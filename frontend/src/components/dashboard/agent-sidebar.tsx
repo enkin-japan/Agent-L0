@@ -1,0 +1,370 @@
+import { useMemo, useState } from "react"
+import {
+  BrainCircuit,
+  Cpu,
+  FolderInput,
+  Monitor,
+  Moon,
+  MoreHorizontal,
+  PanelLeftClose,
+  Pencil,
+  PenSquare,
+  Plus,
+  Search,
+  Settings,
+  Sun,
+  Trash2,
+  Check,
+} from "lucide-react"
+
+import { cn } from "@/lib/utils"
+import { convTitle, type Conversation, type Workspace } from "@/lib/agent-data"
+import { LANGS, type Lang } from "@/lib/i18n"
+import { useT, useUiStore, type Theme } from "@/store/useUiStore"
+import { Button } from "@/components/ui/button"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Switch } from "@/components/ui/switch"
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Field, FieldLabel } from "@/components/ui/field"
+import { SchedulerStrip } from "@/components/dashboard/scheduler-strip"
+import { ScheduleStrip } from "@/components/dashboard/schedule-strip"
+
+type AgentSidebarProps = {
+  workspaces: Workspace[]
+  conversations: Conversation[]
+  activeId: string
+  onSelect: (id: string) => void
+  onNewChat: (workspaceId: string | null) => void
+  /** 打开定时任务的专属会话（本地无条目则以任务名补建）。 */
+  onOpenScheduleSession: (sessionId: string, title: string) => void
+  onRename: (id: string, title: string) => void
+  onDelete: (id: string) => void
+  onMove: (id: string, workspaceId: string | null) => void
+  onAddWorkspace: (name: string) => void
+  onRenameWorkspace: (id: string, name: string) => void
+  onDeleteWorkspace: (id: string) => void
+  onCollapse: () => void
+  thinkingEnabled: boolean
+  onThinkingChange: (value: boolean) => void
+}
+
+export function AgentSidebar({
+  workspaces, conversations, activeId, onSelect, onNewChat, onOpenScheduleSession,
+  onRename, onDelete, onMove, onAddWorkspace,
+  onRenameWorkspace, onDeleteWorkspace, onCollapse,
+  thinkingEnabled, onThinkingChange,
+}: AgentSidebarProps) {
+  const t = useT()
+  const tasks = useUiStore((s) => s.tasks)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false)
+  const [newWorkspaceName, setNewWorkspaceName] = useState("")
+
+  const filteredConversations = useMemo(() =>
+    conversations.filter((c) =>
+      convTitle(c.title, t.store.newChatTitle).toLowerCase().includes(searchQuery.toLowerCase()),
+    ),
+    [conversations, searchQuery, t.store.newChatTitle],
+  )
+
+  const recentChats = useMemo(() =>
+    filteredConversations.filter((c) => !c.workspaceId).sort((a, b) => b.updatedAt - a.updatedAt),
+    [filteredConversations],
+  )
+
+  function submitNewWorkspace() {
+    const name = newWorkspaceName.trim()
+    if (name) onAddWorkspace(name)
+    setNewWorkspaceName("")
+    setNewWorkspaceOpen(false)
+  }
+
+  function renderChatItem(conversation: Conversation) {
+    const isActive = conversation.id === activeId
+    return (
+      <div key={conversation.id} className={cn("group/item relative flex items-center rounded-xl transition-colors", isActive ? "bg-accent" : "hover:bg-accent/60")}>
+        <button onClick={() => onSelect(conversation.id)} className="flex min-w-0 flex-1 items-center rounded-xl py-2 pl-3 pr-9 text-left">
+          <span className={cn("truncate text-sm", isActive ? "font-medium" : "text-foreground/80")}>
+            {convTitle(conversation.title, t.store.newChatTitle)}
+          </span>
+        </button>
+        <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
+          <DropdownMenu>
+            {/* 恒常显示：iOS Safari「请求桌面网站」会伪装成桌面宽度 + hover:hover，
+                任何靠 @media(hover) 或 lg 断点收起的方案都会在触屏上把入口藏死。可靠起见一律常显。 */}
+            <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuGroup>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger><FolderInput className="mr-2 size-4" />{t.workspace.moveTo}</DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DropdownMenuItem onClick={() => onMove(conversation.id, null)}>
+                      {t.workspace.recentChats}
+                      {conversation.workspaceId === null && <Check className="ml-auto size-4" />}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    {workspaces.map((w) => (
+                      <DropdownMenuItem key={w.id} onClick={() => onMove(conversation.id, w.id)}>
+                        {w.name}
+                        {w.id === conversation.workspaceId && <Check className="ml-auto size-4" />}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => onRename(conversation.id, prompt(t.workspace.renamePrompt, convTitle(conversation.title, t.store.newChatTitle)) || conversation.title)}><Pencil className="mr-2 size-4" /> {t.workspace.rename}</DropdownMenuItem>
+                <DropdownMenuItem className="text-destructive" onClick={() => onDelete(conversation.id)}><Trash2 className="mr-2 size-4" /> {t.workspace.delete}</DropdownMenuItem>
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <aside className="flex h-full w-72 max-w-[85vw] flex-col border-r border-sidebar-border bg-sidebar p-3">
+      {/* Brand mark（占位式标志：Cpu 符号 + 中性描述名，后续可替换） */}
+      <div className="flex items-center gap-2.5 px-2 py-3">
+        <div className="flex size-8 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+          <Cpu className="size-4" />
+        </div>
+        <div className="flex min-w-0 flex-col leading-tight">
+          <span className="truncate text-sm font-semibold">{t.appName}</span>
+          <span className="truncate text-[10px] text-muted-foreground">{t.tagline}</span>
+        </div>
+        <Button variant="ghost" size="icon" className="ml-auto shrink-0" onClick={onCollapse}>
+          <PanelLeftClose className="size-4" />
+          <span className="sr-only">{t.sidebar.collapse}</span>
+        </Button>
+      </div>
+
+      <div className="px-2 mb-2">
+        <Button className="w-full justify-start gap-2 rounded-xl" onClick={() => onNewChat(null)}>
+          <PenSquare className="size-4" /> {t.sidebar.newChat}
+        </Button>
+      </div>
+
+      <div className="px-2 mb-3 relative">
+        <Search className="absolute left-4 top-2.5 size-4 text-muted-foreground" />
+        <Input placeholder={t.sidebar.searchPlaceholder} className="pl-9 rounded-xl" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+      </div>
+
+      {/* Worker 状态条（pillar A） */}
+      <div className="px-2 mb-3">
+        <SchedulerStrip tasks={tasks} conversations={conversations} activeId={activeId} onSelect={onSelect} />
+      </div>
+
+      {/* 定时任务条（落盘实体；无任务时自隐藏） */}
+      <div className="px-2 mb-3 empty:mb-0 empty:px-0">
+        <ScheduleStrip onOpenSession={onOpenScheduleSession} />
+      </div>
+
+      <ScrollArea className="flex-1 px-2">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs font-semibold text-muted-foreground">{t.sidebar.workspaces}</p>
+          <Button variant="ghost" size="icon" className="size-6 rounded-lg text-muted-foreground" onClick={() => setNewWorkspaceOpen(true)}>
+            <Plus className="size-3.5" />
+            <span className="sr-only">{t.workspace.dialogTitle}</span>
+          </Button>
+        </div>
+        <Accordion type="multiple" className="w-full">
+          {workspaces.map((w) => (
+            <AccordionItem key={w.id} value={w.id} className="border-none">
+              {/* 触发器与操作菜单并排：菜单绝对定位在行尾（触发器是 button，不能嵌套按钮） */}
+              <div className="relative">
+                <AccordionTrigger className="pr-16 text-sm hover:no-underline">{w.name}</AccordionTrigger>
+                <div className="absolute right-7 top-1/2 -translate-y-1/2">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground">
+                        <MoreHorizontal className="size-4" />
+                        <span className="sr-only">{t.workspace.rename} / {t.workspace.delete}</span>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => onRenameWorkspace(w.id, prompt(t.workspace.renamePrompt, w.name) || w.name)}>
+                        <Pencil className="mr-2 size-4" /> {t.workspace.rename}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="text-destructive" onClick={() => onDeleteWorkspace(w.id)}>
+                        <Trash2 className="mr-2 size-4" /> {t.workspace.delete}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              </div>
+              <AccordionContent>
+                <div className="pl-2 space-y-1">
+                  {filteredConversations.filter((c) => c.workspaceId === w.id).map(renderChatItem)}
+                  <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-xs" onClick={() => onNewChat(w.id)}><Plus className="size-3" /> {t.sidebar.newWorkspaceShort}</Button>
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+          ))}
+        </Accordion>
+        <p className="pt-4 pb-2 text-xs font-semibold text-muted-foreground">{t.sidebar.recentChats}</p>
+        <div className="space-y-1">{recentChats.map(renderChatItem)}</div>
+      </ScrollArea>
+
+      {/* Deep Thinking 开关（对应接口 enable_thinking） */}
+      <div className="px-2 pt-3">
+        <label htmlFor="thinking-mode" className="flex cursor-pointer items-center gap-3 rounded-2xl border border-border bg-card p-3">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-foreground">
+            <BrainCircuit className="size-4" />
+          </div>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <span className="text-sm font-medium">{t.settings.deepThinking}</span>
+            <span className="truncate text-xs text-muted-foreground">
+              {thinkingEnabled ? t.settings.deepThinkingDesc : t.input.thinkingOffHint}
+            </span>
+          </div>
+          <Switch id="thinking-mode" checked={thinkingEnabled} onCheckedChange={onThinkingChange} />
+        </label>
+      </div>
+
+      {/* 设置入口（语言 / 主题 / 深度思考） */}
+      <button
+        type="button"
+        className="mt-2 flex items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors hover:bg-accent"
+        onClick={() => setSettingsOpen(true)}
+      >
+        <div className="flex size-8 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+          <Settings className="size-4" />
+        </div>
+        <span className="flex-1 text-sm font-medium">{t.sidebar.settings}</span>
+        <span className="text-xs uppercase text-muted-foreground">
+          {LANGS.find((l) => l.code === useUiStore.getState().lang)?.label}
+        </span>
+      </button>
+
+      {/* New workspace dialog */}
+      <Dialog open={newWorkspaceOpen} onOpenChange={setNewWorkspaceOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t.workspace.dialogTitle}</DialogTitle>
+            <DialogDescription>{t.workspace.dialogDesc}</DialogDescription>
+          </DialogHeader>
+          <Field>
+            <FieldLabel htmlFor="workspace-input">{t.workspace.nameLabel}</FieldLabel>
+            <Input
+              id="workspace-input"
+              placeholder={t.workspace.namePlaceholder}
+              value={newWorkspaceName}
+              onChange={(e) => setNewWorkspaceName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) submitNewWorkspace() }}
+              autoFocus
+            />
+          </Field>
+          <DialogFooter>
+            <DialogClose asChild><Button variant="outline">{t.workspace.cancel}</Button></DialogClose>
+            <Button onClick={submitNewWorkspace}>{t.workspace.create}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Settings dialog */}
+      <SettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        thinkingEnabled={thinkingEnabled}
+        onThinkingChange={onThinkingChange}
+      />
+    </aside>
+  )
+}
+
+function SettingsDialog({
+  open,
+  onOpenChange,
+  thinkingEnabled,
+  onThinkingChange,
+}: {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  thinkingEnabled: boolean
+  onThinkingChange: (v: boolean) => void
+}) {
+  const t = useT()
+  const lang = useUiStore((s) => s.lang)
+  const theme = useUiStore((s) => s.theme)
+  const setLang = useUiStore((s) => s.setLang)
+  const setTheme = useUiStore((s) => s.setTheme)
+
+  const themeOptions: { value: Theme; label: string; icon: typeof Sun }[] = [
+    { value: "light", label: t.settings.themeLight, icon: Sun },
+    { value: "dark", label: t.settings.themeDark, icon: Moon },
+    { value: "system", label: t.settings.themeSystem, icon: Monitor },
+  ]
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t.settings.title}</DialogTitle>
+          <DialogDescription>{t.settings.desc}</DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-5 py-1">
+          {/* Language */}
+          <div>
+            <p className="mb-2 text-sm font-medium">{t.settings.language}</p>
+            <div className="grid grid-cols-3 gap-1.5">
+              {LANGS.map((l) => (
+                <SegButton key={l.code} active={lang === l.code} onClick={() => setLang(l.code as Lang)}>
+                  {l.label}
+                </SegButton>
+              ))}
+            </div>
+          </div>
+
+          {/* Theme */}
+          <div>
+            <p className="mb-2 text-sm font-medium">{t.settings.theme}</p>
+            <div className="grid grid-cols-3 gap-1.5">
+              {themeOptions.map((o) => (
+                <SegButton key={o.value} active={theme === o.value} onClick={() => setTheme(o.value)}>
+                  <o.icon className="size-3.5" />
+                  {o.label}
+                </SegButton>
+              ))}
+            </div>
+          </div>
+
+          {/* Deep thinking */}
+          <label htmlFor="settings-thinking" className="flex cursor-pointer items-center gap-3">
+            <div className="flex min-w-0 flex-1 flex-col">
+              <span className="text-sm font-medium">{t.settings.deepThinking}</span>
+              <span className="text-xs text-muted-foreground">{t.settings.deepThinkingDesc}</span>
+            </div>
+            <Switch id="settings-thinking" checked={thinkingEnabled} onCheckedChange={onThinkingChange} />
+          </label>
+        </div>
+
+        <DialogFooter>
+          <DialogClose asChild><Button>{t.settings.done}</Button></DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function SegButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "flex items-center justify-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors",
+        active
+          ? "border-primary bg-primary text-primary-foreground"
+          : "border-border bg-transparent text-muted-foreground hover:bg-accent",
+      )}
+    >
+      {children}
+    </button>
+  )
+}

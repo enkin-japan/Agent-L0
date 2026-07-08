@@ -1,0 +1,835 @@
+"""
+外层编排循环（Orchestrator）。
+
+两层循环的落法（结合本地推理成本做的关键取舍）：
+- 不做「外层单独决策推理」的双模型调用——那会让每步推理翻倍；
+- 而是统一为一个生成循环，**护栏全部是确定性代码**：
+    · 预算：单步迭代上限(react_max_steps)、总迭代熔断(max_total_iterations)、
+      重规划上限(replan_max)；
+    · 死循环检测：同名同参的物理工具调用直接拦截；同一步（按标题）反复失败则收窄策略菜单；
+    · 失败路由：代码管配额和菜单（重试/改计划/降级/问用户兜底），模型在菜单内选策略；
+    · 终止：全部步骤完成 + 模型输出最终答复；取消标志在每个 token 段与迭代边界检查。
+- 计划是数据：模型只能通过 update_plan / complete_step 元工具修改（见 task_state.py）；
+- 元工具由本层拦截执行，不进 MCP 注册表（无审批、无探活、永远可用）；
+- 工具目录两级可见性：full 模式全量 schema 常驻（工具少时更省、缓存更稳）；
+  catalog 模式目录常驻 + get_tool_schema 按名取详情（工具规模大后切换，
+  取回的 schema 作为 tool_response 进入追加式 history，对 KV 缓存友好）。
+"""
+import asyncio
+import json
+import re
+import uuid
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from . import events
+from .task_state import TaskState, call_fingerprint
+from ..memory.session import ChatSession
+from ..memory.compactor import compact_tool_observations
+from ..mcp.registry import MCPRegistry
+
+# 会话资产的 markdown 链接（图表图片 ![..](/api/v1/files/..)、导出 PDF [..](/api/v1/files/..)）
+_ASSET_LINK_RE = re.compile(r"!?\[[^\]\n]*\]\((/api/v1/files/[^)\s]+)\)")
+
+
+def _append_missing_asset_links(text: str, turn_messages: List[Dict[str, Any]]) -> str:
+    """收尾兜底：本轮工具产出的用户资产链接若没被模型转贴进最终答复，原样补挂到末尾。
+
+    render_chart / deck_export_pdf 的回执要求模型「原样复制这行 markdown」，但弱模型
+    经常丢——图渲染成功、用户却什么都看不到。交付不该依赖模型的转写忠实度：
+    确定性扫描本轮 tool 观察，凡 /api/v1/files/ 链接未出现在最终文本里的一律补挂。"""
+    found: List[Tuple[str, str]] = []  # (markdown 全行, 资产路径)
+    seen = set()
+    for msg in turn_messages:
+        if msg.get("role") != "tool":
+            continue
+        for tr in msg.get("tool_responses", []) or []:
+            resp = tr.get("response")
+            if not isinstance(resp, str) or "/api/v1/files/" not in resp:
+                continue
+            for m in _ASSET_LINK_RE.finditer(resp):
+                if m.group(1) not in seen:
+                    seen.add(m.group(1))
+                    found.append((m.group(0), m.group(1)))
+    missing = [md for md, path in found if path not in text]
+    if not missing:
+        return text
+    return (text.rstrip() + "\n\n" + "\n".join(missing)) if text.strip() else "\n".join(missing)
+
+
+# ---------- 元工具 Schema（编排层拦截，不进 MCP 注册表） ----------
+UPDATE_PLAN_SCHEMA = {
+    "name": "update_plan",
+    "description": (
+        "Create or modify the multi-step task plan. For complex tasks (ones that need multiple "
+        "steps / multiple tool calls), first use op='replace' to lay out a concise plan of 2-8 "
+        "steps, then execute step by step; use add/remove/reorder for small adjustments along "
+        "the way, or replace again to re-plan when the situation changes substantially (limited "
+        "number of re-plans). Do NOT create a plan for simple questions — just answer them."
+    ),
+    "parameters": {
+        "properties": {
+            "op": {
+                "type": "string",
+                "enum": ["replace", "add", "remove", "reorder", "clear"],
+                "description": "replace=rebuild from steps; add=insert one step; remove=delete one step; reorder=re-sequence; clear=abandon the plan",
+            },
+            "steps": {"type": "array", "items": {"type": "string"},
+                      "description": "Step titles for op=replace (one short sentence each)"},
+            "title": {"type": "string", "description": "Step title for op=add"},
+            "position": {"type": "integer", "description": "Insert position for op=add (defaults to appending at the end)"},
+            "step_id": {"type": "integer", "description": "Target step id for op=remove"},
+            "order": {"type": "array", "items": {"type": "integer"},
+                      "description": "Complete permutation of step ids for op=reorder"},
+        },
+        "required": ["op"],
+    },
+}
+
+COMPLETE_STEP_SCHEMA = {
+    "name": "complete_step",
+    "description": (
+        "Mark the current step of the plan as done and advance to the next one. Call this "
+        "immediately after finishing each step, with a one-sentence summary of the step's "
+        "outcome in result. After all steps are done, output the final answer to the user directly."
+    ),
+    "parameters": {
+        "properties": {
+            "result": {"type": "string", "description": "One-sentence summary of this step's outcome"},
+        },
+        "required": ["result"],
+    },
+}
+
+GET_TOOL_SCHEMA_SCHEMA = {
+    "name": "get_tool_schema",
+    "description": (
+        "Fetch the full parameter definition of tools by name. The tool catalog only lists "
+        "names and short summaries; if you are unsure about a tool's parameters, fetch its "
+        "complete schema with this tool before calling it."
+    ),
+    "parameters": {
+        "properties": {
+            "names": {"type": "array", "items": {"type": "string"}, "description": "List of tool names"},
+        },
+        "required": ["names"],
+    },
+}
+
+META_TOOL_NAMES = {"update_plan", "complete_step", "get_tool_schema"}
+
+# 输出截断恢复护栏（T1-3）：撞 max_tokens 时先把上限升到 ESCALATED 重试同一步一次（多数长答复
+# 一口气能写完），仍不够则多轮「接着写」续写，最多 MAX_TOKENS_RECOVERIES 次后接受半截答复。
+ESCALATED_MAX_TOKENS = 12288
+MAX_TOKENS_RECOVERIES = 3
+# 提前收尾门控（T1-2）：计划未完成却吐纯文本时，每步最多推回 PREMATURE_FINISH_MAX 次，
+# 用尽后放行（视为向用户提问/汇报障碍），避免与「坚持要作答」的模型死循环。
+PREMATURE_FINISH_MAX = 1
+
+
+def _last_user_text(history: List[Dict[str, Any]]) -> str:
+    """从会话历史中提取最近一条用户文本（作为任务 goal）。"""
+    for msg in reversed(history):
+        if msg.get("role") == "user":
+            content = msg.get("content")
+            if isinstance(content, list):
+                for item in content:
+                    if item.get("type") == "text":
+                        return str(item.get("text", ""))[:500]
+            elif isinstance(content, str):
+                return content[:500]
+    return ""
+
+
+# 取代去重（T3-b）的目标键：从只读工具的参数里取「标识资源的那个字段」。同一工具对同一目标的
+# 重复读取才互相取代。按优先级取第一个存在的键，通用而不硬编码具体工具名（新读工具自动适配）；
+# 取不到则返回 None（该观察不参与取代，保守）。
+_TARGET_KEYS = ("file_path", "path", "source_path", "app", "app_name",
+                "bundle_id", "url", "query")
+
+
+def _observation_target(name: str, args: Any) -> Optional[str]:
+    if not isinstance(args, dict):
+        return None
+    for k in _TARGET_KEYS:
+        v = args.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
+
+class Orchestrator:
+    """读状态 → 模型定下一步 → 执行 → 更新状态 的编排循环，护栏为确定性代码。"""
+
+    def __init__(self, engine, mcp_registry: MCPRegistry, agent_cfg: Optional[Dict[str, Any]] = None):
+        cfg = agent_cfg or {}
+        self.engine = engine
+        self.registry = mcp_registry
+
+        # 护栏配置（config.yaml 的 agent 段，用户可调）
+        self.react_max_steps = int(cfg.get("react_max_steps", 4))          # 单步内自纠预算
+        self.max_total_iterations = int(cfg.get("max_total_iterations", 40))  # 一次任务总熔断
+        self.replan_max = int(cfg.get("replan_max", 3))
+        self.observation_max_chars = int(cfg.get("observation_max_chars", 4000))
+        self.tool_timeout_seconds = int(cfg.get("tool_timeout_seconds", 120))  # 单次工具执行熔断
+        self.max_parse_retries = int(cfg.get("max_parse_retries", 3))  # 工具格式解析错误的断环阈值
+        self.tool_schema_mode = str(cfg.get("tool_schema_mode", "full"))   # full | catalog
+
+        # 上下文压缩（Step 1：机械式工具观察压缩）：任务沉降后削旧观察，保留最近若干条原文，
+        # 把 model-facing 上下文规模钉在有界范围（原始观察总量 ≤ keep_recent × 单条上限）。
+        self.observation_keep_recent = int(cfg.get("observation_keep_recent", 6))
+        self.observation_compact_chars = int(cfg.get("observation_compact_chars", 200))
+        # 机械层观察总预算（T3-a）：全部观察总字符越过即在旧区按体量驱逐；不越则旧观察保持原文。
+        self.observation_budget_chars = int(cfg.get("observation_budget_chars", 20000))
+
+        # 摘要式压缩（Step 2，方案A）：越过阈值即把旧轮次折叠进滚动摘要。
+        # 高阈值=活跃期兜底（轮次落盘后判定，昂贵路径，设高）；低阈值=空闲/freeze 前优化（免费，设低）。
+        self.summary_high_threshold = int(cfg.get("summary_high_threshold", 8000))
+        self.summary_low_threshold = int(cfg.get("summary_low_threshold", 2000))
+        self.summary_keep_tail_turns = int(cfg.get("summary_keep_tail_turns", 4))
+        self.summary_idle_seconds = int(cfg.get("summary_idle_seconds", 300))  # 空闲多久进入低阈值维护
+        # 长期记忆沉淀（Stage 3）：折叠旧轮时把原文沉淀进 RAG agent_memory 类目（无损承重网）。
+        self.sediment_to_rag = bool(cfg.get("sediment_to_rag", True))
+
+        # 工具声明属于稳定前缀：启动时构建一次（注册表就是单一数据源），
+        # 任务期内绝不变动，保证 KV 缓存的稳定段命中
+        self._tools_decl = self._build_tools_declaration()
+
+    # ---------- 工具目录（两级可见性） ----------
+    def _build_tools_declaration(self) -> List[Dict[str, Any]]:
+        if self.tool_schema_mode == "catalog":
+            catalog = [
+                {"name": s.get("name"), "description": str(s.get("description", "")).split("\n")[0]}
+                for s in self.registry.get_all_schemas()
+            ]
+            return catalog + [UPDATE_PLAN_SCHEMA, COMPLETE_STEP_SCHEMA, GET_TOOL_SCHEMA_SCHEMA]
+        # full 模式：全部工具完整 schema 常驻（当前工具规模下更省 token 且缓存更稳）
+        return list(self.registry.get_all_schemas()) + [UPDATE_PLAN_SCHEMA, COMPLETE_STEP_SCHEMA]
+
+    # ---------- 编排主循环 ----------
+    async def run_turn(self, session: ChatSession, *,
+                       emit: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+                       keep_recent_calls: bool = False,
+                       compact_history: bool = True,
+                       **gen_kwargs) -> Dict[str, Any]:
+        """
+        执行一轮完整的编排闭环（一次用户消息 → 最终答复 / 挂起审批 / 取消 / 熔断）。
+        取消、审批与故障的落盘语义由路由层统一处理，本方法只返回结果状态。
+
+        emit: 真流式结构化事件回调（可选，SSE 端点注入）。在编排过程的关键点同步发出
+        thinking / tool_started / tool_result / task_progress 事件；为 None 时零开销、
+        行为与改动前完全一致。gen_kwargs（含 on_text_delta 与生成参数）原样透传 generate_once。
+        """
+        def _emit(event: str, data: Dict[str, Any]) -> None:
+            if emit is not None:
+                emit(event, data)
+
+        def _emit_progress() -> None:
+            if emit is None:
+                return
+            t = session.task_state
+            emit("task_progress", {
+                "task": t.snapshot() if (t is not None and t.plan) else None,
+                "activity": session.activity_snapshot(),
+            })
+
+        task = session.task_state
+        if task is not None and not keep_recent_calls:
+            task.recent_calls = []  # 重复调用拦截按轮生效（审批续跑保留：刚执行的调用不可立即复发）
+        no_task_calls: List[str] = []  # 无任务态下的调用指纹（同样拦截重复）
+        turn_start_idx = len(session.history)  # 本轮起点：收尾时扫描本轮工具产出的资产链接
+        parse_errors: Dict[str, int] = {}  # 本轮坏调用原文 -> 次数（断环 + 升级纠错）
+        nudged = False
+        iterations = 0
+        metrics: Dict[str, Any] = {}
+        # [仪表 Phase 0] 整轮累计口径：ReAct 循环内多次生成的分解求和 + 废轮计数。
+        # 每次生成后 stamp 进当前 metrics dict（该 dict 会随任一返回路径带出）。
+        turn_breakdown: Dict[str, int] = {}
+        turn_gen_tokens = 0
+        turn_spec = {"drafted": 0, "accepted": 0}
+
+        def _stamp_turn_stats() -> None:
+            metrics["token_breakdown"] = dict(turn_breakdown)
+            metrics["generations"] = iterations
+            metrics["generation_tokens_turn"] = turn_gen_tokens
+            metrics["parse_error_count"] = sum(parse_errors.values())
+            if turn_spec["drafted"]:
+                metrics["spec_drafted"] = turn_spec["drafted"]
+                metrics["spec_accepted"] = turn_spec["accepted"]
+        # 有界恢复计数（T2-5 地基，承载 T1-2/T1-3；到顶即放行，杜绝新增分支造成死循环）
+        max_tokens_override: Optional[int] = None   # T1-3：非 None 时本轮后续生成用升档上限
+        max_tokens_recoveries = 0                    # T1-3：多轮「接着写」已用次数
+        premature_finish: Dict[str, int] = {}        # T1-2：按步（标题）计的提前收尾推回次数
+        base_max_tokens = int(gen_kwargs.get("max_tokens", 4096))
+        # T3-c：一次性护栏提醒走可变尾部注入（用完即弃、不进历史、不被摘要压缩）。
+        # 下一次生成消费后立即清空；由 T1-2/T1-3 分支按需填充。
+        pending_tail_notes: List[str] = []
+
+        def _transition(reason: str) -> None:
+            """标注一次续跑原因（可审计：为什么又转一圈），便于日志追踪与死循环定位。"""
+            print(f"[Orchestrator] transition → {reason}")
+
+        session.reset_activity()  # 新一轮的实时步骤流从空开始
+
+        # [上下文压缩·机械] 在本轮生成前，把已沉降的工具观察（保留最近若干条原文之外的）
+        # 压成摘要：已完成任务的冗长观察就此让位，控制 model-facing 上下文规模与注意力焦点。
+        # 只改内存历史（此刻全为上一轮及更早的已落盘消息，日志保留全量、不受影响）。
+        # compact_history=False（审批/挂起续跑等轮中重入路径）时跳过：此时 history 尾部
+        # 含本轮尚未落盘的观察，且这些 dict 与暂存轮次的 response 共享引用——在这里压缩
+        # 会把压缩桩写进最终落盘日志，违背「持久化日志保留全量」；压缩推迟到下一轮轮首。
+        if compact_history:
+            n_compacted = compact_tool_observations(
+                session.history,
+                keep_recent=self.observation_keep_recent,
+                digest_chars=self.observation_compact_chars,
+                budget_chars=self.observation_budget_chars,
+            )
+            if n_compacted:
+                print(f"[Orchestrator] 上下文压缩：削减 {n_compacted} 条历史工具观察")
+
+        while iterations < self.max_total_iterations:
+            # --- 取消检查点（迭代边界；token 级检查在 engine 内） ---
+            if session.cancel_requested:
+                return {"status": "cancelled", "response": "任务已被用户取消。", "metrics": metrics}
+
+            # --- 挂起检查点（迭代边界：上一步的生成与工具结果已提交进 history，
+            #     此处是安全让出点，零浪费）：让出 worker，KV/task_state 留内存待恢复。
+            #     恢复时路由再次进入 run_turn，从 task_state + 已提交 history 续跑。 ---
+            if session.suspend_requested:
+                session.suspend_requested = False
+                session.set_activity("已挂起（可恢复）", phase="suspended")
+                return {"status": "suspended", "response": "任务已挂起，可稍后恢复。", "metrics": metrics}
+
+            task = session.task_state  # 元工具可能在上一迭代创建/清除任务
+            task_block = (
+                task.render(self.react_max_steps, self.replan_max)
+                if task is not None and task.plan else None
+            )
+            # 实时反馈：进入推理段（轮询期间显示"思考中"）
+            cur_step = task.current_step() if (task is not None and task.plan) else None
+            session.set_activity(f"思考中：{cur_step['title']}" if cur_step else "思考中…")
+            _emit_progress()  # 进入推理段：推送"思考中"（正文 token 走 on_text_delta）
+            call_kwargs = dict(gen_kwargs)
+            if max_tokens_override is not None:  # T1-3：截断升档后本轮后续生成沿用更高上限
+                call_kwargs["max_tokens"] = max_tokens_override
+            result = await self.engine.generate_once(
+                session=session, tools=self._tools_decl, task_block=task_block,
+                tail_notes=pending_tail_notes or None, **call_kwargs
+            )
+            pending_tail_notes = []  # 一次性提醒已被本次生成消费，清空（T3-c）
+            fresh_metrics = result.get("metrics")
+            metrics = fresh_metrics or metrics
+            if metrics.get("prompt_tokens"):
+                session.last_prompt_tokens = metrics["prompt_tokens"]  # 上下文规模估计（摘要阈值/空闲维护用）
+            # [仪表 Phase 0] 累计本次生成的分解与投机计数，并 stamp 到 metrics。
+            # 只在拿到本次生成的新 metrics 时累计——沿用旧 dict（其值已是累计口径）会双计。
+            if fresh_metrics:
+                for k, v in (fresh_metrics.get("token_breakdown") or {}).items():
+                    turn_breakdown[k] = turn_breakdown.get(k, 0) + v
+                turn_gen_tokens += fresh_metrics.get("generation_tokens", 0) or 0
+                turn_spec["drafted"] += fresh_metrics.get("spec_drafted", 0) or 0
+                turn_spec["accepted"] += fresh_metrics.get("spec_accepted", 0) or 0
+            if result.get("cancelled"):
+                _stamp_turn_stats()
+                return {"status": "cancelled", "response": "任务已被用户取消。", "metrics": metrics}
+
+            iterations += 1
+            _stamp_turn_stats()
+            if task is not None and task.plan and task.current_step() is not None:
+                task.step_iterations += 1
+
+            tool_calls = result["tool_calls"]
+            text = result["text"]
+            thoughts = result["thoughts"]
+
+            # 思考块整块推送（决策 #5：思考不逐 token，一次成块）；正文 token 已走 on_text_delta
+            if thoughts:
+                _emit("thinking", {"text": thoughts if isinstance(thoughts, str) else "\n".join(thoughts)})
+
+            # --- 恢复分支：输出被 max_tokens 截断且非工具调用（T1-3） ---
+            # 撞上限的是纯文本/思考（工具调用即便被截断也走下方 parse-error 路径），先升一档
+            # 重试同一步、再多轮「接着写」，都用尽才接受半截答复。避免半截答复+下轮道歉复述。
+            if result.get("truncated") and not tool_calls:
+                # [失控约束调用拦截] 截断时约束采样已深度介入（大量位置受 schema 约束）却没
+                # 解析出任何调用 = 模型在工具参数的字符串字段里复读失控。升档只会把 4096 的
+                # 浪费放大成 12288（实测一次烧五六分钟），改按坏调用纠错：丢弃产出、反馈
+                # 「用紧凑参数重发」，计入断环阈值。阈值 512 区分「调用刚起头就被截断」
+                # （几十~几百约束步，升档一次即可装下，走原路径）与复读失控（数千步）。
+                if int((result.get("metrics") or {}).get("constrained_steps", 0) or 0) >= 512:
+                    key = "__runaway_tool_call__"
+                    parse_errors[key] = parse_errors.get(key, 0) + 1
+                    _stamp_turn_stats()
+                    events.emit("runaway_call", session=session.session_id,
+                                n=parse_errors[key],
+                                constrained_steps=(result.get("metrics") or {}).get("constrained_steps"))
+                    if parse_errors[key] >= self.max_parse_retries:
+                        session.set_activity("已终止（工具调用参数反复失控）", phase="done")
+                        events.emit("turn_abort", session=session.session_id, reason="runaway_call")
+                        return {
+                            "status": "warning",
+                            "response": ("多次生成工具调用参数失控（超长复读），已终止本次任务。"
+                                         "可以试试：①把需求拆成几件更小的事分别发起；"
+                                         "②如果涉及长文本，让我分段处理。"),
+                            "thoughts": ["System: repeated runaway constrained tool calls; aborted."],
+                            "metrics": metrics,
+                        }
+                    _transition("runaway_tool_call_retry")
+                    # 失控产出整体丢弃（不落 history，KV 前缀下次生成自动裁剪对齐）
+                    pending_tail_notes.append(
+                        "[System guardrail] Your last tool call ran away past the length limit and was "
+                        "DISCARDED — it never executed. Re-issue the tool call with COMPACT arguments: "
+                        "short strings, no repeated phrases, only the fields the tool needs. If the "
+                        "content is long, cut it down to the essentials.")
+                    continue
+                if max_tokens_override is None and base_max_tokens < ESCALATED_MAX_TOKENS:
+                    # 升一档重试：丢弃半截产出（不落 history），KV 前缀下次生成自动裁剪对齐
+                    max_tokens_override = ESCALATED_MAX_TOKENS
+                    _transition("max_tokens_escalate")
+                    events.emit("truncation_recovery", session=session.session_id, kind="escalate")
+                    continue
+                if max_tokens_recoveries < MAX_TOKENS_RECOVERIES:
+                    # 升档后仍截断：落半截产出，注入「从断点接着写」续写指令
+                    max_tokens_recoveries += 1
+                    _transition("max_tokens_recovery")
+                    events.emit("truncation_recovery", session=session.session_id, kind="continue")
+                    session.add_assistant_message(content=text, thoughts=thoughts)
+                    # 续写指令走可变尾部（T3-c）：只此一轮提醒，用完即弃、不进历史、不被摘要压缩
+                    pending_tail_notes.append(
+                        "[System guardrail] Your output was cut off by the length limit. Continue "
+                        "writing from exactly where you stopped — no apologies, no repeating what "
+                        "you already wrote; split the remaining content into smaller parts if needed.")
+                    continue
+                # 恢复预算耗尽 → 落到下方文本分支，接受这半截作为最终答复
+
+            # --- 动作分支：工具调用 ---
+            if tool_calls:
+                session.add_assistant_message(tool_calls=tool_calls, thoughts=thoughts)
+
+                meta_calls = [c for c in tool_calls
+                              if c.get("type") != "error" and c.get("name") in META_TOOL_NAMES]
+                phys_calls = [c for c in tool_calls if c not in meta_calls]
+
+                responses: List[Dict[str, Any]] = []
+                for call in meta_calls:
+                    responses.append({
+                        "name": call.get("name"),
+                        "response": self._handle_meta_call(session, call),
+                    })
+                    # 实时反馈：计划类动作记入步骤流
+                    mname = call.get("name")
+                    if mname == "update_plan":
+                        session.push_activity("plan", "制定/调整计划")
+                    elif mname == "complete_step":
+                        session.push_activity("plan", "完成一步")
+                if meta_calls:
+                    _emit_progress()  # 计划/步骤已变更，推送最新任务快照
+                task = session.task_state
+
+                # [审批闸门] 物理调用中含敏感调用：先落元工具结果，再整批挂起
+                # （按调用动态判定：同一 shell 工具只读命令放行、变更命令弹窗）
+                approval_needed = [
+                    c for c in phys_calls
+                    if c.get("type") != "error"
+                    and self.registry.requires_approval(c.get("name"), c.get("arguments", {}))
+                ]
+                if approval_needed:
+                    if responses:
+                        session.add_tool_message(responses)
+                    session.pending_tool_calls = phys_calls
+                    names = "、".join(c.get("name") for c in approval_needed)
+                    session.set_activity(f"等待授权：{names}", phase="awaiting_approval")
+                    print(f"[Orchestrator] 敏感工具调用挂起待审批: {[c.get('name') for c in approval_needed]}")
+                    return {
+                        "status": "pending_approval",
+                        "pending_tools": [
+                            {"name": c.get("name"), "arguments": c.get("arguments", {})}
+                            for c in approval_needed
+                        ],
+                        "metrics": metrics,
+                    }
+
+                tracker = task.recent_calls if task is not None else no_task_calls
+                responses.extend(
+                    await self._execute_physical(session, phys_calls, tracker, parse_errors, emit=emit)
+                )
+                _stamp_turn_stats()  # [仪表 Phase 0] 刷新废轮计数（_execute_physical 可能新增 parse 失败）
+                # [结构性提醒 T1-1] 在最新观察旁贴一条条件式 nudge（步骤边界/漂移/收尾验证）。
+                # 与 prompt 尾部的 task_block 互补：task_block 渲染计划本身，这里给的是它覆盖不到、
+                # 且贴着最近观察（更强近因）的即时提醒。触发稀疏，避免每轮膨胀与 KV 抖动。
+                did_complete = any(c.get("name") == "complete_step" for c in meta_calls)
+                reminder = self._structural_reminder(session.task_state, did_complete)
+                if reminder:
+                    responses.append({"name": "system", "response": reminder})
+                if responses:
+                    session.add_tool_message(responses)
+                if phys_calls:
+                    _emit_progress()  # 工具执行完毕，推送最新活动/任务快照
+
+                # [断环] 工具格式反复解析失败（同一坏调用重复，或本轮累计过多）→ 优雅终止，
+                # 避免烧光整个迭代预算后输出无关内容（升级纠错已在 _execute_physical 中给过机会）
+                if parse_errors and (
+                    max(parse_errors.values()) >= self.max_parse_retries
+                    or sum(parse_errors.values()) >= self.max_parse_retries + 2
+                ):
+                    session.set_activity("已终止（工具格式反复解析失败）", phase="done")
+                    events.emit("turn_abort", session=session.session_id, reason="parse_loop")
+                    return {
+                        "status": "warning",
+                        "response": ("多次未能解析要调用的工具格式，已终止本次任务。"
+                                     "可以试试：①原样重发一次；②把需求说得更简单具体些；"
+                                     "③把任务拆成几个更小的步骤分别提出。"),
+                        "thoughts": ["System: repeated tool-call parse failures; aborted to avoid a loop."],
+                        "metrics": metrics,
+                    }
+
+                # --- 护栏：内层预算耗尽 → 失败路由（上报外层，不是让模型硬猜） ---
+                if task is not None and task.plan:
+                    step = task.current_step()
+                    if step is not None and task.step_iterations >= self.react_max_steps:
+                        self._route_step_failure(session, task)
+                        _emit_progress()  # 步骤受阻、策略已调整，推送最新任务快照
+                # --- 护栏：无计划却持续调用工具 → 提示收敛（一次性） ---
+                elif not nudged and iterations >= self.react_max_steps + 2:
+                    nudged = True
+                    events.emit("no_plan_nudge", session=session.session_id, iterations=iterations)
+                    session.history.append({
+                        "role": "system",
+                        "content": ("[System guardrail] You have made many tool calls without reaching "
+                                    "a conclusion. Either answer the user directly now, or create an "
+                                    "explicit multi-step plan with update_plan and follow it."),
+                    })
+                continue
+
+            # --- 完结分支：纯文本 = 给用户的答复 ---
+            if text:
+                # [完成门控 T1-2] 计划未完成却吐纯文本 = 可能提前偷懒收尾。每步最多推回
+                # PREMATURE_FINISH_MAX 次：要么明确提出必须用户回答的问题，要么继续执行剩余步骤；
+                # 用尽后放行（视为向用户提问/汇报障碍），杜绝与「坚持要作答」的模型死循环。
+                task = session.task_state
+                if task is not None and task.plan and not task.all_done():
+                    step = task.current_step()
+                    key = step["title"].strip().lower() if step else "__open__"
+                    if premature_finish.get(key, 0) < PREMATURE_FINISH_MAX:
+                        premature_finish[key] = premature_finish.get(key, 0) + 1
+                        _transition("premature_finish_nudge")
+                        events.emit("premature_finish_nudge", session=session.session_id,
+                                    step=(step or {}).get("title"))
+                        session.add_assistant_message(content=text, thoughts=thoughts)
+                        title = step["title"] if step else "current step"
+                        # 提前收尾推回走可变尾部（T3-c）：一次性提醒，用完即弃、不进历史、不被摘要压缩
+                        pending_tail_notes.append(
+                            f"[System guardrail] The plan still has unfinished steps (current step: \"{title}\"). "
+                            "If you genuinely need information from the user that you cannot find out "
+                            "yourself, ask a specific question; otherwise do not wrap up here — keep "
+                            "executing the remaining steps.")
+                        _emit_progress()
+                        continue
+
+                session.set_activity("已完成", phase="done")
+                text = _append_missing_asset_links(text, session.history[turn_start_idx:])
+                session.add_assistant_message(content=text, thoughts=thoughts)
+                if task is not None and (task.all_done() or not task.plan):
+                    # 任务完成即弃：工作过程已沉淀在本轮消息流（blackboard=消息流本身）
+                    session.task_state = None
+                # 未完成而输出文本 = 向用户提问/汇报障碍，任务跨轮保留，等用户答复继续
+                return {"status": "success", "response": text, "thoughts": thoughts, "metrics": metrics}
+
+            # 空输出：浪费一次迭代，靠总熔断兜底
+
+        # --- 总迭代熔断 ---
+        events.emit("turn_abort", session=session.session_id, reason="max_iterations")
+        return {
+            "status": "warning",
+            "response": (f"任务在 {self.max_total_iterations} 次迭代内未能收敛，已终止。"
+                         "可以试试：①把任务拆成几个更小的目标分别发起；②缩小范围（只处理一部分）；"
+                         "③告诉我可以跳过哪些环节。"),
+            "thoughts": ["System Warning: orchestration loop threshold exceeded."],
+            "metrics": metrics,
+        }
+
+    # ---------- 元工具处理（计划是数据，操作有校验） ----------
+    def _handle_meta_call(self, session: ChatSession, call: Dict[str, Any]) -> str:
+        name = call.get("name")
+        args = call.get("arguments") or {}
+        if not isinstance(args, dict):
+            return "Invalid arguments: expected a JSON object."
+
+        if name == "update_plan":
+            task = session.task_state
+            if task is None:
+                task = TaskState(goal=_last_user_text(session.history))
+                session.task_state = task
+            # 重规划预算：推翻已有计划才计数（首次建计划、微调不计）
+            if args.get("op") == "replace" and task.plan:
+                if task.replan_count >= self.replan_max:
+                    events.emit("replan_budget_exhausted", session=session.session_id)
+                    return (f"Replan budget exhausted ({self.replan_max}). Do NOT rebuild the plan. "
+                            "Continue with the current plan, skip blocked steps, "
+                            "or give the user your best final answer with what you have.")
+                task.replan_count += 1
+            ok, msg = task.apply_op(args)
+            if not ok:
+                events.emit("invalid_plan_op", session=session.session_id,
+                            op=args.get("op"), msg=msg)
+            return msg
+
+        if name == "complete_step":
+            task = session.task_state
+            if task is None or not task.plan:
+                return "No active plan. Use update_plan to create one, or just answer the user."
+            ok, msg = task.complete_current(str(args.get("result", "")))
+            return msg
+
+        if name == "get_tool_schema":
+            names = args.get("names") or []
+            if not isinstance(names, list) or not names:
+                return "Invalid arguments: 'names' must be a non-empty list of tool names."
+            by_name = {s.get("name"): s for s in self.registry.get_all_schemas()}
+            found = [by_name[n] for n in names if n in by_name]
+            missing = [n for n in names if n not in by_name]
+            parts = []
+            if found:
+                parts.append(json.dumps(found, ensure_ascii=False))
+            if missing:
+                parts.append(f"Unknown tools (check the catalog for exact names): {missing}")
+            return "\n".join(parts)
+
+        return f"Unknown meta tool: {name}"
+
+    # ---------- 结构性提醒（T1-1：步骤边界 / 漂移 / 收尾验证的条件式 nudge） ----------
+    def _structural_reminder(self, task: Optional[TaskState], did_complete_step: bool) -> Optional[str]:
+        """在最新观察旁贴的条件式提醒；无活跃计划或不满足触发条件时返回 None（保持稀疏）。"""
+        if task is None or not task.plan:
+            return None
+        # 收尾验证：刚完成某步且全部步骤已就绪、计划有一定规模 → 提醒别把「已执行」当「已验证」
+        if did_complete_step and task.all_done() and len(task.plan) >= 3:
+            return ("[Reminder] All plan steps are marked done. Before giving the user the final "
+                    "answer, double-check that the key deliverables were actually verified — "
+                    "\"executed\" is not the same as \"verified\".")
+        # 步骤边界：刚推进到新步 → 重新锚定注意力，别回头重做已完成的步
+        if did_complete_step:
+            step = task.current_step()
+            if step is not None:
+                return (f"[Reminder] Now on step \"{step['title']}\". Focus on this step only; "
+                        "do not go back and redo steps that are already done.")
+        # 漂移：当前步接近迭代上限（失败路由触发前一步）→ 提示收敛或换法
+        step = task.current_step()
+        if step is not None and task.step_iterations >= self.react_max_steps - 1:
+            return (f"[Reminder] Step \"{step['title']}\" is close to its iteration limit. Converge "
+                    "now or switch to a clearly different approach — do not keep circling.")
+        return None
+
+    # ---------- 物理工具执行（纠错 / 重复拦截 / 观察截断 / 实时反馈 / 只读并发） ----------
+    async def _execute_physical(self, session: ChatSession, calls: List[Dict[str, Any]],
+                                tracker: List[str],
+                                parse_errors: Dict[str, int],
+                                emit: Optional[Callable[[str, Dict[str, Any]], None]] = None
+                                ) -> List[Dict[str, Any]]:
+        """
+        执行一批物理调用，保持响应与调用一一对应（按原序返回）。
+        并发策略（T2-4）：连续的 concurrency-safe 只读调用并发执行（asyncio.gather），
+        非安全/有副作用调用逐个串行；串行调用前先冲刷已积压的安全批，保证跨类别的执行顺序。
+        解析错误与重复调用在本层就地生成响应、不进入执行（不占并发名额）。
+        """
+        by_idx: Dict[int, Dict[str, Any]] = {}
+        safe_batch: List[tuple] = []  # 积压的只读安全调用：(idx, call, call_id)
+
+        async def flush_safe_batch() -> None:
+            if not safe_batch:
+                return
+            coros = [self._invoke_tool(session, c, cid, emit) for (_, c, cid) in safe_batch]
+            results = await asyncio.gather(*coros)
+            for (idx, _, _), r in zip(safe_batch, results):
+                by_idx[idx] = r
+            safe_batch.clear()
+
+        for idx, call in enumerate(calls):
+            # [容错闭环] 调用格式无法解析 → 升级式纠错（就地响应，不执行、不占并发名额）
+            if call.get("type") == "error":
+                raw = str(call.get("raw_input", "")).strip()
+                parse_errors[raw] = parse_errors.get(raw, 0) + 1
+                n = parse_errors[raw]
+                events.emit("parse_error", session=session.session_id,
+                            n=n, error=call.get("error_msg"), raw_head=raw[:120])
+                if n == 1:
+                    feedback = (
+                        "System Error: your tool call could not be parsed.\n"
+                        f"Your invalid output: {call.get('raw_input')}\n"
+                        f"Parser error: {call.get('error_msg')}\n"
+                        "A tool call must be VALID JSON with double quotes — the exact same format as "
+                        "the tool calls you already made successfully. For example, to update the plan:\n"
+                        '{"name": "update_plan", "arguments": {"op": "replace", "steps": ["step one", "step two"]}}\n'
+                        "Do NOT use single quotes, a 'call:' prefix, or bare braces. Retry with correct JSON."
+                    )
+                else:
+                    feedback = (
+                        f"System Error: you emitted the exact same invalid tool call {n} times. STOP repeating it.\n"
+                        "Planning is optional — do NOT retry that call. Instead, either complete the task "
+                        "directly with a correctly-formatted tool call (the same JSON format that worked "
+                        "for you before), or briefly tell the user what you were trying to do and why you're stuck."
+                    )
+                by_idx[idx] = {"name": "system", "response": feedback}
+                continue
+
+            name = call.get("name")
+            args = call.get("arguments", {})
+
+            # [死循环拦截] 同名同参调用直接打回（最常见的循环形态）。指纹按序登记并带
+            # r:/w: 前缀区分只读与写：写调用执行后清掉 r: 指纹（写屏障，与 T3-b 同思路）——
+            # 「读→改→再读验证」的复读放行，重复写调用（重复发信/重复删除）仍被拦。
+            read_only = self.registry.is_read_only(name, args)
+            fingerprint = ("r:" if read_only else "w:") + call_fingerprint(name, args)
+            if fingerprint in tracker:
+                events.emit("duplicate_call", session=session.session_id, tool=name)
+                by_idx[idx] = {
+                    "name": name,
+                    "response": ("Duplicate call blocked: you already executed this exact tool call "
+                                 "in this turn. Reuse the earlier result, change the arguments, "
+                                 "or take a different approach."),
+                }
+                continue
+            tracker.append(fingerprint)
+
+            call_id = uuid.uuid4().hex[:8]
+            if self.registry.is_concurrency_safe(name, args):
+                safe_batch.append((idx, call, call_id))
+            else:
+                # 有副作用/有状态调用：先冲刷积压的只读批（保证它在这些安全调用之后执行），再串行跑
+                await flush_safe_batch()
+                by_idx[idx] = await self._invoke_tool(session, call, call_id, emit)
+                if not read_only:
+                    # 写屏障：系统状态已变，此前的只读结果不再代表现状，解禁同参复读
+                    tracker[:] = [f for f in tracker if not f.startswith("r:")]
+
+        await flush_safe_batch()
+        return [by_idx[i] for i in sorted(by_idx)]
+
+    async def _invoke_tool(self, session: ChatSession, call: Dict[str, Any], call_id: str,
+                           emit: Optional[Callable[[str, Dict[str, Any]], None]] = None
+                           ) -> Dict[str, Any]:
+        """真正执行单个物理工具（超时熔断 + 观察截断 + 实时反馈）。可被 gather 并发调用。"""
+        name = call.get("name")
+        args = call.get("arguments", {})
+        print(f"[Orchestrator] 执行工具: {name}")
+        # 登记归属会话：会话级工具（render_chart/deck_* 等落盘 sessions/{id}/ 的）经
+        # runtime.get_current_session() 取用。ContextVar + to_thread 的上下文拷贝保证
+        # gather 并发的各调用互不串台。
+        from ..agents import runtime as _agent_runtime
+        _agent_runtime.set_current_session(session)
+        # 实时反馈：进入工具执行段（并发时以最后写入者为准，仅展示用途，无正确性影响）
+        session.set_activity(f"调用工具：{name}")
+        # 真流式：工具开始事件（call_id 配对 started/result，供前端渲染工具卡片）
+        if emit is not None:
+            emit("tool_started", {"call_id": call_id, "name": name, "args": args})
+        # 工具级超时熔断：卡死的工具会一直占着会话锁，到点放弃等待并反馈让模型改路
+        # （被放弃的线程仍在后台跑完，但不再阻塞本轮；工具自身也应有内部超时，如 shell）
+        timed_out = False
+        try:
+            result_text = await asyncio.wait_for(
+                asyncio.to_thread(self.registry.execute_tool, name, args),
+                timeout=self.tool_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            timed_out = True
+            result_text = (
+                f"System Error: tool '{name}' timed out after {self.tool_timeout_seconds}s "
+                "and was abandoned. Try a lighter operation, add a shorter timeout argument, "
+                "or take a different approach."
+            )
+
+        # [事件回流] 工具级错误反馈（含超时）也是涣散痕迹：参数马虎/路径不存在/匹配失败等
+        # 由工具自身拦下的错误，与编排层护栏一起构成完整事件流（涣散度量的全部组分入流）。
+        if str(result_text).lstrip().startswith("System Error"):
+            events.emit("tool_error", session=session.session_id, tool=name,
+                        timeout=timed_out, msg=str(result_text)[:160])
+
+        # [观察截断] 保护每步延迟与上下文（护栏参数，见 config agent.observation_max_chars）
+        if len(result_text) > self.observation_max_chars:
+            result_text = (result_text[: self.observation_max_chars]
+                           + f"\n...[observation truncated at {self.observation_max_chars} chars]")
+        # 实时反馈：记录一条已完成的工具步骤（结果取首行摘要）
+        summary = result_text.strip().splitlines()[0] if result_text.strip() else ""
+        session.push_activity("tool", name, summary)
+        if emit is not None:
+            emit("tool_result", {"call_id": call_id, "name": name,
+                                 "response": result_text,
+                                 "status": "timeout" if timed_out else "ok"})
+        # 挂上压缩层用的内存元数据（T3-a/b）：_safe=只读可取代、_target=取代键（同工具同目标去重）。
+        # 均为 `_` 前缀，落盘时被 append_log 剥离，仅存内存（与 _compacted 同规矩）。
+        # 判据用 is_read_only（而非 is_concurrency_safe）：read_ui_tree 这类「只读但不可并发」
+        # 的观察最大、最需要取代去重，不能因退出并发批而失去 _safe。
+        obs = {"name": name, "response": result_text}
+        if not timed_out and self.registry.is_read_only(name, args):
+            obs["_safe"] = True
+            target = _observation_target(name, args)
+            if target:
+                obs["_target"] = target
+        return obs
+
+    # ---------- 失败路由（代码管配额和菜单，模型选策略） ----------
+    def _route_step_failure(self, session: ChatSession, task: TaskState) -> None:
+        step = task.current_step()
+        if step is None:
+            return
+        task.fail_current(f"Iteration budget exhausted ({self.react_max_steps} iterations without completion)")
+        session.push_activity("note", "步骤受阻，调整策略", step["title"])
+        title_key = step["title"].strip().lower()
+        fail_count = task.step_failures.get(title_key, 0)
+        events.emit("failure_route", session=session.session_id,
+                    step=step["title"], fail_count=fail_count)
+
+        options = []
+        if fail_count < 2:
+            options.append("A. Retry this step with a clearly different approach (re-add it via "
+                           "update_plan's add op — do NOT repeat the original approach)")
+        options.append("B. Modify the plan to route around this step (update_plan)")
+        options.append("C. Degrade: drop this step and continue the remaining steps, or wrap up, "
+                       "with the information you already have")
+        options.append("D. Only if none of the above is feasible: explain the concrete obstacle "
+                       "to the user and ask for instructions (output plain text)")
+        if task.replan_count >= self.replan_max:
+            options = [o for o in options if not o.startswith("B")]
+
+        session.history.append({
+            "role": "system",
+            "content": (
+                f"[System guardrail] Step \"{step['title']}\" failed to complete after "
+                f"{self.react_max_steps} consecutive iterations and is now marked failed "
+                f"(cumulative failures for this step: {fail_count}). Choose your next strategy:\n"
+                + "\n".join(options)
+                + "\nRepeating the failed approach verbatim is forbidden."
+            ),
+        })
+
+    # ---------- 审批决议恢复 ----------
+    async def resume_after_approval(self, session: ChatSession, approved: bool,
+                                    **gen_kwargs) -> Dict[str, Any]:
+        """
+        用户对挂起的敏感工具调用作出决议后恢复编排闭环：
+        批准则真正执行；拒绝则反馈拒绝结果，由模型决定后续（多步任务继续按计划推进）。
+        """
+        pending_calls = session.pending_tool_calls or []
+        session.pending_tool_calls = None
+
+        if approved:
+            task = session.task_state
+            tracker = task.recent_calls if task is not None else []
+            responses = await self._execute_physical(session, pending_calls, tracker, {})
+        else:
+            responses = [
+                {
+                    "name": call.get("name", "unknown"),
+                    "response": (
+                        "Operation DENIED: the user rejected this operation in the system "
+                        "confirmation dialog, so it was NOT executed. Do NOT retry or ask again. "
+                        "Briefly acknowledge the cancellation and continue with the rest of the task "
+                        "(skip or adapt the affected step)."
+                    ),
+                }
+                for call in pending_calls if call.get("type") != "error"
+            ] or [{"name": "system", "response": "Operation denied by user in the confirmation dialog."}]
+
+        session.add_tool_message(responses)
+        # 回到编排主循环（若再次命中敏感工具会再次挂起）。keep_recent_calls：保留刚执行的
+        # 批准调用指纹，防模型在续跑首步立即原样重复该敏感调用。
+        # compact_history=False：轮中重入，本轮未落盘观察不参与压缩（防压缩桩落盘）。
+        return await self.run_turn(session, keep_recent_calls=True, compact_history=False, **gen_kwargs)

@@ -1,0 +1,47 @@
+fastapi==0.136.1
+fastapi-cli==0.0.13
+fastapi-cloud-cli==0.3.1
+librosa==0.11.0
+mlx==0.31.2
+mlx-audio==0.4.3
+mlx-lm==0.31.3
+mlx-metal==0.31.2
+mlx-vlm==0.5.0
+python-multipart==0.0.20
+PyYAML==6.0.3
+requests==2.32.5
+soundfile==0.13.1
+torch==2.9.1
+torchaudio==2.9.1
+torchcodec==0.11.1
+torchvision==0.24.1
+transformers==5.8.0
+uvicorn==0.38.0
+silero_vad==6.2.1
+huggingface_hub==1.15.0
+# 摄入解析层（Ingestion）：非原生模态急解析依赖。缺失时对应格式 fail-open（返回错误标记
+# 不打断对话），但要让音频转写/办公文档解析真正生效需安装。PyMuPDF 提供 import fitz。
+mlx-whisper==0.4.3
+PyMuPDF==1.27.2.3
+markitdown[docx,pptx,xlsx]==0.1.6  # extras 必带：基础包不含办公文档转换器，缺了 docx/xlsx/pptx 解析会报 MissingDependency
+# 联网调查（web_research 受限沙箱）：正文抽取 + HTML 净化。缺失时 web_research 不注册（探活失败）。
+# SearXNG 本身是独立 Docker 服务（本机搜索层），不在 pip 依赖内，须另行 docker run。
+trafilatura==2.0.0
+selectolax==0.4.10
+# 抓取升级阶梯（缺失时对应档位自动降级，不影响 web_research 注册）：
+#   curl_cffi = T1 TLS 指纹模拟（破 Cloudflare/JA3 一类静态 403）；
+#   playwright = T2 无头渲染（JS 动态页）。T2 复用系统已装的 Google Chrome（channel="chrome"），
+#   无需 `playwright install` 下载 Chromium；若系统无 Chrome 则 T2 自动降级。
+curl_cffi==0.15.0
+playwright==1.61.0
+
+# macOS GUI 工具集（Accessibility / CGEvent / NSWorkspace）依赖；非 macOS 或缺失时相关工具自动不注册
+pyobjc-framework-Cocoa==12.1
+pyobjc-framework-Quartz==12.1
+pyobjc-framework-ApplicationServices==12.1
+llguidance>=1.7  # 工具调用段约束采样（inference-speedup Phase 2）；缺失时自动 fail-open
+
+# 数学工具（run_math / math_research 沙箱预载环境）：缺失时对应工具不注册
+sympy==1.14.0
+# 数据图表（render_chart / deck 视觉路由 chart 分支）：缺失时 render_chart 不注册
+matplotlib==3.11.0

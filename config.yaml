@@ -1,0 +1,161 @@
+# config.yaml —— 整个项目唯一的配置文件（backend 与 rag 两个进程共用；改这里即可）
+# 段落归属：inference/server/ingestion/web_search/math_research/ppt/agent/schedules → backend；
+#          rag（host/port 两侧共用，其余键仅 rag）/ tuning → rag。
+inference:
+  host: "127.0.0.1"  # 仅本机回环：外部访问统一走前端的 /api 代理
+  port: 14159
+  model: "mlx-community/gemma-4-e4b-it-4bit"
+  audio_max_length: 29
+
+  # 模型原生模态声明（任务中心化多模态：文本+图像原生，其余走转写/解析层）。
+  # 含 "audio" 才启用原生音频直喂（VAD 切片，仅少数模型支持）；默认不含 → 音频一律 ASR 转写。
+  # 换模型只需改这一行：例如原生支持音频的模型可加 "audio"。
+  modalities: ["text", "image"]
+
+  # KV Cache 量化（TurboQuant）：默认关闭 = 稠密缓存，行为与不配置时完全一致。
+  # kv_bits 设为小数（如 3.5≈质量中性 / 2.5≈轻微下降）即启用；整数走均匀量化。
+  # 量化由官方 generate_step 内部完成（全局注意力层量化、滑窗层与末层保持稠密）；
+  # 前缀复用/分支/删轮回退均已适配（见 gemma4_generate 的 trim 分支）。
+  kv_bits: null                 # null=关闭；小数启用 TurboQuant（推荐 3.5）
+  kv_quant_scheme: "turboquant" # turboquant | uniform
+  quantized_kv_start: 0         # 从第几个 token 起量化（0=全程；调大可保近端全精度）
+
+  # 工具调用段约束采样（inference-speedup Phase 2）：<|tool_call> 区间内按注册工具的
+  # JSON schema 做 logits mask，废轮（格式坏→重试）清零。自由文本/思考段不受约束。
+  # 依赖 llguidance；缺库或语法编译失败自动 fail-open 回自由采样（纠错闭环兜底）。
+  constrained_tool_calls: true
+
+  # prompt-lookup 投机采样（inference-speedup Phase 3）：从上下文 n-gram 匹配草稿、
+  # 主模型批量验证 + 回滚，decode 有效吞吐提升。off=关闭（行为与改动前完全一致）。
+  speculative:
+    mode: "prompt_lookup"       # off | prompt_lookup
+    num_draft_tokens: 8         # 单轮草稿长度 k 上限（无命中时自然退化为普通 decode）
+    ngram_max: 3                # n-gram 匹配窗口上限（3→2 逐级降配）
+    ngram_min: 2                # 低于该长度不出草稿（1-gram 误命中率过高）
+
+# HTTP 鉴权与跨域（P0）：前后端握手用共享密钥，弃用 IP 绑定（IP 认证的是网络位置而非客户端）。
+# api_key 优先读环境变量 AGENT_API_KEY；此处留空占位，真 key 不进仓库。
+# 密钥为空 = 未启用（启动告警并放行，便于首启/dev）；设了即强制 Bearer 校验（hmac 常量时间比对）。
+# 浏览器侧不持有 key：dev 由 Vite 代理注入 Authorization，生产由 Nginx 注入。
+server:
+  api_key: ""                       # 留空占位；真 key 经 AGENT_API_KEY 环境变量注入
+  allowed_origins:                  # CORS 白名单（仅浏览器直连 14159 时生效；走代理为同源，CORS 不触发）
+    - "http://localhost:5173"
+
+# RAG 知识库服务（rag/ 进程读取本段 + tuning 段；backend 只读 host/port 与之握手）
+rag:
+  host: "127.0.0.1"  # 仅本机回环：RAG 与 Agent 同机部署，只供本机调用
+  port: 14160
+  embed_path: "Qwen/Qwen3-Embedding-0.6B"    # 本地路径或 HF Repo ID（优先 rag/models/）
+  rerank_path: "Qwen/Qwen3-Reranker-0.6B"
+  max_length: 8192   # tokenizer 截断长度
+  batch_size: 32     # 向量化批大小
+
+# RAG 检索与路由调优（仅 rag/ 进程读取；所有距离均为余弦距离，0~2 越小越相似）
+tuning:
+  insert_routing_max_distance: 0.8   # 入库时：文档与分类描述的最大距离，超过流入未分类库
+  query_routing_max_distance: 0.85   # 查询时：意图与分类描述的最大距离，超过的库被剔除
+  query_max_dbs: 3                   # 查询时：最多并发检索几个分类库
+  query_max_chunks: 4                # 查询时：每个库最多召回几条片段
+  query_final_max_results: 3         # 重排后最终返回的最大条数
+  rerank_min_score: 0.5              # 重排分数（0~1）低于该值的片段被过滤
+  chunk_max_tokens: 256              # 切块：每块最大 token 数
+  chunk_overlap_tokens: 128          # 切块：相邻块之间的重叠 token 数
+
+# 摄入解析层（Ingestion）：非原生模态在进模型前的急解析。文本+图像原生直喂，音频经 ASR、
+# PDF/办公文档经解析折成带 provenance 标记的文本注入上下文；代码/大文件懒登记（只给路径，
+# 靠 file_extract/shell 按需取）。解析发生在推理 worker 之外，结果烘进历史日志、重放不重解析。
+ingestion:
+  asr_model: "mlx-community/whisper-large-v3-turbo"  # ASR 引擎（mlx-whisper，懒加载、进程内复用）
+  asr_language: null            # null=自动检测语种；也可固定如 "ja"/"zh"/"en"
+  pdf_text_min_chars_per_page: 50  # PDF 每页平均字符数低于此判为扫描/图像型→渲染成图走原生视觉
+  pdf_render_max_pages: 20      # 图像型 PDF 最多渲染的页数（其余用 file_extract 抽文本）
+  parse_max_chars: 12000        # 单文件解析文本注入上限（超出截断，余量用 file_extract 回源）
+  text_inline_max_chars: 4000   # 纯文本内联上限，超出转懒登记；代码一律懒登记不内联
+
+# 联网调查（web_research）：受限沙箱知识扩充。主体只调 web_research 一个工具、只拿回摘要；
+# 原始网页与搜索/抓取器全封在 framework/agents 内部（方案 b：物理隔离），主 MCPRegistry 不扫描。
+# 需本机起 SearXNG（Docker，须在 settings.yml 开启 json 输出）；离线则 web_research 自动不注册。
+web_search:
+  searxng_url: "http://127.0.0.1:8080"  # 本机 SearXNG（多引擎聚合，数据不出门）
+  timeout: 15                # 单次搜索/抓取的 HTTP 超时（秒）
+  max_results: 8             # web_search 返回候选上限
+  max_pages_per_call: 3      # 单次 open_pages 模型主动选取的抓取页数（与观察预算对齐）
+  min_valid_pages: 2         # 有效正文（非 403/非空壳）目标数；不足时自动从候选池补抓
+  backfill_max: 5            # 补位阶段最多额外尝试的候选数（防止把所有候选抓穿）
+  # 抓取升级阶梯（每个 URL 逐级兜底：T0 requests 静态 → T1 指纹模拟 → T2 无头渲染）：
+  impersonate_enabled: true  # T1：静态被 403/空壳时用 curl_cffi 模拟 Chrome TLS 指纹重试（破 JA3/Cloudflare 一类拦截）
+  render_enabled: true       # T2：T0/T1 仍拿不到正文（JS 渲染页）时用系统 Chrome 无头渲染兜底；缺 Chrome/Playwright 自动降级
+  render_wait_ms: 2500       # T2 渲染后额外等待网络空闲的毫秒数，给 JS 填充 DOM 的时间
+  per_page_max_chars: 2500   # 每页正文注入沙箱上下文的字符上限（1500 实测会把说明页
+                             # 铺垫之后的关键表格截掉，如税率速算表）
+  max_steps: 6               # 沙箱 ReAct 循环步数上限
+  total_timeout: 110         # web_research 整体墙钟熔断（秒）；须 < agent.tool_timeout_seconds
+  engines: []                # 可选：限定 SearXNG 引擎（如 ["duckduckgo","brave"]），空=用默认
+  content_farms:             # 域名黑名单（内容农场 / 已知强反爬站）：信誉压到最低，排到候选末尾
+    - "cn.investing.com"     # Cloudflare 质询站，静态抓取必 403，先沉底减少无谓尝试
+    - "investing.com"
+
+# 数学攻坚子 agent（math_research）：离线 Python/SymPy 沙箱内多步"写码-执行-验证"，
+# 最终答案由解释器输出程序化提取（submit_answer 机制，不经模型转写）。
+# 沙箱循环与执行器封在 framework/agents（math_sandbox/math_tools），主表只见包壳工具。
+math_research:
+  max_steps: 8          # 沙箱内部 写码-执行 循环步数上限
+  exec_timeout: 20      # 单次代码执行墙钟（秒）
+  total_timeout: 170    # 整体熔断（秒）；须 < agent.tool_timeout_seconds
+  max_parse_retries: 2  # 工具调用格式崩坏的重试预算
+
+# PPT 制作（deck_* 工具组）：Deck Spec 落 sessions/{id}/deck/deck.json（单一真相），
+# 前端检视面板 Deck 页签实时投影；图表由 render_chart 核心代码渲染（模型不写绘图代码）。
+# PDF 导出用无头 Chrome 打印前端 /print/deck 路由——渲染器只有一份，预览即所得，
+# 因此导出依赖前端服务在跑（dev: Vite 5173 / 生产: Nginx 同源端口）。
+ppt:
+  frontend_base_url: "http://localhost:5173"  # 打印路由的宿主（生产切 Nginx 地址）
+  export_timeout: 40    # PDF 导出总预算（秒）；须 < agent.tool_timeout_seconds
+
+# 编排循环护栏（多步任务 Agent）
+agent:
+  tool_schema_mode: "full"    # full=全部工具 schema 常驻（工具少时更省且缓存更稳）
+                              # catalog=目录常驻 + get_tool_schema 按名取详情（工具规模大后切换）
+  react_max_steps: 4          # 单步内自纠预算：一步连续多少次迭代未完成即判定失败并路由
+  max_total_iterations: 40    # 一轮任务的总推理次数熔断
+  replan_max: 3               # 整体重规划（推翻已有计划）次数上限
+  observation_max_chars: 4000 # 单条工具观察截断上限（保护每步延迟与上下文）
+  tool_timeout_seconds: 180   # 单次工具执行熔断：超时则放弃等待并反馈模型改路
+                              # （120→180：math_research 沙箱需 3~5 次内部生成，e4b 上 110s 不够收束）
+  max_parse_retries: 3        # 工具格式反复解析失败的断环阈值（同一坏调用重复≥此值即优雅终止）
+
+  # 单 worker 调度（ClassPolicy：确定性两级规则，无启发式）。
+  # 交互任务（chat/approval/resume）> 后台任务（summarize，priority=-1）由优先级排序天然实现。
+  scheduler:
+    preempt_background: true  # 交互任务到达时取消让位运行中的后台摘要（摘要可安全放弃、下次重试）
+    aging_seconds: 300        # 排队超过该秒数有效优先级抬一档（防后台任务饿死）；0=关闭老化
+
+  # 上下文压缩（Step 1：机械式工具观察压缩，T3-a/b 升级为「预算感知 + 取代感知」）。
+  # 取代去重：同一只读工具对同一目标的重复读取，较旧那条被后续读取取代（无夹写才取代）。
+  # 预算驱逐：全部观察总字符越过 observation_budget_chars 才在旧区按体量驱逐；不越则旧观察保持原文。
+  # 只改内存历史，持久化日志与前端展示保留全量。摘要式二次压缩见后续 Step。
+  observation_keep_recent: 6    # 最近多少条工具观察为硬保护窗口（永不改动，保任务内 KV 复用）
+  observation_compact_chars: 200 # 压缩后每条观察保留的首部字符数
+  observation_budget_chars: 20000 # 机械层观察总预算（字符）：越过才驱逐旧大观察，保守偏大
+
+  # 摘要式二次压缩（Step 2，方案A）：越过阈值把旧轮次折叠进 memory.json 的滚动摘要，
+  # 全量日志保留，model-facing 上下文重建为 [system]+[摘要]+[尾部]。触发共用一套摘要器：
+  #   高阈值=活跃期兜底（轮次落盘后判定，会触发一次重预填充，设高、少触发）；
+  #   低阈值=空闲/冻结前优化（KV 反正要释放，近乎免费，设低）。
+  summary_high_threshold: 8000  # 活跃期上下文 prompt token 越过即折叠旧轮
+  summary_low_threshold: 2000   # 空闲将冻结前上下文越过即折叠旧轮
+  summary_keep_tail_turns: 4    # 折叠时尾部保留的最近轮次数（这些保持原文）
+  summary_idle_seconds: 300     # 会话空闲超过此秒数即进入低阈值摘要维护（应 < 冻结超时 1800）
+
+  # 长期记忆沉淀（Stage 3）：折叠旧轮次时把其原文沉淀进 RAG 的 agent_memory 类目，
+  # 作为压缩的无损承重网——上下文摘要有损，被折叠掉的细节仍可经 rag_search 召回。
+  sediment_to_rag: true         # 关闭则只压缩不沉淀（被折叠内容仅留摘要，不可召回细节）
+
+
+# 定时任务（schedule）：落盘一等实体，模型经 schedule_* 工具管理（创建/修改需审批），
+# 到点在专属会话（schedule_{id}）无人值守执行；被交互任务 suspend 抢占、审批自动拒绝。
+schedules:
+  tick_seconds: 30        # 触发扫描周期（秒）
+  run_history_keep: 50    # 每任务运行历史保留条数（runs.jsonl 超出截断头部）
+  min_interval_minutes: 5 # interval 型下限（防模型排出高频轰炸）

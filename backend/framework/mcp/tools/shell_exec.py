@@ -1,0 +1,172 @@
+"""
+终端命令执行工具：桌面 Agent 的主力工具（大多数任务优先走终端）。
+
+审批策略（安全默认 = 白名单放行 + 其余弹窗，而非黑名单拦截）：
+- 只有「首命令属于只读白名单 且 不含 shell 元字符」的调用自动放行（如 ls/cat/grep）；
+- 其余一切（写文件、装卸软件、sudo、管道/重定向/子命令、任何不认识的命令）一律弹窗审批。
+黑名单（禁危险命令）是不安全的：管道、别名、子 shell、环境变量拼接都能绕过；
+白名单则是 fail-safe——没被明确判定为只读的，都当作有副作用对待。
+
+这是按调用动态审批（needs_approval）的典型用例：同一个工具，只读命令不打扰用户，
+变更命令才弹窗。
+"""
+import os
+import shlex
+import subprocess
+from typing import Any, Dict
+
+from ..base import BaseTool
+
+# 只读命令白名单：执行后不改变系统状态，可自动放行（无需审批）。
+# 刻意不含：curl（-o 写盘 / -d 外发数据，是提示注入外传的第一通道）、
+# networksetup（-set* 直接改网络配置）、env/printenv（会把进程环境变量——含
+# AGENT_API_KEY 等密钥——整份倒进模型上下文）——一律走审批。
+# awk 留在名单里安全：其程序体必带 {}，已被下方元字符检查拦截，实际只有
+# 「awk 作为管道段」之类本就被拦的场景会带它，单独出现无法执行程序体。
+_READONLY_COMMANDS = {
+    "ls", "pwd", "cd", "echo", "cat", "head", "tail", "wc", "stat", "file",
+    "find", "grep", "rg", "fd", "tree", "which", "type", "whereis", "realpath", "basename", "dirname",
+    "date", "cal", "uptime", "whoami", "id", "hostname", "uname", "sw_vers", "arch",
+    "df", "du", "ps", "top", "history",
+    "ping", "dig", "nslookup", "host", "ifconfig",
+    "man", "help", "true", "false", "sleep", "test",
+    "sort", "uniq", "cut", "awk", "sed", "diff", "cmp", "md5", "shasum", "column",
+    "jq", "yq", "xxd", "od", "strings",
+    "python", "python3", "node", "ruby",  # 仅纯 flag 查询（如 --version）放行，见 _is_readonly
+}
+
+# 白名单命令里仍能写状态的「危险参数」：命中即转审批（fail-safe 补丁，而非依赖黑名单）
+_FIND_WRITE_ARGS = {"-delete", "-exec", "-execdir", "-ok", "-okdir",
+                    "-fls", "-fprint", "-fprint0", "-fprintf"}
+
+# git 只读子命令白名单（其余 git 操作如 commit/push/reset 需审批）
+_GIT_READONLY_SUBCOMMANDS = {
+    "status", "log", "show", "diff", "branch", "remote", "config", "rev-parse",
+    "describe", "blame", "shortlog", "tag", "ls-files", "ls-remote", "cat-file", "reflog",
+}
+
+# 危险 shell 元字符：可引入子命令、重定向、命令替换或历史展开，出现即无法静态
+# 保证只读，一律审批。注意不含 glob 字符（* ? [ ]）——它们只影响参数展开，
+# 对只读首命令而言结果仍是只读，否则 `find . -name '*.py'` 这类合法只读命令会被误判。
+_SHELL_METACHARS = set(";|&<>`$(){}\n!")
+
+# 解释器直接执行代码的参数：内容不可知，需审批
+_CODE_EXEC_FLAGS = {"-e", "-c", "--eval", "--exec"}
+
+
+def _is_readonly(command: str) -> bool:
+    """静态判定命令是否为「确定的只读操作」；任何不确定都返回 False（→ 需审批）。"""
+    if not command or not command.strip():
+        return False
+    # 含 shell 元字符：可能有管道/重定向/子命令，无法确保只读
+    if any(ch in _SHELL_METACHARS for ch in command):
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False  # 引号不闭合等：判不了，交给审批
+    if not tokens:
+        return False
+
+    head = os.path.basename(tokens[0])
+    args = tokens[1:]
+
+    # 解释器：只放行纯 flag 查询（如 --version）。带内联代码（-e/-c）或脚本文件 → 内容
+    # 不可知，需审批；裸解释器（无参数）会挂 REPL 干等到超时，同样不放行。
+    if head in {"python", "python3", "node", "ruby"}:
+        if not args or any(a in _CODE_EXEC_FLAGS for a in args):
+            return False
+        return all(a.startswith("-") for a in args)
+
+    if head == "git":
+        sub = next((a for a in args if not a.startswith("-")), None)
+        return sub in _GIT_READONLY_SUBCOMMANDS
+
+    # find 的写动作参数（-delete/-exec/…）：命令本身在白名单，但这些参数会删文件/执行子命令
+    if head == "find":
+        return not any(a in _FIND_WRITE_ARGS for a in args)
+
+    # sed 的就地改写（-i / -i'' / --in-place）：写文件，需审批
+    if head == "sed":
+        return not any(a == "--in-place" or a.startswith("-i") for a in args)
+
+    return head in _READONLY_COMMANDS
+
+
+class ShellExecTool(BaseTool):
+    """在本机执行终端命令（只读命令自动放行，其余需用户审批）"""
+    name = "run_shell_command"
+    description = (
+        "Run a shell command on the user's macOS machine. This is your PRIMARY tool — prefer the "
+        "terminal for most tasks (files, processes, network, dev tools, system queries). "
+        "Read-only commands (ls, cat, grep, find, git status, ...) run immediately; any command "
+        "that changes state (writing files, installing, sudo, pipes/redirects, or unknown "
+        "commands) automatically triggers a user confirmation dialog before running — so just "
+        "call the tool directly, do NOT ask the user for permission in words. The tool response "
+        "reports stdout, stderr and the exit code (and tells you if the user denied it). "
+        "To create or modify FILES, use the write_file / edit_file tools instead — never shell "
+        "heredocs (cat <<EOF) or echo redirection."
+    )
+    requires_approval = False  # 默认放行；实际是否弹窗由 needs_approval 按命令内容动态决定
+    parameters = {
+        "properties": {
+            "command": {
+                "type": "string",
+                "description": "The shell command to run (executed via /bin/zsh -c on macOS)."
+            },
+            "cwd": {
+                "type": "string",
+                "description": "Optional working directory (absolute path). Defaults to the user's home."
+            },
+            "timeout": {
+                "type": "integer",
+                "description": "Optional per-command timeout in seconds (default 60, max 600)."
+            }
+        },
+        "required": ["command"]
+    }
+
+    def needs_approval(self, arguments: Dict[str, Any]) -> bool:
+        # 只读命令放行，其余（含判不了的）一律审批
+        return not _is_readonly(str(arguments.get("command", "")))
+
+    def execute(self, command: str, cwd: str = "", timeout: int = 60) -> str:
+        if not command or not command.strip():
+            return "System Error: empty command."
+
+        # 工作目录校验
+        workdir = os.path.expanduser(cwd) if cwd else os.path.expanduser("~")
+        if not os.path.isdir(workdir):
+            return f"System Error: working directory does not exist: {workdir}"
+
+        try:
+            timeout = max(1, min(int(timeout), 600))
+        except (TypeError, ValueError):
+            timeout = 60
+
+        try:
+            proc = subprocess.run(
+                command,
+                shell=True,
+                executable="/bin/zsh",
+                cwd=workdir,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return f"System Error: command timed out after {timeout}s (partial output discarded)."
+        except Exception as e:
+            return f"System Error: failed to run command: {str(e)}"
+
+        # 组装对模型友好的结构化结果
+        parts = [f"exit_code: {proc.returncode}"]
+        stdout = (proc.stdout or "").rstrip()
+        stderr = (proc.stderr or "").rstrip()
+        if stdout:
+            parts.append(f"stdout:\n{stdout}")
+        if stderr:
+            parts.append(f"stderr:\n{stderr}")
+        if not stdout and not stderr:
+            parts.append("(no output)")
+        return "\n".join(parts)

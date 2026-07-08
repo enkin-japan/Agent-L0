@@ -1,0 +1,44 @@
+# ═══════════ 系统 / 编辑器 ═══════════
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# ═══════════ 密钥 / 环境变量（模板 .env.example 除外）═══════════
+.env
+.env.*
+!.env.example
+
+# ═══════════ Python ═══════════
+__pycache__/
+*.pyc
+.venv/
+
+# ═══════════ Node / 前端构建产物 ═══════════
+node_modules/
+frontend/dist/
+frontend/dist-ssr/
+*.local
+
+# ═══════════ 模型权重（首启自动下载，动辄数 GB）═══════════
+backend/models/
+rag/models/
+
+# ═══════════ 运行时数据（用户会话 / 知识库 / 任务实体）═══════════
+backend/sessions/
+backend/schedules/
+backend/ui_state.json
+backend/guardrail_events.jsonl
+rag/chroma_data/
+rag/storage/
+
+# ═══════════ 日志 / 进程文件 ═══════════
+logs/
+*.log
+*.pid
+
+# ═══════════ SearXNG（settings.yml 含随机 secret_key，由 devctl 首启生成）═══════════
+searxng/settings.yml
+
+# ═══════════ Claude Code 本地配置 ═══════════
+.claude/settings.local.json
