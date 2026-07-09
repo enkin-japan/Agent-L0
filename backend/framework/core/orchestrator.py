@@ -8,6 +8,7 @@
       重规划上限(replan_max)；
     · 死循环检测：同名同参的物理工具调用直接拦截；同一步（按标题）反复失败则收窄策略菜单；
     · 失败路由：代码管配额和菜单（重试/改计划/降级/问用户兜底），模型在菜单内选策略；
+    · 写后验证门控（T1-4）：有写调用、之后无任何只读复查就收尾 → 推回一次要求先验证；
     · 终止：全部步骤完成 + 模型输出最终答复；取消标志在每个 token 段与迭代边界检查。
 - 计划是数据：模型只能通过 update_plan / complete_step 元工具修改（见 task_state.py）；
 - 元工具由本层拦截执行，不进 MCP 注册表（无审批、无探活、永远可用）；
@@ -124,6 +125,10 @@ MAX_TOKENS_RECOVERIES = 3
 # 提前收尾门控（T1-2）：计划未完成却吐纯文本时，每步最多推回 PREMATURE_FINISH_MAX 次，
 # 用尽后放行（视为向用户提问/汇报障碍），避免与「坚持要作答」的模型死循环。
 PREMATURE_FINISH_MAX = 1
+# 写后验证门控（T1-4）：本轮发生过写调用、之后没有任何只读复查就要收尾 = 把「已执行」
+# 当「已验证」（弱模型改一行就宣布修好的高频失败形态）。最多推回 VERIFY_NUDGE_MAX 次，
+# 用尽后放行——模型坚持不验证时接受其答复，杜绝死循环。
+VERIFY_NUDGE_MAX = 1
 
 
 def _last_user_text(history: List[Dict[str, Any]]) -> str:
@@ -210,6 +215,7 @@ class Orchestrator:
                        emit: Optional[Callable[[str, Dict[str, Any]], None]] = None,
                        keep_recent_calls: bool = False,
                        compact_history: bool = True,
+                       resume_unverified_write: bool = False,
                        **gen_kwargs) -> Dict[str, Any]:
         """
         执行一轮完整的编排闭环（一次用户消息 → 最终答复 / 挂起审批 / 取消 / 熔断）。
@@ -259,6 +265,10 @@ class Orchestrator:
         max_tokens_override: Optional[int] = None   # T1-3：非 None 时本轮后续生成用升档上限
         max_tokens_recoveries = 0                    # T1-3：多轮「接着写」已用次数
         premature_finish: Dict[str, int] = {}        # T1-2：按步（标题）计的提前收尾推回次数
+        # T1-4：写后验证门控状态。unverified_write=已有写调用且其后没有任何只读复查
+        # （审批续跑时刚执行的批准写调用由 resume_after_approval 传入）；verify_nudges=已推回次数。
+        unverified_write = resume_unverified_write
+        verify_nudges = 0
         base_max_tokens = int(gen_kwargs.get("max_tokens", 4096))
         # T3-c：一次性护栏提醒走可变尾部注入（用完即弃、不进历史、不被摘要压缩）。
         # 下一次生成消费后立即清空；由 T1-2/T1-3 分支按需填充。
@@ -452,6 +462,17 @@ class Orchestrator:
                     await self._execute_physical(session, phys_calls, tracker, parse_errors, emit=emit)
                 )
                 _stamp_turn_stats()  # [仪表 Phase 0] 刷新废轮计数（_execute_physical 可能新增 parse 失败）
+                # [验证门控 T1-4 状态跟踪] 按声明序扫描本批物理调用：写调用置「未验证」，
+                # 其后的只读调用视为复查、清除标记。写屏障（_execute_physical）保证写后重读
+                # 不会被去重拦截，因此复查总能真正执行；声明序与批内实际执行序一致
+                # （串行写之前会先冲刷此前积压的只读批）。
+                for c in phys_calls:
+                    if c.get("type") == "error":
+                        continue
+                    if self.registry.is_read_only(c.get("name"), c.get("arguments", {})):
+                        unverified_write = False
+                    else:
+                        unverified_write = True
                 # [结构性提醒 T1-1] 在最新观察旁贴一条条件式 nudge（步骤边界/漂移/收尾验证）。
                 # 与 prompt 尾部的 task_block 互补：task_block 渲染计划本身，这里给的是它覆盖不到、
                 # 且贴着最近观察（更强近因）的即时提醒。触发稀疏，避免每轮膨胀与 KV 抖动。
@@ -523,6 +544,29 @@ class Orchestrator:
                             "executing the remaining steps.")
                         _emit_progress()
                         continue
+
+                # [验证门控 T1-4] 收尾前的确定性检查：本轮改动过系统状态（写调用）、之后却没有
+                # 任何只读复查 = 「已执行」被当成「已验证」。推回一次，要求先复查改动是否真正
+                # 解决用户报告的问题。仅在正常收尾路径触发（计划未完成的纯文本 = 向用户提问/
+                # 汇报障碍，不适用）；推回有界，模型坚持不验证则放行其答复。
+                wrapping_up = task is None or not task.plan or task.all_done()
+                if wrapping_up and unverified_write and verify_nudges < VERIFY_NUDGE_MAX:
+                    verify_nudges += 1
+                    _transition("verify_nudge")
+                    events.emit("verify_nudge", session=session.session_id)
+                    session.add_assistant_message(content=text, thoughts=thoughts)
+                    # 推回走可变尾部（T3-c）：一次性提醒，用完即弃、不进历史、不被摘要压缩
+                    pending_tail_notes.append(
+                        "[System guardrail] You modified state this turn (write tool calls) but never "
+                        "re-checked the result. Do NOT tell the user it is done/fixed yet. First verify: "
+                        "re-read what you changed, trace the flow end-to-end to confirm the change is "
+                        "actually reached and takes effect, and check that it explains and resolves the "
+                        "user's ORIGINAL problem (not just a plausible nearby issue); run a real check if "
+                        "feasible. If verification shows the fix is wrong or incomplete, keep working. "
+                        "If you genuinely cannot verify, say so explicitly in your answer and tell the "
+                        "user what to test — do not claim success.")
+                    _emit_progress()
+                    continue
 
                 session.set_activity("已完成", phase="done")
                 text = _append_missing_asset_links(text, session.history[turn_start_idx:])
@@ -829,7 +873,15 @@ class Orchestrator:
             ] or [{"name": "system", "response": "Operation denied by user in the confirmation dialog."}]
 
         session.add_tool_message(responses)
+        # 刚批准执行的调用含写调用 → 续跑的 run_turn 以「未验证写」状态起步（T1-4）：
+        # 敏感写操作恰是最不该「改完即宣布成功」的一类，续跑不能丢失这个标记。
+        wrote_unverified = approved and any(
+            c.get("type") != "error"
+            and not self.registry.is_read_only(c.get("name"), c.get("arguments", {}))
+            for c in pending_calls
+        )
         # 回到编排主循环（若再次命中敏感工具会再次挂起）。keep_recent_calls：保留刚执行的
         # 批准调用指纹，防模型在续跑首步立即原样重复该敏感调用。
         # compact_history=False：轮中重入，本轮未落盘观察不参与压缩（防压缩桩落盘）。
-        return await self.run_turn(session, keep_recent_calls=True, compact_history=False, **gen_kwargs)
+        return await self.run_turn(session, keep_recent_calls=True, compact_history=False,
+                                   resume_unverified_write=wrote_unverified, **gen_kwargs)
