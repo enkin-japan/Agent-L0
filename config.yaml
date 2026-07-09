@@ -1,5 +1,5 @@
 # config.yaml —— 整个项目唯一的配置文件（backend 与 rag 两个进程共用；改这里即可）
-# 段落归属：inference/server/ingestion/web_search/math_research/ppt/agent/schedules → backend；
+# 段落归属：inference/server/ingestion/web_search/web_read/math_research/ppt/agent/schedules → backend；
 #          rag（host/port 两侧共用，其余键仅 rag）/ tuning → rag。
 inference:
   host: "127.0.0.1"  # 仅本机回环：外部访问统一走前端的 /api 代理
@@ -100,6 +100,15 @@ web_search:
   content_farms:             # 域名黑名单（内容农场 / 已知强反爬站）：信誉压到最低，排到候选末尾
     - "cn.investing.com"     # Cloudflare 质询站，静态抓取必 403，先沉底减少无谓尝试
     - "investing.com"
+
+# 网页阅读（web_read）：读用户明确给出的 URL 并返回忠实摘要——web_research 的姊妹快通道。
+# 复用同一套沙箱抓取/反投毒管道（L2-L4，旋钮沿用上面 web_search 段），跳过搜索与 ReAct
+# 循环：抓页 → 单次生成总结。物理隔离不变量相同：原文不进主体上下文。不依赖 SearXNG。
+web_read:
+  max_pages: 3               # 单次最多阅读的页面数
+  per_page_max_chars: 8000   # 单页任务字符预算放宽（调查任务是多页交叉，才压到 2500）
+  summary_timeout: 90        # 摘要生成熔断（秒）；连同抓取受 agent.tool_timeout_seconds 兜底
+  max_summary_tokens: 2048   # 摘要生成 token 上限
 
 # 数学攻坚子 agent（math_research）：离线 Python/SymPy 沙箱内多步"写码-执行-验证"，
 # 最终答案由解释器输出程序化提取（submit_answer 机制，不经模型转写）。
