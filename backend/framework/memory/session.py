@@ -515,14 +515,17 @@ class ChatSession:
         return meta
 
     def load_meta(self) -> dict:
-        """读取会话血缘元数据，缺失时返回根会话默认值。"""
+        """读取会话血缘元数据，缺失时返回根会话默认值。老会话缺 pinned 键回落 False。"""
         if self.meta_file.exists():
             try:
                 with open(self.meta_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    meta = json.load(f)
+                meta.setdefault("pinned", False)
+                return meta
             except Exception:
                 pass
-        return {"session_id": self.session_id, "parent_session_id": None, "branch_point": None}
+        return {"session_id": self.session_id, "parent_session_id": None,
+                "branch_point": None, "pinned": False}
 
     def clone_brain_memory_from(self, source: "ChatSession") -> bool:
         """
@@ -686,6 +689,161 @@ class SessionManager:
                 result["status"] = False
                 result["response"] = f"❌ 未发现session {session_id} : 请确认该会话是否存在"
         return result
+
+    # ==========================================
+    # 会话记录清理：反向映射索引 + pin + 确定性磁盘回收
+    # ==========================================
+    def set_pinned(self, session_id: str, pinned: bool) -> bool:
+        """置/撤会话 pin（读-改-写 meta.json，保留血缘等其余字段，不经 save_meta 以免覆盖）。
+        pin 的会话不被自动清扫回收。返回是否落盘成功（会话目录不存在则 False）。"""
+        session_dir = self.sessions_dir / session_id
+        if not session_dir.is_dir():
+            return False
+        meta_file = session_dir / "meta.json"
+        meta: Dict[str, Any] = {}
+        if meta_file.exists():
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            except Exception:
+                meta = {}
+        meta.setdefault("session_id", session_id)
+        meta["pinned"] = bool(pinned)
+        try:
+            with open(meta_file, "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False)
+            return True
+        except Exception as e:
+            print(f"[Memory] pin 落盘失败 {session_id}: {e}")
+            return False
+
+    def _scan_session_dir(self, d: Path) -> Optional[Dict[str, Any]]:
+        """扫描单个会话目录，返回真相元数据（纯磁盘只读，不拉起会话）。非目录返回 None。
+        title 从 history 首条轮次的 prompt 字段派生（与前端 localStorage 无关，孤儿也有人话名）。"""
+        if not d.is_dir():
+            return None
+        sid = d.name
+        meta: Dict[str, Any] = {}
+        meta_file = d / "meta.json"
+        if meta_file.exists():
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            except Exception:
+                meta = {}
+        hist = d / "history.jsonl"
+        turn_count = 0
+        last_updated: Optional[float] = None
+        title = ""
+        try:
+            has_content = hist.exists() and hist.stat().st_size > 0
+        except OSError:
+            has_content = False
+        if has_content:
+            try:
+                last_updated = hist.stat().st_mtime
+                with open(hist, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        turn_count += 1
+                        if not title:
+                            try:
+                                title = str(json.loads(line).get("prompt", "")).strip()[:80]
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+        created_at = meta.get("created_at")
+        if created_at is None:
+            try:
+                created_at = d.stat().st_ctime
+            except OSError:
+                created_at = None
+        scheduler = self.scheduler
+        return {
+            "session_id": sid,
+            "title": title,
+            "turn_count": turn_count,
+            "created_at": created_at,
+            "last_updated": last_updated if last_updated is not None else created_at,
+            "pinned": bool(meta.get("pinned", False)),
+            "parent_session_id": meta.get("parent_session_id"),
+            "active": bool(scheduler.is_active(sid)) if scheduler is not None else False,
+        }
+
+    def list_sessions_meta(self) -> List[Dict[str, Any]]:
+        """扫描 sessions 目录返回全部会话的真相元数据（供前端反向映射/对账）。
+        只读、不拉起会话；按最后更新时间倒序。"""
+        out: List[Dict[str, Any]] = []
+        for d in self.sessions_dir.iterdir():
+            item = self._scan_session_dir(d)
+            if item is not None:
+                out.append(item)
+        out.sort(key=lambda m: (m.get("last_updated") or 0), reverse=True)
+        return out
+
+    async def prune_expired_sessions(self, retention_days: float, empty_ttl_hours: float) -> List[str]:
+        """确定性磁盘回收：pin / 调度活跃 / 进行中 一律跳过；有内容会话按最后更新时间过期，
+        空壳（无历史/0 轮）按创建时间过期。复用 delete_session（并发安全）。返回被回收的 id 列表。
+        先物化候选再删除——避免边遍历边 rmtree。"""
+        now = time.time()
+        content_cutoff = retention_days * 86400.0
+        empty_cutoff = empty_ttl_hours * 3600.0
+        scheduler = self.scheduler
+        candidates: List[str] = []
+        for d in list(self.sessions_dir.iterdir()):
+            if not d.is_dir():
+                continue
+            sid = d.name
+            # 定时任务的执行会话（schedule_{id}）由 ScheduleStore 独立管理、前端反向映射也豁免——
+            # 一律不回收，避免删掉低频计划的执行日志（与前端对账策略对齐）
+            if sid.startswith("schedule_"):
+                continue
+            # 进行中（预写标记在轮首写、append_log 清）——绝不碰
+            if (d / "inflight.json").exists():
+                continue
+            # 调度活跃（运行/排队/挂起）——钉住不删
+            if scheduler is not None and scheduler.is_active(sid):
+                continue
+            meta: Dict[str, Any] = {}
+            meta_file = d / "meta.json"
+            if meta_file.exists():
+                try:
+                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                except Exception:
+                    meta = {}
+            if meta.get("pinned"):
+                continue
+            hist = d / "history.jsonl"
+            try:
+                has_content = hist.exists() and hist.stat().st_size > 0
+            except OSError:
+                has_content = False
+            if has_content:
+                try:
+                    if (now - hist.stat().st_mtime) <= content_cutoff:
+                        continue
+                except OSError:
+                    continue
+            else:
+                created = meta.get("created_at")
+                if created is None:
+                    try:
+                        created = d.stat().st_ctime
+                    except OSError:
+                        continue
+                if (now - float(created)) <= empty_cutoff:
+                    continue
+            candidates.append(sid)
+
+        reaped: List[str] = []
+        for sid in candidates:
+            try:
+                res = await self.delete_session(sid)
+                if res.get("status"):
+                    reaped.append(sid)
+            except Exception as e:
+                print(f"[Cleanup] 回收会话失败 {sid}: {e}")
+        return reaped
 
     # ==========================================
     # 轮次回退能力（删除最后一轮：内存、KV、落盘三方同步）

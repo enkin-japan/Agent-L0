@@ -9,12 +9,16 @@ import {
   PanelLeftClose,
   Pencil,
   PenSquare,
+  Pin,
+  PinOff,
   Plus,
   Search,
   Settings,
   Sun,
   Trash2,
   Check,
+  CheckCircle2,
+  Circle,
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
@@ -42,6 +46,8 @@ type AgentSidebarProps = {
   onOpenScheduleSession: (sessionId: string, title: string) => void
   onRename: (id: string, title: string) => void
   onDelete: (id: string) => void
+  onDeleteMany: (ids: string[]) => void
+  onTogglePin: (id: string, pinned: boolean) => void
   onMove: (id: string, workspaceId: string | null) => void
   onAddWorkspace: (name: string) => void
   onRenameWorkspace: (id: string, name: string) => void
@@ -53,13 +59,15 @@ type AgentSidebarProps = {
 
 export function AgentSidebar({
   workspaces, conversations, activeId, onSelect, onNewChat, onOpenScheduleSession,
-  onRename, onDelete, onMove, onAddWorkspace,
+  onRename, onDelete, onDeleteMany, onTogglePin, onMove, onAddWorkspace,
   onRenameWorkspace, onDeleteWorkspace, onCollapse,
   thinkingEnabled, onThinkingChange,
 }: AgentSidebarProps) {
   const t = useT()
   const tasks = useUiStore((s) => s.tasks)
   const [searchQuery, setSearchQuery] = useState("")
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false)
   const [newWorkspaceName, setNewWorkspaceName] = useState("")
@@ -72,9 +80,31 @@ export function AgentSidebar({
   )
 
   const recentChats = useMemo(() =>
-    filteredConversations.filter((c) => !c.workspaceId).sort((a, b) => b.updatedAt - a.updatedAt),
+    filteredConversations
+      .filter((c) => !c.workspaceId)
+      // pin 优先，其次按最后更新倒序
+      .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || b.updatedAt - a.updatedAt),
     [filteredConversations],
   )
+
+  function toggleSelected(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false)
+    setSelectedIds(new Set())
+  }
+
+  function confirmDeleteSelected() {
+    onDeleteMany([...selectedIds])
+    exitSelectMode()
+  }
 
   function submitNewWorkspace() {
     const name = newWorkspaceName.trim()
@@ -85,9 +115,32 @@ export function AgentSidebar({
 
   function renderChatItem(conversation: Conversation) {
     const isActive = conversation.id === activeId
+    const isPinned = !!conversation.pinned
+    // 选择模式：整行变复选，点击切换选中而非跳转；操作菜单让位给复选框
+    if (selectMode) {
+      const checked = selectedIds.has(conversation.id)
+      return (
+        <button
+          key={conversation.id}
+          type="button"
+          onClick={() => toggleSelected(conversation.id)}
+          className={cn(
+            "flex w-full items-center gap-2 rounded-xl py-2 pl-2.5 pr-3 text-left transition-colors",
+            checked ? "bg-accent" : "hover:bg-accent/60",
+          )}
+        >
+          {checked
+            ? <CheckCircle2 className="size-4 shrink-0 text-primary" />
+            : <Circle className="size-4 shrink-0 text-muted-foreground/50" />}
+          {isPinned && <Pin className="size-3 shrink-0 text-muted-foreground/70" />}
+          <span className="truncate text-sm">{convTitle(conversation.title, t.store.newChatTitle)}</span>
+        </button>
+      )
+    }
     return (
       <div key={conversation.id} className={cn("group/item relative flex items-center rounded-xl transition-colors", isActive ? "bg-accent" : "hover:bg-accent/60")}>
-        <button onClick={() => onSelect(conversation.id)} className="flex min-w-0 flex-1 items-center rounded-xl py-2 pl-3 pr-9 text-left">
+        <button onClick={() => onSelect(conversation.id)} className="flex min-w-0 flex-1 items-center gap-1.5 rounded-xl py-2 pl-3 pr-9 text-left">
+          {isPinned && <Pin className="size-3 shrink-0 text-muted-foreground/70" />}
           <span className={cn("truncate text-sm", isActive ? "font-medium" : "text-foreground/80")}>
             {convTitle(conversation.title, t.store.newChatTitle)}
           </span>
@@ -99,6 +152,11 @@ export function AgentSidebar({
             <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuGroup>
+                <DropdownMenuItem onClick={() => onTogglePin(conversation.id, !isPinned)}>
+                  {isPinned
+                    ? <><PinOff className="mr-2 size-4" /> {t.workspace.unpin}</>
+                    : <><Pin className="mr-2 size-4" /> {t.workspace.pin}</>}
+                </DropdownMenuItem>
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger><FolderInput className="mr-2 size-4" />{t.workspace.moveTo}</DropdownMenuSubTrigger>
                   <DropdownMenuSubContent>
@@ -208,9 +266,33 @@ export function AgentSidebar({
             </AccordionItem>
           ))}
         </Accordion>
-        <p className="pt-4 pb-2 text-xs font-semibold text-muted-foreground">{t.sidebar.recentChats}</p>
+        <div className="flex items-center justify-between pt-4 pb-2">
+          <p className="text-xs font-semibold text-muted-foreground">{t.sidebar.recentChats}</p>
+          {recentChats.length > 0 && (
+            <button
+              type="button"
+              className="text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+              onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+            >
+              {selectMode ? t.sidebar.cancelSelect : t.sidebar.select}
+            </button>
+          )}
+        </div>
         <div className="space-y-1">{recentChats.map(renderChatItem)}</div>
       </ScrollArea>
+
+      {/* 批量删除操作条：仅选择模式且有选中时出现 */}
+      {selectMode && selectedIds.size > 0 && (
+        <div className="px-2 pt-2">
+          <Button
+            variant="destructive"
+            className="w-full justify-center gap-2 rounded-xl"
+            onClick={confirmDeleteSelected}
+          >
+            <Trash2 className="size-4" /> {t.sidebar.deleteSelected} ({selectedIds.size})
+          </Button>
+        </div>
+      )}
 
       {/* Deep Thinking 开关（对应接口 enable_thinking） */}
       <div className="px-2 pt-3">

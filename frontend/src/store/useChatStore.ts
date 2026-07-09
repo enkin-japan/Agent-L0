@@ -8,10 +8,12 @@ import {
   getHistory,
   getTaskStatus,
   getUiState,
+  listSessions,
   putUiState,
   resumeTask as apiResumeTask,
   sendApprovalStream,
   sendChatStream,
+  setSessionPin,
   suspendTask as apiSuspendTask,
 } from "@/api/agent"
 import type {
@@ -41,7 +43,7 @@ export const NEW_CHAT_TITLE = "__NEW_CHAT__"
 type PersistedState = {
   workspaces: Workspace[]
   conversations: Array<
-    Pick<Conversation, "id" | "title" | "updatedAt" | "workspaceId" | "turnCount">
+    Pick<Conversation, "id" | "title" | "updatedAt" | "workspaceId" | "turnCount" | "pinned">
   >
   activeId: string
   thinkingEnabled: boolean
@@ -57,6 +59,7 @@ function freshConversation(workspaceId: string | null = null): Conversation {
     // 新会话在服务端还不存在，没有历史可拉
     historyLoaded: true,
     turnCount: 0,
+    pinned: false,
   }
 }
 
@@ -112,8 +115,8 @@ function uiStatePayload(s: { workspaces: Workspace[]; conversations: Conversatio
   return {
     workspaces: s.workspaces,
     conversations: s.conversations.map(
-      ({ id, title, updatedAt, workspaceId, turnCount }) => ({
-        id, title, updatedAt, workspaceId, turnCount,
+      ({ id, title, updatedAt, workspaceId, turnCount, pinned }) => ({
+        id, title, updatedAt, workspaceId, turnCount, pinned,
       }),
     ),
     thinkingEnabled: s.thinkingEnabled,
@@ -161,6 +164,12 @@ interface ChatState {
   renameConversation: (id: string, title: string) => void
   moveConversation: (id: string, workspaceId: string | null) => void
   deleteConversation: (id: string) => void
+  /** 批量删除会话（多选清理）：逐个同步后端删除并从本地移除。 */
+  deleteConversations: (ids: string[]) => void
+  /** 置/撤会话 pin（乐观更新 + 后端落盘，失败回滚）：pin 的会话不被后台自动清扫。 */
+  togglePin: (id: string, pinned: boolean) => void
+  /** 反向映射对账：以后端会话索引为真相，剔除已被回收的幽灵条目、补入孤儿会话、同步 pin。 */
+  reconcileSessions: () => Promise<void>
   addWorkspace: (name: string) => void
   renameWorkspace: (id: string, name: string) => void
   /** 删除工作区：其内会话回归「最近对话」（workspaceId 置 null），不删任何会话。 */
@@ -459,6 +468,95 @@ export const useChatStore = create<ChatState>((set, get) => {
           suspendedSessions: suspNext,
           taskProgress: taskNext,
           liveActivity: actNext,
+        }
+      })
+    },
+
+    deleteConversations: (ids) => {
+      const idSet = new Set(ids)
+      if (idSet.size === 0) return
+      for (const id of idSet) {
+        controllers.get(id)?.abort()
+        stopTaskPolling(id)
+        deleteSession(id).catch((e) => console.warn("批量删除服务端会话失败:", e))
+      }
+      set((s) => {
+        let next = s.conversations.filter((c) => !idSet.has(c.id))
+        if (next.length === 0) next = [freshConversation()]
+        const drop = (rec: Record<string, unknown>) => {
+          const out = { ...rec }
+          for (const id of idSet) delete out[id]
+          return out
+        }
+        return {
+          conversations: next,
+          activeId: idSet.has(s.activeId) ? next[0].id : s.activeId,
+          pendingApprovals: drop(s.pendingApprovals) as typeof s.pendingApprovals,
+          suspendedSessions: drop(s.suspendedSessions) as typeof s.suspendedSessions,
+          taskProgress: drop(s.taskProgress) as typeof s.taskProgress,
+          liveActivity: drop(s.liveActivity) as typeof s.liveActivity,
+        }
+      })
+    },
+
+    togglePin: (id, pinned) => {
+      // 乐观更新本地，失败回滚（不改 updatedAt：pin 不算内容变更，不该抬高排序时间）
+      patchConversation(id, { pinned })
+      setSessionPin(id, pinned).catch((e) => {
+        console.warn("pin 落盘失败，回滚:", e)
+        patchConversation(id, { pinned: !pinned })
+      })
+    },
+
+    reconcileSessions: async () => {
+      let index
+      try {
+        index = await listSessions()
+      } catch {
+        return // 后端不可达：静默沿用本地
+      }
+      // schedule_ 前缀会话由定时任务条独立管理，不并入普通会话列表
+      const onDisk = new Map(
+        index.sessions
+          .filter((m) => !m.session_id.startsWith("schedule_"))
+          .map((m) => [m.session_id, m]),
+      )
+      set((s) => {
+        const localIds = new Set(s.conversations.map((c) => c.id))
+        // 1) 剔除幽灵：本地已落盘（turnCount>0）但后端已无 → 已被回收/外部删除。
+        //    turnCount===0 的未发送新会话磁盘上本就不存在，保留不动；
+        //    schedule_ 会话由定时任务条独立管理、不在 onDisk 映射内，一律保留不误删。
+        const kept = s.conversations.filter(
+          (c) => onDisk.has(c.id) || c.turnCount === 0 || c.id.startsWith("schedule_"),
+        )
+        // 2) 同步匹配项的 pin（后端为真相）与轮数；用户改过的标题不被服务端派生标题覆盖
+        const synced = kept.map((c) => {
+          const m = onDisk.get(c.id)
+          if (!m) return c
+          const title =
+            c.title === NEW_CHAT_TITLE && m.title ? m.title : c.title
+          return { ...c, pinned: m.pinned, turnCount: m.turn_count, title }
+        })
+        // 3) 补入孤儿：后端有、本地无（清了缓存/换设备）→ 以服务端派生标题登记，可见可删
+        const orphans: Conversation[] = []
+        for (const [sid, m] of onDisk) {
+          if (localIds.has(sid)) continue
+          orphans.push({
+            id: sid,
+            title: m.title || NEW_CHAT_TITLE,
+            updatedAt: (m.last_updated ?? m.created_at ?? Date.now() / 1000) * 1000,
+            workspaceId: null,
+            messages: [],
+            historyLoaded: false,
+            turnCount: m.turn_count,
+            pinned: m.pinned,
+          })
+        }
+        let next = [...synced, ...orphans]
+        if (next.length === 0) next = [freshConversation()]
+        return {
+          conversations: next,
+          activeId: next.some((c) => c.id === s.activeId) ? s.activeId : next[0].id,
         }
       })
     },
@@ -1020,12 +1118,13 @@ useChatStore.subscribe((s) => {
   const data: PersistedState = {
     workspaces: s.workspaces,
     conversations: s.conversations.map(
-      ({ id, title, updatedAt, workspaceId, turnCount }) => ({
+      ({ id, title, updatedAt, workspaceId, turnCount, pinned }) => ({
         id,
         title,
         updatedAt,
         workspaceId,
         turnCount,
+        pinned,
       }),
     ),
     activeId: s.activeId,

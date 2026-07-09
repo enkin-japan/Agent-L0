@@ -67,6 +67,26 @@ async def _idle_maintenance_loop(session_manager, scheduler, orchestrator, inter
         except Exception as e:
             print(f"[Maintenance] 空闲维护回合异常（已忽略，继续）: {e}")
 
+
+async def _session_cleanup_loop(session_manager, cfg: dict):
+    """确定性磁盘回收（session_cleanup）：周期性回收过期会话（pin/调度活跃/进行中一律跳过）。
+    先 sleep 再扫——启动不被拖慢，且 recover_inflight_turns 已在装配阶段先行完成。
+    单目录异常在 delete_session 内隔离，整轮异常在此隔离，绝不掀翻循环。"""
+    interval = int(cfg.get("scan_interval_seconds", 3600))
+    retention_days = float(cfg.get("retention_days", 30))
+    empty_ttl_hours = float(cfg.get("empty_ttl_hours", 24))
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            reaped = await session_manager.prune_expired_sessions(retention_days, empty_ttl_hours)
+            if reaped:
+                shown = ", ".join(reaped[:8]) + (" …" if len(reaped) > 8 else "")
+                print(f"🧹 [Cleanup] 回收 {len(reaped)} 个过期会话: {shown}")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"❌ [Cleanup] 清扫回合异常（已隔离，循环继续）: {e}")
+
 # ==========================================
 # 1. 路径与配置初始化
 # ==========================================
@@ -198,6 +218,17 @@ async def lifespan(app: FastAPI):
     )
     app.state.maintenance_task = maintenance_task
 
+    # 6.1 清理层：确定性磁盘回收的后台清扫（默认自动过期、pin 才长留；见 config.session_cleanup）。
+    #     依赖 session_manager.scheduler（已于上方注入），故置于其后；recover_inflight_turns 已先行。
+    cleanup_cfg = config.get("session_cleanup") or {}
+    cleanup_task = None
+    if cleanup_cfg.get("enabled", True):
+        cleanup_task = asyncio.create_task(_session_cleanup_loop(session_manager, cleanup_cfg))
+        app.state.cleanup_task = cleanup_task
+        print(f"🧹 [System] 会话自动清理已启用（保留 {cleanup_cfg.get('retention_days', 30)} 天 / "
+              f"空壳 {cleanup_cfg.get('empty_ttl_hours', 24)} 小时 / "
+              f"周期 {cleanup_cfg.get('scan_interval_seconds', 3600)}s）")
+
     # 7. 定时任务层：触发扫描循环（due 任务经 kind="scheduled"/priority=-1 无人值守执行，
     #    交互任务到达时被 suspend 抢占让位，见 framework/schedule/runner.py）
     schedule_runner = ScheduleRunner(
@@ -217,8 +248,10 @@ async def lifespan(app: FastAPI):
     print(f"✅ [System] AI Agent has started and is listening on {AGENT_HOST}:{AGENT_PORT}")
     yield
 
-    # 停机：先停后台维护回合与定时任务触发循环
+    # 停机：先停后台维护回合、清扫回合与定时任务触发循环
     maintenance_task.cancel()
+    if cleanup_task is not None:
+        cleanup_task.cancel()
     schedule_tick_task.cancel()
 
     # 优雅停机：安全清理物理与内存资源

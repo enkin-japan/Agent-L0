@@ -174,6 +174,34 @@ class DeleteTurnResponse(BaseModel):
     remaining_turns: Optional[int] = None  # 回退后剩余的历史轮次数
     response: str
 
+class SessionMetaItem(BaseModel):
+    """会话索引条目（后端真相，供前端反向映射/对账，与 localStorage 无关）"""
+    session_id: str
+    title: str                              # 从 history 首条用户消息派生；空壳为 ""
+    turn_count: int
+    created_at: Optional[float] = None
+    last_updated: Optional[float] = None    # history.jsonl mtime；空壳回落 created_at
+    pinned: bool = False
+    parent_session_id: Optional[str] = None # 分支溯源（悬空仅装饰，不影响功能）
+    active: bool = False                    # 调度器视角是否活跃（运行/排队/挂起）
+
+class SessionListResponse(BaseModel):
+    """会话索引响应体（GET /api/v1/sessions）"""
+    status: bool
+    count: int
+    sessions: List[SessionMetaItem]
+
+class PinRequest(BaseModel):
+    """置/撤会话 pin 的请求体（pin 的会话不被自动清扫回收）"""
+    pinned: bool
+
+class PinResponse(BaseModel):
+    """置/撤会话 pin 的响应体"""
+    status: bool
+    session_id: str
+    pinned: bool
+    response: str
+
 class HistoryResponse(BaseModel):
     """
     会话历史节点列表响应体（供前端选取分支节点）

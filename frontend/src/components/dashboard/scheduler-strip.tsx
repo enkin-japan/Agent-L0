@@ -146,34 +146,39 @@ function TaskRow({
   }
 
   return (
-    <li className="relative">
-      <button
-        type="button"
-        onClick={onClick}
-        className={cn(
-          "flex w-full items-center gap-1.5 rounded-lg px-1.5 py-1 text-left transition-colors",
-          isActive ? "bg-accent" : "hover:bg-accent/60",
-          stoppable && "pr-7",
-        )}
-      >
-        {icon}
-        <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{title}</span>
-        <span className="shrink-0 text-[10px] text-muted-foreground/70">{kind}</span>
-        {isActive && (
-          <span className="size-1.5 shrink-0 rounded-full bg-chart-1" title={t.scheduler.thisSession} />
-        )}
-      </button>
-      {stoppable && (
+    <li>
+      {/* 行与中止按钮同处一个单行容器：中止按钮以「行」为垂直定位基准。
+          duration 另起一行放在容器外，避免它把 li 撑高、令 absolute top-1/2 的按钮偏下失准。 */}
+      <div className="relative flex items-center">
         <button
           type="button"
-          onClick={handleStop}
-          title={t.scheduler.stopTask}
-          className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground/70 transition-colors hover:bg-destructive/15 hover:text-destructive"
+          onClick={onClick}
+          className={cn(
+            "flex w-full items-center gap-1.5 rounded-lg px-1.5 py-1 text-left transition-colors",
+            isActive ? "bg-accent" : "hover:bg-accent/60",
+            stoppable && "pr-8",
+          )}
         >
-          <Square className="size-3" />
-          <span className="sr-only">{t.scheduler.stopTask}</span>
+          {icon}
+          <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{title}</span>
+          <span className="shrink-0 text-[10px] text-muted-foreground/70">{kind}</span>
+          {isActive && (
+            <span className="size-1.5 shrink-0 rounded-full bg-chart-1" title={t.scheduler.thisSession} />
+          )}
         </button>
-      )}
+        {stoppable && (
+          <button
+            type="button"
+            onClick={handleStop}
+            title={t.scheduler.stopTask}
+            className="absolute right-1.5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-destructive/15 hover:text-destructive"
+          >
+            {/* 实心方块＝通用「停止」符号；描边空心方框会被误读成半成品/复选框 */}
+            <Square className="size-2.5 fill-current" />
+            <span className="sr-only">{t.scheduler.stopTask}</span>
+          </button>
+        )}
+      </div>
       {duration && (
         <p className="pl-6 text-[10px] text-muted-foreground/60">{duration}</p>
       )}

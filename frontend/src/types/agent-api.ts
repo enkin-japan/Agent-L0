@@ -56,6 +56,31 @@ export interface DeleteTurnResponse {
   response: string
 }
 
+/** 后端会话索引条目（反向映射：磁盘真相，用于对账 localStorage 与展示可删会话）。 */
+export interface SessionMetaItem {
+  session_id: string
+  title: string
+  turn_count: number
+  created_at?: number | null
+  last_updated?: number | null
+  pinned: boolean
+  parent_session_id?: string | null
+  active: boolean
+}
+
+export interface SessionListResponse {
+  status: boolean
+  count: number
+  sessions: SessionMetaItem[]
+}
+
+export interface PinResponse {
+  status: boolean
+  session_id: string
+  pinned: boolean
+  response: string
+}
+
 /** 进行中轮次预写标记：轮首落盘、轮末清除；存在即代表有一轮尚未落进 turns。 */
 export interface InflightMarker {
   prompt: string

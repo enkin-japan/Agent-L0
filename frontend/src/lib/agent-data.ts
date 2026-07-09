@@ -39,6 +39,8 @@ export type Conversation = {
   historyLoaded: boolean
   /** 服务端已落盘的轮次数（分支下标的上界）。 */
   turnCount: number
+  /** 是否已 pin（落盘 meta.json）：pin 的会话不被后台自动清扫回收。 */
+  pinned?: boolean
 }
 
 export type Workspace = {

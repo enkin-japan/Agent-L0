@@ -36,6 +36,8 @@ export default function Page() {
     renameConversation,
     moveConversation,
     deleteConversation,
+    deleteConversations,
+    togglePin,
     addWorkspace,
     renameWorkspace,
     deleteWorkspace,
@@ -63,9 +65,13 @@ export default function Page() {
     applyTheme(theme)
   }, [theme])
 
-  // 启动时从服务端拉取 UI 状态（工作区/会话结构），实现换设备/换浏览器无缝迁移
+  // 启动时从服务端拉取 UI 状态（工作区/会话结构），实现换设备/换浏览器无缝迁移；
+  // 随后以后端会话索引对账：剔除已被自动清扫回收的幽灵、补入孤儿会话、同步 pin。
   useEffect(() => {
-    void useChatStore.getState().hydrateFromServer()
+    void useChatStore
+      .getState()
+      .hydrateFromServer()
+      .then(() => useChatStore.getState().reconcileSessions())
   }, [])
 
   // 全局单 worker 调度快照的低频轮询（驱动侧栏 Worker 状态条）
@@ -92,6 +98,11 @@ export default function Page() {
 
   function handleDelete(id: string) {
     if (window.confirm(t.confirm.deleteConversation)) deleteConversation(id)
+  }
+
+  function handleDeleteMany(ids: string[]) {
+    if (ids.length === 0) return
+    if (window.confirm(t.confirm.deleteConversationsMany(ids.length))) deleteConversations(ids)
   }
 
   return (
@@ -123,6 +134,8 @@ export default function Page() {
             }}
             onRename={renameConversation}
             onDelete={handleDelete}
+            onDeleteMany={handleDeleteMany}
+            onTogglePin={togglePin}
             onMove={moveConversation}
             onAddWorkspace={addWorkspace}
             onRenameWorkspace={renameWorkspace}

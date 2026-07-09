@@ -159,3 +159,15 @@ schedules:
   tick_seconds: 30        # 触发扫描周期（秒）
   run_history_keep: 50    # 每任务运行历史保留条数（runs.jsonl 超出截断头部）
   min_interval_minutes: 5 # interval 型下限（防模型排出高频轰炸）
+
+# 会话记录清理（session_cleanup）：sessions/ 随会话堆积，此层做确定性磁盘回收。
+# 反转默认——默认自动过期、pin 才长留；这样"越囤越懒"的死循环不成立（只手动做加法=保留）。
+# 复用 SessionManager.delete_session（并发安全：取消标志→会话锁→discard→rmtree），硬删不进回收站。
+# 一律跳过：已 pin（meta.json）、调度活跃（is_active：运行/排队/挂起）、进行中（inflight.json）、
+#          定时任务执行会话（schedule_ 前缀，由 ScheduleStore 独立管理）。
+# 起算点：有内容会话取最后更新（history.jsonl mtime，度量"闲置"而非"年龄"）；空壳取创建时间。
+session_cleanup:
+  enabled: true               # 关闭则只留手动删除（前端/DELETE 端点仍可用）
+  retention_days: 30          # 有内容会话：最后更新距今超过此天数即回收
+  empty_ttl_hours: 24         # 空壳会话（无历史/0 轮）：创建距今超过此小时数即回收
+  scan_interval_seconds: 3600 # 后台清扫扫描周期（秒）

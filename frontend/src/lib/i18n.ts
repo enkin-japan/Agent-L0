@@ -29,6 +29,10 @@ const en = {
     newWorkspaceShort: "New chat",
     collapse: "Collapse sidebar",
     settings: "Settings",
+    select: "Select",
+    cancelSelect: "Done",
+    deleteSelected: "Delete",
+    pinnedSection: "Pinned",
   },
 
   workspace: {
@@ -43,6 +47,8 @@ const en = {
     rename: "Rename",
     delete: "Delete",
     renamePrompt: "Rename:",
+    pin: "Pin (keep)",
+    unpin: "Unpin",
   },
 
   settings: {
@@ -254,6 +260,8 @@ const en = {
     deleteWorkspace: "Delete this workspace? Its conversations will move back to Recent (nothing is deleted).",
     deleteSchedule: "Delete this scheduled task and its run history? Its past conversation is kept.",
     stopWorkerTask: "Stop this task? The current turn will be rolled back (the cancellation is archived in its history).",
+    deleteConversationsMany: (n: number) =>
+      `Delete ${n} conversation${n > 1 ? "s" : ""}? Their server history and uploaded files will be removed too.`,
   },
 
   // store 产出的系统提示条 / 顶部横幅（前端生成，须本地化）
@@ -294,6 +302,10 @@ const zh: Dict = {
     newWorkspaceShort: "新建对话",
     collapse: "收起侧栏",
     settings: "设置",
+    select: "选择",
+    cancelSelect: "完成",
+    deleteSelected: "删除",
+    pinnedSection: "已置顶",
   },
 
   workspace: {
@@ -308,6 +320,8 @@ const zh: Dict = {
     rename: "重命名",
     delete: "删除",
     renamePrompt: "重命名：",
+    pin: "置顶保留",
+    unpin: "取消置顶",
   },
 
   settings: {
@@ -518,6 +532,7 @@ const zh: Dict = {
     deleteWorkspace: "删除该工作区？其中的对话会回到「最近」列表（不会删除任何对话）。",
     deleteSchedule: "删除这个定时任务及其运行历史？它的专属会话（聊天记录）会保留。",
     stopWorkerTask: "中止该任务？当前轮次将被回滚（取消记录会留档在该会话历史中）。",
+    deleteConversationsMany: (n: number) => `删除选中的 ${n} 个对话？服务端的历史记录和上传文件也会一并清除。`,
   },
 
   store: {
@@ -555,6 +570,10 @@ const ja: Dict = {
     newWorkspaceShort: "新規チャット",
     collapse: "サイドバーを閉じる",
     settings: "設定",
+    select: "選択",
+    cancelSelect: "完了",
+    deleteSelected: "削除",
+    pinnedSection: "ピン留め",
   },
 
   workspace: {
@@ -569,6 +588,8 @@ const ja: Dict = {
     rename: "名前を変更",
     delete: "削除",
     renamePrompt: "名前を変更：",
+    pin: "ピン留め（保持）",
+    unpin: "ピン留めを解除",
   },
 
   settings: {
@@ -779,6 +800,7 @@ const ja: Dict = {
     deleteWorkspace: "このワークスペースを削除しますか？中の会話は「最近」に戻ります（会話自体は削除されません）。",
     deleteSchedule: "この定期タスクと実行履歴を削除しますか？専用の会話（チャット履歴）は残ります。",
     stopWorkerTask: "このタスクを中止しますか？現在のターンはロールバックされます（中止はその会話の履歴に記録されます）。",
+    deleteConversationsMany: (n: number) => `選択した ${n} 件の会話を削除しますか？サーバーの履歴とアップロードファイルも削除されます。`,
   },
 
   store: {

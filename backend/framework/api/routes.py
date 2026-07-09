@@ -17,6 +17,9 @@ from .schemas import (
     BranchRequest,
     BranchResponse,
     MemoryStatusResponse,
+    PinRequest,
+    PinResponse,
+    SessionListResponse,
     ScheduleActionResponse,
     ScheduleListResponse,
     ScheduleRunsResponse,
@@ -512,6 +515,33 @@ async def resume_task(session_id: str, request: Request):
             await _maybe_summarize_active(session, orchestrator, scheduler, session_id)
 
     return response_data
+
+
+@router.get("/api/v1/sessions", response_model=SessionListResponse)
+async def list_sessions(request: Request):
+    """
+    会话索引：扫描 sessions 目录返回后端真相元数据（session_id/标题/轮数/时间/pin/活跃/血缘）。
+    供前端反向映射与对账——据此展示可筛选删除的会话，并剔除 localStorage 里的幽灵条目。
+    只读、不拉起会话；磁盘扫描走线程池避免阻塞事件循环。
+    """
+    session_manager = request.app.state.session_manager
+    items = await asyncio.to_thread(session_manager.list_sessions_meta)
+    return {"status": True, "count": len(items), "sessions": items}
+
+
+@router.patch("/api/v1/chat/{session_id}/pin", response_model=PinResponse)
+async def set_session_pin(session_id: str, request: Request, body: PinRequest):
+    """
+    置/撤会话 pin（落盘 meta.json）。pin 的会话不被后台自动清扫回收——手动"保留"语义。
+    """
+    session_manager = request.app.state.session_manager
+    ok = await asyncio.to_thread(session_manager.set_pinned, session_id, body.pinned)
+    if not ok:
+        return {"status": False, "session_id": session_id, "pinned": body.pinned,
+                "response": f"❌ 未发现会话 {session_id} 或写入失败"}
+    verb = "已置顶保留" if body.pinned else "已取消保留"
+    return {"status": True, "session_id": session_id, "pinned": body.pinned,
+            "response": f"✅ 会话 {session_id} {verb}"}
 
 
 @router.delete("/api/v1/chat/{session_id}", response_model=DeleteSessionResponse)

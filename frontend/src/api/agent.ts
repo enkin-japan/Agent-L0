@@ -10,6 +10,8 @@ import type {
   DeleteSessionResponse,
   DeleteTurnResponse,
   HistoryResponse,
+  SessionListResponse,
+  PinResponse,
   LiveActivity,
   MemoryStatusResponse,
   ScheduleActionResponse,
@@ -207,6 +209,27 @@ export async function deleteLastTurn(
 
 export async function getHistory(sessionId: string): Promise<HistoryResponse> {
   const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}/history`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+/** 会话索引（后端磁盘真相）：反向映射，供前端对账 localStorage、展示可筛选删除的会话。 */
+export async function listSessions(): Promise<SessionListResponse> {
+  const res = await fetch(`${BASE_URL}/api/v1/sessions`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+/** 置/撤会话 pin：pin 的会话不被后台自动清扫回收（手动「保留」）。 */
+export async function setSessionPin(
+  sessionId: string,
+  pinned: boolean,
+): Promise<PinResponse> {
+  const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}/pin`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pinned }),
+  })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }
