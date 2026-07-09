@@ -3,7 +3,7 @@ import json
 import re
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -540,11 +540,15 @@ async def get_history(session_id: str, request: Request):
     """
     session_manager = request.app.state.session_manager
     turns = session_manager.get_history(session_id)
+    # 进行中轮次（inflight 预写标记）：作为独立字段返回，绝不并入 turns（分支下标依赖 turns
+    # 位置）。使刷新时正在生成/待审批/挂起的轮次可见（用户消息 + 生成中），而非空白会话。
+    inflight = session_manager.read_inflight(session_id)
     return {
         "status": True,
         "session_id": session_id,
         "count": len(turns),
         "turns": turns,
+        "inflight": inflight,
     }
 
 
@@ -565,6 +569,13 @@ async def branch_session(session_id: str, request: Request, body: BranchRequest)
 def _sse(event: str, data: Dict[str, Any]) -> str:
     """序列化一条 SSE 事件帧（event + JSON data）。"""
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+
+
+# SSE 心跳间隔（秒）：静默生成阶段（预填充 / 思考 token / 约束采样）没有任何事件下发，
+# 一条注释帧（": ping"）每隔这么久保活一次，顶住 cloudflared ~100s 无响应硬超时与代理空闲断连。
+# 注释帧不含 event:/data: 字段，前端 parseSSE 会静默跳过（不产出 frame），零副作用。
+_SSE_HEARTBEAT_SECS = 15
+_SSE_HEARTBEAT = ": ping\n\n"
 
 
 def _public_turn(response_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -852,7 +863,13 @@ async def chat_stream(
         yield _sse("turn_start", {"turn_id": turn_id, "session_id": session_id})
         try:
             while True:
-                item = await queue.get()
+                # 出队等待带心跳超时：静默生成阶段（无 token/事件）也周期性发注释帧保活。
+                # 超时不丢事件——queue.get() 被取消时未出队的项仍留在队列，下轮取回。
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECS)
+                except asyncio.TimeoutError:
+                    yield _SSE_HEARTBEAT
+                    continue
                 if item is None:
                     break
                 yield _sse(item[0], item[1])
@@ -868,18 +885,18 @@ async def chat_stream(
     )
 
 
-@router.post("/api/v1/chat/{session_id}/approval", response_model=ChatResponse)
-async def approve_pending_tools(session_id: str, request: Request, body: ApprovalRequest):
+async def _resume_approval_turn(
+    session, session_id: str, orchestrator, scheduler, *,
+    approve: bool,
+    emit: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    on_text_delta: Optional[Callable[[str], None]] = None,
+) -> Dict[str, Any]:
     """
-    敏感工具审批决议接口：编排循环因需授权的工具调用（如删库）挂起后，
-    前端经用户确认调用本接口。批准则执行工具并继续任务，拒绝则由模型调整后续策略。
-    响应格式与对话接口一致，response 仅含本次决议后新增的消息。
+    审批决议后的续跑闭环（阻塞端点与 SSE 端点共享的单一实现）：持锁续跑 → 结果分流/回滚 →
+    落盘或暂存（再审批/挂起）。返回 response_data（response 仅含本次决议后新增的消息）。
+    emit / on_text_delta 非 None 时经引擎把编排事件与可见正文逐段回吐（真流式）；均为 None
+    时行为与改动前的阻塞端点完全一致。两端共用本函数，避免收尾逻辑双路径漂移。
     """
-    orchestrator = request.app.state.orchestrator
-    session_manager = request.app.state.session_manager
-    scheduler = request.app.state.scheduler
-    session = session_manager.get_or_create(session_id)
-
     async with session.lock:
         turn = session.pending_turn
         if not session.pending_tool_calls or turn is None:
@@ -899,12 +916,14 @@ async def approve_pending_tools(session_id: str, request: Request, body: Approva
             # 复用挂起轮次的生成参数，恢复编排闭环（多步任务从挂起的步骤继续）
             final_result = await orchestrator.resume_after_approval(
                 session,
-                approved=body.approve,
+                approved=approve,
                 temperature=turn.get("temperature", 0.2),
                 min_p=turn.get("min_p", 0.05),
                 enable_thinking=turn.get("enable_thinking", False),
                 thinking_budget=turn.get("thinking_budget", 2048),
                 max_tokens=turn.get("max_tokens", 4096),
+                emit=emit,
+                on_text_delta=on_text_delta,
             )
 
             if final_result.get("status") == "cancelled":
@@ -967,3 +986,81 @@ async def approve_pending_tools(session_id: str, request: Request, body: Approva
             await _maybe_summarize_active(session, orchestrator, scheduler, session_id)
 
     return response_data
+
+
+@router.post("/api/v1/chat/{session_id}/approval", response_model=ChatResponse)
+async def approve_pending_tools(session_id: str, request: Request, body: ApprovalRequest):
+    """
+    敏感工具审批决议接口（非流式，回退路径）：一次性返回决议后新增的消息。真流式见 /approval/stream。
+    批准则执行工具并继续任务，拒绝则由模型调整后续策略。
+    """
+    orchestrator = request.app.state.orchestrator
+    session_manager = request.app.state.session_manager
+    scheduler = request.app.state.scheduler
+    session = session_manager.get_or_create(session_id)
+    return await _resume_approval_turn(
+        session, session_id, orchestrator, scheduler, approve=body.approve,
+    )
+
+
+@router.post("/api/v1/chat/{session_id}/approval/stream")
+async def approve_pending_tools_stream(session_id: str, request: Request, body: ApprovalRequest):
+    """
+    审批决议真流式接口（SSE）：与 /stream 同一套事件契约（turn_start/token/thinking/
+    tool_started/tool_result/task_progress/turn_end）。续跑在后台 worker 内跑完整闭环并落盘，
+    客户端中途断开也不丢工作（决议照常执行、轮次照常完结存档）。带心跳保活，续跑再慢也不掉线。
+    """
+    orchestrator = request.app.state.orchestrator
+    session_manager = request.app.state.session_manager
+    scheduler = request.app.state.scheduler
+    session = session_manager.get_or_create(session_id)
+    turn_id = uuid.uuid4().hex
+
+    async def event_gen():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def emit(event: str, data: Dict[str, Any]):
+            queue.put_nowait((event, {"turn_id": turn_id, **data}))
+
+        def emit_token(text: str):
+            emit("token", {"delta": text})
+
+        async def worker():
+            try:
+                rd = await _resume_approval_turn(
+                    session, session_id, orchestrator, scheduler, approve=body.approve,
+                    emit=emit, on_text_delta=emit_token,
+                )
+                queue.put_nowait(("turn_end", {"turn_id": turn_id, **_public_turn(rd)}))
+            except Exception as e:
+                import traceback
+                queue.put_nowait(("turn_end", {
+                    "turn_id": turn_id, "status": "fail",
+                    "response": [{"role": "system",
+                                  "content": f"审批流式处理故障: {str(e)}\n{traceback.format_exc()}"}],
+                }))
+            finally:
+                queue.put_nowait(None)  # 哨兵：通知生成器收流
+
+        task = asyncio.create_task(worker())
+        yield _sse("turn_start", {"turn_id": turn_id, "session_id": session_id})
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECS)
+                except asyncio.TimeoutError:
+                    yield _SSE_HEARTBEAT
+                    continue
+                if item is None:
+                    break
+                yield _sse(item[0], item[1])
+        finally:
+            # 客户端断开时生成器被关闭：不取消后台任务，让决议续跑跑完并落盘（工作不丢）。
+            if not task.done():
+                task.add_done_callback(lambda t: t.exception())
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )

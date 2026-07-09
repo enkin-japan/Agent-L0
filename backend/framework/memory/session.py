@@ -86,9 +86,9 @@ Task execution:
 - Presentations: to make slides / a PPT, use the deck tools — deck_init once, then deck_set_slide one slide at a time (the user watches the deck build in a live preview). Plan the outline first with update_plan for decks of more than a few slides. Charts inside slides take real data, same rule as render_chart. The deck changes ONLY through deck tool calls: to revise or fill in an existing slide, call deck_set_slide with that slide's position and the complete new content. Never tell the user you refined, polished, or completed slides unless you actually called the tools in this turn.
 
 Code fixes & debugging:
-- Diagnose before you edit. First state the root cause, then check it against the reported symptom: would this cause produce EXACTLY the behavior the user described? If the user says "nothing happens", first confirm the trigger is actually wired up and invoked (e.g. a button whose handler is never called) before blaming the logic inside the handler. If your explanation does not fully account for the symptom, you have NOT found the root cause — keep reading the code instead of editing.
-- Executed is not verified. After changing code or files, re-read the modified section and trace the flow end-to-end to confirm the change is actually reached and takes effect; run a real check (execute the code or command) whenever feasible.
-- Never tell the user something is fixed without saying what you verified. If you could not verify it, say so explicitly and tell the user exactly what to test.
+- When the user asks you to fix or change code, APPLY the change yourself with edit_file / write_file. Do NOT just describe the fix in prose or paste a code snippet for the user to apply, and do NOT ask the user to make the edit — you have the tools, so make the edit.
+- Before editing, make sure your fix matches the actual symptom: would this change produce EXACTLY the behavior the user reported? If they say "nothing happens", check that the trigger is even wired up and called (e.g. a button whose handler is never invoked) before changing the logic inside the handler.
+- After editing, verify: re-read the changed section, and whenever feasible run a real check (execute the code or command). Claim success only for what you actually verified; if you could not verify, say so plainly.
 
 Style:
 - Be accurate; say so when you are speculating. Be as concise as clarity allows.
@@ -118,6 +118,12 @@ class ChatSession:
         # 完整响应数据（决议后合并落盘）。冻结/关闭时整轮以 fail 落盘作废。
         self.pending_tool_calls: Optional[List[Dict[str, Any]]] = None
         self.pending_turn: Optional[Dict[str, Any]] = None
+
+        # 逻辑轮次累计迭代数（跨审批挂起/续跑存续）：总迭代熔断（max_total_iterations）
+        # 的计数分母。每次审批续跑都是一个新的 run_turn（局部 iterations 从 0 起），若各自独立
+        # 计数，模型可借「反复吐坏写→弹审批→续跑」无限绕过熔断（实测的审批死循环）。故把消耗量
+        # 累积在会话上：新用户轮次归零，续跑在其上累加，熔断按累计值判定。
+        self.carried_iterations: int = 0
 
         # 多步任务状态（编排循环的状态对象）：任务可跨轮存续（如中途向用户提问），
         # 空闲冻结时随 task.json 落盘、恢复时重建，保证冷启动后任务不丢
@@ -810,6 +816,27 @@ class SessionManager:
                 except Exception:
                     continue
         return turns
+
+    def read_inflight(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """读取某会话的「进行中轮次」预写标记（inflight.json）——纯磁盘读，不拉起会话。
+
+        标记在轮首写入、append_log 时清除（待审批/挂起态不清），故其存在 ⟺ 有一轮用户
+        输入尚未落进 history.jsonl。供 /history 作为独立 provisional 字段返回，使刷新时
+        进行中的轮次可见（用户消息 + "生成中"），而非空白会话。绝不并入 turns 数组——
+        分支下标依赖 turns 位置，混入会错位（见 get_history 契约）。
+        轮末 append 与 clear 之间的亚毫秒窗口可能与已落盘轮次并存（重影），由前端轮询自愈。"""
+        marker = self.sessions_dir / session_id / "inflight.json"
+        if not marker.exists():
+            return None
+        try:
+            data = json.loads(marker.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        return {
+            "prompt": str(data.get("prompt", "")),
+            "started_at": data.get("started_at"),
+            "gen": data.get("gen") or {},
+        }
 
     def _relink_media(self, src_path_str: str, dest_dir: Path) -> str:
         """

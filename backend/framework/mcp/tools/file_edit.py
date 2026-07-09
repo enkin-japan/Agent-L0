@@ -13,6 +13,7 @@ llguidance 对长字符串字面量 ParserTooComplex fail-open，之后自由采
   时被自动拒绝，不新增免审批写盘面。
 - 原子写：tmp + os.replace，同目录保证不跨设备；写坏进程也不会留半截文件。
 """
+import difflib
 import os
 import re
 import shutil
@@ -37,6 +38,65 @@ def _strip_line_numbers(s: str) -> str:
     if n_hit == 0 or n_hit < max(1, len(lines) // 2):
         return s
     return "\n".join(stripped)
+
+
+# 匹配失败时回喂真实文本的相似度门槛与扫描规模上限。
+# 门槛偏高（0.6）：宁可不给候选，也不给一段误导的文本让模型照抄错的。
+_FUZZY_MIN_RATIO = 0.6
+_FUZZY_MAX_SCAN_LINES = 4000  # 超大文件跳过模糊搜索，控制单次工具延迟（钝器优先于慢）
+
+
+def _closest_snippet(text: str, old_string: str) -> Optional[str]:
+    """old_string 精确匹配失败时，在文件里找与它最相似的一段**真实文本**回喂给模型。
+
+    动机：弱模型复现不出逐字原文（把 onclick="addRow" 记成 onclick="add"），只回
+    「没找到，重新读文件」是把可自纠的错误变成死胡同。返回文件里最接近的原文（含精确
+    空白），模型下一步就有了逐字正确的锚点。相似度过低或文件过大则返回 None（不猜、
+    不误导）。按目标行数及其邻域（模型常多算/少算一行）滑窗，SequenceMatcher 计分。"""
+    file_lines = text.splitlines()
+    if not file_lines or len(file_lines) > _FUZZY_MAX_SCAN_LINES:
+        return None
+    target = old_string.strip("\n")
+    if not target:
+        return None
+    n = len(target.splitlines()) or 1
+    sizes = {s for s in (n - 1, n, n + 1) if s >= 1}
+    # 固定序列设为 seq2：其内部 b2j 链只算一次，跨 set_seq1 复用（滑窗更快）
+    sm = difflib.SequenceMatcher(autojunk=False)
+    sm.set_seq2(target)
+    best_ratio = 0.0
+    best_span: Optional[tuple] = None
+    for size in sizes:
+        for start in range(0, len(file_lines) - size + 1):
+            window = "\n".join(file_lines[start:start + size])
+            sm.set_seq1(window)
+            if sm.quick_ratio() <= best_ratio:  # 上界剪枝：先廉价筛，命中才精算
+                continue
+            r = sm.ratio()
+            if r > best_ratio:
+                best_ratio = r
+                best_span = (start, size)
+    if best_span is None or best_ratio < _FUZZY_MIN_RATIO:
+        return None
+    start, size = best_span
+    return "\n".join(file_lines[start:start + size])
+
+
+def _not_found_feedback(text: str, old_string: str) -> str:
+    """old_string 未命中时的可执行反馈：尽量附上文件里最接近的真实文本供逐字照抄。"""
+    snippet = _closest_snippet(text, old_string)
+    base = ("System Error: old_string was NOT found in the file. It must match the file "
+            "content exactly (including spaces, indentation and line breaks). If you copied "
+            "it from file_extract output, drop the line-number prefixes ('  14 | ') — they "
+            "are NOT part of the file.")
+    if snippet is None:
+        return base + " Re-read the file and copy the text verbatim."
+    return (base + " The closest actual text in the file is shown between the markers below — "
+            "copy it VERBATIM as your old_string (and adjust new_string accordingly), or "
+            "extend it with surrounding lines if you need a larger/unique match:\n"
+            "<<<<<<< closest actual file text\n"
+            f"{snippet}\n"
+            ">>>>>>> end")
 
 
 def _check_path(path: str, must_exist: bool) -> Optional[str]:
@@ -138,11 +198,7 @@ class EditFileTool(BaseTool):
                 new_string = _strip_line_numbers(new_string)
                 count = 1
             else:
-                return ("System Error: old_string was NOT found in the file. It must match the "
-                        "file content exactly (including spaces, indentation and line breaks). "
-                        "If you copied it from file_extract output, drop the line-number "
-                        "prefixes ('  14 | ') — they are NOT part of the file. Re-read the file "
-                        "and copy the text verbatim.")
+                return _not_found_feedback(text, old_string)
         if count > 1:
             return (f"System Error: old_string matches {count} locations — refusing an ambiguous "
                     "edit. Extend old_string with a few surrounding lines so it is unique.")

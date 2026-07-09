@@ -10,11 +10,17 @@ import {
   getUiState,
   putUiState,
   resumeTask as apiResumeTask,
-  sendApproval,
+  sendApprovalStream,
   sendChatStream,
   suspendTask as apiSuspendTask,
 } from "@/api/agent"
-import type { ChatResponse, LiveActivity, PendingTool, TaskSnapshot } from "@/types/agent-api"
+import type {
+  ChatResponse,
+  InflightMarker,
+  LiveActivity,
+  PendingTool,
+  TaskSnapshot,
+} from "@/types/agent-api"
 import {
   mapResponseMessages,
   newSessionId,
@@ -90,6 +96,10 @@ export const locallyAbandonedSuspended = new Set<string>()
 
 // 生成期间的任务进度轮询定时器（sessionId -> interval id）
 const taskPollers = new Map<string, ReturnType<typeof setInterval>>()
+
+// 进行中轮次（inflight）对账定时器（sessionId -> timeout id）：刷新后若某会话有一轮尚未落盘，
+// 轮询 /history 直到落盘再换成真结果，堵住「刷新即空白/永不回来」的死路。
+const inflightReconcilers = new Map<string, ReturnType<typeof setTimeout>>()
 
 // ---- UI 状态服务端同步（客户端迁移）----
 // localStorage 仍是本地缓存/离线兜底；服务端为跨设备权威（last-write-wins）。
@@ -256,6 +266,52 @@ export const useChatStore = create<ChatState>((set, get) => {
         }))
       })
       .catch(() => {})
+  }
+
+  function stopInflightReconcile(id: string) {
+    const t = inflightReconcilers.get(id)
+    if (t !== undefined) {
+      clearTimeout(t)
+      inflightReconcilers.delete(id)
+    }
+  }
+
+  /** 把 inflight 标记渲染成 provisional 消息：用户消息 + 一个「生成中」占位气泡。 */
+  function inflightMessages(marker: InflightMarker, turnIndex: number): ChatMessage[] {
+    return [
+      { id: nextMessageId(), role: "user", content: marker.prompt, turnIndex },
+      { id: nextMessageId(), role: "assistant", content: "", streaming: true, turnIndex },
+    ]
+  }
+
+  /** 轮询 /history 直到进行中轮次落盘：期间保持 provisional，落盘后换成真结果并收尾。
+   *  用户在本 tab 主动发消息（SSE 接管）时立即让位，避免与流式路径打架。 */
+  function scheduleInflightReconcile(id: string) {
+    stopInflightReconcile(id)
+    const tick = async () => {
+      // 让位条件：本 tab 主动发消息（SSE 接管），或会话已切走（重新激活时 loadHistory 会
+      // 因 historyLoaded=false 再次拉起对账）——避免离开后台会话仍无限轮询。
+      if (get().generating[id] || get().activeId !== id) {
+        stopInflightReconcile(id)
+        return
+      }
+      try {
+        const h = await getHistory(id)
+        const base = (h.turns ?? []).flatMap((t, i) => turnToMessages(t, i))
+        if (h.inflight) {
+          const provisional = inflightMessages(h.inflight, h.count ?? base.length)
+          patchConversation(id, { messages: [...base, ...provisional], turnCount: h.count ?? 0 })
+          inflightReconcilers.set(id, setTimeout(tick, 1500))
+        } else {
+          // 落盘完成：换成权威结果，历史标记为已加载，收尾
+          patchConversation(id, { messages: base, turnCount: h.count ?? 0, historyLoaded: true })
+          stopInflightReconcile(id)
+        }
+      } catch {
+        inflightReconcilers.set(id, setTimeout(tick, 2500))
+      }
+    }
+    inflightReconcilers.set(id, setTimeout(tick, 1500))
   }
 
   /** 统一消费一次对话/审批响应：追加消息、维护审批挂起态与轮次计数。 */
@@ -480,14 +536,33 @@ export const useChatStore = create<ChatState>((set, get) => {
         const messages = (history.turns ?? []).flatMap((turn, index) =>
           turnToMessages(turn, index),
         )
-        set((s) => ({
-          conversations: s.conversations.map((c) =>
-            // 加载期间用户可能已开始输入新消息，不覆盖非空会话
-            c.id === id && c.messages.length === 0
-              ? { ...c, messages, turnCount: history.count ?? 0 }
-              : c,
-          ),
-        }))
+        if (history.inflight) {
+          // 有进行中轮次（刷新时该轮尚未落盘）：渲染 provisional（用户消息 + 生成中），
+          // 不锁死历史（historyLoaded=false），并启动对账轮询直到落盘换成真结果。
+          const provisional = inflightMessages(history.inflight, history.count ?? messages.length)
+          set((s) => ({
+            conversations: s.conversations.map((c) =>
+              c.id === id && c.messages.length === 0
+                ? {
+                    ...c,
+                    messages: [...messages, ...provisional],
+                    turnCount: history.count ?? 0,
+                    historyLoaded: false,
+                  }
+                : c,
+            ),
+          }))
+          scheduleInflightReconcile(id)
+        } else {
+          set((s) => ({
+            conversations: s.conversations.map((c) =>
+              // 加载期间用户可能已开始输入新消息，不覆盖非空会话
+              c.id === id && c.messages.length === 0
+                ? { ...c, messages, turnCount: history.count ?? 0 }
+                : c,
+            ),
+          }))
+        }
       } catch (e) {
         console.warn("加载会话历史失败:", e)
         patchConversation(id, { historyLoaded: false })
@@ -669,13 +744,77 @@ export const useChatStore = create<ChatState>((set, get) => {
 
       const controller = new AbortController()
       controllers.set(id, controller)
-      startTaskPolling(id)
+
+      // 决议后的续跑同样是一次可能长达数分钟的生成 → 走 SSE（带心跳），而非阻塞式请求，
+      // 扛得住 cloudflared/代理超时。占位气泡逐段填充，turn_end 到达后撤下改用权威 response。
+      const assistantId = nextMessageId()
+      let streamed = ""
+      let ended = false
+      let streamStarted = false
+      appendMessages(id, [
+        { id: assistantId, role: "assistant", content: "", streaming: true, turnIndex: conv.turnCount },
+      ])
+
+      // 断线/异常闭流后的对账：后端 worker 断连仍会把决议执行完并落盘，故不恢复挂起态，
+      // 而是查任务态——已完成则重载权威历史，仍在生成则启动 inflight 对账轮询自愈。
+      const reconcileAfterStream = async () => {
+        removeMessage(id, assistantId)
+        try {
+          const st = await getTaskStatus(id)
+          if (!st.generating) {
+            const h = await getHistory(id)
+            const msgs = (h.turns ?? []).flatMap((t, i) => turnToMessages(t, i))
+            patchConversation(id, { messages: msgs, turnCount: h.count ?? 0, historyLoaded: true })
+          } else {
+            patchConversation(id, { historyLoaded: false })
+            scheduleInflightReconcile(id)
+          }
+        } catch {
+          appendMessages(id, [
+            {
+              id: nextMessageId(),
+              role: "system",
+              content: currentDict().store.disconnectIncomplete,
+              variant: "warning",
+            },
+          ])
+        }
+      }
+
       try {
-        // 阻塞式等待：批准后后端要执行工具并让模型收尾
-        const res = await sendApproval(id, approve, controller.signal)
-        applyChatResponse(id, res, conv.turnCount)
+        await sendApprovalStream(
+          id,
+          approve,
+          {
+            onTurnStart: () => {
+              streamStarted = true
+            },
+            onToken: (delta) => {
+              streamed += delta
+              updateMessage(id, assistantId, { content: streamed })
+            },
+            onThinking: (text) => {
+              updateMessage(id, assistantId, { thoughts: text })
+            },
+            onTaskProgress: ({ task, activity }) => {
+              set((s) => ({
+                taskProgress: { ...s.taskProgress, [id]: task },
+                liveActivity: { ...s.liveActivity, [id]: activity },
+              }))
+            },
+            onTurnEnd: (res) => {
+              ended = true
+              removeMessage(id, assistantId)
+              applyChatResponse(id, res, conv.turnCount)
+            },
+          },
+          controller.signal,
+        )
+        // 流正常结束却没等到 turn_end（异常闭流）：走对账补偿
+        if (!ended) await reconcileAfterStream()
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") {
+          removeMessage(id, assistantId)
           appendMessages(id, [
             {
               id: nextMessageId(),
@@ -684,9 +823,10 @@ export const useChatStore = create<ChatState>((set, get) => {
               variant: "warning",
             },
           ])
-        } else {
+        } else if (!streamStarted) {
+          // 流从未开始（初始请求就失败）：决议未送达后端，恢复挂起态允许重试
           console.error("提交审批决议失败:", e)
-          // 网络失败时决议未送达服务端：恢复挂起态，允许用户重试
+          removeMessage(id, assistantId)
           set((s) => ({ pendingApprovals: { ...s.pendingApprovals, [id]: tools } }))
           appendMessages(id, [
             {
@@ -696,6 +836,10 @@ export const useChatStore = create<ChatState>((set, get) => {
               variant: "error",
             },
           ])
+        } else {
+          // 流已开始后断开：后端仍在执行决议并会落盘 → 对账补偿，不恢复挂起态
+          console.error("审批流中断:", e)
+          await reconcileAfterStream()
         }
       } finally {
         controllers.delete(id)

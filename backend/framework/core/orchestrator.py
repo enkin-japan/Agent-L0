@@ -125,10 +125,14 @@ MAX_TOKENS_RECOVERIES = 3
 # 提前收尾门控（T1-2）：计划未完成却吐纯文本时，每步最多推回 PREMATURE_FINISH_MAX 次，
 # 用尽后放行（视为向用户提问/汇报障碍），避免与「坚持要作答」的模型死循环。
 PREMATURE_FINISH_MAX = 1
-# 写后验证门控（T1-4）：本轮发生过写调用、之后没有任何只读复查就要收尾 = 把「已执行」
-# 当「已验证」（弱模型改一行就宣布修好的高频失败形态）。最多推回 VERIFY_NUDGE_MAX 次，
-# 用尽后放行——模型坚持不验证时接受其答复，杜绝死循环。
+# 写后验证门控（T1-4）：本轮改过文件、之后没有任何复查就要收尾 = 把「已执行」当「已验证」
+# （弱模型改一行就宣布修好的高频失败形态）。最多推回 VERIFY_NUDGE_MAX 次，用尽后放行——
+# 模型坚持不验证时接受其答复，杜绝死循环。
 VERIFY_NUDGE_MAX = 1
+# 「写」判据只认真实的文件写工具：run_shell_command 的 is_read_only 对 cat/ls 也返回 False
+# （无法静态判断命令是否改动），用它会让每个只读 shell 轮次误触发验证门控、白烧一次生成。
+# 故只把这两个确定改文件的工具计作写；shell 内的 sed -i/rm 等写不被覆盖（尽力而为，误报比漏报更伤）。
+_FILE_WRITE_TOOLS = {"edit_file", "write_file"}
 
 
 def _last_user_text(history: List[Dict[str, Any]]) -> str:
@@ -241,6 +245,11 @@ class Orchestrator:
         task = session.task_state
         if task is not None and not keep_recent_calls:
             task.recent_calls = []  # 重复调用拦截按轮生效（审批续跑保留：刚执行的调用不可立即复发）
+        # 总迭代熔断的累计分母（跨审批续跑存续，见 session.carried_iterations）：
+        # keep_recent_calls 仅在审批续跑时为真——新用户轮次归零，续跑沿用先前累计值，
+        # 使「反复吐坏写→弹审批→续跑」的循环仍被同一个 max_total_iterations 保险丝罩住。
+        if not keep_recent_calls:
+            session.carried_iterations = 0
         no_task_calls: List[str] = []  # 无任务态下的调用指纹（同样拦截重复）
         turn_start_idx = len(session.history)  # 本轮起点：收尾时扫描本轮工具产出的资产链接
         parse_errors: Dict[str, int] = {}  # 本轮坏调用原文 -> 次数（断环 + 升级纠错）
@@ -296,7 +305,7 @@ class Orchestrator:
             if n_compacted:
                 print(f"[Orchestrator] 上下文压缩：削减 {n_compacted} 条历史工具观察")
 
-        while iterations < self.max_total_iterations:
+        while session.carried_iterations + iterations < self.max_total_iterations:
             # --- 取消检查点（迭代边界；token 级检查在 engine 内） ---
             if session.cancel_requested:
                 return {"status": "cancelled", "response": "任务已被用户取消。", "metrics": metrics}
@@ -445,6 +454,9 @@ class Orchestrator:
                     if responses:
                         session.add_tool_message(responses)
                     session.pending_tool_calls = phys_calls
+                    # 累积本次 run_turn 已消耗的迭代到会话上：审批续跑（新 run_turn）在此基础上
+                    # 继续计数，总迭代熔断跨审批循环持续生效（防审批死循环绕过保险丝）。
+                    session.carried_iterations += iterations
                     names = "、".join(c.get("name") for c in approval_needed)
                     session.set_activity(f"等待授权：{names}", phase="awaiting_approval")
                     print(f"[Orchestrator] 敏感工具调用挂起待审批: {[c.get('name') for c in approval_needed]}")
@@ -462,17 +474,17 @@ class Orchestrator:
                     await self._execute_physical(session, phys_calls, tracker, parse_errors, emit=emit)
                 )
                 _stamp_turn_stats()  # [仪表 Phase 0] 刷新废轮计数（_execute_physical 可能新增 parse 失败）
-                # [验证门控 T1-4 状态跟踪] 按声明序扫描本批物理调用：写调用置「未验证」，
-                # 其后的只读调用视为复查、清除标记。写屏障（_execute_physical）保证写后重读
-                # 不会被去重拦截，因此复查总能真正执行；声明序与批内实际执行序一致
-                # （串行写之前会先冲刷此前积压的只读批）。
+                # [验证门控 T1-4 状态跟踪] 按声明序扫描本批物理调用：改文件（edit_file/write_file）
+                # 置「未验证」，其后任何非写调用（读回文件 / 跑代码 / grep 等）视为复查、清除标记。
+                # 写屏障（_execute_physical）保证写后重读不会被去重拦截，故复查总能真正执行；
+                # 声明序与批内实际执行序一致（串行写之前会先冲刷此前积压的只读批）。
                 for c in phys_calls:
                     if c.get("type") == "error":
                         continue
-                    if self.registry.is_read_only(c.get("name"), c.get("arguments", {})):
-                        unverified_write = False
-                    else:
+                    if c.get("name") in _FILE_WRITE_TOOLS:
                         unverified_write = True
+                    else:
+                        unverified_write = False
                 # [结构性提醒 T1-1] 在最新观察旁贴一条条件式 nudge（步骤边界/漂移/收尾验证）。
                 # 与 prompt 尾部的 task_block 互补：task_block 渲染计划本身，这里给的是它覆盖不到、
                 # 且贴着最近观察（更强近因）的即时提醒。触发稀疏，避免每轮膨胀与 KV 抖动。
@@ -873,12 +885,12 @@ class Orchestrator:
             ] or [{"name": "system", "response": "Operation denied by user in the confirmation dialog."}]
 
         session.add_tool_message(responses)
-        # 刚批准执行的调用含写调用 → 续跑的 run_turn 以「未验证写」状态起步（T1-4）：
-        # 敏感写操作恰是最不该「改完即宣布成功」的一类，续跑不能丢失这个标记。
+        # 刚批准执行的调用含改文件工具 → 续跑的 run_turn 以「未验证写」状态起步（T1-4）：
+        # 文件写恰是最不该「改完即宣布成功」的一类，续跑不能丢失这个标记。判据与主循环一致
+        # （只认 edit_file/write_file），不用对 shell 无效的 is_read_only。
         wrote_unverified = approved and any(
-            c.get("type") != "error"
-            and not self.registry.is_read_only(c.get("name"), c.get("arguments", {}))
-            for c in pending_calls
+            c.get("name") in _FILE_WRITE_TOOLS
+            for c in pending_calls if c.get("type") != "error"
         )
         # 回到编排主循环（若再次命中敏感工具会再次挂起）。keep_recent_calls：保留刚执行的
         # 批准调用指纹，防模型在续跑首步立即原样重复该敏感调用。

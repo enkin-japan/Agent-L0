@@ -122,7 +122,7 @@ export async function sendChatStream(
   }
 }
 
-/** 对挂起的敏感工具调用作出决议。与 sendChat 一样是阻塞式接口（批准后要等工具执行 + 模型收尾）。 */
+/** 对挂起的敏感工具调用作出决议（非流式，回退路径）。与 sendChat 一样阻塞式。默认走 sendApprovalStream。 */
 export async function sendApproval(
   sessionId: string,
   approve: boolean,
@@ -136,6 +136,52 @@ export async function sendApproval(
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
+}
+
+/**
+ * 审批决议真流式（SSE）：与 sendChatStream 同一套事件契约。决议后的续跑同样是一次可能长达
+ * 数分钟的生成，走 SSE + 心跳保活，扛得住 cloudflared/代理超时（阻塞版 /approval 会掉线）。
+ */
+export async function sendApprovalStream(
+  sessionId: string,
+  approve: boolean,
+  handlers: ChatStreamHandlers,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}/approval/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify({ approve }),
+    signal,
+  })
+  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+
+  for await (const frame of parseSSE(res.body)) {
+    const d = JSON.parse(frame.data)
+    switch (frame.event) {
+      case "token":
+        handlers.onToken(d.delta)
+        break
+      case "thinking":
+        handlers.onThinking?.(d.text)
+        break
+      case "tool_started":
+        handlers.onToolStarted?.(d)
+        break
+      case "tool_result":
+        handlers.onToolResult?.(d)
+        break
+      case "task_progress":
+        handlers.onTaskProgress?.({ task: d.task ?? null, activity: d.activity ?? null })
+        break
+      case "turn_start":
+        handlers.onTurnStart?.(d)
+        break
+      case "turn_end":
+        handlers.onTurnEnd(d as ChatResponse)
+        break
+    }
+  }
 }
 
 export async function deleteSession(

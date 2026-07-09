@@ -56,11 +56,20 @@ export interface DeleteTurnResponse {
   response: string
 }
 
+/** 进行中轮次预写标记：轮首落盘、轮末清除；存在即代表有一轮尚未落进 turns。 */
+export interface InflightMarker {
+  prompt: string
+  started_at?: number | null
+  gen?: Record<string, unknown>
+}
+
 export interface HistoryResponse {
   status: boolean
   session_id: string
   count: number
   turns: ChatResponse[]
+  /** 独立于 turns（不参与分支下标）；无进行中轮次时为 null。 */
+  inflight?: InflightMarker | null
 }
 
 export interface BranchRequest {

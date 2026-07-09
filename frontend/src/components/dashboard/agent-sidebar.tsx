@@ -164,7 +164,9 @@ export function AgentSidebar({
         <ScheduleStrip onOpenSession={onOpenScheduleSession} />
       </div>
 
-      <ScrollArea className="flex-1 px-2">
+      {/* min-h-0：flex 子项默认 min-height:auto 不会缩到内容以下，缺它则 flex-1 被内容撑高、
+          ScrollArea 内部 viewport 拿不到有界高度、纵向滚动失效，会话多时整条侧栏被撑爆。 */}
+      <ScrollArea className="min-h-0 flex-1 px-2">
         <div className="flex items-center justify-between mb-2">
           <p className="text-xs font-semibold text-muted-foreground">{t.sidebar.workspaces}</p>
           <Button variant="ghost" size="icon" className="size-6 rounded-lg text-muted-foreground" onClick={() => setNewWorkspaceOpen(true)}>
