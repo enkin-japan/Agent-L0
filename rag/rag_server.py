@@ -1,6 +1,15 @@
+import json
 import logging
+import os
+import time
 import uuid
 import threading
+
+# hf_xet 的分块缓存默认落 ~/.cache/huggingface/xet（与 local_dir 参数无关）。本项目要求
+# 模型文件全部收敛在仓库内，故禁用 xet、退回纯 HTTPS 直下（断点数据存 local_dir/.cache，
+# 项目内）。须先于 huggingface_hub 首次导入设置；下方再改常量属性以无视导入顺序兜底。
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import torch
 import torch.nn.functional as F
@@ -13,7 +22,9 @@ from torch import Tensor
 from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
 import chromadb
 import yaml
+from huggingface_hub import constants as _hf_constants
 from huggingface_hub import snapshot_download
+_hf_constants.HF_HUB_DISABLE_XET = True
 
 # ==========================================
 # 全局配置与 Mac (MPS) 设备初始化
@@ -68,6 +79,12 @@ logger = logging.getLogger("RAG_Server")
 # ==========================================
 # 模型路径解析
 # ==========================================
+# 下载完整性标记：snapshot_download 成功返回后才写入。不能用「目录非空」判完整——
+# hf 下载一开始就建 .cache/huggingface 元数据目录，中断残留必然非空，曾导致半截
+# 模型被判有效、永不重下、启动死循环。（与 backend/framework/utils/path_resolver.py 同步）
+_MARKER_NAME = ".download_complete"
+
+
 def resolve_model_path(model_id_or_path: str) -> str:
     """
     内部辅助函数：解析模型路径，支持本地绝对/相对路径以及 HuggingFace Repo ID
@@ -79,19 +96,37 @@ def resolve_model_path(model_id_or_path: str) -> str:
     if model_path.exists() and model_path.is_dir():
         print(f"✅ Local model directory detected: {model_id_or_path}")
         return model_id_or_path
-    
+
     model_path = BASE_WORKSPACE / "models" / Path(model_id_or_path).name
-    if model_path.exists() and model_path.is_dir() and any(model_path.iterdir()):
+    marker = model_path / _MARKER_NAME
+    if marker.exists():
         return str(model_path)
-    print(f"🌐 The path was not found locally. Preparing to sync from Hugging Face Hub: {model_id_or_path}")
+
+    # 无标记 = 从未下载或上次中断：重调 snapshot_download 自愈（按 .metadata 边车跳过
+    # 已完成文件、对 .incomplete 续传，不会重下已有的部分）
+    had_local_files = model_path.is_dir() and any(model_path.iterdir())
+    print(f"🌐 Local copy missing or unverified. Syncing from Hugging Face Hub: {model_id_or_path}")
     try:
         snapshot_download(
             repo_id=model_id_or_path,
             local_dir=model_path,
         )
-        return str(model_path)
     except Exception as e:
+        # 断网兜底：只放行本次调用前就存在的本地文件（标记机制之前的完整下载没有标记，
+        # 不能把原本能离线启动的模型堵死；真半截则由加载器报错，联网后下次启动自愈）。
+        # 本次才落的文件不放行——刚失败的下载必然不完整。
+        if had_local_files:
+            print(f"⚠️ Could not verify local model against Hugging Face Hub ({e}). "
+                  f"Using existing files as-is: {model_path} — if loading fails, "
+                  f"reconnect and restart to resume the download.")
+            return str(model_path)
         raise ValueError(f"❌ Unable to find the local path, and unable to download the model from HF. Error message: {e}")
+
+    marker.write_text(json.dumps({
+        "repo_id": model_id_or_path,
+        "completed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }, ensure_ascii=False) + "\n", encoding="utf-8")
+    return str(model_path)
 
 # ==========================================
 # 核心工具函数
