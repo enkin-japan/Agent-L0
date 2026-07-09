@@ -37,8 +37,9 @@ logs/
 *.log
 *.pid
 
-# ═══════════ SearXNG（settings.yml 含随机 secret_key，由 devctl 首启生成）═══════════
+# ═══════════ SearXNG（settings.yml 含随机 secret_key，由 devctl 首启生成；源码由 setup 克隆）═══════════
 searxng/settings.yml
+searxng/searxng-src/
 
 # ═══════════ Claude Code 本地配置 ═══════════
 .claude/settings.local.json

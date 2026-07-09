@@ -6,7 +6,7 @@
 #   backend/   Agent 主体（FastAPI + MLX, :14159）
 #   rag/       RAG 知识库（FastAPI + PyTorch, :14160）
 #   frontend/  Web 前端（Vite, :5173）
-#   searxng/   SearXNG 配置挂载目录（docker 容器, :8080, 可选）
+#   searxng/   SearXNG 原生部署目录（settings.yml + searxng-src 源码 + .venv, :8080, 可选）
 #   config.yaml     全项目唯一配置（backend 与 rag 共读）
 #   .env(.local)    密钥/环境变量（backend 与前端代理共读, 本脚本负责 source）
 #
@@ -16,10 +16,11 @@
 #   ./devctl.sh status
 #   ./devctl.sh logs [rag|searx|backend|front]       # tail 对应日志
 #
-# 启动顺序: RAG → SearXNG(docker) → backend → (等待就绪) → 前端
+# 启动顺序: RAG → SearXNG(原生 venv) → backend → (等待就绪) → 前端
 # 停止顺序: 前端 → backend → SearXNG → RAG
 #
-# SearXNG 为可选联网搜索层（web_research 工具依赖）：缺 docker 时自动跳过、
+# SearXNG 为可选联网搜索层（web_research 工具依赖）：原生 Python 部署、不依赖 Docker——
+# setup 克隆源码到 searxng/searxng-src（pin 提交）并建 searxng/.venv；环境缺失时自动跳过、
 # 不阻断其余服务（此时 backend 的 web_research 探活失败、优雅不注册）。
 #
 # 典型远程用法（单条指令，进程以 nohup 常驻，ssh 退出不受影响）:
@@ -60,13 +61,16 @@ RAG_PORT=14160
 RAG_READY_URL="http://127.0.0.1:${RAG_PORT}/health"
 RAG_TIMEOUT="${RAG_TIMEOUT:-600}"        # 嵌入/重排模型加载可能较慢
 
-# SearXNG：本机联网搜索层（docker 容器）。端口须与 config.yaml 的 web_search.searxng_url 一致。
-SEARX_DIR="$ROOT/searxng"                # settings.yml 挂载目录（首次由脚本生成）
+# SearXNG：本机联网搜索层（原生 Python，无 Docker）。端口须与 config.yaml 的 web_search.searxng_url 一致。
+SEARX_DIR="$ROOT/searxng"                # settings.yml + 源码 + venv 所在目录
+SEARX_SRC="$SEARX_DIR/searxng-src"       # 源码克隆（pip -e 的安装源，setup 时拉取）
+SEARX_VENV="$SEARX_DIR/.venv"
+SEARX_REPO="https://github.com/searxng/searxng"
+SEARX_COMMIT="b512eaa272c0ad6e6c2cca7c6f67dc1feb0ce1bd"  # 滚动发布无版本号，pin 到实测通过的提交
 SEARX_PORT=8080
-SEARX_NAME="searxng"                     # docker 容器名
-SEARX_IMAGE="searxng/searxng:latest"
 SEARX_READY_URL="http://127.0.0.1:${SEARX_PORT}/"
-SEARX_TIMEOUT="${SEARX_TIMEOUT:-60}"     # 仅等容器启动就绪；首次镜像拉取在 docker run 内同步完成
+SEARX_TIMEOUT="${SEARX_TIMEOUT:-60}"
+SEARX_LEGACY_CONTAINER="searxng"         # 旧 docker 部署的容器名（迁移期自动清理）
 
 BACKEND_DIR="$ROOT/backend"
 BACKEND_PORT=14159
@@ -166,9 +170,45 @@ setup_venv() {  # $1: 服务目录（含 requirements.txt）  $2: 名称
     info "$name 环境部署完毕 ✅"
 }
 
+# SearXNG 原生部署（可选层）：克隆源码 → pin 提交 → venv → requirements + editable 安装。
+# 失败只告警不阻断——SearXNG 缺席时 backend 的 web_research 探活失败、优雅不注册。
+setup_searx() {
+    local head=""
+    [ -d "$SEARX_SRC/.git" ] && head="$(git -C "$SEARX_SRC" rev-parse HEAD 2>/dev/null)"
+    if [ -x "$SEARX_VENV/bin/python" ] && [ "$head" = "$SEARX_COMMIT" ] \
+            && "$SEARX_VENV/bin/python" -c "import searx" >/dev/null 2>&1; then
+        info "SearXNG 环境已就绪（pin: ${SEARX_COMMIT:0:12}），跳过"
+        return 0
+    fi
+    command -v git >/dev/null 2>&1 || { warn "未找到 git，跳过 SearXNG 部署"; return 1; }
+    if [ ! -d "$SEARX_SRC/.git" ]; then
+        info "SearXNG: 克隆源码 → $SEARX_SRC"
+        git clone --depth 1 "$SEARX_REPO" "$SEARX_SRC" || { warn "SearXNG 源码克隆失败，跳过"; return 1; }
+        head="$(git -C "$SEARX_SRC" rev-parse HEAD 2>/dev/null)"
+    fi
+    if [ "$head" != "$SEARX_COMMIT" ]; then
+        # GitHub 支持按 SHA 浅取；失败（如网络受限）就用现有源码继续，只是不保证与实测版本一致
+        (git -C "$SEARX_SRC" fetch --depth 1 origin "$SEARX_COMMIT" \
+            && git -C "$SEARX_SRC" checkout -q "$SEARX_COMMIT") \
+            || warn "SearXNG 无法切到 pin 提交 ${SEARX_COMMIT:0:12}，使用当前源码（${head:0:12}）"
+    fi
+    if [ ! -x "$SEARX_VENV/bin/python" ]; then
+        local py; py="$(best_system_python)"
+        [ -n "$py" ] || { warn "系统中未找到版本介于 $MIN_PY ~ $MAX_PY 的 Python，跳过 SearXNG"; return 1; }
+        info "SearXNG: 用 $py 创建 .venv 并安装依赖（可能需要几分钟）…"
+        "$py" -m venv "$SEARX_VENV" || { warn "SearXNG venv 创建失败"; return 1; }
+        "$SEARX_VENV/bin/pip" install -q -U pip setuptools wheel pyyaml || { warn "SearXNG 基础构建工具安装失败"; return 1; }
+    fi
+    # setup.py 构建期会 import searx：必须先装齐 requirements，editable 安装关掉构建隔离
+    "$SEARX_VENV/bin/pip" install -q -r "$SEARX_SRC/requirements.txt" || { warn "SearXNG 依赖安装失败"; return 1; }
+    "$SEARX_VENV/bin/pip" install -q --no-build-isolation -e "$SEARX_SRC" || { warn "SearXNG editable 安装失败"; return 1; }
+    info "SearXNG 环境部署完毕 ✅（源码 pin: ${SEARX_COMMIT:0:12}）"
+}
+
 do_setup() {
     setup_venv "$RAG_DIR" "RAG" || return 1
     setup_venv "$BACKEND_DIR" "backend" || return 1
+    setup_searx || warn "SearXNG 部署未完成（可选层，缺席时 web_research 不注册；可稍后重跑 ./devctl.sh setup）"
     if [ -d "$FRONT_DIR/node_modules" ]; then
         info "前端 node_modules 已存在，跳过（如需重装: cd frontend && npm install）"
     else
@@ -195,6 +235,8 @@ ensure_searx_settings() {
     mkdir -p "$SEARX_DIR"
     local sf="$SEARX_DIR/settings.yml"
     if [ -f "$sf" ]; then
+        grep -qE '^[[:space:]]*port:' "$sf" \
+            || warn "已有 $sf 未声明 server.port——原生 SearXNG 默认监听 8888，请在 server: 下加入 port: ${SEARX_PORT}"
         if grep -qE '^[[:space:]]*-[[:space:]]*json([[:space:]]|$)' "$sf" || grep -qE 'formats:.*json' "$sf"; then
             return 0
         fi
@@ -210,6 +252,8 @@ ensure_searx_settings() {
 use_default_settings: true
 server:
   secret_key: "$secret"
+  bind_address: "127.0.0.1"  # 仅本机回环：limiter 已关，绑 0.0.0.0 会让局域网白嫖搜索代理
+  port: $SEARX_PORT           # 原生 webapp 默认 8888，必须显式指到 config.yaml 约定的端口
   limiter: false          # 本机自用可关；对外暴露务必开启
 search:
   formats:
@@ -219,37 +263,27 @@ EOF
     info "已生成 SearXNG 配置: ${sf}（已开启 html + json 输出）"
 }
 
-wait_ready_searx() {
-    local waited=0
-    printf "[devctl] 等待 SearXNG 就绪 "
-    while ! is_ready "$SEARX_READY_URL"; do
-        if [ "$(docker inspect -f '{{.State.Running}}' "$SEARX_NAME" 2>/dev/null)" != "true" ]; then
-            echo ""; fail "SearXNG 容器已退出，最近日志："; docker logs --tail 30 "$SEARX_NAME" >&2 2>&1; return 1
-        fi
-        if [ "$waited" -ge "$SEARX_TIMEOUT" ]; then
-            echo ""; fail "SearXNG 在 ${SEARX_TIMEOUT}s 内未就绪，最近日志："; docker logs --tail 30 "$SEARX_NAME" >&2 2>&1; return 1
-        fi
-        sleep 2; waited=$((waited + 2)); printf "."
-    done
-    echo ""
-    info "SearXNG 就绪 ✅ ($SEARX_READY_URL)"
+# 迁移期兼容：移除旧 docker 部署的 SearXNG 容器（带 --restart unless-stopped，
+# 不显式删除会一直复活并占着 8080）。docker 未装/未运行则静默跳过。
+remove_legacy_searx_container() {
+    command -v docker >/dev/null 2>&1 || return 0
+    if [ -n "$(docker ps -aq -f "name=^${SEARX_LEGACY_CONTAINER}$" 2>/dev/null)" ]; then
+        info "发现旧的 SearXNG docker 容器，移除（已迁移为原生部署）"
+        docker rm -f "$SEARX_LEGACY_CONTAINER" >/dev/null 2>&1 || true
+        sleep 1   # 等 docker 的端口代理释放 8080
+    fi
 }
 
 start_searx() {
+    remove_legacy_searx_container
     if is_ready "$SEARX_READY_URL"; then info "SearXNG 已在运行，跳过"; return 0; fi
-    command -v docker >/dev/null 2>&1 || { warn "未找到 docker，跳过 SearXNG（web_research 将不注册）"; return 1; }
-    docker info >/dev/null 2>&1 || { warn "docker 守护进程未运行（请先启动 Docker Desktop/colima），跳过 SearXNG"; return 1; }
+    [ -x "$SEARX_VENV/bin/python" ] || { warn "缺少 searxng/.venv（可选层），跳过 SearXNG；如需联网搜索请运行: ./devctl.sh setup"; return 1; }
     ensure_searx_settings
-    docker rm -f "$SEARX_NAME" >/dev/null 2>&1 || true   # 清理同名残留容器
-    info "启动 SearXNG (port $SEARX_PORT) → docker 容器 ${SEARX_NAME}（首次会拉取镜像，请稍候）"
-    # 仅绑本机回环：SearXNG 只供同机的 web_research 沙箱调用（limiter 已关，
-    # 绑 0.0.0.0 会让局域网任何设备白嫖这个搜索代理）
-    if ! docker run -d --name "$SEARX_NAME" -p "127.0.0.1:${SEARX_PORT}:8080" \
-            -v "$SEARX_DIR:/etc/searxng" --restart unless-stopped \
-            "$SEARX_IMAGE" >>"$LOG_DIR/searx.log" 2>&1; then
-        fail "docker run 失败，最近日志（$LOG_DIR/searx.log）："; tail -n 20 "$LOG_DIR/searx.log" >&2; return 1
-    fi
-    wait_ready_searx
+    info "启动 SearXNG (port $SEARX_PORT) → $LOG_DIR/searx.log"
+    # bind_address/port 由 settings.yml 决定（127.0.0.1:8080，仅本机回环）
+    spawn_daemon "$SEARX_DIR" "$LOG_DIR/searx.log" "$LOG_DIR/searx.pid" \
+        env SEARXNG_SETTINGS_PATH="$SEARX_DIR/settings.yml" "$SEARX_VENV/bin/python" -m searx.webapp || return 1
+    wait_ready "SearXNG" "$SEARX_READY_URL" "$SEARX_TIMEOUT" "$(cat "$LOG_DIR/searx.pid")" "$LOG_DIR/searx.log"
 }
 
 start_backend() {
@@ -307,15 +341,10 @@ stop_front()   { stop_one "前端"    "$FRONT_PORT"   "$LOG_DIR/front.pid"   5; 
 stop_backend() { stop_one "backend" "$BACKEND_PORT" "$LOG_DIR/backend.pid" 20; }
 stop_rag()     { stop_one "RAG"     "$RAG_PORT"     "$LOG_DIR/rag.pid"     15; }
 
-stop_searx() {  # docker 容器，不走端口 pid 那套（-p 映射下 lsof 只见 docker-proxy）
-    command -v docker >/dev/null 2>&1 || { info "SearXNG 未运行（无 docker）"; return 0; }
-    if [ -n "$(docker ps -aq -f "name=^${SEARX_NAME}$" 2>/dev/null)" ]; then
-        info "停止 SearXNG 容器 $SEARX_NAME"
-        docker rm -f "$SEARX_NAME" >/dev/null 2>&1 || true
-        info "SearXNG 已停止"
-    else
-        info "SearXNG 未在运行"
-    fi
+stop_searx() {
+    # 先清旧 docker 容器再走端口 pid——否则 lsof 命中的是 docker 的端口代理进程，误杀会连累 Docker Desktop
+    remove_legacy_searx_container
+    stop_one "SearXNG" "$SEARX_PORT" "$LOG_DIR/searx.pid" 5
 }
 
 # ---- 状态 ----
@@ -332,11 +361,14 @@ status_one() {  # $1: 名称  $2: 端口  $3: 就绪 url
     fi
 }
 
-status_searx() {  # docker 容器：优先看就绪，其次看容器是否在跑
-    if is_ready "$SEARX_READY_URL"; then
-        echo -e "  ${GREEN}●${NC} SearXNG \tport $SEARX_PORT\t(docker $SEARX_NAME)\t就绪"
-    elif command -v docker >/dev/null 2>&1 && [ -n "$(docker ps -q -f "name=^${SEARX_NAME}$" 2>/dev/null)" ]; then
-        echo -e "  ${YELLOW}●${NC} SearXNG \tport $SEARX_PORT\t启动中/未就绪"
+status_searx() {  # 与 status_one 同构，仅"未运行"标注（可选）
+    local pids; pids="$(listen_pids "$SEARX_PORT" | tr '\n' ' ')"
+    if [ -n "$pids" ]; then
+        if is_ready "$SEARX_READY_URL"; then
+            echo -e "  ${GREEN}●${NC} SearXNG \tport $SEARX_PORT\tpid $pids\t就绪"
+        else
+            echo -e "  ${YELLOW}●${NC} SearXNG \tport $SEARX_PORT\tpid $pids\t启动中/未就绪"
+        fi
     else
         echo -e "  ${RED}●${NC} SearXNG \tport $SEARX_PORT\t未运行（可选）"
     fi
@@ -354,11 +386,11 @@ do_status() {
 do_logs() {
     case "${1:-all}" in
         rag)     tail -n 50 "$LOG_DIR/rag.log" ;;
-        searx)   docker logs --tail 50 "$SEARX_NAME" 2>&1 || echo "(SearXNG 未运行或无 docker)" ;;
+        searx)   tail -n 50 "$LOG_DIR/searx.log" 2>/dev/null || echo "(无日志)" ;;
         backend) tail -n 50 "$LOG_DIR/backend.log" ;;
         front)   tail -n 50 "$LOG_DIR/front.log" ;;
         all)     echo "===== rag ====="; tail -n 20 "$LOG_DIR/rag.log" 2>/dev/null || echo "(无日志)"
-                 echo "===== searx ====="; docker logs --tail 20 "$SEARX_NAME" 2>&1 || echo "(SearXNG 未运行或无 docker)"
+                 echo "===== searx ====="; tail -n 20 "$LOG_DIR/searx.log" 2>/dev/null || echo "(无日志)"
                  for f in backend front; do
                      echo "===== $f ====="; tail -n 20 "$LOG_DIR/$f.log" 2>/dev/null || echo "(无日志)"
                  done ;;

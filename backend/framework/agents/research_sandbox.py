@@ -11,7 +11,8 @@ ReAct 循环，把多步搜索/抓取/交叉验证折成一份干净摘要。
    串行）。本协程由 web_research 工具经 run_coroutine_threadsafe 投回主事件循环执行；此刻主
    轮次正 await 在工具线程上、已释放推理锁，故沙箱可安全取锁，不与自身争锁。
 """
-from typing import List, Dict
+import time
+from typing import List, Dict, Optional
 
 from mlx_vlm.generate import PromptCacheState
 
@@ -49,6 +50,12 @@ _WEB_SEARCH_SCHEMA = {
         "properties": {
             "query": {"type": "string", "description": "Search query; keep the full semantics and intent."},
             "n": {"type": "integer", "description": "Maximum number of candidates (optional)."},
+            "time_range": {"type": "string", "enum": ["day", "week", "month", "year"],
+                           "description": "Restrict results to this recency window; use for news "
+                                          "and other time-sensitive questions (optional)."},
+            "category": {"type": "string", "enum": ["general", "news"],
+                         "description": "Search category; use 'news' for current events (optional, "
+                                        "defaults to general)."},
         },
         "required": ["query"],
     },
@@ -101,21 +108,45 @@ def _extract_urls(args: dict) -> List[str]:
     return []
 
 
-async def run_research(engine, query: str, cfg: dict) -> str:
+async def run_research(engine, query: str, cfg: dict,
+                       timeout_s: Optional[float] = None,
+                       progress_cb=None) -> str:
     """
     沙箱主循环（协程，运行在主事件循环上）。返回沙箱形成的最终事实摘要文本。
     engine.generate_once 内部持有推理锁，与其他会话生成串行。
+
+    timeout_s：调用方（web_research 包壳）的硬熔断秒数。沙箱据此自设软截止——剩余时间
+    不足 convergence_reserve_seconds 时不再发工具调用，直接用已收集材料收敛出摘要，
+    把「硬超时全损」变成「减配交付」。硬熔断仍由包壳兜底。
+
+    progress_cb(label)：可选进度上报（orchestrator 的钩子，见 runtime.report_progress）。
+    在思考/搜索/阅读/收敛节点上报当前动作，前端 ActivityCard 实时可见。fire-and-forget。
     """
     import asyncio
 
+    def _report(label: str) -> None:
+        if progress_cb is None:
+            return
+        try:
+            progress_cb(label)
+        except Exception:
+            pass  # 进度是仪表，绝不影响调查本体
+
     sess = _EphemeralSession(query)
+    web_tools.reset_extraction_cache()  # 段落去重缓存按调查为界，防跨调查记仇（见函数注释）
     max_steps = int(cfg.get("max_steps", 6))
-    pool: List[str] = []  # 迄今搜到的全部候选 URL（按信誉序），供 open_pages 抓取失败时补位
+    deadline = (time.monotonic() + timeout_s) if timeout_s else None
+    reserve = float(cfg.get("convergence_reserve_seconds", 30))
+    pool: List[str] = []  # 迄今搜到的全部候选 URL（原文、按信誉序），供 open_pages 抓取失败时补位
+    pool_seen: set = set()  # 归一化 key：同页不同跟踪参数只占一个候选位
     fetch_cache: Dict[str, Dict] = {}  # 整轮调查的抓取缓存：同一 URL 跨 step 不重抓（尤其省 T2 渲染）
     parse_retries = 0
     max_parse_retries = int(cfg.get("max_parse_retries", 2))
 
-    for _ in range(max_steps):
+    for step in range(max_steps):
+        if deadline is not None and time.monotonic() > deadline - reserve:
+            break  # 剩余时间不够再跑一轮「生成+抓取」→ 提前收敛，把已有材料折成摘要
+        _report(f"联网调查：思考中（{step + 1}/{max_steps}）")
         result = await engine.generate_once(sess, tools=_TOOLS, temperature=0.2, max_tokens=2048)
         if result.get("cancelled"):
             return "[web_research: generation cancelled]"
@@ -161,14 +192,22 @@ async def run_research(engine, query: str, cfg: dict) -> str:
             args = c.get("arguments", {}) or {}
             if name == "web_search":
                 q = args.get("query") or query
-                res = await asyncio.to_thread(web_tools.web_search, q, cfg, args.get("n"))
-                for item in res:  # 累积候选池（去重，保信誉序），供后续 open_pages 补位
+                _report(f"联网调查：搜索「{q[:40]}」")
+                res = await asyncio.to_thread(web_tools.web_search, q, cfg, args.get("n"),
+                                              args.get("time_range"), args.get("category"))
+                for item in res:  # 累积候选池（按归一化 key 去重，保信誉序），供后续 open_pages 补位
                     u = item.get("url")
-                    if u and u not in pool:
+                    if not u:
+                        continue
+                    k = web_tools.normalize_url(u)
+                    if k not in pool_seen:
+                        pool_seen.add(k)
                         pool.append(u)
                 responses.append({"name": name, "response": web_tools.format_search_results(res)})
             elif name == "open_pages":
                 urls = _extract_urls(args)
+                _report(f"联网调查：阅读 {len(urls)} 个页面"
+                        + ("（强制渲染）" if args.get("render") else ""))
                 res = await asyncio.to_thread(web_tools.open_pages, urls, cfg, pool, fetch_cache,
                                               bool(args.get("render")))
                 responses.append({"name": name, "response": web_tools.wrap_untrusted(res)})
@@ -177,9 +216,11 @@ async def run_research(engine, query: str, cfg: dict) -> str:
                                   "response": f"Unknown tool {name!r} (this sandbox only has web_search / open_pages)"})
         sess.history.append({"role": "tool", "tool_responses": responses})
 
-    # 步数用尽 → 强制收敛出摘要
+    # 步数或时间预算用尽 → 强制收敛出摘要
+    _report("联网调查：归纳结论")
     sess.history.append({"role": "user",
-                        "content": ("Step budget exhausted. Produce the final factual digest from the "
-                                    "material collected above, honestly noting where evidence is insufficient.")})
+                        "content": ("Investigation budget (steps or time) exhausted. Produce the final "
+                                    "factual digest from the material collected above, honestly noting "
+                                    "where evidence is insufficient.")})
     result = await engine.generate_once(sess, tools=_TOOLS, temperature=0.2, max_tokens=2048)
-    return (result.get("text", "") or "").strip() or "[web_research: step budget exhausted without a conclusion]"
+    return (result.get("text", "") or "").strip() or "[web_research: budget exhausted without a conclusion]"

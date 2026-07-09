@@ -71,8 +71,15 @@ class WebResearchTool(BaseTool):
         loop = runtime.get_loop()
         total_timeout = int(_CFG.get("total_timeout", 110))  # 须 < agent.tool_timeout_seconds
 
+        # 进度钩子必须在本工具线程取（ContextVar 随 to_thread 拷贝到此为止）：
+        # run_coroutine_threadsafe 投回主循环的协程不继承本线程上下文，须作参数显式传入。
+        progress_cb = runtime.get_progress_hook()
+
         try:
-            fut = asyncio.run_coroutine_threadsafe(run_research(engine, query, _CFG), loop)
+            # 把硬熔断秒数传给沙箱：沙箱据此自设软截止（提前收敛出部分摘要），硬熔断只兜底
+            fut = asyncio.run_coroutine_threadsafe(
+                run_research(engine, query, _CFG, timeout_s=total_timeout,
+                             progress_cb=progress_cb), loop)
         except Exception as e:
             return f"System Error: could not schedule the web-research sandbox: {e}"
 

@@ -771,6 +771,26 @@ class Orchestrator:
         # gather 并发的各调用互不串台。
         from ..agents import runtime as _agent_runtime
         _agent_runtime.set_current_session(session)
+
+        # 进度钩子：长耗时工具（web_research 等）在执行中上报「正在搜索/正在阅读」，
+        # 复用既有 task_progress 管道实时到前端 ActivityCard；非流式轮次（emit=None）
+        # 退化为只更新 activity，/task 轮询可见。钩子可能从工具线程被调：activity 的
+        # 字典赋值在 GIL 下安全（与 set_activity 并发语义一致，最后写入者为准），
+        # emit 入 asyncio.Queue 必须回主循环线程，走 call_soon_threadsafe。
+        loop = asyncio.get_running_loop()
+
+        def _tool_progress(label: str, detail: str = "") -> None:
+            session.set_activity(label + (f"（{detail}）" if detail else ""))
+            if emit is None:
+                return
+            t = session.task_state
+            payload = {
+                "task": t.snapshot() if (t is not None and t.plan) else None,
+                "activity": session.activity_snapshot(),
+            }
+            loop.call_soon_threadsafe(emit, "task_progress", payload)
+
+        _agent_runtime.set_progress_hook(_tool_progress)
         # 实时反馈：进入工具执行段（并发时以最后写入者为准，仅展示用途，无正确性影响）
         session.set_activity(f"调用工具：{name}")
         # 真流式：工具开始事件（call_id 配对 started/result，供前端渲染工具卡片）

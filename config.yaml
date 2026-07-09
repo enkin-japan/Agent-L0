@@ -75,7 +75,8 @@ ingestion:
 
 # 联网调查（web_research）：受限沙箱知识扩充。主体只调 web_research 一个工具、只拿回摘要；
 # 原始网页与搜索/抓取器全封在 framework/agents 内部（方案 b：物理隔离），主 MCPRegistry 不扫描。
-# 需本机起 SearXNG（Docker，须在 settings.yml 开启 json 输出）；离线则 web_research 自动不注册。
+# 需本机起 SearXNG（原生 venv 部署、无 Docker，devctl.sh 管理；须在 settings.yml 开启 json 输出）；
+# 离线则 web_research 自动不注册。
 web_search:
   searxng_url: "http://127.0.0.1:8080"  # 本机 SearXNG（多引擎聚合，数据不出门）
   timeout: 15                # 单次搜索/抓取的 HTTP 超时（秒）
@@ -83,6 +84,8 @@ web_search:
   max_pages_per_call: 3      # 单次 open_pages 模型主动选取的抓取页数（与观察预算对齐）
   min_valid_pages: 2         # 有效正文（非 403/非空壳）目标数；不足时自动从候选池补抓
   backfill_max: 5            # 补位阶段最多额外尝试的候选数（防止把所有候选抓穿）
+  fetch_concurrency: 3       # 静态档（T0/T1）并行抓取数；T2 无头渲染始终串行
+  per_url_budget_seconds: 25 # 单 URL 三档升级的总时间预算，超时放弃后续档位（防慢站拖垮整轮）
   # 抓取升级阶梯（每个 URL 逐级兜底：T0 requests 静态 → T1 指纹模拟 → T2 无头渲染）：
   impersonate_enabled: true  # T1：静态被 403/空壳时用 curl_cffi 模拟 Chrome TLS 指纹重试（破 JA3/Cloudflare 一类拦截）
   render_enabled: true       # T2：T0/T1 仍拿不到正文（JS 渲染页）时用系统 Chrome 无头渲染兜底；缺 Chrome/Playwright 自动降级
@@ -91,6 +94,8 @@ web_search:
                              # 铺垫之后的关键表格截掉，如税率速算表）
   max_steps: 6               # 沙箱 ReAct 循环步数上限
   total_timeout: 110         # web_research 整体墙钟熔断（秒）；须 < agent.tool_timeout_seconds
+  convergence_reserve_seconds: 30  # 距 total_timeout 不足此秒数时沙箱停发工具调用、
+                                   # 用已收集材料强制收敛出摘要（把超时全损变为部分交付）
   engines: []                # 可选：限定 SearXNG 引擎（如 ["duckduckgo","brave"]），空=用默认
   content_farms:             # 域名黑名单（内容农场 / 已知强反爬站）：信誉压到最低，排到候选末尾
     - "cn.investing.com"     # Cloudflare 质询站，静态抓取必 403，先沉底减少无谓尝试

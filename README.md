@@ -12,7 +12,7 @@ MacAgent/
 ├── backend/             # Agent 主体（FastAPI + MLX, :14159）：推理引擎 / 编排循环 / 工具 / 会话记忆
 ├── rag/                 # RAG 知识库（FastAPI + PyTorch MPS, :14160）：嵌入 + 重排 + ChromaDB
 ├── frontend/            # Web 前端（React 19 + Vite, :5173）：聊天 / 审批 / 任务 / Deck / 定时任务
-├── searxng/             # SearXNG 配置挂载目录（docker, :8080, 可选联网搜索层）
+├── searxng/             # SearXNG 原生部署目录（settings.yml + 源码 + venv, :8080, 可选联网搜索层）
 └── logs/                # 各服务运行日志与 pid（devctl 管理，不入库）
 ```
 
@@ -45,7 +45,7 @@ Hugging Face 下载到各自的 `models/` 目录（已 gitignore）。
 | frontend (Vite) | 5173 | `0.0.0.0`（唯一对外入口，仅限受信通路暴露） |
 | backend | 14159 | `127.0.0.1`（外部访问统一走前端 `/api` 代理） |
 | rag | 14160 | `127.0.0.1`（只供同机 backend 调用，无鉴权） |
-| searxng | 8080 | `127.0.0.1`（docker，只供 web_research 沙箱调用） |
+| searxng | 8080 | `127.0.0.1`（原生 venv 部署、无 Docker，只供 web_research 沙箱调用） |
 
 ⚠️ 5173 + 代理注入密钥意味着**能访问 5173 的设备等于免钥使用 Agent**（含 shell 等强力工具），
 只允许暴露在 Tailscale 内网 / Cloudflare Access 等受信通路上。

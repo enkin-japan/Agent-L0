@@ -13,7 +13,7 @@
 | frontend | 5173 | 0.0.0.0 | React 19 + Vite + Zustand | 用户交互界面（唯一对外入口） |
 | backend | 14159 | 127.0.0.1 | FastAPI + MLX (gemma-4-e4b 4bit) | Agent 主体：推理/编排/工具/会话 |
 | rag | 14160 | 127.0.0.1 | FastAPI + PyTorch(MPS) + ChromaDB | 分类路由式向量知识库 |
-| SearXNG（可选） | 8080 | docker -p | searxng/searxng | 联网搜索聚合（web_research 依赖） |
+| SearXNG（可选） | 8080 | 原生 venv | searxng/.venv + searxng-src（pin 提交） | 联网搜索聚合（web_research 依赖） |
 
 启停统一走根目录 `devctl.sh`（`setup` 首次部署；启动顺序 RAG → SearXNG → backend → 前端；日志在 `logs/`）。
 
@@ -50,7 +50,7 @@
                        ▼              ▼             ▼
         ┌──────────────────┐  ┌──────────────┐  ┌──────────────────┐
         │   rag :14160     │  │SearXNG :8080 │  │ 前端 :5173        │
-        │  (仅回环, 无鉴权) │  │  (docker)    │  │  /print/deck 路由 │
+        │  (仅回环, 无鉴权) │  │  (原生 venv) │  │  /print/deck 路由 │
         └──────────────────┘  └──────────────┘  └──────────────────┘
 ```
 
@@ -224,7 +224,7 @@ MacAgent/                        （monorepo 根）
 │   ├── storage/raw_files/{类}/  入库文档原文备份；unclassified_raw/ 未分类池
 │   └── models/                  Qwen3-Embedding-0.6B / Qwen3-Reranker-0.6B
 ├── frontend/                    React SPA（Vite；密钥经代理注入，bundle 不持有）
-└── searxng/settings.yml         devctl 首次生成（开启 json 输出）
+└── searxng/settings.yml         devctl 首次生成（开启 json 输出；源码/venv 由 setup 建在同目录）
 ```
 
 ---

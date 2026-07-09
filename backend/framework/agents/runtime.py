@@ -30,6 +30,38 @@ def get_current_session():
     return _CURRENT_SESSION.get()
 
 
+# 当前工具执行段的进度上报钩子 hook(label, detail="")。与 _CURRENT_SESSION 同一套惯例：
+# orchestrator 在 _invoke_tool 内 set，to_thread 拷贝上下文进工具线程。长耗时工具
+# （web_research / math_research 等）在关键节点上报「正在搜索/正在阅读」，钩子把它写进
+# 会话活动流并经既有 task_progress 管道实时到前端 ActivityCard；非流式轮次退化为
+# 只更新 activity（/task 轮询可见）。任意线程可调（钩子内部负责回主循环）。
+# 注意：run_coroutine_threadsafe 投回主循环的协程【不继承】工具线程的 ContextVar
+# （Task 上下文在循环线程捕获）——web_research 这类沙箱须在工具线程先 get_progress_hook()
+# 再把钩子作参数传入协程；纯工具线程内（math_research）直接调 report_progress 即可。
+_PROGRESS_HOOK: "ContextVar[Optional[object]]" = ContextVar("progress_hook", default=None)
+
+
+def set_progress_hook(hook) -> None:
+    """工具执行前登记进度钩子（orchestrator._invoke_tool 内调用）。"""
+    _PROGRESS_HOOK.set(hook)
+
+
+def get_progress_hook():
+    """工具线程内取进度钩子；非工具上下文返回 None。"""
+    return _PROGRESS_HOOK.get()
+
+
+def report_progress(label: str, detail: str = "") -> None:
+    """工具内部上报当前动作。无钩子零开销；异常吞掉——进度是仪表，绝不影响工具本体。"""
+    hook = _PROGRESS_HOOK.get()
+    if hook is None:
+        return
+    try:
+        hook(label, detail)
+    except Exception:
+        pass
+
+
 def set_runtime(engine, loop: "asyncio.AbstractEventLoop") -> None:
     """启动时登记推理引擎与主事件循环（lifespan 内调用）。"""
     global _ENGINE, _LOOP

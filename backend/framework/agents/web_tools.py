@@ -3,13 +3,17 @@
 
 这些函数只被 research_sandbox 的受限循环调用，不是 BaseTool、不进插件目录、主 Agent 看不到。
 反投毒是这里的核心价值：网页正文永远是「不可信资料」，抓取前先净化（删隐藏元素/脚本/零宽字符）、
-抽正文、标记疑似注入，最终包进明确的信任边界字符串。SSRF 校验硬拒绝内网/环回/云元数据地址。
+抽正文、标记疑似注入，最终包进明确的信任边界字符串。SSRF 校验硬拒绝内网/环回/云元数据地址，
+且重定向逐跳复检、无头渲染的子请求同样拦截。静态档抓取并行化，单 URL 有总时间预算。
 HTTP 复用项目已有的 requests（不引 httpx）。清洗依赖 trafilatura/selectolax，缺失时 fail-open。
 """
 import re
+import time
 import ipaddress
 import socket
-from urllib.parse import urlparse
+import threading
+import concurrent.futures
+from urllib.parse import urlparse, urljoin, urlsplit, urlunsplit
 from typing import List, Dict, Optional
 
 import requests
@@ -24,6 +28,61 @@ _BROWSER_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7",
 }
+
+# ---------- 连接复用：线程本地 Session ----------
+# 线程本地规避 requests.Session 的线程安全灰区（并行抓取的每个 worker 各持一份）；
+# 同线程内跨请求复用连接池，省 TLS 握手（本机 SearXNG 与同主机多页收益最大）。
+# cookie 随之在同线程内残留（等价浏览器行为），匿名只读抓取可接受。
+_TLS = threading.local()
+
+
+def _session() -> requests.Session:
+    s = getattr(_TLS, "req", None)
+    if s is None:
+        s = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=8)
+        s.mount("http://", adapter)
+        s.mount("https://", adapter)
+        _TLS.req = s
+    return s
+
+
+def _cffi_session():
+    """curl_cffi 线程本地会话；缺库返回 None（调用方 fail-open 跳过 T1 档）。"""
+    try:
+        from curl_cffi import requests as cffi_requests
+    except Exception:
+        return None
+    s = getattr(_TLS, "cffi", None)
+    if s is None:
+        s = cffi_requests.Session()
+        _TLS.cffi = s
+    return s
+
+
+# ---------- URL 归一化（仅作缓存/去重 key，请求永远用原 URL） ----------
+# 跟踪参数清单取保守值：utm_* 前缀 + 常见点击/营销标识。语义参数（如 GitHub 的
+# ?ref=分支）绝不能丢——宁可漏删（损失一次缓存命中）不可误删（把不同页面归并成一个）。
+_TRACKING_PARAMS = {"fbclid", "gclid", "yclid", "igshid", "mc_cid", "mc_eid", "wt_mc", "spm"}
+
+
+def normalize_url(url: str) -> str:
+    """归一 URL：scheme/host 小写、去 fragment、剔除跟踪参数。解析失败原样返回。"""
+    try:
+        sp = urlsplit(url)
+        kept = []
+        for kv in (sp.query.split("&") if sp.query else []):
+            if not kv:
+                continue
+            k = kv.split("=", 1)[0].lower()
+            if k.startswith("utm_") or k in _TRACKING_PARAMS:
+                continue
+            kept.append(kv)
+        return urlunsplit((sp.scheme.lower(), (sp.netloc or "").lower(),
+                           sp.path, "&".join(kept), ""))
+    except Exception:
+        return url
+
 
 # ---------- 域名信誉分层（先给模型看更可信的源） ----------
 _TIER = {"gov": 1.0, "edu": 0.95, "docs": 0.9, "major_media": 0.75,
@@ -81,20 +140,30 @@ def _domain_score(url: str, content_farms: set) -> float:
 # ==========================================================================
 # L1 搜索：SearXNG（JSON 输出）
 # ==========================================================================
-def web_search(query: str, cfg: dict, n: Optional[int] = None) -> List[Dict]:
-    """返回候选网页列表（去重 + 信誉降序）。仅元数据与摘要，不抓正文。"""
+_TIME_RANGES = ("day", "week", "month", "year")
+_CATEGORIES = ("general", "news")
+
+
+def web_search(query: str, cfg: dict, n: Optional[int] = None,
+               time_range: Optional[str] = None, category: Optional[str] = None) -> List[Dict]:
+    """返回候选网页列表（去重 + 信誉降序）。仅元数据与摘要，不抓正文。
+    time_range/category 由沙箱模型按问题时效性选择（SearXNG 原生支持）；非法值静默回落默认。
+    """
     base = cfg.get("searxng_url", "http://127.0.0.1:8080").rstrip("/")
     timeout = int(cfg.get("timeout", 15))
     limit = int(n or cfg.get("max_results", 8))
     farms = set(cfg.get("content_farms") or [])
     engines = cfg.get("engines") or []
 
-    params = {"q": query, "format": "json", "categories": "general"}
+    params = {"q": query, "format": "json",
+              "categories": category if category in _CATEGORIES else "general"}
+    if time_range in _TIME_RANGES:
+        params["time_range"] = time_range
     if engines:
         params["engines"] = ",".join(engines)
     try:
-        r = requests.get(f"{base}/search", params=params,
-                         headers={"User-Agent": UA}, timeout=timeout)
+        r = _session().get(f"{base}/search", params=params,
+                           headers={"User-Agent": UA}, timeout=timeout)
         r.raise_for_status()
         results = r.json().get("results", [])
     except Exception as e:
@@ -179,6 +248,54 @@ def _ssrf_ok(url: str) -> tuple:
     return True, ""
 
 
+# 按 host 缓存 SSRF 判定（无头渲染的每个子资源请求都要过一遍，不缓存会打爆 DNS）。
+# 残余风险：DNS rebinding 的 TOCTOU（判定与实际连接间解析结果变更）——本地个人 Agent 接受。
+_SSRF_CACHE_MAX = 512
+_ssrf_cache: Dict[str, bool] = {}
+
+
+def _ssrf_url_cached(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    if not host:
+        return False
+    hit = _ssrf_cache.get(host)
+    if hit is not None:
+        return hit
+    ok, _ = _ssrf_ok(url)
+    if len(_ssrf_cache) >= _SSRF_CACHE_MAX:
+        _ssrf_cache.clear()
+    _ssrf_cache[host] = ok
+    return ok
+
+
+_MAX_REDIRECTS = 5
+
+
+def _redirect_hops(get_fn, url: str, timeout: int) -> tuple:
+    """手动跟随重定向并逐跳过 SSRF 校验，堵住「公网页 302 → 内网/元数据地址」的绕过
+    （自动 allow_redirects 只校验首跳）。首跳由调用方校验过，不重复解析。
+    get_fn(url, timeout) 须以 allow_redirects=False 发起请求；requests 与 curl_cffi
+    的响应对象在这里用到的接口（status_code/headers）一致。返回 (resp|None, error|None)。"""
+    current = url
+    for hop in range(_MAX_REDIRECTS + 1):
+        if hop > 0:
+            ok, reason = _ssrf_ok(current)
+            if not ok:
+                return None, f"redirect to {current} blocked: {reason}"
+        try:
+            resp = get_fn(current, timeout)
+        except Exception as e:
+            return None, str(e)
+        if resp.status_code in (301, 302, 303, 307, 308):
+            loc = resp.headers.get("Location")
+            if not loc:
+                return resp, None
+            current = urljoin(current, loc)
+            continue
+        return resp, None
+    return None, f"too many redirects (>{_MAX_REDIRECTS})"
+
+
 def _scrub_html(html: str) -> str:
     """删脚本/样式/隐藏元素——渲染时不可见却会进上下文的注入载体。缺 selectolax 则原样返回。"""
     try:
@@ -202,6 +319,22 @@ def _flag_injection(text: str) -> List[str]:
     return [p for p in _INJECTION if re.search(p, text, re.I)]
 
 
+def reset_extraction_cache() -> None:
+    """每轮调查入口调用：清空 trafilatura 的进程级段落去重缓存（LRU_TEST，容量 4096）。
+
+    该缓存是模块级全局、跨 extract() 调用累积（设计给批量爬站抑制样板：同段文本
+    出现超过 MAX_REPETITIONS=2 次即整段删除）。常驻进程里它会跨调查记仇——反复调查
+    同一页面时，其超 100 字的段落计数迟早超阈值，抽取端从此视该页为空壳，且 T1/T2
+    升级救不回（殊途同归撞同一缓存）、重启进程才"自愈"，极难归因。
+    在调查入口清空，把去重作用域从「进程终身」收缩到「单轮调查」：轮内跨页的站内
+    样板剔除照常工作，跨调查污染归零。缺库/私有结构变动时静默跳过（fail-open）。"""
+    try:
+        from trafilatura.deduplication import LRU_TEST
+        LRU_TEST.clear()
+    except Exception:
+        pass
+
+
 def _extract(url: str, html: str, cfg: dict, tier: int) -> Dict:
     """把（任一档位取回的）HTML 净化 → 抽正文 → 反投毒。tier 仅作诊断标记。"""
     per_page = int(cfg.get("per_page_max_chars", 1500))
@@ -216,34 +349,95 @@ def _extract(url: str, html: str, cfg: dict, tier: int) -> Dict:
     return {"url": url, "text": text[:per_page], "error": None, "flags": _flag_injection(text), "tier": tier}
 
 
+def _extract_pdf(url: str, data: bytes, cfg: dict, tier: int) -> Dict:
+    """PDF 正文抽取（PyMuPDF——file_extract 同款既有依赖，fail-open 惯例同 ingestion/parsers/pdf.py）。
+    扫描版无文本层 → 空壳结果，与抓取失败等价，不劣化现状。"""
+    per_page = int(cfg.get("per_page_max_chars", 1500))
+    base = {"url": url, "flags": [], "tier": tier, "kind": "pdf"}
+    try:
+        import fitz  # PyMuPDF
+        doc = fitz.open(stream=data, filetype="pdf")
+    except Exception as e:
+        return {**base, "text": "", "error": f"PDF parsing failed: {e}"}
+    try:
+        if doc.needs_pass:
+            return {**base, "text": "", "error": "PDF is password-protected"}
+        parts = []
+        for i in range(min(doc.page_count, _PDF_MAX_PAGES)):
+            try:
+                t = doc[i].get_text().strip()
+            except Exception:
+                t = ""
+            if t:
+                parts.append(t)
+        text = _ZERO_WIDTH.sub("", "\n".join(parts))
+    finally:
+        doc.close()
+    return {**base, "text": text[:per_page], "error": None, "flags": _flag_injection(text)}
+
+
+def _extract_any(url: str, payload, cfg: dict, tier: int) -> Dict:
+    """按载荷类型分路：("pdf", bytes) → PDF 抽取；str → HTML 净化/抽正文。"""
+    if isinstance(payload, tuple) and payload and payload[0] == "pdf":
+        return _extract_pdf(url, payload[1], cfg, tier)
+    return _extract(url, payload, cfg, tier)
+
+
+_PDF_MAX_BYTES = 10 * 1024 * 1024   # 超此大小拒收（PDF 的 xref 在文件尾，截断即不可解析）
+_PDF_MAX_PAGES = 8                  # 只抽前几页：正文预算 per_page_max_chars 本来就装不下更多
+
+
+def _looks_pdf(content_type: str, url: str) -> bool:
+    if "application/pdf" in (content_type or "").lower():
+        return True
+    return urlparse(url).path.lower().endswith(".pdf")
+
+
 def _http_fetch(url: str, cfg: dict, tier: int) -> tuple:
-    """按档位取原始 HTML，返回 (html|None, error|None)。
+    """按档位取原始载荷，返回 (payload|None, error|None)；payload 为 HTML 字符串，
+    或 PDF 时的 ("pdf", bytes) 元组（政府公告/论文/财报常为 PDF，不再白占抓取名额）。
     tier 0 = requests 静态；tier 1 = curl_cffi 模拟 Chrome TLS 指纹（破 JA3/Cloudflare 一类拦截）。
+    两档都手动跟随重定向（_redirect_hops），每一跳过 SSRF 校验。
     """
     timeout = int(cfg.get("timeout", 15))
     if tier == 0:
+        resp, err = _redirect_hops(
+            lambda u, t: _session().get(u, headers=_BROWSER_HEADERS, timeout=t,
+                                        allow_redirects=False),
+            url, timeout)
+        if resp is None:
+            return None, err
         try:
-            resp = requests.get(url, headers=_BROWSER_HEADERS, timeout=timeout, allow_redirects=True)
             resp.raise_for_status()
         except Exception as e:
             return None, str(e)
+        ct = resp.headers.get("Content-Type", "")
+        if _looks_pdf(ct, str(getattr(resp, "url", "") or url)):
+            if len(resp.content) > _PDF_MAX_BYTES:
+                return None, f"PDF too large ({len(resp.content)} bytes)"
+            return ("pdf", resp.content), None
         # 服务器未声明 charset 时 requests 会 fallback ISO-8859-1，中文站乱码；改用内容嗅探。
-        if "charset" not in resp.headers.get("Content-Type", "").lower() and resp.apparent_encoding:
+        if "charset" not in ct.lower() and resp.apparent_encoding:
             resp.encoding = resp.apparent_encoding
         return resp.text, None
     # tier 1：curl_cffi 模拟真实 Chrome 的 TLS/HTTP2 指纹；缺库则 fail-open（上层跳过本档）
-    try:
-        from curl_cffi import requests as cffi_requests
-    except Exception as e:
-        return None, f"curl_cffi unavailable: {e}"
-    try:
-        resp = cffi_requests.get(url, headers=_BROWSER_HEADERS, timeout=timeout,
-                                 impersonate="chrome", allow_redirects=True)
-    except Exception as e:
-        return None, str(e)
+    sess = _cffi_session()
+    if sess is None:
+        return None, "curl_cffi unavailable"
+    resp, err = _redirect_hops(
+        lambda u, t: sess.get(u, headers=_BROWSER_HEADERS, timeout=t,
+                              impersonate="chrome", allow_redirects=False),
+        url, timeout)
+    if resp is None:
+        return None, err
     if resp.status_code >= 400:
         return None, f"HTTP {resp.status_code}"
-    if "charset" in resp.headers.get("Content-Type", "").lower():
+    ct = resp.headers.get("Content-Type", "")
+    if _looks_pdf(ct, str(getattr(resp, "url", "") or url)):
+        if len(resp.content) > _PDF_MAX_BYTES:
+            return None, f"PDF too large ({len(resp.content)} bytes)"
+        return ("pdf", resp.content), None
+    if "charset" in ct.lower():
         return resp.text, None
     try:  # 未声明 charset：用 charset_normalizer 嗅探字节，避免 GBK/GB2312 乱码
         from charset_normalizer import from_bytes
@@ -278,6 +472,17 @@ def _render_fetch(url: str, cfg: dict, box: dict) -> Optional[str]:
         ctx = box["browser"].new_context(
             user_agent=UA, locale="zh-CN",
             extra_http_headers={"Accept-Language": _BROWSER_HEADERS["Accept-Language"]})
+
+        # 渲染页的导航/子资源请求同样不得触达非公网地址（页面脚本可以主动 fetch 内网）。
+        # data:/blob: 等无网络出口的 scheme 放行；重定向跳转在 Chromium 内部跟随，属尽力拦截。
+        def _guard(route):
+            req_url = route.request.url
+            if urlparse(req_url).scheme in ("http", "https") and not _ssrf_url_cached(req_url):
+                route.abort()
+            else:
+                route.continue_()
+
+        ctx.route("**/*", _guard)
         page = ctx.new_page()
         page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
         try:  # 给 JS 一点时间把动态内容填进 DOM；等不到网络空闲也不致命
@@ -326,6 +531,12 @@ def _fetch_clean(url: str, cfg: dict, box: Optional[dict] = None,
 
     attempts: List[Dict] = []
     last_error: Optional[str] = None
+    # 单 URL 总时间预算：三档升级最坏 3×timeout 会拖垮整轮调查，超预算即放弃后续档位
+    budget = float(cfg.get("per_url_budget_seconds", 25))
+    t0 = time.monotonic()
+
+    def within_budget() -> bool:
+        return time.monotonic() - t0 < budget
 
     # 强制渲染：T2 先行（拿到有效正文即返回，失败再落回 T0/T1 兜底）
     if force_render and box is not None and cfg.get("render_enabled", True):
@@ -337,9 +548,9 @@ def _fetch_clean(url: str, cfg: dict, box: Optional[dict] = None,
             attempts.append(r)
 
     # T0 静态
-    html, err = _http_fetch(url, cfg, tier=0)
-    if html is not None:
-        r = _extract(url, html, cfg, tier=0)
+    payload, err = _http_fetch(url, cfg, tier=0)
+    if payload is not None:
+        r = _extract_any(url, payload, cfg, tier=0)
         if _is_valid(r):
             return r
         attempts.append(r)
@@ -347,10 +558,10 @@ def _fetch_clean(url: str, cfg: dict, box: Optional[dict] = None,
         last_error = err
 
     # T1 curl_cffi 指纹模拟（可配置关闭）
-    if cfg.get("impersonate_enabled", True):
-        html, err = _http_fetch(url, cfg, tier=1)
-        if html is not None:
-            r = _extract(url, html, cfg, tier=1)
+    if cfg.get("impersonate_enabled", True) and within_budget():
+        payload, err = _http_fetch(url, cfg, tier=1)
+        if payload is not None:
+            r = _extract_any(url, payload, cfg, tier=1)
             if _is_valid(r):
                 return r
             attempts.append(r)
@@ -358,7 +569,8 @@ def _fetch_clean(url: str, cfg: dict, box: Optional[dict] = None,
             last_error = err or last_error
 
     # T2 无头渲染（需 open_pages 传入浏览器 box；可配置关闭；强制渲染时已在开头试过）
-    if not force_render and box is not None and cfg.get("render_enabled", True):
+    if (not force_render and box is not None and cfg.get("render_enabled", True)
+            and within_budget()):
         html = _render_fetch(url, cfg, box)
         if html is not None:
             r = _extract(url, html, cfg, tier=2)
@@ -382,6 +594,10 @@ def open_pages(urls: List[str], cfg: dict, pool: Optional[List[str]] = None,
     时，从候选池 pool 自动补抓，且补位优先选与已有效来源【不同可注册域】的候选——沙箱要求
     「≥2 个相互独立来源」，同源补位满足不了独立性。cache 在整轮调查内跨 step 复用，避免重抓。
 
+    并行策略：静态档（T0/T1）按 fetch_concurrency 并行——单页最坏要吃满 per_url_budget，
+    串行会拖垮 total_timeout；T2 渲染始终串行（Playwright 同步 API 不能跨线程共用浏览器），
+    只对静态未果的页逐个补救，且同一 URL 整轮调查只渲染一次（render_tried 标记）。
+
     render=True（沙箱模型显式指定）：对本次选定的 urls 强制 T2 无头渲染优先，并绕过缓存
     重抓——模型发现已抓正文只有页面骨架、缺实际数据（JS 填充页）时的自救通道。
     补位抓取不受该参数影响（仍走常规升级）。
@@ -389,40 +605,95 @@ def open_pages(urls: List[str], cfg: dict, pool: Optional[List[str]] = None,
     max_pages = int(cfg.get("max_pages_per_call", 3))
     min_valid = int(cfg.get("min_valid_pages", 2))
     backfill_max = int(cfg.get("backfill_max", 5))
+    concurrency = max(1, int(cfg.get("fetch_concurrency", 3)))
     cache = cache if cache is not None else {}
 
     box = {"pw": None, "browser": None, "failed": False}  # 本次调用的浏览器（T2 惰性启动、用完即关）
     try:
-        def fetch(u: str, force_render: bool = False) -> Dict:
-            # 强制渲染绕过缓存：缓存里躺着的正是「静态壳过了门槛」的旧结果，命中即前功尽弃
-            if u in cache and not force_render:
-                return cache[u]
-            r = _fetch_clean(u, cfg, box, force_render=force_render)
-            cache[u] = r
+        def static_fetch(u: str) -> Dict:
+            """T0/T1（box=None 使 _fetch_clean 跳过 T2）。只做无共享状态的 HTTP，线程安全。
+            缓存按归一化 key（同页不同跟踪参数命中同一条），请求仍用原 URL。"""
+            k = normalize_url(u)
+            if k in cache:
+                return cache[k]
+            r = _fetch_clean(u, cfg, box=None)
+            cache[k] = r
             return r
 
-        picked = list(dict.fromkeys(u for u in (urls or []) if u))[:max_pages]
-        out = [fetch(u, force_render=render) for u in picked]
+        def fetch_many(us: List[str]) -> List[Dict]:
+            """静态档并行抓一批，按输入顺序返回。"""
+            if len(us) <= 1:
+                return [static_fetch(u) for u in us]
+            with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=min(concurrency, len(us))) as ex:
+                return list(ex.map(static_fetch, us))
+
+        def escalate_render(u: str, prev: Dict) -> Dict:
+            """静态未果 → T2 渲染补救（串行）。取两次尝试中信息量大者回填缓存。
+            PDF 不升级：无头 Chrome 渲不出 PDF 文本层，扫描版渲染也救不回。"""
+            if (prev.get("render_tried") or prev.get("kind") == "pdf" or box.get("failed")
+                    or not cfg.get("render_enabled", True)
+                    or urlparse(u).path.lower().endswith(".pdf")
+                    or not _ssrf_ok(u)[0]):
+                return prev
+            html = _render_fetch(u, cfg, box)
+            r2 = _extract(u, html, cfg, tier=2) if html is not None else None
+            best = prev
+            if r2 is not None and (_is_valid(r2)
+                                   or len(r2.get("text") or "") > len(prev.get("text") or "")):
+                best = r2
+            best["render_tried"] = True
+            cache[normalize_url(u)] = best
+            return best
+
+        # 选定页去重按归一化 key（同页不同跟踪参数只占一个名额），保留首个原 URL 用于请求
+        picked_by_key: Dict[str, str] = {}
+        for u in (urls or []):
+            if u:
+                picked_by_key.setdefault(normalize_url(u), u)
+        picked = list(picked_by_key.values())[:max_pages]
+
+        if render:
+            # 强制渲染绕过缓存（缓存里躺着的正是「静态壳过了门槛」的旧结果），保持串行与确定性
+            out = []
+            for u in picked:
+                r = _fetch_clean(u, cfg, box, force_render=True)
+                r["render_tried"] = True
+                cache[normalize_url(u)] = r
+                out.append(r)
+        else:
+            out = fetch_many(picked)
+            out = [r if _is_valid(r) else escalate_render(u, r)
+                   for u, r in zip(picked, out)]
         valid = sum(_is_valid(r) for r in out)
 
         if pool and valid < min_valid:
-            tried = set(picked)
+            tried = {normalize_url(u) for u in picked}
             valid_domains = {_registrable_domain(r["url"]) for r in out if _is_valid(r)}
+            # 候选按归一化 key 去重且排除已选页（含跟踪参数变体）
+            cand_by_key: Dict[str, str] = {}
+            for u in pool:
+                if u:
+                    k = normalize_url(u)
+                    if k not in tried:
+                        cand_by_key.setdefault(k, u)
             # 新域优先：与已有效来源不同注册域的候选排前面；稳定排序保留池内原有信誉序。
             candidates = sorted(
-                (u for u in pool if u and u not in tried),
-                key=lambda u: 0 if _registrable_domain(u) not in valid_domains else 1)
-            extra = 0
-            for u in candidates:
-                if valid >= min_valid or extra >= backfill_max:
-                    break
-                tried.add(u)
-                extra += 1
-                r = fetch(u)
-                out.append(r)
-                if _is_valid(r):
-                    valid += 1
-                    valid_domains.add(_registrable_domain(u))
+                cand_by_key.values(),
+                key=lambda u: 0 if _registrable_domain(u) not in valid_domains else 1)[:backfill_max]
+            # 波次补位：每波并行抓「缺口+1」个，够数即停——一次性全量并抓会把候选抓穿
+            i = 0
+            while valid < min_valid and i < len(candidates):
+                wave = candidates[i:i + max(min_valid - valid + 1, 1)]
+                i += len(wave)
+                rs = fetch_many(wave)
+                rs = [r if _is_valid(r) else escalate_render(u, r)
+                      for u, r in zip(wave, rs)]
+                for u, r in zip(wave, rs):
+                    out.append(r)
+                    if _is_valid(r):
+                        valid += 1
+                        valid_domains.add(_registrable_domain(u))
         return out
     finally:
         _close_render(box)
@@ -458,7 +729,7 @@ def wrap_untrusted(sources: List[Dict]) -> str:
 def searxng_alive(cfg: dict) -> bool:
     base = cfg.get("searxng_url", "http://127.0.0.1:8080").rstrip("/")
     try:
-        r = requests.get(base, headers={"User-Agent": UA}, timeout=3)
+        r = _session().get(base, headers={"User-Agent": UA}, timeout=3)
         return r.status_code < 500
     except Exception:
         return False

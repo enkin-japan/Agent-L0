@@ -355,7 +355,8 @@ class ChatSession:
             except Exception as e:
                 print(f"[Memory] Session {self.session_id} 历史读取异常: {e}")
 
-    # --- 实时步骤反馈（编排循环写入，/task 轮询读取） ---
+    # --- 实时步骤反馈（编排循环与长耗时工具的进度钩子写入，/task 轮询与 SSE 读取；
+    #     钩子可能从工具线程写：字典赋值在 GIL 下安全，快照浅拷贝，最后写入者为准） ---
     def reset_activity(self):
         self.activity = {"phase": "idle", "current": "", "steps": []}
 
