@@ -57,15 +57,18 @@ class VisibleTextStreamer:
         n = len(self.buf)
         while i < n:
             if self.mode == self.OUT:
-                st, m = self._match(i, [self.soc, self.stc], final)
+                # eoc 也在 OUT 态匹配：思考预算强制收尾后模型可能补发无配对的 <channel|>，
+                # 属标记而非正文，吞掉（与 ResponseParser 第 3 步的游离 eoc 清除对齐）。
+                st, m = self._match(i, [self.soc, self.stc, self.eoc], final)
                 if st == "hold":
                     break
                 if st == "hit":
                     if m == self.soc:
                         self.mode = self.NAME
                         self._name = ""
-                    else:  # stc
+                    elif m == self.stc:
                         self.mode = self.TOOL
+                    # m == eoc：游离收尾标记，吞掉、保持 OUT
                     i += len(m)
                     continue
                 # 频道外裸文本：照吐（但吃掉孤立的 <|…|> 标记残片由 _match 的 hold/hit 覆盖）

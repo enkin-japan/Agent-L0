@@ -182,6 +182,10 @@ class Orchestrator:
         self.tool_timeout_seconds = int(cfg.get("tool_timeout_seconds", 120))  # 单次工具执行熔断
         self.max_parse_retries = int(cfg.get("max_parse_retries", 3))  # 工具格式解析错误的断环阈值
         self.tool_schema_mode = str(cfg.get("tool_schema_mode", "full"))   # full | catalog
+        # 思考位置策略：用户开思考时只让本轮**首次**生成思考（规划价值最高），
+        # 之后的迭代（消化工具结果/纠错重试）强制关思考——多为机械转录，省算力与延迟。
+        # 审批/挂起续跑重入 run_turn 时 iterations 归零，续跑首次生成同样保留思考（重定向）。
+        self.thinking_first_iteration_only = bool(cfg.get("thinking_first_iteration_only", True))
 
         # 上下文压缩（Step 1：机械式工具观察压缩）：任务沉降后削旧观察，保留最近若干条原文，
         # 把 model-facing 上下文规模钉在有界范围（原始观察总量 ≤ keep_recent × 单条上限）。
@@ -330,6 +334,10 @@ class Orchestrator:
             call_kwargs = dict(gen_kwargs)
             if max_tokens_override is not None:  # T1-3：截断升档后本轮后续生成沿用更高上限
                 call_kwargs["max_tokens"] = max_tokens_override
+            # 思考位置策略（见 __init__ 注释）：首次生成之后的迭代强制关思考
+            if (self.thinking_first_iteration_only and iterations > 0
+                    and call_kwargs.get("enable_thinking")):
+                call_kwargs["enable_thinking"] = False
             result = await self.engine.generate_once(
                 session=session, tools=self._tools_decl, task_block=task_block,
                 tail_notes=pending_tail_notes or None, **call_kwargs

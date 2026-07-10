@@ -20,11 +20,13 @@ class AgentEngine:
     多轮编排（ReAct 循环、计划推进、失败路由、审批闸门）由 Orchestrator 负责；
     本层对上彻底屏蔽 MLX 的物理复杂性，并持有全局推理互斥锁。
     """
-    def __init__(self, model, processor, kv_config=None):
+    def __init__(self, model, processor, kv_config=None, suppress_ghost_thinking: bool = False):
         self.model = model
         self.processor = processor
 
-        self.builder = PromptBuilder(processor)
+        # suppress_ghost_thinking：Gemma-4 大杯（26b/31b）关思考时须预填空思考频道，
+        # 见 PromptBuilder 注释；按所选模型的注册表条目由 app.py 传入。
+        self.builder = PromptBuilder(processor, suppress_ghost_thinking=suppress_ghost_thinking)
         self.parser = ResponseParser(processor)
 
         # KV Cache 量化配置（默认关闭）：kv_bits 为 None 时走稠密缓存，
@@ -145,6 +147,11 @@ class AgentEngine:
                 prompt_cache_state=session.brain_memory_state,
                 enable_thinking=enable_thinking,
                 thinking_budget=thinking_budget,
+                # 预算锚点须是本模型的频道 token：不传则底层默认 <think>/</think>（Qwen
+                # 方言，Gemma-4 词表中不存在），预算计数失准、超限还会强插垃圾字面量。
+                # 锚定 soc/eoc 后，超限强制收尾即为 "\n<channel|>"——方言内干净关频道。
+                thinking_start_token=self.parser.soc,
+                thinking_end_token=self.parser.eoc,
                 max_tokens=max_tokens,
                 min_p=min_p,
                 repetition_penalty=1.1,

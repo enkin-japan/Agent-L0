@@ -7,7 +7,11 @@ class PromptBuilder:
     """
     负责将对话历史、多模态上下文及 MCP 工具定义转换为大模型底层的 Token 字符串。
     """
-    def __init__(self, processor: ProcessorMixin):
+    def __init__(self, processor: ProcessorMixin, suppress_ghost_thinking: bool = False):
+        # 幽灵思考抑制（官方 thinking 文档）：Gemma-4 12B/26B/31B 关思考时须在 model 轮
+        # 开头预填空思考频道，否则模型会自发打开 thought 频道（幽灵思考）烧 token。
+        # e4b 官方模板无此要求，保持 False。开关来自 config.yaml model_registry 条目。
+        self.suppress_ghost_thinking = suppress_ghost_thinking
         vocab = processor.tokenizer.special_tokens_map if hasattr(processor.tokenizer, "special_tokens_map") else {}
         
         self.bos_token = vocab.get("bos_token", "<bos>")
@@ -95,6 +99,11 @@ class PromptBuilder:
             thoughts = msg.get("thoughts", "")
             if thoughts:
                 prompt += f"{self.soc_token}thought\n{thoughts}\n{self.eoc_token}\n"
+            elif role == "assistant" and self.suppress_ghost_thinking:
+                # 历史重放与生成头预填保持字节一致：该轮生成时 assistant 头部预填过
+                # 空思考频道（见 build 尾部），重放时不吐同样的空频道会让 KV 前缀
+                # 在此断裂，之后整段重预填。
+                prompt += f"{self.soc_token}thought\n{self.eoc_token}\n"
 
             content = msg.get("content", "")
             if isinstance(content, str) and content:
@@ -145,5 +154,9 @@ class PromptBuilder:
         prompt += f"{self.sot_token}assistant\n"
         if enable_thinking:
             prompt += f"{self.soc_token}thought\n"
+        elif self.suppress_ghost_thinking:
+            # 关思考时预填「空思考频道」（官方 12B/26B/31B 模板的 ghost-thinking 抑制）：
+            # 模型看到已开而即闭的 thought 频道，不再自发思考，直接产出正文/工具调用。
+            prompt += f"{self.soc_token}thought\n{self.eoc_token}\n"
 
         return prompt

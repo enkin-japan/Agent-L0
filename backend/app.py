@@ -101,8 +101,9 @@ config = load_config()
 
 # 模型来源：.model-selection 指针（./devctl.sh model 写入）→ 注册表条目；无选择时用
 # config 默认。解析逻辑与 scripts/fetch_model.py 共用同一函数，保证下载与加载指向一致。
-from framework.utils.model_selection import resolve_selected_model
+from framework.utils.model_selection import resolve_selected_model, model_options
 MODEL, MODEL_REVISION, _model_source = resolve_selected_model()
+MODEL_OPTIONS = model_options(MODEL)  # 注册表条目里的模型级行为开关（表外模型为 {}）
 AUDIO_MAX_LENGTH = config["inference"]["audio_max_length"]
 AGENT_HOST = config["inference"]["host"]
 AGENT_PORT = config["inference"]["port"]
@@ -148,7 +149,10 @@ async def lifespan(app: FastAPI):
     mcp_registry = MCPRegistry(tools_dir=TOOLS_DIR)
     
     # 2. 领域层：推理引擎（单次生成）+ 编排循环（计划推进/失败路由/终止保护）
-    engine = AgentEngine(model, processor, kv_config=config.get("inference") or {})
+    engine = AgentEngine(
+        model, processor, kv_config=config.get("inference") or {},
+        suppress_ghost_thinking=bool(MODEL_OPTIONS.get("suppress_ghost_thinking", False)),
+    )
     orchestrator = Orchestrator(engine, mcp_registry, config.get("agent") or {})
 
     # 2.1 联网调查沙箱运行时：把引擎与主事件循环登记给 web_research（受限沙箱工具经

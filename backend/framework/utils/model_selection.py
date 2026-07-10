@@ -33,3 +33,17 @@ def resolve_selected_model() -> Tuple[str, Optional[str], str]:
     print(f"⚠️ .model-selection 指向注册表外的 {selected!r}，回落默认模型"
           f"（注册表见 config.yaml inference.model_registry）")
     return default
+
+
+def model_options(repo: Optional[str]) -> dict:
+    """按 repo 取注册表条目（含 suppress_ghost_thinking 等模型级行为开关）。
+
+    与 resolve_selected_model 解耦：开关跟着最终选中的 repo 走，无论它来自选择文件
+    还是 inference.model 默认——默认模型若也在注册表内，同样拿到自己的开关。
+    表外 repo / 本地路径返回 {}（一切开关取保守默认）。
+    """
+    inference = load_section("inference")
+    for entry in inference.get("model_registry") or []:
+        if entry.get("repo") == repo:
+            return entry
+    return {}

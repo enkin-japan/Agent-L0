@@ -108,7 +108,10 @@ class ResponseParser:
             current_response = current_response[:idx]
 
         # 3. 兜底纯文本
-        clean_text = re.sub(r'<\|.*?\|>', '', current_response).strip()
+        # 游离的 <channel|>：思考预算强制收尾后，模型仍以为自己在频道内、稍后自行补发
+        # 收尾标记——无配对开启标记，channel_pattern 不消费，通用正则 <\|.*?\|> 也匹配
+        # 不到它（不以 <| 开头），会原样漏进正文。此处显式清除（与 stream_filter 对齐）。
+        clean_text = re.sub(r'<\|.*?\|>', '', current_response.replace(self.eoc, "")).strip()
         if clean_text:
             result["text"] = f'{result["text"]}\n{clean_text}'.strip() if result["text"] else clean_text
             

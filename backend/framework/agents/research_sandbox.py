@@ -12,6 +12,7 @@ ReAct 循环，把多步搜索/抓取/交叉验证折成一份干净摘要。
    轮次正 await 在工具线程上、已释放推理锁，故沙箱可安全取锁，不与自身争锁。
 """
 import time
+from datetime import datetime
 from typing import List, Dict, Optional
 
 from mlx_vlm.generate import PromptCacheState
@@ -45,7 +46,11 @@ SANDBOX_SYSTEM_PROMPT = (
     "5. When sources conflict or evidence is insufficient, honestly say it cannot be confirmed and "
     "lay out the conflict — do not force an answer.\n"
     "6. Once you have enough, output the final digest directly (no more tool calls). The digest is "
-    "for the upper-level agent: concise, facts and sources only, no full-page retelling."
+    "for the upper-level agent: concise, facts and sources only, no full-page retelling.\n"
+    "7. You DO have live web access — these tools fetch the real internet, right now. Never "
+    "refuse or disclaim a question for being about \"current\" or \"real-time\" information "
+    "(weather, prices, news, schedules); search for it instead, anchored to the current date & "
+    "time given below."
 )
 
 # 沙箱内部工具的 Schema（function-calling 格式，喂给 generate_once 的 tools 参数）
@@ -96,8 +101,13 @@ class _EphemeralSession:
     """一次性会话替身：只暴露 generate_once 读取的字段，全新 KV、用完即弃。不落盘。"""
     def __init__(self, query: str, system_prompt: str = SANDBOX_SYSTEM_PROMPT):
         self.brain_memory_state = PromptCacheState()
+        # 分钟级时间锚：主循环刻意只注日粒度（KV 缓存跨天友好，精确时间靠 get_current_time
+        # 工具），但沙箱没有时间工具、KV 又是一次性的——直接注到分钟+时区零缓存代价。
+        # 缺锚时模型对天气/时刻类问题会触发「无实时能力」的先验拒答（见系统提示第 7 条）。
+        _now = datetime.now().astimezone()
+        _anchor = _now.strftime("%Y-%m-%d (%A) %H:%M %Z (UTC%z)")
         self.history: List[Dict] = [
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": f"{system_prompt}\n\nCurrent date & time: {_anchor}"},
             {"role": "user", "content": query},
         ]
         self.images: List[str] = []
