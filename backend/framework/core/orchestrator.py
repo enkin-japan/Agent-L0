@@ -182,10 +182,13 @@ class Orchestrator:
         self.tool_timeout_seconds = int(cfg.get("tool_timeout_seconds", 120))  # 单次工具执行熔断
         self.max_parse_retries = int(cfg.get("max_parse_retries", 3))  # 工具格式解析错误的断环阈值
         self.tool_schema_mode = str(cfg.get("tool_schema_mode", "full"))   # full | catalog
-        # 思考位置策略：用户开思考时只让本轮**首次**生成思考（规划价值最高），
-        # 之后的迭代（消化工具结果/纠错重试）强制关思考——多为机械转录，省算力与延迟。
-        # 审批/挂起续跑重入 run_turn 时 iterations 归零，续跑首次生成同样保留思考（重定向）。
-        self.thinking_first_iteration_only = bool(cfg.get("thinking_first_iteration_only", True))
+        # 思考位置策略：把前端二值思考开关翻译成逐迭代策略（_thinking_for_iteration）。
+        # dynamic（默认）：关思考→首轮自动思考+后续迭代关闭（思考价值集中在规划轮，
+        # 消化轮多为机械转录）；开思考→全程常开。前端开关语义随之重定义（关=动态、
+        # 开=常开），零前端改动。审批/挂起续跑重入 run_turn 时 iterations 归零，
+        # 续跑首轮同样自动思考（重定向）。first_only：关→全不思考，开→仅首轮；
+        # manual：旧语义直通。沙箱/摘要器直调 generate_once，不经本策略。
+        self.thinking_mode = str(cfg.get("thinking_mode", "dynamic"))
 
         # 上下文压缩（Step 1：机械式工具观察压缩）：任务沉降后削旧观察，保留最近若干条原文，
         # 把 model-facing 上下文规模钉在有界范围（原始观察总量 ≤ keep_recent × 单条上限）。
@@ -217,6 +220,15 @@ class Orchestrator:
             return catalog + [UPDATE_PLAN_SCHEMA, COMPLETE_STEP_SCHEMA, GET_TOOL_SCHEMA_SCHEMA]
         # full 模式：全部工具完整 schema 常驻（当前工具规模下更省 token 且缓存更稳）
         return list(self.registry.get_all_schemas()) + [UPDATE_PLAN_SCHEMA, COMPLETE_STEP_SCHEMA]
+
+    # ---------- 思考位置策略 ----------
+    def _thinking_for_iteration(self, requested: bool, iteration: int) -> bool:
+        """把前端二值思考开关翻译成本次迭代的实际思考态（策略详见 __init__ 注释）。"""
+        if self.thinking_mode == "dynamic":
+            return requested or iteration == 0
+        if self.thinking_mode == "first_only":
+            return requested and iteration == 0
+        return requested  # manual：直通旧语义
 
     # ---------- 编排主循环 ----------
     async def run_turn(self, session: ChatSession, *,
@@ -334,10 +346,9 @@ class Orchestrator:
             call_kwargs = dict(gen_kwargs)
             if max_tokens_override is not None:  # T1-3：截断升档后本轮后续生成沿用更高上限
                 call_kwargs["max_tokens"] = max_tokens_override
-            # 思考位置策略（见 __init__ 注释）：首次生成之后的迭代强制关思考
-            if (self.thinking_first_iteration_only and iterations > 0
-                    and call_kwargs.get("enable_thinking")):
-                call_kwargs["enable_thinking"] = False
+            # 思考位置策略（见 __init__ 注释）：翻译本次迭代的实际思考态
+            call_kwargs["enable_thinking"] = self._thinking_for_iteration(
+                bool(call_kwargs.get("enable_thinking")), iterations)
             result = await self.engine.generate_once(
                 session=session, tools=self._tools_decl, task_block=task_block,
                 tail_notes=pending_tail_notes or None, **call_kwargs

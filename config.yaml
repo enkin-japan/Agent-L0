@@ -188,8 +188,11 @@ agent:
   tool_timeout_seconds: 180   # 单次工具执行熔断：超时则放弃等待并反馈模型改路
                               # （120→180：math_research 沙箱需 3~5 次内部生成，e4b 上 110s 不够收束）
   max_parse_retries: 3        # 工具格式反复解析失败的断环阈值（同一坏调用重复≥此值即优雅终止）
-  thinking_first_iteration_only: true # 思考位置策略：开思考时仅每轮首次生成思考（规划轮），
-                                      # 后续工具消化/纠错轮强制关闭；收益经 token_breakdown 仪表可观测
+  thinking_mode: "dynamic"    # 思考位置策略（前端开关的语义翻译，orchestrator 生效；沙箱/摘要不受影响）：
+                              # dynamic=关思考→首轮自动思考+后续关闭；开思考→全程常开（前端语义重定义，零前端改动）
+                              # first_only=关→全不思考；开→仅首轮思考
+                              # manual=旧语义直通：关→全不思考；开→全程思考
+                              # 收益/代价经 token_breakdown 仪表观测；闲聊延迟不达预期再给 dynamic 配独立小预算
 
   # 单 worker 调度（ClassPolicy：确定性两级规则，无启发式）。
   # 交互任务（chat/approval/resume）> 后台任务（summarize，priority=-1）由优先级排序天然实现。
