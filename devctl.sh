@@ -12,6 +12,7 @@
 #
 # 用法:
 #   ./devctl.sh setup                                # 首次部署: 建 venv + 装依赖 + npm install
+#   ./devctl.sh model                                # 从注册表选择启动模型（写 .model-selection）
 #   ./devctl.sh start|stop|restart [rag|searx|backend|front|all]   # 缺省 all
 #   ./devctl.sh status
 #   ./devctl.sh logs [rag|searx|backend|front]       # tail 对应日志
@@ -294,6 +295,11 @@ start_backend() {
         fail "RAG 未就绪，拒绝启动 backend（否则 RAG 工具集不会注册）"
         return 1
     fi
+    # 模型预取（前台）：初次部署要下数 GB，HF 进度条直接显示在终端，杜绝「启动中假死」观感；
+    # 模型已就绪时命中 .download_complete 标记瞬时通过。backend 内部的下载路径保留为自愈兜底。
+    info "检查模型（未下载时将前台下载并显示进度）…"
+    ( cd "$BACKEND_DIR" && .venv/bin/python scripts/fetch_model.py ) \
+        || { fail "模型未就绪，中止 backend 启动"; return 1; }
     info "启动 backend (port $BACKEND_PORT) → $LOG_DIR/backend.log"
     spawn_daemon "$BACKEND_DIR" "$LOG_DIR/backend.log" "$LOG_DIR/backend.pid" .venv/bin/python app.py || return 1
     wait_ready "backend" "$BACKEND_READY_URL" "$BACKEND_TIMEOUT" "$(cat "$LOG_DIR/backend.pid")" "$LOG_DIR/backend.log"
@@ -398,6 +404,64 @@ do_logs() {
     esac
 }
 
+# ---- 模型选择：从 config.yaml 注册表交互选择，写仓库根 .model-selection 指针 ----
+# 注册表条目全部钉死 revision（与 mlx-vlm 同代，见 config.yaml 注释），选择后重启 backend 生效。
+# 非 TTY（ssh 脚本化）只打印当前状态不阻塞——自动化路径永远沿用上次选择。
+do_model() {
+    [ -x "$BACKEND_DIR/.venv/bin/python" ] || { fail "缺少 backend/.venv，请先运行: ./devctl.sh setup"; return 1; }
+    MACAGENT_ROOT="$ROOT" "$BACKEND_DIR/.venv/bin/python" - <<'PY'
+import json, os, sys
+from pathlib import Path
+import yaml
+
+root = Path(os.environ["MACAGENT_ROOT"])
+cfg = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+inference = cfg.get("inference") or {}
+registry = inference.get("model_registry") or []
+default_repo = inference.get("model")
+sel_file = root / ".model-selection"
+try:
+    current = json.loads(sel_file.read_text(encoding="utf-8")).get("repo")
+except Exception:
+    current = None
+
+print("可用模型（config.yaml inference.model_registry，revision 已钉死）：")
+for i, e in enumerate(registry, 1):
+    marks = []
+    if e["repo"] == (current or default_repo):
+        marks.append("当前")
+    if e["repo"] == default_repo:
+        marks.append("默认")
+    tag = f"  ← {'/'.join(marks)}" if marks else ""
+    print(f"  {i:2d}. {e['repo'].split('/')[-1]:28s} {e.get('note','')}{tag}")
+
+try:
+    tty = open("/dev/tty", "r")
+except OSError:
+    print("（非交互环境：仅显示状态。交互选择请在终端运行 ./devctl.sh model）")
+    sys.exit(0)
+
+print("输入编号选择（回车=不变，0=清除选择恢复默认）: ", end="", flush=True)
+line = tty.readline().strip()
+if not line:
+    print("保持不变。")
+    sys.exit(0)
+if line == "0":
+    sel_file.unlink(missing_ok=True)
+    print(f"已清除选择，回落默认: {default_repo}")
+else:
+    try:
+        entry = registry[int(line) - 1]
+    except (ValueError, IndexError):
+        print(f"无效编号: {line!r}")
+        sys.exit(1)
+    sel_file.write_text(json.dumps({"repo": entry["repo"]}, ensure_ascii=False) + "\n",
+                        encoding="utf-8")
+    print(f"已选择: {entry['repo']} @ {entry['revision'][:8]}")
+print("重启 backend 生效: ./devctl.sh restart backend（新模型将在启动时前台下载并显示进度）")
+PY
+}
+
 # ---- 命令分发 ----
 CMD="${1:-}"
 TARGET="${2:-all}"
@@ -406,6 +470,7 @@ TARGET="${2:-all}"
 
 case "$CMD" in
     setup) do_setup ;;
+    model) do_model ;;
     start)
         case "$TARGET" in
             # SearXNG 为可选层：起不来只告警不阻断（web_research 会优雅不注册），故不并入 && 链
@@ -435,6 +500,7 @@ case "$CMD" in
     logs)   do_logs "$TARGET" ;;
     *)
         echo "用法: $0 setup                                   # 首次部署（venv/依赖/node_modules）"
+        echo "      $0 model                                   # 从注册表选择启动模型（钉死 revision）"
         echo "      $0 start|stop|restart [rag|searx|backend|front|all]"
         echo "      $0 status"
         echo "      $0 logs [rag|searx|backend|front]"

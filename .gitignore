@@ -23,6 +23,8 @@ frontend/dist-ssr/
 # ═══════════ 模型权重（首启自动下载，动辄数 GB）═══════════
 backend/models/
 rag/models/
+# 启动模型选择指针（./devctl.sh model 写入，机器本地状态，真相在 config.yaml 注册表）
+.model-selection
 
 # ═══════════ 运行时数据（用户会话 / 知识库 / 任务实体）═══════════
 backend/sessions/
@@ -40,6 +42,9 @@ logs/
 # ═══════════ SearXNG（settings.yml 含随机 secret_key，由 devctl 首启生成；源码由 setup 克隆）═══════════
 searxng/settings.yml
 searxng/searxng-src/
+
+# ═══════════ Apple 原生客户端（个人实验，不入库）═══════════
+apple-app/
 
 # ═══════════ Claude Code 本地配置 ═══════════
 .claude/settings.local.json

@@ -99,7 +99,10 @@ TOOLS_DIR = BASE_DIR / "framework" / "mcp" / "tools"
 from framework.utils.config_loader import load_config
 config = load_config()
 
-MODEL = config["inference"]["model"]
+# 模型来源：.model-selection 指针（./devctl.sh model 写入）→ 注册表条目；无选择时用
+# config 默认。解析逻辑与 scripts/fetch_model.py 共用同一函数，保证下载与加载指向一致。
+from framework.utils.model_selection import resolve_selected_model
+MODEL, MODEL_REVISION, _model_source = resolve_selected_model()
 AUDIO_MAX_LENGTH = config["inference"]["audio_max_length"]
 AGENT_HOST = config["inference"]["host"]
 AGENT_PORT = config["inference"]["port"]
@@ -115,8 +118,9 @@ ALLOWED_ORIGINS = _SERVER_CFG.get("allowed_origins") or ["http://localhost:5173"
 # ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print(f"🚀 [System] loading model: {MODEL}")
-    model_path = resolve_model_path(MODEL)
+    print(f"🚀 [System] loading model: {MODEL}"
+          + ("（来自 .model-selection 启动选择）" if _model_source == "selection" else ""))
+    model_path = resolve_model_path(MODEL, revision=MODEL_REVISION)
     model, processor = load(model_path)
 
     print("🎵 [System] loading model: Silero VAD")
