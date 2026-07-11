@@ -27,7 +27,11 @@ from mlx_vlm.generate import (
 )
 
 
-generation_stream = mx.new_stream(mx.default_device())
+# 线程本地流(对齐上游 mlx_vlm.generate 同名全局的做法):普通 mx.new_stream 的流
+# 只在创建它的线程可用——引擎把生成搬进专用推理线程后,主线程 import 时建的流会报
+# "There is no Stream(gpu, N) in current thread"。thread-local 流按线程惰性解析,
+# 生成在哪个线程跑都各自成流,与上游辅助函数(共享其自己的 thread-local 流)天然兼容。
+generation_stream = mx.new_thread_local_stream(mx.default_device())
 
 
 # ============================================================================

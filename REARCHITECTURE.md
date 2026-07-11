@@ -234,10 +234,16 @@ gemma 方言层,协议改造完全不触碰。**不换语言、不换框架、�
 - `tool_call_pending`(约束采样状态机触发)、thinking 逐段、排队位次事件;
 - 全局 feed `GET /api/v1/events`;两端任务中心/通知改吃 feed;
 - 顺带:web 步骤时间线补上 tool 级卡片(现在扔掉的信息用起来);
-- **prefill 事件循环饿死**(Phase 1 实机定性,新会话 ~11s 全 API 无响应):
-  prefill 分块间插让出点,或整个推理段下沉专用线程(engine 层手术,单独评审)。
+- ~~prefill 事件循环饿死~~ **✅ 提前完成(2026-07-11,用户实测反馈"任务期间像掉线"
+  后拉前)**:整个推理宇宙下沉专用线程——`AgentEngine.create()` 在推理线程内加载
+  模型并生成,增量经 call_soon_threadsafe 回主循环。实测生成全程 API 平均延迟
+  6ms(改造前 prefill 窗口 ~11s 全冻结),取消 0.1s 生效。
+  **踩坑记录(勿回退)**:MLX 流与惰性张量都绑定创建线程——补丁的 generation_stream
+  须用 `mx.new_thread_local_stream`(对齐上游);模型 __init__ 里的非参数惰性常量
+  (rope 频率等,不在 parameters() 树)跨线程首次物化必报 "There is no Stream(gpu,N)
+  in current thread",唯一稳妥解法是 load 本身进推理线程(engine.create)。
 - **验收:发一个多工具任务,从提交到收尾无超过"一次生成时长"的信息真空;
-  工具名在执行前即可见;新会话首轮期间 /turn、/events 心跳保持响应。**
+  工具名在执行前即可见;~~新会话首轮期间 /turn、/events 心跳保持响应~~ ✅。**
 
 ### Phase 4 —— 清账(1 个批次)
 - 退役旧端点与 inflight 前端探测;

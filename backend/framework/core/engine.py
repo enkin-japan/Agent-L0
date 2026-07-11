@@ -1,5 +1,6 @@
 import asyncio
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Optional, Callable
 
 from mlx_vlm.generate import PromptCacheState
@@ -20,7 +21,26 @@ class AgentEngine:
     多轮编排（ReAct 循环、计划推进、失败路由、审批闸门）由 Orchestrator 负责；
     本层对上彻底屏蔽 MLX 的物理复杂性，并持有全局推理互斥锁。
     """
-    def __init__(self, model, processor, kv_config=None, suppress_ghost_thinking: bool = False):
+    @classmethod
+    async def create(cls, model_path, *, kv_config=None,
+                     suppress_ghost_thinking: bool = False) -> "AgentEngine":
+        """标准构造路径:**在推理线程内加载模型**,再装配引擎。
+
+        MLX 的惰性张量携带创建时线程的流:主线程加载的模型,其 __init__ 里的
+        非参数常量(rope 频率/缩放因子等,不在 parameters() 树、加载期不被物化)
+        会在推理线程首次前向时触发跨线程流派发,报
+        "There is no Stream(gpu, N) in current thread"。把 load 本身放进专用
+        推理线程,推理宇宙(权重/常量/KV/生成)从出生起就同属一个线程,无一漏网。
+        """
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mlx-inference")
+        loop = asyncio.get_running_loop()
+        from mlx_vlm.utils import load as _vlm_load
+        model, processor = await loop.run_in_executor(executor, lambda: _vlm_load(model_path))
+        return cls(model, processor, kv_config=kv_config,
+                   suppress_ghost_thinking=suppress_ghost_thinking, _executor=executor)
+
+    def __init__(self, model, processor, kv_config=None, suppress_ghost_thinking: bool = False,
+                 _executor: "ThreadPoolExecutor | None" = None):
         self.model = model
         self.processor = processor
 
@@ -56,6 +76,17 @@ class AgentEngine:
         # 因此 GPU 生成段必须串行；等待方挂起在锁上不阻塞事件循环，
         # 其他请求的文件解析、历史查询、分支等非推理任务仍可并发。
         self._inference_lock = asyncio.Lock()
+
+        # 专用推理线程（单线程执行器）：MLX 生成是同步计算,放在事件循环线程会把
+        # 整个 API 饿死(prefill 一整块数秒内连 /health 都无响应——Phase 1 实机定性)。
+        # 生成整段搬进本线程,事件循环全程自由;token 增量经 call_soon_threadsafe 回主
+        # 循环写账本。单线程 + 推理锁双保险:所有生成/摘要串行,MLX 单例不被并发触碰。
+        # 流的线程适配:补丁层 generation_stream 为 thread-local 流(见 patch 注释),
+        # 生成在执行器线程各自成流。标准路径经 create() 传入已承载模型加载的执行器
+        # (推理宇宙同线程);直接构造(测试/脚本)时自建——注意直接构造 + 主线程
+        # 已加载的真模型仍有跨线程惰性常量风险,生产装配一律走 create()。
+        self._inference_executor = _executor or ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="mlx-inference")
 
     async def generate_once(self,
                             session: ChatSession,
@@ -134,9 +165,16 @@ class AgentEngine:
             kv_kwargs["speculative"] = self.speculative
             kv_kwargs["spec_stats"] = spec_stats
 
-        # 整段生成持有推理锁串行执行（锁按单次生成粒度持有，
-        # 工具调用等网络 I/O 期间由上层让出，供其他会话推理）
-        async with self._inference_lock:
+        # 整段生成搬进专用推理线程（事件循环全程自由:API/心跳/事件流不再被计算饿死）。
+        # 推理锁按单次生成粒度持有（工具调用等 I/O 期间由上层让出,供其他会话推理）;
+        # 可见增量经 call_soon_threadsafe 回主循环（账本 emit 必须在循环线程,FIFO 保序）。
+        loop = asyncio.get_running_loop()
+
+        def _blocking_generate() -> Dict[str, Any]:
+            gen_text = ""
+            gen_metrics: Dict[str, Any] = {}
+            gen_cancelled = False
+            prev = prev_decoded
             for result in stream_generate(
                 model=self.model,
                 processor=self.processor,
@@ -158,43 +196,47 @@ class AgentEngine:
                 repetition_context_size=50,
                 **kv_kwargs,
             ):
-                generated_text += result.text
-                metrics = {
+                gen_text += result.text
+                gen_metrics = {
                     "prompt_tokens": result.prompt_tokens,
                     "generation_tokens": result.generation_tokens,
                     "prompt_tps": result.prompt_tps,
                     "generation_tps": result.generation_tps,
                     "peak_memory": result.peak_memory
                 }
-                # 真流式：取本 token 的可见文本增量 → 过滤成可见正文 → 回吐（同步、不阻塞）
+                # 真流式：取本 token 的可见文本增量 → 过滤成可见正文 → 回吐主循环
                 if streamer is not None:
                     if detok is not None:
                         # 盯 detokenizer 当前解码全文做差（▁ 归一为空格，保证前缀单调延伸）
                         cur = (detok.text + detok._unflushed).replace("▁", " ")
-                        if cur.startswith(prev_decoded):
-                            delta = cur[len(prev_decoded):]
+                        if cur.startswith(prev):
+                            delta = cur[len(prev):]
                             if delta:
                                 visible = streamer.feed(delta)
                                 if visible:
-                                    on_text_delta(visible)
+                                    loop.call_soon_threadsafe(on_text_delta, visible)
                         # trim_space 反常重排等情形跳过一次增量、只推进基线，避免重复回吐
-                        prev_decoded = cur
+                        prev = cur
                     else:
                         visible = streamer.feed(result.text)
                         if visible:
-                            on_text_delta(visible)
-                # 取消检查点（token 段粒度）：立即停止消耗生成流
+                            loop.call_soon_threadsafe(on_text_delta, visible)
+                # 取消检查点（token 段粒度;bool 读在 GIL 下安全）：立即停止消耗生成流
                 if session.cancel_requested:
-                    cancelled = True
+                    gen_cancelled = True
                     break
-                # 释放事件循环：非推理协程（上传解析、历史/分支接口）保持响应
-                await asyncio.sleep(0)
+            # 冲刷过滤器尾部（未闭合频道的残留按语义丢弃）
+            if streamer is not None and not gen_cancelled:
+                tail = streamer.close()
+                if tail:
+                    loop.call_soon_threadsafe(on_text_delta, tail)
+            return {"text": gen_text, "metrics": gen_metrics, "cancelled": gen_cancelled}
 
-        # 冲刷过滤器尾部（未闭合频道的残留按语义丢弃）
-        if streamer is not None and not cancelled:
-            tail = streamer.close()
-            if tail:
-                on_text_delta(tail)
+        async with self._inference_lock:
+            outcome = await loop.run_in_executor(self._inference_executor, _blocking_generate)
+        generated_text += outcome["text"]
+        metrics = outcome["metrics"] or metrics
+        cancelled = outcome["cancelled"]
 
         if spec_stats and spec_stats.get("drafted"):
             metrics["spec_drafted"] = spec_stats["drafted"]
@@ -323,8 +365,10 @@ class AgentEngine:
         fresh_cache = PromptCacheState()  # 隔离缓存：不碰任何会话的 KV
         # [Phase 3] 摘要也走投机：合并旧摘要时大段复述 [Existing summary]，命中率天然高
         spec_kwargs = {"speculative": self.speculative} if self.speculative else {}
-        text = ""
-        async with self._inference_lock:
+        loop = asyncio.get_running_loop()
+
+        def _blocking_summarize() -> str:
+            text = ""
             for result in stream_generate(
                 model=self.model,
                 processor=self.processor,
@@ -343,6 +387,11 @@ class AgentEngine:
                 if cancel_check is not None and cancel_check():
                     return ""  # 被抢占：放弃本次摘要（无半途状态，下次触发重试）
                 text += result.text
-                await asyncio.sleep(0)
+            return text
+
+        async with self._inference_lock:
+            text = await loop.run_in_executor(self._inference_executor, _blocking_summarize)
+        if not text:
+            return ""
         parsed = self.parser.parse(text)
         return (parsed.get("text") or text).strip()

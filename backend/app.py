@@ -9,7 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import mlx.core as mx
 
 # 导入底层模型库
-from mlx_vlm.utils import load
 from silero_vad import load_silero_vad
 
 # 导入解耦后的架构组件
@@ -123,7 +122,6 @@ async def lifespan(app: FastAPI):
     print(f"🚀 [System] loading model: {MODEL}"
           + ("（来自 .model-selection 启动选择）" if _model_source == "selection" else ""))
     model_path = resolve_model_path(MODEL, revision=MODEL_REVISION)
-    model, processor = load(model_path)
 
     print("🎵 [System] loading model: Silero VAD")
     vad_model = load_silero_vad()
@@ -149,11 +147,14 @@ async def lifespan(app: FastAPI):
     # 1. 插件层：扫描并注册所有 MCP 工具
     mcp_registry = MCPRegistry(tools_dir=TOOLS_DIR)
     
-    # 2. 领域层：推理引擎（单次生成）+ 编排循环（计划推进/失败路由/终止保护）
-    engine = AgentEngine(
-        model, processor, kv_config=config.get("inference") or {},
+    # 2. 领域层：推理引擎（单次生成）+ 编排循环（计划推进/失败路由/终止保护）。
+    #    经 AgentEngine.create 在专用推理线程内加载模型并装配——推理宇宙(权重/惰性
+    #    常量/KV/生成)同属一个线程,事件循环全程自由(prefill 不再饿死 API)。
+    engine = await AgentEngine.create(
+        model_path, kv_config=config.get("inference") or {},
         suppress_ghost_thinking=bool(MODEL_OPTIONS.get("suppress_ghost_thinking", False)),
     )
+    model, processor = engine.model, engine.processor
     orchestrator = Orchestrator(engine, mcp_registry, config.get("agent") or {})
 
     # 2.1 联网调查沙箱运行时：把引擎与主事件循环登记给 web_research（受限沙箱工具经
