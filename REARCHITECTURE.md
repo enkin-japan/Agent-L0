@@ -224,11 +224,17 @@ gemma 方言层,协议改造完全不触碰。**不换语言、不换框架、�
   实机验收(真模型+Playwright):生成中刷新 0s 恢复直播;**审批中刷新 1.8s
   恢复审批卡(旧架构的死局)**;turn_ended 在线对账无幽灵重复;拒绝→续跑→落地。
   注:/history 响应与 turn_ended 事件到达顺序不定,两侧各有 turnIndex 去重护栏。
-- native 跟进:AgentStore 同构改造,删 pollUntilIdle/resync 链与热循环,
-  顺修 "ok"≠"success"、resume 无轮询、tool_result 详情丢弃;
-- 夹具双端回放测试全绿。
+- **native ✅ 2026-07-11 完成(v0.10.0,macOS 已装 /Applications,iOS build 10
+  已推 TestFlight)**:`TurnReducer.swift` 归约器(读同一批 protocol/fixtures,
+  `Tests/run_reducer_fixtures.sh` 3/3 绿)+ AgentStore 换脊柱(202 受理+附着流,
+  静默退避重连);退役 pollUntilIdle/resync 链与暂存轮热循环;顺修三个存量 bug
+  ("ok"≠"success" 致成功工具显示 ✗、resume 全程无反馈、tool_result 详情丢弃);
+  暂停态保留直播预览;别端发起的轮次经附着流实时可见。旧契约 E2E 19 项照跑全绿
+  (兼容层未破)。
+- 夹具双端回放测试全绿:web vitest 4/4 + Swift 3/3,同一批夹具。
 - **验收:在轮次任意阶段(生成中/工具中/审批中/挂起中)刷新或杀进程,
   回来 ≤1 秒恢复完整直播视图(含审批卡);两端行为一致。**
+  (web 已由 Playwright 实机验收;native 的杀 app 恢复待用户真机查验。)
 
 ### Phase 3 —— 粒度与任务中心(1~2 个批次)
 - `tool_call_pending`(约束采样状态机触发)、thinking 逐段、排队位次事件;
