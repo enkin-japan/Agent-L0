@@ -2,10 +2,9 @@ import asyncio
 import json
 import re
 import time
-import uuid
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from .schemas import (
     ChatResponse,
@@ -31,7 +30,8 @@ from .schemas import (
     UiStatePutRequest,
     UiStateResponse,
 )
-from ..core.task_state import TaskState
+from ..core.journal import TurnJournal
+from ..core.turn_runner import TurnConflict, public_turn
 from ..memory.compactor import maybe_summarize_context
 
 # 路径 ID 白名单（会话/定时任务/资产文件名共用）：首字符字母数字，其余限 [A-Za-z0-9._-]。
@@ -50,11 +50,6 @@ async def _validate_path_ids(request: Request) -> None:
 
 # 构建模块化路由（统一挂路径 ID 校验依赖）
 router = APIRouter(dependencies=[Depends(_validate_path_ids)])
-
-
-def _restore_task(session, snapshot):
-    """按轮初快照回滚会话的任务状态（引擎故障/用户取消时与 history 回滚同步）"""
-    session.task_state = TaskState.from_snapshot(snapshot) if snapshot else None
 
 
 async def _maybe_summarize_active(session, orchestrator, scheduler, session_id):
@@ -422,99 +417,22 @@ async def suspend_task(session_id: str, request: Request):
 @router.post("/api/v1/chat/{session_id}/task/resume", response_model=ChatResponse)
 async def resume_task(session_id: str, request: Request):
     """
-    恢复一个已挂起的任务：重新排队申请 worker，再次进入编排闭环从挂起处续跑
-    （run_turn 可重入，从 task_state + 已提交 history 接着走）。响应仅含本次续跑新增的消息。
-    续跑若再次挂起/触发审批，则相应转入挂起/审批暂存；正常完结则整轮合并落盘。
+    恢复一个已挂起的任务（旧阻塞接口,兼容至 Phase 4）：内部走 TurnRunner 同一闭环,
+    响应仅含本次续跑新增的消息。新客户端用 POST /turns/resume(202) + GET /events。
     """
-    orchestrator = request.app.state.orchestrator
+    runner = request.app.state.turn_runner
     session_manager = request.app.state.session_manager
-    scheduler = request.app.state.scheduler
     session = session_manager.get_or_create(session_id)
-
-    async with session.lock:
-        turn = session.suspended_turn
-        if turn is None:
-            return {
-                "status": "fail",
-                "prompt": "", "image": [], "audio": [],
-                "enable_thinking": False, "max_tokens": 0, "temperature": 0.0, "min_p": 0.0,
-                "response": [{"role": "system", "content": "当前会话没有挂起的任务（可能已恢复、已完结或会话被回收）。"}],
-            }
-
-        session.cancel_requested = False
-        session.suspend_requested = False
-        history_start_idx = len(session.history)
-        final_result = None
-        # 恢复：把挂起句柄重新排队并等待准入（无挂起句柄则退化为一次新准入，兜底进程重启等情形）
-        if await scheduler.resume(session_id) is None:
-            await scheduler.acquire(session_id, kind="resume")
-        try:
-            final_result = await orchestrator.run_turn(
-                session=session,
-                compact_history=False,  # 轮中重入：本轮未落盘观察不参与压缩（防压缩桩落盘）
-                temperature=turn.get("temperature", 0.2),
-                min_p=turn.get("min_p", 0.05),
-                enable_thinking=turn.get("enable_thinking", False),
-                thinking_budget=turn.get("thinking_budget", 2048),
-                max_tokens=turn.get("max_tokens", 4096),
-            )
-
-            if final_result.get("status") == "cancelled":
-                # 续跑期间被取消：整轮回滚到最初起点（含最早的用户消息），落盘取消存档
-                rollback_idx = turn.get("_rollback_idx")
-                if isinstance(rollback_idx, int) and 0 <= rollback_idx <= len(session.history):
-                    session.history = session.history[:rollback_idx]
-                _restore_task(session, turn.get("_task_snapshot"))
-                note = {"role": "system", "content": "本轮已被用户取消，未产生任何记忆变更。"}
-                turn["status"] = "cancelled"
-                turn["response"].append(note)
-                turn["pending_tools"] = None
-                response_data = {**turn, "response": [note]}
-            else:
-                new_messages = session.history[history_start_idx:]
-                turn["response"].extend(new_messages)  # 累计到完整轮次（落盘用）
-                turn["status"] = final_result.get("status", "success")
-                turn["pending_tools"] = final_result.get("pending_tools")
-                turn.update(final_result.get("metrics", {}))
-                response_data = {**turn, "response": new_messages}  # 响应仅带本次增量
-
-        except Exception as e:
-            import traceback
-            error_details = traceback.format_exc()
-
-            # 续跑故障：整轮回滚出内存记忆与任务状态，落盘为 fail
-            rollback_idx = turn.get("_rollback_idx")
-            if isinstance(rollback_idx, int) and 0 <= rollback_idx <= len(session.history):
-                session.history = session.history[:rollback_idx]
-            _restore_task(session, turn.get("_task_snapshot"))
-            error_message = {"role": "system", "content": f"任务恢复续跑故障: {str(e)}\n{error_details}"}
-            turn["status"] = "fail"
-            turn["response"].append(error_message)
-            turn["pending_tools"] = None
-            response_data = {**turn, "response": [error_message]}
-        finally:
-            if final_result is not None and final_result.get("status") == "suspended":
-                await scheduler.suspend(session_id)
-            else:
-                await scheduler.release(session_id)
-
-        # 续跑后状态分流：又挂起→继续暂存；又触发审批→转审批暂存；否则整轮合并落盘
-        status = response_data.get("status")
-        if status == "suspended":
-            session.suspended_turn = turn  # turn 已累计本次增量，继续挂起
-        elif status == "pending_approval":
-            session.suspended_turn = None
-            session.pending_turn = turn    # 携原账目（_rollback_idx/_task_snapshot）转审批
-        else:
-            session.suspended_turn = None
-            turn.pop("_rollback_idx", None)
-            turn.pop("_task_snapshot", None)
-            turn.pop("_history_start_idx", None)
-            await asyncio.to_thread(session.append_log, turn)
-            await asyncio.to_thread(session.save_task)
-            await _maybe_summarize_active(session, orchestrator, scheduler, session_id)
-
-    return response_data
+    try:
+        await runner.accept_resume(session, session_id)
+    except TurnConflict:
+        return {
+            "status": "fail",
+            "prompt": "", "image": [], "audio": [],
+            "enable_thinking": False, "max_tokens": 0, "temperature": 0.0, "min_p": 0.0,
+            "response": [{"role": "system", "content": "当前会话没有挂起的任务（可能已恢复、已完结或会话被回收）。"}],
+        }
+    return public_turn(await runner.run_resume(session, session_id))
 
 
 @router.get("/api/v1/sessions", response_model=SessionListResponse)
@@ -608,188 +526,95 @@ _SSE_HEARTBEAT_SECS = 15
 _SSE_HEARTBEAT = ": ping\n\n"
 
 
-def _public_turn(response_data: Dict[str, Any]) -> Dict[str, Any]:
-    """剥掉内部账目键（_rollback_idx / _task_snapshot / _history_start_idx）得到可下发前端的轮次数据。"""
-    return {k: v for k, v in response_data.items() if not k.startswith("_")}
+# ---------- 旧事件契约翻译层(兼容至 Phase 4;映射表见 PROTOCOL.md §4) ----------
+
+_CONFLICT_MSG = {
+    "turn_active": "该会话已有正在进行的轮次，请等它完结后再发送。",
+    "no_pending_approval": "当前会话没有等待审批的操作（可能已过期或已被处理）。",
+    "no_suspended_turn": "当前会话没有挂起的任务（可能已恢复、已完结或会话被回收）。",
+}
 
 
-async def _chat_turn(
-    session, session_id: str, orchestrator, scheduler, *,
-    prompt: str, images, audios, ingested_text: str, attachments,
-    gen: Dict[str, Any], on_text_delta=None, emit=None,
-) -> Dict[str, Any]:
-    """
-    对话轮的加锁处理闭环（JSON 端点与 SSE 端点共享）：轮前清理（待审批/挂起残留）→ 追加用户
-    消息 → 单 worker 调度门闸 → run_turn 编排 → 结果分流（成功/取消/故障）→ 落盘。
-    on_text_delta 非 None 时经引擎把可见正文逐段回吐（真流式）；终态仍以返回的 response_data
-    为准（流为预览、终态为真）。逻辑与原 chat_endpoint 一致，仅抽取为可复用闭环 + 透传流式回调。
-    """
-    temperature = gen["temperature"]
-    min_p = gen["min_p"]
-    enable_thinking = gen["enable_thinking"]
-    thinking_budget = gen["thinking_budget"]
-    max_tokens = gen["max_tokens"]
-
-    # 同一会话的并发请求必须整轮串行：history 追加、KV Cache 读写、
-    # 日志落盘都不是并发安全的（不同会话之间仍可并发受理）
-    async with session.lock:
-        # 若上一轮敏感操作仍在等待审批而用户直接发来新消息：视为放弃，
-        # 挂起的工具调用不执行，该轮补上取消结果后以 warning 落盘收尾
-        if session.pending_tool_calls:
-            cancelled = [
-                {"name": c.get("name", "unknown"),
-                 "response": "Operation cancelled: the user sent a new message without approving."}
-                for c in session.pending_tool_calls if c.get("type") != "error"
-            ] or [{"name": "system", "response": "Pending tool call cancelled."}]
-            session.add_tool_message(cancelled)
-            session.pending_tool_calls = None
-            if session.pending_turn is not None:
-                session.pending_turn.pop("_rollback_idx", None)
-                session.pending_turn.pop("_task_snapshot", None)
-                session.pending_turn["status"] = "warning"
-                session.pending_turn.setdefault("response", []).append(
-                    {"role": "tool", "tool_responses": cancelled}
-                )
-                await asyncio.to_thread(session.append_log, session.pending_turn)
-                session.pending_turn = None
-
-        # 若有挂起的任务而用户直接发来新消息：视为改变方向、放弃该挂起任务
-        # （正规恢复途径是 /task/resume）。已产出的局部工作留在 history 可见，
-        # 该轮以 warning 落盘收尾，任务状态清空后按新消息重新开始。
-        if session.suspended_turn is not None:
-            susp = session.suspended_turn
-            susp.pop("_rollback_idx", None)
-            susp.pop("_task_snapshot", None)
-            susp.pop("_history_start_idx", None)
-            susp["status"] = "warning"
-            susp.setdefault("response", []).append(
-                {"role": "system", "content": "The suspended task was interrupted by a new user message and abandoned (not continued)."}
-            )
-            await asyncio.to_thread(session.append_log, susp)
-            session.suspended_turn = None
-            session.suspend_requested = False
-            session.task_state = None
-            if scheduler is not None:
-                scheduler.discard(session_id)  # 清掉残留的挂起句柄
-
-        # 将新解析的资源加入本会话的生命周期
-        session.images.extend(images)
-        session.audios.extend(audios)
-
-        # 本轮起点快照：引擎故障/用户取消时，history 与任务状态同步整轮回滚
-        session.cancel_requested = False
-        rollback_idx = len(session.history)
-        task_snapshot = session.task_state.snapshot() if session.task_state else None
-        session.add_user_message(prompt, images, audios, extra_text=ingested_text)
-        history_start_idx = len(session.history)
-        # 轮次预写标记（write-ahead）：进程若在本轮完结前死亡，启动恢复会据此补 fail 轮，
-        # 用户输入不蒸发。append_log 时自动撤销。
-        await asyncio.to_thread(session.write_inflight, prompt, gen)
-
-        # 任务级调度门闸：向单 worker 调度器申请准入（其余任务排队），
-        # run_turn 全程独占 worker，结束后释放并调度下一个。底层生成锁仍在其内层保证原子性。
-        final_result = None
-        await scheduler.acquire(session_id, kind="chat")
-        try:
-            # 4. 领域层：交付给编排循环执行完整闭环（计划推进/工具调用/失败路由）
-            #    on_text_delta 经 gen_kwargs 透传至 engine.generate_once，逐段回吐可见正文
-            final_result = await orchestrator.run_turn(
-                session=session,
-                emit=emit,
-                temperature=temperature,
-                min_p=min_p,
-                enable_thinking=enable_thinking,
-                thinking_budget=thinking_budget,
-                max_tokens=max_tokens,
-                on_text_delta=on_text_delta,
-            )
-
-            if final_result.get("status") == "cancelled":
-                # 用户取消：与引擎故障同语义——整轮（含用户消息与中途产物）回滚出内存，
-                # KV 缓存多算的部分由下次推理前缀匹配自动裁剪；落盘保留取消存档
-                session.history = session.history[:rollback_idx]
-                _restore_task(session, task_snapshot)
-                response_data = {
-                    "status": "cancelled",
-                    "prompt": prompt,
-                    "image": images,
-                    "audio": audios,
-                    "ingested_text": ingested_text,
-                    "attachments": attachments,
-                    "enable_thinking": enable_thinking,
-                    "thinking_budget": thinking_budget,
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                    "min_p": min_p,
-                    "response": [{"role": "system", "content": "本轮已被用户取消，未产生任何记忆变更。"}],
-                    **final_result.get("metrics", {})
-                }
-            else:
-                # 截取本轮发生的新动作、思考与对话记录
-                new_messages = session.history[history_start_idx:]
-                response_data = {
-                    "status": final_result.get("status", "success"),
-                    "prompt": prompt,
-                    "image": images,
-                    "audio": audios,
-                    "ingested_text": ingested_text,
-                    "attachments": attachments,
-                    "enable_thinking": enable_thinking,
-                    "thinking_budget": thinking_budget,
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                    "min_p": min_p,
-                    "response": new_messages,
-                    "pending_tools": final_result.get("pending_tools"),
-                    **final_result.get("metrics", {})
-                }
-
-        except Exception as e:
-            import traceback
-            error_details = traceback.format_exc()
-
-            # 引擎故障：连同本轮用户消息一起回滚内存记忆与任务状态，防止污染
-            session.history = session.history[:rollback_idx]
-            _restore_task(session, task_snapshot)
-            response_data = {
-                "status": "fail",
-                "prompt": prompt,
-                "image": images,
-                "audio": audios,
-                "ingested_text": ingested_text,
-                "attachments": attachments,
-                "enable_thinking": enable_thinking,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "min_p": min_p,
-                "response": [{"role": "system", "content": f"核心引擎故障: {str(e)}\n{error_details}"}]
-            }
-        finally:
-            # 挂起让出 vs 正常结束分流：挂起时转 worker 给下一个任务（KV 留内存待恢复），
-            # 其余情况（成功/取消/故障/待审批）正常释放 worker 并调度下一个。落盘属 I/O，不占 worker。
-            if final_result is not None and final_result.get("status") == "suspended":
-                await scheduler.suspend(session_id)
-            else:
-                await scheduler.release(session_id)
-
-        # 5. 持久化层：落盘历史记录（锁内执行，保证 history.jsonl 轮次顺序与完整性）。
-        # 未完结的轮次（待审批 / 已挂起）尚不落盘：暂存到会话上，待决议/恢复后合并落盘。
-        if response_data.get("status") == "pending_approval":
-            response_data["_rollback_idx"] = rollback_idx      # 决议执行故障时整轮回滚
-            response_data["_task_snapshot"] = task_snapshot    # 任务状态同步回滚
-            session.pending_turn = response_data
-        elif response_data.get("status") == "suspended":
-            response_data["_rollback_idx"] = rollback_idx      # 恢复续跑故障时整轮回滚
-            response_data["_task_snapshot"] = task_snapshot
-            response_data["_history_start_idx"] = history_start_idx  # 恢复时接续截取增量消息
-            session.suspended_turn = response_data
+def _legacy_frames(env: Dict[str, Any], session) -> list:
+    """把账本事件信封翻译成旧 SSE 契约的 (event, data) 帧列表。
+    生命周期边界(awaiting/suspended/ended)由生成器就地处理,不经本函数。"""
+    etype, data = env["type"], env["data"]
+    if etype == "token_delta":
+        return [("token", {"delta": data.get("text", "")})]
+    if etype == "thinking_delta":
+        return [("thinking", {"text": data.get("text", "")})]
+    if etype in ("tool_started", "tool_result"):
+        return [(etype, dict(data))]
+    if etype in ("iteration_started", "plan_updated", "step_completed",
+                 "step_failed", "tool_progress"):
+        # 旧契约的 task_progress = {task, activity} 快照;plan_updated 自带最新快照,
+        # 其余按当刻会话状态合成(与旧实现的快照语义一致)
+        if etype == "plan_updated":
+            task = data.get("task")
         else:
-            await asyncio.to_thread(session.append_log, response_data)
-            # 跨轮任务快照落盘：保证冷启动后任务不丢/不残留
-            await asyncio.to_thread(session.save_task)
-            await _maybe_summarize_active(session, orchestrator, scheduler, session_id)
+            t = session.task_state
+            task = t.snapshot() if (t is not None and t.plan) else None
+        return [("task_progress", {"task": task, "activity": session.activity_snapshot()})]
+    return []  # turn_queued/turn_started/resumed 等:旧契约无对应帧
 
-    return response_data
+
+def _legacy_stream_response(session, session_id: str, runner, *, accept, run_factory):
+    """
+    旧 SSE 端点(/stream 与 /approval/stream)的共享实现:订阅账本 → 受理 → 背景执行 →
+    把新事件流翻译回旧事件名,至本轮边界(turn_end)闭流。客户端中途断开不影响执行
+    (背景任务持有账本,轮次照常完结落盘)。
+    accept: 受理协程工厂,返回 turn_id(冲突抛 TurnConflict);
+    run_factory: 受理成功后产生执行协程(spawn 到背景)。
+    """
+    journal = session.journal
+
+    async def event_gen():
+        queue = journal.subscribe()  # 先订阅后受理:受理瞬间的事件零丢失
+        try:
+            try:
+                turn_id = await accept()
+            except TurnConflict as e:
+                yield _sse("turn_start", {"turn_id": None, "session_id": session_id})
+                yield _sse("turn_end", {
+                    "turn_id": None, "status": "fail",
+                    "response": [{"role": "system",
+                                  "content": _CONFLICT_MSG.get(e.reason, e.reason)}],
+                })
+                return
+            runner.spawn(session_id, run_factory())
+            yield _sse("turn_start", {"turn_id": turn_id, "session_id": session_id})
+            while True:
+                try:
+                    env = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECS)
+                except asyncio.TimeoutError:
+                    yield _SSE_HEARTBEAT
+                    continue
+                if env is None:
+                    break  # 会话被删除,账本终结
+                if env.get("turn_id") != turn_id:
+                    continue  # 其他轮次的事件(如受理时放弃的旧轮收尾)
+                etype = env["type"]
+                if etype == "awaiting_approval":
+                    rd = public_turn(session.pending_turn or {})
+                    yield _sse("turn_end", {"turn_id": turn_id, **rd})
+                    break
+                if etype == "suspended":
+                    rd = public_turn(session.suspended_turn or {})
+                    yield _sse("turn_end", {"turn_id": turn_id, **rd})
+                    break
+                if etype == "turn_ended":
+                    yield _sse("turn_end", {"turn_id": turn_id, **env["data"]})
+                    break
+                for name, payload in _legacy_frames(env, session):
+                    yield _sse(name, {"turn_id": turn_id, **payload})
+        finally:
+            journal.unsubscribe(queue)
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
 
 
 async def _prepare_turn(request: Request, session_id: str, system: str, files):
@@ -823,16 +648,26 @@ async def chat_endpoint(
     files: Optional[List[UploadFile]] = File(None)
 ):
     """
-    核心对话接口（非流式，回退路径）：一次性返回整轮结果。真流式见 /stream。
+    核心对话接口（非流式，回退路径，兼容至 Phase 4）：一次性返回整轮结果。
+    内部走 TurnRunner 同一闭环。真流式见 /stream；新客户端用 /turns + /events。
     """
-    orchestrator, scheduler, session, io = await _prepare_turn(request, session_id, system, files)
+    _, _, session, io = await _prepare_turn(request, session_id, system, files)
+    runner = request.app.state.turn_runner
     gen = {"temperature": temperature, "min_p": min_p, "enable_thinking": enable_thinking,
            "thinking_budget": thinking_budget, "max_tokens": max_tokens}
-    return await _chat_turn(
-        session, session_id, orchestrator, scheduler,
-        prompt=prompt, images=io["images"], audios=io["audios"],
-        ingested_text=io["ingested_text"], attachments=io["attachments"], gen=gen,
-    )
+    try:
+        ctx = await runner.accept_turn(
+            session, session_id, prompt=prompt, images=io["images"], audios=io["audios"],
+            ingested_text=io["ingested_text"], attachments=io["attachments"], gen=gen)
+    except TurnConflict as e:
+        return {
+            "status": "fail",
+            "prompt": prompt, "image": [], "audio": [],
+            "enable_thinking": enable_thinking, "max_tokens": max_tokens,
+            "temperature": temperature, "min_p": min_p,
+            "response": [{"role": "system", "content": _CONFLICT_MSG.get(e.reason, e.reason)}],
+        }
+    return public_turn(await runner.run_accepted(session, session_id, ctx))
 
 
 @router.post("/api/v1/chat/{session_id}/stream")
@@ -849,245 +684,196 @@ async def chat_stream(
     files: Optional[List[UploadFile]] = File(None)
 ):
     """
-    真流式对话接口（SSE）：响应体是事件流。事件——
-      turn_start / token(可见正文逐段) / turn_end(权威 response_data，含终态与完整消息)。
-    契约：token 为临时预览，turn_end 为真（前端据 turn_end 对账；终态若 cancelled/fail 则撤回预览）。
-    编排在后台任务内跑完整闭环并落盘；客户端中途断开也不丢工作（轮次照常完成并存档）。
+    真流式对话接口（SSE，旧事件契约，兼容至 Phase 4）：turn_start / token / thinking /
+    tool_started / tool_result / task_progress / turn_end。内部=受理进账本 + 背景执行 +
+    翻译层回放（PROTOCOL.md §4）。客户端中途断开不丢工作（轮次照常完成并存档）。
+    新客户端用 POST /turns(202) + GET /events（可断线重连续播）。
     """
-    orchestrator, scheduler, session, io = await _prepare_turn(request, session_id, system, files)
+    _, _, session, io = await _prepare_turn(request, session_id, system, files)
+    runner = request.app.state.turn_runner
     gen = {"temperature": temperature, "min_p": min_p, "enable_thinking": enable_thinking,
            "thinking_budget": thinking_budget, "max_tokens": max_tokens}
-    turn_id = uuid.uuid4().hex
 
-    async def event_gen():
-        queue: asyncio.Queue = asyncio.Queue()
+    ctx_box: Dict[str, Any] = {}
 
-        def emit(event: str, data: Dict[str, Any]):
-            # 引擎/编排线程内同步调用（本事件循环）：入队不阻塞，随后引擎的 sleep(0) 让出，
-            # 本 SSE 生成器得以出队下发。所有事件统一带 turn_id。
-            queue.put_nowait((event, {"turn_id": turn_id, **data}))
+    async def accept():
+        ctx = await runner.accept_turn(
+            session, session_id, prompt=prompt, images=io["images"], audios=io["audios"],
+            ingested_text=io["ingested_text"], attachments=io["attachments"], gen=gen)
+        ctx_box["ctx"] = ctx
+        return ctx["turn_id"]
 
-        def emit_token(text: str):
-            emit("token", {"delta": text})
-
-        async def worker():
-            try:
-                rd = await _chat_turn(
-                    session, session_id, orchestrator, scheduler,
-                    prompt=prompt, images=io["images"], audios=io["audios"],
-                    ingested_text=io["ingested_text"], attachments=io["attachments"],
-                    gen=gen, on_text_delta=emit_token, emit=emit,
-                )
-                queue.put_nowait(("turn_end", {"turn_id": turn_id, **_public_turn(rd)}))
-            except Exception as e:
-                import traceback
-                queue.put_nowait(("turn_end", {
-                    "turn_id": turn_id, "status": "fail",
-                    "response": [{"role": "system",
-                                  "content": f"流式处理故障: {str(e)}\n{traceback.format_exc()}"}],
-                }))
-            finally:
-                queue.put_nowait(None)  # 哨兵：通知生成器收流
-
-        task = asyncio.create_task(worker())
-        yield _sse("turn_start", {"turn_id": turn_id, "session_id": session_id})
-        try:
-            while True:
-                # 出队等待带心跳超时：静默生成阶段（无 token/事件）也周期性发注释帧保活。
-                # 超时不丢事件——queue.get() 被取消时未出队的项仍留在队列，下轮取回。
-                try:
-                    item = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECS)
-                except asyncio.TimeoutError:
-                    yield _SSE_HEARTBEAT
-                    continue
-                if item is None:
-                    break
-                yield _sse(item[0], item[1])
-        finally:
-            # 客户端断开时生成器被关闭：不取消后台任务，让轮次跑完并落盘（工作不丢）。
-            if not task.done():
-                task.add_done_callback(lambda t: t.exception())
-
-    return StreamingResponse(
-        event_gen(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    return _legacy_stream_response(
+        session, session_id, runner,
+        accept=accept,
+        run_factory=lambda: runner.run_accepted(session, session_id, ctx_box["ctx"]),
     )
-
-
-async def _resume_approval_turn(
-    session, session_id: str, orchestrator, scheduler, *,
-    approve: bool,
-    emit: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    on_text_delta: Optional[Callable[[str], None]] = None,
-) -> Dict[str, Any]:
-    """
-    审批决议后的续跑闭环（阻塞端点与 SSE 端点共享的单一实现）：持锁续跑 → 结果分流/回滚 →
-    落盘或暂存（再审批/挂起）。返回 response_data（response 仅含本次决议后新增的消息）。
-    emit / on_text_delta 非 None 时经引擎把编排事件与可见正文逐段回吐（真流式）；均为 None
-    时行为与改动前的阻塞端点完全一致。两端共用本函数，避免收尾逻辑双路径漂移。
-    """
-    async with session.lock:
-        turn = session.pending_turn
-        if not session.pending_tool_calls or turn is None:
-            return {
-                "status": "fail",
-                "prompt": "", "image": [], "audio": [],
-                "enable_thinking": False, "max_tokens": 0, "temperature": 0.0, "min_p": 0.0,
-                "response": [{"role": "system", "content": "当前会话没有等待审批的操作（可能已过期或已被处理）。"}],
-            }
-
-        session.cancel_requested = False
-        history_start_idx = len(session.history)
-        final_result = None
-        # 审批决议后的续跑同样是一次生成，走单 worker 调度门闸（与对话轮同等排队）
-        await scheduler.acquire(session_id, kind="approval")
-        try:
-            # 复用挂起轮次的生成参数，恢复编排闭环（多步任务从挂起的步骤继续）
-            final_result = await orchestrator.resume_after_approval(
-                session,
-                approved=approve,
-                temperature=turn.get("temperature", 0.2),
-                min_p=turn.get("min_p", 0.05),
-                enable_thinking=turn.get("enable_thinking", False),
-                thinking_budget=turn.get("thinking_budget", 2048),
-                max_tokens=turn.get("max_tokens", 4096),
-                emit=emit,
-                on_text_delta=on_text_delta,
-            )
-
-            if final_result.get("status") == "cancelled":
-                # 决议后续跑期间被取消：整轮回滚（含最初的用户消息），落盘取消存档
-                rollback_idx = turn.get("_rollback_idx")
-                if isinstance(rollback_idx, int) and 0 <= rollback_idx <= len(session.history):
-                    session.history = session.history[:rollback_idx]
-                _restore_task(session, turn.get("_task_snapshot"))
-                note = {"role": "system", "content": "本轮已被用户取消，未产生任何记忆变更。"}
-                turn["status"] = "cancelled"
-                turn["response"].append(note)
-                turn["pending_tools"] = None
-                response_data = {**turn, "response": [note]}
-            else:
-                new_messages = session.history[history_start_idx:]
-                # 决议后的消息合并进挂起轮次（落盘用），响应体只带增量消息
-                turn["response"].extend(new_messages)
-                turn["status"] = final_result.get("status", "success")
-                turn["pending_tools"] = final_result.get("pending_tools")
-                turn.update(final_result.get("metrics", {}))
-                response_data = {**turn, "response": new_messages}
-
-        except Exception as e:
-            import traceback
-            error_details = traceback.format_exc()
-
-            # 决议执行故障：整轮（含最初的用户消息）回滚出内存记忆与任务状态，落盘为 fail
-            rollback_idx = turn.get("_rollback_idx")
-            if isinstance(rollback_idx, int) and 0 <= rollback_idx <= len(session.history):
-                session.history = session.history[:rollback_idx]
-            _restore_task(session, turn.get("_task_snapshot"))
-            error_message = {"role": "system", "content": f"审批决议执行故障: {str(e)}\n{error_details}"}
-            turn["status"] = "fail"
-            turn["response"].append(error_message)
-            turn["pending_tools"] = None
-            response_data = {**turn, "response": [error_message]}
-        finally:
-            # 续跑期间被挂起（用户点了挂起按钮）：与 _chat_turn 同语义——转挂起态让出
-            # worker（句柄保留可恢复），其余情况正常释放。此前无脑 release 会把挂起轮
-            # 当完结轮落盘、丢失可恢复句柄，前端"恢复"按钮点了报"没有挂起的任务"。
-            if final_result is not None and final_result.get("status") == "suspended":
-                await scheduler.suspend(session_id)
-            else:
-                await scheduler.release(session_id)
-
-        # 状态分流：又出现敏感调用→继续审批暂存；被挂起→转挂起暂存（待 /task/resume）；
-        # 否则整轮合并落盘
-        if response_data.get("status") == "pending_approval":
-            session.pending_turn = turn
-        elif response_data.get("status") == "suspended":
-            session.pending_turn = None
-            session.suspended_turn = turn  # 携原账目（_rollback_idx/_task_snapshot）转挂起
-        else:
-            session.pending_turn = None
-            turn.pop("_rollback_idx", None)
-            turn.pop("_task_snapshot", None)
-            turn.pop("_history_start_idx", None)  # 挂起→审批转移路径可能带过来，防内部键落盘
-            await asyncio.to_thread(session.append_log, turn)
-            await asyncio.to_thread(session.save_task)
-            await _maybe_summarize_active(session, orchestrator, scheduler, session_id)
-
-    return response_data
 
 
 @router.post("/api/v1/chat/{session_id}/approval", response_model=ChatResponse)
 async def approve_pending_tools(session_id: str, request: Request, body: ApprovalRequest):
     """
-    敏感工具审批决议接口（非流式，回退路径）：一次性返回决议后新增的消息。真流式见 /approval/stream。
-    批准则执行工具并继续任务，拒绝则由模型调整后续策略。
+    敏感工具审批决议接口（非流式，回退路径，兼容至 Phase 4）：一次性返回决议后新增的消息。
+    内部走 TurnRunner。真流式见 /approval/stream；新客户端用 /turns/approval + /events。
     """
-    orchestrator = request.app.state.orchestrator
+    runner = request.app.state.turn_runner
     session_manager = request.app.state.session_manager
-    scheduler = request.app.state.scheduler
     session = session_manager.get_or_create(session_id)
-    return await _resume_approval_turn(
-        session, session_id, orchestrator, scheduler, approve=body.approve,
-    )
+    try:
+        await runner.accept_approval(session, session_id, body.approve)
+    except TurnConflict:
+        return {
+            "status": "fail",
+            "prompt": "", "image": [], "audio": [],
+            "enable_thinking": False, "max_tokens": 0, "temperature": 0.0, "min_p": 0.0,
+            "response": [{"role": "system", "content": "当前会话没有等待审批的操作（可能已过期或已被处理）。"}],
+        }
+    return public_turn(await runner.run_approval(session, session_id, body.approve))
 
 
 @router.post("/api/v1/chat/{session_id}/approval/stream")
 async def approve_pending_tools_stream(session_id: str, request: Request, body: ApprovalRequest):
     """
-    审批决议真流式接口（SSE）：与 /stream 同一套事件契约（turn_start/token/thinking/
-    tool_started/tool_result/task_progress/turn_end）。续跑在后台 worker 内跑完整闭环并落盘，
-    客户端中途断开也不丢工作（决议照常执行、轮次照常完结存档）。带心跳保活，续跑再慢也不掉线。
+    审批决议真流式接口（SSE，旧事件契约，兼容至 Phase 4）：与 /stream 同一套事件。
+    内部=受理进账本 + 背景执行 + 翻译层回放；断开不丢工作。
     """
-    orchestrator = request.app.state.orchestrator
+    runner = request.app.state.turn_runner
     session_manager = request.app.state.session_manager
-    scheduler = request.app.state.scheduler
     session = session_manager.get_or_create(session_id)
-    turn_id = uuid.uuid4().hex
+    return _legacy_stream_response(
+        session, session_id, runner,
+        accept=lambda: runner.accept_approval(session, session_id, body.approve),
+        run_factory=lambda: runner.run_approval(session, session_id, body.approve),
+    )
+
+
+# ---------- 事件账本端点(PROTOCOL.md §2.4~§2.6,协议 v1 正式面) ----------
+
+
+@router.post("/api/v1/chat/{session_id}/turns")
+async def submit_turn(
+    session_id: str,
+    request: Request,
+    prompt: str = Form(...),
+    system: str = Form(""),
+    enable_thinking: bool = Form(False),
+    thinking_budget: int = Form(2048),
+    max_tokens: int = Form(4096),
+    temperature: float = Form(0.2),
+    min_p: float = Form(0.05),
+    files: Optional[List[UploadFile]] = File(None)
+):
+    """提交一个新轮次：摄入完成即受理返回（202 {turn_id, seq}），执行在背景进行,
+    过程与终态经 GET /events 附着流观察。会话已有排队/运行中的轮次时 409。"""
+    _, _, session, io = await _prepare_turn(request, session_id, system, files)
+    runner = request.app.state.turn_runner
+    gen = {"temperature": temperature, "min_p": min_p, "enable_thinking": enable_thinking,
+           "thinking_budget": thinking_budget, "max_tokens": max_tokens}
+    try:
+        ctx = await runner.accept_turn(
+            session, session_id, prompt=prompt, images=io["images"], audios=io["audios"],
+            ingested_text=io["ingested_text"], attachments=io["attachments"], gen=gen)
+    except TurnConflict as e:
+        return JSONResponse(status_code=409, content={"status": False, "reason": e.reason})
+    runner.spawn(session_id, runner.run_accepted(session, session_id, ctx))
+    return JSONResponse(status_code=202, content={
+        "status": True, "turn_id": ctx["turn_id"], "seq": ctx["seq"]})
+
+
+@router.post("/api/v1/chat/{session_id}/turns/approval")
+async def submit_approval(session_id: str, request: Request, body: ApprovalRequest):
+    """审批决议（202 受理即返）：过程与终态经 GET /events 观察。无等待审批的轮次时 409。"""
+    runner = request.app.state.turn_runner
+    session = request.app.state.session_manager.get_or_create(session_id)
+    try:
+        turn_id = await runner.accept_approval(session, session_id, body.approve)
+    except TurnConflict as e:
+        return JSONResponse(status_code=409, content={"status": False, "reason": e.reason})
+    runner.spawn(session_id, runner.run_approval(session, session_id, body.approve))
+    return JSONResponse(status_code=202, content={"status": True, "turn_id": turn_id})
+
+
+@router.post("/api/v1/chat/{session_id}/turns/resume")
+async def submit_resume(session_id: str, request: Request):
+    """恢复挂起轮次（202 受理即返）：过程与终态经 GET /events 观察。无挂起轮次时 409。"""
+    runner = request.app.state.turn_runner
+    session = request.app.state.session_manager.get_or_create(session_id)
+    try:
+        turn_id = await runner.accept_resume(session, session_id)
+    except TurnConflict as e:
+        return JSONResponse(status_code=409, content={"status": False, "reason": e.reason})
+    runner.spawn(session_id, runner.run_resume(session, session_id))
+    return JSONResponse(status_code=202, content={"status": True, "turn_id": turn_id})
+
+
+@router.get("/api/v1/chat/{session_id}/turn")
+async def get_turn_state(session_id: str, request: Request):
+    """当前轮次的可恢复状态（PROTOCOL.md §2.5）：客户端刷新/重启后据此即时渲染,
+    再带 after 游标附着 /events 续播。无活跃轮次时 turn 为 null。"""
+    session_manager = request.app.state.session_manager
+    session = session_manager._all_sessions.get(session_id)
+    if session is not None:
+        journal = session.journal
+    else:
+        sdir = session_manager.sessions_dir / session_id
+        if not sdir.exists():
+            return {"status": True, "turn": None, "last_seq": 0}
+        journal = TurnJournal(sdir)  # 只读实例：冷会话无活跃轮,仅取账本游标
+
+    snap = journal.turn_snapshot()
+    if snap is not None and snap["state"] == "queued":
+        # 排队位次 = 比本会话更早入队的排队任务数（0 = 下一个被准入）
+        tasks = request.app.state.scheduler.snapshot().get("tasks", [])
+        mine = next((t for t in tasks
+                     if t["session_id"] == session_id and t["status"] == "queued"), None)
+        snap["queue_position"] = (
+            sum(1 for t in tasks
+                if t["status"] == "queued" and t["waiting_seconds"] > mine["waiting_seconds"])
+            if mine else 0
+        )
+    return {"status": True, "turn": snap, "last_seq": journal.seq}
+
+
+@router.get("/api/v1/chat/{session_id}/events")
+async def attach_events(session_id: str, request: Request, after: int = 0):
+    """
+    事件附着流（SSE，PROTOCOL.md §2.4）：首帧 stream_attached，随后重放 seq > after 的
+    可重放事件（journal 里程碑 + 活跃轮内存环全量），再转实时续播。断开任意重连,
+    带上已消费的最大 seq 即可。长连贯穿多个轮次（不因轮次完结闭流）。
+    """
+    session_manager = request.app.state.session_manager
+    session = session_manager._all_sessions.get(session_id)
+    if session is None:
+        if not (session_manager.sessions_dir / session_id).exists():
+            raise HTTPException(status_code=404, detail="会话不存在。")
+        session = session_manager.get_or_create(session_id)
+    journal = session.journal
 
     async def event_gen():
-        queue: asyncio.Queue = asyncio.Queue()
-
-        def emit(event: str, data: Dict[str, Any]):
-            queue.put_nowait((event, {"turn_id": turn_id, **data}))
-
-        def emit_token(text: str):
-            emit("token", {"delta": text})
-
-        async def worker():
-            try:
-                rd = await _resume_approval_turn(
-                    session, session_id, orchestrator, scheduler, approve=body.approve,
-                    emit=emit, on_text_delta=emit_token,
-                )
-                queue.put_nowait(("turn_end", {"turn_id": turn_id, **_public_turn(rd)}))
-            except Exception as e:
-                import traceback
-                queue.put_nowait(("turn_end", {
-                    "turn_id": turn_id, "status": "fail",
-                    "response": [{"role": "system",
-                                  "content": f"审批流式处理故障: {str(e)}\n{traceback.format_exc()}"}],
-                }))
-            finally:
-                queue.put_nowait(None)  # 哨兵：通知生成器收流
-
-        task = asyncio.create_task(worker())
-        yield _sse("turn_start", {"turn_id": turn_id, "session_id": session_id})
+        queue = journal.subscribe()  # 先订阅后重放：重放期间的新事件按 seq 去重续上
         try:
+            yield _sse("stream_attached", {
+                "seq": 0, "turn_id": None, "ts": round(time.time(), 3),
+                "type": "stream_attached", "data": {"v": 1, "last_seq": journal.seq},
+            })
+            last = after
+            for env in await asyncio.to_thread(journal.replay, after):
+                last = max(last, env["seq"])
+                yield _sse(env["type"], env)
             while True:
                 try:
-                    item = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECS)
+                    env = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECS)
                 except asyncio.TimeoutError:
                     yield _SSE_HEARTBEAT
                     continue
-                if item is None:
-                    break
-                yield _sse(item[0], item[1])
+                if env is None:
+                    break  # 会话被删除,账本终结
+                if env["seq"] <= last:
+                    continue
+                last = env["seq"]
+                yield _sse(env["type"], env)
         finally:
-            # 客户端断开时生成器被关闭：不取消后台任务，让决议续跑跑完并落盘（工作不丢）。
-            if not task.done():
-                task.add_done_callback(lambda t: t.exception())
+            journal.unsubscribe(queue)
 
     return StreamingResponse(
         event_gen(),

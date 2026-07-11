@@ -135,6 +135,9 @@ class ScheduleRunner:
                     session.pending_turn.setdefault("response", []).append(
                         {"role": "tool", "tool_responses": cancelled})
                     await asyncio.to_thread(session.append_log, session.pending_turn)
+                    if session.journal.turn_state != "none":
+                        session.journal.emit("turn_ended", {
+                            "status": "warning", "turn_index": session.disk_turn_count() - 1})
                     session.pending_turn = None
             if session.suspended_turn is not None:
                 susp = session.suspended_turn
@@ -145,6 +148,9 @@ class ScheduleRunner:
                     {"role": "system",
                      "content": "The suspended task was interrupted by a new scheduled run and abandoned."})
                 await asyncio.to_thread(session.append_log, susp)
+                if session.journal.turn_state != "none":
+                    session.journal.emit("turn_ended", {
+                        "status": "warning", "turn_index": session.disk_turn_count() - 1})
                 session.suspended_turn = None
                 session.suspend_requested = False
                 session.task_state = None
@@ -162,29 +168,45 @@ class ScheduleRunner:
             # 轮次预写标记：进程死亡时启动恢复补 fail 轮（对齐 routes._chat_turn）
             await asyncio.to_thread(session.write_inflight, full_prompt, dict(_GEN))
 
+            # 账本生命周期：定时轮与交互轮同一事件契约(origin=schedule),任务中心可见
+            journal = session.journal
+            from ..core.journal import new_turn_id
+            journal.emit("turn_queued", {
+                "prompt": full_prompt, "attachments": [], "gen": dict(_GEN),
+                "origin": "schedule",
+            }, turn_id=new_turn_id())
+
             final_result = None
             denies = 0
             await self.scheduler.acquire(sid, kind="scheduled", priority=-1)
+            journal.emit("turn_started", {})
             try:
-                final_result = await self.orchestrator.run_turn(session=session, **_GEN)
+                final_result = await self.orchestrator.run_turn(
+                    session=session, journal=journal, **_GEN)
                 # 无人值守分支闭环：挂起（被交互抢占）→ 等 worker 续跑；审批 → 自动拒绝续跑
                 while True:
                     status = final_result.get("status")
                     if status == "suspended":
+                        journal.emit("suspended", {})
                         await self.scheduler.suspend(sid)
+                        journal.emit("resumed", {"trigger": "resume"})
                         if await self.scheduler.resume(sid, priority=-1) is None:
                             await self.scheduler.acquire(sid, kind="scheduled", priority=-1)
+                        journal.emit("turn_started", {})
                         # 轮中重入：本轮未落盘观察不参与压缩（防压缩桩落盘）
                         final_result = await self.orchestrator.run_turn(
-                            session=session, compact_history=False, **_GEN)
+                            session=session, journal=journal, compact_history=False, **_GEN)
                         continue
                     if status == "pending_approval":
                         denies += 1
                         run["status"] = "denied_approval"  # 记档：本次运行撞过审批墙
+                        journal.emit("awaiting_approval",
+                                     {"pending_tools": final_result.get("pending_tools") or []})
                         from ..core import events
                         events.emit("approval_autodeny", session=sid,
                                     tools=[t.get("name") for t in
                                            (final_result.get("pending_tools") or [])])
+                        journal.emit("resumed", {"trigger": "deny"})
                         if denies > _MAX_AUTO_DENIES:
                             session.add_tool_message([{
                                 "name": "system",
@@ -192,8 +214,9 @@ class ScheduleRunner:
                                             "attempts. Stop and summarize what was done so far."}])
                             final_result = {"status": "warning", "metrics": {}}
                             break
+                        journal.emit("turn_started", {})
                         final_result = await self.orchestrator.resume_after_approval(
-                            session, approved=False, **_GEN)
+                            session, approved=False, journal=journal, **_GEN)
                         continue
                     break
 
@@ -228,6 +251,10 @@ class ScheduleRunner:
 
             await asyncio.to_thread(session.append_log, response_data)
             await asyncio.to_thread(session.save_task)
+            journal.emit("turn_ended", {
+                **{k: v for k, v in response_data.items() if not k.startswith("_")},
+                "turn_index": session.disk_turn_count() - 1,
+            })
 
     @staticmethod
     def _turn_data(prompt: str, status: str, messages, metrics=None) -> Dict[str, Any]:

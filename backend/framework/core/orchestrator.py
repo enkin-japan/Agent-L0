@@ -20,9 +20,10 @@ import asyncio
 import json
 import re
 import uuid
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import events
+from .journal import TurnJournal
 from .task_state import TaskState, call_fingerprint
 from ..memory.session import ChatSession
 from ..memory.compactor import compact_tool_observations
@@ -232,31 +233,25 @@ class Orchestrator:
 
     # ---------- 编排主循环 ----------
     async def run_turn(self, session: ChatSession, *,
-                       emit: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+                       journal: TurnJournal,
                        keep_recent_calls: bool = False,
                        compact_history: bool = True,
                        resume_unverified_write: bool = False,
                        **gen_kwargs) -> Dict[str, Any]:
         """
         执行一轮完整的编排闭环（一次用户消息 → 最终答复 / 挂起审批 / 取消 / 熔断）。
-        取消、审批与故障的落盘语义由路由层统一处理，本方法只返回结果状态。
+        取消、审批与故障的落盘语义与生命周期事件由 TurnRunner 统一处理,本方法只返回
+        结果状态,并把**过程事件**无条件写入账本(PROTOCOL.md §6 发射点对照表):
+        iteration_started / thinking_delta / tool_started / tool_progress / tool_result /
+        plan_updated / step_completed / step_failed。token_delta 由调用方经 on_text_delta
+        回调写账本(gen_kwargs 原样透传 generate_once)。
 
-        emit: 真流式结构化事件回调（可选，SSE 端点注入）。在编排过程的关键点同步发出
-        thinking / tool_started / tool_result / task_progress 事件；为 None 时零开销、
-        行为与改动前完全一致。gen_kwargs（含 on_text_delta 与生成参数）原样透传 generate_once。
+        journal 必传:先记账后分发,不存在"某条路径忘发事件"的结构可能。
         """
-        def _emit(event: str, data: Dict[str, Any]) -> None:
-            if emit is not None:
-                emit(event, data)
-
-        def _emit_progress() -> None:
-            if emit is None:
-                return
+        def _emit_plan() -> None:
             t = session.task_state
-            emit("task_progress", {
-                "task": t.snapshot() if (t is not None and t.plan) else None,
-                "activity": session.activity_snapshot(),
-            })
+            journal.emit("plan_updated",
+                         {"task": t.snapshot() if (t is not None and t.plan) else None})
 
         task = session.task_state
         if task is not None and not keep_recent_calls:
@@ -342,13 +337,15 @@ class Orchestrator:
             # 实时反馈：进入推理段（轮询期间显示"思考中"）
             cur_step = task.current_step() if (task is not None and task.plan) else None
             session.set_activity(f"思考中：{cur_step['title']}" if cur_step else "思考中…")
-            _emit_progress()  # 进入推理段：推送"思考中"（正文 token 走 on_text_delta）
             call_kwargs = dict(gen_kwargs)
             if max_tokens_override is not None:  # T1-3：截断升档后本轮后续生成沿用更高上限
                 call_kwargs["max_tokens"] = max_tokens_override
             # 思考位置策略（见 __init__ 注释）：翻译本次迭代的实际思考态
             call_kwargs["enable_thinking"] = self._thinking_for_iteration(
                 bool(call_kwargs.get("enable_thinking")), iterations)
+            journal.emit("iteration_started", {
+                "n": iterations + 1, "thinking": bool(call_kwargs["enable_thinking"]),
+            })
             result = await self.engine.generate_once(
                 session=session, tools=self._tools_decl, task_block=task_block,
                 tail_notes=pending_tail_notes or None, **call_kwargs
@@ -379,9 +376,11 @@ class Orchestrator:
             text = result["text"]
             thoughts = result["thoughts"]
 
-            # 思考块整块推送（决策 #5：思考不逐 token，一次成块）；正文 token 已走 on_text_delta
+            # 思考块整块写账（Phase 1 现状：思考不逐 token、一次成块;Phase 3 收窄为小段。
+            # 客户端契约是 append-only 增量,不得依赖块边界——见 PROTOCOL.md §2.2）
             if thoughts:
-                _emit("thinking", {"text": thoughts if isinstance(thoughts, str) else "\n".join(thoughts)})
+                journal.emit("thinking_delta", {
+                    "text": thoughts if isinstance(thoughts, str) else "\n".join(thoughts)})
 
             # --- 恢复分支：输出被 max_tokens 截断且非工具调用（T1-3） ---
             # 撞上限的是纯文本/思考（工具调用即便被截断也走下方 parse-error 路径），先升一档
@@ -448,18 +447,27 @@ class Orchestrator:
 
                 responses: List[Dict[str, Any]] = []
                 for call in meta_calls:
+                    mname = call.get("name")
+                    # complete_step 的目标步标题须在执行前取（执行后游标已推进）
+                    cur = (session.task_state.current_step()
+                           if (mname == "complete_step" and session.task_state is not None
+                               and session.task_state.plan) else None)
                     responses.append({
-                        "name": call.get("name"),
+                        "name": mname,
                         "response": self._handle_meta_call(session, call),
                     })
-                    # 实时反馈：计划类动作记入步骤流
-                    mname = call.get("name")
+                    # 实时反馈：计划类动作记入步骤流 + 账本
                     if mname == "update_plan":
                         session.push_activity("plan", "制定/调整计划")
                     elif mname == "complete_step":
                         session.push_activity("plan", "完成一步")
+                        if cur is not None:
+                            journal.emit("step_completed", {
+                                "title": cur.get("title", ""),
+                                "result": str((call.get("arguments") or {}).get("result", "")),
+                            })
                 if meta_calls:
-                    _emit_progress()  # 计划/步骤已变更，推送最新任务快照
+                    _emit_plan()  # 计划/步骤已变更，写入最新任务快照
                 task = session.task_state
 
                 # [审批闸门] 物理调用中含敏感调用：先落元工具结果，再整批挂起
@@ -490,7 +498,8 @@ class Orchestrator:
 
                 tracker = task.recent_calls if task is not None else no_task_calls
                 responses.extend(
-                    await self._execute_physical(session, phys_calls, tracker, parse_errors, emit=emit)
+                    await self._execute_physical(session, phys_calls, tracker, parse_errors,
+                                                 journal=journal)
                 )
                 _stamp_turn_stats()  # [仪表 Phase 0] 刷新废轮计数（_execute_physical 可能新增 parse 失败）
                 # [验证门控 T1-4 状态跟踪] 按声明序扫描本批物理调用：改文件（edit_file/write_file）
@@ -513,8 +522,6 @@ class Orchestrator:
                     responses.append({"name": "system", "response": reminder})
                 if responses:
                     session.add_tool_message(responses)
-                if phys_calls:
-                    _emit_progress()  # 工具执行完毕，推送最新活动/任务快照
 
                 # [断环] 工具格式反复解析失败（同一坏调用重复，或本轮累计过多）→ 优雅终止，
                 # 避免烧光整个迭代预算后输出无关内容（升级纠错已在 _execute_physical 中给过机会）
@@ -537,8 +544,8 @@ class Orchestrator:
                 if task is not None and task.plan:
                     step = task.current_step()
                     if step is not None and task.step_iterations >= self.react_max_steps:
-                        self._route_step_failure(session, task)
-                        _emit_progress()  # 步骤受阻、策略已调整，推送最新任务快照
+                        self._route_step_failure(session, task, journal)
+                        _emit_plan()  # 步骤受阻、策略已调整，写入最新任务快照
                 # --- 护栏：无计划却持续调用工具 → 提示收敛（一次性） ---
                 elif not nudged and iterations >= self.react_max_steps + 2:
                     nudged = True
@@ -573,7 +580,6 @@ class Orchestrator:
                             "If you genuinely need information from the user that you cannot find out "
                             "yourself, ask a specific question; otherwise do not wrap up here — keep "
                             "executing the remaining steps.")
-                        _emit_progress()
                         continue
 
                 # [验证门控 T1-4] 收尾前的确定性检查：本轮改动过系统状态（写调用）、之后却没有
@@ -596,7 +602,6 @@ class Orchestrator:
                         "feasible. If verification shows the fix is wrong or incomplete, keep working. "
                         "If you genuinely cannot verify, say so explicitly in your answer and tell the "
                         "user what to test — do not claim success.")
-                    _emit_progress()
                     continue
 
                 session.set_activity("已完成", phase="done")
@@ -697,7 +702,7 @@ class Orchestrator:
     async def _execute_physical(self, session: ChatSession, calls: List[Dict[str, Any]],
                                 tracker: List[str],
                                 parse_errors: Dict[str, int],
-                                emit: Optional[Callable[[str, Dict[str, Any]], None]] = None
+                                *, journal: TurnJournal
                                 ) -> List[Dict[str, Any]]:
         """
         执行一批物理调用，保持响应与调用一一对应（按原序返回）。
@@ -711,7 +716,7 @@ class Orchestrator:
         async def flush_safe_batch() -> None:
             if not safe_batch:
                 return
-            coros = [self._invoke_tool(session, c, cid, emit) for (_, c, cid) in safe_batch]
+            coros = [self._invoke_tool(session, c, cid, journal) for (_, c, cid) in safe_batch]
             results = await asyncio.gather(*coros)
             for (idx, _, _), r in zip(safe_batch, results):
                 by_idx[idx] = r
@@ -770,7 +775,7 @@ class Orchestrator:
             else:
                 # 有副作用/有状态调用：先冲刷积压的只读批（保证它在这些安全调用之后执行），再串行跑
                 await flush_safe_batch()
-                by_idx[idx] = await self._invoke_tool(session, call, call_id, emit)
+                by_idx[idx] = await self._invoke_tool(session, call, call_id, journal)
                 if not read_only:
                     # 写屏障：系统状态已变，此前的只读结果不再代表现状，解禁同参复读
                     tracker[:] = [f for f in tracker if not f.startswith("r:")]
@@ -779,8 +784,7 @@ class Orchestrator:
         return [by_idx[i] for i in sorted(by_idx)]
 
     async def _invoke_tool(self, session: ChatSession, call: Dict[str, Any], call_id: str,
-                           emit: Optional[Callable[[str, Dict[str, Any]], None]] = None
-                           ) -> Dict[str, Any]:
+                           journal: TurnJournal) -> Dict[str, Any]:
         """真正执行单个物理工具（超时熔断 + 观察截断 + 实时反馈）。可被 gather 并发调用。"""
         name = call.get("name")
         args = call.get("arguments", {})
@@ -791,30 +795,22 @@ class Orchestrator:
         from ..agents import runtime as _agent_runtime
         _agent_runtime.set_current_session(session)
 
-        # 进度钩子：长耗时工具（web_research 等）在执行中上报「正在搜索/正在阅读」，
-        # 复用既有 task_progress 管道实时到前端 ActivityCard；非流式轮次（emit=None）
-        # 退化为只更新 activity，/task 轮询可见。钩子可能从工具线程被调：activity 的
-        # 字典赋值在 GIL 下安全（与 set_activity 并发语义一致，最后写入者为准），
-        # emit 入 asyncio.Queue 必须回主循环线程，走 call_soon_threadsafe。
+        # 进度钩子：长耗时工具（web_research 等）在执行中上报「正在搜索/正在阅读」。
+        # 钩子可能从工具线程被调：activity 的字典赋值在 GIL 下安全（与 set_activity
+        # 并发语义一致，最后写入者为准），账本 emit 必须回主循环线程，走 call_soon_threadsafe。
         loop = asyncio.get_running_loop()
 
         def _tool_progress(label: str, detail: str = "") -> None:
             session.set_activity(label + (f"（{detail}）" if detail else ""))
-            if emit is None:
-                return
-            t = session.task_state
-            payload = {
-                "task": t.snapshot() if (t is not None and t.plan) else None,
-                "activity": session.activity_snapshot(),
-            }
-            loop.call_soon_threadsafe(emit, "task_progress", payload)
+            loop.call_soon_threadsafe(
+                journal.emit, "tool_progress",
+                {"call_id": call_id, "label": label, "detail": detail})
 
         _agent_runtime.set_progress_hook(_tool_progress)
         # 实时反馈：进入工具执行段（并发时以最后写入者为准，仅展示用途，无正确性影响）
         session.set_activity(f"调用工具：{name}")
-        # 真流式：工具开始事件（call_id 配对 started/result，供前端渲染工具卡片）
-        if emit is not None:
-            emit("tool_started", {"call_id": call_id, "name": name, "args": args})
+        # 工具开始事件（call_id 配对 started/result，供前端渲染工具卡片）
+        journal.emit("tool_started", {"call_id": call_id, "name": name, "args": args})
         # 工具级超时熔断：卡死的工具会一直占着会话锁，到点放弃等待并反馈让模型改路
         # （被放弃的线程仍在后台跑完，但不再阻塞本轮；工具自身也应有内部超时，如 shell）。
         # 长任务工具（excel_research 等多轮子 agent）可用 BaseTool.timeout_seconds
@@ -847,10 +843,9 @@ class Orchestrator:
         # 实时反馈：记录一条已完成的工具步骤（结果取首行摘要）
         summary = result_text.strip().splitlines()[0] if result_text.strip() else ""
         session.push_activity("tool", name, summary)
-        if emit is not None:
-            emit("tool_result", {"call_id": call_id, "name": name,
-                                 "response": result_text,
-                                 "status": "timeout" if timed_out else "ok"})
+        journal.emit("tool_result", {"call_id": call_id, "name": name,
+                                     "response": result_text,
+                                     "status": "timeout" if timed_out else "ok"})
         # 挂上压缩层用的内存元数据（T3-a/b）：_safe=只读可取代、_target=取代键（同工具同目标去重）。
         # 均为 `_` 前缀，落盘时被 append_log 剥离，仅存内存（与 _compacted 同规矩）。
         # 判据用 is_read_only（而非 is_concurrency_safe）：read_ui_tree 这类「只读但不可并发」
@@ -864,12 +859,17 @@ class Orchestrator:
         return obs
 
     # ---------- 失败路由（代码管配额和菜单，模型选策略） ----------
-    def _route_step_failure(self, session: ChatSession, task: TaskState) -> None:
+    def _route_step_failure(self, session: ChatSession, task: TaskState,
+                            journal: TurnJournal) -> None:
         step = task.current_step()
         if step is None:
             return
         task.fail_current(f"Iteration budget exhausted ({self.react_max_steps} iterations without completion)")
         session.push_activity("note", "步骤受阻，调整策略", step["title"])
+        journal.emit("step_failed", {
+            "title": step["title"],
+            "reason": f"iteration budget exhausted ({self.react_max_steps})",
+        })
         title_key = step["title"].strip().lower()
         fail_count = task.step_failures.get(title_key, 0)
         events.emit("failure_route", session=session.session_id,
@@ -899,7 +899,8 @@ class Orchestrator:
         })
 
     # ---------- 审批决议恢复 ----------
-    async def resume_after_approval(self, session: ChatSession, approved: bool,
+    async def resume_after_approval(self, session: ChatSession, approved: bool, *,
+                                    journal: TurnJournal,
                                     **gen_kwargs) -> Dict[str, Any]:
         """
         用户对挂起的敏感工具调用作出决议后恢复编排闭环：
@@ -911,7 +912,9 @@ class Orchestrator:
         if approved:
             task = session.task_state
             tracker = task.recent_calls if task is not None else []
-            responses = await self._execute_physical(session, pending_calls, tracker, {})
+            # 批准的敏感调用同样经账本发事件（修复旧实现漏发 tool_started/result 的洞）
+            responses = await self._execute_physical(session, pending_calls, tracker, {},
+                                                     journal=journal)
         else:
             responses = [
                 {
@@ -937,5 +940,6 @@ class Orchestrator:
         # 回到编排主循环（若再次命中敏感工具会再次挂起）。keep_recent_calls：保留刚执行的
         # 批准调用指纹，防模型在续跑首步立即原样重复该敏感调用。
         # compact_history=False：轮中重入，本轮未落盘观察不参与压缩（防压缩桩落盘）。
-        return await self.run_turn(session, keep_recent_calls=True, compact_history=False,
+        return await self.run_turn(session, journal=journal,
+                                   keep_recent_calls=True, compact_history=False,
                                    resume_unverified_write=wrote_unverified, **gen_kwargs)

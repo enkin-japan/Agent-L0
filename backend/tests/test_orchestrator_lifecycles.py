@@ -1,17 +1,15 @@
-"""编排层生命周期金测试(Phase 0 回归网)。
+"""编排层生命周期金测试(Phase 0 回归网,Phase 1 起断言账本事件)。
 
 覆盖 Orchestrator.run_turn / resume_after_approval 的全部关键收尾路径与护栏行为。
-这些断言捕获的是**必须保全的现状行为**——Phase 1 收敛 TurnRunner、改 emit 为账本
-句柄时,本文件必须持续全绿(事件形态的断言届时按 PROTOCOL.md 扩展)。
+过程事件一律从会话账本(session.journal.ring)断言——账本是唯一事件出口
+(PROTOCOL.md:先记账后分发),不存在旁路。
 """
 import asyncio
 
-import pytest
-
+from framework.core.journal import new_turn_id
 from framework.core.orchestrator import Orchestrator
 
-from .fake_engine import (EmitCollector, FakeEngine, FakeRegistry, FakeTool,
-                          bad_call, call)
+from .fake_engine import FakeEngine, FakeRegistry, FakeTool, bad_call, call
 
 GEN = dict(temperature=0.2, min_p=0.05, enable_thinking=False,
            thinking_budget=2048, max_tokens=4096)
@@ -25,6 +23,22 @@ def make_orch(engine, registry, **cfg_over):
     return Orchestrator(engine, registry, cfg)
 
 
+def begin_turn(session, prompt="test"):
+    """建立轮次上下文(正式路径由 TurnRunner 发 turn_queued;测试等价起点)。"""
+    session.journal.emit("turn_queued", {"prompt": prompt, "attachments": [],
+                                         "gen": dict(GEN), "origin": "chat"},
+                         turn_id=new_turn_id())
+    session.journal.emit("turn_started", {})
+
+
+def ring_of(session, etype):
+    return [e["data"] for e in session.journal.ring if e["type"] == etype]
+
+
+def ring_types(session):
+    return [e["type"] for e in session.journal.ring]
+
+
 def run(coro):
     return asyncio.run(coro)
 
@@ -36,10 +50,11 @@ def test_plain_text_success(make_session):
     orch = make_orch(engine, FakeRegistry([]))
     session = make_session()
     session.add_user_message("hi")
-    emit = EmitCollector()
+    begin_turn(session)
     streamed = []
 
-    result = run(orch.run_turn(session, emit=emit, on_text_delta=streamed.append, **GEN))
+    result = run(orch.run_turn(session, journal=session.journal,
+                               on_text_delta=streamed.append, **GEN))
 
     assert result["status"] == "success"
     assert result["response"] == "你好!"
@@ -47,7 +62,9 @@ def test_plain_text_success(make_session):
     assert session.history[-1]["role"] == "assistant"
     assert session.history[-1]["content"] == "你好!"
     assert session.activity["phase"] == "done"
-    assert emit.of("thinking") == [{"text": "简单问候"}]      # 思考成块下发(现状契约)
+    # 账本:迭代开始 + 思考块(现状整块,契约为 append-only 增量)
+    assert ring_of(session, "iteration_started") == [{"n": 1, "thinking": False}]
+    assert ring_of(session, "thinking_delta") == [{"text": "简单问候"}]
 
 
 def test_tool_then_answer(make_session):
@@ -59,21 +76,22 @@ def test_tool_then_answer(make_session):
     orch = make_orch(engine, registry)
     session = make_session()
     session.add_user_message("x 是多少?")
-    emit = EmitCollector()
+    begin_turn(session)
 
-    result = run(orch.run_turn(session, emit=emit, **GEN))
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
 
     assert result["status"] == "success"
     assert registry.executed == [{"name": "read_thing", "args": {"path": "/tmp/x"}}]
     # 历史结构:system(会话头)→ user → assistant(tool_calls) → tool → assistant(text)
     roles = [m["role"] for m in session.history]
     assert roles == ["system", "user", "assistant", "tool", "assistant"]
-    # 事件序:tool_started 先于 tool_result,且携带配对 call_id
-    started, finished = emit.of("tool_started"), emit.of("tool_result")
+    # 账本事件序:tool_started 先于 tool_result,携配对 call_id
+    started, finished = ring_of(session, "tool_started"), ring_of(session, "tool_result")
     assert len(started) == len(finished) == 1
     assert started[0]["call_id"] == finished[0]["call_id"]
     assert finished[0]["status"] == "ok" and finished[0]["response"] == "42"
-    assert emit.types().index("tool_started") < emit.types().index("tool_result")
+    types = ring_types(session)
+    assert types.index("tool_started") < types.index("tool_result")
 
 
 # ---------- 审批闸门 ----------
@@ -89,21 +107,28 @@ def test_approval_gate_and_approve_resume(make_session):
     orch = make_orch(engine, registry)
     session = make_session()
     session.add_user_message("执行危险操作")
+    begin_turn(session)
 
-    result = run(orch.run_turn(session, **GEN))
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
 
     assert result["status"] == "pending_approval"
     assert result["pending_tools"] == [{"name": "danger_op", "arguments": {"target": "prod"}}]
     assert registry.executed == []                       # 挂起期间未执行
     assert session.pending_tool_calls                    # 暂存待决议
     assert session.carried_iterations == 1               # 熔断分母跨续跑累计
+    assert ring_of(session, "tool_started") == []        # 未执行 = 无工具事件
 
-    resumed = run(orch.resume_after_approval(session, approved=True, **GEN))
+    resumed = run(orch.resume_after_approval(session, approved=True,
+                                             journal=session.journal, **GEN))
 
     assert resumed["status"] == "success"
     assert resumed["response"] == "已执行完毕。"
     assert registry.executed == [{"name": "danger_op", "args": {"target": "prod"}}]
     assert session.pending_tool_calls is None
+    # 修复验收:批准执行的敏感调用,其 tool_started/result 事件不再丢失
+    started, finished = ring_of(session, "tool_started"), ring_of(session, "tool_result")
+    assert [s["name"] for s in started] == ["danger_op"]
+    assert [f["status"] for f in finished] == ["ok"]
 
 
 def test_approval_deny_feeds_model(make_session):
@@ -116,9 +141,11 @@ def test_approval_deny_feeds_model(make_session):
     orch = make_orch(engine, registry)
     session = make_session()
     session.add_user_message("执行危险操作")
-    run(orch.run_turn(session, **GEN))
+    begin_turn(session)
+    run(orch.run_turn(session, journal=session.journal, **GEN))
 
-    resumed = run(orch.resume_after_approval(session, approved=False, **GEN))
+    resumed = run(orch.resume_after_approval(session, approved=False,
+                                             journal=session.journal, **GEN))
 
     assert resumed["status"] == "success"
     assert registry.executed == []                       # 拒绝 = 绝不执行
@@ -133,9 +160,10 @@ def test_cancel_before_generation(make_session):
     orch = make_orch(engine, FakeRegistry([]))
     session = make_session()
     session.add_user_message("hi")
+    begin_turn(session)
     session.cancel_requested = True
 
-    result = run(orch.run_turn(session, **GEN))
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
 
     assert result["status"] == "cancelled"
     assert engine.calls == []
@@ -146,8 +174,9 @@ def test_cancel_during_generation(make_session):
     orch = make_orch(engine, FakeRegistry([]))
     session = make_session()
     session.add_user_message("hi")
+    begin_turn(session)
 
-    result = run(orch.run_turn(session, **GEN))
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
 
     assert result["status"] == "cancelled"
 
@@ -158,6 +187,7 @@ def test_suspend_at_iteration_boundary(make_session):
     orch = make_orch(engine, registry)
     session = make_session()
     session.add_user_message("做点事")
+    begin_turn(session)
 
     async def scenario():
         # 第一迭代(工具执行)后置位挂起 → 循环在下一个迭代边界让出
@@ -166,7 +196,7 @@ def test_suspend_at_iteration_boundary(make_session):
                 await asyncio.sleep(0)
             session.suspend_requested = True
         task = asyncio.create_task(flag_after_first())
-        r = await orch.run_turn(session, **GEN)
+        r = await orch.run_turn(session, journal=session.journal, **GEN)
         await task
         return r
 
@@ -190,8 +220,9 @@ def test_duplicate_call_blocked(make_session):
     orch = make_orch(engine, registry)
     session = make_session()
     session.add_user_message("看两眼")
+    begin_turn(session)
 
-    result = run(orch.run_turn(session, **GEN))
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
 
     assert result["status"] == "success"
     assert len(registry.executed) == 1                   # 第二次被拦,未真执行
@@ -214,8 +245,9 @@ def test_write_barrier_allows_reread(make_session):
     orch = make_orch(engine, registry)
     session = make_session()
     session.add_user_message("改后复查")
+    begin_turn(session)
 
-    result = run(orch.run_turn(session, **GEN))
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
 
     assert result["status"] == "success"
     assert [e["name"] for e in registry.executed] == ["read_thing", "write_thing", "read_thing"]
@@ -226,8 +258,9 @@ def test_parse_error_loop_aborts(make_session):
     orch = make_orch(engine, FakeRegistry([]))
     session = make_session()
     session.add_user_message("hi")
+    begin_turn(session)
 
-    result = run(orch.run_turn(session, **GEN))
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
 
     assert result["status"] == "warning"
     assert "解析" in result["response"]                   # 优雅终止而非烧光预算
@@ -242,8 +275,9 @@ def test_truncation_escalates_then_recovers(make_session):
     orch = make_orch(engine, FakeRegistry([]))
     session = make_session()
     session.add_user_message("长答复")
+    begin_turn(session)
 
-    result = run(orch.run_turn(session, **GEN))
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
 
     assert result["status"] == "success"
     assert result["response"] == "完整的答案。"
@@ -264,8 +298,9 @@ def test_verify_nudge_on_unverified_write(make_session):
     orch = make_orch(engine, registry)
     session = make_session()
     session.add_user_message("修一下")
+    begin_turn(session)
 
-    result = run(orch.run_turn(session, **GEN))
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
 
     assert result["status"] == "success"
     assert result["response"] == "已修好并验证。"
@@ -286,18 +321,21 @@ def test_plan_flow_and_premature_finish_gate(make_session):
     orch = make_orch(engine, FakeRegistry([]))
     session = make_session()
     session.add_user_message("做个两步任务")
-    emit = EmitCollector()
+    begin_turn(session)
 
-    result = run(orch.run_turn(session, emit=emit, **GEN))
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
 
     assert result["status"] == "success"
     assert result["response"] == "全部完成:结论如下。"
     assert session.task_state is None                    # 完成即弃(blackboard=消息流)
     # 提前收尾推回走 tail_note,第三次生成能看到
     assert any("unfinished steps" in n for n in engine.calls[2]["tail_notes"])
-    # task_progress 事件里出现过含两步的计划快照
-    snapshots = [d["task"] for d in emit.of("task_progress") if d.get("task")]
+    # 账本:计划快照出现过两步计划;两次 step_completed 且标题按序
+    snapshots = [d["task"] for d in ring_of(session, "plan_updated") if d.get("task")]
     assert any(len(s.get("plan", [])) == 2 for s in snapshots)
+    steps = ring_of(session, "step_completed")
+    assert [s["title"] for s in steps] == ["查资料", "写结论"]
+    assert [s["result"] for s in steps] == ["资料已查", "结论已写"]
 
 
 def test_total_iteration_fuse(make_session):
@@ -306,8 +344,9 @@ def test_total_iteration_fuse(make_session):
     orch = make_orch(engine, registry, max_total_iterations=12)
     session = make_session()
     session.add_user_message("转圈")
+    begin_turn(session)
 
-    result = run(orch.run_turn(session, **GEN))
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
 
     assert result["status"] == "warning"
     assert "12" in result["response"]                    # 总熔断兜底,优雅收尾
@@ -328,8 +367,9 @@ def test_concurrent_readonly_batch_order_preserved(make_session):
     orch = make_orch(engine, registry)
     session = make_session()
     session.add_user_message("批量")
+    begin_turn(session)
 
-    result = run(orch.run_turn(session, **GEN))
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
 
     assert result["status"] == "success"
     # 写调用前必须先冲刷只读批:两个 read 都在 write 之前执行

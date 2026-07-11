@@ -35,6 +35,8 @@ class FakeEngine:
         })
         assert self.script, "FakeEngine 脚本耗尽:编排层多转了一圈(检查场景脚本长度)"
         step = self.script.pop(0)
+        if step.get("gate") is not None:      # 可控慢生成:等测试放行(并发场景用)
+            await step["gate"].wait()
         text = step.get("text", "")
         if text and step.get("stream", True) and on_text_delta is not None \
                 and not step.get("tool_calls") and not step.get("cancelled"):
@@ -120,19 +122,3 @@ def call(name: str, **arguments) -> Dict[str, Any]:
 def bad_call(raw: str = '{"name": broken', msg: str = "Expecting value") -> Dict[str, Any]:
     """构造一条解析失败项。"""
     return {"type": "error", "raw_input": raw, "error_msg": msg}
-
-
-class EmitCollector:
-    """收集编排层 emit 的结构化事件,供断言事件序。"""
-
-    def __init__(self):
-        self.events: List[Dict[str, Any]] = []
-
-    def __call__(self, event: str, data: Dict[str, Any]):
-        self.events.append({"event": event, "data": data})
-
-    def types(self) -> List[str]:
-        return [e["event"] for e in self.events]
-
-    def of(self, event_type: str) -> List[Dict[str, Any]]:
-        return [e["data"] for e in self.events if e["event"] == event_type]

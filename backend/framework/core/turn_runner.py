@@ -1,0 +1,445 @@
+"""TurnRunner —— 轮次生命周期的唯一属主(REARCHITECTURE.md §2.2)。
+
+收敛自 routes.py 曾经的三份近拷贝(_chat_turn / _resume_approval_turn / resume_task):
+前置清理(放弃暂停态旧轮)→ 追加用户消息 → inflight 预写 → 账本 turn_queued →
+调度门闸 → 编排闭环 → 终态分流(成功/取消/故障回滚/审批暂存/挂起暂存)→
+落盘或暂存 → 摘要触发 → 账本生命周期事件。routes 退化为薄 HTTP 适配器。
+
+不变量清单(改动本文件前先读,金测试 test_turn_runner.py 逐条守着):
+- session.lock 覆盖从清理到落盘的完整临界区;受理(accept)与执行(run)分两次
+  持锁,期间由账本 turn_state 闸门挡住并发受理(queued/running → 409 语义);
+- scheduler.acquire/release/suspend 严格配对:suspended 走 suspend(句柄保留),
+  其余一律 release;
+- 取消/故障整轮回滚到 _rollback_idx(含用户消息),任务态同步回滚 _task_snapshot;
+- 待审批/挂起的轮次**不落盘**,暂存 session.pending_turn / suspended_turn,
+  决议/恢复后合并;落盘时剥掉全部 `_` 内部账目键;
+- inflight 预写在受理时写入,append_log 自动撤销(崩溃恢复的 write-ahead 闭环);
+- 生命周期事件(turn_queued/started/awaiting/suspended/resumed/ended)由本层发射,
+  过程事件由编排层发射——账本必传,先记账后分发。
+"""
+import asyncio
+from typing import Any, Dict, List, Optional
+
+from .journal import new_turn_id
+from .task_state import TaskState
+
+
+class TurnConflict(Exception):
+    """受理冲突:会话已有排队/运行中的轮次,或决议/恢复的目标态不存在。"""
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def public_turn(response_data: Dict[str, Any]) -> Dict[str, Any]:
+    """剥掉内部账目键(_rollback_idx / _task_snapshot / _history_start_idx)得到可下发的轮次数据。"""
+    return {k: v for k, v in response_data.items() if not k.startswith("_")}
+
+
+def _restore_task(session, snapshot):
+    """按轮初快照回滚会话的任务状态(引擎故障/用户取消时与 history 回滚同步)。"""
+    session.task_state = TaskState.from_snapshot(snapshot) if snapshot else None
+
+
+class TurnRunner:
+    def __init__(self, orchestrator, scheduler, summarize_after_turn=None):
+        self.orchestrator = orchestrator
+        self.scheduler = scheduler
+        # 轮次落盘后的摘要压缩钩子(routes._maybe_summarize_active 注入;测试可传 None)
+        self._summarize = summarize_after_turn
+        self._bg: Dict[str, asyncio.Task] = {}   # sid -> 背景执行任务(调试观测用)
+
+    # ---------- 背景执行 ----------
+    def spawn(self, sid: str, coro) -> asyncio.Task:
+        """把一次轮次执行放入背景(202 受理即返的路径)。异常一律消费并打印,
+        故障语义已在执行体内部转为 fail 轮落盘,这里只兜底真正的 bug。"""
+        task = asyncio.create_task(coro)
+        self._bg[sid] = task
+
+        def _done(t: asyncio.Task):
+            if self._bg.get(sid) is t:
+                self._bg.pop(sid, None)
+            try:
+                exc = t.exception()
+                if exc is not None:
+                    print(f"[TurnRunner] 背景轮次异常({sid}): {exc!r}")
+            except asyncio.CancelledError:
+                pass
+
+        task.add_done_callback(_done)
+        return task
+
+    # ---------- 新轮次:受理 ----------
+    async def accept_turn(self, session, sid: str, *, prompt: str,
+                          images: List[str], audios: List[str],
+                          ingested_text: str, attachments: List[Any],
+                          gen: Dict[str, Any], origin: str = "chat") -> Dict[str, Any]:
+        """
+        受理一个新轮次(短临界区):放弃暂停态旧轮 → 提交用户消息 → inflight 预写 →
+        账本 turn_queued。返回执行上下文 ctx(交给 run_accepted);受理冲突抛 TurnConflict。
+        """
+        journal = session.journal
+        # 锁外快路径:运行中的轮次持 session.lock 长达数分钟,受理冲突必须即时拒绝
+        # 而不是排队等锁(否则 409 永远打不出来,请求全部串成隐形队列)。
+        if journal.turn_state in ("queued", "running"):
+            raise TurnConflict("turn_active")
+        async with session.lock:
+            # 锁内复检:两个受理竞争同一空闲会话时,后进者在此被拦住
+            if journal.turn_state in ("queued", "running"):
+                raise TurnConflict("turn_active")
+
+            await self._abandon_paused_turn(session, sid)
+
+            # 将新解析的资源加入本会话的生命周期
+            session.images.extend(images)
+            session.audios.extend(audios)
+
+            # 本轮起点快照:引擎故障/用户取消时,history 与任务状态同步整轮回滚
+            session.cancel_requested = False
+            rollback_idx = len(session.history)
+            task_snapshot = session.task_state.snapshot() if session.task_state else None
+            session.add_user_message(prompt, images, audios, extra_text=ingested_text)
+            history_start_idx = len(session.history)
+            # 轮次预写标记(write-ahead):进程死亡时启动恢复补 fail 轮,用户输入不蒸发
+            await asyncio.to_thread(session.write_inflight, prompt, gen)
+
+            env = journal.emit("turn_queued", {
+                "prompt": prompt,
+                "attachments": [
+                    {"name": getattr(a, "name", None) or (a.get("name") if isinstance(a, dict) else str(a)),
+                     "kind": (a.get("type") if isinstance(a, dict) else None) or "file"}
+                    for a in (attachments or [])
+                ],
+                "gen": dict(gen), "origin": origin,
+            }, turn_id=new_turn_id())
+
+        return {
+            "turn_id": env["turn_id"], "seq": env["seq"],
+            "prompt": prompt, "images": images, "audios": audios,
+            "ingested_text": ingested_text, "attachments": attachments,
+            "gen": gen, "origin": origin,
+            "_rollback_idx": rollback_idx, "_task_snapshot": task_snapshot,
+            "_history_start_idx": history_start_idx,
+        }
+
+    async def _abandon_paused_turn(self, session, sid: str) -> None:
+        """暂停态旧轮的放弃收尾(须持 session.lock 调用):
+        待审批 → 工具作废 + warning 落盘;挂起 → warning 落盘 + 调度句柄回收。"""
+        journal = session.journal
+        if session.pending_tool_calls:
+            cancelled = [
+                {"name": c.get("name", "unknown"),
+                 "response": "Operation cancelled: the user sent a new message without approving."}
+                for c in session.pending_tool_calls if c.get("type") != "error"
+            ] or [{"name": "system", "response": "Pending tool call cancelled."}]
+            session.add_tool_message(cancelled)
+            session.pending_tool_calls = None
+            if session.pending_turn is not None:
+                session.pending_turn.pop("_rollback_idx", None)
+                session.pending_turn.pop("_task_snapshot", None)
+                session.pending_turn["status"] = "warning"
+                session.pending_turn.setdefault("response", []).append(
+                    {"role": "tool", "tool_responses": cancelled})
+                await asyncio.to_thread(session.append_log, session.pending_turn)
+                if journal.turn_state != "none":
+                    journal.emit("turn_ended", {
+                        **public_turn(session.pending_turn),
+                        "turn_index": session.disk_turn_count() - 1})
+                session.pending_turn = None
+
+        if session.suspended_turn is not None:
+            susp = session.suspended_turn
+            for k in ("_rollback_idx", "_task_snapshot", "_history_start_idx"):
+                susp.pop(k, None)
+            susp["status"] = "warning"
+            susp.setdefault("response", []).append(
+                {"role": "system",
+                 "content": "The suspended task was interrupted by a new user message and abandoned (not continued)."})
+            await asyncio.to_thread(session.append_log, susp)
+            if journal.turn_state != "none":
+                journal.emit("turn_ended", {
+                    **public_turn(susp), "turn_index": session.disk_turn_count() - 1})
+            session.suspended_turn = None
+            session.suspend_requested = False
+            session.task_state = None
+            self.scheduler.discard(sid)
+
+    # ---------- 新轮次:执行 ----------
+    async def run_accepted(self, session, sid: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """执行一个已受理的轮次(完整闭环,持锁全程)。返回完整轮次数据(response 为本轮全量)。"""
+        gen = ctx["gen"]
+        journal = session.journal
+        async with session.lock:
+            final_result = None
+            await self.scheduler.acquire(sid, kind="chat")
+            journal.emit("turn_started", {})
+            try:
+                final_result = await self.orchestrator.run_turn(
+                    session=session, journal=journal,
+                    on_text_delta=lambda t: journal.emit("token_delta", {"text": t}),
+                    **gen,
+                )
+                if final_result.get("status") == "cancelled":
+                    # 用户取消:整轮(含用户消息与中途产物)回滚出内存,落盘保留取消存档
+                    session.history = session.history[:ctx["_rollback_idx"]]
+                    _restore_task(session, ctx["_task_snapshot"])
+                    response_data = self._turn_record(ctx, "cancelled", [
+                        {"role": "system", "content": "本轮已被用户取消,未产生任何记忆变更。"},
+                    ], final_result.get("metrics"))
+                else:
+                    new_messages = session.history[ctx["_history_start_idx"]:]
+                    response_data = self._turn_record(
+                        ctx, final_result.get("status", "success"), new_messages,
+                        final_result.get("metrics"))
+                    response_data["pending_tools"] = final_result.get("pending_tools")
+            except Exception as e:
+                import traceback
+                error_details = traceback.format_exc()
+                # 引擎故障:连同本轮用户消息一起回滚内存记忆与任务状态,防止污染
+                session.history = session.history[:ctx["_rollback_idx"]]
+                _restore_task(session, ctx["_task_snapshot"])
+                response_data = self._turn_record(ctx, "fail", [
+                    {"role": "system", "content": f"核心引擎故障: {str(e)}\n{error_details}"},
+                ])
+            finally:
+                if final_result is not None and final_result.get("status") == "suspended":
+                    await self.scheduler.suspend(sid)
+                else:
+                    await self.scheduler.release(sid)
+
+            await self._settle(session, sid, response_data,
+                               rollback_idx=ctx["_rollback_idx"],
+                               task_snapshot=ctx["_task_snapshot"],
+                               history_start_idx=ctx["_history_start_idx"])
+        return response_data
+
+    def _turn_record(self, ctx: Dict[str, Any], status: str,
+                     messages: List[Dict[str, Any]], metrics: Optional[Dict] = None
+                     ) -> Dict[str, Any]:
+        gen = ctx["gen"]
+        return {
+            "status": status,
+            "prompt": ctx["prompt"],
+            "image": ctx["images"], "audio": ctx["audios"],
+            "ingested_text": ctx["ingested_text"], "attachments": ctx["attachments"],
+            "enable_thinking": gen.get("enable_thinking", False),
+            "thinking_budget": gen.get("thinking_budget", 2048),
+            "max_tokens": gen.get("max_tokens", 4096),
+            "temperature": gen.get("temperature", 0.2),
+            "min_p": gen.get("min_p", 0.05),
+            "response": list(messages),
+            **(metrics or {}),
+        }
+
+    async def _settle(self, session, sid: str, response_data: Dict[str, Any], *,
+                      rollback_idx: int, task_snapshot, history_start_idx: int) -> None:
+        """终态分流(须持 session.lock):暂存(审批/挂起)或落盘,并发射生命周期事件。"""
+        journal = session.journal
+        status = response_data.get("status")
+        if status == "pending_approval":
+            response_data["_rollback_idx"] = rollback_idx      # 决议执行故障时整轮回滚
+            response_data["_task_snapshot"] = task_snapshot    # 任务状态同步回滚
+            session.pending_turn = response_data
+            journal.emit("awaiting_approval",
+                         {"pending_tools": response_data.get("pending_tools") or []})
+        elif status == "suspended":
+            response_data["_rollback_idx"] = rollback_idx      # 恢复续跑故障时整轮回滚
+            response_data["_task_snapshot"] = task_snapshot
+            response_data["_history_start_idx"] = history_start_idx  # 恢复时接续截取增量
+            session.suspended_turn = response_data
+            journal.emit("suspended", {})
+        else:
+            for k in ("_rollback_idx", "_task_snapshot", "_history_start_idx"):
+                response_data.pop(k, None)
+            await asyncio.to_thread(session.append_log, response_data)
+            await asyncio.to_thread(session.save_task)
+            journal.emit("turn_ended", {
+                **public_turn(response_data),
+                "turn_index": session.disk_turn_count() - 1})
+            if self._summarize is not None:
+                await self._summarize(session, sid)
+
+    # ---------- 审批决议 ----------
+    async def accept_approval(self, session, sid: str, approve: bool) -> str:
+        """受理审批决议(短临界区):校验目标态 → 账本 resumed。返回 turn_id。"""
+        journal = session.journal
+        if journal.turn_state != "awaiting_approval":  # 锁外快路径(运行中不排队等锁)
+            raise TurnConflict("no_pending_approval")
+        async with session.lock:
+            if journal.turn_state != "awaiting_approval" \
+                    or not session.pending_tool_calls or session.pending_turn is None:
+                raise TurnConflict("no_pending_approval")
+            journal.emit("resumed", {"trigger": "approve" if approve else "deny"})
+            return journal.current_turn_id
+
+    async def run_approval(self, session, sid: str, approve: bool) -> Dict[str, Any]:
+        """执行审批决议后的续跑闭环。返回轮次数据(response 仅含本次决议后新增的消息)。"""
+        journal = session.journal
+        async with session.lock:
+            turn = session.pending_turn
+            if turn is None or not session.pending_tool_calls:
+                # 受理与执行之间被抢先处理(会话删除等边界):按无事可做收场
+                return self._stale_target("当前会话没有等待审批的操作(可能已过期或已被处理)。")
+
+            session.cancel_requested = False
+            history_start_idx = len(session.history)
+            final_result = None
+            await self.scheduler.acquire(sid, kind="approval")
+            journal.emit("turn_started", {})
+            try:
+                final_result = await self.orchestrator.resume_after_approval(
+                    session, approved=approve, journal=journal,
+                    on_text_delta=lambda t: journal.emit("token_delta", {"text": t}),
+                    temperature=turn.get("temperature", 0.2),
+                    min_p=turn.get("min_p", 0.05),
+                    enable_thinking=turn.get("enable_thinking", False),
+                    thinking_budget=turn.get("thinking_budget", 2048),
+                    max_tokens=turn.get("max_tokens", 4096),
+                )
+                response_data = self._merge_continuation(session, turn, final_result,
+                                                         history_start_idx)
+            except Exception as e:
+                response_data = self._continuation_failure(session, turn, e, "审批决议执行故障")
+            finally:
+                if final_result is not None and final_result.get("status") == "suspended":
+                    await self.scheduler.suspend(sid)
+                else:
+                    await self.scheduler.release(sid)
+
+            # 状态分流:又现敏感调用→继续审批暂存;被挂起→转挂起暂存;否则整轮合并落盘
+            status = response_data.get("status")
+            if status == "pending_approval":
+                session.pending_turn = turn
+                journal.emit("awaiting_approval",
+                             {"pending_tools": turn.get("pending_tools") or []})
+            elif status == "suspended":
+                session.pending_turn = None
+                session.suspended_turn = turn  # 携原账目(_rollback_idx/_task_snapshot)转挂起
+                journal.emit("suspended", {})
+            else:
+                session.pending_turn = None
+                await self._land_continuation(session, sid, turn)
+        return response_data
+
+    # ---------- 挂起恢复 ----------
+    async def accept_resume(self, session, sid: str) -> str:
+        """受理恢复请求(短临界区):校验目标态 → 账本 resumed。返回 turn_id。"""
+        journal = session.journal
+        if journal.turn_state != "suspended":          # 锁外快路径(运行中不排队等锁)
+            raise TurnConflict("no_suspended_turn")
+        async with session.lock:
+            if journal.turn_state != "suspended" or session.suspended_turn is None:
+                raise TurnConflict("no_suspended_turn")
+            journal.emit("resumed", {"trigger": "resume"})
+            return journal.current_turn_id
+
+    async def run_resume(self, session, sid: str) -> Dict[str, Any]:
+        """执行挂起恢复的续跑闭环。返回轮次数据(response 仅含本次续跑新增的消息)。"""
+        journal = session.journal
+        async with session.lock:
+            turn = session.suspended_turn
+            if turn is None:
+                return self._stale_target("当前会话没有挂起的任务(可能已恢复、已完结或会话被回收)。")
+
+            session.cancel_requested = False
+            session.suspend_requested = False
+            history_start_idx = len(session.history)
+            final_result = None
+            # 恢复:挂起句柄重新排队等待准入(无句柄则退化为一次新准入,兜底进程重启等情形)
+            if await self.scheduler.resume(sid) is None:
+                await self.scheduler.acquire(sid, kind="resume")
+            journal.emit("turn_started", {})
+            try:
+                final_result = await self.orchestrator.run_turn(
+                    session=session, journal=journal,
+                    compact_history=False,  # 轮中重入:本轮未落盘观察不参与压缩(防压缩桩落盘)
+                    on_text_delta=lambda t: journal.emit("token_delta", {"text": t}),
+                    temperature=turn.get("temperature", 0.2),
+                    min_p=turn.get("min_p", 0.05),
+                    enable_thinking=turn.get("enable_thinking", False),
+                    thinking_budget=turn.get("thinking_budget", 2048),
+                    max_tokens=turn.get("max_tokens", 4096),
+                )
+                response_data = self._merge_continuation(session, turn, final_result,
+                                                         history_start_idx)
+            except Exception as e:
+                response_data = self._continuation_failure(session, turn, e, "任务恢复续跑故障")
+            finally:
+                if final_result is not None and final_result.get("status") == "suspended":
+                    await self.scheduler.suspend(sid)
+                else:
+                    await self.scheduler.release(sid)
+
+            # 续跑后状态分流:又挂起→继续暂存;又触发审批→转审批暂存;否则整轮合并落盘
+            status = response_data.get("status")
+            if status == "suspended":
+                session.suspended_turn = turn  # turn 已累计本次增量,继续挂起
+                journal.emit("suspended", {})
+            elif status == "pending_approval":
+                session.suspended_turn = None
+                session.pending_turn = turn    # 携原账目转审批
+                journal.emit("awaiting_approval",
+                             {"pending_tools": turn.get("pending_tools") or []})
+            else:
+                session.suspended_turn = None
+                await self._land_continuation(session, sid, turn)
+        return response_data
+
+    # ---------- 续跑共用收尾 ----------
+    def _merge_continuation(self, session, turn: Dict[str, Any],
+                            final_result: Dict[str, Any], history_start_idx: int
+                            ) -> Dict[str, Any]:
+        """把续跑产物合并进暂存轮次:取消→整轮回滚;否则增量并入(响应只带增量)。"""
+        if final_result.get("status") == "cancelled":
+            rollback_idx = turn.get("_rollback_idx")
+            if isinstance(rollback_idx, int) and 0 <= rollback_idx <= len(session.history):
+                session.history = session.history[:rollback_idx]
+            _restore_task(session, turn.get("_task_snapshot"))
+            note = {"role": "system", "content": "本轮已被用户取消,未产生任何记忆变更。"}
+            turn["status"] = "cancelled"
+            turn["response"].append(note)
+            turn["pending_tools"] = None
+            return {**turn, "response": [note]}
+        new_messages = session.history[history_start_idx:]
+        turn["response"].extend(new_messages)      # 累计到完整轮次(落盘用)
+        turn["status"] = final_result.get("status", "success")
+        turn["pending_tools"] = final_result.get("pending_tools")
+        turn.update(final_result.get("metrics", {}))
+        return {**turn, "response": new_messages}  # 响应仅带本次增量
+
+    def _continuation_failure(self, session, turn: Dict[str, Any], exc: Exception,
+                              label: str) -> Dict[str, Any]:
+        """续跑故障:整轮(含最初的用户消息)回滚出内存记忆与任务状态,落盘为 fail。"""
+        import traceback
+        error_details = traceback.format_exc()
+        rollback_idx = turn.get("_rollback_idx")
+        if isinstance(rollback_idx, int) and 0 <= rollback_idx <= len(session.history):
+            session.history = session.history[:rollback_idx]
+        _restore_task(session, turn.get("_task_snapshot"))
+        error_message = {"role": "system", "content": f"{label}: {exc}\n{error_details}"}
+        turn["status"] = "fail"
+        turn["response"].append(error_message)
+        turn["pending_tools"] = None
+        return {**turn, "response": [error_message]}
+
+    async def _land_continuation(self, session, sid: str, turn: Dict[str, Any]) -> None:
+        """续跑终态落盘(须持 session.lock):剥内部键 → append_log → 账本 turn_ended → 摘要。"""
+        journal = session.journal
+        for k in ("_rollback_idx", "_task_snapshot", "_history_start_idx"):
+            turn.pop(k, None)
+        await asyncio.to_thread(session.append_log, turn)
+        await asyncio.to_thread(session.save_task)
+        journal.emit("turn_ended", {
+            **public_turn(turn), "turn_index": session.disk_turn_count() - 1})
+        if self._summarize is not None:
+            await self._summarize(session, sid)
+
+    @staticmethod
+    def _stale_target(msg: str) -> Dict[str, Any]:
+        """受理后目标态消失(会话删除等边界)的兜底响应(与旧端点的 fail 形状一致)。"""
+        return {
+            "status": "fail",
+            "prompt": "", "image": [], "audio": [],
+            "enable_thinking": False, "max_tokens": 0, "temperature": 0.0, "min_p": 0.0,
+            "response": [{"role": "system", "content": msg}],
+        }

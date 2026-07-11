@@ -14,6 +14,7 @@
 - **长期记忆沉淀**：被折叠掉的对话原文沉淀进 RAG `agent_memory` 类目（压缩的无损承重网，fail-open），日后经 `rag_search` 召回早前交互
 - **联网调查（受限沙箱知识扩充）**：主体只调 `web_research` 一个工具、只拿回交叉验证过的事实摘要；搜索/抓取/原始网页全封在受限沙箱内（复用主模型权重、KV 隔离，仅有 `web_search`/`open_pages` 两个脏工具，物理上不进主体上下文）——注入即便劫持沙箱也够不到任何危险工具（无行为劫持），最坏只能返回被污染文本，故摘要仍以「不可信资料」边界交回主体。反投毒落到代码：删隐藏元素/脚本/零宽字符、标记祈使注入、域名信誉分交叉质证、SSRF 硬拒内网/环回/云元数据。搜索层用本机 SearXNG（数据不出门），离线则该工具自动不注册
 - **进度可视与真取消**：`GET /task` 轮询计划推进进度；`POST /task/cancel` 在 token 级检查点停止生成并整轮回滚（非仅中断等待）
+- **事件账本（协议 v1，根 `PROTOCOL.md`）**：轮次是可寻址资源——`POST /turns` 受理即返（202），编排过程"先记账后分发"（`core/journal.py`：活跃轮内存环 + journal.jsonl 里程碑落盘），`GET /events?after=seq` 断线任意重连、重放后续播，`GET /turn` 即查进行中轮次的完整可恢复状态（含待审批工具）；轮次生命周期唯一属主为 `core/turn_runner.py`，旧 SSE/阻塞对话端点全部退化为其薄适配器（旧事件契约兼容至 Phase 4，蓝图见根 `REARCHITECTURE.md`）
 - **MCP 工具插件**：扫描 `framework/mcp/tools/` 自动注册 `BaseTool` 子类；注册前探活，依赖服务不可用的工具自动舍弃
 - **桌面任务工具集**：三层递进——终端命令（`run_shell_command`，主力）→ AppleScript/JXA 应用级自动化（`run_applescript`）→ Accessibility GUI 操作兜底（读 UI 树 / 点击 / 键入 / 快捷键），配合按调用动态审批
 - **KV Cache 前缀复用**：多轮对话仅预填充新增 token，实测续轮 prefill 提速近 10 倍

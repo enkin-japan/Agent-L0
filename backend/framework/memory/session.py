@@ -173,6 +173,11 @@ class ChatSession:
         self.audio_dir.mkdir(parents=True, exist_ok=True)
         self.attach_dir.mkdir(parents=True, exist_ok=True)
 
+        # 会话事件账本(PROTOCOL.md):编排/TurnRunner 的唯一事件出口,SSE 与状态
+        # 查询的唯一数据源。seq 从磁盘账本续增;冻结不清账本(轮次状态独立于 KV)。
+        from ..core.journal import TurnJournal
+        self.journal = TurnJournal(self.session_dir)
+
         self._init_system_prompt(system_prompt)
         # 为根会话补齐血缘元数据（分支会话的 meta 由 SessionManager 预先落盘）
         if not self.meta_file.exists():
@@ -222,6 +227,9 @@ class ChatSession:
                 )
                 try:
                     self.append_log(self.pending_turn)
+                    if self.journal.turn_state != "none":
+                        self.journal.emit("turn_ended",
+                                          {"status": "fail", "turn_index": self.disk_turn_count() - 1})
                 except Exception as e:
                     print(f"[Memory] 未决审批轮次落盘失败: {e}")
                 self.pending_turn = None
@@ -241,6 +249,9 @@ class ChatSession:
                 )
                 try:
                     self.append_log(self.suspended_turn)
+                    if self.journal.turn_state != "none":
+                        self.journal.emit("turn_ended",
+                                          {"status": "warning", "turn_index": self.disk_turn_count() - 1})
                 except Exception as e:
                     print(f"[Memory] 挂起轮次落盘失败: {e}")
                 self.suspended_turn = None
@@ -478,6 +489,16 @@ class ChatSession:
         # 轮次已成为落盘事实 → 撤销预写标记（write-ahead 闭环，见 write_inflight）
         self.clear_inflight()
 
+    def disk_turn_count(self) -> int:
+        """history.jsonl 的落盘轮数(行数)。turn_ended 事件的 turn_index 依据。"""
+        try:
+            if not self.history_log.exists():
+                return 0
+            with open(self.history_log, "rb") as f:
+                return sum(1 for _ in f)
+        except Exception:
+            return 0
+
     # --- 轮次预写标记（write-ahead）：进行中的轮次防丢 ---
     # 用户消息在轮次完结前只活在内存里，进程死亡（重启/崩溃）会让输入无痕蒸发、
     # 前端重拉历史得到空会话。轮次开始即落 inflight.json（prompt + 生成参数），
@@ -668,6 +689,7 @@ class SessionManager:
             async with session.lock:         # 等进行中的轮次在检查点干净退出
                 self._all_sessions.pop(session_id, None)
                 session.freeze()
+                session.journal.close()      # 终结账本：/events 附着流收流
                 result["frozen"] = True
         if self.scheduler is not None:
             self.scheduler.discard(session_id)  # 清理调度句柄，防止状态表泄漏

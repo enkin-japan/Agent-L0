@@ -17,12 +17,13 @@ from framework.mcp.registry import MCPRegistry
 from framework.core.engine import AgentEngine
 from framework.core.orchestrator import Orchestrator
 from framework.core.scheduler import TaskScheduler, ClassPolicy
+from framework.core.turn_runner import TurnRunner
 from framework.memory.session import SessionManager
 from framework.ingestion import Ingestion
 from framework.utils.file_handler import FileHandler
 from framework.utils.path_resolver import resolve_model_path
 from framework.memory.compactor import maybe_summarize_context
-from framework.api.routes import router
+from framework.api.routes import router, _maybe_summarize_active
 from framework.api.auth import verify_api_key
 
 
@@ -196,6 +197,13 @@ async def lifespan(app: FastAPI):
     )
     session_manager.scheduler = scheduler
     
+    # 3.2 轮次执行层：TurnRunner —— 轮次生命周期的唯一属主（受理/执行/终态分流/落盘/
+    #     账本生命周期事件）。routes 的对话端点全部是它的薄适配器（新旧契约共用一套闭环）。
+    async def _summarize_hook(session, sid):
+        await _maybe_summarize_active(session, orchestrator, scheduler, sid)
+
+    turn_runner = TurnRunner(orchestrator, scheduler, summarize_after_turn=_summarize_hook)
+
     # 4. 基础设施层：文件处理器（图像落盘 + 原生音频 VAD 切片）
     file_handler = FileHandler(vad_model=vad_model, audio_max_length=AUDIO_MAX_LENGTH)
 
@@ -217,6 +225,7 @@ async def lifespan(app: FastAPI):
     app.state.mcp_registry = mcp_registry
     app.state.session_manager = session_manager
     app.state.scheduler = scheduler
+    app.state.turn_runner = turn_runner
     app.state.file_handler = file_handler
     app.state.ingestion = ingestion
 

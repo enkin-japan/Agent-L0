@@ -192,21 +192,27 @@ gemma 方言层,协议改造完全不触碰。**不换语言、不换框架、�
 
 ## 3. 迁移计划(四期,每期独立可交付)
 
-### Phase 0 —— 契约冻结(1 个工作批次)
-- 写 `PROTOCOL.md`:事件 schema v1、状态机图、端点定义、兼容策略;
-- 建 `protocol/fixtures/` 目录与夹具格式;
-- 后端建 `FakeEngine`(脚本化生成序列,不加载模型)测试骨架。
-- **验收:文档评审通过,夹具能手工构造。** 不改任何运行代码。
+### Phase 0 —— 契约冻结(1 个工作批次) ✅ 2026-07-11 完成
+- `PROTOCOL.md`:事件 schema v1、状态机图、端点定义、兼容策略——已冻结;
+- `protocol/fixtures/`:001 成功轮 / 002 审批中态 / 003 未知事件容忍;
+- `backend/tests/`:FakeEngine + 15 项编排层生命周期金测试(全绿)。
 
-### Phase 1 —— 后端脊柱(2~3 个批次)
-- 事件账本(内存环+journal.jsonl)+ seq;
-- TurnRunner 收敛三份端点拷贝;orchestrator 的 emit 参数改为账本句柄(必传);
-- 新端点 `/turns` `/events` `/turn`;旧 `/stream` `/approval/stream` 内部走新路径、
-  对外行为不变;
-- 金测试:FakeEngine 驱动 8 条生命周期(成功/取消/故障/审批批准/审批拒绝/挂起/
-  恢复/再挂起),断言账本内容+磁盘状态。
-- **验收:现有 web/native 零改动照常工作;curl 可重放任意会话事件;
-  审批/挂起状态可 GET。** 出问题可整体切回旧路径(兼容层在)。
+### Phase 1 —— 后端脊柱(2~3 个批次) ✅ 2026-07-11 完成
+- 事件账本 `core/journal.py`(内存环+journal.jsonl+seq+状态跟踪+订阅分发);
+- `core/turn_runner.py` 收敛三份端点拷贝;orchestrator emit → 账本句柄(必传),
+  **顺带修复**:审批批准的敏感调用漏发 tool_started/result(orchestrator 旧 914 行)、
+  schedule 运行无事件(现与交互轮同契约,origin=schedule);
+- 新端点 `/turns`(202) `/turns/approval` `/turns/resume` `/turn` `/events`(重放+续播);
+  旧 `/stream` `/approval/stream` `/chat` `/approval` `/task/resume` 全部改为
+  TurnRunner 薄适配器 + 旧事件名翻译层(无双路逻辑);
+- 金测试 32 项全绿(编排 15 + 账本 6 + TurnRunner 11);
+- 实机验证(e4b-4bit 真模型):202 受理→生成中附着 /events 完整生命周期→落盘对账;
+  完结后重放+游标续播;旧 /stream 事件契约逐帧核对;真取消;409 冲突即拒。
+- **实机发现并修复**:受理冲突闸门原在 session.lock 内→运行中的轮次持锁数分钟,
+  409 永远打不出、断连请求还会复活执行;改为锁外快路径+锁内复检(回归测试钉住)。
+- **实机发现(未修,记入 Phase 3+)**:MLX prefill 是整块同步计算,期间事件循环
+  完全饿死——新会话完整 prompt 预填充 ~11s 内所有 API 无响应(心跳也发不出)。
+  这是"刚发送时无响应感"的另一半根因;方向:prefill 分块让出 / 推理下沉专用线程。
 
 ### Phase 2 —— 客户端换脊柱(web 2 批次,native 2 批次)
 - web 先行(迭代快):useChatStore 重写为 reducer + attach 流程,
@@ -220,9 +226,11 @@ gemma 方言层,协议改造完全不触碰。**不换语言、不换框架、�
 ### Phase 3 —— 粒度与任务中心(1~2 个批次)
 - `tool_call_pending`(约束采样状态机触发)、thinking 逐段、排队位次事件;
 - 全局 feed `GET /api/v1/events`;两端任务中心/通知改吃 feed;
-- 顺带:web 步骤时间线补上 tool 级卡片(现在扔掉的信息用起来)。
+- 顺带:web 步骤时间线补上 tool 级卡片(现在扔掉的信息用起来);
+- **prefill 事件循环饿死**(Phase 1 实机定性,新会话 ~11s 全 API 无响应):
+  prefill 分块间插让出点,或整个推理段下沉专用线程(engine 层手术,单独评审)。
 - **验收:发一个多工具任务,从提交到收尾无超过"一次生成时长"的信息真空;
-  工具名在执行前即可见。**
+  工具名在执行前即可见;新会话首轮期间 /turn、/events 心跳保持响应。**
 
 ### Phase 4 —— 清账(1 个批次)
 - 退役旧端点与 inflight 前端探测;
