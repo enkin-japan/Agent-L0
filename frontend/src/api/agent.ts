@@ -25,6 +25,7 @@ import type {
   UiStateResponse,
 } from "@/types/agent-api"
 import type { DeckSpec } from "@/types/deck"
+import type { EventEnvelope, TurnAccepted, TurnStateResponse } from "@/types/protocol"
 import { parseSSE } from "./sse"
 
 // 默认同源相对路径：请求由 Vite dev server 的 /api 代理转发到本机 Agent（127.0.0.1:14159），
@@ -121,6 +122,83 @@ export async function sendChatStream(
         handlers.onTurnEnd(d as ChatResponse)
         break
     }
+  }
+}
+
+// ---------- 事件账本协议 v1（PROTOCOL.md §2.4~§2.6）:轮次是可寻址资源 ----------
+
+/** 受理冲突（409）：会话已有排队/运行中的轮次,或决议/恢复的目标态不存在。 */
+export class TurnConflictError extends Error {
+  reason: string
+  constructor(reason: string) {
+    super(reason)
+    this.reason = reason
+  }
+}
+
+async function acceptedOrConflict(res: Response): Promise<TurnAccepted> {
+  if (res.status === 409) {
+    const body = (await res.json().catch(() => ({}))) as { reason?: string }
+    throw new TurnConflictError(body.reason ?? "conflict")
+  }
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+/** 提交新轮次：受理即返（202 {turn_id, seq}），执行在后台,过程经 attachEvents 观察。 */
+export async function submitTurn(
+  sessionId: string,
+  params: ChatRequestParams,
+): Promise<TurnAccepted> {
+  const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}/turns`, {
+    method: "POST",
+    body: buildChatForm(params),
+  })
+  return acceptedOrConflict(res)
+}
+
+/** 审批决议（202 受理即返）：结果经事件流回来（resumed → … → turn_ended）。 */
+export async function submitApproval(sessionId: string, approve: boolean): Promise<TurnAccepted> {
+  const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}/turns/approval`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ approve }),
+  })
+  return acceptedOrConflict(res)
+}
+
+/** 恢复挂起轮次（202 受理即返）：结果经事件流回来。 */
+export async function submitResume(sessionId: string): Promise<TurnAccepted> {
+  const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}/turns/resume`, {
+    method: "POST",
+  })
+  return acceptedOrConflict(res)
+}
+
+/** 当前轮次的可恢复状态（无活跃轮次时 turn 为 null）+ 账本游标 last_seq。 */
+export async function getTurnState(sessionId: string): Promise<TurnStateResponse> {
+  const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}/turn`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+/**
+ * 附着事件流（SSE）：重放 seq > after 的事件后转实时续播,长连贯穿多个轮次。
+ * 逐帧产出事件信封;流被服务端正常收尾(会话删除)时自然结束,网络断开抛错,
+ * 由调用方带游标重连(断开是常态,不是异常)。首帧 stream_attached(seq=0)一并产出。
+ */
+export async function* attachEvents(
+  sessionId: string,
+  after: number,
+  signal?: AbortSignal,
+): AsyncGenerator<EventEnvelope> {
+  const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}/events?after=${after}`, {
+    headers: { Accept: "text/event-stream" },
+    signal,
+  })
+  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+  for await (const frame of parseSSE(res.body)) {
+    yield JSON.parse(frame.data) as EventEnvelope
   }
 }
 

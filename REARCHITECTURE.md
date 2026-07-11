@@ -215,8 +215,15 @@ gemma 方言层,协议改造完全不触碰。**不换语言、不换框架、�
   这是"刚发送时无响应感"的另一半根因;方向:prefill 分块让出 / 推理下沉专用线程。
 
 ### Phase 2 —— 客户端换脊柱(web 2 批次,native 2 批次)
-- web 先行(迭代快):useChatStore 重写为 reducer + attach 流程,
-  删 reconciler/inflight-provisional/双补偿路径;outbox;断开静默重连;
+- **web ✅ 2026-07-11 完成**:`lib/turn-reducer.ts` 纯归约器(夹具回放 4/4 绿,
+  vitest 落地为 `npm run test`);useChatStore 换脊柱——附着流(单附着策略:
+  活跃会话一条 /events 长连,断线静默指数退避重连,切走即断、切回经
+  /history + /turn + 重放对账)+ outbox(202 受理即清,刷新致死后回收提示);
+  补偿动物园整体退役(inflight provisional / scheduleInflightReconcile /
+  taskPollers / 双断线补偿路径全删);审批/恢复改 202 受理 + 事件流收结果。
+  实机验收(真模型+Playwright):生成中刷新 0s 恢复直播;**审批中刷新 1.8s
+  恢复审批卡(旧架构的死局)**;turn_ended 在线对账无幽灵重复;拒绝→续跑→落地。
+  注:/history 响应与 turn_ended 事件到达顺序不定,两侧各有 turnIndex 去重护栏。
 - native 跟进:AgentStore 同构改造,删 pollUntilIdle/resync 链与热循环,
   顺修 "ok"≠"success"、resume 无轮询、tool_result 详情丢弃;
 - 夹具双端回放测试全绿。

@@ -288,7 +288,7 @@ reduce(NormalizedState, Event) -> NormalizedState
     "prompt": "…",              // 活跃轮用户消息
     "text": "…",                // token_delta 累计
     "thinking": "…",            // thinking_delta 累计
-    "steps": [ {"kind": "tool|plan", "label": "…", "detail": "…", "status": "running|ok|timeout"} ],
+    "steps": [ {"kind": "tool|plan", "label": "…", "detail": "…", "status": "running|ok|timeout|failed"} ],
     "task": {TaskSnapshot 或 null}
   },
   "pending_tools": [ … ] 
@@ -312,7 +312,9 @@ reduce(NormalizedState, Event) -> NormalizedState
 ```
 
 两端测试(web: vitest / native: XCTest)读取同一批夹具:逐行 reduce,断言终态
-deep-equal `expected.json`。**新增协议行为必须先落夹具再改实现。**
+deep-equal `expected.json`。归约器可携带 `_` 前缀的内部簿记字段(如工具步的
+`_callId` 配对键),比对前由测试运行器递归剥除——夹具只锁公共形状。
+**新增协议行为必须先落夹具再改实现。**
 
 ---
 

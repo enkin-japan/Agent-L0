@@ -1,28 +1,36 @@
 import { create } from "zustand"
 
 import {
+  attachEvents,
   branchSession,
   cancelTask,
   deleteLastTurn as apiDeleteLastTurn,
   deleteSession,
   getHistory,
   getTaskStatus,
+  getTurnState,
   getUiState,
   listSessions,
   putUiState,
-  resumeTask as apiResumeTask,
-  sendApprovalStream,
-  sendChatStream,
   setSessionPin,
+  submitApproval,
+  submitResume,
+  submitTurn,
   suspendTask as apiSuspendTask,
+  TurnConflictError,
 } from "@/api/agent"
 import type {
   ChatResponse,
-  InflightMarker,
   LiveActivity,
   PendingTool,
   TaskSnapshot,
 } from "@/types/agent-api"
+import type { EventEnvelope } from "@/types/protocol"
+import {
+  initialTurnState,
+  reduceTurnEvent,
+  type NormalizedState,
+} from "@/lib/turn-reducer"
 import {
   mapResponseMessages,
   newSessionId,
@@ -36,6 +44,9 @@ import {
 import { currentDict } from "@/store/useUiStore"
 
 const STORAGE_KEY = "macagent-chat-v1"
+/** 发送暂存（outbox）：提交前落 localStorage,202 受理即清——浏览器在 multipart
+ *  上传中途被杀(刷新)时,这是唯一能证明"有话没送达"的凭据(PROTOCOL.md §5)。 */
+const OUTBOX_KEY = "macagent-outbox-v1"
 /** 语言无关的「新对话」标题哨兵：存储用此值，展示时按当前语言翻译（见 lib/agent-data 的 convTitle）。 */
 export const NEW_CHAT_TITLE = "__NEW_CHAT__"
 
@@ -89,20 +100,44 @@ function loadInitialState() {
   }
 }
 
-// 每个会话进行中的请求：停止时优先走后端 /task/cancel 真取消，
-// 网络不可达时才退回本地 abort（仅中断前端等待）
-const controllers = new Map<string, AbortController>()
+// ---------- 事件附着（账本协议）：模块级簿记,不进 zustand ----------
+// 单附着策略：同一时刻只对活跃会话保持一条 /events 长连（HTTP/1.1 每源连接数有限,
+// 全量附着会饿死其他请求）;切走即断开并置 historyLoaded=false,切回经
+// /history + /turn + 重放完整恢复。后台会话的调度状态仍由 useUiStore 的 /tasks 轮询兜底。
+const attachCtls = new Map<string, AbortController>()
+const cursors = new Map<string, number>()
+const liveTurns = new Map<string, NormalizedState>()
+/** 活跃轮的界面簿记：预览气泡/用户气泡的消息 id 与轮次 id 的配对。 */
+const liveMsg = new Map<string, { turnId?: string; userId?: string; assistantId?: string }>()
+/** 本 tab 乐观追加的用户气泡（turn_queued 到达时被收编,不重复建）。 */
+const optimistic = new Map<string, { userId: string; prompt: string }>()
 
 /** 用户已在本地「放弃」的挂起会话：后端句柄要等下条消息才真正回收，期间 /tasks 对账
  *  （useUiStore.syncSuspendedSessions）须跳过这些 id，否则放弃的横幅每 3s 被轮询复活。 */
 export const locallyAbandonedSuspended = new Set<string>()
 
-// 生成期间的任务进度轮询定时器（sessionId -> interval id）
-const taskPollers = new Map<string, ReturnType<typeof setInterval>>()
+// ---- 发送暂存(outbox) ----
+function outboxAll(): Record<string, { text: string; ts: number }> {
+  try {
+    return JSON.parse(localStorage.getItem(OUTBOX_KEY) ?? "{}")
+  } catch {
+    return {}
+  }
+}
 
-// 进行中轮次（inflight）对账定时器（sessionId -> timeout id）：刷新后若某会话有一轮尚未落盘，
-// 轮询 /history 直到落盘再换成真结果，堵住「刷新即空白/永不回来」的死路。
-const inflightReconcilers = new Map<string, ReturnType<typeof setTimeout>>()
+function outboxSet(sid: string, text: string) {
+  const all = outboxAll()
+  all[sid] = { text, ts: Date.now() }
+  try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(all)) } catch { /* 配额 */ }
+}
+
+function outboxClear(sid: string) {
+  const all = outboxAll()
+  if (sid in all) {
+    delete all[sid]
+    try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(all)) } catch { /* 配额 */ }
+  }
+}
 
 // ---- UI 状态服务端同步（客户端迁移）----
 // localStorage 仍是本地缓存/离线兜底；服务端为跨设备权威（last-write-wins）。
@@ -143,15 +178,15 @@ interface ChatState {
   conversations: Conversation[]
   activeId: string
   thinkingEnabled: boolean
-  /** sessionId -> 是否有请求在途 */
+  /** sessionId -> 有轮次在跑（queued/running，事件流驱动） */
   generating: Record<string, boolean>
   /** sessionId -> 等待用户授权的敏感工具调用（删库等不可逆操作） */
   pendingApprovals: Record<string, PendingTool[]>
-  /** sessionId -> 是否有一个已挂起、可恢复的任务（suspended 终态；等待 resume/放弃） */
+  /** sessionId -> 是否有一个已挂起、可恢复的任务（suspended；等待 resume/放弃） */
   suspendedSessions: Record<string, boolean>
-  /** sessionId -> 多步任务进度快照（生成期间轮询更新；任务跨轮存续时保留） */
+  /** sessionId -> 多步任务进度快照（plan_updated 事件驱动；任务跨轮存续时保留） */
   taskProgress: Record<string, TaskSnapshot | null>
-  /** sessionId -> 实时步骤流（当前动作 + 已完成步骤，仅生成期间有值） */
+  /** sessionId -> 实时步骤流（事件归约的 preview.steps 投影，仅生成期间有值） */
   liveActivity: Record<string, LiveActivity | null>
   /** 顶部横幅提示（分支失败等业务性错误） */
   notice: string | null
@@ -177,24 +212,22 @@ interface ChatState {
   setThinking: (value: boolean) => void
   clearNotice: () => void
 
-  /** 启动时从服务端拉取 UI 状态（工作区/会话元数据），实现换设备无缝迁移。
-   *  服务端有状态→整体替换本地（activeId 保持设备本地）；服务端为空且本地有旧数据→
-   *  一次性迁移上云；请求失败→静默用 localStorage（离线可用性不回退）。 */
+  /** 启动时从服务端拉取 UI 状态（工作区/会话元数据），实现换设备无缝迁移。 */
   hydrateFromServer: () => Promise<void>
-  /** 懒加载服务端历史（App 在 activeId 变化时调用）。 */
+  /** 加载服务端历史 + 附着事件流（App 在 activeId 变化时调用；账本协议的统一恢复入口）。 */
   loadHistory: (id: string) => Promise<void>
   sendMessage: (text: string, files: File[]) => Promise<void>
-  /** 对挂起的敏感操作作出决议：approve=true 执行，false 拒绝。 */
+  /** 对挂起的敏感操作作出决议：approve=true 执行，false 拒绝（202 受理，结果走事件流）。 */
   respondApproval: (id: string, approve: boolean) => Promise<void>
   /** 删除最后一轮问答：后端同步回退记忆/KV/落盘，成功后从服务端重载消息。 */
   deleteLastTurn: (id: string) => Promise<boolean>
   /** 更新最后一次发言：删除最后一轮后按新内容重新发送生成。 */
   updateLastTurn: (text: string) => Promise<void>
-  /** 真取消：请求后端在最近检查点停止并整轮回滚；后端不可达时退回本地中断等待。 */
+  /** 真取消：后端在最近检查点停止并整轮回滚；turn_ended(cancelled) 从事件流回来收尾。 */
   stopGenerating: (id: string) => void
-  /** 挂起当前运行中的任务：后端在安全点让出，本轮以 suspended 收尾，转入可恢复态。 */
+  /** 挂起当前运行中的任务：后端在安全点让出；suspended 事件从流上回来置入可恢复态。 */
   suspendTask: (id: string) => void
-  /** 恢复一个已挂起的任务：从挂起处续跑（阻塞式，续跑可能多步）。 */
+  /** 恢复一个已挂起的任务（202 受理，续跑过程走事件流）。 */
   resumeTask: (id: string) => Promise<void>
   /** 放弃一个已挂起的任务：清除本地可恢复态（后端挂起轮会在下次发消息时被丢弃回收）。 */
   abandonSuspended: (id: string) => void
@@ -221,7 +254,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     }))
   }
 
-  /** 按 id 局部更新一条消息（真流式 token 逐段填充临时预览气泡）。 */
+  /** 按 id 局部更新一条消息（预览气泡随 token/thinking 增量填充）。 */
   function updateMessage(id: string, msgId: string, patch: Partial<ChatMessage>) {
     set((s) => ({
       conversations: s.conversations.map((c) =>
@@ -232,130 +265,252 @@ export const useChatStore = create<ChatState>((set, get) => {
     }))
   }
 
-  /** 移除一条消息（turn_end 到达后撤下临时预览，改用权威消息对账）。 */
-  function removeMessage(id: string, msgId: string) {
+  function removeMessages(id: string, msgIds: Array<string | undefined>) {
+    const drop = new Set(msgIds.filter(Boolean) as string[])
+    if (drop.size === 0) return
     set((s) => ({
       conversations: s.conversations.map((c) =>
-        c.id === id ? { ...c, messages: c.messages.filter((m) => m.id !== msgId) } : c,
+        c.id === id ? { ...c, messages: c.messages.filter((m) => !drop.has(m.id)) } : c,
       ),
     }))
   }
 
-  /** 生成期间轮询多步任务进度 + 实时步骤流（1.2s 间隔），把黑盒等待变成可见的动作流。 */
-  function startTaskPolling(convId: string) {
-    stopTaskPolling(convId)
-    const timer = setInterval(() => {
-      getTaskStatus(convId)
-        .then((res) => {
-          set((s) => ({
-            taskProgress: { ...s.taskProgress, [convId]: res.active ? (res.task ?? null) : null },
-            liveActivity: { ...s.liveActivity, [convId]: res.activity ?? null },
-          }))
-        })
-        .catch(() => {})
-    }, 1200)
-    taskPollers.set(convId, timer)
+  function setGenerating(id: string, value: boolean) {
+    set((s) => ({ generating: { ...s.generating, [id]: value } }))
   }
 
-  function stopTaskPolling(convId: string) {
-    const timer = taskPollers.get(convId)
-    if (timer !== undefined) {
-      clearInterval(timer)
-      taskPollers.delete(convId)
+  // ---------- 事件附着与归约（账本协议核心） ----------
+
+  function ensureAttached(sid: string) {
+    if (attachCtls.has(sid)) return
+    const ctl = new AbortController()
+    attachCtls.set(sid, ctl)
+    void attachLoop(sid, ctl)
+  }
+
+  /** 断开附着并清空该会话的活跃轮簿记。reload=true 时置 historyLoaded=false,
+   *  下次激活经 /history + /turn + 重放完整恢复(切走-切回的对账路径)。 */
+  function detach(sid: string, reload = true) {
+    attachCtls.get(sid)?.abort()
+    attachCtls.delete(sid)
+    cursors.delete(sid)
+    liveTurns.delete(sid)
+    liveMsg.delete(sid)
+    optimistic.delete(sid)
+    if (reload) patchConversation(sid, { historyLoaded: false })
+  }
+
+  async function attachLoop(sid: string, ctl: AbortController) {
+    let backoff = 1000
+    while (!ctl.signal.aborted) {
+      try {
+        let after = cursors.get(sid)
+        if (after === undefined) {
+          // 初次附着：/turn 定游标——有活跃轮从轮首整段重放(完整重建直播视图),
+          // 无活跃轮从账本末尾只收新事件(落盘轮次由 /history 提供,避免重复对账)。
+          const ts = await getTurnState(sid)
+          after = ts.turn ? ts.turn.first_seq - 1 : ts.last_seq
+          cursors.set(sid, after)
+          if (!ts.turn) {
+            // 无活跃轮：清掉可能残留的进行中标志（如后台完结后切回）
+            setGenerating(sid, false)
+          }
+        }
+        for await (const env of attachEvents(sid, after, ctl.signal)) {
+          backoff = 1000
+          if (env.seq > 0) {
+            const cur = cursors.get(sid) ?? 0
+            if (env.seq <= cur) continue // 重连重放的重复事件
+            cursors.set(sid, env.seq)
+          }
+          dispatch(sid, env)
+        }
+        break // 服务端正常收流（会话被删除）：结束附着
+      } catch (e) {
+        if (ctl.signal.aborted) break
+        if (String(e).includes("404")) break // 会话尚不存在：首条消息受理后会再附着
+        // 断开是常态：静默指数退避重连（游标在,断线期间的事件重连即补）
+        await new Promise((r) => setTimeout(r, backoff))
+        backoff = Math.min(backoff * 2, 10000)
+      }
+    }
+    attachCtls.delete(sid)
+  }
+
+  /** 事件分发：归约器推进活跃轮状态,再把结果投影进 UI store。 */
+  function dispatch(sid: string, env: EventEnvelope) {
+    if (env.type === "stream_attached") return
+    const next = reduceTurnEvent(liveTurns.get(sid) ?? initialTurnState(), env)
+    liveTurns.set(sid, next)
+
+    switch (env.type) {
+      case "turn_queued":
+        onTurnQueued(sid, env, String(env.data.prompt ?? ""))
+        break
+      case "turn_started":
+      case "resumed":
+        setGenerating(sid, true)
+        set((s) => {
+          const approvals = { ...s.pendingApprovals }
+          delete approvals[sid]
+          const susp = { ...s.suspendedSessions }
+          delete susp[sid]
+          return { pendingApprovals: approvals, suspendedSessions: susp }
+        })
+        break
+      case "token_delta":
+      case "thinking_delta":
+        syncPreviewBubble(sid, next)
+        break
+      case "tool_started":
+      case "tool_progress":
+      case "tool_result":
+      case "step_completed":
+      case "step_failed":
+        syncActivity(sid, next)
+        break
+      case "plan_updated":
+        set((s) => ({ taskProgress: { ...s.taskProgress, [sid]: next.preview.task } }))
+        syncActivity(sid, next)
+        break
+      case "awaiting_approval":
+        setGenerating(sid, false)
+        set((s) => ({ pendingApprovals: { ...s.pendingApprovals, [sid]: next.pending_tools } }))
+        pruneEmptyPreview(sid)
+        break
+      case "suspended":
+        setGenerating(sid, false)
+        set((s) => ({ suspendedSessions: { ...s.suspendedSessions, [sid]: true } }))
+        pruneEmptyPreview(sid)
+        break
+      case "turn_ended":
+        onTurnEnded(sid, env)
+        break
     }
   }
 
-  /** 轮次结束后收尾：任务可能跨轮存续（如模型中途提问）需再取一次；实时步骤流清空。 */
-  function refreshTaskOnce(convId: string) {
-    set((s) => ({ liveActivity: { ...s.liveActivity, [convId]: null } }))
-    getTaskStatus(convId)
+  /** 轮次受理：确保用户气泡存在（收编本 tab 的乐观气泡；其他来源——别的客户端/
+   *  定时任务——则按事件补建），重置预览簿记。幂等：重连重放同一轮的 turn_queued
+   *  只重置内容,不重复建气泡。 */
+  function onTurnQueued(sid: string, env: EventEnvelope, prompt: string) {
+    setGenerating(sid, true)
+    const existing = liveMsg.get(sid)
+    if (existing?.turnId === env.turn_id) return // 重放幂等
+
+    let userId: string | undefined
+    const opt = optimistic.get(sid)
+    if (opt) {
+      userId = opt.userId // 收编乐观气泡（内容即 prompt）
+      optimistic.delete(sid)
+    } else {
+      userId = nextMessageId()
+      appendMessages(sid, [{ id: userId, role: "user", content: prompt }])
+    }
+    liveMsg.set(sid, { turnId: env.turn_id ?? undefined, userId })
+
+    const conv = get().conversations.find((c) => c.id === sid)
+    if (conv && conv.title === NEW_CHAT_TITLE && prompt) {
+      patchConversation(sid, { title: prompt.slice(0, 30) })
+    }
+  }
+
+  /** 预览气泡（流式正文 + 思考）：懒创建——首个增量到达才挂气泡,避免审批/工具阶段的空壳。 */
+  function syncPreviewBubble(sid: string, live: NormalizedState) {
+    const ids = liveMsg.get(sid) ?? {}
+    if (!ids.assistantId) {
+      ids.assistantId = nextMessageId()
+      liveMsg.set(sid, ids)
+      appendMessages(sid, [{ id: ids.assistantId, role: "assistant", content: "", streaming: true }])
+    }
+    updateMessage(sid, ids.assistantId, {
+      content: live.preview.text,
+      thoughts: live.preview.thinking || undefined,
+    })
+  }
+
+  /** 暂停态（审批/挂起）时收掉空预览气泡：有内容则保留（半截产出仍可见）。 */
+  function pruneEmptyPreview(sid: string) {
+    const ids = liveMsg.get(sid)
+    const live = liveTurns.get(sid)
+    if (ids?.assistantId && live && !live.preview.text && !live.preview.thinking) {
+      removeMessages(sid, [ids.assistantId])
+      liveMsg.set(sid, { ...ids, assistantId: undefined })
+    }
+    syncActivity(sid, live ?? initialTurnState())
+  }
+
+  /** 实时步骤流投影：归约的 preview.steps → ActivityCard 的 LiveActivity 形状。 */
+  function syncActivity(sid: string, live: NormalizedState) {
+    const runningTool = [...live.preview.steps].reverse().find((s) => s.status === "running")
+    const activity: LiveActivity = {
+      phase: live.turn_state === "running" || live.turn_state === "queued" ? "running" : live.turn_state,
+      current: runningTool ? runningTool.label + (runningTool.detail ? `（${runningTool.detail}）` : "") : "",
+      steps: live.preview.steps
+        .filter((s) => s.status !== "running")
+        .map((s) => ({ kind: s.kind, label: s.label, detail: s.detail })),
+    }
+    set((s) => ({ liveActivity: { ...s.liveActivity, [sid]: activity } }))
+  }
+
+  /** 权威终态：撤下预览簿记,按 turn_ended 的完整轮次记录对账（含 user 消息）。 */
+  function onTurnEnded(sid: string, env: EventEnvelope) {
+    const data = env.data as unknown as ChatResponse & { turn_index?: number }
+    const ids = liveMsg.get(sid)
+    removeMessages(sid, [ids?.userId, ids?.assistantId])
+    liveMsg.delete(sid)
+    optimistic.delete(sid)
+    outboxClear(sid)
+
+    const conv = get().conversations.find((c) => c.id === sid)
+    const turnIndex = typeof data.turn_index === "number"
+      ? data.turn_index
+      : (conv?.turnCount ?? 0)
+    // 对账去重：/history 响应与 turn_ended 事件到达顺序不定,该轮已由历史渲染则跳过
+    if (!conv?.messages.some((m) => m.turnIndex === turnIndex)) {
+      applyEndedTurn(sid, data, turnIndex)
+    } else {
+      patchConversation(sid, { turnCount: turnIndex + 1 })
+    }
+
+    setGenerating(sid, false)
+    set((s) => {
+      const approvals = { ...s.pendingApprovals }
+      delete approvals[sid]
+      const susp = { ...s.suspendedSessions }
+      delete susp[sid]
+      return {
+        pendingApprovals: approvals,
+        suspendedSessions: susp,
+        liveActivity: { ...s.liveActivity, [sid]: null },
+      }
+    })
+    // 任务可能跨轮存续（如模型中途向用户提问）：轮末一次性校准任务快照
+    getTaskStatus(sid)
       .then((res) => {
         set((s) => ({
-          taskProgress: { ...s.taskProgress, [convId]: res.active ? (res.task ?? null) : null },
+          taskProgress: { ...s.taskProgress, [sid]: res.active ? (res.task ?? null) : null },
         }))
       })
       .catch(() => {})
   }
 
-  function stopInflightReconcile(id: string) {
-    const t = inflightReconcilers.get(id)
-    if (t !== undefined) {
-      clearTimeout(t)
-      inflightReconcilers.delete(id)
-    }
-  }
-
-  /** 把 inflight 标记渲染成 provisional 消息：用户消息 + 一个「生成中」占位气泡。 */
-  function inflightMessages(marker: InflightMarker, turnIndex: number): ChatMessage[] {
-    return [
-      { id: nextMessageId(), role: "user", content: marker.prompt, turnIndex },
-      { id: nextMessageId(), role: "assistant", content: "", streaming: true, turnIndex },
-    ]
-  }
-
-  /** 轮询 /history 直到进行中轮次落盘：期间保持 provisional，落盘后换成真结果并收尾。
-   *  用户在本 tab 主动发消息（SSE 接管）时立即让位，避免与流式路径打架。 */
-  function scheduleInflightReconcile(id: string) {
-    stopInflightReconcile(id)
-    const tick = async () => {
-      // 让位条件：本 tab 主动发消息（SSE 接管），或会话已切走（重新激活时 loadHistory 会
-      // 因 historyLoaded=false 再次拉起对账）——避免离开后台会话仍无限轮询。
-      if (get().generating[id] || get().activeId !== id) {
-        stopInflightReconcile(id)
-        return
-      }
-      try {
-        const h = await getHistory(id)
-        const base = (h.turns ?? []).flatMap((t, i) => turnToMessages(t, i))
-        if (h.inflight) {
-          const provisional = inflightMessages(h.inflight, h.count ?? base.length)
-          patchConversation(id, { messages: [...base, ...provisional], turnCount: h.count ?? 0 })
-          inflightReconcilers.set(id, setTimeout(tick, 1500))
-        } else {
-          // 落盘完成：换成权威结果，历史标记为已加载，收尾
-          patchConversation(id, { messages: base, turnCount: h.count ?? 0, historyLoaded: true })
-          stopInflightReconcile(id)
-        }
-      } catch {
-        inflightReconcilers.set(id, setTimeout(tick, 2500))
-      }
-    }
-    inflightReconcilers.set(id, setTimeout(tick, 1500))
-  }
-
-  /** 统一消费一次对话/审批响应：追加消息、维护审批挂起态与轮次计数。 */
-  function applyChatResponse(convId: string, res: ChatResponse, turnIndex: number) {
-    if (res.status === "pending_approval") {
-      // 模型请求执行敏感操作：先展示工具调用消息，挂起等待用户决议；
-      // 该轮尚未落盘，不推进 turnCount
-      appendMessages(convId, mapResponseMessages(res.response ?? [], turnIndex))
-      set((s) => ({
-        pendingApprovals: { ...s.pendingApprovals, [convId]: res.pending_tools ?? [] },
-        lastMetrics: {
-          promptTokens: res.prompt_tokens,
-          generationTokens: res.generation_tokens,
-          generationTps: res.generation_tps,
-        },
-      }))
-      return
-    }
-
-    if (res.status === "suspended") {
-      // 任务已在安全点让出，转入可恢复态。已产出的局部消息展示为 warning；该轮尚未落盘，
-      // 不推进 turnCount、不校准 history（正规去向是 resumeTask 续跑，或发新消息=放弃）。
-      appendMessages(convId, mapResponseMessages(res.response ?? [], turnIndex, "warning"))
-      set((s) => ({ suspendedSessions: { ...s.suspendedSessions, [convId]: true } }))
-      return
-    }
-
+  /** 把一轮终态渲染进消息流（沿用旧 turn_end 对账口径,终态本地化提示不变）。 */
+  function applyEndedTurn(convId: string, res: ChatResponse, turnIndex: number) {
     if (res.status === "cancelled") {
       // 后端已整轮回滚（用户消息与中间产物均未进入模型记忆），仅存档取消记录
       appendMessages(convId, [
         {
           id: nextMessageId(),
+          role: "user",
+          content: res.prompt,
+          turnIndex,
+        },
+        {
+          id: nextMessageId(),
           role: "system",
           content: currentDict().store.cancelled,
           variant: "warning",
+          turnIndex,
         },
       ])
     } else if (res.status === "fail") {
@@ -363,41 +518,40 @@ export const useChatStore = create<ChatState>((set, get) => {
       const traceback = res.response?.find((m) => m.role === "system")
       console.error("模型引擎故障:", traceback && "content" in traceback ? traceback.content : res)
       appendMessages(convId, [
+        { id: nextMessageId(), role: "user", content: res.prompt, turnIndex },
         {
           id: nextMessageId(),
           role: "system",
           content: currentDict().store.engineFail,
           variant: "error",
+          turnIndex,
         },
       ])
     } else {
-      const messages = mapResponseMessages(res.response ?? [], turnIndex)
+      const messages = [
+        { id: nextMessageId(), role: "user" as const, content: res.prompt, turnIndex },
+        ...mapResponseMessages(res.response ?? [], turnIndex,
+          res.status === "warning" ? "warning" : "error"),
+      ]
       if (res.status === "warning" && !messages.some((m) => m.role === "assistant" && m.content)) {
         messages.push({
           id: nextMessageId(),
           role: "assistant",
           content: currentDict().store.warningNoConclusion,
           variant: "warning",
+          turnIndex,
         })
       }
       appendMessages(convId, messages)
-      patchConversation(convId, { turnCount: turnIndex + 1 })
-      set({
-        lastMetrics: {
-          promptTokens: res.prompt_tokens,
-          generationTokens: res.generation_tokens,
-          generationTps: res.generation_tps,
-        },
-      })
     }
-
-    // 后台校准服务端真实轮次数：fail 轮次同样会落盘占用节点下标，
-    // 不校准会导致后续消息的 turnIndex 偏移、分支节点错位
-    getHistory(convId)
-      .then((h) => {
-        if (typeof h.count === "number") patchConversation(convId, { turnCount: h.count })
-      })
-      .catch(() => {})
+    patchConversation(convId, { turnCount: turnIndex + 1 })
+    set({
+      lastMetrics: {
+        promptTokens: res.prompt_tokens,
+        generationTokens: res.generation_tokens,
+        generationTps: res.generation_tps,
+      },
+    })
   }
 
   return {
@@ -410,9 +564,15 @@ export const useChatStore = create<ChatState>((set, get) => {
     notice: null,
     lastMetrics: null,
 
-    selectConversation: (id) => set({ activeId: id }),
+    selectConversation: (id) => {
+      const prev = get().activeId
+      if (prev && prev !== id) detach(prev) // 单附着：切走即断,回来经历史+重放对账
+      set({ activeId: id })
+    },
 
     newConversation: (workspaceId) => {
+      const prev = get().activeId
+      if (prev) detach(prev)
       const fresh = freshConversation(workspaceId)
       set((s) => ({
         conversations: [fresh, ...s.conversations],
@@ -423,9 +583,11 @@ export const useChatStore = create<ChatState>((set, get) => {
     openScheduleSession: (sessionId, title) => {
       const existing = get().conversations.find((c) => c.id === sessionId)
       if (existing) {
-        set({ activeId: sessionId })
+        get().selectConversation(sessionId)
         return
       }
+      const prev = get().activeId
+      if (prev) detach(prev)
       // 会话由后端定时运行创建，前端首次打开时补建条目；historyLoaded=false 触发拉取运行全文
       const conv: Conversation = {
         id: sessionId,
@@ -446,8 +608,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     moveConversation: (id, workspaceId) => patchConversation(id, { workspaceId }),
 
     deleteConversation: (id) => {
-      controllers.get(id)?.abort()
-      stopTaskPolling(id)
+      detach(id, false)
       // 服务端同步删除该 session 的全部落盘数据；失败也不阻塞本地移除
       deleteSession(id).catch((e) => console.warn("删除服务端会话失败:", e))
       set((s) => {
@@ -476,8 +637,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       const idSet = new Set(ids)
       if (idSet.size === 0) return
       for (const id of idSet) {
-        controllers.get(id)?.abort()
-        stopTaskPolling(id)
+        detach(id, false)
         deleteSession(id).catch((e) => console.warn("批量删除服务端会话失败:", e))
       }
       set((s) => {
@@ -524,8 +684,6 @@ export const useChatStore = create<ChatState>((set, get) => {
       set((s) => {
         const localIds = new Set(s.conversations.map((c) => c.id))
         // 1) 剔除幽灵：本地已落盘（turnCount>0）但后端已无 → 已被回收/外部删除。
-        //    turnCount===0 的未发送新会话磁盘上本就不存在，保留不动；
-        //    schedule_ 会话由定时任务条独立管理、不在 onDisk 映射内，一律保留不误删。
         const kept = s.conversations.filter(
           (c) => onDisk.has(c.id) || c.turnCount === 0 || c.id.startsWith("schedule_"),
         )
@@ -626,7 +784,9 @@ export const useChatStore = create<ChatState>((set, get) => {
 
     loadHistory: async (id) => {
       const conv = get().conversations.find((c) => c.id === id)
-      if (!conv || conv.historyLoaded || get().generating[id]) return
+      if (!conv) return
+      ensureAttached(id) // 统一恢复入口：历史（落盘轮）+ 附着（活跃轮重放 + 实时续播）
+      if (conv.historyLoaded || get().generating[id]) return
       // 先置位，避免重复请求
       patchConversation(id, { historyLoaded: true })
       try {
@@ -634,32 +794,38 @@ export const useChatStore = create<ChatState>((set, get) => {
         const messages = (history.turns ?? []).flatMap((turn, index) =>
           turnToMessages(turn, index),
         )
-        if (history.inflight) {
-          // 有进行中轮次（刷新时该轮尚未落盘）：渲染 provisional（用户消息 + 生成中），
-          // 不锁死历史（historyLoaded=false），并启动对账轮询直到落盘换成真结果。
-          const provisional = inflightMessages(history.inflight, history.count ?? messages.length)
-          set((s) => ({
-            conversations: s.conversations.map((c) =>
-              c.id === id && c.messages.length === 0
-                ? {
-                    ...c,
-                    messages: [...messages, ...provisional],
-                    turnCount: history.count ?? 0,
-                    historyLoaded: false,
-                  }
-                : c,
-            ),
-          }))
-          scheduleInflightReconcile(id)
-        } else {
-          set((s) => ({
-            conversations: s.conversations.map((c) =>
-              // 加载期间用户可能已开始输入新消息，不覆盖非空会话
-              c.id === id && c.messages.length === 0
-                ? { ...c, messages, turnCount: history.count ?? 0 }
-                : c,
-            ),
-          }))
+        const count = history.count ?? 0
+        set((s) => ({
+          conversations: s.conversations.map((c) =>
+            // 加载期间事件流可能已开始追加活跃轮气泡，保留已有尾部;
+            // 但事件流抢先对账过的已落盘轮次(turnIndex < count)以历史为准去重
+            c.id === id
+              ? {
+                  ...c,
+                  messages: [
+                    ...messages,
+                    ...c.messages.filter(
+                      (m) => m.turnIndex === undefined || m.turnIndex >= count,
+                    ),
+                  ],
+                  turnCount: count,
+                }
+              : c,
+          ),
+        }))
+        // 发送暂存回收：上次刷新可能死在 multipart 上传途中——凭据仅剩 outbox
+        const pending = outboxAll()[id]
+        if (pending) {
+          outboxClear(id)
+          const lastUser = [...(history.turns ?? [])].reverse()[0]?.prompt
+          if (lastUser !== pending.text) {
+            appendMessages(id, [{
+              id: nextMessageId(),
+              role: "system",
+              content: currentDict().store.outboxMaybeLost(pending.text),
+              variant: "warning",
+            }])
+          }
         }
       } catch (e) {
         console.warn("加载会话历史失败:", e)
@@ -672,27 +838,15 @@ export const useChatStore = create<ChatState>((set, get) => {
       const conv = get().conversations.find((c) => c.id === convId)
       if (!conv || get().generating[convId]) return
 
-      // 镜像后端规则：挂起任务存在时发新消息 = 放弃该挂起任务（routes 已按 warning 收尾）。
-      // 本地同步清掉可恢复态（App 层已就"放弃"二次确认）。后端句柄随本条消息回收，
-      // 本地放弃标记一并清除（此后 /tasks 对账恢复权威）。
+      // 本地放弃标记随新消息回收（后端 accept 时同步收尾暂停态旧轮,事件流会带回终态）
       locallyAbandonedSuspended.delete(convId)
-      if (get().suspendedSessions[convId]) {
-        set((s) => {
-          const next = { ...s.suspendedSessions }
-          delete next[convId]
-          return { suspendedSessions: next }
-        })
-      }
-
-      // 镜像后端规则：待审批中发新消息 = 放弃审批（后端把挂起的工具调用作废、该轮 warning 落盘）。
-      // 不清的话审批横幅残留，用户点批准只会得到"没有等待审批的操作"。
-      if (get().pendingApprovals[convId]) {
-        set((s) => {
-          const next = { ...s.pendingApprovals }
-          delete next[convId]
-          return { pendingApprovals: next }
-        })
-      }
+      set((s) => {
+        const susp = { ...s.suspendedSessions }
+        delete susp[convId]
+        const approvals = { ...s.pendingApprovals }
+        delete approvals[convId]
+        return { suspendedSessions: susp, pendingApprovals: approvals }
+      })
 
       const attachments: MessageAttachment[] = files.map((f) => ({
         name: f.name,
@@ -704,251 +858,87 @@ export const useChatStore = create<ChatState>((set, get) => {
         previewUrl: f.type.startsWith("image/") ? URL.createObjectURL(f) : undefined,
       }))
 
-      const optimisticTurnIndex = conv.turnCount
+      // 乐观用户气泡 + 发送暂存（202 受理即清；刷新致死时 outbox 是唯一凭据）
+      const userId = nextMessageId()
+      optimistic.set(convId, { userId, prompt: text })
+      outboxSet(convId, text)
       appendMessages(convId, [
         {
-          id: nextMessageId(),
+          id: userId,
           role: "user",
           content: text,
           attachments: attachments.length > 0 ? attachments : undefined,
-          turnIndex: optimisticTurnIndex,
         },
       ])
       if (conv.title === NEW_CHAT_TITLE) {
         patchConversation(convId, { title: text.slice(0, 30) || conv.title })
       }
-      set((s) => ({ generating: { ...s.generating, [convId]: true } }))
+      setGenerating(convId, true)
 
-      const controller = new AbortController()
-      controllers.set(convId, controller)
-      // 真流式退掉了 interval 轮询：任务进度/实时步骤改由 SSE 的 task_progress 事件推送；
-      // /task 仅保留为轮末一次性 catch-up（refreshTaskOnce，同步跨轮任务态并清空实时步骤）。
-
-      // 先放一个临时预览气泡，token 逐段填充；turn_end 到达后撤下、改用权威 response 对账
-      const assistantId = nextMessageId()
-      let streamed = ""
-      let ended = false
-      appendMessages(convId, [
-        { id: assistantId, role: "assistant", content: "", streaming: true, turnIndex: optimisticTurnIndex },
-      ])
       try {
-        await sendChatStream(
-          convId,
-          {
-            prompt: text,
-            enable_thinking: get().thinkingEnabled,
-            files: files.length > 0 ? files : undefined,
-          },
-          {
-            onToken: (delta) => {
-              streamed += delta
-              updateMessage(convId, assistantId, { content: streamed })
-            },
-            onThinking: (text) => {
-              // 思考块整块到达：挂到临时气泡的 thoughts（可折叠展示）
-              updateMessage(convId, assistantId, { thoughts: text })
-            },
-            onTaskProgress: ({ task, activity }) => {
-              // 推送替代轮询：直接刷新任务计划与实时步骤流
-              set((s) => ({
-                taskProgress: { ...s.taskProgress, [convId]: task },
-                liveActivity: { ...s.liveActivity, [convId]: activity },
-              }))
-            },
-            onTurnEnd: (res) => {
-              // 流为预览、turn_end 为真：撤下临时气泡，用权威 response 对账（含所有终态）
-              ended = true
-              removeMessage(convId, assistantId)
-              applyChatResponse(convId, res, optimisticTurnIndex)
-            },
-          },
-          controller.signal,
-        )
-        // 流结束却没等到 turn_end（异常闭流/断线）：撤下占位，走 /task 断线补偿——
-        // 后端可能已把本轮跑完并落盘，此时重载权威历史补回结果；否则如实提示仍在生成。
-        if (!ended) {
-          removeMessage(convId, assistantId)
-          try {
-            const st = await getTaskStatus(convId)
-            if (!st.generating) {
-              const h = await getHistory(convId)
-              const msgs = (h.turns ?? []).flatMap((t, i) => turnToMessages(t, i))
-              patchConversation(convId, {
-                messages: msgs,
-                turnCount: h.count ?? 0,
-                historyLoaded: true,
-              })
-            } else {
-              appendMessages(convId, [
-                {
-                  id: nextMessageId(),
-                  role: "system",
-                  content: currentDict().store.disconnectStillGenerating,
-                  variant: "warning",
-                },
-              ])
-            }
-          } catch {
-            appendMessages(convId, [
-              {
-                id: nextMessageId(),
-                role: "system",
-                content: currentDict().store.disconnectIncomplete,
-                variant: "warning",
-              },
-            ])
-          }
-        }
+        await submitTurn(convId, {
+          prompt: text,
+          enable_thinking: get().thinkingEnabled,
+          files: files.length > 0 ? files : undefined,
+        })
+        outboxClear(convId)
+        ensureAttached(convId) // 首条消息后会话才在服务端存在（此前附着会 404 退出）
       } catch (e) {
-        removeMessage(convId, assistantId)
-        if (e instanceof DOMException && e.name === "AbortError") {
-          appendMessages(convId, [
-            {
-              id: nextMessageId(),
-              role: "system",
-              content: currentDict().store.stoppedWaiting,
-              variant: "warning",
-            },
-          ])
+        outboxClear(convId)
+        optimistic.delete(convId)
+        removeMessages(convId, [userId])
+        setGenerating(convId, false)
+        if (e instanceof TurnConflictError) {
+          appendMessages(convId, [{
+            id: nextMessageId(),
+            role: "system",
+            content: currentDict().store.turnConflict,
+            variant: "warning",
+          }])
         } else {
-          console.error("请求模型服务失败:", e)
-          appendMessages(convId, [
-            {
-              id: nextMessageId(),
-              role: "system",
-              content: currentDict().store.cannotConnect,
-              variant: "error",
-            },
-          ])
+          console.error("提交轮次失败:", e)
+          appendMessages(convId, [{
+            id: nextMessageId(),
+            role: "system",
+            content: currentDict().store.cannotConnect,
+            variant: "error",
+          }])
         }
-      } finally {
-        controllers.delete(convId)
-        stopTaskPolling(convId)
-        refreshTaskOnce(convId)
-        set((s) => ({ generating: { ...s.generating, [convId]: false } }))
       }
     },
 
     respondApproval: async (id, approve) => {
-      const conv = get().conversations.find((c) => c.id === id)
+      if (!get().pendingApprovals[id]) return
       const tools = get().pendingApprovals[id]
-      if (!conv || !tools || get().generating[id]) return
-
+      // 乐观收卡 + 置生成中；事件流的 resumed/turn_started 会确认（或 409 时回滚）
       set((s) => {
         const next = { ...s.pendingApprovals }
         delete next[id]
         return { pendingApprovals: next, generating: { ...s.generating, [id]: true } }
       })
-
-      const controller = new AbortController()
-      controllers.set(id, controller)
-
-      // 决议后的续跑同样是一次可能长达数分钟的生成 → 走 SSE（带心跳），而非阻塞式请求，
-      // 扛得住 cloudflared/代理超时。占位气泡逐段填充，turn_end 到达后撤下改用权威 response。
-      const assistantId = nextMessageId()
-      let streamed = ""
-      let ended = false
-      let streamStarted = false
-      appendMessages(id, [
-        { id: assistantId, role: "assistant", content: "", streaming: true, turnIndex: conv.turnCount },
-      ])
-
-      // 断线/异常闭流后的对账：后端 worker 断连仍会把决议执行完并落盘，故不恢复挂起态，
-      // 而是查任务态——已完成则重载权威历史，仍在生成则启动 inflight 对账轮询自愈。
-      const reconcileAfterStream = async () => {
-        removeMessage(id, assistantId)
-        try {
-          const st = await getTaskStatus(id)
-          if (!st.generating) {
-            const h = await getHistory(id)
-            const msgs = (h.turns ?? []).flatMap((t, i) => turnToMessages(t, i))
-            patchConversation(id, { messages: msgs, turnCount: h.count ?? 0, historyLoaded: true })
-          } else {
-            patchConversation(id, { historyLoaded: false })
-            scheduleInflightReconcile(id)
-          }
-        } catch {
-          appendMessages(id, [
-            {
-              id: nextMessageId(),
-              role: "system",
-              content: currentDict().store.disconnectIncomplete,
-              variant: "warning",
-            },
-          ])
-        }
-      }
-
       try {
-        await sendApprovalStream(
-          id,
-          approve,
-          {
-            onTurnStart: () => {
-              streamStarted = true
-            },
-            onToken: (delta) => {
-              streamed += delta
-              updateMessage(id, assistantId, { content: streamed })
-            },
-            onThinking: (text) => {
-              updateMessage(id, assistantId, { thoughts: text })
-            },
-            onTaskProgress: ({ task, activity }) => {
-              set((s) => ({
-                taskProgress: { ...s.taskProgress, [id]: task },
-                liveActivity: { ...s.liveActivity, [id]: activity },
-              }))
-            },
-            onTurnEnd: (res) => {
-              ended = true
-              removeMessage(id, assistantId)
-              applyChatResponse(id, res, conv.turnCount)
-            },
-          },
-          controller.signal,
-        )
-        // 流正常结束却没等到 turn_end（异常闭流）：走对账补偿
-        if (!ended) await reconcileAfterStream()
+        await submitApproval(id, approve)
       } catch (e) {
-        if (e instanceof DOMException && e.name === "AbortError") {
-          removeMessage(id, assistantId)
-          appendMessages(id, [
-            {
-              id: nextMessageId(),
-              role: "system",
-              content: currentDict().store.approvalStoppedWaiting,
-              variant: "warning",
-            },
-          ])
-        } else if (!streamStarted) {
-          // 流从未开始（初始请求就失败）：决议未送达后端，恢复挂起态允许重试
-          console.error("提交审批决议失败:", e)
-          removeMessage(id, assistantId)
-          set((s) => ({ pendingApprovals: { ...s.pendingApprovals, [id]: tools } }))
-          appendMessages(id, [
-            {
-              id: nextMessageId(),
-              role: "system",
-              content: currentDict().store.approvalCannotConnect,
-              variant: "error",
-            },
-          ])
+        setGenerating(id, false)
+        if (e instanceof TurnConflictError) {
+          // 决议目标已不存在（另一端已处理/已过期）：以服务端为准重载
+          detach(id)
+          void get().loadHistory(id)
         } else {
-          // 流已开始后断开：后端仍在执行决议并会落盘 → 对账补偿，不恢复挂起态
-          console.error("审批流中断:", e)
-          await reconcileAfterStream()
+          console.error("提交审批决议失败:", e)
+          set((s) => ({ pendingApprovals: { ...s.pendingApprovals, [id]: tools } }))
+          appendMessages(id, [{
+            id: nextMessageId(),
+            role: "system",
+            content: currentDict().store.approvalCannotConnect,
+            variant: "error",
+          }])
         }
-      } finally {
-        controllers.delete(id)
-        stopTaskPolling(id)
-        refreshTaskOnce(id)
-        set((s) => ({ generating: { ...s.generating, [id]: false } }))
       }
     },
 
     abandonSuspended: (id) => {
-      // 仅清本地可恢复态；后端的挂起轮会在下次发消息时被判为放弃并回收（routes 已处理）。
+      // 仅清本地可恢复态；后端的挂起轮会在下次发消息时被判为放弃并回收（TurnRunner 处理）。
       locallyAbandonedSuspended.add(id)
       set((s) => {
         const next = { ...s.suspendedSessions }
@@ -975,6 +965,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         }
         // 后端已同步回退（含撤销未完结的审批轮）：清除本地审批挂起态，
         // 重置消息并从服务端重新拉取，保证与后端记忆/落盘一致
+        detach(id, false)
         set((s) => {
           const pendingNext = { ...s.pendingApprovals }
           delete pendingNext[id]
@@ -1018,66 +1009,42 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
 
     stopGenerating: (id) => {
-      // 优先真取消：后端在最近检查点停止生成并整轮回滚，流式 turn_end 会以
-      // cancelled 状态正常返回；后端不可达或无在途轮次时退回本地中断等待
-      cancelTask(id)
-        .then((res) => {
-          if (!res.status) controllers.get(id)?.abort()
-        })
-        .catch(() => controllers.get(id)?.abort())
+      // 真取消：后端在最近检查点停止生成并整轮回滚，turn_ended(cancelled) 从事件流回来收尾
+      cancelTask(id).catch((e) => console.warn("取消失败:", e))
     },
 
     suspendTask: (id) => {
-      // 挂起（区别于取消）：后端在当前步骤完成后的安全点让出 worker，本轮以 suspended
-      // 收尾。流式 turn_end 携 suspended 经 applyChatResponse 置入可恢复态，无需额外处理。
+      // 挂起（区别于取消）：后端在安全点让出 worker，suspended 事件从流上回来置入可恢复态
       apiSuspendTask(id).catch((e) => console.warn("挂起任务失败:", e))
     },
 
     resumeTask: async (id) => {
-      const conv = get().conversations.find((c) => c.id === id)
-      if (!conv || !get().suspendedSessions[id] || get().generating[id]) return
-      // 进入续跑：清可恢复态、置 generating
+      if (!get().suspendedSessions[id] || get().generating[id]) return
       locallyAbandonedSuspended.delete(id)
       set((s) => {
         const next = { ...s.suspendedSessions }
         delete next[id]
         return { suspendedSessions: next, generating: { ...s.generating, [id]: true } }
       })
-      const controller = new AbortController()
-      controllers.set(id, controller)
-      startTaskPolling(id)
       try {
-        // 阻塞式续跑：从挂起处接着走，可能多步、耗时（与审批续跑同语义）
-        const res = await apiResumeTask(id, controller.signal)
-        applyChatResponse(id, res, conv.turnCount)
+        await submitResume(id)
+        ensureAttached(id) // 续跑过程走事件流（已附着则幂等）
       } catch (e) {
-        if (e instanceof DOMException && e.name === "AbortError") {
-          appendMessages(id, [
-            {
-              id: nextMessageId(),
-              role: "system",
-              content: currentDict().store.resumeStoppedWaiting,
-              variant: "warning",
-            },
-          ])
+        setGenerating(id, false)
+        if (e instanceof TurnConflictError) {
+          // 挂起句柄已不存在（已被恢复/回收）：以服务端为准重载
+          detach(id)
+          void get().loadHistory(id)
         } else {
           console.error("恢复任务失败:", e)
-          // 网络失败：续跑未送达，回退到可恢复态允许重试
           set((s) => ({ suspendedSessions: { ...s.suspendedSessions, [id]: true } }))
-          appendMessages(id, [
-            {
-              id: nextMessageId(),
-              role: "system",
-              content: currentDict().store.resumeCannotConnect,
-              variant: "error",
-            },
-          ])
+          appendMessages(id, [{
+            id: nextMessageId(),
+            role: "system",
+            content: currentDict().store.resumeCannotConnect,
+            variant: "error",
+          }])
         }
-      } finally {
-        controllers.delete(id)
-        stopTaskPolling(id)
-        refreshTaskOnce(id)
-        set((s) => ({ generating: { ...s.generating, [id]: false } }))
       }
     },
 
@@ -1101,6 +1068,8 @@ export const useChatStore = create<ChatState>((set, get) => {
           historyLoaded: false, // 交给 loadHistory 从服务端拉取分支携带的历史
           turnCount: res.turns ?? 0,
         }
+        const prev = get().activeId
+        if (prev) detach(prev)
         set((s) => ({
           conversations: [branch, ...s.conversations],
           activeId: branch.id,

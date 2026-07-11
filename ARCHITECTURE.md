@@ -196,9 +196,15 @@
 
 ```
 api/agent.ts      全部 REST/SSE 封装（同源 /api 相对路径，鉴权由代理注入）
+                  含账本协议 v1：submitTurn(202)/submitApproval/submitResume/
+                  getTurnState/attachEvents（重放+续播的事件附着流）
 api/sse.ts        fetch+ReadableStream 的 SSE 解析（EventSource 不支持 POST/头）
-store/useChatStore.ts  会话/消息/审批/挂起/流式对账主状态机
-                       （localStorage 本地缓存 + /ui-state 服务端跨设备同步）
+lib/turn-reducer.ts    事件归约器（PROTOCOL.md §5 的纯函数实现）——
+                       行为由 protocol/fixtures/ 夹具锁定（npm run test 回放）
+store/useChatStore.ts  会话/消息主状态机：附着流驱动（单附着=活跃会话一条
+                       /events 长连；断线静默退避重连；刷新/切回经 /history +
+                       /turn + 事件重放恢复,审批卡/直播预览可完整重建）
+                       + outbox 发送暂存 + /ui-state 服务端跨设备同步
 store/useUiStore.ts    语言/主题 + /tasks(3s) /schedules(10s) 轮询对账
 components/dashboard/  聊天区/输入/侧栏/检视面板(工具·任务·记忆)/定时任务条
 components/deck/       SlideRenderer（Deck 唯一渲染器）+ /print/deck 打印路由
