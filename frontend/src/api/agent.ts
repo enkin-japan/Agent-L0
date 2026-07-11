@@ -22,7 +22,6 @@ import type {
   TaskSnapshot,
   TaskStatusResponse,
   ToolsResponse,
-  UiStateResponse,
 } from "@/types/agent-api"
 import type { DeckSpec } from "@/types/deck"
 import type { EventEnvelope, TurnAccepted, TurnStateResponse } from "@/types/protocol"
@@ -187,6 +186,20 @@ export async function listSessions(): Promise<SessionListResponse> {
   return res.json()
 }
 
+/** 会话元数据（服务端一等,Phase 4b）：title 改名/pinned,双端同源。 */
+export async function setSessionMeta(
+  sessionId: string,
+  patch: { title?: string; pinned?: boolean },
+): Promise<{ status: boolean; response?: string }> {
+  const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}/meta`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
 /** 置/撤会话 pin：pin 的会话不被后台自动清扫回收（手动「保留」）。 */
 export async function setSessionPin(
   sessionId: string,
@@ -324,23 +337,7 @@ export async function getScheduleRuns(id: string, limit = 20): Promise<ScheduleR
   return res.json()
 }
 
-/** 读取服务端保存的 UI 状态（工作区/会话元数据）；从未写入过则 state 为 null。 */
-export async function getUiState(): Promise<UiStateResponse> {
-  const res = await fetch(`${BASE_URL}/api/v1/ui-state`)
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
-}
 
-/** 整体覆盖写入 UI 状态（last-write-wins；服务端原子落盘）。 */
-export async function putUiState(state: Record<string, unknown>): Promise<UiStateResponse> {
-  const res = await fetch(`${BASE_URL}/api/v1/ui-state`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ state }),
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
-}
 
 /** 读取会话 Deck Spec（PPT 单一真相的投影）；该会话没有 deck 时返回 null。 */
 export async function getDeck(sessionId: string): Promise<DeckSpec | null> {

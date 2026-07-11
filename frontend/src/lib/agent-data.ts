@@ -32,8 +32,6 @@ export type Conversation = {
   title: string
   /** Epoch ms of last edit — used for chronological (newest-first) ordering. */
   updatedAt: number
-  /** Workspace the chat belongs to, or null when it lives in "Recent Chats". */
-  workspaceId: string | null
   messages: ChatMessage[]
   /** 是否已从 GET /history 拉取过服务端历史。 */
   historyLoaded: boolean
@@ -41,11 +39,6 @@ export type Conversation = {
   turnCount: number
   /** 是否已 pin（落盘 meta.json）：pin 的会话不被后台自动清扫回收。 */
   pinned?: boolean
-}
-
-export type Workspace = {
-  id: string
-  name: string
 }
 
 /** 语言无关的「新对话」标题哨兵（与 store 一致）：展示时翻译成当前语言。 */

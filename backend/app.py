@@ -339,6 +339,22 @@ app.add_middleware(
 async def health():
     return {"status": "ok"}
 
+# 自托管 deck 打印页(Phase 4b 解除后端→前端倒挂):`./devctl.sh bundle-print` 把
+# 前端构建产物放进 backend/static/webapp,这里原样出货——前端服务不在时,
+# deck_export_pdf 打印本机 14159 的这份(渲染器仍是同一份 React 代码的构建物)。
+# 页面 shell 免鉴权(只是渲染器外壳);数据请求由 pdf_export 经 Playwright 注入 Bearer。
+_PRINT_BUNDLE = BASE_DIR / "static" / "webapp"
+if (_PRINT_BUNDLE / "index.html").exists():
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/assets", StaticFiles(directory=_PRINT_BUNDLE / "assets"), name="print-assets")
+
+    @app.get("/print/deck")
+    async def print_deck_page():
+        return FileResponse(_PRINT_BUNDLE / "index.html")
+
+    print("🖨️  [System] deck 打印页自托管已启用（backend/static/webapp）")
+
 # 挂载解耦后的路由：全量 /api/v1/* 套用 Bearer 鉴权依赖（未配置密钥时依赖内部放行）
 app.include_router(router, dependencies=[Depends(verify_api_key)])
 

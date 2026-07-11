@@ -27,8 +27,6 @@ from .schemas import (
     TaskListResponse,
     TaskStatusResponse,
     ToolsResponse,
-    UiStatePutRequest,
-    UiStateResponse,
 )
 from ..core.journal import TurnJournal
 from ..core.turn_runner import TurnConflict, public_turn
@@ -191,57 +189,6 @@ async def get_schedule_runs(schedule_id: str, request: Request, limit: int = 20)
     return {"status": True, "schedule_id": schedule_id, "count": len(runs), "runs": runs}
 
 
-# ---------- UI 状态服务端化（客户端迁移：换设备打开即恢复工作区/会话结构） ----------
-# 落盘在 sessions 目录的同级文件（不放 sessions_dir 内部，避免会话目录扫描把它当会话）。
-# state 是不透明 JSON blob（shape 归前端管），last-write-wins，个人场景不做版本向量。
-_UI_STATE_LOCK = asyncio.Lock()
-_UI_STATE_MAX_BYTES = 1024 * 1024  # 1MB 上限：会话元数据量级远小于此，超限=前端出错或滥用
-
-
-def _ui_state_path(request: Request):
-    return request.app.state.session_manager.sessions_dir.parent / "ui_state.json"
-
-
-@router.get("/api/v1/ui-state", response_model=UiStateResponse)
-async def get_ui_state(request: Request):
-    """读取前端 UI 状态（工作区/会话元数据）。从未写入过则 state 为 null。"""
-    path = _ui_state_path(request)
-
-    def _read():
-        if not path.exists():
-            return None
-        return json.loads(path.read_text(encoding="utf-8"))
-
-    try:
-        doc = await asyncio.to_thread(_read)
-    except Exception as e:
-        # 文件损坏按空状态处理（前端会回退 localStorage 并在下次写入时覆盖修复）
-        print(f"[Routes] ui_state.json 读取失败（按空处理）: {e}")
-        doc = None
-    if not doc:
-        return {"status": True, "state": None, "updated_at": None}
-    return {"status": True, "state": doc.get("state"), "updated_at": doc.get("updated_at")}
-
-
-@router.put("/api/v1/ui-state", response_model=UiStateResponse)
-async def put_ui_state(request: Request, body: UiStatePutRequest):
-    """整体覆盖写入前端 UI 状态（last-write-wins）。原子写：tmp + rename。"""
-    payload = {"state": body.state, "updated_at": time.time()}
-    raw = json.dumps(payload, ensure_ascii=False)
-    if len(raw.encode("utf-8")) > _UI_STATE_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="ui state too large (limit 1MB)")
-    path = _ui_state_path(request)
-
-    def _write():
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(raw, encoding="utf-8")
-        tmp.replace(path)
-
-    async with _UI_STATE_LOCK:
-        await asyncio.to_thread(_write)
-    return {"status": True, "state": body.state, "updated_at": payload["updated_at"]}
-
-
 # ---------- 会话资产出货（render_chart / deck 等工具产物 → 前端展示） ----------
 # 安全边界：只从 sessions/{id}/assets/ 出货；session_id 与文件名双重白名单正则 +
 # resolve 包含校验，双保险防路径穿越（_ASSET_NAME_RE 定义在文件顶部，与路由级
@@ -350,7 +297,7 @@ async def get_memory_status(session_id: str, request: Request):
             **base,
             "loaded": True,
             "last_prompt_tokens": session.last_prompt_tokens,
-            "total_turns": len(session.history),
+            "total_turns": session.disk_turn_count(),  # 统一口径:落盘轮数(原为消息条数,冷热不一致)
             "summarized_turns": session.summarized_turns,
             "has_summary": bool(summary.strip()),
             "summary_chars": len(summary),
@@ -439,6 +386,23 @@ async def set_session_pin(session_id: str, request: Request, body: PinRequest):
     verb = "已置顶保留" if body.pinned else "已取消保留"
     return {"status": True, "session_id": session_id, "pinned": body.pinned,
             "response": f"✅ 会话 {session_id} {verb}"}
+
+
+@router.patch("/api/v1/chat/{session_id}/meta")
+async def set_session_meta(session_id: str, request: Request, body: dict):
+    """会话元数据(服务端一等,Phase 4b):title 改名(空串=清除回退派生)/pinned。
+    双端同源——web 与原生 app 的改名从此一致可见。"""
+    session_manager = request.app.state.session_manager
+    title = body.get("title")
+    pinned = body.get("pinned")
+    if title is None and pinned is None:
+        return JSONResponse(status_code=400, content={"status": False, "response": "空请求:至少给 title 或 pinned。"})
+    ok = await asyncio.to_thread(
+        session_manager.set_meta, session_id,
+        title=title if title is None else str(title),
+        pinned=None if pinned is None else bool(pinned))
+    return {"status": ok, "session_id": session_id,
+            "response": "已保存" if ok else f"未发现会话 {session_id} 或写入失败"}
 
 
 @router.delete("/api/v1/chat/{session_id}", response_model=DeleteSessionResponse)

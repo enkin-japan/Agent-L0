@@ -112,19 +112,6 @@ class ApprovalRequest(BaseModel):
     """
     approve: bool
 
-class UiStateResponse(BaseModel):
-    """
-    前端 UI 状态（工作区/会话元数据等）的读取响应。state 为不透明 JSON blob，
-    后端不与前端 shape 耦合；无已存状态时 state/updated_at 为 null。
-    """
-    status: bool
-    state: Optional[Dict[str, Any]] = None
-    updated_at: Optional[float] = None
-
-class UiStatePutRequest(BaseModel):
-    """前端 UI 状态整体覆盖写入（last-write-wins）。"""
-    state: Dict[str, Any]
-
 class ScheduleListResponse(BaseModel):
     """
     定时任务清单响应体：每项为 schedule.json 定义 + running（是否正在执行）

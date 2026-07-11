@@ -12,7 +12,6 @@ import { InspectorPanel } from "@/components/dashboard/inspector-panel"
 
 export default function Page() {
   const t = useT()
-  const workspaces = useChatStore((s) => s.workspaces)
   const conversations = useChatStore((s) => s.conversations)
   const activeId = useChatStore((s) => s.activeId)
   const thinkingEnabled = useChatStore((s) => s.thinkingEnabled)
@@ -34,13 +33,9 @@ export default function Page() {
     selectConversation,
     newConversation,
     renameConversation,
-    moveConversation,
     deleteConversation,
     deleteConversations,
     togglePin,
-    addWorkspace,
-    renameWorkspace,
-    deleteWorkspace,
     setThinking,
     clearNotice,
     sendMessage,
@@ -65,13 +60,10 @@ export default function Page() {
     applyTheme(theme)
   }, [theme])
 
-  // 启动时从服务端拉取 UI 状态（工作区/会话结构），实现换设备/换浏览器无缝迁移；
-  // 随后以后端会话索引对账：剔除已被自动清扫回收的幽灵、补入孤儿会话、同步 pin。
+  // 启动即以后端会话索引对账：剔除已被自动清扫回收的幽灵、补入孤儿会话、同步标题/pin。
+  // (工作区已退役;会话元数据本地 localStorage 缓存 + /sessions 对账恢复,无需 ui_state。)
   useEffect(() => {
-    void useChatStore
-      .getState()
-      .hydrateFromServer()
-      .then(() => useChatStore.getState().reconcileSessions())
+    void useChatStore.getState().reconcileSessions()
   }, [])
 
   // 全局单 worker 调度快照的低频轮询（驱动侧栏 Worker 状态条）
@@ -117,15 +109,14 @@ export default function Page() {
           )}
         >
           <AgentSidebar
-            workspaces={workspaces}
             conversations={conversations}
             activeId={activeId}
             onSelect={(id) => {
               selectConversation(id)
               setMobileOpen(false)
             }}
-            onNewChat={(workspaceId) => {
-              newConversation(workspaceId)
+            onNewChat={() => {
+              newConversation()
               setMobileOpen(false)
             }}
             onOpenScheduleSession={(sessionId, title) => {
@@ -136,12 +127,6 @@ export default function Page() {
             onDelete={handleDelete}
             onDeleteMany={handleDeleteMany}
             onTogglePin={togglePin}
-            onMove={moveConversation}
-            onAddWorkspace={addWorkspace}
-            onRenameWorkspace={renameWorkspace}
-            onDeleteWorkspace={(id) => {
-              if (window.confirm(t.confirm.deleteWorkspace)) deleteWorkspace(id)
-            }}
             onCollapse={() => {
               setMobileOpen(false)
               setDesktopCollapsed(true)

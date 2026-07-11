@@ -2,7 +2,6 @@ import { useMemo, useState } from "react"
 import {
   BrainCircuit,
   Cpu,
-  FolderInput,
   Monitor,
   Moon,
   MoreHorizontal,
@@ -11,25 +10,22 @@ import {
   PenSquare,
   Pin,
   PinOff,
-  Plus,
   Search,
   Settings,
   Sun,
   Trash2,
-  Check,
   CheckCircle2,
   Circle,
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import { convTitle, type Conversation, type Workspace } from "@/lib/agent-data"
+import { convTitle, type Conversation } from "@/lib/agent-data"
 import { LANGS, type Lang } from "@/lib/i18n"
 import { useT, useUiStore, type Theme } from "@/store/useUiStore"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Switch } from "@/components/ui/switch"
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Field, FieldLabel } from "@/components/ui/field"
@@ -37,7 +33,6 @@ import { SchedulerStrip } from "@/components/dashboard/scheduler-strip"
 import { ScheduleStrip } from "@/components/dashboard/schedule-strip"
 
 type AgentSidebarProps = {
-  workspaces: Workspace[]
   conversations: Conversation[]
   activeId: string
   onSelect: (id: string) => void
@@ -48,19 +43,14 @@ type AgentSidebarProps = {
   onDelete: (id: string) => void
   onDeleteMany: (ids: string[]) => void
   onTogglePin: (id: string, pinned: boolean) => void
-  onMove: (id: string, workspaceId: string | null) => void
-  onAddWorkspace: (name: string) => void
-  onRenameWorkspace: (id: string, name: string) => void
-  onDeleteWorkspace: (id: string) => void
   onCollapse: () => void
   thinkingEnabled: boolean
   onThinkingChange: (value: boolean) => void
 }
 
 export function AgentSidebar({
-  workspaces, conversations, activeId, onSelect, onNewChat, onOpenScheduleSession,
-  onRename, onDelete, onDeleteMany, onTogglePin, onMove, onAddWorkspace,
-  onRenameWorkspace, onDeleteWorkspace, onCollapse,
+  conversations, activeId, onSelect, onNewChat, onOpenScheduleSession,
+  onRename, onDelete, onDeleteMany, onTogglePin, onCollapse,
   thinkingEnabled, onThinkingChange,
 }: AgentSidebarProps) {
   const t = useT()
@@ -69,8 +59,6 @@ export function AgentSidebar({
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false)
-  const [newWorkspaceName, setNewWorkspaceName] = useState("")
 
   const filteredConversations = useMemo(() =>
     conversations.filter((c) =>
@@ -81,7 +69,6 @@ export function AgentSidebar({
 
   const recentChats = useMemo(() =>
     filteredConversations
-      .filter((c) => !c.workspaceId)
       // pin 优先，其次按最后更新倒序
       .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || b.updatedAt - a.updatedAt),
     [filteredConversations],
@@ -104,13 +91,6 @@ export function AgentSidebar({
   function confirmDeleteSelected() {
     onDeleteMany([...selectedIds])
     exitSelectMode()
-  }
-
-  function submitNewWorkspace() {
-    const name = newWorkspaceName.trim()
-    if (name) onAddWorkspace(name)
-    setNewWorkspaceName("")
-    setNewWorkspaceOpen(false)
   }
 
   function renderChatItem(conversation: Conversation) {
@@ -157,23 +137,6 @@ export function AgentSidebar({
                     ? <><PinOff className="mr-2 size-4" /> {t.workspace.unpin}</>
                     : <><Pin className="mr-2 size-4" /> {t.workspace.pin}</>}
                 </DropdownMenuItem>
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger><FolderInput className="mr-2 size-4" />{t.workspace.moveTo}</DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
-                    <DropdownMenuItem onClick={() => onMove(conversation.id, null)}>
-                      {t.workspace.recentChats}
-                      {conversation.workspaceId === null && <Check className="ml-auto size-4" />}
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    {workspaces.map((w) => (
-                      <DropdownMenuItem key={w.id} onClick={() => onMove(conversation.id, w.id)}>
-                        {w.name}
-                        {w.id === conversation.workspaceId && <Check className="ml-auto size-4" />}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-                <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => onRename(conversation.id, prompt(t.workspace.renamePrompt, convTitle(conversation.title, t.store.newChatTitle)) || conversation.title)}><Pencil className="mr-2 size-4" /> {t.workspace.rename}</DropdownMenuItem>
                 <DropdownMenuItem className="text-destructive" onClick={() => onDelete(conversation.id)}><Trash2 className="mr-2 size-4" /> {t.workspace.delete}</DropdownMenuItem>
               </DropdownMenuGroup>
@@ -225,48 +188,7 @@ export function AgentSidebar({
       {/* min-h-0：flex 子项默认 min-height:auto 不会缩到内容以下，缺它则 flex-1 被内容撑高、
           ScrollArea 内部 viewport 拿不到有界高度、纵向滚动失效，会话多时整条侧栏被撑爆。 */}
       <ScrollArea className="min-h-0 flex-1 px-2">
-        <div className="flex items-center justify-between mb-2">
-          <p className="text-xs font-semibold text-muted-foreground">{t.sidebar.workspaces}</p>
-          <Button variant="ghost" size="icon" className="size-6 rounded-lg text-muted-foreground" onClick={() => setNewWorkspaceOpen(true)}>
-            <Plus className="size-3.5" />
-            <span className="sr-only">{t.workspace.dialogTitle}</span>
-          </Button>
-        </div>
-        <Accordion type="multiple" className="w-full">
-          {workspaces.map((w) => (
-            <AccordionItem key={w.id} value={w.id} className="border-none">
-              {/* 触发器与操作菜单并排：菜单绝对定位在行尾（触发器是 button，不能嵌套按钮） */}
-              <div className="relative">
-                <AccordionTrigger className="pr-16 text-sm hover:no-underline">{w.name}</AccordionTrigger>
-                <div className="absolute right-7 top-1/2 -translate-y-1/2">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground">
-                        <MoreHorizontal className="size-4" />
-                        <span className="sr-only">{t.workspace.rename} / {t.workspace.delete}</span>
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => onRenameWorkspace(w.id, prompt(t.workspace.renamePrompt, w.name) || w.name)}>
-                        <Pencil className="mr-2 size-4" /> {t.workspace.rename}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem className="text-destructive" onClick={() => onDeleteWorkspace(w.id)}>
-                        <Trash2 className="mr-2 size-4" /> {t.workspace.delete}
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </div>
-              <AccordionContent>
-                <div className="pl-2 space-y-1">
-                  {filteredConversations.filter((c) => c.workspaceId === w.id).map(renderChatItem)}
-                  <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-xs" onClick={() => onNewChat(w.id)}><Plus className="size-3" /> {t.sidebar.newWorkspaceShort}</Button>
-                </div>
-              </AccordionContent>
-            </AccordionItem>
-          ))}
-        </Accordion>
-        <div className="flex items-center justify-between pt-4 pb-2">
+        <div className="flex items-center justify-between pb-2">
           <p className="text-xs font-semibold text-muted-foreground">{t.sidebar.recentChats}</p>
           {recentChats.length > 0 && (
             <button
@@ -324,31 +246,6 @@ export function AgentSidebar({
           {LANGS.find((l) => l.code === useUiStore.getState().lang)?.label}
         </span>
       </button>
-
-      {/* New workspace dialog */}
-      <Dialog open={newWorkspaceOpen} onOpenChange={setNewWorkspaceOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t.workspace.dialogTitle}</DialogTitle>
-            <DialogDescription>{t.workspace.dialogDesc}</DialogDescription>
-          </DialogHeader>
-          <Field>
-            <FieldLabel htmlFor="workspace-input">{t.workspace.nameLabel}</FieldLabel>
-            <Input
-              id="workspace-input"
-              placeholder={t.workspace.namePlaceholder}
-              value={newWorkspaceName}
-              onChange={(e) => setNewWorkspaceName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) submitNewWorkspace() }}
-              autoFocus
-            />
-          </Field>
-          <DialogFooter>
-            <DialogClose asChild><Button variant="outline">{t.workspace.cancel}</Button></DialogClose>
-            <Button onClick={submitNewWorkspace}>{t.workspace.create}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Settings dialog */}
       <SettingsDialog

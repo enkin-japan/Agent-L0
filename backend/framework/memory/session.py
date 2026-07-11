@@ -720,9 +720,11 @@ class SessionManager:
     # ==========================================
     # 会话记录清理：反向映射索引 + pin + 确定性磁盘回收
     # ==========================================
-    def set_pinned(self, session_id: str, pinned: bool) -> bool:
-        """置/撤会话 pin（读-改-写 meta.json，保留血缘等其余字段，不经 save_meta 以免覆盖）。
-        pin 的会话不被自动清扫回收。返回是否落盘成功（会话目录不存在则 False）。"""
+    def set_meta(self, session_id: str, *, title: Optional[str] = None,
+                 pinned: Optional[bool] = None) -> bool:
+        """会话元数据落盘(读-改-写 meta.json,保留血缘等其余字段,不经 save_meta 以免覆盖)。
+        title:用户改名(服务端一等,双端同源;空串=清除改名回退派生标题);
+        pinned:置/撤保留(pin 的会话不被自动清扫)。返回是否落盘成功。"""
         session_dir = self.sessions_dir / session_id
         if not session_dir.is_dir():
             return False
@@ -734,7 +736,14 @@ class SessionManager:
             except Exception:
                 meta = {}
         meta.setdefault("session_id", session_id)
-        meta["pinned"] = bool(pinned)
+        if pinned is not None:
+            meta["pinned"] = bool(pinned)
+        if title is not None:
+            t = str(title).strip()[:120]
+            if t:
+                meta["title"] = t
+            else:
+                meta.pop("title", None)
         try:
             with open(meta_file, "w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False)
@@ -788,7 +797,8 @@ class SessionManager:
         scheduler = self.scheduler
         return {
             "session_id": sid,
-            "title": title,
+            # 用户改名(meta.json title)优先;未改名回退 history 首轮 prompt 派生
+            "title": str(meta.get("title") or "").strip() or title,
             "turn_count": turn_count,
             "created_at": created_at,
             "last_updated": last_updated if last_updated is not None else created_at,

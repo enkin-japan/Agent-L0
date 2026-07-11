@@ -9,9 +9,8 @@ import {
   getHistory,
   getTaskStatus,
   getTurnState,
-  getUiState,
   listSessions,
-  putUiState,
+  setSessionMeta,
   setSessionPin,
   submitApproval,
   submitResume,
@@ -39,7 +38,6 @@ import {
   type ChatMessage,
   type Conversation,
   type MessageAttachment,
-  type Workspace,
 } from "@/lib/agent-data"
 import { currentDict } from "@/store/useUiStore"
 
@@ -52,20 +50,18 @@ export const NEW_CHAT_TITLE = "__NEW_CHAT__"
 
 /** 落盘到 localStorage 的部分：会话元数据（消息刷新后从 /history 恢复）。 */
 type PersistedState = {
-  workspaces: Workspace[]
   conversations: Array<
-    Pick<Conversation, "id" | "title" | "updatedAt" | "workspaceId" | "turnCount" | "pinned">
+    Pick<Conversation, "id" | "title" | "updatedAt" | "turnCount" | "pinned">
   >
   activeId: string
   thinkingEnabled: boolean
 }
 
-function freshConversation(workspaceId: string | null = null): Conversation {
+function freshConversation(): Conversation {
   return {
     id: newSessionId(),
     title: NEW_CHAT_TITLE,
     updatedAt: Date.now(),
-    workspaceId,
     messages: [],
     // 新会话在服务端还不存在，没有历史可拉
     historyLoaded: true,
@@ -93,7 +89,6 @@ function loadInitialState() {
     : conversations[0].id
 
   return {
-    workspaces: persisted?.workspaces ?? [],
     conversations,
     activeId,
     thinkingEnabled: persisted?.thinkingEnabled ?? false,
@@ -139,34 +134,6 @@ function outboxClear(sid: string) {
   }
 }
 
-// ---- UI 状态服务端同步（客户端迁移）----
-// localStorage 仍是本地缓存/离线兜底；服务端为跨设备权威（last-write-wins）。
-let _hydrating = false // hydrate 落地本地时不回写服务端（防止把刚拉下来的又推一遍）
-let _uiPushTimer: ReturnType<typeof setTimeout> | null = null
-let _lastPushedRaw = ""
-
-function uiStatePayload(s: { workspaces: Workspace[]; conversations: Conversation[]; thinkingEnabled: boolean }) {
-  // 同步范围 = PersistedState 减 activeId（焦点是设备本地偏好，跨设备同步会互抢）
-  return {
-    workspaces: s.workspaces,
-    conversations: s.conversations.map(
-      ({ id, title, updatedAt, workspaceId, turnCount, pinned }) => ({
-        id, title, updatedAt, workspaceId, turnCount, pinned,
-      }),
-    ),
-    thinkingEnabled: s.thinkingEnabled,
-  }
-}
-
-function pushUiStateNow(s: { workspaces: Workspace[]; conversations: Conversation[]; thinkingEnabled: boolean }) {
-  const payload = uiStatePayload(s)
-  const raw = JSON.stringify(payload)
-  if (raw === _lastPushedRaw) return
-  _lastPushedRaw = raw
-  // fire-and-forget：失败静默，下次变更会带全量重推（last-write-wins 自愈）
-  void putUiState(payload).catch(() => { _lastPushedRaw = "" })
-}
-
 export interface LastMetrics {
   promptTokens?: number
   generationTokens?: number
@@ -174,7 +141,6 @@ export interface LastMetrics {
 }
 
 interface ChatState {
-  workspaces: Workspace[]
   conversations: Conversation[]
   activeId: string
   thinkingEnabled: boolean
@@ -193,11 +159,10 @@ interface ChatState {
   lastMetrics: LastMetrics | null
 
   selectConversation: (id: string) => void
-  newConversation: (workspaceId: string | null) => void
+  newConversation: () => void
   /** 打开定时任务的专属会话（schedule_{id}）：本地无该会话条目则以任务名补建后跳转。 */
   openScheduleSession: (sessionId: string, title: string) => void
   renameConversation: (id: string, title: string) => void
-  moveConversation: (id: string, workspaceId: string | null) => void
   deleteConversation: (id: string) => void
   /** 批量删除会话（多选清理）：逐个同步后端删除并从本地移除。 */
   deleteConversations: (ids: string[]) => void
@@ -205,15 +170,9 @@ interface ChatState {
   togglePin: (id: string, pinned: boolean) => void
   /** 反向映射对账：以后端会话索引为真相，剔除已被回收的幽灵条目、补入孤儿会话、同步 pin。 */
   reconcileSessions: () => Promise<void>
-  addWorkspace: (name: string) => void
-  renameWorkspace: (id: string, name: string) => void
-  /** 删除工作区：其内会话回归「最近对话」（workspaceId 置 null），不删任何会话。 */
-  deleteWorkspace: (id: string) => void
   setThinking: (value: boolean) => void
   clearNotice: () => void
 
-  /** 启动时从服务端拉取 UI 状态（工作区/会话元数据），实现换设备无缝迁移。 */
-  hydrateFromServer: () => Promise<void>
   /** 加载服务端历史 + 附着事件流（App 在 activeId 变化时调用；账本协议的统一恢复入口）。 */
   loadHistory: (id: string) => Promise<void>
   sendMessage: (text: string, files: File[]) => Promise<void>
@@ -591,10 +550,10 @@ export const useChatStore = create<ChatState>((set, get) => {
       set({ activeId: id })
     },
 
-    newConversation: (workspaceId) => {
+    newConversation: () => {
       const prev = get().activeId
       if (prev) detach(prev)
-      const fresh = freshConversation(workspaceId)
+      const fresh = freshConversation()
       set((s) => ({
         conversations: [fresh, ...s.conversations],
         activeId: fresh.id,
@@ -614,7 +573,6 @@ export const useChatStore = create<ChatState>((set, get) => {
         id: sessionId,
         title,
         updatedAt: Date.now(),
-        workspaceId: null,
         messages: [],
         historyLoaded: false,
         turnCount: 0,
@@ -623,10 +581,15 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
 
     renameConversation: (id, title) => {
-      if (title.trim()) patchConversation(id, { title: title.trim(), updatedAt: Date.now() })
+      const trimmed = title.trim()
+      if (!trimmed) return
+      const prev = get().conversations.find((c) => c.id === id)?.title
+      patchConversation(id, { title: trimmed })  // 乐观;标题服务端一等,双端同源
+      setSessionMeta(id, { title: trimmed }).catch((e) => {
+        console.warn("改名落盘失败，回滚:", e)
+        if (prev !== undefined) patchConversation(id, { title: prev })
+      })
     },
-
-    moveConversation: (id, workspaceId) => patchConversation(id, { workspaceId }),
 
     deleteConversation: (id) => {
       detach(id, false)
@@ -724,7 +687,6 @@ export const useChatStore = create<ChatState>((set, get) => {
             id: sid,
             title: m.title || NEW_CHAT_TITLE,
             updatedAt: (m.last_updated ?? m.created_at ?? Date.now() / 1000) * 1000,
-            workspaceId: null,
             messages: [],
             historyLoaded: false,
             turnCount: m.turn_count,
@@ -740,68 +702,9 @@ export const useChatStore = create<ChatState>((set, get) => {
       })
     },
 
-    addWorkspace: (name) => {
-      const id = `${Date.now()}-w`
-      set((s) => ({ workspaces: [...s.workspaces, { id, name }] }))
-    },
-
-    renameWorkspace: (id, name) => {
-      const trimmed = name.trim()
-      if (!trimmed) return
-      set((s) => ({
-        workspaces: s.workspaces.map((w) => (w.id === id ? { ...w, name: trimmed } : w)),
-      }))
-    },
-
-    deleteWorkspace: (id) => {
-      // 只删分组不删内容：会话回归「最近对话」，服务端数据不动
-      set((s) => ({
-        workspaces: s.workspaces.filter((w) => w.id !== id),
-        conversations: s.conversations.map((c) =>
-          c.workspaceId === id ? { ...c, workspaceId: null } : c,
-        ),
-      }))
-    },
-
     setThinking: (value) => set({ thinkingEnabled: value }),
 
     clearNotice: () => set({ notice: null }),
-
-    hydrateFromServer: async () => {
-      try {
-        const res = await getUiState()
-        const remote = res.state as Partial<PersistedState> | null
-        if (remote && Array.isArray(remote.workspaces) && Array.isArray(remote.conversations)) {
-          // 服务端为准：整体替换工作区与会话元数据（消息仍按需从 /history 拉取）
-          const conversations: Conversation[] = remote.conversations.map((c) => ({
-            ...c,
-            messages: [],
-            historyLoaded: false,
-          }))
-          if (conversations.length === 0) conversations.push(freshConversation())
-          _hydrating = true
-          try {
-            set((s) => ({
-              workspaces: remote.workspaces as Workspace[],
-              conversations,
-              thinkingEnabled: !!remote.thinkingEnabled,
-              // activeId 是设备本地偏好：仍存在则保留，否则回退到第一条
-              activeId: conversations.some((c) => c.id === s.activeId)
-                ? s.activeId
-                : conversations[0].id,
-            }))
-          } finally {
-            _hydrating = false
-          }
-          void get().loadHistory(get().activeId)
-        } else {
-          // 服务端从未写入：把本设备 localStorage 的既有状态一次性迁移上云
-          pushUiStateNow(get())
-        }
-      } catch {
-        // 后端不可达：静默沿用 localStorage 启动值
-      }
-    },
 
     loadHistory: async (id) => {
       const conv = get().conversations.find((c) => c.id === id)
@@ -1084,7 +987,6 @@ export const useChatStore = create<ChatState>((set, get) => {
           id: res.session_id,
           title: `${parentTitle} · ${d.store.branchSuffix}`,
           updatedAt: Date.now(),
-          workspaceId: parent.workspaceId,
           messages: [],
           historyLoaded: false, // 交给 loadHistory 从服务端拉取分支携带的历史
           turnCount: res.turns ?? 0,
@@ -1106,15 +1008,9 @@ export const useChatStore = create<ChatState>((set, get) => {
 // 元数据持久化：消息本体不落地（刷新后通过 /history 恢复文本历史）
 useChatStore.subscribe((s) => {
   const data: PersistedState = {
-    workspaces: s.workspaces,
     conversations: s.conversations.map(
-      ({ id, title, updatedAt, workspaceId, turnCount, pinned }) => ({
-        id,
-        title,
-        updatedAt,
-        workspaceId,
-        turnCount,
-        pinned,
+      ({ id, title, updatedAt, turnCount, pinned }) => ({
+        id, title, updatedAt, turnCount, pinned,
       }),
     ),
     activeId: s.activeId,
@@ -1123,14 +1019,6 @@ useChatStore.subscribe((s) => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
   } catch {
-    // 忽略配额等存储错误
-  }
-  // 服务端同步：防抖 1s 的 fire-and-forget PUT（内容不变时 pushUiStateNow 自去重）
-  if (!_hydrating) {
-    if (_uiPushTimer !== null) clearTimeout(_uiPushTimer)
-    _uiPushTimer = setTimeout(() => {
-      _uiPushTimer = null
-      pushUiStateNow(useChatStore.getState())
-    }, 1000)
+    // 忽略配额等存储错误(会话元数据也可从 /sessions 对账恢复)
   }
 })

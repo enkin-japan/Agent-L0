@@ -4,9 +4,13 @@
 > frontend（交互前端）与可选的 SearXNG——的运行架构与关键数据流。
 > 配置统一在仓库根 config.yaml，启动统一走根 devctl.sh。
 >
-> **交互层重整进行中**（2026-07）：目标架构与分期计划见 `REARCHITECTURE.md`，
-> 冻结的事件账本协议见 `PROTOCOL.md`（双端行为标准 + `protocol/fixtures/` 测试夹具）。
-> 本文描述的 SSE/轮询交互面在 Phase 1~4 期间逐步被事件账本替代（旧端点兼容至 Phase 4）。
+> **交互层已重整为事件账本架构**（2026-07 完成）：轮次是可寻址、可重放的持久资源，
+> 编排"先记账后分发"，客户端是账本事件的瘦渲染器（web + 原生 app 共享
+> `protocol/fixtures/` 行为夹具）。协议冻结见 `PROTOCOL.md`，蓝图与踩坑见
+> `REARCHITECTURE.md`。核心交互面：`POST /turns`(202 受理即返) +
+> `GET /chat/{sid}/events`(附着流,断线任意重连重放) + `GET /turn`(可恢复状态) +
+> `GET /events`(全局任务 feed)。旧 SSE/阻塞端点已退役（`POST /chat` 阻塞版留作
+> App Intents 便捷入口）。
 
 ---
 
@@ -48,14 +52,14 @@
                     │  FastAPI + Bearer 鉴权 + CORS 白名单   │
                     └──┬──────────────┬─────────────┬─────┘
                        │              │             │
-          rag_search / │   web_research│             │ PDF 导出：无头 Chrome
-          rag_admin /  │   (受限沙箱)  │             │ 打印前端 /print/deck
-          记忆沉淀 HTTP │              │             │（渲染器只有前端一份）
+          rag_search / │   web_research│             │ PDF 导出：无头 Chrome 打印
+          rag_admin /  │   (受限沙箱)  │             │ /print/deck（前端在跑打前端,
+          记忆沉淀 HTTP │              │             │  否则打后端自托管包;渲染器同一份）
                        ▼              ▼             ▼
-        ┌──────────────────┐  ┌──────────────┐  ┌──────────────────┐
-        │   rag :14160     │  │SearXNG :8080 │  │ 前端 :5173        │
-        │  (仅回环, 无鉴权) │  │  (原生 venv) │  │  /print/deck 路由 │
-        └──────────────────┘  └──────────────┘  └──────────────────┘
+        ┌──────────────────┐  ┌──────────────┐  ┌──────────────────────────┐
+        │   rag :14160     │  │SearXNG :8080 │  │ 前端 :5173 /print/deck    │
+        │  (仅回环, 无鉴权) │  │  (原生 venv) │  │ 或 backend/static/webapp  │
+        └──────────────────┘  └──────────────┘  └──────────────────────────┘
 ```
 
 ---
@@ -67,9 +71,9 @@
 │                                                                                  │
 │  表现层  framework/api/                                                          │
 │  ┌────────────────────────────────────────────────────────────────────────────┐ │
-│  │ routes.py：/chat /chat/stream(SSE) /approval /task/{cancel,suspend,resume}  │ │
-│  │ /history /branch /turns/last /memory /tools /tasks /schedules /ui-state     │ │
-│  │ /files/{sid}/assets|deck     auth.py：Bearer 常量时间比对（空key=放行+告警）│ │
+│  │ routes.py：/turns(202) /turns/{approval,resume} /turn /events(附着流)      │ │
+│  │ /history /branch /turns/last /meta /memory /tools /tasks /events(全局feed) │ │
+│  │ /schedules /files/{sid}/assets|deck   auth：Bearer 常量时间比对（空key=告警放行）│ │
 │  └───────┬────────────────────────────────────────────────────────────────────┘ │
 │          │ session.lock（同会话整轮串行）                                        │
 │          ▼                                                                       │
@@ -153,41 +157,52 @@
 
 ## 5. 一次对话轮的完整生命周期
 
+事件账本架构（"先记账后分发"）：轮次是可寻址资源，提交与观察解耦——
+提交端 202 受理即返，过程与终态经附着流观察，断线不改变轮次状态。
+
 ```
  用户输入(文字+文件)
       │
       ▼
- 前端 useChatStore.sendMessage ── multipart POST /api/v1/chat/{sid}/stream
+ 客户端 submitTurn ── multipart POST /api/v1/chat/{sid}/turns ──▶ 202 {turn_id, seq}
+      │                                    │                          (受理即返,不长连)
+      │                          TurnRunner.accept_turn（短临界区,持 session.lock）：
+      │                            Ingestion 摄入分路（图像原生/音频 ASR/PDF 解析…）
+      │                            放弃暂停态旧轮 → 追加用户消息 → write_inflight
+      │                            → 账本 turn_queued（→ 全局 feed 镜像）
       │                                    │
-      │                          Ingestion 摄入分路（推理锁之外）：
-      │                            图像→原生直喂 / 音频→Whisper ASR 转写
-      │                            PDF→文本抽取或渲染成图 / 代码大文件→懒登记路径
-      │                                    │
-      │                          session.lock → 清理残留审批/挂起 → 追加用户消息
-      │                          write_inflight 预写标记 → scheduler.acquire
-      │                                    │
-      │                       ┌── Orchestrator.run_turn（ReAct 循环）──┐
-      │   SSE: token/thinking │  生成(engine) → 解析 → 元工具│物理工具  │
-      │◀──tool_started/result─┤  审批命中 → pending_approval 挂起返回   │
-      │      task_progress    │  取消/挂起检查点 → cancelled/suspended  │
-      │                       │  纯文本+计划完成 → success              │
-      │                       └────────────────┬───────────────────────┘
-      │                                        │ scheduler.release/suspend
-      │                          结果分流：成功/警告→append_log 落盘+save_task
-      │                                 待审批→session.pending_turn（暂存内存）
-      │                                 挂起→session.suspended_turn（暂存内存）
-      │                                 取消/故障→history 整轮回滚，落盘存档
-      │                                        │
-      │                          落盘后若 prompt_tokens > 8000：
-      │                            折叠旧轮→滚动摘要(memory.json)
-      │                            + 原文沉淀 RAG agent_memory
+      │  ┌─ 客户端 attachEvents ── GET /api/v1/chat/{sid}/events?after=seq (SSE) ─┐
+      │  │  重放 seq 之后的账本事件 → 转实时续播；断线带游标任意重连          │
+      │  ▼                                                                       │
+ TurnRunner.run_accepted（背景任务,持锁全程）：scheduler.acquire → turn_started
+      │                       ┌── Orchestrator.run_turn（ReAct 循环）──────────┐
+      │  账本(唯一写入者)：    │  engine.generate（专用推理线程,事件循环自由）  │
+      │  iteration_started /   │   → VisibleTextStreamer 增量过滤：              │
+      │  token_delta /         │      · 可见正文 → token_delta                  │
+      │  thinking_delta /      │      · thought 频道 → thinking_delta（逐段）    │
+      │  tool_call_pending /   │      · 工具块解析出 name → tool_call_pending    │
+      │  tool_started/result / │   → 解析 → 元工具│物理工具                     │
+      │  plan_updated /        │  审批命中 → awaiting_approval（暂停,worker 让出）│
+      │  step_completed…       │  取消/挂起检查点 → cancelled / suspended       │
+      │                        │  纯文本+计划完成 → success                     │
+      │                        └────────────────┬──────────────────────────────┘
+      │                          终态分流（_settle,持锁）：
+      │                            成功/警告/取消/故障 → append_log 落盘 + save_task
+      │                                            → 账本 turn_ended（→ feed）
+      │                            待审批 → pending_turn 暂存 + awaiting_approval
+      │                            挂起   → suspended_turn 暂存 + suspended
+      │                            落盘后 prompt_tokens>8000 → 折叠摘要 + RAG 沉淀
       ▼
- SSE: turn_end（权威终态，前端撤下流式预览、按 response 对账）
+ 账本事件流(经 events 附着) —— 客户端 TurnReducer 归约为规范态投影 UI：
+      token/thinking 逐段预览；turn_ended 权威终态撤下预览、按 response 对账
       │
-      ├─ pending_approval → 前端弹审批卡片 → POST /approval {approve}
-      │                     批准→执行工具→回到 run_turn 续跑；拒绝→反馈模型改路
-      └─ suspended → 前端「可恢复」横幅 → POST /task/resume 续跑
+      ├─ awaiting_approval → 审批卡（刷新可经 /turn 重建）→ POST /turns/approval {approve}
+      │                       批准→执行工具→续跑；拒绝→反馈模型改路（均走事件流）
+      └─ suspended → 「可恢复」横幅 → POST /turns/resume 续跑
                      （或发新消息 = 放弃挂起任务）
+
+恢复（刷新/杀进程/切后台/断线）统一一条路：GET /turn 拿可恢复状态（含审批卡/
+进行中预览）→ GET /events?after 续播。崩溃防丢仍靠 inflight.json（write-ahead）。
 ```
 
 ---
@@ -204,7 +219,7 @@ lib/turn-reducer.ts    事件归约器（PROTOCOL.md §5 的纯函数实现）�
 store/useChatStore.ts  会话/消息主状态机：附着流驱动（单附着=活跃会话一条
                        /events 长连；断线静默退避重连；刷新/切回经 /history +
                        /turn + 事件重放恢复,审批卡/直播预览可完整重建）
-                       + outbox 发送暂存 + /ui-state 服务端跨设备同步
+                       + outbox 发送暂存（会话元数据 localStorage + /sessions 对账）
 store/useUiStore.ts    语言/主题 + /tasks(3s) /schedules(10s) 轮询对账
 components/dashboard/  聊天区/输入/侧栏/检视面板(工具·任务·记忆)/定时任务条
 components/deck/       SlideRenderer（Deck 唯一渲染器）+ /print/deck 打印路由
@@ -227,7 +242,7 @@ MacAgent/                        （monorepo 根）
 │   │                            inflight.json(预写标记) image/ audio/ attach/
 │   │                            assets/(图表PNG/PDF) deck/deck.json(PPT真相)
 │   ├── schedules/{id}/          schedule.json(定义) runs.jsonl(运行历史)
-│   ├── ui_state.json            前端工作区状态（服务端化，换设备恢复）
+│   ├── static/webapp/           deck 打印页自托管包（devctl bundle-print 生成，gitignored）
 │   └── models/                  gemma-4-e4b-it-4bit / whisper-large-v3-turbo
 ├── rag/
 │   ├── chroma_data/             ChromaDB 持久化（每分类一个 collection + meta 库）

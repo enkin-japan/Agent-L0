@@ -496,6 +496,15 @@ case "$CMD" in
         "$0" stop "$TARGET" && "$0" start "$TARGET"
         exit $?
         ;;
+    bundle-print)
+        # deck 打印页自托管包:构建前端并把产物放进 backend/static/webapp——
+        # 前端服务不跑时,后端也能独立导出 deck PDF(pdf_export 自动回退到这份)。
+        ( cd "$ROOT/frontend" && npm run build ) || { fail "前端构建失败"; exit 1; }
+        rm -rf "$ROOT/backend/static/webapp"
+        mkdir -p "$ROOT/backend/static"
+        cp -R "$ROOT/frontend/dist" "$ROOT/backend/static/webapp"
+        info "打印包已就位 → backend/static/webapp(重启 backend 生效)"
+        ;;
     status) do_status ;;
     logs)   do_logs "$TARGET" ;;
     *)
@@ -504,6 +513,7 @@ case "$CMD" in
         echo "      $0 start|stop|restart [rag|searx|backend|front|all]"
         echo "      $0 status"
         echo "      $0 logs [rag|searx|backend|front]"
+        echo "      $0 bundle-print                            # 构建 deck 打印包进 backend（前端不跑也能导 PDF）"
         echo "远程示例: ssh <host> '$ROOT/devctl.sh restart'"
         exit 1
         ;;
