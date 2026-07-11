@@ -3,6 +3,10 @@
 > 描述本仓库（monorepo）四个组件——backend（Agent 主体）、rag（RAG 数据库）、
 > frontend（交互前端）与可选的 SearXNG——的运行架构与关键数据流。
 > 配置统一在仓库根 config.yaml，启动统一走根 devctl.sh。
+>
+> **交互层重整进行中**（2026-07）：目标架构与分期计划见 `REARCHITECTURE.md`，
+> 冻结的事件账本协议见 `PROTOCOL.md`（双端行为标准 + `protocol/fixtures/` 测试夹具）。
+> 本文描述的 SSE/轮询交互面在 Phase 1~4 期间逐步被事件账本替代（旧端点兼容至 Phase 4）。
 
 ---
 

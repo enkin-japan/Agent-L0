@@ -1,0 +1,12 @@
+{"seq": 1, "turn_id": "t_9f3c2a000001", "ts": 1783600000.0, "type": "turn_queued", "data": {"prompt": "东京今天多少度?", "attachments": [], "gen": {"enable_thinking": false, "thinking_budget": 2048, "max_tokens": 4096, "temperature": 0.2, "min_p": 0.05}, "origin": "chat"}}
+{"seq": 2, "turn_id": "t_9f3c2a000001", "ts": 1783600000.1, "type": "turn_started", "data": {}}
+{"seq": 3, "turn_id": "t_9f3c2a000001", "ts": 1783600000.2, "type": "iteration_started", "data": {"n": 1, "thinking": true}}
+{"seq": 4, "turn_id": "t_9f3c2a000001", "ts": 1783600004.0, "type": "thinking_delta", "data": {"text": "用户问东京天气,应当调用联网调查工具获取实时气温。"}}
+{"seq": 5, "turn_id": "t_9f3c2a000001", "ts": 1783600004.1, "type": "tool_started", "data": {"call_id": "c1a2b3c4", "name": "web_research", "args": {"query": "东京 今日 气温"}}}
+{"seq": 6, "turn_id": "t_9f3c2a000001", "ts": 1783600006.0, "type": "tool_progress", "data": {"call_id": "c1a2b3c4", "label": "正在搜索", "detail": "东京 今日 气温"}}
+{"seq": 7, "turn_id": "t_9f3c2a000001", "ts": 1783600012.0, "type": "tool_result", "data": {"call_id": "c1a2b3c4", "name": "web_research", "response": "东京今日晴,当前气温 31°C,最高 34°C。", "status": "ok"}}
+{"seq": 8, "turn_id": "t_9f3c2a000001", "ts": 1783600012.6, "type": "hologram_projection", "data": {"whatever": ["future", 42]}}
+{"seq": 9, "turn_id": "t_9f3c2a000001", "ts": 1783600012.5, "type": "iteration_started", "data": {"n": 2, "thinking": false}}
+{"seq": 10, "turn_id": "t_9f3c2a000001", "ts": 1783600013.0, "type": "token_delta", "data": {"text": "东京今天晴,"}}
+{"seq": 11, "turn_id": "t_9f3c2a000001", "ts": 1783600013.4, "type": "token_delta", "data": {"text": "当前 31°C(最高 34°C)。"}}
+{"seq": 12, "turn_id": "t_9f3c2a000001", "ts": 1783600014.0, "type": "turn_ended", "data": {"status": "success", "prompt": "东京今天多少度?", "image": [], "audio": [], "ingested_text": "", "attachments": [], "enable_thinking": false, "thinking_budget": 2048, "max_tokens": 4096, "temperature": 0.2, "min_p": 0.05, "response": [{"role": "assistant", "tool_calls": [{"type": "function", "name": "web_research", "arguments": {"query": "东京 今日 气温"}}], "thoughts": ["用户问东京天气,应当调用联网调查工具获取实时气温。"]}, {"role": "tool", "tool_responses": [{"name": "web_research", "response": "东京今日晴,当前气温 31°C,最高 34°C。"}]}, {"role": "assistant", "content": "东京今天晴,当前 31°C(最高 34°C)。"}], "prompt_tokens": 1234, "generation_tokens": 87, "generation_tps": 21.3, "turn_index": 0}}

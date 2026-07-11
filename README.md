@@ -9,6 +9,9 @@ MacAgent/
 ├── config.yaml          # 全项目唯一配置文件（backend 与 rag 共读，改这里即可）
 ├── .env.example         # 环境变量模板（复制为 .env.local 填写密钥；backend 与前端代理共读）
 ├── ARCHITECTURE.md      # 运行架构逻辑示意图（拓扑 / 分层 / 数据流 / 生命周期）
+├── REARCHITECTURE.md    # 交互层重整蓝图（体检报告 / 目标架构 / 四期迁移计划）
+├── PROTOCOL.md          # 交互协议 v1（事件账本契约，双端行为标准）
+├── protocol/fixtures/   # 协议测试夹具（web 与原生 app 共享的行为标准）
 ├── backend/             # Agent 主体（FastAPI + MLX, :14159）：推理引擎 / 编排循环 / 工具 / 会话记忆
 ├── rag/                 # RAG 知识库（FastAPI + PyTorch MPS, :14160）：嵌入 + 重排 + ChromaDB
 ├── frontend/            # Web 前端（React 19 + Vite, :5173）：聊天 / 审批 / 任务 / Deck / 定时任务
