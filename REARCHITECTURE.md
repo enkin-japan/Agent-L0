@@ -274,12 +274,18 @@ web 步骤时间线的 tool 级卡片已由 Phase 2 归约器步骤流覆盖(含
 - 两端删净旧契约客户端代码(web sendChat*/sendApproval*/阻塞 resume;
   native chatEvents/approvalEvents/AgentEvent 解码层);
 - 原生 E2E 全部迁移到账本协议(20 项全绿:202→/turn→附着→对账→分支/回退/资产)。
-**4b(待做,单独设计)**:
-- 会话元数据服务端一等化(workspace/title 入 meta.json,`ui_state.json` blob 退役,
-  native/web 同源)——涉及工作区定义的归属设计,单独一轮;
-- deck 打印页自包含化(独立 HTML 随后端出货),解除后端→前端倒挂——
-  与"渲染器只有一份"原则的取舍需评审;
-- 文档同步(`ARCHITECTURE.md` 交互面重绘)。
+**4b ✅ 2026-07-11(用户决策后)**:
+- 会话元数据服务端一等:PATCH /meta 改名(双端同源),SessionManager.set_meta
+  落 meta.json;**工作区(分组)砍掉**(用户拍板)——web 独有+ui_state blob 双头
+  真相病灶清除,会话回归纯"最近"列表;ui_state.json 端点退役,元数据改
+  localStorage 缓存 + /sessions 对账;
+- deck 打印自托管(用户拍板"打包进后端"):devctl bundle-print → backend/static/
+  webapp;pdf_export 两级选宿主(前端可达优先,否则后端自托管+Bearer 注入),
+  实测 self-hosted 路径渲染器加载执行成功——**后端→前端倒挂解除**;
+- 顺带:/memory total_turns 统一落盘轮数(冷热一致);ARCHITECTURE.md 交互面重绘。
+
+**重整工程全部完成(Phase 0~4)。** 交付脊柱:事件账本(先记账后分发)+
+可寻址轮次 + 双端瘦渲染器 + 协议夹具锁行为 + 48 后端金测试 + 20 原生 E2E。
 
 **总量估计:9~12 个工作批次**(按现在"一批实现+真机验证"的协作节奏)。
 期间**冻结两端的新功能批次**(v0.9 式的功能迭代先停),否则全是返工。
