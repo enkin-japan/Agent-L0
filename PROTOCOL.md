@@ -244,15 +244,17 @@ resumed/turn_ended,信封加 `session_id` 字段)+ 定时任务运行事件。�
 
 ## 4. 兼容与退役计划
 
-Phase 1~3 期间旧端点全部保留,**内部走新账本**(适配层翻译,无双路逻辑):
+**Phase 4a(2026-07-11)已执行退役**:下表旧端点除注明保留者外均已移除(404),
+翻译层随之删除;`GET /task` 的 activity 快照保留(调试价值)。历史对照:
 
 | 旧 | 新语义下的实现 | 退役 |
 |---|---|---|
-| `POST /chat/{sid}/stream` | 提交轮次 + 内联附着;新事件流翻译回旧事件名(下表) | Phase 4 |
-| `POST /chat/{sid}/approval/stream` | 决议 + 内联附着,同上 | Phase 4 |
-| `POST /chat/{sid}`、`/approval`(阻塞版) | 提交/决议后等待 ended/暂停,一次性返回 | Phase 4 |
-| `POST /task/resume`(阻塞版) | 恢复后等待,返回增量消息 | Phase 4 |
-| `GET /history` 的 `inflight` 字段 | 由活跃轮状态合成(shape 不变) | Phase 4 |
+| `POST /chat/{sid}/stream` | 已退役(原:提交+内联附着的翻译层) | ✅ 4a |
+| `POST /chat/{sid}/approval/stream` | 已退役 | ✅ 4a |
+| `POST /chat/{sid}`(阻塞版) | **保留**:App Intents/脚本便捷入口(走 TurnRunner) | 保留 |
+| `POST /approval`(阻塞版) | 已退役 | ✅ 4a |
+| `POST /task/resume`(阻塞版) | 已退役 | ✅ 4a |
+| `GET /history` 的 `inflight` 字段 | 已退役(客户端经 /turn + /events 恢复) | ✅ 4a |
 | `GET /task` 的 `activity` 快照 | 照旧(session.activity 继续维护) | 保留(调试价值) |
 
 **旧事件名翻译表**(适配层内固定映射):

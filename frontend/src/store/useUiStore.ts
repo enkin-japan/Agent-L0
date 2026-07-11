@@ -1,6 +1,6 @@
 import { create } from "zustand"
 
-import { getTasks, listSchedules } from "@/api/agent"
+import { attachGlobalFeed, getTasks, listSchedules } from "@/api/agent"
 import { detectLang, getDict, type Dict, type Lang } from "@/lib/i18n"
 import type { ScheduleListResponse, TaskListResponse } from "@/types/agent-api"
 
@@ -46,6 +46,48 @@ interface UiState {
 
 let schedulerTimer: ReturnType<typeof setInterval> | null = null
 let scheduleTimer: ReturnType<typeof setInterval> | null = null
+
+// ---- 全局任务 feed(Phase 3b):跨会话生命周期事件的长连,断线静默退避重连 ----
+let feedCtl: AbortController | null = null
+
+function startFeed(onLifecycle: () => void) {
+  if (feedCtl) return
+  const ctl = new AbortController()
+  feedCtl = ctl
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null
+  const refresh = () => {
+    // 去抖 300ms:一轮生命周期常带多个事件(queued+started 相邻),合并成一次快照刷新
+    if (refreshTimer) clearTimeout(refreshTimer)
+    refreshTimer = setTimeout(onLifecycle, 300)
+  }
+  void (async () => {
+    let backoff = 1000
+    let cursor = 0
+    while (!ctl.signal.aborted) {
+      try {
+        for await (const item of attachGlobalFeed(cursor, ctl.signal)) {
+          backoff = 1000
+          if (typeof item.feed_seq === "number" && item.feed_seq > 0) {
+            if (item.feed_seq <= cursor) continue
+            cursor = item.feed_seq
+          }
+          if (item.type !== "stream_attached") refresh()
+        }
+        break // 服务端正常收流
+      } catch {
+        if (ctl.signal.aborted) break
+        await new Promise((r) => setTimeout(r, backoff))
+        backoff = Math.min(backoff * 2, 15000)
+      }
+    }
+    if (feedCtl === ctl) feedCtl = null
+  })()
+}
+
+function stopFeed() {
+  feedCtl?.abort()
+  feedCtl = null
+}
 
 /**
  * 用 /tasks 快照对账挂起会话集合（后端调度器是唯一权威）：
@@ -104,7 +146,11 @@ export const useUiStore = create<UiState>((set) => ({
         .catch(() => set({ tasks: null }))
     }
     tick()
-    schedulerTimer = setInterval(tick, 3000)
+    // Phase 3b:全局 feed 驱动——生命周期事件到达即刷新快照(去抖),
+    // 固定轮询降级为 30s 慢对账兜底(断线/漏事件自愈)。/tasks 快照仍是
+    // 数据权威(waiting/running 秒数等),feed 只当"该刷新了"的门铃。
+    schedulerTimer = setInterval(tick, 30000)
+    startFeed(tick)
   },
 
   stopSchedulerPolling: () => {
@@ -112,6 +158,7 @@ export const useUiStore = create<UiState>((set) => ({
       clearInterval(schedulerTimer)
       schedulerTimer = null
     }
+    stopFeed()
   },
 
   startSchedulePolling: () => {

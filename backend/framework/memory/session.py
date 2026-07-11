@@ -1002,27 +1002,6 @@ class SessionManager:
                     continue
         return turns
 
-    def read_inflight(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """读取某会话的「进行中轮次」预写标记（inflight.json）——纯磁盘读，不拉起会话。
-
-        标记在轮首写入、append_log 时清除（待审批/挂起态不清），故其存在 ⟺ 有一轮用户
-        输入尚未落进 history.jsonl。供 /history 作为独立 provisional 字段返回，使刷新时
-        进行中的轮次可见（用户消息 + "生成中"），而非空白会话。绝不并入 turns 数组——
-        分支下标依赖 turns 位置，混入会错位（见 get_history 契约）。
-        轮末 append 与 clear 之间的亚毫秒窗口可能与已落盘轮次并存（重影），由前端轮询自愈。"""
-        marker = self.sessions_dir / session_id / "inflight.json"
-        if not marker.exists():
-            return None
-        try:
-            data = json.loads(marker.read_text(encoding="utf-8"))
-        except Exception:
-            return None
-        return {
-            "prompt": str(data.get("prompt", "")),
-            "started_at": data.get("started_at"),
-            "gen": data.get("gen") or {},
-        }
-
     def _relink_media(self, src_path_str: str, dest_dir: Path) -> str:
         """
         将父会话引用的多模态文件“零拷贝”复用到分支目录：优先硬链接（共享物理数据块），

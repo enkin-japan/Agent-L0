@@ -414,27 +414,6 @@ async def suspend_task(session_id: str, request: Request):
             "response": "该任务当前不在运行中，无法挂起（可能已在排队/挂起，或无进行中的任务）。"}
 
 
-@router.post("/api/v1/chat/{session_id}/task/resume", response_model=ChatResponse)
-async def resume_task(session_id: str, request: Request):
-    """
-    恢复一个已挂起的任务（旧阻塞接口,兼容至 Phase 4）：内部走 TurnRunner 同一闭环,
-    响应仅含本次续跑新增的消息。新客户端用 POST /turns/resume(202) + GET /events。
-    """
-    runner = request.app.state.turn_runner
-    session_manager = request.app.state.session_manager
-    session = session_manager.get_or_create(session_id)
-    try:
-        await runner.accept_resume(session, session_id)
-    except TurnConflict:
-        return {
-            "status": "fail",
-            "prompt": "", "image": [], "audio": [],
-            "enable_thinking": False, "max_tokens": 0, "temperature": 0.0, "min_p": 0.0,
-            "response": [{"role": "system", "content": "当前会话没有挂起的任务（可能已恢复、已完结或会话被回收）。"}],
-        }
-    return public_turn(await runner.run_resume(session, session_id))
-
-
 @router.get("/api/v1/sessions", response_model=SessionListResponse)
 async def list_sessions(request: Request):
     """
@@ -488,15 +467,13 @@ async def get_history(session_id: str, request: Request):
     """
     session_manager = request.app.state.session_manager
     turns = session_manager.get_history(session_id)
-    # 进行中轮次（inflight 预写标记）：作为独立字段返回，绝不并入 turns（分支下标依赖 turns
-    # 位置）。使刷新时正在生成/待审批/挂起的轮次可见（用户消息 + 生成中），而非空白会话。
-    inflight = session_manager.read_inflight(session_id)
+    # 进行中轮次不再随历史下发(Phase 4 退役):客户端统一经 GET /turn + /events
+    # 恢复活跃轮;inflight.json 仅存崩溃防丢(write-ahead)一个职责。
     return {
         "status": True,
         "session_id": session_id,
         "count": len(turns),
         "turns": turns,
-        "inflight": inflight,
     }
 
 
@@ -535,88 +512,6 @@ _CONFLICT_MSG = {
 }
 
 
-def _legacy_frames(env: Dict[str, Any], session) -> list:
-    """把账本事件信封翻译成旧 SSE 契约的 (event, data) 帧列表。
-    生命周期边界(awaiting/suspended/ended)由生成器就地处理,不经本函数。"""
-    etype, data = env["type"], env["data"]
-    if etype == "token_delta":
-        return [("token", {"delta": data.get("text", "")})]
-    if etype == "thinking_delta":
-        return [("thinking", {"text": data.get("text", "")})]
-    if etype in ("tool_started", "tool_result"):
-        return [(etype, dict(data))]
-    if etype in ("iteration_started", "plan_updated", "step_completed",
-                 "step_failed", "tool_progress"):
-        # 旧契约的 task_progress = {task, activity} 快照;plan_updated 自带最新快照,
-        # 其余按当刻会话状态合成(与旧实现的快照语义一致)
-        if etype == "plan_updated":
-            task = data.get("task")
-        else:
-            t = session.task_state
-            task = t.snapshot() if (t is not None and t.plan) else None
-        return [("task_progress", {"task": task, "activity": session.activity_snapshot()})]
-    return []  # turn_queued/turn_started/resumed 等:旧契约无对应帧
-
-
-def _legacy_stream_response(session, session_id: str, runner, *, accept, run_factory):
-    """
-    旧 SSE 端点(/stream 与 /approval/stream)的共享实现:订阅账本 → 受理 → 背景执行 →
-    把新事件流翻译回旧事件名,至本轮边界(turn_end)闭流。客户端中途断开不影响执行
-    (背景任务持有账本,轮次照常完结落盘)。
-    accept: 受理协程工厂,返回 turn_id(冲突抛 TurnConflict);
-    run_factory: 受理成功后产生执行协程(spawn 到背景)。
-    """
-    journal = session.journal
-
-    async def event_gen():
-        queue = journal.subscribe()  # 先订阅后受理:受理瞬间的事件零丢失
-        try:
-            try:
-                turn_id = await accept()
-            except TurnConflict as e:
-                yield _sse("turn_start", {"turn_id": None, "session_id": session_id})
-                yield _sse("turn_end", {
-                    "turn_id": None, "status": "fail",
-                    "response": [{"role": "system",
-                                  "content": _CONFLICT_MSG.get(e.reason, e.reason)}],
-                })
-                return
-            runner.spawn(session_id, run_factory())
-            yield _sse("turn_start", {"turn_id": turn_id, "session_id": session_id})
-            while True:
-                try:
-                    env = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECS)
-                except asyncio.TimeoutError:
-                    yield _SSE_HEARTBEAT
-                    continue
-                if env is None:
-                    break  # 会话被删除,账本终结
-                if env.get("turn_id") != turn_id:
-                    continue  # 其他轮次的事件(如受理时放弃的旧轮收尾)
-                etype = env["type"]
-                if etype == "awaiting_approval":
-                    rd = public_turn(session.pending_turn or {})
-                    yield _sse("turn_end", {"turn_id": turn_id, **rd})
-                    break
-                if etype == "suspended":
-                    rd = public_turn(session.suspended_turn or {})
-                    yield _sse("turn_end", {"turn_id": turn_id, **rd})
-                    break
-                if etype == "turn_ended":
-                    yield _sse("turn_end", {"turn_id": turn_id, **env["data"]})
-                    break
-                for name, payload in _legacy_frames(env, session):
-                    yield _sse(name, {"turn_id": turn_id, **payload})
-        finally:
-            journal.unsubscribe(queue)
-
-    return StreamingResponse(
-        event_gen(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-    )
-
-
 async def _prepare_turn(request: Request, session_id: str, system: str, files):
     """两个对话端点的共用前置：取依赖、恢复/建会话、摄入解析（在推理 worker 之外完成）。"""
     orchestrator = request.app.state.orchestrator
@@ -648,8 +543,8 @@ async def chat_endpoint(
     files: Optional[List[UploadFile]] = File(None)
 ):
     """
-    核心对话接口（非流式，回退路径，兼容至 Phase 4）：一次性返回整轮结果。
-    内部走 TurnRunner 同一闭环。真流式见 /stream；新客户端用 /turns + /events。
+    非流式便捷入口（App Intents / 脚本一次性问答）：阻塞到整轮完成一次性返回。
+    内部走 TurnRunner 同一闭环;交互客户端一律用 /turns(202) + /events(附着流)。
     """
     _, _, session, io = await _prepare_turn(request, session_id, system, files)
     runner = request.app.state.turn_runner
@@ -668,83 +563,6 @@ async def chat_endpoint(
             "response": [{"role": "system", "content": _CONFLICT_MSG.get(e.reason, e.reason)}],
         }
     return public_turn(await runner.run_accepted(session, session_id, ctx))
-
-
-@router.post("/api/v1/chat/{session_id}/stream")
-async def chat_stream(
-    session_id: str,
-    request: Request,
-    prompt: str = Form(...),
-    system: str = Form(""),
-    enable_thinking: bool = Form(False),
-    thinking_budget: int = Form(2048),
-    max_tokens: int = Form(4096),
-    temperature: float = Form(0.2),
-    min_p: float = Form(0.05),
-    files: Optional[List[UploadFile]] = File(None)
-):
-    """
-    真流式对话接口（SSE，旧事件契约，兼容至 Phase 4）：turn_start / token / thinking /
-    tool_started / tool_result / task_progress / turn_end。内部=受理进账本 + 背景执行 +
-    翻译层回放（PROTOCOL.md §4）。客户端中途断开不丢工作（轮次照常完成并存档）。
-    新客户端用 POST /turns(202) + GET /events（可断线重连续播）。
-    """
-    _, _, session, io = await _prepare_turn(request, session_id, system, files)
-    runner = request.app.state.turn_runner
-    gen = {"temperature": temperature, "min_p": min_p, "enable_thinking": enable_thinking,
-           "thinking_budget": thinking_budget, "max_tokens": max_tokens}
-
-    ctx_box: Dict[str, Any] = {}
-
-    async def accept():
-        ctx = await runner.accept_turn(
-            session, session_id, prompt=prompt, images=io["images"], audios=io["audios"],
-            ingested_text=io["ingested_text"], attachments=io["attachments"], gen=gen)
-        ctx_box["ctx"] = ctx
-        return ctx["turn_id"]
-
-    return _legacy_stream_response(
-        session, session_id, runner,
-        accept=accept,
-        run_factory=lambda: runner.run_accepted(session, session_id, ctx_box["ctx"]),
-    )
-
-
-@router.post("/api/v1/chat/{session_id}/approval", response_model=ChatResponse)
-async def approve_pending_tools(session_id: str, request: Request, body: ApprovalRequest):
-    """
-    敏感工具审批决议接口（非流式，回退路径，兼容至 Phase 4）：一次性返回决议后新增的消息。
-    内部走 TurnRunner。真流式见 /approval/stream；新客户端用 /turns/approval + /events。
-    """
-    runner = request.app.state.turn_runner
-    session_manager = request.app.state.session_manager
-    session = session_manager.get_or_create(session_id)
-    try:
-        await runner.accept_approval(session, session_id, body.approve)
-    except TurnConflict:
-        return {
-            "status": "fail",
-            "prompt": "", "image": [], "audio": [],
-            "enable_thinking": False, "max_tokens": 0, "temperature": 0.0, "min_p": 0.0,
-            "response": [{"role": "system", "content": "当前会话没有等待审批的操作（可能已过期或已被处理）。"}],
-        }
-    return public_turn(await runner.run_approval(session, session_id, body.approve))
-
-
-@router.post("/api/v1/chat/{session_id}/approval/stream")
-async def approve_pending_tools_stream(session_id: str, request: Request, body: ApprovalRequest):
-    """
-    审批决议真流式接口（SSE，旧事件契约，兼容至 Phase 4）：与 /stream 同一套事件。
-    内部=受理进账本 + 背景执行 + 翻译层回放；断开不丢工作。
-    """
-    runner = request.app.state.turn_runner
-    session_manager = request.app.state.session_manager
-    session = session_manager.get_or_create(session_id)
-    return _legacy_stream_response(
-        session, session_id, runner,
-        accept=lambda: runner.accept_approval(session, session_id, body.approve),
-        run_factory=lambda: runner.run_approval(session, session_id, body.approve),
-    )
 
 
 # ---------- 事件账本端点(PROTOCOL.md §2.4~§2.6,协议 v1 正式面) ----------

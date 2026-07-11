@@ -211,7 +211,6 @@ class HistoryResponse(BaseModel):
     count: int
     turns: List[Dict[str, Any]]
     # 进行中轮次预写标记（{prompt, started_at, gen}）；无则 None。独立于 turns（不参与分支下标）。
-    inflight: Optional[Dict[str, Any]] = None
 
 class BranchRequest(BaseModel):
     """

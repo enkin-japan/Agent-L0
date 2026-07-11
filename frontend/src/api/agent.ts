@@ -51,80 +51,6 @@ function buildChatForm(params: ChatRequestParams): FormData {
   return form
 }
 
-/** 非流式对话（回退路径）：一次性返回整轮结果。默认走流式 sendChatStream。 */
-export async function sendChat(
-  sessionId: string,
-  params: ChatRequestParams,
-  signal?: AbortSignal,
-): Promise<ChatResponse> {
-  const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}`, {
-    method: "POST",
-    body: buildChatForm(params),
-    signal,
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
-}
-
-/** 真流式对话回调。token=可见正文逐段（临时预览）；turnEnd=权威 response（对账为准）。
- *  thinking/toolStarted/toolResult/taskProgress 为编排过程的结构化事件（P2 事件全量）。 */
-export interface ChatStreamHandlers {
-  onTurnStart?: (e: { turn_id: string; session_id: string }) => void
-  onToken: (delta: string) => void
-  onThinking?: (text: string) => void
-  onToolStarted?: (e: { call_id: string; name: string; args: unknown }) => void
-  onToolResult?: (e: { call_id: string; name: string; response: string; status: string }) => void
-  onTaskProgress?: (e: { task: TaskSnapshot | null; activity: LiveActivity | null }) => void
-  onTurnEnd: (res: ChatResponse) => void
-}
-
-/**
- * 真流式对话（SSE）：POST multipart 到 /stream，读事件流分派回调。
- * 契约：token 只作即时预览，最终一律以 turn_end 的 response 对账（终态可能是
- * success/fail/cancelled/warning/pending_approval）。turn_end 到达即视为本轮结束。
- */
-export async function sendChatStream(
-  sessionId: string,
-  params: ChatRequestParams,
-  handlers: ChatStreamHandlers,
-  signal?: AbortSignal,
-): Promise<void> {
-  const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}/stream`, {
-    method: "POST",
-    body: buildChatForm(params),
-    headers: { Accept: "text/event-stream" },
-    signal,
-  })
-  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
-
-  for await (const frame of parseSSE(res.body)) {
-    const d = JSON.parse(frame.data)
-    switch (frame.event) {
-      case "token":
-        handlers.onToken(d.delta)
-        break
-      case "thinking":
-        handlers.onThinking?.(d.text)
-        break
-      case "tool_started":
-        handlers.onToolStarted?.(d)
-        break
-      case "tool_result":
-        handlers.onToolResult?.(d)
-        break
-      case "task_progress":
-        handlers.onTaskProgress?.({ task: d.task ?? null, activity: d.activity ?? null })
-        break
-      case "turn_start":
-        handlers.onTurnStart?.(d)
-        break
-      case "turn_end":
-        handlers.onTurnEnd(d as ChatResponse)
-        break
-    }
-  }
-}
-
 // ---------- 事件账本协议 v1（PROTOCOL.md §2.4~§2.6）:轮次是可寻址资源 ----------
 
 /** 受理冲突（409）：会话已有排队/运行中的轮次,或决议/恢复的目标态不存在。 */
@@ -175,6 +101,31 @@ export async function submitResume(sessionId: string): Promise<TurnAccepted> {
   return acceptedOrConflict(res)
 }
 
+/** 全局任务 feed 信封（PROTOCOL.md §2.7）：跨会话生命周期事件 + 独立 feed_seq 游标。 */
+export interface FeedEnvelope {
+  feed_seq: number
+  session_id?: string
+  turn_id?: string | null
+  ts?: number
+  type: string
+  data?: Record<string, unknown>
+}
+
+/** 附着全局任务 feed（SSE）：重放 feed_seq > after 后转实时续播。断开由调用方带游标重连。 */
+export async function* attachGlobalFeed(
+  after: number,
+  signal?: AbortSignal,
+): AsyncGenerator<FeedEnvelope> {
+  const res = await fetch(`${BASE_URL}/api/v1/events?after=${after}`, {
+    headers: { Accept: "text/event-stream" },
+    signal,
+  })
+  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+  for await (const frame of parseSSE(res.body)) {
+    yield JSON.parse(frame.data) as FeedEnvelope
+  }
+}
+
 /** 当前轮次的可恢复状态（无活跃轮次时 turn 为 null）+ 账本游标 last_seq。 */
 export async function getTurnState(sessionId: string): Promise<TurnStateResponse> {
   const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}/turn`)
@@ -199,68 +150,6 @@ export async function* attachEvents(
   if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
   for await (const frame of parseSSE(res.body)) {
     yield JSON.parse(frame.data) as EventEnvelope
-  }
-}
-
-/** 对挂起的敏感工具调用作出决议（非流式，回退路径）。与 sendChat 一样阻塞式。默认走 sendApprovalStream。 */
-export async function sendApproval(
-  sessionId: string,
-  approve: boolean,
-  signal?: AbortSignal,
-): Promise<ChatResponse> {
-  const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}/approval`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ approve }),
-    signal,
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
-}
-
-/**
- * 审批决议真流式（SSE）：与 sendChatStream 同一套事件契约。决议后的续跑同样是一次可能长达
- * 数分钟的生成，走 SSE + 心跳保活，扛得住 cloudflared/代理超时（阻塞版 /approval 会掉线）。
- */
-export async function sendApprovalStream(
-  sessionId: string,
-  approve: boolean,
-  handlers: ChatStreamHandlers,
-  signal?: AbortSignal,
-): Promise<void> {
-  const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}/approval/stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-    body: JSON.stringify({ approve }),
-    signal,
-  })
-  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
-
-  for await (const frame of parseSSE(res.body)) {
-    const d = JSON.parse(frame.data)
-    switch (frame.event) {
-      case "token":
-        handlers.onToken(d.delta)
-        break
-      case "thinking":
-        handlers.onThinking?.(d.text)
-        break
-      case "tool_started":
-        handlers.onToolStarted?.(d)
-        break
-      case "tool_result":
-        handlers.onToolResult?.(d)
-        break
-      case "task_progress":
-        handlers.onTaskProgress?.({ task: d.task ?? null, activity: d.activity ?? null })
-        break
-      case "turn_start":
-        handlers.onTurnStart?.(d)
-        break
-      case "turn_end":
-        handlers.onTurnEnd(d as ChatResponse)
-        break
-    }
   }
 }
 
@@ -368,20 +257,6 @@ export async function cancelTask(sessionId: string): Promise<CancelResponse> {
 export async function suspendTask(sessionId: string): Promise<CancelResponse> {
   const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}/task/suspend`, {
     method: "POST",
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
-}
-
-/** 恢复一个已挂起的任务：后端重新排队申请 worker，从挂起处续跑。阻塞式接口
- *  （续跑可能多步、耗时），响应仅含本次续跑新增的消息（与 approval 同语义）。 */
-export async function resumeTask(
-  sessionId: string,
-  signal?: AbortSignal,
-): Promise<ChatResponse> {
-  const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}/task/resume`, {
-    method: "POST",
-    signal,
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()

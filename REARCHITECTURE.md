@@ -248,8 +248,11 @@ gemma 方言层,协议改造完全不触碰。**不换语言、不换框架、�
   feed_seq 游标,turn_ended 瘦身),实测跨 3 会话聚合正常;
 - 双端消费:归约器 pending 步语义(夹具 004 双端绿),活动行显示"准备调用 X…"/
   排队位次;后端金测试 48 项全绿。
-**3b(待做)**:两端任务中心/通知改吃全局 feed(替代 /tasks 6s/3s 差分轮询);
-- 顺带:web 步骤时间线补上 tool 级卡片(现在扔掉的信息用起来);
+**3b ✅ 2026-07-11**:两端任务中心/通知改吃全局 feed——feed 作"该刷新了"的门铃
+(生命周期事件到达即刷 /tasks 快照,快照仍是秒数等数据的权威),固定轮询降级为
+30s 慢对账兜底(原 web 3s / native 6s);native 后台通知从"消失即完结"的差分猜测
+改为 turn_ended / awaiting_approval 事件直达(审批等待也能通知了)。
+web 步骤时间线的 tool 级卡片已由 Phase 2 归约器步骤流覆盖(含详情),不再单列;
 - ~~prefill 事件循环饿死~~ **✅ 提前完成(2026-07-11,用户实测反馈"任务期间像掉线"
   后拉前)**:整个推理宇宙下沉专用线程——`AgentEngine.create()` 在推理线程内加载
   模型并生成,增量经 call_soon_threadsafe 回主循环。实测生成全程 API 平均延迟
@@ -261,12 +264,22 @@ gemma 方言层,协议改造完全不触碰。**不换语言、不换框架、�
 - **验收:发一个多工具任务,从提交到收尾无超过"一次生成时长"的信息真空;
   工具名在执行前即可见;~~新会话首轮期间 /turn、/events 心跳保持响应~~ ✅。**
 
-### Phase 4 —— 清账(1 个批次)
-- 退役旧端点与 inflight 前端探测;
+### Phase 4 —— 清账
+**4a ✅ 2026-07-11(退役旧契约)**:
+- 退役端点:`POST /chat/{sid}/stream`、`/approval`、`/approval/stream`、
+  `/task/resume`(阻塞)及整个旧事件名翻译层(实测均 404);
+  `POST /chat/{sid}`(阻塞)保留为 App Intents/脚本的便捷入口(仍走 TurnRunner);
+- `/history` 撤下 inflight 字段(客户端统一经 /turn + /events 恢复;
+  inflight.json 只剩崩溃防丢一个职责);
+- 两端删净旧契约客户端代码(web sendChat*/sendApproval*/阻塞 resume;
+  native chatEvents/approvalEvents/AgentEvent 解码层);
+- 原生 E2E 全部迁移到账本协议(20 项全绿:202→/turn→附着→对账→分支/回退/资产)。
+**4b(待做,单独设计)**:
 - 会话元数据服务端一等化(workspace/title 入 meta.json,`ui_state.json` blob 退役,
-  native/web 同源);
-- deck 打印页自包含化(独立 HTML 随后端出货),解除后端→前端倒挂;
-- 文档同步(`ARCHITECTURE.md` 重绘)。
+  native/web 同源)——涉及工作区定义的归属设计,单独一轮;
+- deck 打印页自包含化(独立 HTML 随后端出货),解除后端→前端倒挂——
+  与"渲染器只有一份"原则的取舍需评审;
+- 文档同步(`ARCHITECTURE.md` 交互面重绘)。
 
 **总量估计:9~12 个工作批次**(按现在"一批实现+真机验证"的协作节奏)。
 期间**冻结两端的新功能批次**(v0.9 式的功能迭代先停),否则全是返工。
