@@ -2,6 +2,16 @@ import re
 import json
 from typing import Dict, Any
 
+# error 调用的 raw_input 上限：解析失败的原文会被原样回显给模型（纠错反馈）并进入
+# 历史/账本——失控超长的半截 JSON（可达上万 token）必须截断，防止反馈自体膨胀。
+_ERROR_RAW_MAX = 1500
+
+
+def _cap(raw: str) -> str:
+    raw = raw.strip()
+    return raw if len(raw) <= _ERROR_RAW_MAX else raw[:_ERROR_RAW_MAX] + " …[truncated]"
+
+
 class ResponseParser:
     """
     负责将大模型的流式或完整输出文本，反序列化为结构化的推理和动作信号。
@@ -71,7 +81,7 @@ class ResponseParser:
                     # 将格式错误作为一个独立的数据结构返回，由 Engine 统一拦截
                     result["tool_calls"].append({
                         "type": "error",
-                        "raw_input": raw_tool_content,
+                        "raw_input": _cap(raw_tool_content),
                         "error_msg": str(e)
                     })
             else:
@@ -89,14 +99,14 @@ class ResponseParser:
                     else:
                         result["tool_calls"].append({
                             "type": "error",
-                            "raw_input": raw_tool_content,
+                            "raw_input": _cap(raw_tool_content),
                             "error_msg": ("A tool call must be a JSON object with a string 'name' "
                                           "and an 'arguments' object."),
                         })
                 except json.JSONDecodeError:
                     result["tool_calls"].append({
                         "type": "error",
-                        "raw_input": raw_tool_content,
+                        "raw_input": _cap(raw_tool_content),
                         "error_msg": "Severely malformed: neither native tool-call format nor valid JSON."
                     })
 
@@ -111,18 +121,41 @@ class ResponseParser:
             dangling = current_response[idx + len(self.stc):].strip()
             result["tool_calls"].append({
                 "type": "error",
-                "raw_input": dangling,
+                "raw_input": _cap(dangling),
                 "error_msg": ("Unterminated tool call: the closing marker is missing — your "
                               "output ended before the call was complete. Re-issue it as ONE "
                               "complete, compact JSON call (shorter string values if needed)."),
             })
             current_response = current_response[:idx]
 
+        # 2.6 有尾无头的工具调用残片（§2.5 的镜像）：收尾标记之前没有任何起始标记。
+        # 实测事故（挂起恢复的天气查询）：模型在思考频道内草拟工具调用,思考预算超限
+        # 强插 "\n<channel|>" 恰落在调用 JSON 中间——频道提取把调用头吞进 thoughts,
+        # 剩下 `…", "type": "once"}<tool_call|>` 这样的尾巴漏成正文,垃圾静默变最终答复。
+        # 处理:残片(含标记)整段移出正文、转 error 调用走纠错闭环——该调用从未执行,
+        # 反馈让模型完整重发（敏感调用重发后照常撞审批闸门,不会静默漏权限）。
+        if self.etc in current_response:
+            idx = current_response.rindex(self.etc)
+            fragment = current_response[:idx].strip()
+            result["tool_calls"].append({
+                "type": "error",
+                "raw_input": _cap(fragment),
+                "error_msg": ("Corrupted tool call: only the TAIL of a call was found (its "
+                              "beginning was cut off, e.g. by the thinking-budget limit). The "
+                              "call was NOT executed. Re-issue it as ONE complete, compact JSON "
+                              "call — and do not draft tool calls inside your thinking."),
+            })
+            current_response = current_response[idx + len(self.etc):]
+
         # 3. 兜底纯文本
         # 游离的 <channel|>：思考预算强制收尾后，模型仍以为自己在频道内、稍后自行补发
         # 收尾标记——无配对开启标记，channel_pattern 不消费，通用正则 <\|.*?\|> 也匹配
         # 不到它（不以 <| 开头），会原样漏进正文。此处显式清除（与 stream_filter 对齐）。
-        clean_text = re.sub(r'<\|.*?\|>', '', current_response.replace(self.eoc, "")).strip()
+        # self.etc/stc 同理显式清除（<tool_call|> 不以 <| 开头,通用正则同样漏放）。
+        clean_text = re.sub(
+            r'<\|.*?\|>', '',
+            current_response.replace(self.eoc, "").replace(self.etc, "").replace(self.stc, ""),
+        ).strip()
         if clean_text:
             result["text"] = f'{result["text"]}\n{clean_text}'.strip() if result["text"] else clean_text
             
