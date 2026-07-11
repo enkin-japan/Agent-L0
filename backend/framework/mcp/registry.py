@@ -83,6 +83,20 @@ class MCPRegistry:
         except Exception:
             return False
 
+    def tool_timeout(self, name: str) -> "int | None":
+        """查询工具级超时覆盖（秒）。未声明/非法值返回 None（编排层回落全局值）。"""
+        tool = self._tools.get(name)
+        if tool is None:
+            return None
+        try:
+            t = getattr(tool, "timeout_seconds", None)
+            if t is None:
+                return None
+            t = int(t)
+            return t if t > 0 else None
+        except (TypeError, ValueError):
+            return None
+
     def is_read_only(self, name: str, arguments: Dict[str, Any] = None) -> bool:
         """
         查询某次调用是否只读（对系统状态无副作用）。驱动压缩层取代去重的 _safe/_target

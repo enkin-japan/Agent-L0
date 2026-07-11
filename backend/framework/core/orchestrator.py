@@ -816,17 +816,20 @@ class Orchestrator:
         if emit is not None:
             emit("tool_started", {"call_id": call_id, "name": name, "args": args})
         # 工具级超时熔断：卡死的工具会一直占着会话锁，到点放弃等待并反馈让模型改路
-        # （被放弃的线程仍在后台跑完，但不再阻塞本轮；工具自身也应有内部超时，如 shell）
+        # （被放弃的线程仍在后台跑完，但不再阻塞本轮；工具自身也应有内部超时，如 shell）。
+        # 长任务工具（excel_research 等多轮子 agent）可用 BaseTool.timeout_seconds
+        # 覆盖全局值——工具自身的 total_timeout 硬熔断先触发，这里只是最外层兜底。
         timed_out = False
+        timeout_s = self.registry.tool_timeout(name) or self.tool_timeout_seconds
         try:
             result_text = await asyncio.wait_for(
                 asyncio.to_thread(self.registry.execute_tool, name, args),
-                timeout=self.tool_timeout_seconds,
+                timeout=timeout_s,
             )
         except asyncio.TimeoutError:
             timed_out = True
             result_text = (
-                f"System Error: tool '{name}' timed out after {self.tool_timeout_seconds}s "
+                f"System Error: tool '{name}' timed out after {timeout_s}s "
                 "and was abandoned. Try a lighter operation, add a shorter timeout argument, "
                 "or take a different approach."
             )

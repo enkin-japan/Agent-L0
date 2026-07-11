@@ -22,6 +22,10 @@ class BaseTool(ABC):
     # 「写屏障后解禁复读」的指纹分类。None = 跟随 is_concurrency_safe（多数工具二者一致）；
     # 仅当工具「只读但不可并发」（如 read_ui_tree：读快照但写共享索引缓存）才需显式设 True。
     is_read_only: bool = None
+    # 工具级超时覆盖（秒）：None = 用全局 agent.tool_timeout_seconds。长任务工具
+    # （excel_research 等多轮子 agent）设为自身 total_timeout + 余量；覆盖值只改
+    # 编排层对本工具的等待上限，其他工具不受影响。
+    timeout_seconds: int = None
 
     def needs_approval(self, arguments: Dict[str, Any]) -> bool:
         """

@@ -169,6 +169,24 @@ math_research:
   total_timeout: 170    # 整体熔断（秒）；须 < agent.tool_timeout_seconds
   max_parse_retries: 2  # 工具调用格式崩坏的重试预算
 
+# Excel 工程子 agent（excel_research）：seatbelt 沙箱内多步"写码-验证-修复"，
+# 交付必须过 verify 门禁（LibreOffice 影子重算 + 契约断言 + 改动半径审计 + 视觉回读），
+# verdict 由 harness 直读、GO 时哈希封印交付文件——模型伪造不了判决、验证后偷改会被抓。
+# 沙箱循环/REPL/验证链封在 framework/{agents,excel}，主表只见包壳工具。
+# 系统依赖：LibreOffice（brew install --cask libreoffice，缺失则工具不注册）
+#          poppler/pdftoppm（brew install poppler，缺失仅降级视觉回读）。
+excel_research:
+  max_steps: 14           # 沙箱内部循环步数上限（写码+验证+修复都算步）
+  exec_timeout: 60        # 单次 run_python 墙钟（秒）；超时杀 REPL、变量丢失自动重启
+  recalc_timeout: 120     # LibreOffice 影子重算熔断（秒）
+  render_timeout: 120     # 渲染 PNG（PDF+pdftoppm）熔断（秒）
+  render_dpi: 100
+  total_timeout: 540      # 整体硬熔断（秒）；包壳工具声明 timeout_seconds=此值+30 覆盖全局
+  repair_budget: 3        # 连续 NO-GO 修复轮预算，超了令模型 blocked 诚实交回
+  max_parse_retries: 2    # 工具调用格式崩坏的重试预算
+  max_changed_default: 500  # 编辑已有文件时的改动单元格默认上限（契约 max_changed 可覆盖）
+  visual_qa: true         # 渲染页走一次性 VLM 单发回读（####挤压/表头错位/格式失效）
+
 # PPT 制作（deck_* 工具组）：Deck Spec 落 sessions/{id}/deck/deck.json（单一真相），
 # 前端检视面板 Deck 页签实时投影；图表由 render_chart 核心代码渲染（模型不写绘图代码）。
 # PDF 导出用无头 Chrome 打印前端 /print/deck 路由——渲染器只有一份，预览即所得，

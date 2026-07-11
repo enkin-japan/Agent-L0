@@ -24,8 +24,15 @@ from typing import Any, Dict, List, Optional
 
 from .parsers import asr, pdf, document, text as textparser
 
-# 办公文档扩展名（交给 markitdown）
-OFFICE_EXTS = {".docx", ".pptx", ".xlsx", ".doc", ".ppt", ".xls", ".odt", ".odp", ".ods", ".rtf", ".epub"}
+# 办公文档扩展名（xlsx/xlsm/xltx 走结构摘要，其余交给 markitdown）
+OFFICE_EXTS = {".docx", ".pptx", ".xlsx", ".xlsm", ".xltx", ".doc", ".ppt", ".xls",
+               ".odt", ".odp", ".ods", ".rtf", ".epub"}
+
+
+def _spreadsheet_summary(path: str, max_chars: int) -> str:
+    """惰性导入的结构摘要（openpyxl 只在真的摄入表格时加载）。"""
+    from ..excel import summarize_for_ingestion
+    return summarize_for_ingestion(path, max_chars=max_chars)
 
 
 class Ingestion:
@@ -141,10 +148,32 @@ class Ingestion:
 
                 elif route == "document":
                     p = self._save(file, attach_dir, name)
-                    body = await asyncio.to_thread(document.parse_document, str(p), max_chars=self.parse_max_chars)
-                    text_parts.append(
-                        f"[Document · {fname}]\n{body}\n[Original file: {p}; for full text use file_extract(path)]"
-                    )
+                    suf = Path(fname).suffix.lower()
+                    if suf in {".xlsx", ".xlsm", ".xltx"}:
+                        # 电子表格：结构摘要（R1C1 公式折叠）替代 markitdown 全文 dump——
+                        # 整表 dump 是 token 泄漏点+幻觉温床，且 markdown 化丢光公式/错误
+                        # 单元格信号。失败（加密/损坏等）回落 markitdown 老路径。
+                        try:
+                            body = await asyncio.to_thread(
+                                _spreadsheet_summary, str(p), self.parse_max_chars)
+                            text_parts.append(
+                                f"[Spreadsheet · {fname}]\n{body}\n"
+                                f"[Original file: {p}; to CREATE/EDIT/FIX/compute on a workbook "
+                                f"use excel_research(task, file_path=this path); for a plain "
+                                f"text dump use file_extract(path)]"
+                            )
+                        except Exception:
+                            body = await asyncio.to_thread(
+                                document.parse_document, str(p), max_chars=self.parse_max_chars)
+                            text_parts.append(
+                                f"[Document · {fname}]\n{body}\n"
+                                f"[Original file: {p}; for full text use file_extract(path)]"
+                            )
+                    else:
+                        body = await asyncio.to_thread(document.parse_document, str(p), max_chars=self.parse_max_chars)
+                        text_parts.append(
+                            f"[Document · {fname}]\n{body}\n[Original file: {p}; for full text use file_extract(path)]"
+                        )
                     result["attachments"].append({"path": str(p), "type": "document", "name": fname})
 
                 elif route in ("code", "text"):
