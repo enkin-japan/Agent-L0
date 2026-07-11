@@ -57,9 +57,12 @@ def _truncated_copy(data: Dict[str, Any], keys: List[str]) -> Dict[str, Any]:
 
 
 class TurnJournal:
-    """单会话事件账本:seq 分配、内存环、里程碑落盘、订阅分发、轮次状态跟踪。"""
+    """单会话事件账本:seq 分配、内存环、里程碑落盘、订阅分发、轮次状态跟踪。
+    feed 非 None 时,生命周期事件同步镜像进全局任务 feed(PROTOCOL.md §2.7)。"""
 
-    def __init__(self, session_dir: Path):
+    def __init__(self, session_dir: Path, session_id: Optional[str] = None, feed=None):
+        self.session_id = session_id or session_dir.name
+        self.feed = feed
         self.path = session_dir / "journal.jsonl"
         self.seq = self._load_last_seq()
         self.ring: List[Dict[str, Any]] = []          # 活跃轮全部事件(信封)
@@ -141,6 +144,13 @@ class TurnJournal:
                 q.put_nowait(env)
             except Exception:
                 pass
+        if self.feed is not None:
+            try:
+                from .feed import FEED_TYPES
+                if etype in FEED_TYPES:
+                    self.feed.publish(self.session_id, env)
+            except Exception as e:
+                print(f"[Journal] feed 镜像失败(忽略): {e}")
         return env
 
     def _track(self, etype: str, data: Dict[str, Any], env: Dict[str, Any]) -> None:

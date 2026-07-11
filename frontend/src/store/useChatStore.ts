@@ -362,12 +362,26 @@ export const useChatStore = create<ChatState>((set, get) => {
       case "thinking_delta":
         syncPreviewBubble(sid, next)
         break
+      case "tool_call_pending":
       case "tool_started":
       case "tool_progress":
       case "tool_result":
       case "step_completed":
       case "step_failed":
         syncActivity(sid, next)
+        break
+      case "queue_moved":
+        // 排队位次可见(Phase 3):单 worker 忙碌时,黑盒排队变成明确位次
+        set((s) => ({
+          liveActivity: {
+            ...s.liveActivity,
+            [sid]: {
+              phase: "running",
+              current: currentDict().activity.queuedAt(Number(env.data.position ?? 0)),
+              steps: [],
+            },
+          },
+        }))
         break
       case "plan_updated":
         set((s) => ({ taskProgress: { ...s.taskProgress, [sid]: next.preview.task } }))
@@ -439,14 +453,21 @@ export const useChatStore = create<ChatState>((set, get) => {
     syncActivity(sid, live ?? initialTurnState())
   }
 
-  /** 实时步骤流投影：归约的 preview.steps → ActivityCard 的 LiveActivity 形状。 */
+  /** 实时步骤流投影：归约的 preview.steps → ActivityCard 的 LiveActivity 形状。
+   *  当前行优先级:执行中的工具 > 生成中预告的工具(tool_call_pending,执行前可见)。 */
   function syncActivity(sid: string, live: NormalizedState) {
     const runningTool = [...live.preview.steps].reverse().find((s) => s.status === "running")
+    const pendingTool = [...live.preview.steps].reverse().find((s) => s.status === "pending")
+    const current = runningTool
+      ? runningTool.label + (runningTool.detail ? `（${runningTool.detail}）` : "")
+      : pendingTool
+        ? currentDict().activity.pendingTool(pendingTool.label)
+        : ""
     const activity: LiveActivity = {
       phase: live.turn_state === "running" || live.turn_state === "queued" ? "running" : live.turn_state,
-      current: runningTool ? runningTool.label + (runningTool.detail ? `（${runningTool.detail}）` : "") : "",
+      current,
       steps: live.preview.steps
-        .filter((s) => s.status !== "running")
+        .filter((s) => s.status !== "running" && s.status !== "pending")
         .map((s) => ({ kind: s.kind, label: s.label, detail: s.detail })),
     }
     set((s) => ({ liveActivity: { ...s.liveActivity, [sid]: activity } }))

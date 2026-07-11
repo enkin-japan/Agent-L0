@@ -37,6 +37,16 @@ class FakeEngine:
         step = self.script.pop(0)
         if step.get("gate") is not None:      # 可控慢生成:等测试放行(并发场景用)
             await step["gate"].wait()
+        # 模拟引擎的直播回调面(Phase 3):思考逐段、工具名预告、正文逐段
+        on_thinking = kwargs.get("on_thinking_delta")
+        if on_thinking is not None and step.get("thoughts") and not step.get("cancelled"):
+            t = step["thoughts"]
+            on_thinking(t if isinstance(t, str) else "\n".join(t))
+        on_pending = kwargs.get("on_tool_pending")
+        if on_pending is not None and not step.get("cancelled"):
+            for call_ in step.get("tool_calls", []):
+                if call_.get("type") != "error" and call_.get("name"):
+                    on_pending(call_["name"])
         text = step.get("text", "")
         if text and step.get("stream", True) and on_text_delta is not None \
                 and not step.get("tool_calls") and not step.get("cancelled"):

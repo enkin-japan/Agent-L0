@@ -51,19 +51,17 @@ def test_plain_text_success(make_session):
     session = make_session()
     session.add_user_message("hi")
     begin_turn(session)
-    streamed = []
 
-    result = run(orch.run_turn(session, journal=session.journal,
-                               on_text_delta=streamed.append, **GEN))
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
 
     assert result["status"] == "success"
     assert result["response"] == "你好!"
-    assert "".join(streamed) == "你好!"                      # 真流式回吐
     assert session.history[-1]["role"] == "assistant"
     assert session.history[-1]["content"] == "你好!"
     assert session.activity["phase"] == "done"
-    # 账本:迭代开始 + 思考块(现状整块,契约为 append-only 增量)
+    # 账本:回调由编排层集中注入(单一写入者)——正文与思考增量都在账本里
     assert ring_of(session, "iteration_started") == [{"n": 1, "thinking": False}]
+    assert ring_of(session, "token_delta") == [{"text": "你好!"}]
     assert ring_of(session, "thinking_delta") == [{"text": "简单问候"}]
 
 

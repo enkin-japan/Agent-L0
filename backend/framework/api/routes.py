@@ -834,6 +834,49 @@ async def get_turn_state(session_id: str, request: Request):
     return {"status": True, "turn": snap, "last_seq": journal.seq}
 
 
+@router.get("/api/v1/events")
+async def attach_global_feed(request: Request, after: int = 0):
+    """
+    全局任务 feed（SSE，PROTOCOL.md §2.7）：跨会话聚合生命周期事件
+    （turn_queued/started/awaiting_approval/suspended/resumed/turn_ended,信封含
+    session_id 与独立 feed_seq 游标）。任务中心与后台通知的推送源,替代 /tasks
+    差分轮询;环形缓冲兜短时断线,深度断档由 /tasks 快照对账。
+    """
+    feed = request.app.state.feed
+
+    async def event_gen():
+        queue = feed.subscribe()
+        try:
+            yield _sse("stream_attached", {
+                "feed_seq": 0, "type": "stream_attached",
+                "data": {"v": 1, "last_feed_seq": feed.seq},
+            })
+            last = after
+            for item in feed.replay(after):
+                last = max(last, item["feed_seq"])
+                yield _sse(item["type"], item)
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECS)
+                except asyncio.TimeoutError:
+                    yield _SSE_HEARTBEAT
+                    continue
+                if item is None:
+                    break
+                if item["feed_seq"] <= last:
+                    continue
+                last = item["feed_seq"]
+                yield _sse(item["type"], item)
+        finally:
+            feed.unsubscribe(queue)
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.get("/api/v1/chat/{session_id}/events")
 async def attach_events(session_id: str, request: Request, after: int = 0):
     """

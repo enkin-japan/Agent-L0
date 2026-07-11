@@ -163,8 +163,14 @@ async def lifespan(app: FastAPI):
     research_runtime.set_runtime(engine, asyncio.get_running_loop())
 
 
-    # 3. 记忆层：初始化弹性冷热会话管理 (默认闲置 30 分钟冻结)
+    # 3. 记忆层：初始化弹性冷热会话管理 (默认闲置 30 分钟冻结)。
+    #    全局任务 feed(Phase 3):各会话账本的生命周期事件镜像于此,
+    #    GET /api/v1/events 推送给任务中心/通知(替代 /tasks 差分轮询)。
+    from framework.core.feed import GlobalFeed
+    feed = GlobalFeed()
     session_manager = SessionManager(sessions_dir=SESSIONS_DIR, idle_timeout=1800)
+    session_manager.feed = feed
+    app.state.feed = feed
 
     # 3.0 中断轮次恢复（write-ahead 闭环）：上次进程死亡时进行中/待审批/挂起的轮次，
     #     按残留的 inflight.json 补 fail 轮存档——用户输入不蒸发、会话窗口可见死因。
@@ -187,6 +193,14 @@ async def lifespan(app: FastAPI):
         if s is not None and not s.is_cold:
             s.cancel_requested = True
 
+    # 排队位次广播(Phase 3):位次变化写入对应会话账本(queue_moved 事件)。
+    # 排队中的会话必然是热会话(受理即建),取不到就静默跳过。
+    def _publish_queue_positions(positions: dict):
+        for sid, pos in positions.items():
+            s = session_manager._all_sessions.get(sid)
+            if s is not None and not s.is_cold:
+                s.journal.emit("queue_moved", {"position": pos})
+
     sched_cfg = (config.get("agent") or {}).get("scheduler") or {}
     scheduler = TaskScheduler(
         policy=ClassPolicy(
@@ -195,6 +209,7 @@ async def lifespan(app: FastAPI):
         ),
         on_suspend_request=_flag_session_suspend,
         on_cancel_request=_flag_session_cancel,
+        on_queue_positions=_publish_queue_positions,
     )
     session_manager.scheduler = scheduler
     

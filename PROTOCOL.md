@@ -288,7 +288,7 @@ reduce(NormalizedState, Event) -> NormalizedState
     "prompt": "…",              // 活跃轮用户消息
     "text": "…",                // token_delta 累计
     "thinking": "…",            // thinking_delta 累计
-    "steps": [ {"kind": "tool|plan", "label": "…", "detail": "…", "status": "running|ok|timeout|failed"} ],
+    "steps": [ {"kind": "tool|plan", "label": "…", "detail": "…", "status": "pending|running|ok|timeout|failed"} ],
     "task": {TaskSnapshot 或 null}
   },
   "pending_tools": [ … ] 
@@ -300,7 +300,9 @@ reduce(NormalizedState, Event) -> NormalizedState
 - `turn_ended` → preview 整体清空、轮次消息(prompt + response)并入 transcript,
   turn_state=none;**以 turn_ended 为准丢弃预览**(cancelled/fail 时预览撤回);
 - `awaiting_approval` → pending_tools 置入,turn_state 相应;`resumed` → 清 pending_tools;
-- `tool_started` → steps 追加 running 项;`tool_result` → 按 call_id 收尾该项;
+- `tool_call_pending` → steps 追加 pending 项(生成中预告,无 call_id);
+  `tool_started` → 若存在**同名 pending** 步则收编它(置 running + 配 call_id),
+  否则追加 running 项;`tool_result` → 按 call_id 收尾该项;
 - 未知 type → 原样忽略(必须有此用例)。
 
 **夹具格式**(`protocol/fixtures/`):

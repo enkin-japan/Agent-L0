@@ -1,0 +1,25 @@
+{
+  "turn_state": "running",
+  "transcript": [],
+  "preview": {
+    "prompt": "现在几点了?",
+    "text": "现在是 21:30。",
+    "thinking": "用户问时间,调用时间工具即可。",
+    "steps": [
+      {
+        "kind": "tool",
+        "label": "get_current_time",
+        "detail": "2026-07-11 21:30 (Asia/Tokyo)",
+        "status": "ok"
+      },
+      {
+        "kind": "tool",
+        "label": "web_research",
+        "detail": "",
+        "status": "pending"
+      }
+    ],
+    "task": null
+  },
+  "pending_tools": []
+}

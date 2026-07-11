@@ -253,6 +253,12 @@ class Orchestrator:
             journal.emit("plan_updated",
                          {"task": t.snapshot() if (t is not None and t.plan) else None})
 
+        # 流式回调集中在此注入(单一写入者纪律):任何调用方(TurnRunner/定时任务)
+        # 都自动获得完整直播——正文逐段、思考逐段(Phase 3)、工具名预告(Phase 3)。
+        gen_kwargs["on_text_delta"] = lambda t: journal.emit("token_delta", {"text": t})
+        gen_kwargs["on_thinking_delta"] = lambda t: journal.emit("thinking_delta", {"text": t})
+        gen_kwargs["on_tool_pending"] = lambda name: journal.emit("tool_call_pending", {"name": name})
+
         task = session.task_state
         if task is not None and not keep_recent_calls:
             task.recent_calls = []  # 重复调用拦截按轮生效（审批续跑保留：刚执行的调用不可立即复发）
@@ -376,11 +382,8 @@ class Orchestrator:
             text = result["text"]
             thoughts = result["thoughts"]
 
-            # 思考块整块写账（Phase 1 现状：思考不逐 token、一次成块;Phase 3 收窄为小段。
-            # 客户端契约是 append-only 增量,不得依赖块边界——见 PROTOCOL.md §2.2）
-            if thoughts:
-                journal.emit("thinking_delta", {
-                    "text": thoughts if isinstance(thoughts, str) else "\n".join(thoughts)})
+            # 思考已在生成中经 on_thinking_delta 逐段直播(Phase 3),此处不再整块补发
+            # (重复累积);权威思考文本随 turn_ended.response 的 thoughts 字段对账。
 
             # --- 恢复分支：输出被 max_tokens 截断且非工具调用（T1-3） ---
             # 撞上限的是纯文本/思考（工具调用即便被截断也走下方 parse-error 路径），先升一档

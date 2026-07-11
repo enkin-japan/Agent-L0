@@ -10,7 +10,7 @@ export interface NormalizedStep {
   kind: "tool" | "plan"
   label: string
   detail: string
-  status: "running" | "ok" | "timeout" | "failed"
+  status: "pending" | "running" | "ok" | "timeout" | "failed"
   /** 内部簿记:tool_started/result 的配对键(夹具比对时剥除)。 */
   _callId?: string
 }
@@ -65,13 +65,27 @@ export function reduceTurnEvent(state: NormalizedState, env: EventEnvelope): Nor
     case "thinking_delta":
       return patchPreview(state, { thinking: state.preview.thinking + String(d.text ?? "") })
 
-    case "tool_started":
+    case "tool_call_pending":
+      // 生成中预告:工具名在执行前先亮出(无 call_id;tool_started 到达时被收编)
       return patchPreview(state, {
         steps: [...state.preview.steps, {
-          kind: "tool", label: String(d.name ?? ""), detail: "",
-          status: "running", _callId: asStr(d.call_id),
+          kind: "tool", label: String(d.name ?? ""), detail: "", status: "pending",
         }],
       })
+
+    case "tool_started": {
+      const name = String(d.name ?? "")
+      const steps = [...state.preview.steps]
+      // 收编同名 pending 步(生成预告→真正执行,不重复占行);无则追加
+      const i = steps.findIndex((s) => s.status === "pending" && s.label === name)
+      const started = {
+        kind: "tool" as const, label: name, detail: "",
+        status: "running" as const, _callId: asStr(d.call_id),
+      }
+      if (i >= 0) steps[i] = started
+      else steps.push(started)
+      return patchPreview(state, { steps })
+    }
 
     case "tool_progress": {
       // 执行中的进度:按 call_id 更新对应 running 步的 detail(无 call_id 则更新最后一个 running 步)

@@ -175,9 +175,7 @@ class TurnRunner:
             journal.emit("turn_started", {})
             try:
                 final_result = await self.orchestrator.run_turn(
-                    session=session, journal=journal,
-                    on_text_delta=lambda t: journal.emit("token_delta", {"text": t}),
-                    **gen,
+                    session=session, journal=journal, **gen,
                 )
                 if final_result.get("status") == "cancelled":
                     # 用户取消:整轮(含用户消息与中途产物)回滚出内存,落盘保留取消存档
@@ -289,7 +287,6 @@ class TurnRunner:
             try:
                 final_result = await self.orchestrator.resume_after_approval(
                     session, approved=approve, journal=journal,
-                    on_text_delta=lambda t: journal.emit("token_delta", {"text": t}),
                     temperature=turn.get("temperature", 0.2),
                     min_p=turn.get("min_p", 0.05),
                     enable_thinking=turn.get("enable_thinking", False),
@@ -353,7 +350,6 @@ class TurnRunner:
                 final_result = await self.orchestrator.run_turn(
                     session=session, journal=journal,
                     compact_history=False,  # 轮中重入:本轮未落盘观察不参与压缩(防压缩桩落盘)
-                    on_text_delta=lambda t: journal.emit("token_delta", {"text": t}),
                     temperature=turn.get("temperature", 0.2),
                     min_p=turn.get("min_p", 0.05),
                     enable_thinking=turn.get("enable_thinking", False),

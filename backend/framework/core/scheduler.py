@@ -144,8 +144,14 @@ class TaskScheduler:
 
     def __init__(self, policy: Optional[SchedulingPolicy] = None,
                  on_suspend_request: Optional[Callable[[str], None]] = None,
-                 on_cancel_request: Optional[Callable[[str], None]] = None):
+                 on_cancel_request: Optional[Callable[[str], None]] = None,
+                 on_queue_positions: Optional[Callable[[Dict[str, int]], None]] = None):
         self.policy = policy or FifoPolicy()
+        # 排队位次广播(Phase 3):每次调度后,位次有变化的 QUEUED 会话经此回调上报
+        # {session_id: position}(0=下一个被准入)。app 层接到后写入各会话账本
+        # (queue_moved 事件),前端把"黑盒排队"变成可见位次。
+        self._on_queue_positions = on_queue_positions
+        self._last_positions: Dict[str, int] = {}
         # 挂起请求桥接：手动接口与自动抢占策略统一经此把挂起意图传播到会话
         # （置位 session.suspend_requested），编排循环在迭代边界读取单一来源即可。
         self._on_suspend_request = on_suspend_request
@@ -284,16 +290,37 @@ class TaskScheduler:
                         running.suspend_requested = True  # 由编排循环在迭代边界响应
                         if self._on_suspend_request is not None:
                             self._on_suspend_request(running.session_id)
+            self._broadcast_positions()  # worker 忙:新排队者也要知道自己的位次
             return
 
         waiters = [h for h in self._handles.values() if h.status == QUEUED]
         nxt = self.policy.pick_next(waiters)
         if nxt is None:
+            self._broadcast_positions()
             return
         nxt.status = RUNNING
         nxt.started_at = time.time()
         self._running = nxt.session_id
         nxt._admit.set()
+        self._broadcast_positions()
+
+    def _broadcast_positions(self) -> None:
+        """计算 QUEUED 句柄的当前位次并上报变化(与默认策略同序:优先级降序、先来先到)。"""
+        if self._on_queue_positions is None:
+            return
+        waiters = sorted(
+            (h for h in self._handles.values() if h.status == QUEUED),
+            key=lambda h: (-h.priority, h.enqueued_at),
+        )
+        now = {h.session_id: i for i, h in enumerate(waiters)}
+        changed = {sid: pos for sid, pos in now.items()
+                   if self._last_positions.get(sid) != pos}
+        self._last_positions = now
+        if changed:
+            try:
+                self._on_queue_positions(changed)
+            except Exception as e:
+                print(f"[Scheduler] 位次广播失败(忽略): {e}")
 
     # ---------- 只读观测（/tasks 接口、驱逐器守卫、自动调度决策） ----------
     def status_of(self, session_id: str) -> str:

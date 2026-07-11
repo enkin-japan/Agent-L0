@@ -1,0 +1,11 @@
+{"seq": 1, "turn_id": "t_a1b2c3000004", "ts": 1783800000.0, "type": "turn_queued", "data": {"prompt": "现在几点了?", "attachments": [], "gen": {"enable_thinking": true, "thinking_budget": 2048, "max_tokens": 4096, "temperature": 0.2, "min_p": 0.05}, "origin": "chat"}}
+{"seq": 2, "turn_id": "t_a1b2c3000004", "ts": 1783800000.1, "type": "turn_started", "data": {}}
+{"seq": 3, "turn_id": "t_a1b2c3000004", "ts": 1783800000.2, "type": "iteration_started", "data": {"n": 1, "thinking": true}}
+{"seq": 4, "turn_id": "t_a1b2c3000004", "ts": 1783800001.0, "type": "thinking_delta", "data": {"text": "用户问时间,"}}
+{"seq": 5, "turn_id": "t_a1b2c3000004", "ts": 1783800001.4, "type": "thinking_delta", "data": {"text": "调用时间工具即可。"}}
+{"seq": 6, "turn_id": "t_a1b2c3000004", "ts": 1783800002.0, "type": "tool_call_pending", "data": {"name": "get_current_time"}}
+{"seq": 7, "turn_id": "t_a1b2c3000004", "ts": 1783800003.0, "type": "tool_started", "data": {"call_id": "c9d8e7f6", "name": "get_current_time", "args": {}}}
+{"seq": 8, "turn_id": "t_a1b2c3000004", "ts": 1783800003.2, "type": "tool_result", "data": {"call_id": "c9d8e7f6", "name": "get_current_time", "response": "2026-07-11 21:30 (Asia/Tokyo)", "status": "ok"}}
+{"seq": 9, "turn_id": "t_a1b2c3000004", "ts": 1783800004.0, "type": "iteration_started", "data": {"n": 2, "thinking": false}}
+{"seq": 10, "turn_id": "t_a1b2c3000004", "ts": 1783800004.5, "type": "token_delta", "data": {"text": "现在是 21:30。"}}
+{"seq": 11, "turn_id": "t_a1b2c3000004", "ts": 1783800005.0, "type": "tool_call_pending", "data": {"name": "web_research"}}

@@ -100,7 +100,8 @@ class ChatSession:
     单个会话状态机，负责管理该会话的上下文、历史记录及物理文件生命周期
     支持冷热状态切换（释放/预热内存）
     """
-    def __init__(self, session_id: str, base_sessions_dir: Path, system_prompt: str = ""):
+    def __init__(self, session_id: str, base_sessions_dir: Path, system_prompt: str = "",
+                 feed=None):
         self.session_id = session_id
         
         # 内存状态（热数据）
@@ -175,8 +176,9 @@ class ChatSession:
 
         # 会话事件账本(PROTOCOL.md):编排/TurnRunner 的唯一事件出口,SSE 与状态
         # 查询的唯一数据源。seq 从磁盘账本续增;冻结不清账本(轮次状态独立于 KV)。
+        # feed:生命周期事件镜像进全局任务 feed(SessionManager 注入,测试可 None)。
         from ..core.journal import TurnJournal
-        self.journal = TurnJournal(self.session_dir)
+        self.journal = TurnJournal(self.session_dir, session_id=session_id, feed=feed)
 
         self._init_system_prompt(system_prompt)
         # 为根会话补齐血缘元数据（分支会话的 meta 由 SessionManager 预先落盘）
@@ -573,6 +575,8 @@ class SessionManager:
     负责维护所有活跃的 ChatSession 实例，提供冷热管理能力
     """
     def __init__(self, sessions_dir: Path, idle_timeout: int = 1800):
+        # 全局任务 feed(app 装配注入;None=不镜像,测试/脚本单用不受影响)
+        self.feed = None
         self.sessions_dir = sessions_dir
         self.idle_timeout = idle_timeout # 默认 30 分钟未交互则转入冷状态
         self._all_sessions: Dict[str, ChatSession] = {}
@@ -626,7 +630,7 @@ class SessionManager:
         session = self._all_sessions.get(session_id)
         if not session:
             # 内存里没有，新建会话
-            session = ChatSession(session_id, self.sessions_dir, system_prompt)
+            session = ChatSession(session_id, self.sessions_dir, system_prompt, feed=self.feed)
             self._all_sessions[session_id] = session
             # 检查磁盘中是否有历史记录，若有，则恢复历史记录
             if session.history_log.exists():
@@ -1163,7 +1167,7 @@ class SessionManager:
             self._materialize_branch(parent_session_id, new_session_id, lines[: node_index + 1], node_index)
 
             # 6. 内存重建分支会话（复用共同的历史文本）
-            branch = ChatSession(new_session_id, self.sessions_dir, "")
+            branch = ChatSession(new_session_id, self.sessions_dir, "", feed=self.feed)
             if branch.history_log.exists():
                 branch.restore_from_disk()
 

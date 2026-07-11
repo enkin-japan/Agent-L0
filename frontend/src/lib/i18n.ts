@@ -136,6 +136,8 @@ const en = {
     multiStepWaiting: "Multi-step task · awaiting your reply",
     goal: (g: string) => `Goal: ${g}`,
     processing: "Working…",
+    pendingTool: (name: string) => `Preparing to call ${name}…`,
+    queuedAt: (pos: number) => (pos === 0 ? "Queued · next up" : `Queued · ${pos} task${pos > 1 ? "s" : ""} ahead`),
     progress: (done: number, total: number) => `${done}/${total}`,
   },
 
@@ -406,6 +408,8 @@ const zh: Dict = {
     multiStepWaiting: "多步任务 · 等待你的答复以继续",
     goal: (g: string) => `目标：${g}`,
     processing: "处理中…",
+    pendingTool: (name: string) => `准备调用 ${name}…`,
+    queuedAt: (pos: number) => (pos === 0 ? "排队中 · 下一个执行" : `排队中 · 前面还有 ${pos} 个任务`),
     progress: (done: number, total: number) => `${done}/${total}`,
   },
 
@@ -672,6 +676,8 @@ const ja: Dict = {
     multiStepWaiting: "マルチステップタスク · 返答待ち",
     goal: (g: string) => `目標：${g}`,
     processing: "処理中…",
+    pendingTool: (name: string) => `${name} を呼び出す準備中…`,
+    queuedAt: (pos: number) => (pos === 0 ? "待機中 · 次に実行" : `待機中 · 前に ${pos} 件`),
     progress: (done: number, total: number) => `${done}/${total}`,
   },
 

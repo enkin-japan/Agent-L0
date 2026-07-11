@@ -98,7 +98,9 @@ class AgentEngine:
                             thinking_budget: int = 2048,
                             max_tokens: int = 4096,
                             tail_notes: Optional[List[str]] = None,
-                            on_text_delta: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
+                            on_text_delta: Optional[Callable[[str], None]] = None,
+                            on_thinking_delta: Optional[Callable[[str], None]] = None,
+                            on_tool_pending: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
         """
         执行一次完整生成并解析输出。
 
@@ -109,6 +111,10 @@ class AgentEngine:
         - on_text_delta: 真流式回调（可选）。每产出一段**用户可见正文**即同步调用一次
           （思考/工具调用区块经 VisibleTextStreamer 过滤，不会流出）。为 None 时行为与
           改动前完全一致——攒全文、末尾一次性 parse，终态仍走原路（保证 turn_end 权威）。
+        - on_thinking_delta: 思考直播回调（Phase 3）：thought 频道内容逐段回吐。
+        - on_tool_pending: 工具名预告回调（Phase 3）：生成进入工具调用块并解析出
+          name 字段的瞬间调用一次——执行前就知道要调什么。
+          三个回调均在主事件循环线程被调（推理线程经 call_soon_threadsafe 跳转）。
         """
         formatted_prompt = self.builder.build(
             messages=session.history,
@@ -122,16 +128,27 @@ class AgentEngine:
         metrics: Dict[str, Any] = {}
         cancelled = False
 
-        # 真流式过滤器：把原始 token 流增量过滤成可见正文（思考/工具块不流出）。
+        # 真流式过滤器：把原始 token 流增量过滤成可见正文（思考/工具块不流出正文,
+        # 但分别经 on_thinking_delta 直播、on_tool_pending 预告——Phase 3 粒度钩子）。
         # enable_thinking 时 prompt 收尾在已打开的 thought 频道内，故以抑制态起步。
+        # 钩子回调在推理线程触发,这里包一层 call_soon_threadsafe 回主循环(账本纪律)。
         streamer = None
         detok = None
         prev_decoded = ""
-        if on_text_delta is not None:
+        _loop_for_hooks = asyncio.get_running_loop()
+
+        def _hop(cb: Optional[Callable[[str], None]]) -> Optional[Callable[[str], None]]:
+            if cb is None:
+                return None
+            return lambda s: _loop_for_hooks.call_soon_threadsafe(cb, s)
+
+        if on_text_delta is not None or on_thinking_delta is not None or on_tool_pending is not None:
             streamer = VisibleTextStreamer(
                 soc=self.parser.soc, eoc=self.parser.eoc,
                 stc=self.parser.stc, etc=self.parser.etc,
                 in_thought=enable_thinking,
+                on_thinking=_hop(on_thinking_delta),
+                on_tool_pending=_hop(on_tool_pending),
             )
             # 增量取字直接盯 detokenizer 的当前解码全文（text + 未 flush 缓冲）做差，而非
             # result.text（=last_segment）：SPM 分词器对无空格语言（中文）会把文本攒在
@@ -213,13 +230,13 @@ class AgentEngine:
                             delta = cur[len(prev):]
                             if delta:
                                 visible = streamer.feed(delta)
-                                if visible:
+                                if visible and on_text_delta is not None:
                                     loop.call_soon_threadsafe(on_text_delta, visible)
                         # trim_space 反常重排等情形跳过一次增量、只推进基线，避免重复回吐
                         prev = cur
                     else:
                         visible = streamer.feed(result.text)
-                        if visible:
+                        if visible and on_text_delta is not None:
                             loop.call_soon_threadsafe(on_text_delta, visible)
                 # 取消检查点（token 段粒度;bool 读在 GIL 下安全）：立即停止消耗生成流
                 if session.cancel_requested:
@@ -228,7 +245,7 @@ class AgentEngine:
             # 冲刷过滤器尾部（未闭合频道的残留按语义丢弃）
             if streamer is not None and not gen_cancelled:
                 tail = streamer.close()
-                if tail:
+                if tail and on_text_delta is not None:
                     loop.call_soon_threadsafe(on_text_delta, tail)
             return {"text": gen_text, "metrics": gen_metrics, "cancelled": gen_cancelled}
 

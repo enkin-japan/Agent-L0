@@ -1,12 +1,15 @@
 """
-增量可见正文过滤器（真流式 P1 的核心）。
+增量可见正文过滤器（真流式 P1 的核心 + Phase 3 的粒度钩子）。
 
 把模型的原始 token 流（含频道标记与工具调用区块）**增量**过滤成"用户可见正文"，
 语义与 ResponseParser.parse 的最终 text 对齐——两者对同一段完整输出应给出一致结果：
 
-- thought 频道 `<|channel>thought …<channel|>` 内容：抑制（思考按决策 #5 整块另发，不逐字）；
+- thought 频道 `<|channel>thought …<channel|>` 内容：不进正文;经 on_thinking 钩子
+  **逐段回吐**（Phase 3：思考直播,客户端契约为 append-only 增量,不依赖块边界）；
 - 文本频道 `<|channel>text CONTENT<channel|>`：只吐 CONTENT（吃掉频道名 "text " 前缀）；
-- 工具调用区块 `<|tool_call>…<tool_call|>`：抑制（结构化，另作 tool_started 事件）；
+- 工具调用区块 `<|tool_call>…<tool_call|>`：不进正文;块内一旦解析出工具名即经
+  on_tool_pending 钩子预告一次（Phase 3：执行前几十秒就知道要调什么,与约束采样
+  开关无关——本过滤器看得到全部原始流）；
 - 频道外的裸文本：照吐（模型常不加频道包裹直接给最终答复）；
 - 标记 token 本身永不吐。
 
@@ -16,8 +19,18 @@
 注意：引擎在 enable_thinking 时把 prompt 收尾在一个已打开的 thought 频道里（见 engine
 的 generated_text 播种），模型续写即处于该频道内——故此时 streamer 须以 in_thought=True
 的抑制态起步，否则会把思考内容误当正文流出。
+
+钩子在推理线程被同步调用（engine 负责用 call_soon_threadsafe 回主循环），
+本层不做线程跳转。
 """
-from typing import List, Tuple
+import re
+from typing import Callable, List, Optional, Tuple
+
+# 工具名预告的解析:块首若干字符内找 {"name": "..."} 或旧式 call: name { 前缀。
+# 两种形态都要求名字之后出现边界符(闭引号 / 左花括号)才算完整——逐 token 喂入时
+# 名字可能只生成了一半,过早匹配会预告出残缺工具名。
+_TOOL_NAME_RE = re.compile(r'"name"\s*:\s*"([A-Za-z0-9_-]+)"|call\s*:\s*"?([A-Za-z0-9_-]+)"?\s*(?=\{)')
+_TOOL_NAME_SCAN_LIMIT = 200  # 超过此长度还没出现 name 就放弃预告(不影响执行)
 
 
 class VisibleTextStreamer:
@@ -26,12 +39,18 @@ class VisibleTextStreamer:
 
     def __init__(self, soc: str = "<|channel>", eoc: str = "<channel|>",
                  stc: str = "<|tool_call>", etc: str = "<tool_call|>",
-                 in_thought: bool = False):
+                 in_thought: bool = False,
+                 on_thinking: Optional[Callable[[str], None]] = None,
+                 on_tool_pending: Optional[Callable[[str], None]] = None):
         self.soc, self.eoc, self.stc, self.etc = soc, eoc, stc, etc
         self._maxlen = max(len(soc), len(eoc), len(stc), len(etc))
         self.buf = ""
         self.mode = self.OTHERCH if in_thought else self.OUT
-        self._name = ""  # NAME 态下累积的频道名
+        self._name = "thought" if in_thought else ""  # NAME 态下累积的频道名(播种态即思考)
+        self.on_thinking = on_thinking
+        self.on_tool_pending = on_tool_pending
+        self._tool_buf = ""        # 当前工具块已累积文本(仅为解析 name,有限长)
+        self._tool_announced = False
 
     # ---- 标记匹配：在 buf[i:] 处尝试匹配给定标记集合 ----
     def _match(self, i: int, markers: List[str], final: bool) -> Tuple[str, str]:
@@ -53,6 +72,7 @@ class VisibleTextStreamer:
     def feed(self, delta: str, final: bool = False) -> str:
         self.buf += delta
         out: List[str] = []
+        thinking: List[str] = []   # 本次 feed 产出的思考增量(批量回吐一次)
         i = 0
         n = len(self.buf)
         while i < n:
@@ -68,6 +88,8 @@ class VisibleTextStreamer:
                         self._name = ""
                     elif m == self.stc:
                         self.mode = self.TOOL
+                        self._tool_buf = ""
+                        self._tool_announced = False
                     # m == eoc：游离收尾标记，吞掉、保持 OUT
                     i += len(m)
                     continue
@@ -112,7 +134,10 @@ class VisibleTextStreamer:
                     self.mode = self.OUT
                     i += len(m)
                     continue
-                i += 1  # 抑制
+                # thought 频道内容:不进正文,但作为思考增量直播(其余未知频道仍纯抑制)
+                if self._name == "thought":
+                    thinking.append(self.buf[i])
+                i += 1
 
             else:  # TOOL
                 st, m = self._match(i, [self.etc], final)
@@ -122,10 +147,19 @@ class VisibleTextStreamer:
                     self.mode = self.OUT
                     i += len(m)
                     continue
-                i += 1  # 抑制
+                # 工具块内容:累积有限长文本,一解析出工具名即预告一次
+                if not self._tool_announced and len(self._tool_buf) < _TOOL_NAME_SCAN_LIMIT:
+                    self._tool_buf += self.buf[i]
+                    if (m2 := _TOOL_NAME_RE.search(self._tool_buf)) is not None:
+                        self._tool_announced = True
+                        if self.on_tool_pending is not None:
+                            self.on_tool_pending(m2.group(1) or m2.group(2))
+                i += 1
 
         # 未处理的尾部（holdback 或未闭合标记）留待下次
         self.buf = self.buf[i:]
+        if thinking and self.on_thinking is not None:
+            self.on_thinking("".join(thinking))
         return "".join(out)
 
     def close(self) -> str:
