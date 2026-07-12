@@ -12,6 +12,7 @@ MacAgent/
 ├── ARCHITECTURE.md      # 运行架构逻辑示意图（拓扑 / 分层 / 数据流 / 生命周期）
 ├── REARCHITECTURE.md    # 交互层重整蓝图（体检报告 / 目标架构 / 四期迁移计划 + 踩坑）
 ├── PROTOCOL.md          # 交互协议 v1（事件账本契约，三端行为标准）
+├── DEFERRED.md          # 未竟架构账本（轻量已交付·完整版待做；与 CHARTER §7 非目标相区分）
 ├── protocol/fixtures/   # 协议测试夹具（web 与原生 app 共享的行为标准）
 ├── backend/             # Agent 主体（FastAPI + MLX, :14159）：推理引擎 / 编排循环 / 工具 / 会话记忆
 ├── rag/                 # RAG 知识库（FastAPI + PyTorch MPS, :14160）：嵌入 + 重排 + ChromaDB
