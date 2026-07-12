@@ -236,6 +236,12 @@ ensure_searx_settings() {
     mkdir -p "$SEARX_DIR"
     local sf="$SEARX_DIR/settings.yml"
     if [ -f "$sf" ]; then
+        # 旧模板自愈（幂等）：标量 use_default_settings → 映射形式，从默认引擎表剔除
+        # 需 Tor 代理的暗网引擎（本机无 Tor，ahmia/torch 每次启动注册失败刷 ERROR）。
+        if grep -qE '^use_default_settings:[[:space:]]*true[[:space:]]*$' "$sf"; then
+            /usr/bin/perl -i -pe 's/^use_default_settings:\s*true\s*$/use_default_settings:\n  engines:\n    remove:          # 暗网引擎需 Tor 代理，本机注册必败；本项目不路由 onion\n      - ahmia\n      - torch/' "$sf"
+            info "SearXNG 配置自愈：已从默认引擎表剔除 ahmia/torch（无 Tor 代理，注册必败刷 ERROR）"
+        fi
         grep -qE '^[[:space:]]*port:' "$sf" \
             || warn "已有 $sf 未声明 server.port——原生 SearXNG 默认监听 8888，请在 server: 下加入 port: ${SEARX_PORT}"
         if grep -qE '^[[:space:]]*-[[:space:]]*json([[:space:]]|$)' "$sf" || grep -qE 'formats:.*json' "$sf"; then
@@ -250,7 +256,11 @@ ensure_searx_settings() {
     [ -n "$secret" ] || secret="devsecret-$(date +%s)"
     cat > "$sf" <<EOF
 # 由 devctl.sh 生成：仅覆写必要项，其余继承 SearXNG 默认设置
-use_default_settings: true
+use_default_settings:
+  engines:
+    remove:          # 暗网引擎需 Tor 代理，本机注册必败（启动刷 ERROR）；本项目不路由 onion
+      - ahmia
+      - torch
 server:
   secret_key: "$secret"
   bind_address: "127.0.0.1"  # 仅本机回环：limiter 已关，绑 0.0.0.0 会让局域网白嫖搜索代理
