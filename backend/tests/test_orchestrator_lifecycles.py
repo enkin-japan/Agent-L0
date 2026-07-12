@@ -336,6 +336,54 @@ def test_plan_flow_and_premature_finish_gate(make_session):
     assert [s["result"] for s in steps] == ["资料已查", "结论已写"]
 
 
+def test_remember_carries_value_into_later_step(make_session):
+    """记事板端到端:某步 remember 的值,在之后的迭代里仍出现在 task_block 中喂回模型。"""
+    engine = FakeEngine([
+        {"tool_calls": [call("update_plan", op="replace", steps=["拿到接口地址", "用地址取数"])]},
+        {"tool_calls": [call("remember", note="API endpoint = https://api.example.com/v2"),
+                        call("complete_step", result="拿到地址")]},
+        {"tool_calls": [call("complete_step", result="取数完成")]},
+        {"text": "全部完成。"},
+    ])
+    orch = make_orch(engine, FakeRegistry([]))
+    session = make_session()
+    session.add_user_message("两步任务,第二步要用第一步的地址")
+    begin_turn(session)
+
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
+
+    assert result["status"] == "success"
+    # 第三次生成(index 2)的任务块应携带第二步存下的便签——跨步可见即记事板的意义
+    assert "https://api.example.com/v2" in (engine.calls[2]["task_block"] or "")
+    # remember 的回执确实反馈给了模型
+    remembered = [tr for m in session.history if m["role"] == "tool"
+                  for tr in m.get("tool_responses", []) if tr.get("name") == "remember"]
+    assert remembered and "scratchpad" in remembered[0]["response"].lower()
+    # 账本:plan_updated 快照带上了 notes(snapshot 口径统一)
+    snaps = [d["task"] for d in ring_of(session, "plan_updated") if d.get("task")]
+    assert any("API endpoint = https://api.example.com/v2" in s.get("notes", []) for s in snaps)
+
+
+def test_remember_without_plan_redirects(make_session):
+    """无活跃计划时 remember 被重定向,不创建任务、不污染单步问答。"""
+    engine = FakeEngine([
+        {"tool_calls": [call("remember", note="something")]},
+        {"text": "好的。"},
+    ])
+    orch = make_orch(engine, FakeRegistry([]))
+    session = make_session()
+    session.add_user_message("随口记一下")
+    begin_turn(session)
+
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
+
+    assert result["status"] == "success"
+    assert session.task_state is None                    # 未因 remember 造出空任务
+    redirects = [tr for m in session.history if m["role"] == "tool"
+                 for tr in m.get("tool_responses", []) if tr.get("name") == "remember"]
+    assert redirects and "No active plan" in redirects[0]["response"]
+
+
 def test_total_iteration_fuse(make_session):
     engine = FakeEngine([{"tool_calls": [call("read_thing", i=i)]} for i in range(12)])
     registry = FakeRegistry([FakeTool("read_thing")])

@@ -1,4 +1,5 @@
 import json
+import platform
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from transformers.processing_utils import ProcessorMixin
@@ -7,11 +8,16 @@ class PromptBuilder:
     """
     负责将对话历史、多模态上下文及 MCP 工具定义转换为大模型底层的 Token 字符串。
     """
-    def __init__(self, processor: ProcessorMixin, suppress_ghost_thinking: bool = False):
+    def __init__(self, processor: ProcessorMixin, suppress_ghost_thinking: bool = False,
+                 env: Optional[Dict[str, Any]] = None):
         # 幽灵思考抑制（官方 thinking 文档）：Gemma-4 12B/26B/31B 关思考时须在 model 轮
         # 开头预填空思考频道，否则模型会自发打开 thought 频道（幽灵思考）烧 token。
         # e4b 官方模板无此要求，保持 False。开关来自 config.yaml model_registry 条目。
         self.suppress_ghost_thinking = suppress_ghost_thinking
+        # 环境上下文（想法1）：稳定的环境事实，启动时算一次。机器事实自动探测；个人事实来自
+        # config.yaml agent.environment（默认全空、opt-in）。只在主编排轮注入——见 build。
+        self.env = env or {}
+        self.static_env_lines = self._compute_static_env_lines()
         vocab = processor.tokenizer.special_tokens_map if hasattr(processor.tokenizer, "special_tokens_map") else {}
         
         self.bos_token = vocab.get("bos_token", "<bos>")
@@ -36,6 +42,30 @@ class PromptBuilder:
 
         self.soc_token = vocab.get("soc_token", "<|channel>")
         self.eoc_token = vocab.get("eoc_token", "<channel|>")
+
+    def _compute_static_env_lines(self) -> List[str]:
+        """稳定环境事实（启动算一次）：机器事实自动探测 + config 里填写的个人事实。
+        最小相关集，不是"足够多"——弱模型上下文越多注意力越稀释。个人事实默认全空，
+        仅填写后注入；且只进主编排轮（build(include_env=True)），不进沙箱子生成。"""
+        env = self.env
+        lines: List[str] = []
+        if env.get("inject_machine", True):
+            sysname = platform.system()
+            if sysname == "Darwin":
+                ver = platform.mac_ver()[0]
+                os_str = f"macOS {ver}" if ver else "macOS"
+            elif sysname:
+                os_str = f"{sysname} {platform.release()}".strip()
+            else:
+                os_str = "unknown OS"
+            lines.append(f"Operating system: {os_str} ({platform.machine() or 'unknown arch'})")
+        if env.get("language"):
+            lines.append(f"User's preferred reply language: {env['language']}")
+        if env.get("location"):
+            lines.append(f"User's approximate location: {env['location']}")
+        if env.get("about"):
+            lines.append(f"About the user: {env['about']}")
+        return lines
 
     def _extract_text(self, item: Dict[str, Any]) -> str:
         text = item.get("text") or item.get("content") or ""
@@ -80,7 +110,7 @@ class PromptBuilder:
 
     def build(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None,
               enable_thinking: bool = False, task_block: Optional[str] = None,
-              tail_notes: Optional[List[str]] = None) -> str:
+              tail_notes: Optional[List[str]] = None, include_env: bool = False) -> str:
         """
         前缀分层布局（KV 缓存友好）：
         [稳定前缀] system 提示词 + 工具声明（启动后不变）
@@ -144,12 +174,15 @@ class PromptBuilder:
             if notes.strip():
                 prompt += f"{self.sot_token}system\n{notes}\n{self.eot_token}\n"
 
-        # 被动注入当前日期（仅到"天"，放最尾部对 KV 缓存友好——同一天多轮不变、跨天只失效尾部一小段）：
-        # 给模型一个"今天"的时间锚点，使其能把"明天/最近/今年"等相对时间落到具体日期。
-        # 需精确到时分秒/时区时，模型另有 get_current_time 工具可主动调用（mcp/tools/datetime_now.py）。
+        # 被动注入环境锚点块（放最尾部对 KV 缓存友好——静态事实与当天日期同处一块，跨天/无关
+        # 变动只失效尾部一小段）。日期永远注入（相对时间锚点；需精确时分秒模型另有 get_current_time
+        # 工具，mcp/tools/datetime_now.py）。机器/个人事实仅在主编排轮注入（include_env=True）——
+        # 沙箱子生成复用同一 builder 但默认 include_env=False，个人信息绝不入沙箱上下文（隐私边界）。
         _now = datetime.now()
-        _date_line = f"Current date: {_now.strftime('%Y-%m-%d')} ({_now.strftime('%A')})"
-        prompt += f"{self.sot_token}system\n{_date_line}\n{self.eot_token}\n"
+        env_lines = [f"Current date: {_now.strftime('%Y-%m-%d')} ({_now.strftime('%A')})"]
+        if include_env and self.static_env_lines:
+            env_lines.extend(self.static_env_lines)
+        prompt += f"{self.sot_token}system\n" + "\n".join(env_lines) + f"\n{self.eot_token}\n"
 
         prompt += f"{self.sot_token}assistant\n"
         if enable_thinking:

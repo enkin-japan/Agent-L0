@@ -117,7 +117,25 @@ GET_TOOL_SCHEMA_SCHEMA = {
     },
 }
 
-META_TOOL_NAMES = {"update_plan", "complete_step", "get_tool_schema"}
+REMEMBER_SCHEMA = {
+    "name": "remember",
+    "description": (
+        "Save one short note to your scratchpad — a concrete value/fact you will need in a LATER "
+        "step (a url, an id, a file path, a number, a name). The scratchpad stays visible in every "
+        "following step, so you never have to re-derive or re-fetch what you already found. Write "
+        "down key intermediate results the moment you obtain them, instead of trusting they will "
+        "stay in view. Only meaningful during a multi-step task (create a plan first)."
+    ),
+    "parameters": {
+        "properties": {
+            "note": {"type": "string",
+                     "description": "One short line to remember — a concrete fact/value, not a whole paragraph"},
+        },
+        "required": ["note"],
+    },
+}
+
+META_TOOL_NAMES = {"update_plan", "complete_step", "remember", "get_tool_schema"}
 
 # 输出截断恢复护栏（T1-3）：撞 max_tokens 时先把上限升到 ESCALATED 重试同一步一次（多数长答复
 # 一口气能写完），仍不够则多轮「接着写」续写，最多 MAX_TOKENS_RECOVERIES 次后接受半截答复。
@@ -218,9 +236,9 @@ class Orchestrator:
                 {"name": s.get("name"), "description": str(s.get("description", "")).split("\n")[0]}
                 for s in self.registry.get_all_schemas()
             ]
-            return catalog + [UPDATE_PLAN_SCHEMA, COMPLETE_STEP_SCHEMA, GET_TOOL_SCHEMA_SCHEMA]
+            return catalog + [UPDATE_PLAN_SCHEMA, COMPLETE_STEP_SCHEMA, REMEMBER_SCHEMA, GET_TOOL_SCHEMA_SCHEMA]
         # full 模式：全部工具完整 schema 常驻（当前工具规模下更省 token 且缓存更稳）
-        return list(self.registry.get_all_schemas()) + [UPDATE_PLAN_SCHEMA, COMPLETE_STEP_SCHEMA]
+        return list(self.registry.get_all_schemas()) + [UPDATE_PLAN_SCHEMA, COMPLETE_STEP_SCHEMA, REMEMBER_SCHEMA]
 
     # ---------- 思考位置策略 ----------
     def _thinking_for_iteration(self, requested: bool, iteration: int) -> bool:
@@ -662,6 +680,14 @@ class Orchestrator:
             ok, msg = task.complete_current(str(args.get("result", "")))
             return msg
 
+        if name == "remember":
+            task = session.task_state
+            if task is None or not task.plan:
+                return ("No active plan — the scratchpad carries values across the steps of a "
+                        "multi-step task. Create a plan with update_plan first, or just answer.")
+            ok, msg = task.remember(str(args.get("note", "")))
+            return msg
+
         if name == "get_tool_schema":
             names = args.get("names") or []
             if not isinstance(names, list) or not names:
@@ -688,12 +714,16 @@ class Orchestrator:
             return ("[Reminder] All plan steps are marked done. Before giving the user the final "
                     "answer, double-check that the key deliverables were actually verified — "
                     "\"executed\" is not the same as \"verified\".")
-        # 步骤边界：刚推进到新步 → 重新锚定注意力，别回头重做已完成的步
+        # 步骤边界：刚推进到新步 → 重新锚定注意力，别回头重做已完成的步。
+        # 记事板提示自限：仅在便签仍为空时追加——一旦模型开始记录即消失，不逐步膨胀。
         if did_complete_step:
             step = task.current_step()
             if step is not None:
+                hint = ("" if task.notes else
+                        " If the step you just finished produced a value a later step will need "
+                        "(a url, id, path, number), save it now with remember.")
                 return (f"[Reminder] Now on step \"{step['title']}\". Focus on this step only; "
-                        "do not go back and redo steps that are already done.")
+                        "do not go back and redo steps that are already done." + hint)
         # 漂移：当前步接近迭代上限（失败路由触发前一步）→ 提示收敛或换法
         step = task.current_step()
         if step is not None and task.step_iterations >= self.react_max_steps - 1:

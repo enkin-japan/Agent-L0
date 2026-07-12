@@ -107,8 +107,11 @@ class ChatSession:
         # 内存状态（热数据）
         self.brain_memory_state = PromptCacheState() # MLX KV 缓存
         self.history: List[Dict[str, Any]] = []
-        self.images: List[str] = [] 
+        self.images: List[str] = []
         self.audios: List[str] = []
+        # 环境上下文注入开关（想法1）：仅主编排会话为 True。沙箱一次性会话替身不设此属性
+        # （getattr 默认 False），故机器/个人环境事实绝不进沙箱子生成上下文——隐私边界 opt-in。
+        self.inject_env_context = True
         
         # 生命周期控制
         self.last_access_time: float = time.time()

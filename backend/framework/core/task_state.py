@@ -23,6 +23,11 @@ STEP_SKIPPED = "skipped"
 MAX_PLAN_STEPS = 12
 MAX_STEP_TITLE_CHARS = 200
 
+# 记事板（scratchpad）边界：模型自写的持久便签，跨步可见，抗上下文压缩。
+# 有界记忆原则——model-facing 上下文必须有界，故 FIFO 淘汰而非无限累积。
+MAX_NOTES = 12
+MAX_NOTE_CHARS = 200
+
 _STATUS_MARKS = {
     STEP_PENDING: "○",
     STEP_DOING: "▶",
@@ -38,6 +43,7 @@ class TaskState:
     def __init__(self, goal: str = ""):
         self.goal = goal
         self.plan: List[Dict[str, Any]] = []  # {"id", "title", "status", "note"}
+        self.notes: List[str] = []   # 记事板：模型经 remember 元工具写入的持久便签（跨步可见）
         self.replan_count = 0        # 整体重规划（replace/clear 后再建）次数
         self.step_iterations = 0     # 当前步已消耗的推理迭代（内层 ReAct 预算）
         self.step_failures: Dict[str, int] = {}  # step_id(str) -> 累计失败次数
@@ -173,7 +179,31 @@ class TaskState:
         self.step_iterations = 0
         return step
 
+    # ---------- 记事板（模型经 remember 元工具进入） ----------
+    def remember(self, note: str) -> Tuple[bool, str]:
+        """
+        把一条短便签写入记事板。返回 (是否成功, 反馈文本)。
+        有界护栏：单条截到 MAX_NOTE_CHARS；精确去重（不重复记同一句）；
+        超过 MAX_NOTES 时 FIFO 淘汰最旧一条——永不因"记事板满"回绝模型
+        （回绝一个弱模型只会打乱它的注意力，近因便签更可能有用）。
+        """
+        note = (note or "").strip()
+        if not note:
+            return False, "Invalid note: 'note' must be a non-empty string (a concrete fact/value to reuse later)."
+        note = note[:MAX_NOTE_CHARS]
+        if note in self.notes:
+            return True, "Already on your scratchpad — no need to save it again.\n" + self.render_notes()
+        self.notes.append(note)
+        if len(self.notes) > MAX_NOTES:
+            self.notes.pop(0)  # FIFO：丢最旧的一条，保持有界
+        return True, "Saved to scratchpad.\n" + self.render_notes()
+
     # ---------- 上下文渲染 ----------
+    def render_notes(self) -> str:
+        if not self.notes:
+            return "(scratchpad is empty)"
+        return "\n".join(f"  - {n}" for n in self.notes)
+
     def render_plan(self) -> str:
         if not self.plan:
             return "(plan is empty)"
@@ -187,16 +217,21 @@ class TaskState:
 
     def render(self, react_max: int, replan_max: int) -> str:
         """渲染为 prompt 尾部的任务状态块（可变区，必须保持在整个上下文最尾部）。"""
+        # 记事板仅在非空时渲染，保持任务块精简（空板时靠 remember 工具说明 + 步界提醒发现）
+        notes_block = (f"Scratchpad (values you saved — reuse these, do not re-derive):\n"
+                       f"{self.render_notes()}\n") if self.notes else ""
         return (
             "[Current task state | system-maintained; modifiable only via the "
-            "update_plan / complete_step tools]\n"
+            "update_plan / complete_step / remember tools]\n"
             f"Goal: {self.goal}\n"
             f"Plan:\n{self.render_plan()}\n"
+            f"{notes_block}"
             f"Budget: current-step iterations {self.step_iterations}/{react_max}; "
             f"re-plans {self.replan_count}/{replan_max}\n"
             "Rules: focus on completing the current step; call complete_step as soon as it is "
-            "done; after all steps are done, output the final answer to the user directly "
-            "(plain text, no more tool calls)."
+            "done; the moment a step yields a value you'll need later (a url, id, path, number), "
+            "save it with remember; after all steps are done, output the final answer to the user "
+            "directly (plain text, no more tool calls)."
         )
 
     # ---------- 序列化（/task 接口、挂起恢复、冷启动） ----------
@@ -204,6 +239,7 @@ class TaskState:
         return {
             "goal": self.goal,
             "plan": [dict(s) for s in self.plan],
+            "notes": list(self.notes),
             "replan_count": self.replan_count,
             "step_iterations": self.step_iterations,
             "step_failures": dict(self.step_failures),
@@ -215,6 +251,7 @@ class TaskState:
     def from_snapshot(cls, data: Dict[str, Any]) -> "TaskState":
         task = cls(goal=str(data.get("goal", "")))
         task.plan = [dict(s) for s in data.get("plan", []) if isinstance(s, dict)]
+        task.notes = [str(n) for n in (data.get("notes") or []) if str(n).strip()][:MAX_NOTES]
         task.replan_count = int(data.get("replan_count", 0))
         task.step_iterations = int(data.get("step_iterations", 0))
         task.step_failures = {str(k): int(v) for k, v in (data.get("step_failures") or {}).items()}

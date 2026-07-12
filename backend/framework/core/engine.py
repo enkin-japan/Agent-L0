@@ -23,7 +23,7 @@ class AgentEngine:
     """
     @classmethod
     async def create(cls, model_path, *, kv_config=None,
-                     suppress_ghost_thinking: bool = False) -> "AgentEngine":
+                     suppress_ghost_thinking: bool = False, env=None) -> "AgentEngine":
         """标准构造路径:**在推理线程内加载模型**,再装配引擎。
 
         MLX 的惰性张量携带创建时线程的流:主线程加载的模型,其 __init__ 里的
@@ -37,16 +37,16 @@ class AgentEngine:
         from mlx_vlm.utils import load as _vlm_load
         model, processor = await loop.run_in_executor(executor, lambda: _vlm_load(model_path))
         return cls(model, processor, kv_config=kv_config,
-                   suppress_ghost_thinking=suppress_ghost_thinking, _executor=executor)
+                   suppress_ghost_thinking=suppress_ghost_thinking, env=env, _executor=executor)
 
     def __init__(self, model, processor, kv_config=None, suppress_ghost_thinking: bool = False,
-                 _executor: "ThreadPoolExecutor | None" = None):
+                 env=None, _executor: "ThreadPoolExecutor | None" = None):
         self.model = model
         self.processor = processor
 
         # suppress_ghost_thinking：Gemma-4 大杯（26b/31b）关思考时须预填空思考频道，
         # 见 PromptBuilder 注释；按所选模型的注册表条目由 app.py 传入。
-        self.builder = PromptBuilder(processor, suppress_ghost_thinking=suppress_ghost_thinking)
+        self.builder = PromptBuilder(processor, suppress_ghost_thinking=suppress_ghost_thinking, env=env)
         self.parser = ResponseParser(processor)
 
         # KV Cache 量化配置（默认关闭）：kv_bits 为 None 时走稠密缓存，
@@ -122,6 +122,8 @@ class AgentEngine:
             enable_thinking=enable_thinking,
             task_block=task_block,
             tail_notes=tail_notes,
+            # 环境事实只注入主编排会话；沙箱一次性会话替身默认 False（隐私边界，opt-in）
+            include_env=getattr(session, "inject_env_context", False),
         )
         # 思考播种用 parser 的实际 token（而非硬编码字面量）：换模型/token 表时保持一致
         generated_text = f"{self.parser.soc}thought\n" if enable_thinking else ""

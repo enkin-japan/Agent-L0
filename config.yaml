@@ -212,6 +212,16 @@ agent:
                               # manual=旧语义直通：关→全不思考；开→全程思考
                               # 收益/代价经 token_breakdown 仪表观测；闲聊延迟不达预期再给 dynamic 配独立小预算
 
+  # 环境上下文注入（想法1）：把稳定的环境事实预注入到 system 尾部锚点块（与当天日期同处一块），
+  # 帮小模型少猜少绕。机器事实（OS+架构）自动探测；个人事实默认全空、opt-in、仅填写后注入。
+  # 隐私：这些只进主编排上下文，绝不进联网/数学/Excel 沙箱（沙箱子生成 include_env=False，
+  # 物理隔离方向一致）。注意"最小相关集"——弱模型上下文越多注意力越稀释，勿堆砌。
+  environment:
+    inject_machine: true   # 自动注入操作系统+架构（桌面级 shell/路径任务有用）；false=不注入机器信息
+    language: null         # 偏好应答语言，如 "中文"/"日本語"；null=不注入（模型按用户消息语种自适应）
+    location: null         # 大致所在地（城市级即可，如 "东京"），供天气/本地检索类任务；null=不注入
+    about: null            # 一句话用户画像/偏好，如 "工程背景，偏好简洁中文"；null=不注入
+
   # 单 worker 调度（ClassPolicy：确定性两级规则，无启发式）。
   # 交互任务（chat/approval/resume）> 后台任务（summarize，priority=-1）由优先级排序天然实现。
   scheduler:

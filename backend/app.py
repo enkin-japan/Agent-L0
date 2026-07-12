@@ -153,6 +153,7 @@ async def lifespan(app: FastAPI):
     engine = await AgentEngine.create(
         model_path, kv_config=config.get("inference") or {},
         suppress_ghost_thinking=bool(MODEL_OPTIONS.get("suppress_ghost_thinking", False)),
+        env=(config.get("agent") or {}).get("environment") or {},
     )
     model, processor = engine.model, engine.processor
     orchestrator = Orchestrator(engine, mcp_registry, config.get("agent") or {})
