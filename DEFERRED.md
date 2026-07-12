@@ -64,6 +64,13 @@
 
 ## 2. 目的-结果对齐 / 收尾验证（想法3；想法5 的"监工"诉求也落这）
 
+> **✅ 完整版已上马**（2026-07-12）：A/B 实测（4bit，n=10×2 侧）证实触发条件 1——长任务
+> 两侧**确定性虚报完成**（读完 8 站日志却交不出任何数值，且自信宣告完成）。实现为
+> `orchestrator._goal_alignment_check`：计划≥3步全完成后一次独立审计生成（goal+答复→
+> VERDICT PASS/FAIL），FAIL 经 tail_note 推回自纠一次，异常/歧义 fail-open；
+> `config.yaml agent.goal_verify` 开关。金测试 +4（test_goal_verify.py）。
+> 采用简单 verdict 形态；结构化 checklist 仍属后续可选强化。以下原设计存档备考。
+
 **任务级目标对齐已有轻量提醒；完整版是一次独立的验证生成。**
 
 ### 轻量版（已交付）

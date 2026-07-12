@@ -91,12 +91,18 @@ COMPLETE_STEP_SCHEMA = {
     "name": "complete_step",
     "description": (
         "Mark the current step of the plan as done and advance to the next one. Call this "
-        "immediately after finishing each step, with a one-sentence summary of the step's "
-        "outcome in result. After all steps are done, output the final answer to the user directly."
+        "immediately after finishing each step. `result` MUST carry the step's concrete "
+        "output — the actual value(s) it produced (numbers, ids, names, urls, paths), never "
+        "a vague \"done\": recorded results stay pinned in the task state and the final "
+        "answer is assembled from them. After all steps are done, output the final answer "
+        "to the user directly."
     ),
     "parameters": {
         "properties": {
-            "result": {"type": "string", "description": "One-sentence summary of this step's outcome"},
+            "result": {"type": "string",
+                       "description": ("This step's concrete outcome INCLUDING the actual value(s) "
+                                       "it produced, e.g. 'station 3 KEY_METRIC = 15887' — keep it "
+                                       "short but never omit the values")},
         },
         "required": ["result"],
     },
@@ -144,6 +150,11 @@ MAX_TOKENS_RECOVERIES = 3
 # 提前收尾门控（T1-2）：计划未完成却吐纯文本时，每步最多推回 PREMATURE_FINISH_MAX 次，
 # 用尽后放行（视为向用户提问/汇报障碍），避免与「坚持要作答」的模型死循环。
 PREMATURE_FINISH_MAX = 1
+# 收尾目标校验（DEFERRED §2 完整版，2026-07-12 A/B 实测触发条件 1 后上马）：
+# 计划 ≥ GOAL_VERIFY_MIN_STEPS 步且全部完成、产出最终文本后，用一次独立小生成审计
+# 「答复是否兑现原始目标」（串行、每轮最多一次），FAIL 推回自纠一次；异常/歧义 fail-open 放行。
+GOAL_VERIFY_MIN_STEPS = 3
+GOAL_VERIFY_MAX_TOKENS = 220
 # 写后验证门控（T1-4）：本轮改过文件、之后没有任何复查就要收尾 = 把「已执行」当「已验证」
 # （弱模型改一行就宣布修好的高频失败形态）。最多推回 VERIFY_NUDGE_MAX 次，用尽后放行——
 # 模型坚持不验证时接受其答复，杜绝死循环。
@@ -224,6 +235,9 @@ class Orchestrator:
         self.summary_idle_seconds = int(cfg.get("summary_idle_seconds", 300))  # 空闲多久进入低阈值维护
         # 长期记忆沉淀（Stage 3）：折叠旧轮时把原文沉淀进 RAG agent_memory 类目（无损承重网）。
         self.sediment_to_rag = bool(cfg.get("sediment_to_rag", True))
+
+        # 收尾目标校验开关（DEFERRED §2 完整版）：大计划完成后一次独立审计生成，防虚报完成。
+        self.goal_verify = bool(cfg.get("goal_verify", True))
 
         # 工具声明属于稳定前缀：启动时构建一次（注册表就是单一数据源），
         # 任务期内绝不变动，保证 KV 缓存的稳定段命中
@@ -313,6 +327,7 @@ class Orchestrator:
         # （审批续跑时刚执行的批准写调用由 resume_after_approval 传入）；verify_nudges=已推回次数。
         unverified_write = resume_unverified_write
         verify_nudges = 0
+        goal_verified = False        # 收尾目标校验预算（每次 run_turn 最多审计一次）
         base_max_tokens = int(gen_kwargs.get("max_tokens", 4096))
         # T3-c：一次性护栏提醒走可变尾部注入（用完即弃、不进历史、不被摘要压缩）。
         # 下一次生成消费后立即清空；由 T1-2/T1-3 分支按需填充。
@@ -625,6 +640,29 @@ class Orchestrator:
                         "user what to test — do not claim success.")
                     continue
 
+                # [收尾目标校验 T-goal] DEFERRED §2 完整版：大计划全部完成后的最终答复，
+                # 用一次独立小生成对照原始目标审计（实测：长任务两侧确定性虚报完成 → 上马）。
+                # 预算 1 次；FAIL 推回自纠（同提前收尾形态），PASS/异常/预算尽 → 放行。
+                if (self.goal_verify and not goal_verified
+                        and task is not None and task.plan and task.all_done()
+                        and len(task.plan) >= GOAL_VERIFY_MIN_STEPS):
+                    goal_verified = True
+                    session.set_activity("正在核对结果与目标…")
+                    ok_goal, why = await self._goal_alignment_check(task.goal, text)
+                    events.emit("goal_verify", session=session.session_id,
+                                passed=ok_goal, reason=why)
+                    if not ok_goal:
+                        _transition("goal_verify_pushback")
+                        session.add_assistant_message(content=text, thoughts=thoughts)
+                        pending_tail_notes.append(
+                            "[System guardrail] A completion audit against the user's ORIGINAL goal "
+                            f"says your answer falls short: {why} — do NOT present this as done. "
+                            "Fix it now: pull the missing concrete values from the recorded step "
+                            "results / scratchpad / tool observations above and deliver the complete "
+                            "answer. Only if the data truly does not exist may you say exactly what "
+                            "is missing and why.")
+                        continue
+
                 session.set_activity("已完成", phase="done")
                 text = _append_missing_asset_links(text, session.history[turn_start_idx:])
                 session.add_assistant_message(content=text, thoughts=thoughts)
@@ -703,6 +741,53 @@ class Orchestrator:
             return "\n".join(parts)
 
         return f"Unknown meta tool: {name}"
+
+    # ---------- 收尾目标校验（想法3 完整版：任务级独立审计，串行、每轮最多一次） ----------
+    async def _goal_alignment_check(self, goal: str, answer: str) -> "tuple[bool, str]":
+        """一次无工具小生成审计「最终答复是否兑现原始目标」。返回 (通过?, 理由)。
+
+        成本刻意收敛：只喂 goal+答复（不带全历史），max_tokens 小、思考关闭；
+        engine.generate_once 内部持有推理锁，与主循环天然串行（不违反单 worker）。
+        任何异常/歧义一律 fail-open 放行——审计是安全网，绝不能反过来卡死收尾。
+        """
+        try:
+            from mlx_vlm.generate import PromptCacheState  # 惰性导入：金测试无模型环境不强依赖
+        except Exception:
+            return True, "verifier unavailable"
+
+        class _AuditSession:
+            """一次性会话替身（与 agents/research_sandbox._EphemeralSession 同型），不落盘。"""
+            def __init__(self):
+                self.brain_memory_state = PromptCacheState()
+                self.history = [
+                    {"role": "system", "content": (
+                        "You are a strict completion auditor. Judge ONLY whether the answer "
+                        "delivers what the goal asked for. Reply with first line exactly "
+                        "'VERDICT: PASS' or 'VERDICT: FAIL', then ONE short reason line. "
+                        "FAIL when the answer omits requested deliverables, contains "
+                        "placeholders like '[value]' or 'TBD', claims required data was "
+                        "unavailable, or answers a different question.")},
+                    {"role": "user", "content": (
+                        f"Goal:\n{goal}\n\nFinal answer:\n{answer}\n\n"
+                        "Does the answer fully deliver the goal?")},
+                ]
+                self.images: List[str] = []
+                self.audios: List[str] = []
+                self.cancel_requested = False
+
+        try:
+            r = await self.engine.generate_once(_AuditSession(), tools=None,
+                                                enable_thinking=False, temperature=0.1,
+                                                max_tokens=GOAL_VERIFY_MAX_TOKENS)
+            verdict_text = (r.get("text") or "").strip()
+        except Exception as e:
+            events.emit("goal_verify_error", error=f"{type(e).__name__}: {e}")
+            return True, "verifier error"
+        lines = verdict_text.splitlines()
+        first = lines[0].upper() if lines else ""
+        passed = "FAIL" not in first    # 空输出/无法辨认 → 放行（fail-open）
+        reason = (lines[1].strip() if len(lines) > 1 else first)[:300]
+        return passed, reason
 
     # ---------- 结构性提醒（T1-1：步骤边界 / 漂移 / 收尾验证的条件式 nudge） ----------
     def _structural_reminder(self, task: Optional[TaskState], did_complete_step: bool) -> Optional[str]:
