@@ -709,11 +709,17 @@ class Orchestrator:
         """在最新观察旁贴的条件式提醒；无活跃计划或不满足触发条件时返回 None（保持稀疏）。"""
         if task is None or not task.plan:
             return None
-        # 收尾验证：刚完成某步且全部步骤已就绪、计划有一定规模 → 提醒别把「已执行」当「已验证」
+        # 收尾验证 + 目标对齐（想法3 轻量）：刚完成某步且全部步骤已就绪、计划有一定规模 →
+        # ①把结果对回「用户最初的目标」（弱模型跑长多步任务极易漂移到相邻的事）②别把「已执行」
+        # 当「已验证」。确定性触发（all_done），零额外生成——只是最终答复前读到的一条提醒。
         if did_complete_step and task.all_done() and len(task.plan) >= 3:
-            return ("[Reminder] All plan steps are marked done. Before giving the user the final "
-                    "answer, double-check that the key deliverables were actually verified — "
-                    "\"executed\" is not the same as \"verified\".")
+            goal = (task.goal or "").strip()
+            goal_ref = f" the user's ORIGINAL goal (\"{goal[:120]}\")" if goal else " the user's ORIGINAL goal"
+            return ("[Reminder] All plan steps are marked done. Before giving the final answer, "
+                    "re-read" + goal_ref + " and check your result actually ACHIEVES it — not just a "
+                    "nearby thing you drifted into. Also confirm the key deliverables were truly "
+                    "verified (\"executed\" is not \"verified\"). If it falls short, keep working "
+                    "instead of wrapping up.")
         # 步骤边界：刚推进到新步 → 重新锚定注意力，别回头重做已完成的步。
         # 记事板提示自限：仅在便签仍为空时追加——一旦模型开始记录即消失，不逐步膨胀。
         if did_complete_step:

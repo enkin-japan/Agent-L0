@@ -8,6 +8,7 @@ import asyncio
 
 from framework.core.journal import new_turn_id
 from framework.core.orchestrator import Orchestrator
+from framework.core.task_state import TaskState
 
 from .fake_engine import FakeEngine, FakeRegistry, FakeTool, bad_call, call
 
@@ -382,6 +383,20 @@ def test_remember_without_plan_redirects(make_session):
     redirects = [tr for m in session.history if m["role"] == "tool"
                  for tr in m.get("tool_responses", []) if tr.get("name") == "remember"]
     assert redirects and "No active plan" in redirects[0]["response"]
+
+
+def test_completion_reminder_references_goal(make_session):
+    """想法3:全部步骤完成时的收尾提醒引用用户最初目标 + 目标对齐语义(防小模型漂移)。"""
+    orch = make_orch(FakeEngine([]), FakeRegistry([]))
+    task = TaskState(goal="把下载文件夹按类型整理好")
+    task.plan = [{"id": i, "title": f"step{i}", "status": "done", "note": ""} for i in range(1, 4)]
+    assert task.all_done()
+
+    msg = orch._structural_reminder(task, did_complete_step=True)
+
+    assert msg is not None
+    assert "整理" in msg                                    # 引用了原始目标文本
+    assert "ACHIEVES" in msg or "achieve" in msg.lower()    # 目标对齐(非仅"已验证")
 
 
 def test_total_iteration_fuse(make_session):
