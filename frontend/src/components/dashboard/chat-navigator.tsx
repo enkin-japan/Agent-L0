@@ -1,6 +1,7 @@
 "use client"
 
 import {
+  memo,
   useCallback,
   useLayoutEffect,
   useState,
@@ -19,7 +20,9 @@ export type NavigatorItem = {
   content: string
 }
 
-export function ChatNavigator({
+/** memo：items 由 ChatArea 保证内容不变则引用不变——流式增量期间本组件整体跳过,
+ *  内容高度变化由内部 ResizeObserver 自行驱动重测,不依赖父级重渲染。 */
+export const ChatNavigator = memo(function ChatNavigator({
   scrollRef,
   items,
   recomputeKey,
@@ -116,4 +119,4 @@ export function ChatNavigator({
       </div>
     </div>
   )
-}
+})

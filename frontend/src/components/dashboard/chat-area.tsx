@@ -23,7 +23,7 @@ import {
 import type { Conversation } from "@/lib/agent-data"
 import { convTitle } from "@/lib/agent-data"
 import { conversationToMarkdown, exportFilename } from "@/lib/export"
-import { downloadText } from "@/lib/utils"
+import { downloadText, useStableCallback } from "@/lib/utils"
 import type { LiveActivity, PendingTool, TaskSnapshot } from "@/types/agent-api"
 import type { LastMetrics } from "@/store/useChatStore"
 import { useT } from "@/store/useUiStore"
@@ -32,9 +32,28 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ChatInput } from "@/components/dashboard/chat-input"
 import { ChatMessage } from "@/components/dashboard/chat-message"
-import { ChatNavigator } from "@/components/dashboard/chat-navigator"
+import { ChatNavigator, type NavigatorItem } from "@/components/dashboard/chat-navigator"
 
 const _STEP_MARK: Record<string, string> = { tool: "🛠", plan: "📋", note: "⚠" }
+
+/** 用户消息目录（导航条数据源）：内容没变就保持数组引用不变。
+ *  流式期间 store 每次增量都会重建 messages 数组——若这里跟着换新引用,
+ *  ChatNavigator 的测量 effect（ResizeObserver + getBoundingClientRect）会每个
+ *  token 重跑一遍,这是掉帧与分配churn的来源之一。 */
+function useUserItems(messages: Conversation["messages"]): NavigatorItem[] {
+  const ref = useRef<NavigatorItem[]>([])
+  const next = messages
+    .filter((m) => m.role === "user")
+    .map((m) => ({ id: m.id, content: m.content ?? "" }))
+  const prev = ref.current
+  if (
+    next.length !== prev.length ||
+    next.some((it, i) => it.id !== prev[i].id || it.content !== prev[i].content)
+  ) {
+    ref.current = next
+  }
+  return ref.current
+}
 
 /** 实时步骤流卡片：SSE task_progress 推送，展示"当前在做什么"+ 最近完成动作。
  *  内容（current/label/detail）由后端产出，按原样展示；卡片壳本地化。 */
@@ -126,11 +145,14 @@ export function ChatArea({
   const titleInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  const userMessages = conversation.messages
-    .filter((m) => m.role === "user")
-    .map((m) => ({ id: m.id, content: m.content ?? "" }))
+  const userMessages = useUserItems(conversation.messages)
 
   const lastUserMessageId = userMessages.at(-1)?.id
+
+  // 传进 memo 化 ChatMessage 的回调必须身份稳定，否则浅比较永远不等、memo 失效
+  const stableBranch = useStableCallback(onBranch)
+  const stableEditSubmit = useStableCallback(onUpdateLast)
+  const stableDeleteTurn = useStableCallback(onDeleteLast)
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState("")
@@ -282,10 +304,10 @@ export function ChatArea({
               <ChatMessage
                 key={message.id}
                 message={message}
-                onBranch={onBranch}
+                onBranch={stableBranch}
                 editable={message.id === lastUserMessageId && !generating}
-                onEditSubmit={onUpdateLast}
-                onDeleteTurn={onDeleteLast}
+                onEditSubmit={stableEditSubmit}
+                onDeleteTurn={stableDeleteTurn}
               />
             ))}
 

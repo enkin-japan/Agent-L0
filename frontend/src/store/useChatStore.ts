@@ -102,6 +102,21 @@ function loadInitialState() {
 const attachCtls = new Map<string, AbortController>()
 const cursors = new Map<string, number>()
 const liveTurns = new Map<string, NormalizedState>()
+/** 预览气泡的合并刷新计时器：token/thinking 增量攒 ~90ms 投影一次（与原生端
+ *  AgentStore 的流式节流同拍）。归约本身每事件照做，节流的只是 UI 投影。 */
+const previewFlush = new Map<string, ReturnType<typeof setTimeout>>()
+
+/** 撤销消息附件的本地 blob 预览 URL。createObjectURL 不 revoke 会把整个 Blob
+ *  （原图字节）钉在内存里直到页面关闭——实测 Safari 内存重载的确定性泄漏项。 */
+function revokePreviewUrls(messages: ChatMessage[]) {
+  for (const m of messages) {
+    for (const a of m.attachments ?? []) {
+      if (a.previewUrl) {
+        try { URL.revokeObjectURL(a.previewUrl) } catch { /* 已失效则忽略 */ }
+      }
+    }
+  }
+}
 /** 活跃轮的界面簿记：预览气泡/用户气泡的消息 id 与轮次 id 的配对。 */
 const liveMsg = new Map<string, { turnId?: string; userId?: string; assistantId?: string }>()
 /** 本 tab 乐观追加的用户气泡（turn_queued 到达时被收编,不重复建）。 */
@@ -227,6 +242,9 @@ export const useChatStore = create<ChatState>((set, get) => {
   function removeMessages(id: string, msgIds: Array<string | undefined>) {
     const drop = new Set(msgIds.filter(Boolean) as string[])
     if (drop.size === 0) return
+    // 被移除消息（乐观气泡）里的图片预览 blob URL 随之撤销，Blob 才能被回收
+    const conv = get().conversations.find((c) => c.id === id)
+    if (conv) revokePreviewUrls(conv.messages.filter((m) => drop.has(m.id)))
     set((s) => ({
       conversations: s.conversations.map((c) =>
         c.id === id ? { ...c, messages: c.messages.filter((m) => !drop.has(m.id)) } : c,
@@ -256,7 +274,18 @@ export const useChatStore = create<ChatState>((set, get) => {
     liveTurns.delete(sid)
     liveMsg.delete(sid)
     optimistic.delete(sid)
-    if (reload) patchConversation(sid, { historyLoaded: false })
+    cancelPreviewFlush(sid)
+    if (reload) {
+      // 内存有界：切走的会话消息就地释放（回来经 /history 重建，服务端是真相源）。
+      // 活跃轮在跑时保留——运行中切回走"重放不拉历史"的路径,清了会丢已落盘轮次的显示。
+      const conv = get().conversations.find((c) => c.id === sid)
+      if (conv && conv.messages.length > 0 && !get().generating[sid]) {
+        revokePreviewUrls(conv.messages)
+        patchConversation(sid, { historyLoaded: false, messages: [] })
+      } else {
+        patchConversation(sid, { historyLoaded: false })
+      }
+    }
   }
 
   async function attachLoop(sid: string, ctl: AbortController) {
@@ -299,11 +328,15 @@ export const useChatStore = create<ChatState>((set, get) => {
   /** 事件分发：归约器推进活跃轮状态,再把结果投影进 UI store。 */
   function dispatch(sid: string, env: EventEnvelope) {
     if (env.type === "stream_attached") return
-    const next = reduceTurnEvent(liveTurns.get(sid) ?? initialTurnState(), env)
+    let next = reduceTurnEvent(liveTurns.get(sid) ?? initialTurnState(), env)
+    // transcript 是夹具口径的对账字段,UI 从不读取——长期附着下随轮次无界累积
+    // (每轮的完整 response 含工具结果),store 层不留存。归约器保持纯函数,夹具不受影响。
+    if (next.transcript.length > 0) next = { ...next, transcript: [] }
     liveTurns.set(sid, next)
 
     switch (env.type) {
       case "turn_queued":
+        cancelPreviewFlush(sid) // 上一轮迟到的投影计时器不得漏进新轮
         onTurnQueued(sid, env, String(env.data.prompt ?? ""))
         break
       case "turn_started":
@@ -319,7 +352,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         break
       case "token_delta":
       case "thinking_delta":
-        syncPreviewBubble(sid, next)
+        schedulePreviewFlush(sid)
         break
       case "tool_call_pending":
       case "tool_started":
@@ -347,16 +380,19 @@ export const useChatStore = create<ChatState>((set, get) => {
         syncActivity(sid, next)
         break
       case "awaiting_approval":
+        flushPreviewNow(sid) // 暂停前把最后 ~90ms 的增量落进气泡（半截产出是决策上下文）
         setGenerating(sid, false)
         set((s) => ({ pendingApprovals: { ...s.pendingApprovals, [sid]: next.pending_tools } }))
         pruneEmptyPreview(sid)
         break
       case "suspended":
+        flushPreviewNow(sid)
         setGenerating(sid, false)
         set((s) => ({ suspendedSessions: { ...s.suspendedSessions, [sid]: true } }))
         pruneEmptyPreview(sid)
         break
       case "turn_ended":
+        cancelPreviewFlush(sid) // 权威对账在即，未刷的增量随预览一并撤下
         onTurnEnded(sid, env)
         break
     }
@@ -385,6 +421,32 @@ export const useChatStore = create<ChatState>((set, get) => {
     if (conv && conv.title === NEW_CHAT_TITLE && prompt) {
       patchConversation(sid, { title: prompt.slice(0, 30) })
     }
+  }
+
+  /** 流式投影节流：每个 token/thinking 增量都直投会导致「重建 conversations 数组
+   *  → 全列表重渲染 → 流式气泡 markdown 重解析」以每秒几十次的频率发生（实测
+   *  Safari 内存重载的主因），攒 ~90ms 合并刷一次。 */
+  function schedulePreviewFlush(sid: string) {
+    if (previewFlush.has(sid)) return
+    previewFlush.set(sid, setTimeout(() => {
+      previewFlush.delete(sid)
+      flushPreviewNow(sid)
+    }, 90))
+  }
+
+  function cancelPreviewFlush(sid: string) {
+    const timer = previewFlush.get(sid)
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      previewFlush.delete(sid)
+    }
+  }
+
+  function flushPreviewNow(sid: string) {
+    cancelPreviewFlush(sid)
+    const live = liveTurns.get(sid)
+    // 空内容不投影：迟到的计时器不会在 turn_ended/turn_queued 重置预览后造出空壳气泡
+    if (live && (live.preview.text || live.preview.thinking)) syncPreviewBubble(sid, live)
   }
 
   /** 预览气泡（流式正文 + 思考）：懒创建——首个增量到达才挂气泡,避免审批/工具阶段的空壳。 */

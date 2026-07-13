@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react"
 import {
-  Boxes,
   Brain,
   CheckCircle2,
   Circle,
@@ -11,7 +10,6 @@ import {
   ListTodo,
   Loader2,
   Presentation,
-  ScrollText,
   ShieldAlert,
   Wrench,
   X,
@@ -20,18 +18,16 @@ import {
 
 import { DeckPreview } from "@/components/deck/deck-preview"
 
-import { getMemoryStatus, getSystemPrompt, getTools } from "@/api/agent"
+import { getMemoryStatus, getTools } from "@/api/agent"
 import { cn } from "@/lib/utils"
 import type { Conversation } from "@/lib/agent-data"
 import { useT } from "@/store/useUiStore"
 import type {
   MemoryStatusResponse,
-  SystemPromptResponse,
   TaskSnapshot,
   TaskStep,
   ToolInfo,
 } from "@/types/agent-api"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 
 type Tab = "plan" | "deck" | "memory" | "context"
@@ -40,7 +36,7 @@ type Tab = "plan" | "deck" | "memory" | "context"
  * 右侧检视面板：把后端既有机理提升为一等公民。
  *  - Plan（pillar B）：多步任务计划常驻可见（后端 /task 已提供 TaskState 快照）。
  *  - Memory（pillar C）：有界记忆可视化——在用上下文 vs 折叠阈值、压缩摘要、RAG 沉淀。
- *  - Context：会话系统提示词 + 模型可用工具（原 context-panel 内容）。
+ *  - 工具集：模型可用工具清单（只列名字；系统提示词展示已按用户要求移除）。
  */
 export function InspectorPanel({
   conversation,
@@ -74,14 +70,14 @@ export function InspectorPanel({
         <TabButton icon={ListTodo} label={t.inspector.tabPlan} active={tab === "plan"} onClick={() => setTab("plan")} />
         <TabButton icon={Presentation} label={t.inspector.tabDeck} active={tab === "deck"} onClick={() => setTab("deck")} />
         <TabButton icon={Brain} label={t.inspector.tabMemory} active={tab === "memory"} onClick={() => setTab("memory")} />
-        <TabButton icon={Boxes} label={t.inspector.tabContext} active={tab === "context"} onClick={() => setTab("context")} />
+        <TabButton icon={Wrench} label={t.inspector.tabContext} active={tab === "context"} onClick={() => setTab("context")} />
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4">
         {tab === "plan" && <PlanTab task={taskProgress} />}
         {tab === "deck" && <DeckPreview sessionId={conversation.id} />}
         {tab === "memory" && <MemoryTab sessionId={conversation.id} />}
-        {tab === "context" && <ContextTab sessionId={conversation.id} />}
+        {tab === "context" && <ToolsTab />}
       </div>
     </aside>
   )
@@ -248,14 +244,11 @@ function MemoryTab({ sessionId }: { sessionId: string }) {
   )
 }
 
-// ── Context（系统提示词 + 工具） ────────────────────────────────────────────
-function ContextTab({ sessionId }: { sessionId: string }) {
+// ── 工具集（只列名字；需审批的带盾标） ────────────────────────────────────────
+function ToolsTab() {
   const t = useT()
   const [tools, setTools] = useState<ToolInfo[] | null>(null)
   const [toolsError, setToolsError] = useState(false)
-  const [promptState, setPromptState] = useState<{ id: string; data: SystemPromptResponse | null; error: boolean } | null>(null)
-  const prompt = promptState?.id === sessionId ? promptState.data : null
-  const promptError = promptState?.id === sessionId && promptState.error
 
   useEffect(() => {
     let cancelled = false
@@ -265,98 +258,37 @@ function ContextTab({ sessionId }: { sessionId: string }) {
     return () => { cancelled = true }
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    getSystemPrompt(sessionId)
-      .then((r) => { if (!cancelled) setPromptState({ id: sessionId, data: r, error: false }) })
-      .catch(() => { if (!cancelled) setPromptState({ id: sessionId, data: null, error: true }) })
-    return () => { cancelled = true }
-  }, [sessionId])
-
   return (
-    <div className="flex flex-col gap-6">
-      <section>
-        <div className="flex items-center gap-1.5">
-          <ScrollText className="size-3.5 text-muted-foreground" />
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {t.inspector.ctxSystemPrompt}
-          </h3>
-          {prompt && (
-            <Badge variant="secondary" className="rounded-full text-[10px] font-normal">
-              {prompt.source === "default" ? t.inspector.ctxSourceDefault : t.inspector.ctxSourceSession}
-            </Badge>
-          )}
-        </div>
-        <div className="mt-2 rounded-xl border border-border bg-muted/30 px-3 py-2.5">
-          {promptError ? (
-            <p className="text-xs text-destructive">{t.inspector.ctxPromptError}</p>
-          ) : prompt ? (
-            <p className="whitespace-pre-wrap text-xs leading-relaxed text-foreground/80">
-              {prompt.system_prompt.trim()}
-            </p>
-          ) : (
-            <p className="text-xs text-muted-foreground">{t.inspector.loading}</p>
-          )}
-        </div>
-      </section>
-
-      <section>
-        <div className="flex items-center gap-1.5">
-          <Wrench className="size-3.5 text-muted-foreground" />
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {tools ? t.inspector.ctxToolsCount(tools.length) : t.inspector.ctxTools}
-          </h3>
-        </div>
-        <div className="mt-2 flex flex-col gap-2">
-          {toolsError ? (
-            <p className="text-xs text-destructive">{t.inspector.ctxToolsError}</p>
-          ) : tools === null ? (
-            <p className="text-xs text-muted-foreground">{t.inspector.loading}</p>
-          ) : tools.length === 0 ? (
-            <p className="text-xs text-muted-foreground">{t.inspector.ctxNoTools}</p>
-          ) : (
-            tools.map((tool) => {
-              const paramEntries = Object.entries(tool.parameters.properties ?? {})
-              return (
-                <div key={tool.name} className="rounded-xl border border-border bg-muted/30 px-3 py-2.5">
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-mono text-xs font-medium">{tool.name}</span>
-                    {tool.requires_approval && (
-                      <Badge
-                        variant="secondary"
-                        className="gap-1 rounded-full border-chart-3/40 bg-chart-3/10 text-[10px] font-normal text-chart-3"
-                      >
-                        <ShieldAlert className="size-3" />
-                        {t.inspector.ctxNeedsApproval}
-                      </Badge>
-                    )}
-                  </div>
-                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{tool.description}</p>
-                  {paramEntries.length > 0 && (
-                    <details className="mt-1.5">
-                      <summary className="cursor-pointer select-none text-xs text-muted-foreground/70 hover:text-foreground">
-                        {t.inspector.ctxParams(paramEntries.length)}
-                      </summary>
-                      <ul className="mt-1.5 flex flex-col gap-1.5">
-                        {paramEntries.map(([key, p]) => (
-                          <li key={key} className="text-xs leading-relaxed">
-                            <span className="font-mono">{key}</span>
-                            {tool.parameters.required?.includes(key) && (
-                              <span className="text-destructive">*</span>
-                            )}
-                            {p.description && <span className="text-muted-foreground"> — {p.description}</span>}
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                  )}
-                </div>
-              )
-            })
-          )}
-        </div>
-      </section>
-    </div>
+    <section>
+      <div className="flex items-center gap-1.5">
+        <Wrench className="size-3.5 text-muted-foreground" />
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {tools ? t.inspector.ctxToolsCount(tools.length) : t.inspector.ctxTools}
+        </h3>
+      </div>
+      <div className="mt-2">
+        {toolsError ? (
+          <p className="text-xs text-destructive">{t.inspector.ctxToolsError}</p>
+        ) : tools === null ? (
+          <p className="text-xs text-muted-foreground">{t.inspector.loading}</p>
+        ) : tools.length === 0 ? (
+          <p className="text-xs text-muted-foreground">{t.inspector.ctxNoTools}</p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {tools.map((tool) => (
+              <span
+                key={tool.name}
+                title={tool.requires_approval ? t.inspector.ctxNeedsApproval : undefined}
+                className="flex items-center gap-1 rounded-lg border border-border bg-muted/30 px-2 py-1 font-mono text-xs"
+              >
+                {tool.name}
+                {tool.requires_approval && <ShieldAlert className="size-3 shrink-0 text-chart-3" />}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
   )
 }
 

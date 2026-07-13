@@ -146,7 +146,7 @@ const en = {
     tabPlan: "Plan",
     tabDeck: "Deck",
     tabMemory: "Memory",
-    tabContext: "Context",
+    tabContext: "Tools",
     close: "Close inspector",
 
     planNone: "No active plan. Ask for a multi-step task and the plan will appear here.",
@@ -417,7 +417,7 @@ const zh: Dict = {
     tabPlan: "计划",
     tabDeck: "幻灯片",
     tabMemory: "记忆",
-    tabContext: "上下文",
+    tabContext: "工具集",
     close: "关闭检视面板",
 
     planNone: "暂无进行中的计划。发起一个多步任务，计划会在这里出现。",
@@ -684,7 +684,7 @@ const ja: Dict = {
     tabPlan: "計画",
     tabDeck: "スライド",
     tabMemory: "記憶",
-    tabContext: "コンテキスト",
+    tabContext: "ツール",
     close: "インスペクタを閉じる",
 
     planNone: "進行中の計画はありません。マルチステップタスクを依頼すると、ここに計画が表示されます。",

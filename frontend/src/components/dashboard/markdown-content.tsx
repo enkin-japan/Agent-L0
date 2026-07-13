@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from "react"
+import { memo, type ReactElement, type ReactNode } from "react"
 import ReactMarkdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
@@ -102,7 +102,10 @@ const components: Components = {
   td: ({ children }) => <td className="border border-border px-2 py-1 align-top">{children}</td>,
 }
 
-export function MarkdownContent({ text }: { text: string }) {
+/** memo：remark 解析是消息列表里最贵的一步。正文不变（引用相等）时跳过重解析——
+ *  没有 memo 时，流式期间每个 token 增量都会把整个会话的全部 markdown 重新解析一遍
+ *  （实测 Safari 内存重载事故的主因），memo 后只有流式气泡自身随增量重算。 */
+export const MarkdownContent = memo(function MarkdownContent({ text }: { text: string }) {
   return (
     <div className="min-w-0 break-words">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
@@ -110,4 +113,4 @@ export function MarkdownContent({ text }: { text: string }) {
       </ReactMarkdown>
     </div>
   )
-}
+})

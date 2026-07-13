@@ -1,8 +1,22 @@
+import { useCallback, useLayoutEffect, useRef } from "react"
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
+}
+
+/** 身份恒定的回调包装：返回的函数引用永不变化，调用时转发到最新的 fn。
+ *  供 React.memo 的浅比较使用——父级每次渲染重建的内联箭头函数会让 memo 失效，
+ *  包一层后子组件按值比较即可跳过重渲染，且不存在闭包过期问题。 */
+export function useStableCallback<A extends unknown[], R>(
+  fn: (...args: A) => R,
+): (...args: A) => R {
+  const ref = useRef(fn)
+  useLayoutEffect(() => {
+    ref.current = fn
+  })
+  return useCallback((...args: A) => ref.current(...args), [])
 }
 
 /** 复制文本到剪贴板。优先 Clipboard API（需安全上下文：HTTPS/localhost），

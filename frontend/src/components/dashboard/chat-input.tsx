@@ -265,6 +265,11 @@ export function ChatInput({
     if (!trimmed && attachments.length === 0) return
     // prompt 为必填字段：纯附件时用文件名兜底
     onSend(trimmed || attachments.map((a) => a.file.name).join(", "), attachments.map((a) => a.file))
+    // 输入区的缩略图/试听 blob URL 随发送作废（消息气泡用的是 store 自建的另一份），
+    // 不 revoke 会把原始字节钉在内存里直到页面关闭
+    for (const a of attachments) {
+      if (a.previewUrl) URL.revokeObjectURL(a.previewUrl)
+    }
     setValue("")
     setAttachments([])
     if (textareaRef.current) textareaRef.current.style.height = "auto"

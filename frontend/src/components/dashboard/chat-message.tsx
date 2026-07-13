@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { memo, useState } from "react"
 import {
   AlertTriangle,
   Cpu,
@@ -37,7 +37,11 @@ function Thoughts({ text, label }: { text: string; label: string }) {
   )
 }
 
-export function ChatMessage({
+/** memo：流式期间 store 每次增量都会重建 conversations 数组导致父级整体重渲染；
+ *  非流式消息的 message 引用是稳定的（updateMessage 只重建目标消息），memo 让
+ *  它们整棵跳过（含内部 MarkdownContent 的 remark 重解析）。回调 props 由
+ *  ChatArea 用 useStableCallback 稳定，浅比较才有效——新增回调 prop 时同样处理。 */
+export const ChatMessage = memo(function ChatMessage({
   message,
   onBranch,
   editable = false,
@@ -280,4 +284,4 @@ export function ChatMessage({
       </div>
     </div>
   )
-}
+})
