@@ -258,8 +258,11 @@ class TurnRunner:
                 await self._summarize(session, sid)
 
     # ---------- 审批决议 ----------
-    async def accept_approval(self, session, sid: str, approve: bool) -> str:
-        """受理审批决议(短临界区):校验目标态 → 账本 resumed。返回 turn_id。"""
+    async def accept_approval(self, session, sid: str, approve: bool, *,
+                              expected_turn_id: str = None) -> str:
+        """受理审批决议(短临界区):校验目标态 → 账本 resumed。返回 turn_id。
+        expected_turn_id:远程决议(推送通知按钮)的防错批锚——迟到点击时当前等待
+        审批的可能已是另一个轮次,不匹配即拒,绝不把决议错递给后来者。"""
         journal = session.journal
         if journal.turn_state != "awaiting_approval":  # 锁外快路径(运行中不排队等锁)
             raise TurnConflict("no_pending_approval")
@@ -267,6 +270,8 @@ class TurnRunner:
             if journal.turn_state != "awaiting_approval" \
                     or not session.pending_tool_calls or session.pending_turn is None:
                 raise TurnConflict("no_pending_approval")
+            if expected_turn_id and journal.current_turn_id != expected_turn_id:
+                raise TurnConflict("approval_target_mismatch")
             journal.emit("resumed", {"trigger": "approve" if approve else "deny"})
             return journal.current_turn_id
 

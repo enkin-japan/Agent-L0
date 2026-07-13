@@ -29,6 +29,7 @@ rag/models/
 # ═══════════ 运行时数据（用户会话 / 知识库 / 任务实体）═══════════
 backend/sessions/
 backend/schedules/
+backend/push/
 backend/ui_state.json
 backend/guardrail_events.jsonl
 rag/chroma_data/
@@ -49,3 +50,5 @@ apple-app/
 # ═══════════ Claude Code 本地配置 ═══════════
 .claude/settings.local.json
 backend/static/
+
+/.keys/

@@ -236,7 +236,7 @@ RAG 沉淀（原文可召回）。全量日志永远保留在 `history.jsonl`。
 
 **加一个功能**：
 1. 若涉及新协议行为 → 先落 `protocol/fixtures/` 夹具（铁律 5）；
-2. 后端改动 → 跑 `backend/tests/`（67 项金测试，FakeEngine 无模型毫秒级）
+2. 后端改动 → 跑 `backend/tests/`（102 项金测试，FakeEngine 无模型毫秒级）
    必须全绿；动 TurnRunner/编排/账本前**先读金测试**知道它守着哪些不变量；
 3. 两端归约器改动 → 跑夹具回放（web `npm run test` + Swift
    `Tests/run_reducer_fixtures.sh`）双绿；
@@ -275,7 +275,7 @@ RAG 沉淀（原文可召回）。全量日志永远保留在 `history.jsonl`。
 | 协议类型 | `api/schemas.py` | `types/protocol.ts` | `API/ProtocolModels.swift` |
 | 智能层 | `core/{engine,orchestrator,scheduler}.py` `memory/` `mcp/` `agents/` `patch/` | — | — |
 | 契约 | `PROTOCOL.md` + `protocol/fixtures/`（三端共享） | | |
-| 回归网 | `backend/tests/`（67 金测试） | `lib/turn-reducer.test.ts` | `Tests/run_reducer_fixtures.sh` + `run_e2e.sh` |
+| 回归网 | `backend/tests/`（102 金测试） | `lib/turn-reducer.test.ts` | `Tests/run_reducer_fixtures.sh` + `run_e2e.sh` |
 
 单配置：仓库根 `config.yaml`。单启动器：仓库根 `devctl.sh`。
 
@@ -286,8 +286,13 @@ RAG 沉淀（原文可召回）。全量日志永远保留在 `history.jsonl`。
 > 本节是**非目标**（刻意不做）。另有**缓做**（先轻量交付、完整版择机再做）的架构记在
 > `DEFERRED.md`——那些不是边界，是有明确完整设计、等触发条件的待办，别混为一谈。
 
-- **iOS 后台推送**：iOS 转后台数秒即被系统挂起，真推送需 APNs/Bark 云中转，
-  与"纯本地"张力，用户拍板搁置。macOS 后台常驻可通知。
+- ~~**iOS 后台推送**~~（2026-07-12 用户拍板解除搁置并实装）：iOS 推送经 APNs **直发**
+  （`framework/push/`，铁律 2 预留的"通知读者"——dispatcher 订阅 feed/journal，无旁路），
+  不用任何第三方中转。与"纯本地"的张力以**内容分级**缓解：per-device 三档
+  （full / category / placeholder，默认 category 只推类别不推内容），
+  "推送即门铃，真相永远在账本"——丢通知不丢状态，回 app 走统一 /turn+/events 对账。
+  macOS 客户端**不经 APNs**（app 常驻订阅 feed 发本地通知，零出网）。
+  残留边界：iOS 推送 payload 经 Apple 服务器，出门内容档位由用户在设置里选择。
 - **deck 的 lucide 图标**：以 SF Symbol 近似映射，未收录降级圆点（web 端同有
   降级）。
 - **gemma 生成偶发孤立 `*`**：模型侧格式紊乱，属提示词/输出清洗层，非交互架构。

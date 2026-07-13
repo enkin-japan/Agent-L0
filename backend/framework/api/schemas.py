@@ -108,9 +108,49 @@ class ToolsResponse(BaseModel):
 
 class ApprovalRequest(BaseModel):
     """
-    敏感工具审批决议请求体：approve=True 执行挂起的工具调用，False 则拒绝
+    敏感工具审批决议请求体：approve=True 执行挂起的工具调用，False 则拒绝。
+    expected_turn_id（可选）：远程决议（推送通知按钮）的防错批锚——决议只对这个
+    轮次有效；当前等待审批的轮次不是它时拒绝（409 approval_target_mismatch），
+    防止迟到点击批到后续另一个审批请求。
     """
     approve: bool
+    expected_turn_id: Optional[str] = None
+
+
+class PushRegisterRequest(BaseModel):
+    """
+    推送设备注册/更新（upsert）：device_id 是 app 生成并持久化的稳定标识；
+    token 是 APNs 设备 token（hex）；push_to_start_token 是 Live Activity
+    push-to-start token（iOS 17.2+，可无）；prefs 见 PushPrefsRequest。
+    """
+    device_id: str
+    platform: str = "ios"
+    token: Optional[str] = None
+    push_to_start_token: Optional[str] = None
+    prefs: Optional[Dict[str, Any]] = None
+    app_build: Optional[str] = None
+
+
+class PushPrefsRequest(BaseModel):
+    """
+    通知偏好（部分更新）：三类开关 + 内容分级（full/category/placeholder）。
+    """
+    results: Optional[bool] = None
+    schedule_start: Optional[bool] = None
+    approval: Optional[bool] = None
+    content_level: Optional[str] = None
+
+
+class LiveActivityTokenRequest(BaseModel):
+    """
+    Live Activity 活动 token 上报：app 起活动（本地或 push-to-start）后回传，
+    后端据此附着该会话账本做阶段推送。轮次已结束时返回 active=False，
+    app 据此本地收尾孤儿活动。
+    """
+    device_id: str
+    session_id: str
+    turn_id: str
+    token: str
 
 class ScheduleListResponse(BaseModel):
     """

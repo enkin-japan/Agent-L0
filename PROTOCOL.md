@@ -225,6 +225,30 @@ resumed/turn_ended,信封加 `session_id` 字段)+ 定时任务运行事件。�
 后台通知的唯一数据源,替代 /tasks 差分轮询。`global_seq` 独立于会话 seq。
 (`GET /api/v1/tasks` 快照保留,作为低频对账与调试接口。)
 
+### 2.8 推送投影(additive,2026-07-12;不改既有事件语义,不升版本)
+
+通知不是新事件源——后端 `framework/push/` 的 dispatcher 是 feed/journal 的**读者**
+(铁律 2),把生命周期事件映射为 APNs 推送(iOS);macOS 客户端自行订阅 feed 发本地
+通知。推送丢失不丢状态,恢复仍走 §2.4/§2.5 统一路径("推送即门铃,真相在账本")。
+
+```
+POST   /api/v1/push/register                    设备注册/更新(upsert;device_id 为 app 生成的稳定主键)
+       {device_id, platform, token?, push_to_start_token?, prefs?, app_build?}
+DELETE /api/v1/push/devices/{device_id}         注销(幂等)
+PATCH  /api/v1/push/devices/{device_id}/prefs   通知偏好 {results?, schedule_start?, approval?, content_level?}
+POST   /api/v1/push/live-activity               Live Activity 活动 token 上报
+       {device_id, session_id, turn_id, token} → {active: bool}   active=false ⇒ app 本地收尾孤儿活动
+```
+
+`POST /turns/approval` 请求体新增**可选** `expected_turn_id`(向后兼容):远程决议
+(通知按钮/灵动岛)带上,当前等待审批的轮次不是它时 409 `approval_target_mismatch`
+——迟到点击绝不错递给后来的审批请求。不带该字段的旧客户端行为不变。
+
+APNs payload 自定义段 `ma: {v, kind, session_id, turn_id}`,kind ∈ result /
+approval / approval_autodenied / schedule_start;Live Activity content-state 契约
+见 `apple-app/Sources/LiveActivity/AgentActivityAttributes.swift`(与
+`framework/push/dispatcher.py` 字段一一对应,改动须两边同步)。
+
 ---
 
 ## 3. 持久化与账本实现约束

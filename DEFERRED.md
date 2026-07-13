@@ -62,6 +62,53 @@
 
 ---
 
+## 1.5 定时任务的远程审批（推送批次的刻意搁置项，2026-07-12）
+
+**通知基建已全量上线（APNs 直发 + 互动审批 + Live Activity），唯独无人值守场景的
+审批语义保持"自动拒绝"不动——远程限时审批是它的一等公民形态。**
+
+### 轻量版（已交付，随推送批次）
+- 交互式轮次的审批已可远程决议：APNs 鉴权通知（time-sensitive + TTL 过期不投）带
+  允许/拒绝按钮（允许=authenticationRequired 强制解锁，拒绝免解锁），灵动岛/锁屏
+  另有免解锁"拒绝"（LiveActivityIntent）；决议带 `expected_turn_id` 防错批。
+- 定时任务撞审批墙时**语义未变**：runner 立即 `approved=False` 决议（无人值守纪律，
+  提示词也明示"审批类工具会被自动拒绝"）。推送侧做的是**诚实通报**：
+  `approval_autodenied` 类推送（"定时任务遇到需授权操作，已自动拒绝"），
+  绝不把已注定拒绝的请求渲染成互动审批卡（那是撒谎 UI）。
+
+### 完整版（未做，择机）——挂起 → 推送 → 限时等待 → 超时拒绝
+- `schedule/runner.py` 的 pending_approval 分支改为：emit awaiting_approval 后**不立即
+  决议**，改为等待远程决议或超时（如 10 分钟，与推送的 apns-expiration 对齐），超时才
+  `approved=False` 续跑。凌晨的定时调研要写一个文件，被窝里 Face ID 一下就放行。
+- 随动改造（成套，不可只改一半）：
+  - 注入提示词更新（runner.py preamble "will be DENIED automatically" 改为"会推送给
+    用户限时决议，超时拒绝"）；
+  - 等待期间调度器 worker 的让出语义（挂起等待不能占死单 worker——参照
+    awaiting_approval 暂停态的 suspend/release 配对，铁律 3 的不变量清单逐条核对）；
+  - `_MAX_AUTO_DENIES` 熔断保留（远程决议也可能连环触发审批）；
+  - 推送侧：schedule-origin 的 awaiting_approval 从"通报"升级回互动审批卡
+    （dispatcher._route 的 origin 分叉反转）；
+  - config：`schedules.remote_approval_wait_minutes`（0=保持现状自动拒绝）。
+- **两种审批场景语义要分开**：交互式轮次维持无限等待（awaiting_approval 是暂停态，
+  通知只是提醒）；只有 schedule-origin 加 TTL。
+
+### 为什么先轻量
+改的是编排语义（runner 决议路径 + 调度器占用），金测试范围；与通知基建混一批会把
+"推送坏了"和"定时任务坏了"耦成一个故障面。先让通知层在真机跑稳，再动无人值守语义。
+
+### 重启触发条件（任一即上）
+1. 定时任务因审批墙**实际失败/降级**的运行次数变多（runs.jsonl 里 denied_approval 常见）；
+2. 用户在真实使用中想"半夜放行一次写文件"而做不到；
+3. 通知链路（APNs 送达 + 互动按钮回程）在真机被验证可靠。
+
+### 承重代码指针
+- 现状语义：`backend/framework/schedule/runner.py:186-221`（自动拒绝闭环 + `_MAX_AUTO_DENIES`）；
+- 推送分叉：`backend/framework/push/dispatcher.py` `_route` 的 awaiting_approval origin 分支；
+- 远程决议管道（现成，直接复用）：`POST /turns/approval` + `expected_turn_id` 防错批
+  （`core/turn_runner.py accept_approval`）+ PushManager 通知动作处理。
+
+---
+
 ## 2. 目的-结果对齐 / 收尾验证（想法3；想法5 的"监工"诉求也落这）
 
 > **✅ 完整版已上马**（2026-07-12）：A/B 实测（4bit，n=10×2 侧）证实触发条件 1——长任务

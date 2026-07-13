@@ -260,6 +260,26 @@ schedules:
   run_history_keep: 50    # 每任务运行历史保留条数（runs.jsonl 超出截断头部）
   min_interval_minutes: 5 # interval 型下限（防模型排出高频轰炸）
 
+# iOS 推送（framework/push：APNs 直发，纯出站 HTTPS，后端回环绑定不变）。
+# macOS 客户端不经此层（app 常驻订阅 feed 发本地通知，零出网）。
+# 前置一次性人工步骤：developer.apple.com → Keys → 新建启用 APNs 的密钥 →
+#   下载 AuthKey_XXXXXXXXXX.p8（只给下载一次），把路径/KeyID 填进下面两项。
+# apns_key_path 为空 = iOS 推送整体禁用（dispatcher 不发一个字节，接口仍可注册设备）。
+# 相对路径 = 相对仓库根；约定放 .keys/（已 gitignore——git 同步不携带，换机要手动拷一次）。
+# 环境（TestFlight=生产 / Xcode 直装=沙箱）无需配置：按设备自动探测并粘滞学习。
+push:
+  enabled: true
+  apns_key_path: "./.keys/AuthKey_645U4V9MAX.p8"                 # 例：.keys/AuthKey_ABC123DEFG.p8（绝对路径/~ 也认）
+  apns_key_id: "645U4V9MAX"                   # 密钥页显示的 Key ID（10 位）
+  apns_team_id: "9A84P4ZS84"        # Apple Developer Team ID
+  bundle_id: "dev.enkin.macagent"   # iOS app 的 bundle id（apns-topic）
+  approval_ttl_seconds: 900         # 鉴权通知的投递时限（过期不投；决议端点另有 turn_id 防错批）
+  live_activity:
+    enabled: true
+    heartbeat_seconds: 60           # 滚动 stale-date 心跳（低优先级，静默窗口才补发）
+    stale_seconds: 150              # 无更新超过此秒数，iOS 自动把灵动岛标记为过期
+    min_push_interval: 2.0          # 阶段更新节流下限（秒）；审批/收尾等硬转折不受限
+
 # 会话记录清理（session_cleanup）：sessions/ 随会话堆积，此层做确定性磁盘回收。
 # 反转默认——默认自动过期、pin 才长留；这样"越囤越懒"的死循环不成立（只手动做加法=保留）。
 # 复用 SessionManager.delete_session（并发安全：取消标志→会话锁→discard→rmtree），硬删不进回收站。

@@ -74,7 +74,8 @@
 │  ┌────────────────────────────────────────────────────────────────────────────┐ │
 │  │ routes.py：/turns(202) /turns/{approval,resume} /turn /events(附着流)      │ │
 │  │ /history /branch /turns/last /meta /memory /tools /tasks /events(全局feed) │ │
-│  │ /schedules /files/{sid}/assets|deck   auth：Bearer 常量时间比对（空key=告警放行）│ │
+│  │ /schedules /files/{sid}/assets|deck /push/*（iOS 推送注册面,PROTOCOL §2.8）│ │
+│  │ auth：Bearer 常量时间比对（空key=告警放行）                                  │ │
 │  └───────┬────────────────────────────────────────────────────────────────────┘ │
 │          │ session.lock（同会话整轮串行）                                        │
 │          ▼                                                                       │

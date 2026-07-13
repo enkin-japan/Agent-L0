@@ -45,3 +45,6 @@ llguidance>=1.7  # 工具调用段约束采样（inference-speedup Phase 2）；
 sympy==1.14.0
 # 数据图表（render_chart / deck 视觉路由 chart 分支）：缺失时 render_chart 不注册
 matplotlib==3.11.0
+# iOS 推送（framework/push：APNs HTTP/2 直发 + .p8 ES256 签名）：缺失时 iOS 推送禁用，macOS 本地通知不受影响
+h2==4.3.0
+cryptography==49.0.0

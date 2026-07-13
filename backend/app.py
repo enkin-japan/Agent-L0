@@ -273,6 +273,35 @@ async def lifespan(app: FastAPI):
     app.state.schedule_runner = schedule_runner
     app.state.schedule_tick_task = schedule_tick_task
 
+    # 7.5 推送层（CHARTER 铁律 2 预留的"通知读者"）：dispatcher 订阅全局 feed 把生命周期
+    #     事件映射为 APNs 推送（iOS）；Live Activity 按 app 上报的活动 token 附着会话账本。
+    #     缺 .p8 密钥时 APNs 客户端不建，dispatcher 保持注册表可用但一个字节不发（macOS
+    #     本地通知不依赖本层）。纯出站 HTTPS，回环绑定的隐私边界不变。
+    from framework.push import APNsClient, APNsDisabled, PushRegistry, NotificationDispatcher
+    push_cfg = config.get("push") or {}
+    push_registry = PushRegistry(BASE_DIR / "push")
+    apns_client = None
+    if push_cfg.get("enabled", True):
+        # 密钥相对路径 = 相对仓库根（config.yaml 所在处）：`.keys/AuthKey_X.p8` 在
+        # 开发机/远程机都指向各自仓库副本里的同一位置，不受进程启动目录影响。
+        key_path = str(push_cfg.get("apns_key_path") or "")
+        if key_path and not Path(key_path).expanduser().is_absolute():
+            key_path = str(BASE_DIR.parent / key_path)
+        try:
+            apns_client = APNsClient(
+                key_path,
+                str(push_cfg.get("apns_key_id") or ""),
+                str(push_cfg.get("apns_team_id") or ""),
+            )
+            print("📮 [System] APNs 推送已启用（iOS 横幅 + Live Activity）")
+        except APNsDisabled as e:
+            print(f"📮 [System] iOS 推送未启用（{e}）——设备注册照常，macOS 本地通知不受影响")
+    push_dispatcher = NotificationDispatcher(
+        feed, push_registry, apns_client, session_manager, push_cfg, SESSIONS_DIR)
+    push_dispatcher.start()
+    app.state.push_registry = push_registry
+    app.state.push_dispatcher = push_dispatcher
+
     if API_KEY:
         print("🔐 [System] API 鉴权已启用（Bearer 共享密钥）")
     else:
@@ -282,11 +311,15 @@ async def lifespan(app: FastAPI):
     print(f"✅ [System] AI Agent has started and is listening on {AGENT_HOST}:{AGENT_PORT}")
     yield
 
-    # 停机：先停后台维护回合、清扫回合与定时任务触发循环
+    # 停机：先停后台维护回合、清扫回合、定时任务触发循环与推送分发器
     maintenance_task.cancel()
     if cleanup_task is not None:
         cleanup_task.cancel()
     schedule_tick_task.cancel()
+    try:
+        await push_dispatcher.stop()
+    except Exception:
+        pass
 
     # 优雅停机：安全清理物理与内存资源
     print("\n🛑 [System] An exit signal has been received, resources are being cleaned up....")

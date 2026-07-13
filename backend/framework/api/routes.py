@@ -15,9 +15,12 @@ from .schemas import (
     HistoryResponse,
     BranchRequest,
     BranchResponse,
+    LiveActivityTokenRequest,
     MemoryStatusResponse,
     PinRequest,
     PinResponse,
+    PushPrefsRequest,
+    PushRegisterRequest,
     SessionListResponse,
     ScheduleActionResponse,
     ScheduleListResponse,
@@ -194,6 +197,50 @@ async def get_schedule_runs(schedule_id: str, request: Request, limit: int = 20)
 # resolve 包含校验，双保险防路径穿越（_ASSET_NAME_RE 定义在文件顶部，与路由级
 # 路径 ID 校验共用）。经既有 Bearer 鉴权（前端 <img> 走同源 /api 相对路径，
 # Authorization 由 Vite/Nginx 代理注入）。文件名含毫秒时间戳恒不复用，可安全长缓存。
+
+
+# ---------- 推送设备注册面（iOS APNs；macOS 本地通知不经此）----------
+
+
+@router.post("/api/v1/push/register")
+async def push_register(request: Request, body: PushRegisterRequest):
+    """设备注册/更新（upsert，幂等）：device token / push-to-start token / 偏好。
+    token 轮换直接重打本端点；apns 未配置时注册照收（配置好即生效）。"""
+    registry = request.app.state.push_registry
+    d = registry.upsert(
+        body.device_id, platform=body.platform, token=body.token,
+        push_to_start_token=body.push_to_start_token,
+        prefs=body.prefs, app_build=body.app_build)
+    return {"status": True, "device_id": d["device_id"],
+            "push_enabled": request.app.state.push_dispatcher.enabled,
+            "prefs": d.get("prefs")}
+
+
+@router.delete("/api/v1/push/devices/{device_id}")
+async def push_unregister(device_id: str, request: Request):
+    """设备注销（用户关掉总开关/卸载前清理）。不存在也返回成功（幂等）。"""
+    request.app.state.push_registry.remove(device_id)
+    return {"status": True}
+
+
+@router.patch("/api/v1/push/devices/{device_id}/prefs")
+async def push_update_prefs(device_id: str, request: Request, body: PushPrefsRequest):
+    """通知偏好部分更新（设置页开关的同步端点）。设备未注册时 404。"""
+    prefs = {k: v for k, v in body.model_dump().items() if v is not None}
+    d = request.app.state.push_registry.update_prefs(device_id, prefs)
+    if d is None:
+        raise HTTPException(status_code=404, detail="设备未注册，请先调 /push/register。")
+    return {"status": True, "prefs": d.get("prefs")}
+
+
+@router.post("/api/v1/push/live-activity")
+async def push_live_activity_token(request: Request, body: LiveActivityTokenRequest):
+    """Live Activity 活动 token 上报：后端据此附着该会话账本做阶段推送。
+    轮次已结束/会话不热时 active=False——app 据此本地收尾孤儿活动。"""
+    dispatcher = request.app.state.push_dispatcher
+    res = dispatcher.register_activity(body.session_id, body.turn_id,
+                                       body.device_id, body.token)
+    return {"status": True, **res}
 
 
 @router.get("/api/v1/files/{session_id}/assets/{filename}")
@@ -473,6 +520,7 @@ _CONFLICT_MSG = {
     "turn_active": "该会话已有正在进行的轮次，请等它完结后再发送。",
     "no_pending_approval": "当前会话没有等待审批的操作（可能已过期或已被处理）。",
     "no_suspended_turn": "当前会话没有挂起的任务（可能已恢复、已完结或会话被回收）。",
+    "approval_target_mismatch": "这条审批请求已过期：当前等待审批的是另一个轮次，请打开会话确认后再决议。",
 }
 
 
@@ -564,11 +612,13 @@ async def submit_turn(
 
 @router.post("/api/v1/chat/{session_id}/turns/approval")
 async def submit_approval(session_id: str, request: Request, body: ApprovalRequest):
-    """审批决议（202 受理即返）：过程与终态经 GET /events 观察。无等待审批的轮次时 409。"""
+    """审批决议（202 受理即返）：过程与终态经 GET /events 观察。无等待审批的轮次时 409。
+    expected_turn_id（可选，推送按钮的远程决议带上）：目标轮已换时 409 防错批。"""
     runner = request.app.state.turn_runner
     session = request.app.state.session_manager.get_or_create(session_id)
     try:
-        turn_id = await runner.accept_approval(session, session_id, body.approve)
+        turn_id = await runner.accept_approval(session, session_id, body.approve,
+                                               expected_turn_id=body.expected_turn_id)
     except TurnConflict as e:
         return JSONResponse(status_code=409, content={"status": False, "reason": e.reason})
     runner.spawn(session_id, runner.run_approval(session, session_id, body.approve))
