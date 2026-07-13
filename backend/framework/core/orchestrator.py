@@ -515,6 +515,23 @@ class Orchestrator:
                     _emit_plan()  # 计划/步骤已变更，写入最新任务快照
                 task = session.task_state
 
+                # [参数预检] 审批/执行前的确定性静态校验（工具自声明 validate_arguments）：
+                # 注定失败的调用（如引号不配对的 shell 命令）就地打回让模型重发——绝不拿
+                # 一条必败命令去打扰用户审批（实测事故 d618f0d6：mkdir …') 带语法伤过审、
+                # 执行必败 zsh unmatched '、修正后再骗一次审批点击）。
+                validated: List[Dict[str, Any]] = []
+                for c in phys_calls:
+                    verr = (self.registry.validate_call(c.get("name"), c.get("arguments", {}))
+                            if c.get("type") != "error" else None)
+                    if verr:
+                        events.emit("tool_error", session=session.session_id,
+                                    tool=c.get("name"), timeout=False,
+                                    msg=str(verr)[:160], kind="precheck")
+                        responses.append({"name": c.get("name"), "response": verr})
+                    else:
+                        validated.append(c)
+                phys_calls = validated
+
                 # [审批闸门] 物理调用中含敏感调用：先落元工具结果，再整批挂起
                 # （按调用动态判定：同一 shell 工具只读命令放行、变更命令弹窗）
                 approval_needed = [
@@ -956,6 +973,11 @@ class Orchestrator:
                 {"call_id": call_id, "label": label, "detail": detail})
 
         _agent_runtime.set_progress_hook(_tool_progress)
+        # [事实记账] 当前步的物理执行数 +1（complete_step 时随 note 落痕：0 执行却宣称
+        # "已执行"的虚报从此可见）。覆盖 run_turn 与审批续跑两条路径（都经本函数）。
+        _task = session.task_state
+        if _task is not None and _task.plan:
+            _task.step_tool_calls += 1
         # 实时反馈：进入工具执行段（并发时以最后写入者为准，仅展示用途，无正确性影响）
         session.set_activity(f"调用工具：{name}")
         # 工具开始事件（call_id 配对 started/result，供前端渲染工具卡片）

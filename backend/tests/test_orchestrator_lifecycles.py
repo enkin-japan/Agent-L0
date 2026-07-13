@@ -507,3 +507,74 @@ def test_thinking_only_output_pushed_back_once(make_session):
     assert any("entirely into thinking" in n for n in engine.calls[1]["tail_notes"])
     # 思考已留档,续跑可直接引用其中的分析
     assert any(m.get("thoughts") for m in session.history if m.get("role") == "assistant")
+
+
+# ---------- 步内执行数事实标记(complete_step 虚报红旗) ----------
+
+def test_complete_step_marks_zero_tool_executions(make_session):
+    """实测事故(复测会话 d618f0d6):step 零物理调用却宣称"已向数据库插入记录"。
+    complete_step 须在 note 落 [tool calls: 0] 事实标记,反馈里提醒模型自查。"""
+    engine = FakeEngine([
+        {"tool_calls": [call("update_plan", op="replace", steps=["读文件", "执行操作"])]},
+        {"tool_calls": [call("probe", path="/tmp/x")]},           # 步1:真执行了 1 次
+        {"tool_calls": [call("complete_step", result="文件已读")]},
+        {"tool_calls": [call("complete_step", result="操作已执行")]},  # 步2:零执行就宣布完成
+        {"text": "都做完了。"},
+    ])
+    orch = make_orch(engine, FakeRegistry([FakeTool("probe")]))
+    session = make_session()
+    session.add_user_message("两步任务")
+    begin_turn(session)
+
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
+
+    assert result["status"] == "success"
+    snapshots = [d["task"] for d in ring_of(session, "plan_updated") if d.get("task")]
+    final = snapshots[-1]["plan"]
+    assert "[tool calls: 1]" in final[0]["note"]          # 真执行的步:如实记 1
+    assert "[tool calls: 0]" in final[1]["note"]          # 零执行的步:红旗落痕
+    # 零执行完成的反馈里带自查提醒(喂回模型的 tool response)
+    zero_warns = [m for m in session.history if m.get("role") == "tool"
+                  and "ZERO tools" in str(m.get("tool_responses"))]
+    assert len(zero_warns) == 1
+
+
+# ---------- 参数预检(validate_call):必败调用不进审批不执行 ----------
+
+def test_precheck_rejects_before_approval(make_session):
+    """实测事故(d618f0d6):引号不配对的 shell 命令通过审批、执行必败、修正后再骗一次
+    审批点击。带 validate 的工具:坏参数就地打回模型,绝不挂起审批、绝不执行。"""
+    def quote_check(args):
+        if "'" in str(args.get("command", "")):
+            return "System Error: shell syntax error (unmatched quote) — fix and re-issue."
+        return None
+
+    engine = FakeEngine([
+        {"tool_calls": [call("shellish", command="mkdir -p ~/x')")]},   # 必败:预检打回
+        {"tool_calls": [call("shellish", command="mkdir -p ~/x")]},     # 修正:正常走审批
+        {"text": "建好了。"},
+    ])
+    registry = FakeRegistry([FakeTool("shellish", result="ok", approval=True,
+                                      read_only=False, concurrency_safe=False,
+                                      validate=quote_check)])
+    orch = make_orch(engine, registry)
+    session = make_session()
+    session.add_user_message("建个目录")
+    begin_turn(session)
+
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
+
+    # 第一次调用被预检打回:没执行、没挂审批;第二次(合法)才挂起等审批
+    assert result["status"] == "pending_approval"
+    assert result["pending_tools"] == [{"name": "shellish",
+                                        "arguments": {"command": "mkdir -p ~/x"}}]
+    assert registry.executed == []
+    # 预检错误已作为工具响应喂回模型(第二次生成读到)
+    fed = [m for m in session.history if m.get("role") == "tool"
+           and "unmatched quote" in str(m.get("tool_responses"))]
+    assert len(fed) == 1
+
+    resumed = run(orch.resume_after_approval(session, approved=True,
+                                             journal=session.journal, **GEN))
+    assert resumed["status"] == "success"
+    assert registry.executed == [{"name": "shellish", "args": {"command": "mkdir -p ~/x"}}]

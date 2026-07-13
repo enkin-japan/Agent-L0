@@ -72,7 +72,7 @@ class FakeTool:
     def __init__(self, name: str, result: str = "ok-result", *,
                  approval: bool = False, read_only: bool = True,
                  concurrency_safe: bool = True, timeout: Optional[int] = None,
-                 raises: Optional[Exception] = None):
+                 raises: Optional[Exception] = None, validate=None):
         self.name = name
         self.result = result
         self.approval = approval
@@ -80,6 +80,7 @@ class FakeTool:
         self.concurrency_safe = concurrency_safe
         self.timeout = timeout
         self.raises = raises
+        self.validate = validate  # 可选参数预检: (args)->Optional[str]，对齐 validate_arguments
 
 
 class FakeRegistry:
@@ -110,6 +111,13 @@ class FakeRegistry:
     def tool_timeout(self, name):
         t = self._tools.get(name)
         return t.timeout if t else None
+
+    def validate_call(self, name, arguments=None):
+        t = self._tools.get(name)
+        if t is None or t.validate is None:
+            return None
+        err = t.validate(arguments or {})
+        return str(err) if err else None
 
     def list_tools(self):
         return [{"name": t.name, "description": f"fake tool {t.name}",

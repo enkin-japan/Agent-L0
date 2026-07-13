@@ -115,3 +115,22 @@ def test_pdf_budget_capped_below_observation_limit(pdf30):
     assert 'continue with page=' in out.splitlines()[0]
     # 编排层 observation_max_chars 默认 4000：整条输出须留出路标存活余量
     assert len(out) <= _PDF_MAX_CHARS + 200
+
+
+# ---------- 坏参数的修正建议(did you mean) ----------
+
+def test_garbage_spec_suggests_extracted_range(pdf5):
+    """备注粘进 page 参数 → 报错直接给可照抄的修正建议(实测:只教格式会退化成单页爬行)。"""
+    out = extract_pdf_pages(str(pdf5), page="2-5_pages_to_extract_exercises_contextual_range")
+    assert out.startswith("System Error:")
+    assert "Did you mean page='2-5'?" in out
+
+def test_garbage_spec_single_number_suggestion(pdf5):
+    out = extract_pdf_pages(str(pdf5), page="3-end_of_document_range")
+    assert "Did you mean page='3'?" in out
+
+def test_out_of_range_garbage_gets_no_suggestion(pdf5):
+    """抽出的数字全部越界 → 不给建议(建议本身必须可执行)。"""
+    out = extract_pdf_pages(str(pdf5), page="200_pages_range")
+    assert out.startswith("System Error:")
+    assert "Did you mean" not in out

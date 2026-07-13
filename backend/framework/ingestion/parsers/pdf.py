@@ -4,6 +4,7 @@ PDF 解析器（pymupdf / fitz）。PDF 横跨原生与非原生两界，故按�
 - 扫描/图像型（文本密度过低）：渲染页面为 PNG，走原生视觉路（与普通图片同机制）。
 所有异常 fail-open：返回错误标记文本，不打断整轮。
 """
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -90,10 +91,27 @@ def _parse_page_spec(spec: str, total: int) -> "tuple[Optional[List[int]], Optio
     （会话 e2348829）：模型把页码写坏后两次拿回第 1 页，据此断定"提取在循环"
     并放弃了任务；显式报错它下一次就能自纠（同轮实证会写 '50'/'50-70'）。"""
 
+    def _suggest() -> str:
+        """从坏参数里抽出数字模式给修正建议。实测（复测会话 d618f0d6）：模型把备注粘进
+        page（'50-80_pages_to_extract_...'）后，只报格式它会退化成单页爬行烧光步骤预算；
+        直接给 \"did you mean page='50-80'\" 它下一次几乎必然照抄。仅数字落在文档内才建议。"""
+        nums = [int(n) for n in re.findall(r"\d+", spec)[:4]]
+        nums = [n for n in nums if 1 <= n <= total]
+        if not nums:
+            return ""
+        if len(nums) == 2 and nums[0] != nums[1]:
+            lo, hi = sorted(nums)
+            sug = f"{lo}-{hi}"
+        elif len(nums) <= 2:
+            sug = str(nums[0])
+        else:
+            sug = ",".join(str(n) for n in nums)
+        return f" Did you mean page='{sug}'?"
+
     def _bad(reason: str) -> "tuple[None, str]":
         shown = spec if len(spec) <= 60 else spec[:60] + "…"
         # 报错保持单行（换行转义）：首行会被 push_activity 当步骤摘要展示
-        return None, (f"invalid page spec {shown!r}: {reason}. "
+        return None, (f"invalid page spec {shown!r}: {reason}.{_suggest()} "
                       f"Use '3', '3-5', or '2,4,6' "
                       f"(this PDF has {total} pages).").replace("\n", "\\n")
 

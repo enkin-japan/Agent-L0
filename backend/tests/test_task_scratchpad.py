@@ -59,3 +59,23 @@ def test_empty_scratchpad_not_rendered():
     t = TaskState(goal="g")
     t.plan = list(DOING_STEP)
     assert "Scratchpad" not in t.render(4, 3)    # 空板不渲染,保持任务块精简
+
+
+def test_step_tool_calls_counter_snapshot_and_reset():
+    """步内执行数:快照往返保真;完成/失败/跳过/重规划一律复位;note 落事实标记。"""
+    t = TaskState(goal="g")
+    t.apply_op({"op": "replace", "steps": ["a", "b"]})
+    t.step_tool_calls = 3
+    restored = TaskState.from_snapshot(t.snapshot())
+    assert restored.step_tool_calls == 3
+    # 旧快照无此键 → 缺省 0
+    legacy = t.snapshot(); legacy.pop("step_tool_calls")
+    assert TaskState.from_snapshot(legacy).step_tool_calls == 0
+
+    ok, msg = t.complete_current("步骤a结果")
+    assert ok and t.step_tool_calls == 0
+    assert "[tool calls: 3]" in t.plan[0]["note"]
+    assert "ZERO tools" not in msg                       # 有执行就不该警告
+    ok, msg = t.complete_current("步骤b结果")
+    assert ok and "[tool calls: 0]" in t.plan[1]["note"]
+    assert "ZERO tools" in msg                           # 零执行 → 自查提醒

@@ -126,6 +126,28 @@ class ShellExecTool(BaseTool):
         "required": ["command"]
     }
 
+    def validate_arguments(self, arguments: Dict[str, Any]) -> "str | None":
+        """审批前的确定性语法预检（registry.validate_call 钩子）。
+
+        只拦「引号不闭合」这类注定 zsh 报错的硬伤——实测事故（复测会话 d618f0d6）：
+        模型把函数调用语法带进命令（mkdir -p ~/Desktop/W12_Exercises'）），用户批准了
+        一条必败命令、执行 unmatched '、修正后又骗一次审批。shlex 是 POSIX 近似，
+        对引号配对足够；heredoc 正文可含合法奇数引号（don't），见 << 即跳过预检
+        （宁漏勿误杀——预检的唯一职责是省掉必败调用的审批打扰）。
+        """
+        command = str((arguments or {}).get("command", ""))
+        if not command.strip():
+            return "System Error: empty command."
+        if "<<" in command:
+            return None  # heredoc：shlex 无法正确解析正文，交给执行路径
+        try:
+            shlex.split(command)
+        except ValueError as e:
+            return (f"System Error: shell syntax error ({e}) — the command was NOT executed "
+                    "and NOT sent for user approval. Fix the quoting and re-issue it "
+                    "(do not carry function-call syntax like a trailing ') into the command).")
+        return None
+
     def needs_approval(self, arguments: Dict[str, Any]) -> bool:
         # 只读命令放行，其余（含判不了的）一律审批
         return not _is_readonly(str(arguments.get("command", "")))

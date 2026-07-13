@@ -46,6 +46,7 @@ class TaskState:
         self.notes: List[str] = []   # 记事板：模型经 remember 元工具写入的持久便签（跨步可见）
         self.replan_count = 0        # 整体重规划（replace/clear 后再建）次数
         self.step_iterations = 0     # 当前步已消耗的推理迭代（内层 ReAct 预算）
+        self.step_tool_calls = 0     # 当前步实际执行过的物理工具数（虚报完成的事实红旗）
         self.step_failures: Dict[str, int] = {}  # step_id(str) -> 累计失败次数
         self.recent_calls: List[str] = []  # 本轮物理工具调用指纹（重复调用拦截）
         self.created_at = time.time()
@@ -97,6 +98,7 @@ class TaskState:
                                f"within {MAX_STEP_TITLE_CHARS} chars.")
             self.plan = [self._new_step(t.strip()) for t in steps]
             self.step_iterations = 0
+            self.step_tool_calls = 0
             return True, "Plan replaced.\n" + self.render_plan()
 
         if op == "add":
@@ -119,6 +121,7 @@ class TaskState:
                 if step["id"] == step_id:
                     if step["status"] == STEP_DOING:
                         self.step_iterations = 0
+                        self.step_tool_calls = 0
                     self.plan.pop(i)
                     return True, f"Step {step_id} removed.\n" + self.render_plan()
             return False, f"Invalid op: no step with id={step_id!r}. Check the plan listing."
@@ -135,23 +138,37 @@ class TaskState:
         if op == "clear":
             self.plan = []
             self.step_iterations = 0
+            self.step_tool_calls = 0
             return True, "Plan cleared. Answer the user directly, or build a new plan with op='replace'."
 
         return False, ("Invalid op: 'op' must be one of "
                        "replace / add / remove / reorder / clear.")
 
     def complete_current(self, result: str = "") -> Tuple[bool, str]:
-        """当前步标记完成，推进到下一步；result 为一句话结果摘要（记入计划便于回看）。"""
+        """当前步标记完成，推进到下一步；result 为一句话结果摘要（记入计划便于回看）。
+
+        事实标记：note 尾部附本步实际执行的物理工具数（在截断之后拼接，永不被截掉）。
+        纯记账不做判断——但 0 次执行却宣称"已执行"的虚报（实测复测会话 d618f0d6：
+        step 2 零调用即宣布"已向数据库插入三条记录"）从此在计划渲染/审计/用户眼前留痕；
+        0 时反馈里再加一句提醒，让模型自查这一步是否真的做过事。"""
         step = self.current_step()
         if step is None:
             return False, "No open step to complete. Update the plan or answer the user."
+        ran = self.step_tool_calls
         step["status"] = STEP_DONE
-        step["note"] = (result or "").strip()[:MAX_STEP_TITLE_CHARS]
+        note = (result or "").strip()[:MAX_STEP_TITLE_CHARS]
+        step["note"] = (note + f" [tool calls: {ran}]").strip()
         self.step_iterations = 0
+        self.step_tool_calls = 0
+        zero_warn = ("" if ran else
+                     " Note: this step executed ZERO tools — if it was supposed to actually do "
+                     "something (create/write/run/verify), that has NOT happened; do it first "
+                     "instead of just describing it.")
         nxt = self.current_step()
         if nxt is not None:
-            return True, f"Step {step['id']} done. Now on step {nxt['id']}: {nxt['title']}"
-        return True, f"Step {step['id']} done. All steps finished — give the user the final answer now."
+            return True, f"Step {step['id']} done.{zero_warn} Now on step {nxt['id']}: {nxt['title']}"
+        return True, (f"Step {step['id']} done.{zero_warn} All steps finished — "
+                      "give the user the final answer now.")
 
     def fail_current(self, note: str = "") -> Optional[Dict[str, Any]]:
         """
@@ -167,6 +184,7 @@ class TaskState:
         key = step["title"].strip().lower()
         self.step_failures[key] = self.step_failures.get(key, 0) + 1
         self.step_iterations = 0
+        self.step_tool_calls = 0
         return step
 
     def skip_current(self, note: str = "") -> Optional[Dict[str, Any]]:
@@ -177,6 +195,7 @@ class TaskState:
         step["status"] = STEP_SKIPPED
         step["note"] = note[:MAX_STEP_TITLE_CHARS]
         self.step_iterations = 0
+        self.step_tool_calls = 0
         return step
 
     # ---------- 记事板（模型经 remember 元工具进入） ----------
@@ -242,6 +261,7 @@ class TaskState:
             "notes": list(self.notes),
             "replan_count": self.replan_count,
             "step_iterations": self.step_iterations,
+            "step_tool_calls": self.step_tool_calls,
             "step_failures": dict(self.step_failures),
             "created_at": self.created_at,
             "next_id": self._next_id,
@@ -254,6 +274,7 @@ class TaskState:
         task.notes = [str(n) for n in (data.get("notes") or []) if str(n).strip()][:MAX_NOTES]
         task.replan_count = int(data.get("replan_count", 0))
         task.step_iterations = int(data.get("step_iterations", 0))
+        task.step_tool_calls = int(data.get("step_tool_calls", 0))  # 旧快照缺省 0
         task.step_failures = {str(k): int(v) for k, v in (data.get("step_failures") or {}).items()}
         task.created_at = float(data.get("created_at", time.time()))
         task._next_id = int(data.get("next_id", 1 + max((s.get("id", 0) for s in task.plan), default=0)))

@@ -69,6 +69,24 @@ class MCPRegistry:
             print(f"[MCP] ⚠️ 工具 {name} 审批判定异常，按需审批处理: {e}")
             return True
 
+    def validate_call(self, name: str, arguments: Dict[str, Any] = None) -> "str | None":
+        """
+        审批/执行前的参数预检（工具可选实现 validate_arguments(arguments) -> Optional[str]）。
+        返回错误文本 = 该调用注定失败，编排层就地打回模型重发（不执行、不进审批——
+        绝不拿一条必败调用去打扰用户）；返回 None = 放行。只做确定性静态检查；
+        预检自身异常 fail-open 放行，走正常执行路径暴露真实错误。
+        """
+        tool = self._tools.get(name)
+        checker = getattr(tool, "validate_arguments", None)
+        if tool is None or not callable(checker):
+            return None
+        try:
+            err = checker(arguments or {})
+            return str(err) if err else None
+        except Exception as e:
+            print(f"[MCP] ⚠️ 工具 {name} 参数预检异常，放行走执行路径: {e}")
+            return None
+
     def is_concurrency_safe(self, name: str, arguments: Dict[str, Any] = None) -> bool:
         """
         查询某次调用是否可与同批其他安全调用并发执行（编排层据此把连续安全段并发跑）。
