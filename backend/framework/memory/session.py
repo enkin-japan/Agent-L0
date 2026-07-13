@@ -128,6 +128,10 @@ class ChatSession:
         # 计数，模型可借「反复吐坏写→弹审批→续跑」无限绕过熔断（实测的审批死循环）。故把消耗量
         # 累积在会话上：新用户轮次归零，续跑在其上累加，熔断按累计值判定。
         self.carried_iterations: int = 0
+        # 跨审批段的整轮仪表累计（与 carried_iterations 同生命周期）：审批把一轮切成
+        # 多个 run_turn 段，history.jsonl 只落最终段的 metrics——不累计则跨段轮次的
+        # generations/tokens 被严重低估（实测四测 662eac7d：20+ 迭代记成 3）。
+        self.carried_turn_stats: Dict[str, Any] = {}
 
         # 多步任务状态（编排循环的状态对象）：任务可跨轮存续（如中途向用户提问），
         # 空闲冻结时随 task.json 落盘、恢复时重建，保证冷启动后任务不丢

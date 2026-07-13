@@ -86,3 +86,52 @@ def test_goal_verify_config_off(make_session):
 
     assert result["status"] == "success"
     assert len(engine.calls) == 3                       # 开关关闭：零审计成本
+
+
+# ---------- 无计划逃逸兜底(四测 662eac7d:不建计划=审计休眠+虚报放行) ----------
+
+def test_goal_verify_noplan_substantial_fail_pushback(make_session):
+    """无计划但总迭代≥5 的最终答复照样过审计——"不建计划"不是护栏逃逸通道。"""
+    from .fake_engine import FakeTool
+    engine = FakeEngine([
+        {"tool_calls": [call("probe", i=1)]},
+        {"tool_calls": [call("probe", i=2)]},
+        {"tool_calls": [call("probe", i=3)]},
+        {"tool_calls": [call("probe", i=4)]},
+        {"tool_calls": [call("probe", i=5)]},
+        {"text": "我已经完成了您的全部请求。"},                    # 虚报 → 审计
+        {"text": "VERDICT: FAIL\nonly one of seven deliverables exists"},
+        {"text": "实际只完成了第 1 项，其余 6 项尚未开始。"},        # 推回后诚实自纠
+    ])
+    orch = make_orch(engine, FakeRegistry([FakeTool("probe")]))
+    session = make_session()
+    session.add_user_message("完成 7 个练习并放进桌面文件夹")
+    begin_turn(session)
+
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
+
+    assert result["status"] == "success"
+    assert result["response"] == "实际只完成了第 1 项，其余 6 项尚未开始。"
+    assert len(engine.calls) == 8                       # 主循环 7 次 + 审计 1 次
+    audit = engine.calls[6]
+    assert "Goal:" in audit["last_user"] and "7 个练习" in audit["last_user"]
+    assert any("completion audit" in n for n in engine.calls[7]["tail_notes"])
+
+
+def test_goal_verify_noplan_short_turn_skipped(make_session):
+    """短平快轮次(迭代<5)不受影响:零审计成本。"""
+    from .fake_engine import FakeTool
+    engine = FakeEngine([
+        {"tool_calls": [call("probe", i=1)]},
+        {"tool_calls": [call("probe", i=2)]},
+        {"text": "查完了,答案是 42。"},
+    ])
+    orch = make_orch(engine, FakeRegistry([FakeTool("probe")]))
+    session = make_session()
+    session.add_user_message("查个数")
+    begin_turn(session)
+
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
+
+    assert result["status"] == "success"
+    assert len(engine.calls) == 3                       # 无审计

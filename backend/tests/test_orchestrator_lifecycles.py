@@ -610,3 +610,43 @@ def test_failure_route_menu_offers_split(make_session):
     # 账本:步骤失败事件照常
     fails = ring_of(session, "step_failed")
     assert len(fails) == 1 and "读完全部日志" in fails[0]["title"]
+
+
+# ---------- 仪表跨审批段累计(整轮口径) ----------
+
+def test_turn_stats_accumulate_across_approval(make_session):
+    """审批把一轮切成多段,history 落盘的 metrics 必须是整轮口径而非末段
+    (实测四测 662eac7d:20+ 迭代被记成 3)。"""
+    engine = FakeEngine([
+        {"tool_calls": [call("read_thing", i=1)]},                    # 段1 迭代1
+        {"tool_calls": [call("danger_op", target="x")]},              # 段1 迭代2 → 挂起审批
+        {"text": "完成。", "metrics": {"prompt_tokens": 100,
+                                       "generation_tokens": 20,
+                                       "generation_tps": 50.0}},      # 段2 迭代1
+    ])
+    registry = FakeRegistry([FakeTool("read_thing"),
+                             FakeTool("danger_op", approval=True, read_only=False,
+                                      concurrency_safe=False)])
+    orch = make_orch(engine, registry)
+    session = make_session()
+    session.add_user_message("做点事")
+    begin_turn(session)
+
+    first = run(orch.run_turn(session, journal=session.journal, **GEN))
+    assert first["status"] == "pending_approval"
+    assert first["metrics"]["generations"] == 2          # 段1 已计 2 次生成
+
+    resumed = run(orch.resume_after_approval(session, approved=True,
+                                             journal=session.journal, **GEN))
+
+    assert resumed["status"] == "success"
+    m = resumed["metrics"]
+    assert m["generations"] == 3                         # 整轮 3 次生成,不是末段的 1
+    assert m["generation_tokens_turn"] == 60             # 3 × 20,跨段累计
+    # 新用户轮次归零:上一轮的累计不得泄漏进下一轮
+    engine.script.append({"text": "新轮次。"})
+    session.add_user_message("再来")
+    begin_turn(session)
+    fresh = run(orch.run_turn(session, journal=session.journal, **GEN))
+    assert fresh["metrics"]["generations"] == 1
+    assert fresh["metrics"]["generation_tokens_turn"] == 20

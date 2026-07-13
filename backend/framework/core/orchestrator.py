@@ -159,6 +159,11 @@ THINKING_ONLY_NUDGE_MAX = 1
 # 用尽后放行（视为向用户提问/汇报障碍），避免与「坚持要作答」的模型死循环。
 PREMATURE_FINISH_MAX = 1
 # 收尾目标校验（DEFERRED §2 完整版，2026-07-12 A/B 实测触发条件 1 后上马）：
+# 无计划逃逸兜底：模型无视 no_plan_nudge 全程不建计划时，步骤预算/提前收尾/审计全体
+# 休眠（实测四测 662eac7d：20+ 迭代自由爬行后以"已完成全部请求"虚报收尾零拦截）。
+# 无计划但整轮总迭代（跨审批段累计）≥ 此阈值的最终答复照样过收尾审计——
+# "不建计划"不能成为护栏逃逸通道。短平快轮次（1-4 迭代）不受影响。
+GOAL_VERIFY_NOPLAN_MIN_ITERS = 5
 # 计划 ≥ GOAL_VERIFY_MIN_STEPS 步且全部完成、产出最终文本后，用一次独立小生成审计
 # 「答复是否兑现原始目标」（串行、每轮最多一次），FAIL 推回自纠一次；异常/歧义 fail-open 放行。
 GOAL_VERIFY_MIN_STEPS = 3
@@ -307,6 +312,7 @@ class Orchestrator:
         # 使「反复吐坏写→弹审批→续跑」的循环仍被同一个 max_total_iterations 保险丝罩住。
         if not keep_recent_calls:
             session.carried_iterations = 0
+            session.carried_turn_stats = {}
         no_task_calls: List[str] = []  # 无任务态下的调用指纹（同样拦截重复）
         turn_start_idx = len(session.history)  # 本轮起点：收尾时扫描本轮工具产出的资产链接
         parse_errors: Dict[str, int] = {}  # 本轮坏调用原文 -> 次数（断环 + 升级纠错）
@@ -315,15 +321,20 @@ class Orchestrator:
         metrics: Dict[str, Any] = {}
         # [仪表 Phase 0] 整轮累计口径：ReAct 循环内多次生成的分解求和 + 废轮计数。
         # 每次生成后 stamp 进当前 metrics dict（该 dict 会随任一返回路径带出）。
-        turn_breakdown: Dict[str, int] = {}
-        turn_gen_tokens = 0
-        turn_spec = {"drafted": 0, "accepted": 0}
+        # 审批把一轮切成多个 run_turn 段：从 session.carried_turn_stats 播种续算，
+        # 使 history.jsonl 最终落盘的 metrics 是整轮口径而非末段（实测被低估 8 倍）。
+        _carried = getattr(session, "carried_turn_stats", None) or {}
+        turn_breakdown: Dict[str, int] = dict(_carried.get("breakdown") or {})
+        turn_gen_tokens = int(_carried.get("gen_tokens") or 0)
+        turn_spec = {"drafted": int((_carried.get("spec") or {}).get("drafted") or 0),
+                     "accepted": int((_carried.get("spec") or {}).get("accepted") or 0)}
+        carried_parse_errors = int(_carried.get("parse_errors") or 0)
 
         def _stamp_turn_stats() -> None:
             metrics["token_breakdown"] = dict(turn_breakdown)
-            metrics["generations"] = iterations
+            metrics["generations"] = session.carried_iterations + iterations
             metrics["generation_tokens_turn"] = turn_gen_tokens
-            metrics["parse_error_count"] = sum(parse_errors.values())
+            metrics["parse_error_count"] = carried_parse_errors + sum(parse_errors.values())
             if turn_spec["drafted"]:
                 metrics["spec_drafted"] = turn_spec["drafted"]
                 metrics["spec_accepted"] = turn_spec["accepted"]
@@ -546,6 +557,13 @@ class Orchestrator:
                     # 累积本次 run_turn 已消耗的迭代到会话上：审批续跑（新 run_turn）在此基础上
                     # 继续计数，总迭代熔断跨审批循环持续生效（防审批死循环绕过保险丝）。
                     session.carried_iterations += iterations
+                    # 仪表随行暂存：续跑段在此基础上继续累计（整轮口径，见 run_turn 播种处）
+                    session.carried_turn_stats = {
+                        "breakdown": dict(turn_breakdown),
+                        "gen_tokens": turn_gen_tokens,
+                        "spec": dict(turn_spec),
+                        "parse_errors": carried_parse_errors + sum(parse_errors.values()),
+                    }
                     names = "、".join(c.get("name") for c in approval_needed)
                     session.set_activity(f"等待授权：{names}", phase="awaiting_approval")
                     print(f"[Orchestrator] 敏感工具调用挂起待审批: {[c.get('name') for c in approval_needed]}")
@@ -670,12 +688,20 @@ class Orchestrator:
                 # [收尾目标校验 T-goal] DEFERRED §2 完整版：大计划全部完成后的最终答复，
                 # 用一次独立小生成对照原始目标审计（实测：长任务两侧确定性虚报完成 → 上马）。
                 # 预算 1 次；FAIL 推回自纠（同提前收尾形态），PASS/异常/预算尽 → 放行。
+                plan_done_big = (task is not None and task.plan and task.all_done()
+                                 and len(task.plan) >= GOAL_VERIFY_MIN_STEPS)
+                # 无计划扩展：goal 取最近用户消息（审批续跑轮的"可以/同意"类短语审不出
+                # 结论时由 fail-open 放行——审计器判不了就不拦）。
+                noplan_substantial = ((task is None or not task.plan)
+                                      and (session.carried_iterations + iterations)
+                                      >= GOAL_VERIFY_NOPLAN_MIN_ITERS)
                 if (self.goal_verify and not goal_verified
-                        and task is not None and task.plan and task.all_done()
-                        and len(task.plan) >= GOAL_VERIFY_MIN_STEPS):
+                        and (plan_done_big or noplan_substantial)):
                     goal_verified = True
+                    goal_src = (task.goal if plan_done_big
+                                else _last_user_text(session.history))
                     session.set_activity("正在核对结果与目标…")
-                    ok_goal, why = await self._goal_alignment_check(task.goal, text)
+                    ok_goal, why = await self._goal_alignment_check(goal_src, text)
                     events.emit("goal_verify", session=session.session_id,
                                 passed=ok_goal, reason=why)
                     if not ok_goal:
@@ -808,7 +834,10 @@ class Orchestrator:
                         "'VERDICT: PASS' or 'VERDICT: FAIL', then ONE short reason line. "
                         "FAIL when the answer omits requested deliverables, contains "
                         "placeholders like '[value]' or 'TBD', claims required data was "
-                        "unavailable, or answers a different question.")},
+                        "unavailable, or answers a different question. "
+                        "PASS when the answer is primarily a clarifying question to the user "
+                        "or an honest report of a concrete obstacle — pausing to ask is "
+                        "legitimate; only completion CLAIMS are audited strictly.")},
                     {"role": "user", "content": (
                         f"Goal:\n{goal}\n\nFinal answer:\n{answer}\n\n"
                         "Does the answer fully deliver the goal?")},
