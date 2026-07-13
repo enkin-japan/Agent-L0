@@ -578,3 +578,35 @@ def test_precheck_rejects_before_approval(make_session):
                                              journal=session.journal, **GEN))
     assert resumed["status"] == "success"
     assert registry.executed == [{"name": "shellish", "args": {"command": "mkdir -p ~/x"}}]
+
+
+# ---------- 失败路由菜单:Split 选项(范围过大的步) ----------
+
+def test_failure_route_menu_offers_split(make_session):
+    """两轮复测(d618f0d6/78126c52)证实:「逐页读完 103 页」类范围过大的步在预算内
+    结构性必败,原菜单(换法/绕开/降级/问用户)无"拆小"出路,模型只能落到问用户。"""
+    engine = FakeEngine([
+        {"tool_calls": [call("update_plan", op="replace", steps=["读完全部日志"])]},
+        {"tool_calls": [call("probe", i=1)]},
+        {"tool_calls": [call("probe", i=2)]},
+        {"tool_calls": [call("probe", i=3)]},
+        {"tool_calls": [call("probe", i=4)]},      # 第 4 次迭代耗尽步内预算 → 失败路由
+        {"text": "步骤受阻,我拆小重试。"},
+    ])
+    orch = make_orch(engine, FakeRegistry([FakeTool("probe")]))
+    session = make_session()
+    session.add_user_message("读日志")
+    begin_turn(session)
+
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
+
+    assert result["status"] == "success"
+    menus = [m for m in session.history if m.get("role") == "system"
+             and "Choose your next strategy" in str(m.get("content"))]
+    assert len(menus) == 1
+    menu = str(menus[0]["content"])
+    assert "Split" in menu and "TOO BIG" in menu
+    assert "E. Only if none of the above" in menu   # 重排后的兜底项仍在
+    # 账本:步骤失败事件照常
+    fails = ring_of(session, "step_failed")
+    assert len(fails) == 1 and "读完全部日志" in fails[0]["title"]

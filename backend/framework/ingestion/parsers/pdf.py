@@ -140,6 +140,10 @@ def _parse_page_spec(spec: str, total: int) -> "tuple[Optional[List[int]], Optio
     return pages, None
 
 
+# 单页请求附区间提示的文档规模下限：小文档单页取用是正常形态，提示只会添噪
+_RANGE_TIP_MIN_PAGES = 10
+
+
 def _ranges_desc(idxs: List[int]) -> str:
     """0-based 下标列表 → 1-based 紧凑区间描述（'50-57' / '2,4,6-9'），供续读路标复用。"""
     if not idxs:
@@ -201,6 +205,13 @@ def extract_pdf_pages(path, page: Optional[str] = None, *, max_chars: int = 1200
         if remaining:
             rdesc = _ranges_desc(remaining)
             header += f' | remaining: {rdesc} — continue with page="{rdesc}"'
+        elif len(idxs) == 1 and total >= _RANGE_TIP_MIN_PAGES:
+            # 近因提示：单页请求 + 大文档 → 告知一次可取区间。实测（复测会话 78126c52）：
+            # 模型页码全部合法却计划成 "read page by page"，4 迭代爬 4 页烧光步骤预算——
+            # 续读路标只在截断时出现，单页成功路径此前没有任何区间提示（近因 >> 工具描述）。
+            nxt = min(idxs[0] + 8, total)  # 1-based: idxs[0]+1 是当前页，+8 即再往后 7 页
+            if nxt > idxs[0] + 1:
+                header += f' | tip: one call can return a page range, e.g. page="{idxs[0] + 1}-{nxt}"'
         header += "]"
         return header + "\n\n" + "\n\n".join(blocks)
     finally:

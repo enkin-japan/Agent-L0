@@ -1050,13 +1050,19 @@ class Orchestrator:
         if fail_count < 2:
             options.append("A. Retry this step with a clearly different approach (re-add it via "
                            "update_plan's add op — do NOT repeat the original approach)")
-        options.append("B. Modify the plan to route around this step (update_plan)")
-        options.append("C. Degrade: drop this step and continue the remaining steps, or wrap up, "
+        # Split：范围过大的步（如「逐页读完 103 页」）在迭代预算内结构性必败——换法重试
+        # 救不了尺寸问题。实测两轮复测（d618f0d6/78126c52）均因菜单无此出路而落到「问用户」。
+        options.append("B. Split: this step may simply be TOO BIG for the iteration budget — "
+                       "replace it with 2-4 smaller steps via update_plan (each small enough to "
+                       "finish within the budget, e.g. one page-range per step), then execute "
+                       "them one by one")
+        options.append("C. Modify the plan to route around this step (update_plan)")
+        options.append("D. Degrade: drop this step and continue the remaining steps, or wrap up, "
                        "with the information you already have")
-        options.append("D. Only if none of the above is feasible: explain the concrete obstacle "
+        options.append("E. Only if none of the above is feasible: explain the concrete obstacle "
                        "to the user and ask for instructions (output plain text)")
         if task.replan_count >= self.replan_max:
-            options = [o for o in options if not o.startswith("B")]
+            options = [o for o in options if not o.startswith("C.")]
 
         session.history.append({
             "role": "system",

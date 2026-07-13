@@ -134,3 +134,32 @@ def test_out_of_range_garbage_gets_no_suggestion(pdf5):
     out = extract_pdf_pages(str(pdf5), page="200_pages_range")
     assert out.startswith("System Error:")
     assert "Did you mean" not in out
+
+
+# ---------- 单页请求的区间提示(近因 tip) ----------
+
+def test_single_page_on_large_doc_gets_range_tip(pdf30):
+    """实测(复测会话 78126c52):模型页码全合法却"逐页爬行",4 迭代烧光步骤预算。
+    单页成功响应的头部须附一次可取区间的近因提示。"""
+    out = extract_pdf_pages(str(pdf30), page="2")
+    header = out.splitlines()[0]
+    assert 'tip: one call can return a page range' in header
+    assert 'page="2-9"' in header                  # 具体可照抄,从当前页起往后
+    assert "[Page 2]" in out
+
+def test_single_page_on_small_doc_no_tip(pdf5):
+    out = extract_pdf_pages(str(pdf5), page="2")
+    assert "tip:" not in out.splitlines()[0]       # 小文档单页取用是正常形态
+
+def test_range_request_gets_no_tip(pdf30):
+    out = extract_pdf_pages(str(pdf30), page="2-3")
+    assert "tip:" not in out.splitlines()[0]       # 已在用区间,不用教
+
+def test_last_page_request_no_tip(pdf30):
+    out = extract_pdf_pages(str(pdf30), page="30")
+    assert "tip:" not in out.splitlines()[0]       # 后面没有页可组区间
+
+def test_truncated_keeps_continue_hint_not_tip(pdf30):
+    out = extract_pdf_pages(str(pdf30), page="1-30", max_chars=1000)
+    header = out.splitlines()[0]
+    assert "continue with page=" in header and "tip:" not in header
