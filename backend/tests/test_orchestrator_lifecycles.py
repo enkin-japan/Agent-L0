@@ -440,3 +440,70 @@ def test_concurrent_readonly_batch_order_preserved(make_session):
     tool_msg = next(m for m in session.history if m["role"] == "tool")
     assert [tr["name"] for tr in tool_msg["tool_responses"]] \
         == ["read_thing", "read_thing", "write_thing"]
+
+
+# ---------- 无计划收敛提醒(NO_PLAN_NUDGE_ITERATIONS) ----------
+
+def test_no_plan_nudge_after_three_unplanned_calls(make_session):
+    """实测事故(会话 e2348829):多件套任务无计划连打工具后以"承诺继续"文本收尾,
+    旧阈值(react_max_steps+2=6)永远够不着。3 次无计划工具迭代须提醒一次:
+    建计划或直接作答——这是唤醒记事板/提前收尾推回/goal_verify 的唯一入口。"""
+    engine = FakeEngine([
+        {"tool_calls": [call("probe", i=1)]},
+        {"tool_calls": [call("probe", i=2)]},
+        {"tool_calls": [call("probe", i=3)]},
+        {"text": "查完了,结论如下。"},
+    ])
+    orch = make_orch(engine, FakeRegistry([FakeTool("probe")]))
+    session = make_session()
+    session.add_user_message("多查几处再说")
+    begin_turn(session)
+
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
+
+    assert result["status"] == "success"
+    nudges = [m for m in session.history
+              if m.get("role") == "system" and "without a plan" in str(m.get("content"))]
+    assert len(nudges) == 1
+
+
+def test_no_plan_nudge_absent_for_short_tool_runs(make_session):
+    """两次以内的无计划工具调用是正常轻任务形态,不得打扰。"""
+    engine = FakeEngine([
+        {"tool_calls": [call("probe", i=1)]},
+        {"tool_calls": [call("probe", i=2)]},
+        {"text": "两步答完。"},
+    ])
+    orch = make_orch(engine, FakeRegistry([FakeTool("probe")]))
+    session = make_session()
+    session.add_user_message("小事")
+    begin_turn(session)
+
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
+
+    assert result["status"] == "success"
+    assert not [m for m in session.history
+                if m.get("role") == "system" and "without a plan" in str(m.get("content"))]
+
+
+# ---------- 全思考空产出推回(T1-5) ----------
+
+def test_thinking_only_output_pushed_back_once(make_session):
+    """整段生成全进思考频道(典型:无收尾频道块被解析器 §2.7 路由)→ 用户什么都看不到。
+    须推回一次要求产出可见答复,思考留档进历史;而不是静默空转烧到总熔断。"""
+    engine = FakeEngine([
+        {"thoughts": ["分析都在这里,正文忘了写"], "text": ""},
+        {"text": "这是补上的可见答复。"},
+    ])
+    orch = make_orch(engine, FakeRegistry([]))
+    session = make_session()
+    session.add_user_message("问点事")
+    begin_turn(session)
+
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
+
+    assert result["status"] == "success"
+    assert result["response"] == "这是补上的可见答复。"
+    assert any("entirely into thinking" in n for n in engine.calls[1]["tail_notes"])
+    # 思考已留档,续跑可直接引用其中的分析
+    assert any(m.get("thoughts") for m in session.history if m.get("role") == "assistant")

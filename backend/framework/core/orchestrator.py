@@ -147,6 +147,14 @@ META_TOOL_NAMES = {"update_plan", "complete_step", "remember", "get_tool_schema"
 # 一口气能写完），仍不够则多轮「接着写」续写，最多 MAX_TOKENS_RECOVERIES 次后接受半截答复。
 ESCALATED_MAX_TOKENS = 12288
 MAX_TOKENS_RECOVERIES = 3
+# 无计划收敛提醒：无计划连打 NO_PLAN_NUDGE_ITERATIONS 次工具即提醒一次（答复或建计划
+# 二选一）。原阈值 react_max_steps+2=6 实测永远够不着——事故（会话 e2348829，103 页 PDF
+# 多件套任务）里模型 3-4 次无计划工具迭代后就以「承诺继续」文本收尾；而不建计划意味着
+# 记事板/提前收尾推回/goal_verify 全体休眠，这条提醒是把它们唤醒的唯一入口。
+NO_PLAN_NUDGE_ITERATIONS = 3
+# 全思考空产出推回：整段生成都进了思考频道（典型：无收尾频道块被解析器 §2.7 路由后
+# 正文为空），用户什么都看不到；静默空转只会烧到总熔断。推回一次，用尽即放行给熔断。
+THINKING_ONLY_NUDGE_MAX = 1
 # 提前收尾门控（T1-2）：计划未完成却吐纯文本时，每步最多推回 PREMATURE_FINISH_MAX 次，
 # 用尽后放行（视为向用户提问/汇报障碍），避免与「坚持要作答」的模型死循环。
 PREMATURE_FINISH_MAX = 1
@@ -328,6 +336,7 @@ class Orchestrator:
         unverified_write = resume_unverified_write
         verify_nudges = 0
         goal_verified = False        # 收尾目标校验预算（每次 run_turn 最多审计一次）
+        thinking_only_nudges = 0     # 全思考空产出推回预算（THINKING_ONLY_NUDGE_MAX）
         base_max_tokens = int(gen_kwargs.get("max_tokens", 4096))
         # T3-c：一次性护栏提醒走可变尾部注入（用完即弃、不进历史、不被摘要压缩）。
         # 下一次生成消费后立即清空；由 T1-2/T1-3 分支按需填充。
@@ -583,14 +592,15 @@ class Orchestrator:
                         self._route_step_failure(session, task, journal)
                         _emit_plan()  # 步骤受阻、策略已调整，写入最新任务快照
                 # --- 护栏：无计划却持续调用工具 → 提示收敛（一次性） ---
-                elif not nudged and iterations >= self.react_max_steps + 2:
+                elif not nudged and iterations >= NO_PLAN_NUDGE_ITERATIONS:
                     nudged = True
                     events.emit("no_plan_nudge", session=session.session_id, iterations=iterations)
                     session.history.append({
                         "role": "system",
-                        "content": ("[System guardrail] You have made many tool calls without reaching "
-                                    "a conclusion. Either answer the user directly now, or create an "
-                                    "explicit multi-step plan with update_plan and follow it."),
+                        "content": ("[System guardrail] You have made several tool calls without a plan "
+                                    "or a conclusion. If this task needs more steps, create an explicit "
+                                    "plan with update_plan NOW and follow it; otherwise answer the user "
+                                    "directly."),
                     })
                 continue
 
@@ -671,6 +681,21 @@ class Orchestrator:
                     session.task_state = None
                 # 未完成而输出文本 = 向用户提问/汇报障碍，任务跨轮保留，等用户答复继续
                 return {"status": "success", "response": text, "thoughts": thoughts, "metrics": metrics}
+
+            # --- 全思考空产出（T1-5）：生成不空但全进了思考频道，用户什么都看不到 ---
+            # （典型：无收尾频道块被解析器 §2.7 路由进 thoughts 后正文为空。）思考留档进
+            # 历史——里面往往已有分析结论，续跑可直接引用；推回一次，用尽即放行给总熔断。
+            if thoughts and not tool_calls and thinking_only_nudges < THINKING_ONLY_NUDGE_MAX:
+                thinking_only_nudges += 1
+                _transition("thinking_only_nudge")
+                events.emit("thinking_only_nudge", session=session.session_id)
+                session.add_assistant_message(thoughts=thoughts)
+                pending_tail_notes.append(
+                    "[System guardrail] Your last output went entirely into thinking — the user "
+                    "saw NOTHING. Thinking is never shown to the user. Now produce the actual "
+                    "visible reply (or the next tool call); if your thinking already contains "
+                    "the answer, write it out as the reply.")
+                continue
 
             # 空输出：浪费一次迭代，靠总熔断兜底
 

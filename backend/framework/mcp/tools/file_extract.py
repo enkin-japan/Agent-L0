@@ -15,6 +15,11 @@ from typing import Optional
 from ..base import BaseTool
 from ...ingestion.parsers import asr, pdf, document, text as textparser
 
+# PDF 单次输出预算：编排层单条观察截断 observation_max_chars 默认 4000——工具级预算
+# 压到 3400，保证「页对齐截断 + 头部续读路标」完整活过编排层截断（否则路标被剪掉，
+# 模型不知道还剩哪些页）。若下调 observation_max_chars，此值需同步收紧。
+_PDF_MAX_CHARS = 3400
+
 
 class FileExtractTool(BaseTool):
     name = "file_extract"
@@ -22,7 +27,8 @@ class FileExtractTool(BaseTool):
         "Re-parse a previously ingested file by its path to get precise/full content that the "
         "inline ingestion summary omitted. Find the path in context provenance markers like "
         "'[原文件：/abs/path]' or '[原音频：/abs/path]'. Modes by file type: "
-        "PDF -> pass page='N' or 'N-M' to extract those pages' text; "
+        "PDF -> pass page='N' or 'N-M' to extract those pages' text (output is paginated; "
+        "its header names the remaining pages to fetch next); "
         "audio -> pass start/end (seconds) to transcribe a time range; "
         "code/text -> pass start/end (line numbers) to read that line range; "
         "document -> full text. Read-only."
@@ -50,7 +56,14 @@ class FileExtractTool(BaseTool):
         suf = p.suffix.lower()
 
         if suf == ".pdf":
-            return pdf.extract_pdf_pages(str(p), page=page, max_chars=max_chars)
+            # start/end 对 PDF 无意义——静默忽略会让模型误以为拿到了指定区间
+            # （实测事故形态：start=50,end=1000 拿回全文头部，误判工具在循环）。
+            if page is None and (start is not None or end is not None):
+                return ("System Error: for PDF files use page='N' or 'N-M' (1-based); "
+                        "start/end mean seconds (audio) or line numbers (code/text) "
+                        "and do not apply to PDFs.")
+            return pdf.extract_pdf_pages(str(p), page=page,
+                                         max_chars=min(int(max_chars), _PDF_MAX_CHARS))
 
         mime_audio = suf in {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".webm", ".aiff", ".wma"}
         if mime_audio:

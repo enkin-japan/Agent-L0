@@ -83,8 +83,20 @@ def parse_pdf(path, image_dir, *, min_chars_per_page: int = 50,
         doc.close()
 
 
-def _parse_page_spec(spec: str, total: int) -> List[int]:
-    """解析页码规格 '3' / '3-5' / '3,5,7'（1-based）为 0-based 下标列表，越界自动裁剪。"""
+def _parse_page_spec(spec: str, total: int) -> "tuple[Optional[List[int]], Optional[str]]":
+    """解析页码规格 '3' / '3-5' / '3,5,7'（1-based）→ (0-based 下标列表, None)。
+    含无法解析的片段、或没有任何页落在文档内 → (None, 错误说明)。
+    绝不静默回退全文：坏参数拿到第 1 页的内容比一条报错致命得多——实测事故
+    （会话 e2348829）：模型把页码写坏后两次拿回第 1 页，据此断定"提取在循环"
+    并放弃了任务；显式报错它下一次就能自纠（同轮实证会写 '50'/'50-70'）。"""
+
+    def _bad(reason: str) -> "tuple[None, str]":
+        shown = spec if len(spec) <= 60 else spec[:60] + "…"
+        # 报错保持单行（换行转义）：首行会被 push_activity 当步骤摘要展示
+        return None, (f"invalid page spec {shown!r}: {reason}. "
+                      f"Use '3', '3-5', or '2,4,6' "
+                      f"(this PDF has {total} pages).").replace("\n", "\\n")
+
     pages: List[int] = []
     for part in str(spec).replace(" ", "").split(","):
         if not part:
@@ -94,22 +106,48 @@ def _parse_page_spec(spec: str, total: int) -> List[int]:
             try:
                 lo, hi = int(a), int(b)
             except ValueError:
-                continue
-            for p in range(lo, hi + 1):
-                if 1 <= p <= total:
-                    pages.append(p - 1)
+                return _bad(f"cannot parse range '{part[:30]}'")
+            if lo > hi:
+                return _bad(f"range '{part[:30]}' is reversed")
+            pages.extend(p - 1 for p in range(lo, hi + 1) if 1 <= p <= total)
         else:
             try:
                 p = int(part)
             except ValueError:
-                continue
+                return _bad(f"cannot parse page number '{part[:30]}'")
             if 1 <= p <= total:
                 pages.append(p - 1)
-    return pages or list(range(total))
+    if not pages:
+        return _bad("no requested page exists in this document")
+    return pages, None
+
+
+def _ranges_desc(idxs: List[int]) -> str:
+    """0-based 下标列表 → 1-based 紧凑区间描述（'50-57' / '2,4,6-9'），供续读路标复用。"""
+    if not idxs:
+        return ""
+    nums = [i + 1 for i in idxs]
+    out: List[str] = []
+    s = e = nums[0]
+    for n in nums[1:]:
+        if n == e + 1:
+            e = n
+            continue
+        out.append(f"{s}-{e}" if e > s else f"{s}")
+        s = e = n
+    out.append(f"{s}-{e}" if e > s else f"{s}")
+    return ",".join(out)
 
 
 def extract_pdf_pages(path, page: Optional[str] = None, *, max_chars: int = 12000) -> str:
-    """逃生舱：按需抽取 PDF 指定页文本（page 缺省=全文）。fail-open 返回字符串。"""
+    """逃生舱：按需抽取 PDF 指定页文本（page 缺省=全文）。fail-open 返回字符串。
+
+    输出协议（弱模型的确定性翻页支点）：
+    - 首行头部注明「总页数 | 本次包含哪些页 | 还剩哪些页 + 续读用的 page 参数」。
+      路标放头部而非尾部——下游还有编排层观察截断，尾部路标会被剪掉，头部永远活着。
+    - 截断按页对齐：装不下的页整页留给下一次调用，绝不吐半页（首页独页超预算除外）。
+    - 页码规格非法 → 显式 System Error（见 _parse_page_spec，绝不静默回退全文）。
+    """
     try:
         import fitz
     except Exception as e:
@@ -120,8 +158,13 @@ def extract_pdf_pages(path, page: Optional[str] = None, *, max_chars: int = 1200
         return f"[PDF open failed: {e}]"
     try:
         total = doc.page_count
-        idxs = _parse_page_spec(page, total) if page else list(range(total))
-        parts: List[str] = []
+        if page:
+            idxs, err = _parse_page_spec(str(page), total)
+            if err:
+                return f"System Error: {err}"
+        else:
+            idxs = list(range(total))
+        blocks: List[str] = []
         acc = 0
         for i in idxs:
             try:
@@ -129,11 +172,18 @@ def extract_pdf_pages(path, page: Optional[str] = None, *, max_chars: int = 1200
             except Exception:
                 t = ""
             block = f"[Page {i + 1}]\n{t}" if t else f"[Page {i + 1}] (no extractable text; possibly an image page)"
-            parts.append(block)
+            if blocks and acc + len(block) > max_chars:
+                break  # 页对齐截断：这一页放不下就整页留给下一次调用
+            if not blocks and len(block) > max_chars:
+                block = block[:max_chars] + "\n…[this single page exceeds the output budget]"
+            blocks.append(block)
             acc += len(block)
-            if acc >= max_chars:
-                parts.append("[Truncated; narrow the page range]")
-                break
-        return "\n\n".join(parts)
+        shown, remaining = idxs[:len(blocks)], idxs[len(blocks):]
+        header = f"[PDF: {total} pages | showing: {_ranges_desc(shown)}"
+        if remaining:
+            rdesc = _ranges_desc(remaining)
+            header += f' | remaining: {rdesc} — continue with page="{rdesc}"'
+        header += "]"
+        return header + "\n\n" + "\n\n".join(blocks)
     finally:
         doc.close()

@@ -81,3 +81,46 @@ def test_constrained_pure_json_call():
     out = p.parse('<|tool_call>{"name": "rag_search", "arguments": {"query": "天气"}}<tool_call|>')
     assert out["tool_calls"][0]["type"] == "function"
     assert out["tool_calls"][0]["name"] == "rag_search"
+
+
+def test_unclosed_thought_channel_routes_to_thoughts():
+    """有头无尾的频道块(§2.7):实测事故(会话 e2348829)——<|channel>thought 后整段
+    无收尾标记,内部独白连同标记原样漏成正文直呈用户。必须整段路由进 thoughts。"""
+    p = make_parser()
+    out = p.parse("<|channel>thought\nThe user wants me to complete 7 exercises…")
+    assert out["thoughts"] == "The user wants me to complete 7 exercises…"
+    assert out["text"] == ""
+    assert "channel" not in out["text"]
+
+
+def test_text_before_unclosed_thought_preserved():
+    p = make_parser()
+    out = p.parse("可见答案。<|channel>thought\n内部独白不该给用户看")
+    assert out["text"] == "可见答案。"
+    assert "内部独白" in out["thoughts"]
+    assert "channel" not in out["text"]
+
+
+def test_unclosed_text_channel_routes_to_text():
+    """频道名是 text 的无收尾块:内容本来就是想说的话,进正文(剥掉标记)。"""
+    p = make_parser()
+    out = p.parse("<|channel>text\n这是给用户的正文")
+    assert out["text"] == "这是给用户的正文"
+    assert out["thoughts"] == []
+
+
+def test_paired_then_stray_thought_channels_join_in_order():
+    p = make_parser()
+    out = p.parse("<|channel>thought 想法一<channel|>正文。<|channel>thought\n想法二没闭合")
+    assert out["text"] == "正文。"
+    assert out["thoughts"].index("想法一") < out["thoughts"].index("想法二没闭合")
+
+
+def test_tool_call_inside_unclosed_thought_still_executes():
+    """无收尾思考块里的完整调用照常提取执行(与既有'调用不因频道残缺而丢'语义一致)。"""
+    p = make_parser()
+    out = p.parse('<|channel>thought\n先分析一下<|tool_call>'
+                  '{"name": "list_dir", "arguments": {}}<tool_call|>')
+    assert out["tool_calls"] and out["tool_calls"][0]["name"] == "list_dir"
+    assert "先分析一下" in out["thoughts"]
+    assert out["text"] == ""

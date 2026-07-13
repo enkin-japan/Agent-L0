@@ -147,6 +147,30 @@ class ResponseParser:
             })
             current_response = current_response[idx + len(self.etc):]
 
+        # 2.7 有头无尾的频道块（§2.5/2.6 的同族兜底）：开启标记后整段无收尾标记
+        # （思考预算内 EOS / 模型忘写收尾）。实测事故（会话 e2348829）：<|channel>thought
+        # 未闭合，channel_pattern 不匹配、通用正则 <\|.*?\|> 也吃不掉它（无后续 |>），
+        # 整段内部独白连同标记原样漏成正文直呈用户。处理：自右向左逐段剥离，按频道名
+        # 路由（thought→思考、text/其他→正文），标记本身绝不入正文。
+        stray_thoughts = []
+        while self.soc in current_response:
+            idx = current_response.rindex(self.soc)
+            dangling = current_response[idx + len(self.soc):].strip()
+            current_response = current_response[:idx]
+            parts = re.split(r'\s+', dangling, maxsplit=1)
+            channel_name = parts[0] if parts else ""
+            channel_text = parts[1] if len(parts) == 2 else ""
+            if channel_name == "thought":
+                if channel_text:
+                    stray_thoughts.append(channel_text)
+            elif channel_text:
+                current_response = (f"{current_response}\n{channel_text}"
+                                    if current_response.strip() else channel_text)
+        if stray_thoughts:
+            stray_thoughts.reverse()  # 自右向左剥离的，恢复原文顺序
+            prev = result["thoughts"] if isinstance(result["thoughts"], str) else ""
+            result["thoughts"] = "\n".join(([prev] if prev else []) + stray_thoughts)
+
         # 3. 兜底纯文本
         # 游离的 <channel|>：思考预算强制收尾后，模型仍以为自己在频道内、稍后自行补发
         # 收尾标记——无配对开启标记，channel_pattern 不消费，通用正则 <\|.*?\|> 也匹配
