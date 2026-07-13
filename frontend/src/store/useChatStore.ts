@@ -276,10 +276,11 @@ export const useChatStore = create<ChatState>((set, get) => {
     optimistic.delete(sid)
     cancelPreviewFlush(sid)
     if (reload) {
-      // 内存有界：切走的会话消息就地释放（回来经 /history 重建，服务端是真相源）。
-      // 活跃轮在跑时保留——运行中切回走"重放不拉历史"的路径,清了会丢已落盘轮次的显示。
+      // 内存有界：切走的会话消息就地释放,运行中也一样——活轮瞬态气泡的簿记(liveMsg/
+      // 游标)已随附着断开,留着的气泡切回重放时收编不了,每进出一次多一份幽灵副本
+      // (实测重复渲染根因)。切回经 /history + 整轮重放完整重建,与原生 select 同契约。
       const conv = get().conversations.find((c) => c.id === sid)
-      if (conv && conv.messages.length > 0 && !get().generating[sid]) {
+      if (conv && conv.messages.length > 0) {
         revokePreviewUrls(conv.messages)
         patchConversation(sid, { historyLoaded: false, messages: [] })
       } else {
@@ -772,7 +773,9 @@ export const useChatStore = create<ChatState>((set, get) => {
       const conv = get().conversations.find((c) => c.id === id)
       if (!conv) return
       ensureAttached(id) // 统一恢复入口：历史（落盘轮）+ 附着（活跃轮重放 + 实时续播）
-      if (conv.historyLoaded || get().generating[id]) return
+      // 运行中也照拉：落盘轮次一律以 /history 为准(detach 已释放本地消息),活跃轮
+      // 气泡由整轮重放重建,二者经下方 turnIndex 对账互不重复。
+      if (conv.historyLoaded) return
       // 先置位，避免重复请求
       patchConversation(id, { historyLoaded: true })
       try {
@@ -794,7 +797,8 @@ export const useChatStore = create<ChatState>((set, get) => {
                       (m) => m.turnIndex === undefined || m.turnIndex >= count,
                     ),
                   ],
-                  turnCount: count,
+                  // 拉取期间活跃轮可能恰好完结(turn_ended 已把轮数推到 count+1)：取大者
+                  turnCount: Math.max(count, c.turnCount),
                 }
               : c,
           ),
