@@ -97,7 +97,7 @@ cd frontend && npm run test; cd ..
 | D3 | RAG 生产档 = **Qwen3-8B 嵌入+重排**，多用户隔离**只埋 user_id 点** | 见 §4；命名空间落点约定已写死，实现推迟 |
 | D4 | 客户端形态 = **macOS 原生 app（SwiftUI）+ 内嵌 Python 执行层** | 全 Swift 重写执行层已否决（生态硬墙/资产归零/维护倒挂）。web 前端保留为远程窗口。见 §6 |
 | D5 | iOS 远程端 = **只留四处接口预留**（B3 期顺手落），本体不排期 | 见 §7 |
-| D6 | 本仓库已与 GitHub 远程断开（2026-07-14 执行 `git remote remove origin`） | 独立本地仓库，历史保留 |
+| D6 | 托管：2026-07-14 与旧仓库（enkin-japan/MacAgent）断开，同日改托管至 **`git@github.com:enkin-japan/Agent.git`**（origin/main，已 push） | 每期验收通过后 commit（message 带期号前缀）并 push 到此仓库；旧仓库不再使用 |
 | D7 | 端口约定：inference-server **:14161**；目录约定：CUDA 后端 `backend/framework/backends/cuda/`、MLX 后端 `backend/framework/backends/mlx/`、服务 `inference/` | 避免每次重入重新发明命名 |
 
 ---
