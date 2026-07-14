@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mlx_vlm.utils import load
 from mlx_vlm.generate import PromptCacheState
 from mlx_vlm import turboquant as tq
-from framework.patch.gemma4_generate import stream_generate
+from framework.backends.mlx.patch.gemma4_generate import stream_generate
 from framework.utils.path_resolver import resolve_model_path
 
 print("加载模型中…")

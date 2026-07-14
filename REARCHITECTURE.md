@@ -32,7 +32,7 @@
 
 | 层 | 位置 | 为什么宝贵 |
 |---|---|---|
-| 推理层 | `backend/framework/patch/gemma4_generate.py`(824 行)、`core/engine.py` | KV 前缀复用(prefill 提速≈10×)、TurboQuant KV 量化、prompt-lookup 投机采样、思考预算锚定、llguidance 工具段约束采样。硬件感知的深度工程,换任何框架都要重写且大概率更差 |
+| 推理层 | `backend/framework/backends/mlx/patch/gemma4_generate.py`(824 行；2026-07-14 P0 手术自 `framework/patch/` 平移)、`core/engine.py` | KV 前缀复用(prefill 提速≈10×)、TurboQuant KV 量化、prompt-lookup 投机采样、思考预算锚定、llguidance 工具段约束采样。硬件感知的深度工程,换任何框架都要重写且大概率更差 |
 | 编排护栏 | `core/orchestrator.py`(941 行) | 十余种**确定性**护栏:步内预算/总熔断/重规划上限/同参重复拦截(读写指纹+写屏障)/解析断环/截断升档续写/提前收尾推回/写后验证门控/失败路由菜单/结构性提醒/tail_notes 可变尾部。这是"弱模型跑真任务"的全部经验结晶,参数全是实测调的 |
 | 记忆三层 | `memory/`(session 1164 行、compactor、rag_sink) | 机械压缩(取代去重+预算驱逐)→滚动摘要(双阈值)→RAG 沉淀(无损承重网);冷热会话 KV 冻结/恢复;分支(KV 克隆+媒体硬链接);取消/故障整轮回滚;inflight 预写防丢 |
 | 任务调度 | `core/scheduler.py`(318 行) | 单 worker 协作式多任务、cancel/suspend 两种抢占原语、老化防饿死、策略可插拔。**这正是"重 task 轻会话"理念的地基**,写得很干净 |

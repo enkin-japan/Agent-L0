@@ -1,10 +1,33 @@
 """脚本化引擎/工具注册表替身(金测试地基)。
 
 FakeEngine 鸭子类型对齐 AgentEngine.generate_once 的调用契约(编排层只依赖
-这一个方法 + summarize),按脚本逐次吐出生成结果——不碰模型、不碰 MLX 生成路径。
-FakeRegistry 鸭子类型对齐 MCPRegistry 被编排层使用的全部查询/执行接口。
+这一个方法 + summarize + backend 缓存面),按脚本逐次吐出生成结果——不碰模型、
+不碰真实生成路径。FakeBackend 对齐 InferenceBackend 的缓存生命周期面
+(new/clone/release/shutdown;沙箱与收尾审计的一次性会话替身经 engine.backend
+取全新缓存)。FakeRegistry 鸭子类型对齐 MCPRegistry 被编排层使用的全部查询/执行接口。
 """
 from typing import Any, Dict, List, Optional
+
+
+class FakeCacheHandle:
+    """CacheHandle 替身:无物理缓存,token_ids 恒 None(冷启动语义)。"""
+    token_ids: Optional[List[int]] = None
+
+
+class FakeBackend:
+    """InferenceBackend 的缓存面替身(生成面由 FakeEngine.generate_once 顶替)。"""
+
+    def new_cache(self):
+        return FakeCacheHandle()
+
+    def clone_cache(self, src):
+        return None  # 不支持克隆 → 调用方回退冷启动(既有语义)
+
+    def release_cache(self, h):
+        pass
+
+    def shutdown(self):
+        pass
 
 
 class FakeEngine:
@@ -24,6 +47,7 @@ class FakeEngine:
     def __init__(self, script: List[Dict[str, Any]]):
         self.script = list(script)
         self.calls: List[Dict[str, Any]] = []  # 每次生成收到的关键参数(断言用)
+        self.backend = FakeBackend()           # 缓存面(沙箱/审计替身经此取全新缓存)
 
     async def generate_once(self, session, tools=None, task_block=None,
                             tail_notes=None, on_text_delta=None, **kwargs):

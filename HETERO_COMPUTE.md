@@ -44,7 +44,7 @@
 
 | 期 | 内容 | 状态 | 完成日期 | 验收摘要 |
 |---|---|---|---|---|
-| P0 | 协议手术：InferenceBackend + 缓存句柄收编 | 未开始 | — | — |
+| P0 | 协议手术：InferenceBackend + 缓存句柄收编 | **完成** | 2026-07-14 | 金测试 122 全绿（3.7s，框架导入不再拉 mlx_vlm）；泄漏 grep 空；vitest 夹具 5 过；API 级实机冒烟全过：对话生成（spec 仪表经 GenChunk.extra 回吐）、分支克隆 kv_cache_reused=true、生成中取消、审批挂起→批准续跑（shell_exec 落盘验证）、math_research（弹跳球 36.112m 答对）、web_research（634m）、音频转写（mlx_whisper 经 backends 注册面）。浏览器手工冒烟留给用户。 |
 | A1 | CUDA 后端最小可用（vLLM，特性全关） | 未开始 | — | — |
 | A2 | CUDA 特性对齐（前缀缓存/投机/FP8 KV/约束） | 未开始 | — | — |
 | A3 | 周边件 CUDA 化（ASR / RAG 设备层） | 未开始 | — | — |
@@ -84,7 +84,41 @@ cd frontend && npm run test; cd ..
 
 ### S.3 踩坑与偏差记录（追加式，只增不删；格式：日期 / 期号 / 现象 / 处置）
 
-（暂无）
+- 2026-07-14 / P0 / **开发环境是纯克隆状态**：backend/rag 无 `.venv`、frontend 无
+  node_modules、`models/`、`rag/storage/`、`.env.local` 全缺席（仓库迁移时 gitignored
+  资产未随迁）。处置：`./devctl.sh setup` 重建环境；pytest 不在 requirements 里，需
+  `backend/.venv/bin/pip install pytest pytest-asyncio`；首次 `devctl start` 会重新下载
+  模型权重。
+- 2026-07-14 / P0 / **GenChunk 需要比 §1.1 草图多两个字段**：`delta`（展示增量——MLX
+  的 SPM detokenizer 差分逻辑属于后端，中文逐 token 流式靠它；None=后端无差分能力，
+  引擎退回用 text，恰好就是 B1 远程后端的既定路径）与 `extra`（投机采样接受率等后端
+  仪表经 chunk 回吐，engine 不再持有 spec_stats 容器）。协议语义不变，字段面已定型。
+- 2026-07-14 / P0 / **约束采样 guard 的双协议**：补丁投机路径按
+  `hasattr(consume/mask_logits)` 识别 guard 并直连驱动——纯逻辑化时必须保留该识别面，
+  故 MLX `_GuardAdapter` 同时实现 logits_processors 协议与 consume/mask_logits 直连
+  协议，纯逻辑 `ToolCallGuard.next_allowed()` 返回三态（None/只放行单 token/allowed 集）。
+- 2026-07-14 / P0 / **ASR provider 配置键取平铺式** `ingestion.asr_provider`（方案文本
+  原写 `ingestion.asr.provider`）：既有键 asr_model/asr_language 都是平铺，嵌套段不一致。
+  provider 名与默认模型名（含 "mlx" 字样）收编进 `backends/__init__.py` 注册面，
+  泄漏 grep 才可为空。
+- 2026-07-14 / P0 / **验收 grep 对注释同样敏感**：`utils/path_resolver.py` 的两处纯注释
+  （hf 导入顺序、模型 re-upload 事故）也含小写 mlx，已改中性措辞/大写 MLX 指称；
+  默认后端名 "mlx" 从 engine.py 默认参数收进 `backends.DEFAULT_BACKEND`。
+- 2026-07-14 / P0 / zsh 里 `echo ===` 会被当作 `=word` 路径展开炸掉复合命令——
+  现场核实命令若手打分隔符须加引号（S.2 命令本身无此问题）。
+- 2026-07-14 / P0 / **web_research 冒烟揪出一个"疑似回归"，深挖后定性为存量病理，
+  与 P0 无关**。现象：沙箱内工具调用 JSON 的 query 字符串偶发不闭合，整段生成被约束
+  顶满 max_tokens（`[Constrained] 2047 步`），110s 熔断报超时。三重取证定性：
+  ① 离线重放——纯逻辑 guard 对健康序列逐 token 全放行、JSON 完成即强制收尾，状态机
+  正确；② live 探针——卡死段每步 mask 放行 261124/262144（闭引号在放行集里），是模型
+  自己在字符串内漂走（KV 上下文与产出流错位，自以为引号早已闭合）；③ A/B——stash 掉
+  P0 改动跑 HEAD 老代码，同样出现 1575 步同病理段（恰好在顶满前恢复）。根因指向
+  prompt-lookup 投机采样的拒绝回滚在滑窗旋转态的近似损耗（inference-speedup Phase 1
+  已记录 KL≈5e-4），约束 JSON 内草稿命中率高（复读 prompt/schema 片段）时误差可累积
+  到改变采样。关 speculative 即消失。发作随机（沙箱 prompt 含分钟级时间锚，每轮路径
+  不同），且沙箱 parse-retry 闭环多数能兜住（实测卡死后重试即成功）。**留待后续期**：
+  候选缓解=guard.active 期间暂停出草稿（约束段本就短，投机收益趋零），属行为变更，
+  不进 P0。
 
 ---
 
@@ -164,25 +198,34 @@ class InferenceBackend(Protocol):
 
 ### 1.2 任务清单（对照 §0 清单逐项；勾掉即存档）
 
-- [ ] 新建 `backend/framework/core/backend_protocol.py`（§1.1 的协议 + GenChunk）
-- [ ] `engine.py` + `patch/` **原样平移**到 `backend/framework/backends/mlx/`
-      （补丁一行不动，import 路径机械替换）。`AgentEngine` 保留在
-      `core/engine.py`，改为持有 `InferenceBackend` 实例；`PromptBuilder` /
+- [x] 新建 `backend/framework/core/backend_protocol.py`（§1.1 的协议 + GenChunk；
+      GenChunk 增设 `delta` 展示增量与 `extra` 后端仪表字段，见 §S.3 2026-07-14）
+- [x] `engine.py` + `patch/` **原样平移**到 `backend/framework/backends/mlx/`
+      （补丁一行不动 `git mv` 至 `backends/mlx/patch/`；MLX 物理层收进
+      `backends/mlx/backend.py` 的 `MLXBackend`+`MLXCacheHandle`）。`AgentEngine`
+      保留在 `core/engine.py`，改为持有 `InferenceBackend` 实例；`PromptBuilder` /
       `ResponseParser` / `VisibleTextStreamer` / 推理锁 / 执行器线程 /
       token 分解仪表**留在 `AgentEngine`**（后端无关资产）
-- [ ] `memory/session.py`：`PromptCacheState()` → `backend.new_cache()`；
+- [x] `memory/session.py`：`PromptCacheState()` → `backend.new_cache()`；
       `clone_kv_cache` 挪进 MLX 后端，分支处改调 `backend.clone_cache()`；
-      冻结处改调 `release_cache()`。ChatSession 构造注入 backend 引用
-      （app.py 装配点）
-- [ ] `agents/{math,research,excel}_sandbox.py`：一次性会话替身改从传入的
+      冻结处改调 `release_cache()`。ChatSession/SessionManager 注入 backend
+      （app.py 装配点 `session_manager.backend = engine.backend`；无后端时
+      句柄为 None，分支冷启动——金测试环境语义）
+- [x] `agents/{math,research,excel}_sandbox.py`：一次性会话替身改从传入的
       engine 取 `engine.backend.new_cache()`（沙箱本就持有 engine 引用）
-- [ ] `core/orchestrator.py` 收尾审计处同上，删惰性 import
-- [ ] `core/constrained.py`：mask 计算抽出纯逻辑，数组实现（`mx`）下沉到
-      MLX 后端注入；llguidance 本身框架无关
-- [ ] `ingestion/parsers/asr.py`：抽 provider 接口，config 新增
-      `ingestion.asr.provider`（默认 `mlx_whisper`，行为不变）
-- [ ] `app.py`：`mx.clear_cache()` → `backend.shutdown()`
-- [ ] `tests/fake_engine.py` 改为实现 `InferenceBackend`（预计改动极小）
+- [x] `core/orchestrator.py` 收尾审计处同上，删惰性 import（改为
+      `engine.backend` 缺席时跳过审计，与旧「无 mlx_vlm 环境跳过」语义对齐）
+- [x] `core/constrained.py`：mask 计算抽出纯逻辑（`next_allowed()` 三态：
+      None/单 token/np bool 集），数组实现下沉到 MLX 后端 `_GuardAdapter`
+      （兼容上游 logits_processors 协议与投机走查 consume/mask_logits 直连协议）
+- [x] `ingestion/parsers/asr.py`：抽 provider 接口经 `backends/` 注册面分发，
+      config 新增 `ingestion.asr_provider`（默认 `mlx_whisper`，行为不变；
+      键名取平铺式对齐既有 asr_model/asr_language，见 §S.3）
+- [x] `app.py`：`mx.clear_cache()` → `engine.backend.shutdown()`
+- [x] `tests/fake_engine.py`：FakeEngine 增 `backend` 属性（FakeBackend：缓存面
+      替身，clone 恒 None=冷启动语义）；另 `scripts/{probe_lookup_parity,
+      probe_reuse_e2e,measure_kv_mem}.py` 的补丁 import 路径同步改到
+      `framework.backends.mlx.patch.*`
 
 ### 1.3 验收（全过才算完成）
 
@@ -197,7 +240,9 @@ cd frontend && npm run test                                  # 夹具回放全�
 分支克隆一次 / 触发一次审批并批准续跑 / 取消一轮 / 跑一次 math_research 与
 web_research / 发一段音频转写。
 
-- [ ] 验收全过 → 更新 §S.1、踩坑进 §S.3、保存本文、报告用户可压缩历史
+- [x] 验收全过 → 更新 §S.1、踩坑进 §S.3、保存本文、报告用户可压缩历史
+      （2026-07-14：验收命令全过；冒烟以 API 级替代浏览器手工——分支克隆/审批
+      续跑/取消/math_research/web_research/音频转写全过，浏览器过一遍留给用户）
 
 ---
 

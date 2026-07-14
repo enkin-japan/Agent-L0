@@ -7,7 +7,7 @@ from typing import Optional
 # hf_xet 的分块缓存默认落 ~/.cache/huggingface/xet（与 local_dir 参数无关，一个 4GB 模型
 # 会在项目外留下同量级缓存）。本项目要求模型文件全部收敛在仓库内，故禁用 xet、退回纯
 # HTTPS 直下：断点数据存 local_dir/.cache/huggingface/download/（项目内），支持字节续传。
-# 环境变量在 huggingface_hub 首次导入时定格，若别处（如 mlx_vlm）先导入则 setdefault
+# 环境变量在 huggingface_hub 首次导入时定格，若别处（如推理后端的模型库）先导入则 setdefault
 # 已迟——is_xet_available() 是调用时读常量属性，直接改属性可无视导入顺序兜底。
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 from huggingface_hub import constants as _hf_constants
@@ -31,7 +31,7 @@ def resolve_model_path(model_id_or_path: str, revision: Optional[str] = None) ->
 
     revision：钉死 HF 仓库的 commit（config.yaml inference.model_revision）。不钉死时
     snapshot_download 拉 main 最新——上游 re-upload 会让两台机器下到结构不同的权重
-    （实例：gemma-4-e4b-it-4bit 2026-07-06 重传后裁掉共享 KV 权重，mlx-vlm 0.5.0
+    （实例：gemma-4-e4b-it-4bit 2026-07-06 重传后裁掉共享 KV 权重，MLX-VLM 0.5.0
     加载直接 Missing 54 parameters）。凡走 HF 下载的常驻模型都应钉死。
     """
     if isinstance(model_id_or_path, str):

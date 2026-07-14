@@ -5,7 +5,7 @@ ReAct 循环，把多步搜索/抓取/交叉验证折成一份干净摘要。
 隔离要点：
  · 工具集物理受限——沙箱手工装配这两个函数，主 MCPRegistry 永不扫描它们；注入劫持了沙箱
    也够不到任何能执行动作的工具（最坏返回被污染的文本，无行为劫持能力）。
- · KV 隔离——用一次性 EphemeralSession（全新 PromptCacheState），不碰任何真实会话的 KV；
+ · KV 隔离——用一次性 EphemeralSession（后端新建的全新缓存），不碰任何真实会话的 KV；
    沙箱自身多步生成走前缀复用（history 只增不改）。
  · 单 worker 不死锁——沙箱生成走 engine.generate_once（复用其 asyncio 推理锁，与其他会话
    串行）。本协程由 web_research 工具经 run_coroutine_threadsafe 投回主事件循环执行；此刻主
@@ -14,8 +14,6 @@ ReAct 循环，把多步搜索/抓取/交叉验证折成一份干净摘要。
 import time
 from datetime import datetime
 from typing import List, Dict, Optional
-
-from mlx_vlm.generate import PromptCacheState
 
 from . import web_tools
 
@@ -99,8 +97,8 @@ _TOOLS = [_WEB_SEARCH_SCHEMA, _OPEN_PAGES_SCHEMA]
 
 class _EphemeralSession:
     """一次性会话替身：只暴露 generate_once 读取的字段，全新 KV、用完即弃。不落盘。"""
-    def __init__(self, query: str, system_prompt: str = SANDBOX_SYSTEM_PROMPT):
-        self.brain_memory_state = PromptCacheState()
+    def __init__(self, backend, query: str, system_prompt: str = SANDBOX_SYSTEM_PROMPT):
+        self.brain_memory_state = backend.new_cache()
         # 分钟级时间锚：主循环刻意只注日粒度（KV 缓存跨天友好，精确时间靠 get_current_time
         # 工具），但沙箱没有时间工具、KV 又是一次性的——直接注到分钟+时区零缓存代价。
         # 缺锚时模型对天气/时刻类问题会触发「无实时能力」的先验拒答（见系统提示第 7 条）。
@@ -150,7 +148,7 @@ async def run_research(engine, query: str, cfg: dict,
         except Exception:
             pass  # 进度是仪表，绝不影响调查本体
 
-    sess = _EphemeralSession(query)
+    sess = _EphemeralSession(engine.backend, query)
     web_tools.reset_extraction_cache()  # 段落去重缓存按调查为界，防跨调查记仇（见函数注释）
     max_steps = int(cfg.get("max_steps", 6))
     deadline = (time.monotonic() + timeout_s) if timeout_s else None
@@ -291,7 +289,7 @@ async def run_page_digest(engine, question: str, material: str, cfg: dict) -> st
     material 须是 wrap_untrusted 包好的页面正文。
     """
     goal = (question or "").strip() or "General summary of the page(s)."
-    sess = _EphemeralSession(f"Reading goal: {goal}\n\n{material}",
+    sess = _EphemeralSession(engine.backend, f"Reading goal: {goal}\n\n{material}",
                              system_prompt=READER_SYSTEM_PROMPT)
     result = await engine.generate_once(
         sess, tools=None, temperature=0.2,

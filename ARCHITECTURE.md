@@ -94,11 +94,11 @@
 │  │ 只读工具并发批执行；观察截断；tail_notes 一次性护栏提醒（不进历史）           │ │
 │  └───────┬────────────────────────────────────────────────────────────────────┘ │
 │          ▼                                                                       │
-│  引擎层  core/engine.py —— 单次生成（持推理互斥锁）                                │
+│  引擎层  core/engine.py —— 单次生成（持推理互斥锁，经 InferenceBackend 协议驱动） │
 │  ┌────────────────────────────────────────────────────────────────────────────┐ │
 │  │ PromptBuilder（前缀分层：稳定前缀→追加历史→可变尾部，KV 缓存友好）           │ │
-│  │ patch/gemma4_generate.stream_generate（KV前缀复用/TurboQuant量化/           │ │
-│  │   prompt-lookup 投机采样）  constrained.py：llguidance 工具段约束采样        │ │
+│  │ backends/mlx/（MLXBackend + patch/gemma4_generate：KV前缀复用/TurboQuant    │ │
+│  │   量化/prompt-lookup 投机采样）  constrained.py：llguidance 工具段约束采样   │ │
 │  │ VisibleTextStreamer（真流式可见正文过滤） ResponseParser（容错解析+纠错闭环）│ │
 │  └───────┬────────────────────────────────────────────────────────────────────┘ │
 │          ▼                                                                       │

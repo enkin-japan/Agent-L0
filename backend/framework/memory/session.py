@@ -4,13 +4,9 @@ import os
 import json
 import re
 import time
-import copy
 import uuid
 import shutil
 from typing import List, Dict, Any, Optional
-
-import mlx.core as mx
-from mlx_vlm.generate import PromptCacheState
 
 from ..core.task_state import TaskState
 
@@ -41,30 +37,6 @@ def _strip_internal_meta(response_data: dict) -> dict:
     if not changed:
         return response_data
     return {**response_data, "response": cleaned}
-
-
-def clone_kv_cache(cache: Optional[List[Any]]) -> Optional[List[Any]]:
-    """
-    深拷贝一份 MLX KV Cache（含每层的 keys/values 张量）。
-
-    分支复用的关键：拷贝出的 Cache 与源会话在物理内存上完全独立，
-    因此后续对分支 Cache 的裁剪/续写（in-place 写入）绝不会污染源会话。
-    经实测 mx.eval + copy.deepcopy 会产生独立的底层缓冲区。
-    失败时返回 None，调用方据此回退到冷启动预填充（正确性不受影响）。
-    """
-    if not cache:
-        return None
-    try:
-        # 先物化惰性图，保证 deepcopy 拷贝的是已求值的独立缓冲区
-        for layer in cache:
-            for attr in ("keys", "values"):
-                tensor = getattr(layer, attr, None)
-                if tensor is not None:
-                    mx.eval(tensor)
-        return copy.deepcopy(cache)
-    except Exception as e:
-        print(f"[Memory] KV Cache 克隆失败，分支将回退到冷启动预填充: {e}")
-        return None
 
 
 DEFAULT_SYSTEM_PROMPT = """
@@ -101,11 +73,14 @@ class ChatSession:
     支持冷热状态切换（释放/预热内存）
     """
     def __init__(self, session_id: str, base_sessions_dir: Path, system_prompt: str = "",
-                 feed=None):
+                 feed=None, backend=None):
         self.session_id = session_id
-        
-        # 内存状态（热数据）
-        self.brain_memory_state = PromptCacheState() # MLX KV 缓存
+
+        # 推理后端（InferenceBackend，app 装配注入）：会话缓存的生命周期属主。
+        # None = 无后端环境（金测试用 FakeEngine，不触碰真实生成路径）。
+        self._backend = backend
+        # 内存状态（热数据）：会话级推理缓存句柄（CacheHandle，实现不透明）
+        self.brain_memory_state = backend.new_cache() if backend is not None else None
         self.history: List[Dict[str, Any]] = []
         self.images: List[str] = []
         self.audios: List[str] = []
@@ -275,10 +250,11 @@ class ChatSession:
             self.task_state = None
             self.cancel_requested = False
 
-            # 释放 MLX 底层内存
-            if self.brain_memory_state.cache:
-                self.brain_memory_state.cache.clear()
-            self.brain_memory_state = PromptCacheState()
+            # 释放推理缓存的底层内存（后端负责物理释放，句柄换新）
+            if self._backend is not None:
+                if self.brain_memory_state is not None:
+                    self._backend.release_cache(self.brain_memory_state)
+                self.brain_memory_state = self._backend.new_cache()
             
             # 清空内存中的历史文本与资源路径引用
             self.history.clear()
@@ -562,18 +538,16 @@ class ChatSession:
         """
         从父会话克隆一份独立的 KV Cache 与 token 轨迹，实现分支的“热复用”。
 
-        克隆后本会话与父会话的 Cache 物理隔离；分支首次推理时，底层
-        stream_generate 会用现有的 prefix-matching 自动对齐到分支节点并裁剪多余部分，
+        克隆经后端 clone_cache 完成（物理隔离由后端保证）；分支首次推理时，底层
+        生成流会用现有的 prefix-matching 自动对齐到分支节点并裁剪多余部分，
         无需在此精确计算 token 边界。返回是否成功复用（失败则冷启动，正确性不受影响）。
         """
-        src = source.brain_memory_state
-        if src is None or src.cache is None:
+        if self._backend is None or source.brain_memory_state is None:
             return False
-        cloned = clone_kv_cache(src.cache)
+        cloned = self._backend.clone_cache(source.brain_memory_state)
         if cloned is None:
             return False
-        self.brain_memory_state.cache = cloned
-        self.brain_memory_state.token_ids = list(src.token_ids) if src.token_ids else None
+        self.brain_memory_state = cloned
         return True
 
 
@@ -584,6 +558,8 @@ class SessionManager:
     def __init__(self, sessions_dir: Path, idle_timeout: int = 1800):
         # 全局任务 feed(app 装配注入;None=不镜像,测试/脚本单用不受影响)
         self.feed = None
+        # 推理后端(app 装配注入;None=无后端环境,会话缓存句柄为 None、分支只冷启动)
+        self.backend = None
         self.sessions_dir = sessions_dir
         self.idle_timeout = idle_timeout # 默认 30 分钟未交互则转入冷状态
         self._all_sessions: Dict[str, ChatSession] = {}
@@ -637,7 +613,8 @@ class SessionManager:
         session = self._all_sessions.get(session_id)
         if not session:
             # 内存里没有，新建会话
-            session = ChatSession(session_id, self.sessions_dir, system_prompt, feed=self.feed)
+            session = ChatSession(session_id, self.sessions_dir, system_prompt,
+                                  feed=self.feed, backend=self.backend)
             self._all_sessions[session_id] = session
             # 检查磁盘中是否有历史记录，若有，则恢复历史记录
             if session.history_log.exists():
@@ -1163,7 +1140,8 @@ class SessionManager:
             self._materialize_branch(parent_session_id, new_session_id, lines[: node_index + 1], node_index)
 
             # 6. 内存重建分支会话（复用共同的历史文本）
-            branch = ChatSession(new_session_id, self.sessions_dir, "", feed=self.feed)
+            branch = ChatSession(new_session_id, self.sessions_dir, "",
+                                 feed=self.feed, backend=self.backend)
             if branch.history_log.exists():
                 branch.restore_from_disk()
 

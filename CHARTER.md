@@ -34,7 +34,7 @@ Agent 沟通的**窗口**，不是主体。
 
 **规则**：以下是几个月实测调出来的核心竞争力，**任何交互层/前端/协议的迭代都
 不得触碰它们的逻辑**：
-- 推理引擎与 MLX 补丁（`core/engine.py`、`patch/gemma4_generate.py`）：
+- 推理引擎与 MLX 补丁（`core/engine.py`、`backends/mlx/patch/gemma4_generate.py`）：
   KV 前缀复用、TurboQuant 量化、prompt-lookup 投机采样、思考预算锚定、
   llguidance 工具段约束采样；
 - 编排护栏（`core/orchestrator.py`）：十余种**确定性**护栏（步内预算/总熔断/

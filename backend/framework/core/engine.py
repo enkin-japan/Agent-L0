@@ -3,11 +3,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Optional, Callable
 
-from mlx_vlm.generate import PromptCacheState
-
-# 导入底层防腐层（隔离 MLX 补丁与复杂接口）
-from ..patch.gemma4_generate import stream_generate
-
+from .backend_protocol import InferenceBackend
 from .prompt_builder import PromptBuilder
 from .response_parser import ResponseParser
 from .stream_filter import VisibleTextStreamer
@@ -19,74 +15,74 @@ class AgentEngine:
     """
     推理引擎：封装底层大模型的单次生成（Prompt 组装 → 流式生成 → 输出解析）。
     多轮编排（ReAct 循环、计划推进、失败路由、审批闸门）由 Orchestrator 负责；
-    本层对上彻底屏蔽 MLX 的物理复杂性，并持有全局推理互斥锁。
+    本层对上彻底屏蔽推理后端的物理复杂性，并持有全局推理互斥锁。
+
+    物理承载经 InferenceBackend 协议注入（backends/，P0 手术产物）：本层保留
+    全部后端无关资产——PromptBuilder / ResponseParser / VisibleTextStreamer /
+    推理互斥锁 / 专用推理执行器线程 / token 去向分解仪表 / 工具约束状态机。
     """
     @classmethod
     async def create(cls, model_path, *, kv_config=None,
-                     suppress_ghost_thinking: bool = False, env=None) -> "AgentEngine":
-        """标准构造路径:**在推理线程内加载模型**,再装配引擎。
+                     suppress_ghost_thinking: bool = False, env=None,
+                     backend: str = "") -> "AgentEngine":
+        """标准构造路径：**在推理线程内加载模型**，再装配引擎。
 
-        MLX 的惰性张量携带创建时线程的流:主线程加载的模型,其 __init__ 里的
-        非参数常量(rope 频率/缩放因子等,不在 parameters() 树、加载期不被物化)
-        会在推理线程首次前向时触发跨线程流派发,报
-        "There is no Stream(gpu, N) in current thread"。把 load 本身放进专用
-        推理线程,推理宇宙(权重/常量/KV/生成)从出生起就同属一个线程,无一漏网。
+        进程内后端的惰性张量/计算流通常与创建线程绑定：主线程加载、推理线程
+        前向会跨线程崩溃（细节见所选后端模块头注释）。把 load 本身放进专用
+        推理线程，推理宇宙（权重/常量/KV/生成）从出生起就同属一个线程。
         """
-        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mlx-inference")
-        loop = asyncio.get_running_loop()
-        from mlx_vlm.utils import load as _vlm_load
-        model, processor = await loop.run_in_executor(executor, lambda: _vlm_load(model_path))
-        return cls(model, processor, kv_config=kv_config,
-                   suppress_ghost_thinking=suppress_ghost_thinking, env=env, _executor=executor)
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="inference")
+        from ..backends import get_backend_class  # 后端命名收编在注册面（缺省即默认后端）
+        backend_obj = await get_backend_class(backend).load(
+            model_path, executor=executor, **(kv_config or {}))
+        return cls(backend_obj, kv_config=kv_config,
+                   suppress_ghost_thinking=suppress_ghost_thinking, env=env,
+                   _executor=executor)
 
-    def __init__(self, model, processor, kv_config=None, suppress_ghost_thinking: bool = False,
+    def __init__(self, backend: InferenceBackend, kv_config=None,
+                 suppress_ghost_thinking: bool = False,
                  env=None, _executor: "ThreadPoolExecutor | None" = None):
-        self.model = model
-        self.processor = processor
+        self.backend = backend
 
         # suppress_ghost_thinking：Gemma-4 大杯（26b/31b）关思考时须预填空思考频道，
         # 见 PromptBuilder 注释；按所选模型的注册表条目由 app.py 传入。
-        self.builder = PromptBuilder(processor, suppress_ghost_thinking=suppress_ghost_thinking, env=env)
-        self.parser = ResponseParser(processor)
-
-        # KV Cache 量化配置（默认关闭）：kv_bits 为 None 时走稠密缓存，
-        # 与未配置时行为完全一致；设为小数（如 3.5）则底层 generate_step 启用 TurboQuant。
-        kv_config = kv_config or {}
-        self.kv_bits = kv_config.get("kv_bits", None)
-        self.kv_quant_scheme = kv_config.get("kv_quant_scheme", "turboquant")
-        self.quantized_kv_start = int(kv_config.get("quantized_kv_start", 0))
+        self.builder = PromptBuilder(backend.processor,
+                                     suppress_ghost_thinking=suppress_ghost_thinking, env=env)
+        self.parser = ResponseParser(backend.processor)
 
         # [Phase 2] 工具调用段约束采样（llguidance schema mask）。
         # 懒构建：LLTokenizer ~1s，首次带 tools 的生成时建；缺库/建失败 → 永久禁用（fail-open）。
+        kv_config = kv_config or {}
         self.constrained_tool_calls = bool(kv_config.get("constrained_tool_calls", False))
         self._constraint_engine = None
         self._constraint_disabled = _llg is None
         if self.constrained_tool_calls and self._constraint_disabled:
             print("[Engine] constrained_tool_calls=true 但 llguidance 不可用，约束采样禁用")
 
-        # [Phase 3] prompt-lookup 投机采样配置（mode=off 时不带 kwargs，路径与改动前一致）
-        spec_cfg = kv_config.get("speculative") or {}
-        self.speculative = dict(spec_cfg) if spec_cfg.get("mode", "off") != "off" else None
-        if self.speculative:
-            print(f"[Engine] 投机采样启用：{self.speculative}")
-
-        # 推理互斥锁：底层 stream_generate 依赖共享可变单例
-        # （processor.detokenizer、tokenizer.stopping_criteria/thinking_budget_criteria、
-        # 结尾的 mx.clear_cache 等），并发请求逐 token 交错执行会互相污染文本流。
-        # 因此 GPU 生成段必须串行；等待方挂起在锁上不阻塞事件循环，
+        # 推理互斥锁：底层生成流依赖共享可变单例（detokenizer、stopping/thinking
+        # criteria、生成尾部的缓存清理等），并发请求逐 token 交错执行会互相污染文本流。
+        # 因此生成段必须串行；等待方挂起在锁上不阻塞事件循环，
         # 其他请求的文件解析、历史查询、分支等非推理任务仍可并发。
         self._inference_lock = asyncio.Lock()
 
-        # 专用推理线程（单线程执行器）：MLX 生成是同步计算,放在事件循环线程会把
-        # 整个 API 饿死(prefill 一整块数秒内连 /health 都无响应——Phase 1 实机定性)。
-        # 生成整段搬进本线程,事件循环全程自由;token 增量经 call_soon_threadsafe 回主
-        # 循环写账本。单线程 + 推理锁双保险:所有生成/摘要串行,MLX 单例不被并发触碰。
-        # 流的线程适配:补丁层 generation_stream 为 thread-local 流(见 patch 注释),
-        # 生成在执行器线程各自成流。标准路径经 create() 传入已承载模型加载的执行器
-        # (推理宇宙同线程);直接构造(测试/脚本)时自建——注意直接构造 + 主线程
-        # 已加载的真模型仍有跨线程惰性常量风险,生产装配一律走 create()。
+        # 专用推理线程（单线程执行器）：进程内生成是同步计算，放在事件循环线程会把
+        # 整个 API 饿死（prefill 一整块数秒内连 /health 都无响应——Phase 1 实机定性）。
+        # 生成整段搬进本线程，事件循环全程自由；token 增量经 call_soon_threadsafe 回主
+        # 循环写账本。单线程 + 推理锁双保险：所有生成/摘要串行，后端单例不被并发触碰。
+        # 标准路径经 create() 传入已承载模型加载的执行器（推理宇宙同线程）；
+        # 直接构造（测试/脚本）时自建——注意直接构造 + 主线程已加载的真模型仍有
+        # 跨线程惰性常量风险，生产装配一律走 create()。
         self._inference_executor = _executor or ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="mlx-inference")
+            max_workers=1, thread_name_prefix="inference")
+
+    # 装配便利面（app.py 依赖注入用）：模型与处理器由后端持有
+    @property
+    def model(self):
+        return self.backend.model
+
+    @property
+    def processor(self):
+        return self.backend.processor
 
     async def generate_once(self,
                             session: ChatSession,
@@ -135,8 +131,6 @@ class AgentEngine:
         # enable_thinking 时 prompt 收尾在已打开的 thought 频道内，故以抑制态起步。
         # 钩子回调在推理线程触发,这里包一层 call_soon_threadsafe 回主循环(账本纪律)。
         streamer = None
-        detok = None
-        prev_decoded = ""
         _loop_for_hooks = asyncio.get_running_loop()
 
         def _hop(cb: Optional[Callable[[str], None]]) -> Optional[Callable[[str], None]]:
@@ -152,37 +146,29 @@ class AgentEngine:
                 on_thinking=_hop(on_thinking_delta),
                 on_tool_pending=_hop(on_tool_pending),
             )
-            # 增量取字直接盯 detokenizer 的当前解码全文（text + 未 flush 缓冲）做差，而非
-            # result.text（=last_segment）：SPM 分词器对无空格语言（中文）会把文本攒在
-            # _unflushed 里、到 ▁ 词边界或 finalize 才 flush，导致 last_segment 中途恒空、
-            # 整段答复在结尾一次性吐出。盯 text+_unflushed 可让中文也逐 token 出。
-            # 该 detokenizer 与底层 stream_generate 用的是同一实例（processor.detokenizer）。
-            detok = self.processor.detokenizer
-            if not (hasattr(detok, "text") and hasattr(detok, "_unflushed")):
-                detok = None  # 非 SPM 类 detokenizer：退回 last_segment 增量
 
-        # KV 量化参数仅在启用时才透传给底层 generate_step；
-        # 关闭（kv_bits=None）时不带这些 kwargs，稠密路径与改动前完全一致
-        kv_kwargs = {}
-        if self.kv_bits is not None:
-            kv_kwargs = {
-                "kv_bits": self.kv_bits,
-                "kv_quant_scheme": self.kv_quant_scheme,
-                "quantized_kv_start": self.quantized_kv_start,
-            }
-
-        # [Phase 2] 工具调用段约束采样：每次生成一个新 guard（状态机），
-        # 经 generate_step 原生的 logits_processors 钩子挂载；未启用时零开销。
+        # [Phase 2] 工具调用段约束采样：每次生成一个新 guard（纯逻辑状态机），
+        # 经 features 交由后端挂载进它的 logits 处理协议；未启用时零开销。
         guard = self._tool_guard(tools)
-        if guard is not None:
-            kv_kwargs["logits_processors"] = [guard]
 
-        # [Phase 3] 投机采样：透传配置 + 接受率统计回传容器
-        spec_stats = None
-        if self.speculative:
-            spec_stats = {"drafted": 0, "accepted": 0, "rounds": 0}
-            kv_kwargs["speculative"] = self.speculative
-            kv_kwargs["spec_stats"] = spec_stats
+        sampling = {
+            "temperature": temperature,
+            "min_p": min_p,
+            "max_tokens": max_tokens,
+            "repetition_penalty": 1.1,
+            "repetition_context_size": 50,
+        }
+        features: Dict[str, Any] = {
+            "enable_thinking": enable_thinking,
+            "thinking_budget": thinking_budget,
+            # 预算锚点：本模型的频道 token（详见后端对预算裁决的说明）
+            "thinking_start_token": self.parser.soc,
+            "thinking_end_token": self.parser.eoc,
+            # 展示增量：仅在真流式时要求后端计算（detokenizer 差分有每 token 成本）
+            "want_delta": streamer is not None,
+        }
+        if guard is not None:
+            features["tool_guard"] = guard
 
         # 整段生成搬进专用推理线程（事件循环全程自由:API/心跳/事件流不再被计算饿死）。
         # 推理锁按单次生成粒度持有（工具调用等 I/O 期间由上层让出,供其他会话推理）;
@@ -193,53 +179,32 @@ class AgentEngine:
             gen_text = ""
             gen_metrics: Dict[str, Any] = {}
             gen_cancelled = False
-            prev = prev_decoded
-            for result in stream_generate(
-                model=self.model,
-                processor=self.processor,
-                prompt=formatted_prompt,
-                image=session.images or None,
-                audio=session.audios or None,
-                temperature=temperature,
-                prompt_cache_state=session.brain_memory_state,
-                enable_thinking=enable_thinking,
-                thinking_budget=thinking_budget,
-                # 预算锚点须是本模型的频道 token：不传则底层默认 <think>/</think>（Qwen
-                # 方言，Gemma-4 词表中不存在），预算计数失准、超限还会强插垃圾字面量。
-                # 锚定 soc/eoc 后，超限强制收尾即为 "\n<channel|>"——方言内干净关频道。
-                thinking_start_token=self.parser.soc,
-                thinking_end_token=self.parser.eoc,
-                max_tokens=max_tokens,
-                min_p=min_p,
-                repetition_penalty=1.1,
-                repetition_context_size=50,
-                **kv_kwargs,
+            gen_extra: Dict[str, Any] = {}
+            for chunk in self.backend.stream_generate(
+                formatted_prompt,
+                cache=session.brain_memory_state,
+                images=session.images or None,
+                audios=session.audios or None,
+                sampling=sampling,
+                features=features,
             ):
-                gen_text += result.text
+                gen_text += chunk.text
                 gen_metrics = {
-                    "prompt_tokens": result.prompt_tokens,
-                    "generation_tokens": result.generation_tokens,
-                    "prompt_tps": result.prompt_tps,
-                    "generation_tps": result.generation_tps,
-                    "peak_memory": result.peak_memory
+                    "prompt_tokens": chunk.prompt_tokens,
+                    "generation_tokens": chunk.generation_tokens,
+                    "prompt_tps": chunk.prompt_tps,
+                    "generation_tps": chunk.generation_tps,
+                    "peak_memory": chunk.peak_memory
                 }
-                # 真流式：取本 token 的可见文本增量 → 过滤成可见正文 → 回吐主循环
+                if chunk.extra:
+                    gen_extra = chunk.extra
+                # 真流式：取本段的可见文本增量 → 过滤成可见正文 → 回吐主循环。
+                # delta=None 表示后端无 detokenizer 级差分能力，退回规范文本段增量。
                 if streamer is not None:
-                    if detok is not None:
-                        # 盯 detokenizer 当前解码全文做差（▁ 归一为空格，保证前缀单调延伸）
-                        cur = (detok.text + detok._unflushed).replace("▁", " ")
-                        if cur.startswith(prev):
-                            delta = cur[len(prev):]
-                            if delta:
-                                visible = streamer.feed(delta)
-                                if visible and on_text_delta is not None:
-                                    loop.call_soon_threadsafe(on_text_delta, visible)
-                        # trim_space 反常重排等情形跳过一次增量、只推进基线，避免重复回吐
-                        prev = cur
-                    else:
-                        visible = streamer.feed(result.text)
-                        if visible and on_text_delta is not None:
-                            loop.call_soon_threadsafe(on_text_delta, visible)
+                    visible = streamer.feed(chunk.delta if chunk.delta is not None
+                                            else chunk.text)
+                    if visible and on_text_delta is not None:
+                        loop.call_soon_threadsafe(on_text_delta, visible)
                 # 取消检查点（token 段粒度;bool 读在 GIL 下安全）：立即停止消耗生成流
                 if session.cancel_requested:
                     gen_cancelled = True
@@ -249,7 +214,8 @@ class AgentEngine:
                 tail = streamer.close()
                 if tail and on_text_delta is not None:
                     loop.call_soon_threadsafe(on_text_delta, tail)
-            return {"text": gen_text, "metrics": gen_metrics, "cancelled": gen_cancelled}
+            return {"text": gen_text, "metrics": gen_metrics,
+                    "cancelled": gen_cancelled, "extra": gen_extra}
 
         async with self._inference_lock:
             outcome = await loop.run_in_executor(self._inference_executor, _blocking_generate)
@@ -257,9 +223,11 @@ class AgentEngine:
         metrics = outcome["metrics"] or metrics
         cancelled = outcome["cancelled"]
 
-        if spec_stats and spec_stats.get("drafted"):
-            metrics["spec_drafted"] = spec_stats["drafted"]
-            metrics["spec_accepted"] = spec_stats["accepted"]
+        # [Phase 3] 投机采样仪表：后端经 GenChunk.extra 回吐接受率统计
+        extra = outcome.get("extra") or {}
+        if extra.get("spec_drafted"):
+            metrics["spec_drafted"] = extra["spec_drafted"]
+            metrics["spec_accepted"] = extra.get("spec_accepted", 0)
 
         if guard is not None and guard.masked_positions:
             metrics["constrained_steps"] = guard.masked_positions
@@ -276,7 +244,7 @@ class AgentEngine:
         )
 
         parsed = self.parser.parse(generated_text)
-        # 截断检测（供上层 max_tokens 恢复用）：底层 stream_generate 遇 EOS/停止符会 break、
+        # 截断检测（供上层 max_tokens 恢复用）：底层生成流遇 EOS/停止符会 break、
         # 生成 token 数 < max_tokens；撞上 max_tokens 上限则是生成器自然耗尽、恰好产满
         # max_tokens 个 token。故 generation_tokens >= max_tokens 即判定本次生成被长度截断。
         truncated = (metrics.get("generation_tokens", 0) or 0) >= max_tokens
@@ -367,7 +335,7 @@ class AgentEngine:
                         cancel_check=None) -> str:
         """
         对一段对话历史做要点摘要（摘要式压缩）。一次性裸生成：不带工具、不复用会话 KV
-        （用全新的 PromptCacheState），与任何会话的推理状态隔离。持有推理锁保证与生成串行。
+        （用后端新建的隔离缓存），与任何会话的推理状态隔离。持有推理锁保证与生成串行。
         cancel_check：可选无参回调，逐 token 段轮询；返回真则中断生成并返回空串
         （调用侧把空摘要视为失败、水位线不推进、下次触发重试——调度器抢占后台摘要靠它让位）。
         """
@@ -381,35 +349,30 @@ class AgentEngine:
         ]
         prompt = self.builder.build(messages=messages, tools=None, enable_thinking=False)
 
-        fresh_cache = PromptCacheState()  # 隔离缓存：不碰任何会话的 KV
-        # [Phase 3] 摘要也走投机：合并旧摘要时大段复述 [Existing summary]，命中率天然高
-        spec_kwargs = {"speculative": self.speculative} if self.speculative else {}
+        fresh_cache = self.backend.new_cache()  # 隔离缓存：不碰任何会话的 KV
         loop = asyncio.get_running_loop()
 
         def _blocking_summarize() -> str:
+            # [Phase 3] 摘要也走投机（后端按自身配置决定）：合并旧摘要时大段复述
+            # [Existing summary]，命中率天然高
             text = ""
-            for result in stream_generate(
-                model=self.model,
-                processor=self.processor,
-                prompt=prompt,
-                image=None,
-                audio=None,
-                temperature=temperature,
-                prompt_cache_state=fresh_cache,
-                enable_thinking=False,
-                max_tokens=max_tokens,
-                min_p=0.05,
-                repetition_penalty=1.1,
-                repetition_context_size=50,
-                **spec_kwargs,
+            for chunk in self.backend.stream_generate(
+                prompt,
+                cache=fresh_cache,
+                sampling={"temperature": temperature, "min_p": 0.05, "max_tokens": max_tokens,
+                          "repetition_penalty": 1.1, "repetition_context_size": 50},
+                features={"enable_thinking": False},
             ):
                 if cancel_check is not None and cancel_check():
                     return ""  # 被抢占：放弃本次摘要（无半途状态，下次触发重试）
-                text += result.text
+                text += chunk.text
             return text
 
-        async with self._inference_lock:
-            text = await loop.run_in_executor(self._inference_executor, _blocking_summarize)
+        try:
+            async with self._inference_lock:
+                text = await loop.run_in_executor(self._inference_executor, _blocking_summarize)
+        finally:
+            self.backend.release_cache(fresh_cache)
         if not text:
             return ""
         parsed = self.parser.parse(text)

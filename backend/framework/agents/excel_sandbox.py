@@ -25,8 +25,6 @@ import shutil
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from mlx_vlm.generate import PromptCacheState
-
 from . import excel_tools
 from ..excel import inspect_workbook, verify_workbook
 
@@ -182,9 +180,9 @@ _VISUAL_QA_SYSTEM = (
 
 class _EphemeralSession:
     """一次性会话替身：只暴露 generate_once 读取的字段，全新 KV、用完即弃。不落盘。"""
-    def __init__(self, system_prompt: str, opening: str,
+    def __init__(self, backend, system_prompt: str, opening: str,
                  images: Optional[List[str]] = None):
-        self.brain_memory_state = PromptCacheState()
+        self.brain_memory_state = backend.new_cache()
         if images:
             content: object = [{"type": "image"} for _ in images]
             content.append({"type": "text", "text": opening})
@@ -271,7 +269,7 @@ async def _visual_qa(engine, pages: List[str], max_pages: int = 2) -> str:
     findings = []
     for i, png in enumerate(pages[:max_pages]):
         qa = _EphemeralSession(
-            _VISUAL_QA_SYSTEM,
+            engine.backend, _VISUAL_QA_SYSTEM,
             f"Rendered page {i + 1} of the workbook you produced. Inspect it.",
             images=[png])
         r = await engine.generate_once(qa, tools=None, temperature=0.1, max_tokens=300)
@@ -387,7 +385,7 @@ async def run_excel_task(engine, task: str, input_file: Optional[str],
         opening += ("No input file. Create the workbook in the current directory with a "
                     "descriptive bare filename (e.g. wb.save('report.xlsx')), then verify it.")
 
-    sess = _EphemeralSession(EXCEL_SANDBOX_SYSTEM_PROMPT, opening)
+    sess = _EphemeralSession(engine.backend, EXCEL_SANDBOX_SYSTEM_PROMPT, opening)
     parse_retries = 0
     nudged = False
     visual_summary = ""

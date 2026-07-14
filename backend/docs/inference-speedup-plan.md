@@ -53,7 +53,7 @@
 
 ## 5. 已完成：Phase 3 prompt-lookup 投机
 
-实现全部在 `framework/patch/gemma4_generate.py`：
+实现全部在 `framework/backends/mlx/patch/gemma4_generate.py`（2026-07-14 P0 手术前位于 `framework/patch/`）：
 
 - `lookup_generate_step`：prefill 与上游 generate_step 同构（get_input_embeddings +
   分块 prefill + 末步采样），decode 换成轮循环：`_NgramIndex` n-gram 草稿（**单槽最近

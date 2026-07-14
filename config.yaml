@@ -116,7 +116,8 @@ tuning:
 # PDF/办公文档经解析折成带 provenance 标记的文本注入上下文；代码/大文件懒登记（只给路径，
 # 靠 file_extract/shell 按需取）。解析发生在推理 worker 之外，结果烘进历史日志、重放不重解析。
 ingestion:
-  asr_model: "mlx-community/whisper-large-v3-turbo"  # ASR 引擎（mlx-whisper，懒加载、进程内复用）
+  asr_provider: "mlx_whisper"   # 转写实现（backends 注册面；P0 仅 mlx_whisper，A3 增 faster_whisper/remote）
+  asr_model: "mlx-community/whisper-large-v3-turbo"  # ASR 模型（懒加载、进程内复用）
   asr_language: null            # null=自动检测语种；也可固定如 "ja"/"zh"/"en"
   pdf_text_min_chars_per_page: 50  # PDF 每页平均字符数低于此判为扫描/图像型→渲染成图走原生视觉
   pdf_render_max_pages: 20      # 图像型 PDF 最多渲染的页数（其余用 file_extract 抽文本）

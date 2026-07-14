@@ -14,8 +14,6 @@ ANSWER 是解释器对 answer_code 的执行输出——模型的自然语言只
 import asyncio
 from typing import Dict, List, Optional, Tuple
 
-from mlx_vlm.generate import PromptCacheState
-
 from . import math_tools
 
 
@@ -81,8 +79,8 @@ _TOOLS = [_RUN_PYTHON_SCHEMA, _SUBMIT_ANSWER_SCHEMA]
 
 class _EphemeralSession:
     """一次性会话替身：只暴露 generate_once 读取的字段，全新 KV、用完即弃。不落盘。"""
-    def __init__(self, problem: str):
-        self.brain_memory_state = PromptCacheState()
+    def __init__(self, backend, problem: str):
+        self.brain_memory_state = backend.new_cache()
         self.history: List[Dict] = [
             {"role": "system", "content": MATH_SANDBOX_SYSTEM_PROMPT},
             {"role": "user", "content": problem},
@@ -116,7 +114,7 @@ async def run_math_research(engine, problem: str, cfg: dict) -> str:
     沙箱主循环（协程，运行在主事件循环上）。返回结果摘要文本；其中 ANSWER 段
     为解释器输出原样嵌入。engine.generate_once 内部持有推理锁，与其他会话生成串行。
     """
-    sess = _EphemeralSession(problem)
+    sess = _EphemeralSession(engine.backend, problem)
     max_steps = int(cfg.get("max_steps", 8))
     exec_timeout = int(cfg.get("exec_timeout", math_tools.DEFAULT_TIMEOUT))
     parse_retries = 0

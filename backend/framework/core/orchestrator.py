@@ -818,15 +818,14 @@ class Orchestrator:
         engine.generate_once 内部持有推理锁，与主循环天然串行（不违反单 worker）。
         任何异常/歧义一律 fail-open 放行——审计是安全网，绝不能反过来卡死收尾。
         """
-        try:
-            from mlx_vlm.generate import PromptCacheState  # 惰性导入：金测试无模型环境不强依赖
-        except Exception:
+        backend = getattr(self.engine, "backend", None)
+        if backend is None:
             return True, "verifier unavailable"
 
         class _AuditSession:
             """一次性会话替身（与 agents/research_sandbox._EphemeralSession 同型），不落盘。"""
             def __init__(self):
-                self.brain_memory_state = PromptCacheState()
+                self.brain_memory_state = backend.new_cache()
                 self.history = [
                     {"role": "system", "content": (
                         "You are a strict completion auditor. Judge ONLY whether the answer "

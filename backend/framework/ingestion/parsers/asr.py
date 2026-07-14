@@ -1,33 +1,33 @@
-"""
-音频转写解析器（mlx-whisper，large-v3-turbo）。
+"""音频转写解析器（provider 分发面）。
 
-- 懒加载：首次转写时 mlx_whisper 才载入模型，之后进程内自动复用（不占推理 worker，
-  发生在生成锁之外）。
-- fail-open：任何异常（未装 mlx-whisper / 模型载入失败 / 解码失败）一律返回错误标记
-  文本，绝不让转写异常打断整轮对话。返回值始终是可直接注入上下文的字符串。
+- provider 制（HETERO_COMPUTE P0）：转写实现经 framework.backends 的 ASR provider
+  注册面取用（config: ingestion.asr_provider，默认本地 whisper 实现），物理承载
+  相关的名字全部收编在 backends/ 之下；本层只做区间切片与 fail-open。
+- fail-open：任何异常（provider 缺失 / 依赖未装 / 模型载入失败 / 解码失败）一律
+  返回错误标记文本，绝不让转写异常打断整轮对话。返回值始终是可直接注入上下文的字符串。
 """
 import os
 from pathlib import Path
 from typing import Optional
 
-from ...utils import resolve_model_path
+from ...backends import (AsrProviderUnavailable, DEFAULT_ASR_MODEL,
+                         get_asr_provider)
 
-DEFAULT_ASR_MODEL = "mlx-community/whisper-large-v3-turbo"
 
-
-def transcribe_audio(path, *, model: str = DEFAULT_ASR_MODEL,
+def transcribe_audio(path, *, model: Optional[str] = DEFAULT_ASR_MODEL,
                      language: Optional[str] = None,
                      start: Optional[float] = None,
-                     end: Optional[float] = None) -> str:
+                     end: Optional[float] = None,
+                     provider: Optional[str] = None) -> str:
     """
     转写整段音频（或 [start, end] 秒区间）为文本。whisper 自带 30s 窗口分块，
     无需外部 VAD 切片——直接喂整文件比按固定长度切更准（不会切在词中间）。
-    start/end 均以秒计，缺省转写全程。
+    start/end 均以秒计，缺省转写全程。provider 缺省用默认转写实现（行为不变）。
     """
     try:
-        import mlx_whisper
-    except Exception as e:  # 依赖缺失：fail-open
-        return f"[Audio transcription unavailable: mlx-whisper not installed ({e})]"
+        fn = get_asr_provider(provider or "")
+    except Exception as e:  # provider 未知/注册面异常：fail-open
+        return f"[Audio transcription unavailable: {e}]"
 
     src = str(path)
     tmp: Optional[Path] = None
@@ -47,15 +47,10 @@ def transcribe_audio(path, *, model: str = DEFAULT_ASR_MODEL,
             soundfile.write(str(tmp), clip, sr)
             src = str(tmp)
 
-        # 与主模型同一条 resolver：命中 MacAgent/models/<name>/ 则用本地，缺失则一次性
-        # snapshot_download 到项目内（不落 ~/.cache/huggingface）。收敛依赖、避免散落项目外。
-        resolved = str(resolve_model_path(model))
-        kwargs = {"path_or_hf_repo": resolved}
-        if language:
-            kwargs["language"] = language
-        result = mlx_whisper.transcribe(src, **kwargs)
-        text = (result.get("text") or "").strip()
+        text = fn(src, model=model, language=language)
         return text or "[Empty transcript (no speech detected)]"
+    except AsrProviderUnavailable as e:  # 依赖缺失：fail-open
+        return f"[Audio transcription unavailable: {e}]"
     except Exception as e:  # 解码/载入失败：fail-open
         return f"[Audio transcription failed: {e}]"
     finally:

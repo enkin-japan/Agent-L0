@@ -47,6 +47,7 @@ class Ingestion:
         cfg = ingestion_cfg or {}
         self.asr_model = cfg.get("asr_model", asr.DEFAULT_ASR_MODEL)
         self.asr_language = cfg.get("asr_language")  # None=自动检测
+        self.asr_provider = cfg.get("asr_provider")  # None=默认转写实现（backends 注册面）
         self.pdf_min_chars = int(cfg.get("pdf_text_min_chars_per_page", 50))
         self.pdf_render_max_pages = int(cfg.get("pdf_render_max_pages", 20))
         self.parse_max_chars = int(cfg.get("parse_max_chars", 12000))
@@ -118,7 +119,8 @@ class Ingestion:
                         # 默认路径：整段落盘 → ASR 转写 → 文本注入；原音频留作 attachment
                         p = self._save(file, audio_dir, name)
                         transcript = await asyncio.to_thread(
-                            asr.transcribe_audio, str(p), model=self.asr_model, language=self.asr_language
+                            asr.transcribe_audio, str(p), model=self.asr_model,
+                            language=self.asr_language, provider=self.asr_provider
                         )
                         text_parts.append(
                             f"[Audio transcript · {fname}]\n{transcript}\n"

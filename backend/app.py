@@ -6,7 +6,6 @@ import yaml
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-import mlx.core as mx
 
 # 导入底层模型库
 from silero_vad import load_silero_vad
@@ -171,6 +170,8 @@ async def lifespan(app: FastAPI):
     feed = GlobalFeed()
     session_manager = SessionManager(sessions_dir=SESSIONS_DIR, idle_timeout=1800)
     session_manager.feed = feed
+    # 推理后端注入：会话缓存句柄（new/clone/release）的生命周期属主（P0 协议面）
+    session_manager.backend = engine.backend
     app.state.feed = feed
 
     # 3.0 中断轮次恢复（write-ahead 闭环）：上次进程死亡时进行中/待审批/挂起的轮次，
@@ -337,9 +338,9 @@ async def lifespan(app: FastAPI):
         del app.state.orchestrator
         del app.state.session_manager
         del app.state.file_handler
-        
-        # 强制释放苹果芯片的显存/内存
-        mx.clear_cache()
+
+        # 释放推理后端持有的全局资源（MLX 下即强制释放苹果芯片的显存/内存）
+        engine.backend.shutdown()
         print("✅ [System] Resources have been safely released. Goodbye!")
     except Exception as e:
         print(f"❌ [System] Resource release error, force termination: {e}")

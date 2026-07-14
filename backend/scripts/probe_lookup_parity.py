@@ -26,7 +26,7 @@ def check(name, cond, extra=""):
 
 
 def run(model, processor, prompt, speculative, max_tokens=300):
-    from framework.patch.gemma4_generate import stream_generate
+    from framework.backends.mlx.patch.gemma4_generate import stream_generate
     from mlx_vlm.generate import PromptCacheState
 
     stats = {"drafted": 0, "accepted": 0, "rounds": 0}
