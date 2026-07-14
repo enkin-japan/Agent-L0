@@ -4,6 +4,17 @@
 inference:
   host: "127.0.0.1"  # 仅本机回环：外部访问统一走前端的 /api 代理
   port: 14159
+
+  # 推理承载（HETERO_COMPUTE B1）：inprocess=本进程加载 backend 所指后端（现状默认）；
+  # remote=经 backends/remote 连下面 remote 段所指的 inference-server（inference/server.py，
+  # 服务端进程读同一份 config 的 backend 键决定它内包哪个后端）。
+  # 远程模式密钥：两侧 .env.local 设同一 INFER_API_KEY（服务端校验、客户端携带）。
+  mode: "inprocess"             # inprocess | remote
+  backend: "mlx"                # mlx | cuda(A1 后)：进程内所用/服务端内包的后端
+  remote:
+    host: "127.0.0.1"           # inference-server 地址（服务端绑定与客户端连接共用；
+    port: 14161                 #   跨机部署改为算力机的 Tailscale 地址，D7 端口约定 :14161）
+    cache_ttl_minutes: 45       # 服务端缓存注册表空闲回收（略长于 backend 30min 冻结，只兜底）
   model: "mlx-community/gemma-4-e4b-it-4bit"
   # 钉死 HF 仓库 commit：上游 2026-07-06 重传（475b9088，裁掉共享 KV 权重）与 mlx-vlm 0.5.0
   # 不兼容，加载报 Missing 54 parameters。deb1db71 = 重传前最后一版（已在两台机器实证可用）。
@@ -198,6 +209,8 @@ ppt:
 
 # 编排循环护栏（多步任务 Agent）
 agent:
+  max_inference_concurrency: 1 # 并发生成上限（B1）：默认 1 行为与现状全同；仅 remote 模式
+                              # 允许 >1（进程内后端共享单例不可并发，引擎强制钳制回 1）
   tool_schema_mode: "full"    # full=全部工具 schema 常驻（工具少时更省且缓存更稳）
                               # catalog=目录常驻 + get_tool_schema 按名取详情（工具规模大后切换）
   react_max_steps: 4          # 单步内自纠预算：一步连续多少次迭代未完成即判定失败并路由

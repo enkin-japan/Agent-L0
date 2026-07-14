@@ -48,7 +48,7 @@
 | A1 | CUDA 后端最小可用（vLLM，特性全关） | 未开始 | — | — |
 | A2 | CUDA 特性对齐（前缀缓存/投机/FP8 KV/约束） | 未开始 | — | — |
 | A3 | 周边件 CUDA 化（ASR / RAG 设备层） | 未开始 | — | — |
-| B1 | inference-server 服务化 + RemoteBackend | 未开始 | — | — |
+| B1 | inference-server 服务化 + RemoteBackend | **完成** | 2026-07-14 | 金测试 122 全绿；泄漏 grep 空；vitest 5 过。同机双进程（:14161 包 MLX + backend mode=remote）实机冒烟全过：对话/跨轮 KV 热复用（次轮 7.6s）、分支克隆 kv_cache_reused=true（远程 clone 端点）、生成中取消（修复一处 SSE 收尾泄锁后 active_generations 归零）、审批挂起→批准续跑（shell 落盘验证）、math_research 与 web_research 沙箱子生成全走远程、约束采样跨网生效（constrained_steps 回填仪表）、图片经 /v1/media 内容寻址上传（识别正确）、音频转写、鉴权 401/401/200。实测 SSE 传输零吞吐损耗（端到端 29.1 tps=服务端 29.1 tps，首 chunk 0.35s）。拔线：SIGKILL 中断→轮次 fail 干净落账、重启服务端后同会话自愈（句柄换发+冷启动重建）；SIGTERM=uvicorn 优雅排水（在飞生成完成后才退）。mode=inprocess 回归零变化。ARCHITECTURE.md 拓扑图更新推迟到 B3（devctl profiles 一并画）。 |
 | B2 | RAG 远程化 + 鉴权 + 8B 升级（重建+阈值重标） | 未开始 | — | — |
 | B3 | devctl profiles + §7 接口预留 + 生产联调 | 未开始 | — | — |
 
@@ -119,6 +119,37 @@ cd frontend && npm run test; cd ..
   不同），且沙箱 parse-retry 闭环多数能兜住（实测卡死后重试即成功）。**留待后续期**：
   候选缓解=guard.active 期间暂停出草稿（约束段本就短，投机收益趋零），属行为变更，
   不进 P0。
+- 2026-07-14 / B1 / **SSE 生成流的 finally 里绝不能 await（粘性取消泄锁）**：客户端
+  断连时 starlette 取消流任务，async 生成器 finally 里的 `await task` 在粘性取消语境
+  下立即再抛 CancelledError，其后的 gens.pop 与 gen_lock.release() 被跳过——实测断连后
+  active_generations 卡 1、后续生成永久挂死。修复：放锁改为生成线程退出时的
+  done-callback（跑在事件循环线程），既保住"放锁严格晚于生成线程退出"的单例不变量，
+  又对取消免疫。
+- 2026-07-14 / B1 / **服务端进程死亡 = SSE 干净 EOF，不是异常**：TCP FIN 让
+  iter_lines 安静结束，RemoteBackend 若静默返回，上层拿到"空生成"继续走解析重试，
+  轮次状态被污染（实测卡出 cancelled 假象）。修复：流在 done/error 终态前结束一律
+  显式 raise。另：SIGTERM 触发 uvicorn 优雅排水（监听即关但在飞 SSE 保留、生成做完
+  才退，运维友好）；测拔线必须 SIGKILL。
+- 2026-07-14 / B1 / **设备 B 侧分词器纯 transformers 加载**：AutoProcessor 对本模型
+  目录不可用（缺 video_preprocessor_config.json），AutoTokenizer 可用且
+  special_tokens_map 23 键齐全（与 MLX 路径同源同值）、stc/etc 单 token——
+  `_ProcessorShim` 包一层 .tokenizer 即满足 PromptBuilder/Parser/约束引擎/仪表全部
+  消费面。设备 B 不需要装 MLX，也不需要权重（只要模型目录的 tokenizer 文件，
+  B3 落地时做 tokenizer-only fetch）。
+- 2026-07-14 / B1 / **约束采样跨网**：纯逻辑 guard 无法逐 token 跨网驱动。方案：引擎
+  构建 guard 时把工具声明一并放进 features.tool_specs（可序列化），远程后端剥掉
+  guard 只发声明，服务端用自己的 ToolConstraintEngine 重建 guard 挂进 MLX 适配器，
+  done 事件把 constrained_steps 回填本地 guard.masked_positions——仪表口径两模式一致
+  （实机 21/39/53 步均正确回报）。进程内后端忽略 tool_specs，语义单一来源。
+- 2026-07-14 / B1 / **远程缓存句柄两条纪律**：①new_cache 被 ChatSession.__init__ 在
+  事件循环线程同步调用，绝不能发网络请求→懒注册（首次生成时服务端分配）；②客户端
+  始终采纳 meta 事件回执的生效 cache_id（不只在句柄为空时）——服务端重启/TTL 回收后
+  旧 id 失效，服务端换新冷启动并回执，客户端句柄自愈、后续轮次恢复热复用。
+  沙箱一次性会话的服务端缓存无人显式释放，靠 45min TTL 兜底（设计如此）。
+- 2026-07-14 / B1 / **传输开销实测**：同机双进程下端到端 decode 29.1 tps = 服务端
+  原生 29.1 tps（零吞吐损耗），首 chunk 延迟 0.35s；逐 token SSE + 有界队列
+  （maxsize 256 背压）在本机/内网量级不构成瓶颈。远程模式 backend 启动只需数秒
+  （不加载权重）。
 
 ---
 
@@ -341,22 +372,28 @@ GET  /health  /metrics               devctl 探活 + 仪表
 
 任务清单：
 
-- [ ] `inference/` 服务骨架 + 上表端点；Bearer 鉴权照抄 backend 的常量时间比对，
-      密钥走 `.env.local`（新键 `INFER_API_KEY`）
-- [ ] 服务端缓存注册表：`cache_id → CacheHandle`，TTL 空闲释放默认 45min
-      （略长于 backend 侧 30min 冻结——释放顺序由 backend 主导，TTL 只兜底）
-- [ ] `backends/remote/`：RemoteBackend。stream_generate = SSE 消费迭代器；
-      媒体先查本地 sha256 记录、未传则上传；网络错误/超时映射到既有异常类型
-      → 落入编排层**失败路由菜单**（现成护栏，无新机制）
-- [ ] **流式语义**：远程模式服务端做 detokenize，chunk 携带增量文本；
-      AgentEngine 对 Remote 后端跳过 detok 差分、直接 `streamer.feed(chunk.text)`
-      （`engine.py` 既有的非 SPM 回退分支）
-- [ ] config 新增 `inference: {mode: inprocess|remote, backend: mlx|cuda,
-      remote: {host, port}}`；`agent.max_inference_concurrency`（默认 1，
-      行为与现状全同；调度器 ClassPolicy/抢占/老化**不动**）
-- [ ] 验收：mode=remote 指向同机双进程 → 金测试 + 实机冒烟（含断网重连：
-      拔线一次验证失败路由 + 账本重放）；mode=inprocess 回归验证零变化
-- [ ] 更新本文 / 报告可压缩历史
+- [x] `inference/` 服务骨架 + 上表端点；Bearer 鉴权照抄 backend 的常量时间比对，
+      密钥走 `.env.local`（新键 `INFER_API_KEY`，已补进 `.env.example`；
+      实机验证无 key 401 / 错 key 401 / 对 key 200）
+- [x] 服务端缓存注册表：`cache_id → CacheHandle`，TTL 空闲释放默认 45min
+      （略长于 backend 侧 30min 冻结——释放顺序由 backend 主导，TTL 只兜底；
+      config 键 `inference.remote.cache_ttl_minutes`）
+- [x] `backends/remote/`：RemoteBackend。stream_generate = SSE 消费迭代器；
+      媒体先查本地 sha256 记录、未传则上传；网络错误/超时映射为 RuntimeError
+      → 整轮 fail 干净落账（拔线实测："核心引擎故障: 网络异常"）。缓存句柄
+      **懒注册**（new_cache 在事件循环线程，不发网络请求），服务端经 meta 事件
+      回填/换发生效 cache_id（重启/TTL 回收后自愈，见 §S.3）
+- [x] **流式语义**：远程模式服务端做 detokenize，chunk 同时携带规范段与 delta
+      展示增量——比清单预想更强：GenChunk.delta 原样跨网透传，中文逐 token
+      流式不降级（engine 的 text 回退分支保留作后端无 delta 时的兜底）
+- [x] config 新增 `inference: {mode, backend, remote: {host, port}}`；
+      `agent.max_inference_concurrency`（默认 1，行为与现状全同——推理互斥锁
+      改为等价的 Semaphore(1)；>1 仅对 remote 生效，进程内后端强制钳制回 1；
+      调度器 ClassPolicy/抢占/老化**不动**）
+- [x] 验收：mode=remote 同机双进程 → 金测试 + 实机冒烟全过（含拔线：SIGKILL
+      中断→失败路由+账本重放，重启后同会话自愈）；mode=inprocess 回归零变化
+      （同一会话跨模式无缝续跑）
+- [x] 更新本文 / 报告可压缩历史（2026-07-14）
 
 ### 3.3 B2 —— RAG 远程化 + 鉴权 + 8B 升级
 

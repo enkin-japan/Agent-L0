@@ -16,7 +16,10 @@ def get_backend_class(name: str = ""):
     if name == "mlx":
         from .mlx.backend import MLXBackend
         return MLXBackend
-    raise ValueError(f"未知推理后端: {name!r}（可用: mlx）")
+    if name == "remote":
+        from .remote.backend import RemoteBackend
+        return RemoteBackend
+    raise ValueError(f"未知推理后端: {name!r}（可用: mlx, remote）")
 
 
 # ---- ASR provider（ingestion/parsers/asr.py 经此取转写实现）----

@@ -28,6 +28,7 @@ rag/models/
 
 # ═══════════ 运行时数据（用户会话 / 知识库 / 任务实体）═══════════
 backend/sessions/
+inference/media/
 backend/schedules/
 backend/push/
 backend/ui_state.json

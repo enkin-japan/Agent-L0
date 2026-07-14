@@ -149,10 +149,22 @@ async def lifespan(app: FastAPI):
     # 2. 领域层：推理引擎（单次生成）+ 编排循环（计划推进/失败路由/终止保护）。
     #    经 AgentEngine.create 在专用推理线程内加载模型并装配——推理宇宙(权重/惰性
     #    常量/KV/生成)同属一个线程,事件循环全程自由(prefill 不再饿死 API)。
+    #    推理承载（B1）：mode=inprocess（现状默认）在本进程加载所选后端；
+    #    mode=remote 改装 RemoteBackend（backends/remote/）连 inference-server——
+    #    执行层/会话数据留在本机，本进程不加载权重（只在本地读分词器）。
+    _inference_cfg = config.get("inference") or {}
+    _mode = str(_inference_cfg.get("mode", "inprocess"))
+    _backend_name = "remote" if _mode == "remote" else str(_inference_cfg.get("backend") or "")
+    if _mode == "remote":
+        _r = _inference_cfg.get("remote") or {}
+        print(f"🔌 [System] 推理模式 remote：连接 inference-server "
+              f"{_r.get('host', '127.0.0.1')}:{_r.get('port', 14161)}（本进程不加载权重）")
     engine = await AgentEngine.create(
-        model_path, kv_config=config.get("inference") or {},
+        model_path, kv_config=_inference_cfg,
         suppress_ghost_thinking=bool(MODEL_OPTIONS.get("suppress_ghost_thinking", False)),
         env=(config.get("agent") or {}).get("environment") or {},
+        backend=_backend_name,
+        max_concurrency=int((config.get("agent") or {}).get("max_inference_concurrency", 1)),
     )
     model, processor = engine.model, engine.processor
     orchestrator = Orchestrator(engine, mcp_registry, config.get("agent") or {})

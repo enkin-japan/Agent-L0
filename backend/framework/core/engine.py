@@ -24,24 +24,35 @@ class AgentEngine:
     @classmethod
     async def create(cls, model_path, *, kv_config=None,
                      suppress_ghost_thinking: bool = False, env=None,
-                     backend: str = "") -> "AgentEngine":
+                     backend: str = "", max_concurrency: int = 1) -> "AgentEngine":
         """标准构造路径：**在推理线程内加载模型**，再装配引擎。
 
         进程内后端的惰性张量/计算流通常与创建线程绑定：主线程加载、推理线程
         前向会跨线程崩溃（细节见所选后端模块头注释）。把 load 本身放进专用
         推理线程，推理宇宙（权重/常量/KV/生成）从出生起就同属一个线程。
+
+        max_concurrency（B1，config agent.max_inference_concurrency）：并发生成上限。
+        进程内后端受"单线程 + 共享单例"物理约束强制钳制为 1（默认值，行为与现状全同）；
+        仅远程后端（服务端自管并发）允许 >1——此时执行器线程数随之放宽。
         """
-        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="inference")
+        max_concurrency = max(1, int(max_concurrency))
+        if max_concurrency > 1 and backend != "remote":
+            print(f"[Engine] max_inference_concurrency={max_concurrency} 仅对 remote 后端生效，"
+                  f"进程内后端强制钳制为 1（共享单例不可并发）")
+            max_concurrency = 1
+        executor = ThreadPoolExecutor(max_workers=max_concurrency,
+                                      thread_name_prefix="inference")
         from ..backends import get_backend_class  # 后端命名收编在注册面（缺省即默认后端）
         backend_obj = await get_backend_class(backend).load(
             model_path, executor=executor, **(kv_config or {}))
         return cls(backend_obj, kv_config=kv_config,
                    suppress_ghost_thinking=suppress_ghost_thinking, env=env,
-                   _executor=executor)
+                   _executor=executor, max_concurrency=max_concurrency)
 
     def __init__(self, backend: InferenceBackend, kv_config=None,
                  suppress_ghost_thinking: bool = False,
-                 env=None, _executor: "ThreadPoolExecutor | None" = None):
+                 env=None, _executor: "ThreadPoolExecutor | None" = None,
+                 max_concurrency: int = 1):
         self.backend = backend
 
         # suppress_ghost_thinking：Gemma-4 大杯（26b/31b）关思考时须预填空思考频道，
@@ -59,11 +70,13 @@ class AgentEngine:
         if self.constrained_tool_calls and self._constraint_disabled:
             print("[Engine] constrained_tool_calls=true 但 llguidance 不可用，约束采样禁用")
 
-        # 推理互斥锁：底层生成流依赖共享可变单例（detokenizer、stopping/thinking
+        # 推理互斥：底层生成流依赖共享可变单例（detokenizer、stopping/thinking
         # criteria、生成尾部的缓存清理等），并发请求逐 token 交错执行会互相污染文本流。
-        # 因此生成段必须串行；等待方挂起在锁上不阻塞事件循环，
+        # 因此进程内后端生成段必须串行；等待方挂起在信号量上不阻塞事件循环，
         # 其他请求的文件解析、历史查询、分支等非推理任务仍可并发。
-        self._inference_lock = asyncio.Lock()
+        # B1 起为并发上限信号量：默认 1（与互斥锁行为全同）；远程后端可配 >1
+        # （create 钳制进程内后端恒为 1），调度器 ClassPolicy/抢占/老化不动。
+        self._inference_lock = asyncio.Semaphore(max(1, int(max_concurrency)))
 
         # 专用推理线程（单线程执行器）：进程内生成是同步计算，放在事件循环线程会把
         # 整个 API 饿死（prefill 一整块数秒内连 /health 都无响应——Phase 1 实机定性）。
@@ -169,6 +182,10 @@ class AgentEngine:
         }
         if guard is not None:
             features["tool_guard"] = guard
+            # 工具声明随行（B1）：纯逻辑 guard 无法跨网逐 token 驱动，远程后端改发
+            # 声明、由服务端约束引擎重建 guard 并把 constrained_steps 回填本地仪表；
+            # 进程内后端忽略此键（直接驱动 tool_guard），语义单一来源
+            features["tool_specs"] = tools
 
         # 整段生成搬进专用推理线程（事件循环全程自由:API/心跳/事件流不再被计算饿死）。
         # 推理锁按单次生成粒度持有（工具调用等 I/O 期间由上层让出,供其他会话推理）;
