@@ -8,6 +8,7 @@
 rag 服务是独立进程/独立 venv，不 import 本模块，但其 CONFIG_PATH 同样指向仓库根
 （见 rag/rag_server.py），两侧读的是同一个文件。
 """
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict
@@ -32,3 +33,14 @@ def load_section(name: str) -> Dict[str, Any]:
         return load_config().get(name) or {}
     except Exception:
         return {}
+
+
+def rag_auth_headers() -> Dict[str, str]:
+    """RAG 客户端鉴权头（HETERO_COMPUTE B2a）。
+
+    读 env RAG_API_KEY（.env.local，devctl 启动时 source，与 rag 服务端同一变量）；
+    空 = 不加头（dev/回环，与服务端"空 key 放行"对称）。三个 rag 客户端
+    （rag_search / rag_admin / rag_sink）统一经此注入 Authorization，跨机部署即自动携带。
+    """
+    key = os.environ.get("RAG_API_KEY", "")
+    return {"Authorization": f"Bearer {key}"} if key else {}

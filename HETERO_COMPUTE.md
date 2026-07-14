@@ -49,7 +49,7 @@
 | A2 | CUDA 特性对齐（前缀缓存/投机/FP8 KV/约束） | 未开始 | — | — |
 | A3 | 周边件 CUDA 化（ASR / RAG 设备层） | 未开始 | — | — |
 | B1 | inference-server 服务化 + RemoteBackend | **完成** | 2026-07-14 | 金测试 122 全绿；泄漏 grep 空；vitest 5 过。同机双进程（:14161 包 MLX + backend mode=remote）实机冒烟全过：对话/跨轮 KV 热复用（次轮 7.6s）、分支克隆 kv_cache_reused=true（远程 clone 端点）、生成中取消（修复一处 SSE 收尾泄锁后 active_generations 归零）、审批挂起→批准续跑（shell 落盘验证）、math_research 与 web_research 沙箱子生成全走远程、约束采样跨网生效（constrained_steps 回填仪表）、图片经 /v1/media 内容寻址上传（识别正确）、音频转写、鉴权 401/401/200。实测 SSE 传输零吞吐损耗（端到端 29.1 tps=服务端 29.1 tps，首 chunk 0.35s）。拔线：SIGKILL 中断→轮次 fail 干净落账、重启服务端后同会话自愈（句柄换发+冷启动重建）；SIGTERM=uvicorn 优雅排水（在飞生成完成后才退）。mode=inprocess 回归零变化。ARCHITECTURE.md 拓扑图更新推迟到 B3（devctl profiles 一并画）。 |
-| B2 | RAG 远程化 + 鉴权 + 8B 升级（重建+阈值重标） | 未开始 | — | — |
+| B2 | RAG 家族参数化（含多模态加载）+ 鉴权 + 远程化 + 8B 升级 | **进行中：B2a 完成** | 2026-07-14（B2a） | B2a（本机可完成的可移植切片，用户追加"兼容 Qwen3 家族 5 档"方向）落地并验证：①RAG 档位注册表（config.rag.tiers 5 档/10 仓库：文本 0.6B/4B/8B + 视觉多模态 VL-2B/8B）+ 选择制换档（`./devctl.sh rag-model`→`.rag-tier-selection` 指针，镜像主模型选择）；②文本/VL 两条加载装配路径（文本族 0.6B 行为零变化；VL 族按 Qwen 约定 loads+文本 I/O，图像真入库=L2 另一期）；③换档护栏（建库盖维度戳 + 启动/入库比对不符即快速失败提示先 reembed）；④`rag/scripts/reembed.py` 全量重建脚本；⑤RAG Bearer 鉴权（补原**零鉴权**缺口，RAG_API_KEY 常量时间比对，空=dev 放行）+ backend 三客户端经 `config_loader.rag_auth_headers` 统一注入；⑥user_id 埋点（X-Rag-User，D3，只定约定与参数面）。验收：金测试 122 全绿、vitest 5 过；单拉 RAG 新码实测——health 报 tier=text-0.6b/dim=1024、鉴权 401/401/200、0.6B 检索全链路（embed→route→retrieve→rerank，1 命中经 rerank 阈值过滤）、护栏盖戳 + 篡改戳→11s 拒启（RuntimeError 附 reembed 指引）、devctl rag-model 列全 5 档、inprocess 全系统回归绿。**待设备 A/GPU**：8B 实跑、全量重建实跑、三阈值数值标定、L2 图像入 RAG、跨机远程化联调（并入 B3）。VL 加载路径代码到位但未下 2B VL 权重实测（多 GB 下载未擅动，留作下一步可下载校验）。 |
 | B3 | devctl profiles + §7 接口预留 + 生产联调 | 未开始 | — | — |
 
 依赖关系：P0 → {A1→A2, B1}；A3、B2 依赖 P0（A3 的 RAG 部分与 B2 协同）；
@@ -150,6 +150,36 @@ cd frontend && npm run test; cd ..
   原生 29.1 tps（零吞吐损耗），首 chunk 延迟 0.35s；逐 token SSE + 有界队列
   （maxsize 256 背压）在本机/内网量级不构成瓶颈。远程模式 backend 启动只需数秒
   （不加载权重）。
+- 2026-07-14 / B2a / **RAG 代码本就 Qwen3 家族无关**：`rag_server.py` 用 `AutoModel`/
+  `AutoModelForCausalLM` 泛型加载、`last_token_pool` 池化、yes/no token logits 重排——全 603
+  行无一处写死尺寸/维度。故"兼容 0.6B/4B/8B(+VL)"不是新写兼容代码，而是把"选哪档"做成
+  **选择制**（档位注册表 + `.rag-tier-selection` 指针，镜像主模型选择）+ 换档护栏 + reembed。
+  与 §4 早写的"接口/池化/yes-no 全同，代码路径不变仅换权重"一致。
+- 2026-07-14 / B2a / **换档纪律（用户澄清，收窄了设计）**：档位是**开发者调试旋钮**，非
+  用户/运行时特性；**向量库一旦入库，档位即固定**，换档=开发者主动重建。据此砍掉"运行时
+  无痛换档"才需要的复杂件（按模型命名空间的 collection、MRL 维度对齐），护栏收敛为：建库
+  盖维度戳（`chroma_data/.tier_stamp.json`）+ 启动探测运行维度比对，不符即 lifespan 抛
+  RuntimeError 拒启并提示先 `reembed`（实测篡改戳→11s 拒启，报错含 reembed 指引）。入库处
+  chroma 维度错误另包装成同样提示，兜底"旧库无戳"边缘。
+- 2026-07-14 / B2a / **多模态分层 L1/L2**：Qwen3 家族 5 档 = 文本 0.6B/4B/8B + 视觉 VL-2B/8B
+  （各嵌入+重排，10 仓库）。"兼容多模态"诚实拆两层：**L1** 加载+文本 I/O（VL 用
+  `AutoProcessor.tokenizer` + `trust_remote_code`，池化/重排复用文本路径；16GB M4 单拉 RAG
+  bf16 可实测 2B VL）= B2a 已交付；**L2** 图像真入 RAG（收图/图文索引/检索）动 RAG API 契约 +
+  Agent 喂图 + 存储，属独立能力另立一期。**VL 加载确切契约（是否 trust_remote_code、专用类、
+  池化口径）未下 2B VL 权重实测——多 GB 下载未擅动，代码按 Qwen VL 通行约定装配、失败显式上抛，
+  留作下一步可下载校验。**
+- 2026-07-14 / B2a / **硬件天花板**：开发机 = Apple M4 / 16GB 统一内存。8B×2（嵌入+重排）
+  fp16≈30GB、8bit≈16GB，即便单拉 RAG 也装不下 → 8B 生产档归设备 A（§4.1）。开发机能实测：
+  0.6B/4B 文本 + 2B VL（单拉 RAG bf16，不起 Agent 主体）。dtype 做成档位字段（0.6B 保持
+  fp16 零变化；bf16 供 VL 实测；8bit 量化 MPS 上不干净，归设备 A）。
+- 2026-07-14 / B2a / **RAG 原本零鉴权（安全缺口）**：`rag_server.py` grep 无任何 Bearer/校验，
+  跨机前必补。补法照抄 backend `api/auth`（RAG 独立 venv 不 import backend，就地实现）：全局
+  FastAPI 依赖 `verify_rag_key`（自豁免 `/health`+docs），env `RAG_API_KEY` 常量时间比对，
+  空=dev 放行+告警。backend 三客户端（rag_search/rag_admin/rag_sink）经 `config_loader.
+  rag_auth_headers()` 读同一 env 统一注入，空则不加头（与服务端"空放行"对称）。
+- 2026-07-14 / B2a / macOS 无 `timeout`（GNU coreutils，默认未装）——测试脚本里 `timeout 90 …`
+  直接 exit 127（command not found），会假过（进程根本没跑）。护栏拒启测试改用后台起进程 +
+  轮询"死亡 vs 就绪"判定，才真正验到 lifespan 抛错退出。测脚本踩坑，非产品代码。
 
 ---
 
@@ -395,24 +425,43 @@ GET  /health  /metrics               devctl 探活 + 仪表
       （同一会话跨模式无缝续跑）
 - [x] 更新本文 / 报告可压缩历史（2026-07-14）
 
-### 3.3 B2 —— RAG 远程化 + 鉴权 + 8B 升级
+### 3.3 B2 —— RAG 家族参数化（含多模态加载）+ 鉴权 + 远程化 + 8B 升级
 
-- [ ] RAG 加 Bearer（照抄 backend auth；当前"仅回环无鉴权"**必须先补**再跨机）；
-      backend 的 rag 客户端统一注入 Authorization 头
-- [ ] `config.yaml` 的 `rag.host` 指向服务器（该键本就两侧共用，迁移即改一行）
-- [ ] 8B 权重落位 + 精度/显存档位按 §4.1 选定（记录所选档位进 §S.1）
-- [ ] **全量重建**：写 `rag/scripts/reembed.py`——遍历 `storage/raw_files/{类}/`
-      走既有 `/insert` 流水线重灌（切块参数不变），meta 分类描述向量同步重算。
-      顺序：新库全量重建 → 新旧库并行查询对比 → 切流 → 旧库归档
-- [ ] **阈值重标**（不可跳过）：入类 0.8 / 软路由 0.85 / rerank 0.5 是 0.6B
-      余弦空间的实测值，8B 分布不同。方法：现库真实文档做召回回归集，新模型上
-      扫参重定三阈值，写进 config 注释（标定日期+依据）
+> **范围扩充（2026-07-14，用户拍板）**：原 B2 只到"8B 升级"。用户追加"兼容 Qwen3 家族
+> 全 5 档"方向——文本 0.6B/4B/8B + 视觉多模态 VL-2B/8B（各有嵌入+重排，共 10 仓库）。
+> 关键洞察：RAG 代码本就家族无关（`AutoModel`/`last_token_pool`/yes-no logits 全同），
+> "兼容"≠新写兼容代码，= **选择制换档 + 换档护栏 + reembed**。换档纪律（用户澄清）：
+> 档位是**开发者调试旋钮**非用户/运行时特性；库一旦入库档位即固定；换档 = 主动重建。
+> 多模态分两层：**L1**（加载 + 文本 I/O，16GB M4 单拉 RAG bf16 可实测 2B VL）；
+> **L2**（图像真入 RAG——API 收图/图文索引/检索）属独立能力，另立一期（需账本追加 + 用户同意）。
+> 本机可完成的可移植切片 = **B2a**（下列前半已落地并验证，见 §S.1）；8B 实跑与跨机远程
+> 依赖设备 A（16GB M4 装不下 8B×2，§4.1）。
+
+- [x] （B2a）RAG 加 Bearer（照抄 backend auth；原"仅回环无鉴权"缺口**已补**）；
+      backend 三客户端（rag_search/rag_admin/rag_sink）经 `config_loader.rag_auth_headers`
+      统一注入 Authorization 头。实测无 key 401 / 错 key 401 / 对 key 200；空 key=dev 放行
+- [x] （B2a）**档位注册表 + 选择制换档**：`config.rag.tiers`（5 档/10 仓库，每档
+      {embed_repo, rerank_repo, modality, embed_dim, dtype, thresholds}）+ `active_tier`；
+      `./devctl.sh rag-model` 交互选择写 `.rag-tier-selection` 指针（镜像主模型 `.model-selection`）；
+      下载仍收敛 `rag/models/`。文本/VL 两条加载装配路径（VL 用 AutoProcessor.tokenizer +
+      trust_remote_code，loads+文本 I/O；**VL 加载契约待真机 2B VL 权重实测校准**）
+- [x] （B2a）**换档护栏**：建库给 chroma 盖维度戳（`.tier_stamp.json`：模型身份+维度），
+      启动探测运行维度比对——不符即快速失败并提示先 `reembed`；入库处 chroma 维度错误
+      同样包装成"先重建"提示，兜底旧库无戳边缘情形
+- [x] （B2a）**reembed.py 脚本**：`rag/scripts/reembed.py`（dump-categories/wipe/rebuild/--dry-run）
+      遍历 `storage/raw_files/{类}/` 走既有 `/insert` 流水线重灌。**实跑**（8B 新库）待设备 A
+- [x] （B2a）**user_id 埋点**（D3）：RAG API 加 header `X-Rag-User`（缺省 `"default"`，行为全同），
+      `_scoped_collection` 默认用户返回原名；约定 collection `u_{user_id}__{category}`、
+      原文 `storage/raw_files/{user_id}/{类}/`、meta 按 user 分库——**只定约定与参数面，不实现逻辑**
+- [ ] （设备 A）`config.yaml` 的 `rag.host` 指向服务器（键已两侧共用+鉴权已补，跨机联调并入 B3）
+- [ ] （设备 A）8B 权重落位 + 精度/显存档位按 §4.1 选定（档位表已备位，记录所选进 §S.1）
+- [ ] （设备 A）**全量重建实跑**：新库全量重建 → 新旧库并行查询对比 → 切流 → 旧库归档
+- [ ] （设备 A）**阈值重标**（不可跳过）：入类 0.8 / 软路由 0.85 / rerank 0.5 是 0.6B 余弦空间
+      实测值，各档分布不同（档位 thresholds 面已备位）。现库真实文档做召回回归集扫参重定，
+      写进 config 注释（标定日期+依据）
+- [ ] （L2 另一期）图像真入 RAG：`/insert`·`/query` 收图、图像切块/索引、图文混合检索
 - [ ] ASR 路由（可选）：`asr.provider=remote` → 服务器 `/v1/asr`
-- [ ] **user_id 埋点**（D3）：RAG API 加 header `X-Rag-User`（缺省 `"default"`，
-      行为全同）；命名空间落点约定：collection `u_{user_id}__{category}`、
-      原文 `storage/raw_files/{user_id}/{类}/`、meta 路由库按 user 分库——
-      **只定约定与参数面，不实现多用户逻辑**
-- [ ] 更新本文 / 报告可压缩历史
+- [x] （B2a）更新本文 / 报告可压缩历史（2026-07-14）
 
 ### 3.4 B3 —— 部署形态 + §7 接口预留 + 生产联调
 

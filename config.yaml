@@ -107,12 +107,75 @@ server:
 rag:
   host: "127.0.0.1"  # 仅本机回环：RAG 与 Agent 同机部署，只供本机调用
   port: 14160
+
+  # ── RAG 档位注册表（镜像 inference.model_registry 的选择制，HETERO_COMPUTE B2a）──
+  # 一个"档位" = 一对 {嵌入模型, 重排模型}（同尺寸同家族）。调试期换档走**选择**而非手填：
+  #   ./devctl.sh rag-model   交互选择 → 写仓库根 .rag-tier-selection（gitignored 指针）
+  # rag_server.py 按「指针 → active_tier 默认 → 下方 embed_path/rerank_path 兜底」解析；
+  # 下载仍收敛到 rag/models/（resolve_model_path，不变）。
+  #
+  # 关键不变量（换档纪律）：向量库一旦入库，档位即固定；换档 = 开发者**主动重建**
+  #   （rag/scripts/reembed.py 从 storage/raw_files 全量重灌），运行中/用户侧绝不换。
+  #   换档若嵌入维度与旧库不符，服务启动/入库会**快速失败**并提示先 reembed（护栏）。
+  #
+  # 字段：modality=text 纯文本 / vl 视觉多模态（Qwen3-VL；图像真入库属 L2 另一期，
+  #   当前 vl 档仅"加载 + 文本 I/O"，见 HETERO_COMPUTE §S.3）；embed_dim 该档向量维度
+  #   （护栏比对用，vl 档留 null 由运行时探测）；dtype 加载精度（fp16 现状 / bf16 开发机
+  #   单拉 RAG 实测 VL / 8bit 量化归设备 A）；thresholds 该档余弦空间三阈值（分布随尺寸变，
+  #   0.6B 为实测标定值，其余为占位继承、标注"待设备 A 标定"，真跑该档时用召回回归集重定）。
+  active_tier: "text-0.6b"      # 当前档位 id（被 .rag-tier-selection 指针覆盖）
+  tiers:
+    - id: "text-0.6b"
+      modality: "text"
+      embed_repo: "Qwen/Qwen3-Embedding-0.6B"
+      rerank_repo: "Qwen/Qwen3-Reranker-0.6B"
+      embed_dim: 1024
+      dtype: "fp16"
+      thresholds: { insert_routing_max_distance: 0.8, query_routing_max_distance: 0.85, rerank_min_score: 0.5 }
+      note: "~2.4GB | 实测标定 ✓（默认，开发机现状）"
+    - id: "text-4b"
+      modality: "text"
+      embed_repo: "Qwen/Qwen3-Embedding-4B"
+      rerank_repo: "Qwen/Qwen3-Reranker-4B"
+      embed_dim: 2560
+      dtype: "bf16"
+      thresholds: { insert_routing_max_distance: 0.8, query_routing_max_distance: 0.85, rerank_min_score: 0.5 }
+      note: "~16GB fp16 | 阈值待标定 | 开发机可单模型/8bit 试载，双模型 bf16 偏紧"
+    - id: "text-8b"
+      modality: "text"
+      embed_repo: "Qwen/Qwen3-Embedding-8B"
+      rerank_repo: "Qwen/Qwen3-Reranker-8B"
+      embed_dim: 4096
+      dtype: "bf16"
+      thresholds: { insert_routing_max_distance: 0.8, query_routing_max_distance: 0.85, rerank_min_score: 0.5 }
+      note: "~30GB fp16 | 生产档 | 需设备 A（≥40GB 或双卡分置）"
+    - id: "vl-2b"
+      modality: "vl"
+      embed_repo: "Qwen/Qwen3-VL-Embedding-2B"
+      rerank_repo: "Qwen/Qwen3-VL-Reranker-2B"
+      embed_dim: null            # 运行时探测（真机 2B VL 权重实测后回填）
+      dtype: "bf16"
+      thresholds: { insert_routing_max_distance: 0.8, query_routing_max_distance: 0.85, rerank_min_score: 0.5 }
+      note: "多模态最小档 | 开发机单拉 RAG bf16 可实测加载 | 图像入库=L2 另一期"
+    - id: "vl-8b"
+      modality: "vl"
+      embed_repo: "Qwen/Qwen3-VL-Embedding-8B"
+      rerank_repo: "Qwen/Qwen3-VL-Reranker-8B"
+      embed_dim: null            # 运行时探测
+      dtype: "bf16"
+      thresholds: { insert_routing_max_distance: 0.8, query_routing_max_distance: 0.85, rerank_min_score: 0.5 }
+      note: "多模态生产档 | 需设备 A"
+
+  # 兜底（无 tiers / active_tier 未命中时回退的旧路径；被选中档位覆盖）：
   embed_path: "Qwen/Qwen3-Embedding-0.6B"    # 本地路径或 HF Repo ID（优先 rag/models/）
   rerank_path: "Qwen/Qwen3-Reranker-0.6B"
   max_length: 8192   # tokenizer 截断长度
   batch_size: 32     # 向量化批大小
 
 # RAG 检索与路由调优（仅 rag/ 进程读取；所有距离均为余弦距离，0~2 越小越相似）
+# 注：三个阈值（insert_routing / query_routing / rerank_min_score）若在 rag.tiers 选中档位的
+#     thresholds 里给出，则**以档位值为准**（余弦分布随模型尺寸变，须各档各自标定）；
+#     此处为档位未覆盖时的全局兜底值。其余切块/召回参数与档位无关，恒读本段。
 tuning:
   insert_routing_max_distance: 0.8   # 入库时：文档与分类描述的最大距离，超过流入未分类库
   query_routing_max_distance: 0.85   # 查询时：意图与分类描述的最大距离，超过的库被剔除

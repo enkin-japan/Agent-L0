@@ -1,7 +1,7 @@
 import json
 import requests
 from ..base import BaseTool
-from ...utils.config_loader import load_section
+from ...utils.config_loader import load_section, rag_auth_headers
 
 # 配置统一在仓库根 config.yaml（rag 段），寻址走 config_loader
 _rag_cfg = load_section("rag")
@@ -28,7 +28,7 @@ class RAGSearchTool(BaseTool):
         self._available = True
         categories = ["default"]
         try:
-            response = requests.get(url=RAG_CATEGORY_URL, timeout=3).json()
+            response = requests.get(url=RAG_CATEGORY_URL, timeout=3, headers=rag_auth_headers()).json()
             if isinstance(response, list):
                 categories = [i.get("db_name", "default") for i in response if isinstance(i, dict)]
         except Exception as e:
@@ -88,7 +88,7 @@ class RAGSearchTool(BaseTool):
             response = requests.post(
                 url=RAG_SEARCH_URL,
                 json=payload,
-                headers={'Content-Type': 'application/json'},
+                headers={**rag_auth_headers(), 'Content-Type': 'application/json'},
                 timeout=15
             )
             response.raise_for_status()

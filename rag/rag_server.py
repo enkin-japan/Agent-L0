@@ -1,3 +1,4 @@
+import hmac
 import json
 import logging
 import os
@@ -16,7 +17,7 @@ import torch.nn.functional as F
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Body
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Body, Request, Header, Depends
 from pydantic import BaseModel, Field
 from torch import Tensor
 from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
@@ -43,26 +44,81 @@ UNCLASSIFIED_DIR.mkdir(parents=True, exist_ok=True)
 with CONFIG_PATH.open("r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
-EMBED_MODEL = config["rag"]["embed_path"]
-RERANK_MODEL = config["rag"]["rerank_path"]
-RAG_HOST = config["rag"]["host"]
-RAG_PORT = config["rag"]["port"]
-MAX_LENGTH = config["rag"]["max_length"]
-BATCH_SIZE = config["rag"]["batch_size"]
+RAG_CFG = config["rag"]
+RAG_HOST = RAG_CFG["host"]
+RAG_PORT = RAG_CFG["port"]
+MAX_LENGTH = RAG_CFG["max_length"]
+BATCH_SIZE = RAG_CFG["batch_size"]
 
-# 相似度阈值等调优参数（从 config.yaml 的 tuning 段读取，缺省时使用默认值）
+# ── 档位解析（HETERO_COMPUTE B2a）──────────────────────────────────────────
+# 选择制换档：仓库根 .rag-tier-selection 指针（./devctl.sh rag-model 写）→ active_tier 默认
+#   → 旧 embed_path/rerank_path 兜底。解析次序镜像主模型 .model-selection。
+# 一档 = 一对 {嵌入, 重排} 同尺寸家族模型；modality=text/vl；dtype 决定加载精度。
+_TIER_SELECTION_FILE = CONFIG_PATH.parent / ".rag-tier-selection"
+
+
+def _resolve_active_tier(rag_cfg: dict) -> dict:
+    tiers = rag_cfg.get("tiers") or []
+    sel_id = None
+    try:
+        sel_id = json.loads(_TIER_SELECTION_FILE.read_text(encoding="utf-8")).get("tier")
+    except Exception:
+        sel_id = None
+    active_id = sel_id or rag_cfg.get("active_tier")
+    for t in tiers:
+        if t.get("id") == active_id:
+            return dict(t)
+    # 无 tiers / 未命中：用旧两键合成一个 text 档（向后兼容，行为与档位化之前完全一致）
+    return {
+        "id": active_id or "legacy",
+        "modality": "text",
+        "embed_repo": rag_cfg["embed_path"],
+        "rerank_repo": rag_cfg["rerank_path"],
+        "embed_dim": None,
+        "dtype": "fp16",
+        "thresholds": {},
+    }
+
+
+ACTIVE_TIER = _resolve_active_tier(RAG_CFG)
+EMBED_MODEL = ACTIVE_TIER["embed_repo"]
+RERANK_MODEL = ACTIVE_TIER["rerank_repo"]
+MODALITY = str(ACTIVE_TIER.get("modality", "text")).lower()
+_DTYPE_MAP = {
+    "fp16": torch.float16, "float16": torch.float16,
+    "bf16": torch.bfloat16, "bfloat16": torch.bfloat16,
+    "fp32": torch.float32, "float32": torch.float32,
+}
+TIER_DTYPE = _DTYPE_MAP.get(str(ACTIVE_TIER.get("dtype", "fp16")).lower(), torch.float16)
+TIER_EMBED_DIM_HINT = ACTIVE_TIER.get("embed_dim")   # config 声明值（护栏以运行时探测为准）
+
+# 相似度阈值：档位 thresholds 覆盖 > tuning 全局兜底 > 硬编默认（余弦分布随尺寸变，须各档标定）
 tuning = config.get("tuning") or {}
-INSERT_ROUTING_MAX_DISTANCE = tuning.get("insert_routing_max_distance", 0.8)
-QUERY_ROUTING_MAX_DISTANCE = tuning.get("query_routing_max_distance", 0.85)
+_tier_thr = ACTIVE_TIER.get("thresholds") or {}
+
+
+def _thr(key, default):
+    return _tier_thr.get(key, tuning.get(key, default))
+
+
+INSERT_ROUTING_MAX_DISTANCE = _thr("insert_routing_max_distance", 0.8)
+QUERY_ROUTING_MAX_DISTANCE = _thr("query_routing_max_distance", 0.85)
+RERANK_MIN_SCORE = _thr("rerank_min_score", 0.5)
 QUERY_MAX_DBS = tuning.get("query_max_dbs", 3)
 QUERY_MAX_CHUNKS = tuning.get("query_max_chunks", 4)
 QUERY_FINAL_MAX_RESULTS = tuning.get("query_final_max_results", 3)
-RERANK_MIN_SCORE = tuning.get("rerank_min_score", 0.5)
 CHUNK_MAX_TOKENS = tuning.get("chunk_max_tokens", 256)
 CHUNK_OVERLAP_TOKENS = tuning.get("chunk_overlap_tokens", 128)
 
+# ── 鉴权（HETERO_COMPUTE B2a，照抄 backend api/auth 的常量时间比对）───────────
+# RAG 独立进程/venv，不 import backend，故就地实现。密钥走 env RAG_API_KEY（.env.local，
+# devctl source，两侧同值）；留空 = 未启用（启动告警后放行，仅限开发/回环）。
+RAG_API_KEY = os.environ.get("RAG_API_KEY", "")
+
 DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
 CHROMA_DB_PATH = BASE_WORKSPACE / "chroma_data"
+# 换档护栏：建库时给存储盖戳（嵌入模型身份+维度），换档维度不符即快速失败提示先重建
+TIER_STAMP_FILE = CHROMA_DB_PATH / ".tier_stamp.json"
 
 GLOBAL_OBJECTS = {}
 MPS_LOCK = threading.Lock()
@@ -127,6 +183,122 @@ def resolve_model_path(model_id_or_path: str) -> str:
         "completed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }, ensure_ascii=False) + "\n", encoding="utf-8")
     return str(model_path)
+
+# ==========================================
+# 模型加载（档位化：文本 / 视觉多模态两条装配路径，HETERO_COMPUTE B2a）
+# ==========================================
+def _load_text_models(embed_path: str, rerank_path: str, dtype) -> dict:
+    """纯文本族（Qwen3-Embedding / Qwen3-Reranker）：既有装配路径，0.6B 行为一字不变。"""
+    return {
+        "embed_tokenizer": AutoTokenizer.from_pretrained(embed_path, padding_side='left'),
+        "embed_model": AutoModel.from_pretrained(embed_path, dtype=dtype).to(DEVICE).eval(),
+        "rerank_tokenizer": AutoTokenizer.from_pretrained(rerank_path, padding_side='left'),
+        "rerank_model": AutoModelForCausalLM.from_pretrained(rerank_path, dtype=dtype).to(DEVICE).eval(),
+    }
+
+
+def _load_vl_models(embed_path: str, rerank_path: str, dtype) -> dict:
+    """视觉多模态族（Qwen3-VL-Embedding / Qwen3-VL-Reranker）。
+
+    ⚠️ B2a L1 边界：本路径把 VL 模型**加载**并支持**文本 I/O**（分词器取自 AutoProcessor，
+    池化/重排复用文本路径），足以在开发机单拉 RAG（bf16）实测"能选/能下/能加载/能出向量"。
+    图像**真入库/检索**（processor 喂图、图文混合索引）属 L2 另一期，不在此实现。
+    VL 模型的确切加载契约（是否 trust_remote_code、专用类、池化口径）以真机 2B VL 权重
+    实测校准为准（见 HETERO_COMPUTE §S.3）；下面按 Qwen VL 通行约定装配，失败显式上抛。
+    """
+    from transformers import AutoProcessor
+
+    def _tok_from_processor(path):
+        proc = AutoProcessor.from_pretrained(path, trust_remote_code=True)
+        tok = getattr(proc, "tokenizer", None)
+        if tok is None:
+            tok = AutoTokenizer.from_pretrained(path, trust_remote_code=True, padding_side='left')
+        else:
+            tok.padding_side = 'left'
+        return tok
+
+    return {
+        "embed_tokenizer": _tok_from_processor(embed_path),
+        "embed_model": AutoModel.from_pretrained(
+            embed_path, dtype=dtype, trust_remote_code=True).to(DEVICE).eval(),
+        "rerank_tokenizer": _tok_from_processor(rerank_path),
+        "rerank_model": AutoModelForCausalLM.from_pretrained(
+            rerank_path, dtype=dtype, trust_remote_code=True).to(DEVICE).eval(),
+    }
+
+
+def _probe_embed_dim() -> int:
+    """探测当前嵌入模型的实际输出维度——护栏以此为准，绕开 config 声明值（尤其 VL 档）的不确定性。"""
+    return len(get_embeddings(["dimension probe"])[0])
+
+
+def _guard_or_stamp_store(runtime_dim: int) -> None:
+    """换档护栏：比对存储戳与当前档位。
+
+    - 有戳且维度/模型不符 → 快速失败（RuntimeError），提示先跑 reembed.py 重建。
+    - 无戳（新库 / 档位化之前的旧库）→ 采纳当前档位盖戳。旧库若曾用别的档位建（无戳无从
+      得知），首个 add/query 会在 chroma 层撞维度错误，由入库/检索处包成同样的"先重建"提示兜底。
+    """
+    try:
+        stamp = json.loads(TIER_STAMP_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        stamp = None
+
+    if stamp:
+        if int(stamp.get("embed_dim", -1)) != int(runtime_dim) or stamp.get("embed_repo") != EMBED_MODEL:
+            raise RuntimeError(
+                f"❌ RAG 换档护栏：向量库是用档位 '{stamp.get('tier_id')}'"
+                f"（{stamp.get('embed_repo')}, dim={stamp.get('embed_dim')}）建立的，"
+                f"而当前选择的是 '{ACTIVE_TIER.get('id')}'（{EMBED_MODEL}, dim={runtime_dim}）。\n"
+                f"   换档必须重建向量库：先跑  python rag/scripts/reembed.py  从 storage/raw_files "
+                f"全量重灌，或改回原档位。（不变量：库一旦入库，档位即固定。）"
+            )
+        return
+
+    CHROMA_DB_PATH.mkdir(parents=True, exist_ok=True)
+    TIER_STAMP_FILE.write_text(json.dumps({
+        "tier_id": ACTIVE_TIER.get("id"),
+        "modality": MODALITY,
+        "embed_repo": EMBED_MODEL,
+        "rerank_repo": RERANK_MODEL,
+        "embed_dim": int(runtime_dim),
+        "stamped_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    logger.info(f"🏷️ 向量库盖戳：档位 {ACTIVE_TIER.get('id')} / {EMBED_MODEL} / dim={runtime_dim}")
+
+
+# ==========================================
+# 鉴权 + 多用户埋点（HETERO_COMPUTE B2a / D3）
+# ==========================================
+async def verify_rag_key(request: Request, authorization: Optional[str] = Header(None)) -> None:
+    """全局 Bearer 校验（挂在 FastAPI app 依赖上）。/health 与 docs 自豁免；空 key=放行（dev）。"""
+    path = request.url.path
+    if path == "/health" or path in ("/openapi.json", "/redoc") or path.startswith("/docs"):
+        return
+    if not RAG_API_KEY:
+        return  # 未配置密钥 → 放行（启动时已告警）
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="缺少或格式错误的 Authorization 头（应为 'Bearer <key>'）。")
+    provided = authorization[len("Bearer "):]
+    # encode 后比对：compare_digest 对含非 ASCII 的 str 会抛 TypeError，bytes 恒安全
+    if not hmac.compare_digest(provided.encode("utf-8"), RAG_API_KEY.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="RAG API 密钥无效。")
+
+
+# 多用户命名空间**埋点**（D3）：只定约定与参数面，**不实现多用户逻辑**。
+# 约定（B2 全量落地时启用）：collection 命名 u_{user_id}__{category}、原文
+#   storage/raw_files/{user_id}/{类}、meta 路由库按 user 分库。当前后端不发 X-Rag-User 头，
+#   一律取默认 "default"，_scoped_collection 对默认用户返回原名——行为与现状全同。
+def _current_user(x_rag_user: Optional[str] = Header(None)) -> str:
+    return (x_rag_user or "default").strip() or "default"
+
+
+def _scoped_collection(user_id: str, name: str) -> str:
+    """按 D3 约定给 collection 名加 user 命名空间。默认用户 = 原名（当前唯一路径）。"""
+    if not user_id or user_id == "default":
+        return name
+    return f"u_{user_id}__{name}"
+
 
 # ==========================================
 # 核心工具函数
@@ -318,8 +490,17 @@ def auto_classify_and_insert(raw_document: str, doc_title: str, forced_category:
     # 【核心：Metadata 注入原始文件路径】(Chroma metadata 仅支持标量，路径需转 str)
     ids = [str(uuid.uuid4()) for _ in chunks]
     metadatas = [{"source_path": str(backup_path), "title": doc_title} for _ in chunks]
-    
-    target_db.add(embeddings=all_embeddings, documents=chunks, ids=ids, metadatas=metadatas)
+
+    try:
+        target_db.add(embeddings=all_embeddings, documents=chunks, ids=ids, metadatas=metadatas)
+    except Exception as e:
+        # 换档护栏兜底：库是别的维度建的、当前档位维度不符（启动戳未拦住的旧库无戳边缘情形）
+        if "dimension" in str(e).lower():
+            logger.error(
+                f"❌ 入库维度不匹配：库 '{target_category}' 与当前档位 "
+                f"'{ACTIVE_TIER.get('id')}'(dim={GLOBAL_OBJECTS.get('embed_dim')}) 冲突——换档后未重建。"
+                f"请跑  python rag/scripts/reembed.py  全量重建，或改回原档位。原始错误: {e}")
+        raise
     logger.info(f"✅ 入库完成: [{doc_title}] -> {target_category} ({total_chunks} 个片段)")
 
 def reclassify_background_task():
@@ -356,17 +537,18 @@ def reclassify_background_task():
 # ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print(f"正在初始化硬件设备: {DEVICE}...")
+    print(f"正在初始化硬件设备: {DEVICE}...  档位: {ACTIVE_TIER.get('id')} "
+          f"(modality={MODALITY}, dtype={ACTIVE_TIER.get('dtype')})")
+    if not RAG_API_KEY:
+        logger.warning("⚠️ RAG_API_KEY 未设置：鉴权未启用（放行）——仅限开发/回环，跨机部署必须设置。")
     print("正在检查模型目录")
     embed_model_path = resolve_model_path(EMBED_MODEL)
     rerank_model_path = resolve_model_path(RERANK_MODEL)
 
-    GLOBAL_OBJECTS["embed_tokenizer"] = AutoTokenizer.from_pretrained(embed_model_path, padding_side='left')
-    GLOBAL_OBJECTS["embed_model"] = AutoModel.from_pretrained(embed_model_path, dtype=torch.float16).to(DEVICE).eval()
+    # 档位分派装配：文本族 vs 视觉多模态族（两条路径产出同一 GLOBAL_OBJECTS 形状）
+    loader = _load_vl_models if MODALITY == "vl" else _load_text_models
+    GLOBAL_OBJECTS.update(loader(embed_model_path, rerank_model_path, TIER_DTYPE))
 
-    GLOBAL_OBJECTS["rerank_tokenizer"] = AutoTokenizer.from_pretrained(rerank_model_path, padding_side='left')
-    GLOBAL_OBJECTS["rerank_model"] = AutoModelForCausalLM.from_pretrained(rerank_model_path, dtype=torch.float16).to(DEVICE).eval()
-    
     GLOBAL_OBJECTS["token_false_id"] = GLOBAL_OBJECTS["rerank_tokenizer"].convert_tokens_to_ids("no")
     GLOBAL_OBJECTS["token_true_id"] = GLOBAL_OBJECTS["rerank_tokenizer"].convert_tokens_to_ids("yes")
     GLOBAL_OBJECTS["rerank_prefix_tokens"] = GLOBAL_OBJECTS["rerank_tokenizer"].encode(
@@ -375,11 +557,21 @@ async def lifespan(app: FastAPI):
     GLOBAL_OBJECTS["rerank_suffix_tokens"] = GLOBAL_OBJECTS["rerank_tokenizer"].encode(
         "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n", add_special_tokens=False
     )
-    print("🚀 双模型 RAG 系统及存储结构已就绪！")
+
+    # 换档护栏：探测运行维度 → 比对存储戳（不符即快速失败提示先 reembed），无戳则盖戳
+    runtime_dim = _probe_embed_dim()
+    GLOBAL_OBJECTS["embed_dim"] = runtime_dim
+    if TIER_EMBED_DIM_HINT is not None and int(TIER_EMBED_DIM_HINT) != int(runtime_dim):
+        logger.warning(f"⚠️ 档位 {ACTIVE_TIER.get('id')} 声明 embed_dim={TIER_EMBED_DIM_HINT}，"
+                       f"实测={runtime_dim}——以实测为准（建议更新 config 的 embed_dim）。")
+    _guard_or_stamp_store(runtime_dim)
+
+    print(f"🚀 双模型 RAG 系统就绪（档位 {ACTIVE_TIER.get('id')} / dim={runtime_dim}）！")
     yield
     GLOBAL_OBJECTS.clear()
 
-app = FastAPI(lifespan=lifespan, title="RAG 知识库 API")
+# 全局 Bearer 依赖（verify_rag_key 自豁免 /health 与 docs；空 key=放行）
+app = FastAPI(lifespan=lifespan, title="RAG 知识库 API", dependencies=[Depends(verify_rag_key)])
 
 # ==========================================
 # 模型与接口
@@ -406,7 +598,13 @@ class CategoryItem(BaseModel):
 
 @app.get("/health", tags=["基础监控"])
 async def health_check():
-    return {"status": "healthy", "device": DEVICE}
+    return {
+        "status": "healthy",
+        "device": DEVICE,
+        "tier": ACTIVE_TIER.get("id"),
+        "modality": MODALITY,
+        "embed_dim": GLOBAL_OBJECTS.get("embed_dim"),
+    }
 
 @app.post("/tokenize", tags=["基础监控"])
 async def token_counter(text: str = Body(embed=True), model_type: str = Body("embedding", embed=True)):
@@ -434,7 +632,10 @@ async def delete_category(db_name: str):
 
 # ---------------- 数据流向与治理 ----------------
 @app.post("/api/v1/document/insert", tags=["数据入库"])
-async def insert_docs(req: InsertRequest, background_tasks: BackgroundTasks):
+async def insert_docs(req: InsertRequest, background_tasks: BackgroundTasks,
+                      user_id: str = Depends(_current_user)):
+    # user_id 为 D3 多用户埋点（参数面已通，逻辑未实现）：当前恒为 "default"，
+    # _scoped_collection 对其返回原名——入库路径行为与现状全同。见模块头 _scoped_collection。
     forced = (req.category or "").strip() or None
 
     # 硬性前置校验（规则是代码）：显式指定的分类必须真实存在，

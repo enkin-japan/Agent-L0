@@ -14,7 +14,7 @@
 """
 import requests
 
-from ..utils.config_loader import load_section
+from ..utils.config_loader import load_section, rag_auth_headers
 
 # 与 rag_search 一致地从仓库根 config.yaml 寻址 RAG 后端（保持同一后端）
 _rag_cfg = load_section("rag")
@@ -41,7 +41,7 @@ def ensure_memory_category() -> bool:
     try:
         resp = requests.post(f"{_BASE_URL}/api/v1/category",
                              json={"db_name": MEMORY_CATEGORY, "description": MEMORY_CATEGORY_DESC},
-                             timeout=5)
+                             headers=rag_auth_headers(), timeout=5)
         resp.raise_for_status()
         _category_ready = True
         return True
@@ -62,7 +62,7 @@ def sediment(text: str, title: str) -> bool:
     try:
         resp = requests.post(f"{_BASE_URL}/api/v1/document/insert",
                              json={"title": title, "document": text, "category": MEMORY_CATEGORY},
-                             timeout=10)
+                             headers=rag_auth_headers(), timeout=10)
         resp.raise_for_status()
         return True
     except Exception as e:

@@ -25,6 +25,7 @@ backend/models/
 rag/models/
 # 启动模型选择指针（./devctl.sh model 写入，机器本地状态，真相在 config.yaml 注册表）
 .model-selection
+.rag-tier-selection
 
 # ═══════════ 运行时数据（用户会话 / 知识库 / 任务实体）═══════════
 backend/sessions/

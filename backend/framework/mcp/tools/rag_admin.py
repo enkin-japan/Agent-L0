@@ -7,6 +7,7 @@ RAG 知识库管理插件集：在 rag_search 检索之外，把 RAG 服务的
 """
 import requests
 from ..base import BaseTool
+from ...utils.config_loader import rag_auth_headers
 # 复用 rag_search 的配置寻址结果，保证两组工具指向同一个 RAG 后端
 from .rag_search import RAG_HOST, RAG_PORT, RAG_HEALTH_URL
 
@@ -31,6 +32,7 @@ _RAG_ALIVE = _probe_rag_alive()
 
 def _request(method: str, url: str, **kwargs) -> str:
     """统一的 HTTP 请求执行器：返回给 LLM 可读的结果或错误说明"""
+    kwargs["headers"] = {**rag_auth_headers(), **(kwargs.get("headers") or {})}
     try:
         response = requests.request(method, url, timeout=kwargs.pop("timeout", 30), **kwargs)
         response.raise_for_status()
@@ -60,7 +62,7 @@ def _request(method: str, url: str, **kwargs) -> str:
 def _fetch_categories() -> tuple:
     """拉取现有分类目录。返回 (成功与否, {db_name: description} 或错误文本)"""
     try:
-        response = requests.get(RAG_CATEGORY_URL, timeout=10)
+        response = requests.get(RAG_CATEGORY_URL, timeout=10, headers=rag_auth_headers())
         response.raise_for_status()
         return True, {
             str(c.get("db_name")): str(c.get("description", ""))
@@ -93,7 +95,7 @@ class RAGListCategoriesTool(BaseTool):
 
     def execute(self) -> str:
         try:
-            response = requests.get(RAG_CATEGORY_URL, timeout=10)
+            response = requests.get(RAG_CATEGORY_URL, timeout=10, headers=rag_auth_headers())
             response.raise_for_status()
             categories = response.json()
         except Exception as e:

@@ -13,6 +13,7 @@
 # 用法:
 #   ./devctl.sh setup                                # 首次部署: 建 venv + 装依赖 + npm install
 #   ./devctl.sh model                                # 从注册表选择启动模型（写 .model-selection）
+#   ./devctl.sh rag-model                            # 从 rag.tiers 选择 RAG 档位（写 .rag-tier-selection）
 #   ./devctl.sh start|stop|restart [rag|searx|backend|front|all]   # 缺省 all
 #   ./devctl.sh status
 #   ./devctl.sh logs [rag|searx|backend|front]       # tail 对应日志
@@ -472,6 +473,69 @@ print("重启 backend 生效: ./devctl.sh restart backend（新模型将在启�
 PY
 }
 
+# ---- RAG 档位选择：从 config.yaml rag.tiers 交互选择，写仓库根 .rag-tier-selection 指针 ----
+# 换档 = 选择，非手填（HETERO_COMPUTE B2a）。换档纪律：库一旦入库档位即固定，换到不同维度的
+# 新档须重建向量库（rag/scripts/reembed.py）。非 TTY（脚本化）只打印状态不阻塞。
+do_rag_model() {
+    [ -x "$RAG_DIR/.venv/bin/python" ] || { fail "缺少 rag/.venv，请先运行: ./devctl.sh setup"; return 1; }
+    MACAGENT_ROOT="$ROOT" "$RAG_DIR/.venv/bin/python" - <<'PY'
+import json, os, sys
+from pathlib import Path
+import yaml
+
+root = Path(os.environ["MACAGENT_ROOT"])
+cfg = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+rag = cfg.get("rag") or {}
+tiers = rag.get("tiers") or []
+default_id = rag.get("active_tier")
+sel_file = root / ".rag-tier-selection"
+try:
+    current = json.loads(sel_file.read_text(encoding="utf-8")).get("tier")
+except Exception:
+    current = None
+
+if not tiers:
+    print("config.yaml rag.tiers 为空（走旧 embed_path/rerank_path 兜底）。")
+    sys.exit(0)
+
+print("可用 RAG 档位（config.yaml rag.tiers；档 = 一对 嵌入+重排 模型）：")
+for i, t in enumerate(tiers, 1):
+    marks = []
+    if t["id"] == (current or default_id):
+        marks.append("当前")
+    if t["id"] == default_id:
+        marks.append("默认")
+    tag = f"  ← {'/'.join(marks)}" if marks else ""
+    print(f"  {i:2d}. {t['id']:10s} [{t.get('modality','text'):4s}] {t.get('note','')}{tag}")
+
+try:
+    tty = open("/dev/tty", "r")
+except OSError:
+    print("（非交互环境：仅显示状态。交互选择请在终端运行 ./devctl.sh rag-model）")
+    sys.exit(0)
+
+print("输入编号选择（回车=不变，0=清除选择恢复默认）: ", end="", flush=True)
+line = tty.readline().strip()
+if not line:
+    print("保持不变。")
+    sys.exit(0)
+if line == "0":
+    sel_file.unlink(missing_ok=True)
+    print(f"已清除选择，回落默认: {default_id}")
+else:
+    try:
+        entry = tiers[int(line) - 1]
+    except (ValueError, IndexError):
+        print(f"无效编号: {line!r}")
+        sys.exit(1)
+    sel_file.write_text(json.dumps({"tier": entry["id"]}, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"已选择档位: {entry['id']}（{entry.get('embed_repo')} + {entry.get('rerank_repo')}）")
+print("⚠️ 换档纪律：库一旦入库档位即固定。换到不同维度的新档需重建向量库——")
+print("   见 rag/scripts/reembed.py（dump-categories → stop → wipe → start → rebuild）。")
+print("重启 rag 生效: ./devctl.sh restart rag（新模型将在启动时下载并加载）")
+PY
+}
+
 # ---- 命令分发 ----
 CMD="${1:-}"
 TARGET="${2:-all}"
@@ -481,6 +545,7 @@ TARGET="${2:-all}"
 case "$CMD" in
     setup) do_setup ;;
     model) do_model ;;
+    rag-model) do_rag_model ;;
     start)
         case "$TARGET" in
             # SearXNG 为可选层：起不来只告警不阻断（web_research 会优雅不注册），故不并入 && 链
@@ -520,6 +585,7 @@ case "$CMD" in
     *)
         echo "用法: $0 setup                                   # 首次部署（venv/依赖/node_modules）"
         echo "      $0 model                                   # 从注册表选择启动模型（钉死 revision）"
+        echo "      $0 rag-model                                # 从 rag.tiers 选择 RAG 档位（写 .rag-tier-selection）"
         echo "      $0 start|stop|restart [rag|searx|backend|front|all]"
         echo "      $0 status"
         echo "      $0 logs [rag|searx|backend|front]"
