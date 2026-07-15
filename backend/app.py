@@ -357,7 +357,7 @@ async def lifespan(app: FastAPI):
         print("⚠️  [System] API 鉴权未启用：未设置 AGENT_API_KEY / server.api_key，接口对可达网络裸奔。"
               "\n    生产务必设置 AGENT_API_KEY 环境变量。")
 
-    print(f"✅ [System] AI Agent has started and is listening on {AGENT_HOST}:{AGENT_PORT}")
+    print(f"✅ [System] Agent has started and is listening on {AGENT_HOST}:{AGENT_PORT}")
     yield
 
     # 停机：先停后台维护回合、清扫回合、定时任务触发循环与推送分发器
