@@ -9,6 +9,7 @@ import {
   getHistory,
   getTaskStatus,
   getTurnState,
+  HttpError,
   listSessions,
   setSessionMeta,
   setSessionPin,
@@ -317,7 +318,10 @@ export const useChatStore = create<ChatState>((set, get) => {
         break // 服务端正常收流（会话被删除）：结束附着
       } catch (e) {
         if (ctl.signal.aborted) break
-        if (String(e).includes("404")) break // 会话尚不存在：首条消息受理后会再附着
+        // 404 = 会话在服务端不存在（PROTOCOL §2.4）：懒创建下这是新会话的常态,
+        // 首条消息受理后由发送路径再附着;也可能是会话已被清扫/删除,同样无可重连。
+        // 必须读状态码而非匹配 message——本 catch 连 JSON.parse/归约器的异常一起罩着。
+        if (e instanceof HttpError && e.status === 404) break
         // 断开是常态：静默指数退避重连（游标在,断线期间的事件重连即补）
         await new Promise((r) => setTimeout(r, backoff))
         backoff = Math.min(backoff * 2, 10000)
