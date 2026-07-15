@@ -23,6 +23,51 @@ BASE_WORKSPACE = _framework_path.parent
 # hf 下载一开始就建 .cache/huggingface 元数据目录，中断残留必然非空，曾导致半截
 # 模型被判有效、永不重下、启动死循环。
 _MARKER_NAME = ".download_complete"
+# tokenizer-only 下载的**独立**标记（HETERO_COMPUTE B3 / edge profile）。绝不能与上面那个
+# 复用：edge（inference.mode=remote）只拉分词器文件，若也写 .download_complete，日后同一台
+# 机器切回 inprocess 就会命中标记、跳过下载，然后加载器缺权重报错——正是标记机制当初要防的
+# 「半截模型被判有效」。两个标记并存时全量标记优先（全量是 tokenizer 的超集）。
+_TOKENIZER_MARKER_NAME = ".tokenizer_only_complete"
+# 设备 B 需要的最小文件集：PromptBuilder/Parser/约束引擎/仪表全部只消费 tokenizer
+# （见 §S.3 B1 的 _ProcessorShim）。权重/视觉塔/视频预处理器一概不拉。
+_TOKENIZER_PATTERNS = [
+    "tokenizer*",            # tokenizer.json / tokenizer_config.json / tokenizer.model
+    "*special_tokens_map*",
+    "vocab*", "merges*",
+    "config.json",           # 部分加载路径要读 model_type
+    "*chat_template*",
+    "preprocessor_config.json",
+]
+
+
+def resolve_tokenizer_only_path(model_id_or_path: str, revision: Optional[str] = None) -> str:
+    """只拉分词器文件（edge profile：设备 B 不装 MLX、不要权重，见 §S.3 B1）。
+
+    与全量下载共用模型目录，但标记独立——命中全量标记直接放行（超集），
+    只有 tokenizer 标记时不放行全量请求（由 resolve_model_path 自己重下）。
+    """
+    p = Path(model_id_or_path)
+    if p.exists() and p.is_dir():
+        return model_id_or_path
+    model_path = BASE_WORKSPACE / "models" / p.name
+    if (model_path / _MARKER_NAME).exists():
+        return str(model_path)          # 已有全量权重，分词器自然在内
+    if (model_path / _TOKENIZER_MARKER_NAME).exists():
+        return str(model_path)
+    print(f"🌐 Fetching tokenizer-only files (edge profile, no weights): {model_id_or_path}")
+    snapshot_download(
+        repo_id=model_id_or_path,
+        local_dir=model_path,
+        revision=revision,
+        allow_patterns=_TOKENIZER_PATTERNS,
+    )
+    (model_path / _TOKENIZER_MARKER_NAME).write_text(json.dumps({
+        "repo_id": model_id_or_path,
+        "revision": revision,
+        "kind": "tokenizer_only",
+        "completed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }, ensure_ascii=False) + "\n", encoding="utf-8")
+    return str(model_path)
 
 
 def resolve_model_path(model_id_or_path: str, revision: Optional[str] = None) -> str:

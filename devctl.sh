@@ -60,8 +60,8 @@ done
 # ---- 服务定义（端口与 config.yaml / vite.config.ts 保持一致）----
 RAG_DIR="$ROOT/rag"
 RAG_PORT=14160
-RAG_READY_URL="http://127.0.0.1:${RAG_PORT}/health"
 RAG_TIMEOUT="${RAG_TIMEOUT:-600}"        # 嵌入/重排模型加载可能较慢
+# RAG_READY_URL 在下方按 config 的绑定地址组装（profile 下可能非回环）
 
 # SearXNG：本机联网搜索层（原生 Python，无 Docker）。端口须与 config.yaml 的 web_search.searxng_url 一致。
 SEARX_DIR="$ROOT/searxng"                # settings.yml + 源码 + venv 所在目录
@@ -76,18 +76,68 @@ SEARX_LEGACY_CONTAINER="searxng"         # 旧 docker 部署的容器名（迁�
 
 BACKEND_DIR="$ROOT/backend"
 BACKEND_PORT=14159
-BACKEND_READY_URL="http://127.0.0.1:${BACKEND_PORT}/health"   # 免鉴权健康探活（启用 API key 后 /api/* 会 401）
 BACKEND_TIMEOUT="${BACKEND_TIMEOUT:-600}"    # 首次可能触发模型下载
+# BACKEND_READY_URL 同样在下方组装（/health 免鉴权；启用 API key 后 /api/* 会 401）
 
 FRONT_DIR="$ROOT/frontend"
 FRONT_PORT=5173
 FRONT_READY_URL="http://127.0.0.1:${FRONT_PORT}/"
 FRONT_TIMEOUT="${FRONT_TIMEOUT:-60}"
 
+# inference-server（HETERO_COMPUTE B1/D7，:14161）：gpu profile 的推理承载。
+# 无独立 venv——跑在 backend 的 venv 里（B1 实证形态：cd backend && .venv/bin/python ../inference/server.py）。
+INFER_DIR="$ROOT/inference"
+INFER_PORT=14161
+INFER_TIMEOUT="${INFER_TIMEOUT:-600}"    # 首次可能触发模型下载 + 权重加载
+
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 info()  { echo -e "${GREEN}[devctl]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[devctl]${NC} $*"; }
 fail()  { echo -e "${RED}[devctl]${NC} $*" >&2; }
+
+# ---- 探活地址：取 config.yaml 里的**绑定地址**，不能写死 127.0.0.1 ----
+# profile 部署下服务可能绑 Tailscale 接口（§7 预留 2），此时回环探活打不通、devctl 会误判
+# 未就绪。绑 0.0.0.0/:: （全网卡）时回环可达，探活仍走 127.0.0.1。
+# 三个 host 一次读出（每次 python 启动约 0.1s，不值得多跑几趟）。
+probe_host() {  # $1: 配置里的绑定地址 → 可探活的地址
+    case "$1" in
+        ""|"0.0.0.0"|"::"|"*") echo "127.0.0.1" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+_read_cfg_hosts() {
+    local py=""
+    for c in "$BACKEND_DIR/.venv/bin/python" "$RAG_DIR/.venv/bin/python"; do
+        [ -x "$c" ] && { py="$c"; break; }
+    done
+    [ -n "$py" ] || return 1
+    "$py" - "$ROOT/config.yaml" <<'PY' 2>/dev/null
+import sys, yaml
+c = yaml.safe_load(open(sys.argv[1], encoding="utf-8")) or {}
+inf = c.get("inference") or {}
+rem = inf.get("remote") or {}
+rag = c.get("rag") or {}
+print(inf.get("host", "127.0.0.1"))
+print(rem.get("host", "127.0.0.1"))
+print(rag.get("host", "127.0.0.1"))
+print(inf.get("mode", "inprocess"))
+PY
+}
+
+# 解析一次，供探活 URL 使用（venv 缺席时静默回落回环——setup 之前的形态）
+_CFG_LINES="$(_read_cfg_hosts)" || _CFG_LINES=""
+if [ -n "$_CFG_LINES" ]; then
+    BACKEND_HOST="$(printf '%s\n' "$_CFG_LINES" | sed -n 1p)"
+    INFER_HOST="$(printf '%s\n' "$_CFG_LINES" | sed -n 2p)"
+    RAG_HOST="$(printf '%s\n' "$_CFG_LINES" | sed -n 3p)"
+    INFER_MODE="$(printf '%s\n' "$_CFG_LINES" | sed -n 4p)"
+else
+    BACKEND_HOST="127.0.0.1"; INFER_HOST="127.0.0.1"; RAG_HOST="127.0.0.1"; INFER_MODE="inprocess"
+fi
+RAG_READY_URL="http://$(probe_host "$RAG_HOST"):${RAG_PORT}/health"
+BACKEND_READY_URL="http://$(probe_host "$BACKEND_HOST"):${BACKEND_PORT}/health"
+INFER_READY_URL="http://$(probe_host "$INFER_HOST"):${INFER_PORT}/health"
 
 # ---- 通用工具 ----
 listen_pids() {  # $1: port
@@ -301,16 +351,33 @@ start_searx() {
 start_backend() {
     if is_ready "$BACKEND_READY_URL"; then info "backend 已在运行，跳过"; return 0; fi
     [ -x "$BACKEND_DIR/.venv/bin/python" ] || { fail "缺少 backend/.venv，请先运行: ./devctl.sh setup"; return 1; }
-    # 硬性依赖顺序：RAG 完全就绪后 backend 才能启动（工具探活只发生在 backend 启动时）
+    # 硬性依赖顺序：RAG 完全就绪后 backend 才能启动（工具探活只发生在 backend 启动时）。
+    # edge profile 下 RAG_READY_URL 已指向设备 A（rag.host），这一条同样是跨机可达性校验。
     if ! is_ready "$RAG_READY_URL"; then
-        fail "RAG 未就绪，拒绝启动 backend（否则 RAG 工具集不会注册）"
+        fail "RAG 未就绪（探活 ${RAG_READY_URL}），拒绝启动 backend（否则 RAG 工具集不会注册）"
+        [ "$(probe_host "$RAG_HOST")" = "127.0.0.1" ] || \
+            warn "  RAG 配置在远端——请确认设备 A 上 './devctl.sh start --profile gpu' 已跑起来、Tailscale 可达。"
         return 1
     fi
     # 模型预取（前台）：初次部署要下数 GB，HF 进度条直接显示在终端，杜绝「启动中假死」观感；
-    # 模型已就绪时命中 .download_complete 标记瞬时通过。backend 内部的下载路径保留为自愈兜底。
-    info "检查模型（未下载时将前台下载并显示进度）…"
-    ( cd "$BACKEND_DIR" && .venv/bin/python scripts/fetch_model.py ) \
-        || { fail "模型未就绪，中止 backend 启动"; return 1; }
+    # 已就绪时命中标记瞬时通过。backend 内部的下载路径保留为自愈兜底。
+    # mode=remote：推理在设备 A，本机只需分词器（§S.3 B1）——按 config 的 mode 判，而非 profile 旗标，
+    # 因为"要不要权重"取决于承载模式本身（同机 remote 双进程也一样不必在 backend 侧再拉一份）。
+    if [ "$INFER_MODE" = "remote" ]; then
+        info "检查分词器（inference.mode=remote：推理在远端，本机不拉权重）…"
+        ( cd "$BACKEND_DIR" && .venv/bin/python scripts/fetch_model.py --tokenizer-only ) \
+            || { fail "分词器未就绪，中止 backend 启动"; return 1; }
+        if ! is_ready "$INFER_READY_URL"; then
+            fail "inference-server 未就绪（探活 ${INFER_READY_URL}），拒绝启动 backend"
+            warn "  mode=remote 下没有推理承载，任何生成都会整轮失败。"
+            warn "  请确认设备 A 上 './devctl.sh start --profile gpu' 已跑起来、Tailscale 可达。"
+            return 1
+        fi
+    else
+        info "检查模型（未下载时将前台下载并显示进度）…"
+        ( cd "$BACKEND_DIR" && .venv/bin/python scripts/fetch_model.py ) \
+            || { fail "模型未就绪，中止 backend 启动"; return 1; }
+    fi
     info "启动 backend (port $BACKEND_PORT) → $LOG_DIR/backend.log"
     spawn_daemon "$BACKEND_DIR" "$LOG_DIR/backend.log" "$LOG_DIR/backend.pid" .venv/bin/python app.py || return 1
     wait_ready "backend" "$BACKEND_READY_URL" "$BACKEND_TIMEOUT" "$(cat "$LOG_DIR/backend.pid")" "$LOG_DIR/backend.log"
@@ -358,6 +425,24 @@ stop_front()   { stop_one "前端"    "$FRONT_PORT"   "$LOG_DIR/front.pid"   5; 
 stop_backend() { stop_one "backend" "$BACKEND_PORT" "$LOG_DIR/backend.pid" 20; }
 stop_rag()     { stop_one "RAG"     "$RAG_PORT"     "$LOG_DIR/rag.pid"     15; }
 
+# inference-server（gpu profile 的推理承载）。跑在 backend 的 venv 里（无独立 venv，B1 实证形态）；
+# 工作目录取 BACKEND_DIR，故 framework.* 可直接 import。SIGTERM = uvicorn 优雅排水
+# （在飞生成做完才退，见 §S.3 B1），故停机宽限给足。
+start_infer() {
+    if is_ready "$INFER_READY_URL"; then info "inference-server 已在运行，跳过"; return 0; fi
+    [ -x "$BACKEND_DIR/.venv/bin/python" ] || { fail "缺少 backend/.venv，请先运行: ./devctl.sh setup"; return 1; }
+    # 权重预取走与 backend 相同的前台下载器（进度条直显），gpu 侧要的是全量权重
+    info "检查模型（未下载时将前台下载并显示进度）…"
+    ( cd "$BACKEND_DIR" && .venv/bin/python scripts/fetch_model.py ) \
+        || { fail "模型未就绪，中止 inference-server 启动"; return 1; }
+    info "启动 inference-server (port $INFER_PORT) → $LOG_DIR/infer.log"
+    spawn_daemon "$BACKEND_DIR" "$LOG_DIR/infer.log" "$LOG_DIR/infer.pid" \
+        .venv/bin/python ../inference/server.py || return 1
+    wait_ready "inference-server" "$INFER_READY_URL" "$INFER_TIMEOUT" \
+        "$(cat "$LOG_DIR/infer.pid")" "$LOG_DIR/infer.log"
+}
+stop_infer()   { stop_one "inference-server" "$INFER_PORT" "$LOG_DIR/infer.pid" 30; }
+
 stop_searx() {
     # 先清旧 docker 容器再走端口 pid——否则 lsof 命中的是 docker 的端口代理进程，误杀会连累 Docker Desktop
     remove_legacy_searx_container
@@ -373,6 +458,10 @@ status_one() {  # $1: 名称  $2: 端口  $3: 就绪 url
         else
             echo -e "  ${YELLOW}●${NC} $1\tport $2\tpid $pids\t启动中/未就绪"
         fi
+    elif is_ready "$3"; then
+        # 本机该端口没进程、但探活通 = 服务在远端（profile 部署：设备 A 的 RAG/推理）。
+        # 不能报"未运行"——那会让人在设备 B 上白折腾一个其实健康的远端服务。
+        echo -e "  ${GREEN}●${NC} $1\t远端\t\t就绪 ($3)"
     else
         echo -e "  ${RED}●${NC} $1\tport $2\t未运行"
     fi
@@ -392,9 +481,14 @@ status_searx() {  # 与 status_one 同构，仅"未运行"标注（可选）
 }
 
 do_status() {
-    echo "[devctl] 服务状态："
+    echo "[devctl] 服务状态（inference.mode=${INFER_MODE}）："
     status_one "RAG     " "$RAG_PORT" "$RAG_READY_URL"
     status_searx
+    # 仅 remote 模式才该有独立推理服务：inprocess 下权重在 backend 进程内，
+    # 这一行标红只会让人去查一个按设计就不存在的东西。
+    if [ "$INFER_MODE" = "remote" ]; then
+        status_one "推理服务" "$INFER_PORT" "$INFER_READY_URL"
+    fi
     status_one "backend " "$BACKEND_PORT" "$BACKEND_READY_URL"
     status_one "前端    " "$FRONT_PORT" "$FRONT_READY_URL"
     echo "[devctl] 日志目录: $LOG_DIR"
@@ -404,14 +498,15 @@ do_logs() {
     case "${1:-all}" in
         rag)     tail -n 50 "$LOG_DIR/rag.log" ;;
         searx)   tail -n 50 "$LOG_DIR/searx.log" 2>/dev/null || echo "(无日志)" ;;
+        infer)   tail -n 50 "$LOG_DIR/infer.log" 2>/dev/null || echo "(无日志)" ;;
         backend) tail -n 50 "$LOG_DIR/backend.log" ;;
         front)   tail -n 50 "$LOG_DIR/front.log" ;;
         all)     echo "===== rag ====="; tail -n 20 "$LOG_DIR/rag.log" 2>/dev/null || echo "(无日志)"
                  echo "===== searx ====="; tail -n 20 "$LOG_DIR/searx.log" 2>/dev/null || echo "(无日志)"
-                 for f in backend front; do
+                 for f in infer backend front; do
                      echo "===== $f ====="; tail -n 20 "$LOG_DIR/$f.log" 2>/dev/null || echo "(无日志)"
                  done ;;
-        *)       fail "未知服务: ${1}（可选 rag|searx|backend|front）"; exit 1 ;;
+        *)       fail "未知服务: ${1}（可选 rag|searx|infer|backend|front）"; exit 1 ;;
     esac
 }
 
@@ -538,37 +633,87 @@ PY
 
 # ---- 命令分发 ----
 CMD="${1:-}"
-TARGET="${2:-all}"
+shift 2>/dev/null || true
+
+# --profile edge|gpu（HETERO_COMPUTE B3）：把 all-in-one 拆成两台设备的角色。
+#   （无 profile）= 现状 all-in-one，永不破坏——不传旗标时下面的分发与改动前逐字等价。
+#   edge = 设备 B（用户 Mac）：backend + 前端；推理/RAG 在设备 A（config 的 host 指过去）。
+#   gpu  = 设备 A（算力机）：inference-server + RAG (+ SearXNG)；不起前端、不起编排。
+PROFILE=""
+_args=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --profile) PROFILE="${2:-}"; shift 2 || true ;;
+        --profile=*) PROFILE="${1#--profile=}"; shift ;;
+        *) _args="$_args $1"; shift ;;
+    esac
+done
+# shellcheck disable=SC2086
+set -- $_args
+TARGET="${1:-all}"
 # 兼容旧服务名（拆分仓时代）：agent → backend
 [ "$TARGET" = "agent" ] && TARGET="backend"
+
+case "$PROFILE" in
+    ""|edge|gpu) ;;
+    *) fail "未知 profile: ${PROFILE}（可选 edge|gpu；不传 = all-in-one 现状）"; exit 1 ;;
+esac
 
 case "$CMD" in
     setup) do_setup ;;
     model) do_model ;;
     rag-model) do_rag_model ;;
     start)
+        case "$PROFILE" in
+            edge)
+                # 设备 B：只起编排 + 前端。RAG/推理的可达性由 start_backend 内部校验
+                # （RAG_READY_URL / INFER_READY_URL 已按 config 指向设备 A）。
+                info "profile=edge（设备 B：backend + 前端；推理/RAG 在远端）"
+                [ "$INFER_MODE" = "remote" ] || warn "inference.mode=${INFER_MODE}——edge 通常配 remote，否则推理仍在本机跑。"
+                start_backend && start_front
+                exit $?
+                ;;
+            gpu)
+                # 设备 A：只起重型计算。不起 backend/前端（编排与会话数据留在设备 B，D2 隐私边界）。
+                info "profile=gpu（设备 A：inference-server + RAG (+SearXNG)）"
+                start_rag && { start_searx || warn "SearXNG 未就绪，设备 B 的 web_research 将不注册，继续"; true; } && start_infer
+                exit $?
+                ;;
+        esac
         case "$TARGET" in
             # SearXNG 为可选层：起不来只告警不阻断（web_research 会优雅不注册），故不并入 && 链
             all)     start_rag && { start_searx || warn "SearXNG 未就绪，web_research 将不注册，继续启动其余服务"; true; } && start_backend && start_front ;;
             rag)     start_rag ;;
             searx)   start_searx ;;
+            infer)   start_infer ;;
             backend) start_backend ;;   # 内部会校验 RAG 已就绪
             front)   start_front ;;
-            *) fail "未知服务: ${TARGET}（可选 rag|searx|backend|front|all）"; exit 1 ;;
+            *) fail "未知服务: ${TARGET}（可选 rag|searx|infer|backend|front|all）"; exit 1 ;;
         esac
         ;;
     stop)
+        case "$PROFILE" in
+            edge) stop_front; stop_backend; exit 0 ;;
+            gpu)  stop_infer; stop_searx; stop_rag; exit 0 ;;
+        esac
         case "$TARGET" in
-            all)     stop_front; stop_backend; stop_searx; stop_rag ;;
+            # all 停机含 infer：同机 remote 双进程（B1 验收形态）下它也是本机进程；没在跑则是 no-op
+            all)     stop_front; stop_backend; stop_infer; stop_searx; stop_rag ;;
             rag)     stop_rag ;;
             searx)   stop_searx ;;
+            infer)   stop_infer ;;
             backend) stop_backend ;;
             front)   stop_front ;;
-            *) fail "未知服务: ${TARGET}（可选 rag|searx|backend|front|all）"; exit 1 ;;
+            *) fail "未知服务: ${TARGET}（可选 rag|searx|infer|backend|front|all）"; exit 1 ;;
         esac
         ;;
     restart)
-        "$0" stop "$TARGET" && "$0" start "$TARGET"
+        # profile 必须透传，否则 restart --profile edge 会退化成 all-in-one 重启
+        if [ -n "$PROFILE" ]; then
+            "$0" stop --profile "$PROFILE" && "$0" start --profile "$PROFILE"
+        else
+            "$0" stop "$TARGET" && "$0" start "$TARGET"
+        fi
         exit $?
         ;;
     bundle-print)
@@ -586,9 +731,11 @@ case "$CMD" in
         echo "用法: $0 setup                                   # 首次部署（venv/依赖/node_modules）"
         echo "      $0 model                                   # 从注册表选择启动模型（钉死 revision）"
         echo "      $0 rag-model                                # 从 rag.tiers 选择 RAG 档位（写 .rag-tier-selection）"
-        echo "      $0 start|stop|restart [rag|searx|backend|front|all]"
+        echo "      $0 start|stop|restart [rag|searx|infer|backend|front|all]"
+        echo "      $0 start|stop|restart --profile edge   # 设备 B：backend+前端（推理/RAG 在设备 A）"
+        echo "      $0 start|stop|restart --profile gpu    # 设备 A：inference-server + RAG (+SearXNG)"
         echo "      $0 status"
-        echo "      $0 logs [rag|searx|backend|front]"
+        echo "      $0 logs [rag|searx|infer|backend|front]"
         echo "      $0 bundle-print                            # 构建 deck 打印包进 backend（前端不跑也能导 PDF）"
         echo "远程示例: ssh <host> '$ROOT/devctl.sh restart'"
         exit 1

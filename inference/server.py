@@ -406,5 +406,24 @@ async def generate(request: Request):
     return StreamingResponse(_sse(), media_type="text/event-stream")
 
 
+def _enforce_bind_guardrail() -> None:
+    """部署铁则（§8 / §7 预留 2）：非回环绑定 + 空 INFER_API_KEY = 拒启。
+
+    gpu profile 的常规形态就是绑 Tailscale 地址给设备 B 拨——"改了 host 忘了 key"
+    会让推理服务对整个 tailnet 裸奔，只靠启动告警拦不住。回环绑定时空密钥仍放行（dev 不变）。
+    与 backend/app.py、rag/rag_server.py 同一条纪律（三服务各自独立 venv，就地实现不共享代码）。
+    """
+    if str(HOST).strip() in ("127.0.0.1", "localhost", "::1") or API_KEY:
+        return
+    raise SystemExit(
+        f"❌ [inference-server] 拒绝启动：绑定到非回环地址 {HOST!r} 但未设置 INFER_API_KEY——"
+        f"服务会对整个可达网络裸奔。\n"
+        f"   请在 .env.local 设置 INFER_API_KEY=<强随机串>（与设备 B 同值），"
+        f"或把 inference.remote.host 改回 127.0.0.1。\n"
+        f"   （部署铁则 §8：非回环绑定只允许出现在受信内网 + 必须带 Bearer。）"
+    )
+
+
 if __name__ == "__main__":
+    _enforce_bind_guardrail()   # 先于加载权重：省掉几十秒才发现配置错
     uvicorn.run(app, host=HOST, port=PORT)

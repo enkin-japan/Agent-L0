@@ -871,6 +871,25 @@ def advanced_query_rag(req: QueryRequest):
         "results": final_results
     }
 
+def _enforce_bind_guardrail() -> None:
+    """部署铁则（§8 / §7 预留 2）：非回环绑定 + 空 RAG_API_KEY = 拒启。
+
+    gpu profile 里 RAG 跟推理服务同住设备 A、由设备 B 跨机拨号（B2 的 rag.host 指向服务器）——
+    "改了 host 忘了 key"会让整个知识库对 tailnet 裸奔（比推理服务更糟：那是用户的原文）。
+    回环绑定时空密钥仍放行（dev 现状不变）。与 backend/app.py、inference/server.py 同一条纪律。
+    """
+    if str(RAG_HOST).strip() in ("127.0.0.1", "localhost", "::1") or RAG_API_KEY:
+        return
+    raise SystemExit(
+        f"❌ [rag] 拒绝启动：绑定到非回环地址 {RAG_HOST!r} 但未设置 RAG_API_KEY——"
+        f"知识库会对整个可达网络裸奔。\n"
+        f"   请在 .env.local 设置 RAG_API_KEY=<强随机串>（与设备 B 同值），"
+        f"或把 rag.host 改回 127.0.0.1。\n"
+        f"   （部署铁则 §8：非回环绑定只允许出现在受信内网 + 必须带 Bearer。）"
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
+    _enforce_bind_guardrail()   # 先于加载模型：省掉几十秒权重加载才发现配置错
     uvicorn.run(app, host=RAG_HOST, port=RAG_PORT, reload=False)

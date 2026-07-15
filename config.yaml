@@ -103,6 +103,15 @@ server:
   allowed_origins:                  # CORS 白名单（仅浏览器直连 14159 时生效；走代理为同源，CORS 不触发）
     - "http://localhost:5173"
 
+# 设备级票据（HETERO_COMPUTE §7 预留 1，B3 落）——**当前留空 = 单密钥期，行为与预留前全同**。
+# 背景：原生 macOS/iOS app 自持凭据（不走 Vite 代理注入），届时校验要回答的不是"key 对不对"
+# 而是"这是哪台设备"：每台一张票，吊销一台不牵连其余；审批推送等可按设备路由。
+# 启用方式：填 devices（device_id: token），校验收敛在 framework/api/auth.py 的
+# verify_token() 单一函数里——换 JWT/mTLS 只改那一处。devices 优先于 server.api_key，
+# 两者可并存（迁移期）。真 token 同样不进仓库，用环境变量或本地覆盖。
+auth:
+  devices: {}                       # 例：{ mac-studio: "<token>", iphone-15: "<token>" }
+
 # RAG 知识库服务（rag/ 进程读取本段 + tuning 段；backend 只读 host/port 与之握手）
 rag:
   host: "127.0.0.1"  # 仅本机回环：RAG 与 Agent 同机部署，只供本机调用

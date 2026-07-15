@@ -112,6 +112,32 @@ AGENT_PORT = config["inference"]["port"]
 _SERVER_CFG = config.get("server") or {}
 API_KEY = os.environ.get("AGENT_API_KEY") or _SERVER_CFG.get("api_key") or ""
 ALLOWED_ORIGINS = _SERVER_CFG.get("allowed_origins") or ["http://localhost:5173"]
+# 设备级票据（§7 预留 1）：留空 = 单密钥期，行为与预留前全同。填了之后每台设备一张票，
+# 吊销一台不牵连其余（原生 app / iOS 端自持凭据时启用）。
+AUTH_DEVICES = (config.get("auth") or {}).get("devices") or {}
+
+
+def is_loopback_bind(host: str) -> bool:
+    """绑定地址是否只对本机可达。空串/0.0.0.0/:: = 绑全部网卡，最不回环的一种。"""
+    return str(host).strip() in ("127.0.0.1", "localhost", "::1", "127.0.0.0/8")
+
+
+def enforce_bind_guardrail(host: str, key: str, *, service: str, key_env: str) -> None:
+    """部署铁则（§8 / §7 预留 2）：非回环绑定 + 空密钥 = 拒启。
+
+    此前这条只是文档里的散文，而"绑到 Tailscale 地址"与"设了密钥"是两个独立动作——
+    先改 host 后忘了 key，服务就对整个 tailnet 裸奔且**只打印一行告警**（谁看启动日志？）。
+    edge/gpu profile 让非回环绑定成为常规操作，这条必须由代码强制。
+    回环绑定时空密钥仍放行（dev 现状不变）。
+    """
+    if is_loopback_bind(host) or key:
+        return
+    raise SystemExit(
+        f"❌ [{service}] 拒绝启动：绑定到非回环地址 {host!r} 但未设置 {key_env}——"
+        f"服务会对整个可达网络裸奔。\n"
+        f"   请在 .env.local 设置 {key_env}=<强随机串>（两侧同值），或把绑定地址改回 127.0.0.1。\n"
+        f"   （部署铁则 §8：非回环绑定只允许出现在受信内网 + 必须带 Bearer。）"
+    )
 
 # ==========================================
 # 2. 生命周期与依赖装配 (IoC Container)
@@ -315,7 +341,10 @@ async def lifespan(app: FastAPI):
     app.state.push_registry = push_registry
     app.state.push_dispatcher = push_dispatcher
 
-    if API_KEY:
+    if AUTH_DEVICES:
+        print(f"🔐 [System] API 鉴权已启用（设备级票据 ×{len(AUTH_DEVICES)}"
+              + ("；共享密钥同时有效" if API_KEY else "") + "）")
+    elif API_KEY:
         print("🔐 [System] API 鉴权已启用（Bearer 共享密钥）")
     else:
         print("⚠️  [System] API 鉴权未启用：未设置 AGENT_API_KEY / server.api_key，接口对可达网络裸奔。"
@@ -369,6 +398,7 @@ app = FastAPI(
 
 # 鉴权密钥挂到 app.state，供 verify_api_key 依赖按请求读取（避免每次触碰环境变量）
 app.state.api_key = API_KEY
+app.state.auth_devices = AUTH_DEVICES   # §7 预留 1：空 dict = 单密钥期（现状）
 
 # CORS 中间件：收敛为白名单。走 header Bearer（非 cookie）不需要 credentials；
 # 且前端经 Vite/Nginx 代理为同源，CORS 仅在浏览器直连 14159 时才触发，此处为纵深防御。
@@ -410,5 +440,7 @@ app.include_router(router, dependencies=[Depends(verify_api_key)])
 # ==========================================
 if __name__ == "__main__":
     import uvicorn
+    # 绑定护栏先于加载模型：非回环 + 空密钥立即拒启，不浪费几十秒权重加载才发现
+    enforce_bind_guardrail(AGENT_HOST, API_KEY, service="backend", key_env="AGENT_API_KEY")
     # 建议不要在此处使用 reload=True，MLX 模型反复重载会导致严重内存泄漏
     uvicorn.run(app, host=AGENT_HOST, port=AGENT_PORT)

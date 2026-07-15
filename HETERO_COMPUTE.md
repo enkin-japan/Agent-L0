@@ -53,7 +53,7 @@
 | A3 | 周边件 CUDA 化（ASR / RAG 设备层） | 未开始 | — | — |
 | B1 | inference-server 服务化 + RemoteBackend | **完成** | 2026-07-14 | 金测试 122 全绿；泄漏 grep 空；vitest 5 过。同机双进程（:14161 包 MLX + backend mode=remote）实机冒烟全过：对话/跨轮 KV 热复用（次轮 7.6s）、分支克隆 kv_cache_reused=true（远程 clone 端点）、生成中取消（修复一处 SSE 收尾泄锁后 active_generations 归零）、审批挂起→批准续跑（shell 落盘验证）、math_research 与 web_research 沙箱子生成全走远程、约束采样跨网生效（constrained_steps 回填仪表）、图片经 /v1/media 内容寻址上传（识别正确）、音频转写、鉴权 401/401/200。实测 SSE 传输零吞吐损耗（端到端 29.1 tps=服务端 29.1 tps，首 chunk 0.35s）。拔线：SIGKILL 中断→轮次 fail 干净落账、重启服务端后同会话自愈（句柄换发+冷启动重建）；SIGTERM=uvicorn 优雅排水（在飞生成完成后才退）。mode=inprocess 回归零变化。ARCHITECTURE.md 拓扑图更新推迟到 B3（devctl profiles 一并画）。 |
 | B2 | RAG 家族参数化（含多模态加载）+ 鉴权 + 远程化 + 8B 升级 | **进行中：B2a+B2b 完成** | 2026-07-15（B2b） | **B2b（VL 加载契约实测校准 + reembed 实跑，2026-07-15）**：用真机 2B VL 权重（各 4GB，单拉 RAG bf16）把 B2a"按约定装配"的 VL 路径校准为实测契约，并首次实跑 reembed——**揪出 1 个必崩错误 + 2 个静默 bug**（VL 重排加载直接 ValueError；重排收尾串误用使判别力静默打折；reembed 每跑一遍原文语料翻一倍）。①**VL 重排加载本会直接崩**：checkpoint 是 `Qwen3VLForConditionalGeneration`，`AutoModelForCausalLM` 不认 `Qwen3VLConfig`（ValueError）→ 改 `AutoModelForImageTextToText`（文本/VL 两族在此**分叉**，嵌入侧 `AutoModel`→`Qwen3VLModel` 则通用）。②**`trust_remote_code` 纯属多余**：两 repo 的 config.json 均无 auto_map，qwen3_vl 是 transformers 原生架构（venv 5.8.0）→ 三处全删（不给远程代码执行面）。③**重排收尾串必须按族分叉**：VL 自带 reranker.jinja 收在 `assistant\n`、无 `<think>` 块（文本族官方用例有）；实测误用文本收尾把相关/不相关分离度从 **0.61 打到 0.43**。④yes/no 口径**证实可复用**：VL 与文本 tokenizer 的 `yes=9693/no=2152` 完全一致，且与 VL 官方 `1_LogitScore` 声明相同——B2a 此处判断正确。⑤`embed_dim` 实测回填 vl-2b=**2048**（与官方 1_Pooling 一致；vl-8b=4096 仅取官方文档值、标注未实测）。验收：health 报 tier=vl-2b/modality=vl/dim=2048、VL 全链路检索通（embed→route→rerank，无关文档被阈值滤掉、命中 0.68）、**换档护栏首次真实换档触发**（vl-2b 库 dim2048 vs text-0.6b 运行 dim1024 → 拒启并指向 reembed，此前只用篡改戳测过）、**reembed.py 首次实跑全流程通**（dump-categories→wipe→start→rebuild，分类描述与检索均复原，0.999）。金测试 122 全绿、vitest 5 过、泄漏 grep 空、text-0.6b 回归零变化（收尾串分叉挂在 MODALITY 上）。**待设备 A 不变**：8B 实跑、三阈值标定、L2 图像入库、跨机远程化（并入 B3）。<br>**B2a（2026-07-14）**：①RAG 档位注册表（config.rag.tiers 5 档/10 仓库：文本 0.6B/4B/8B + 视觉多模态 VL-2B/8B）+ 选择制换档（`./devctl.sh rag-model`→`.rag-tier-selection` 指针，镜像主模型选择）；②文本/VL 两条加载装配路径（文本族 0.6B 行为零变化；VL 族按 Qwen 约定 loads+文本 I/O，图像真入库=L2 另一期）；③换档护栏（建库盖维度戳 + 启动/入库比对不符即快速失败提示先 reembed）；④`rag/scripts/reembed.py` 全量重建脚本；⑤RAG Bearer 鉴权（补原**零鉴权**缺口，RAG_API_KEY 常量时间比对，空=dev 放行）+ backend 三客户端经 `config_loader.rag_auth_headers` 统一注入；⑥user_id 埋点（X-Rag-User，D3，只定约定与参数面）。验收：金测试 122 全绿、vitest 5 过；单拉 RAG 新码实测——health 报 tier=text-0.6b/dim=1024、鉴权 401/401/200、0.6B 检索全链路（embed→route→retrieve→rerank，1 命中经 rerank 阈值过滤）、护栏盖戳 + 篡改戳→11s 拒启（RuntimeError 附 reembed 指引）、devctl rag-model 列全 5 档、inprocess 全系统回归绿。**待设备 A/GPU**：8B 实跑、全量重建实跑、三阈值数值标定、L2 图像入 RAG、跨机远程化联调（并入 B3）。VL 加载路径代码到位但未下 2B VL 权重实测（多 GB 下载未擅动，留作下一步可下载校验）。 |
-| B3 | devctl profiles + §7 接口预留 + 生产联调 | 未开始 | — | — |
+| B3 | devctl profiles + §7 接口预留 + 生产联调 | **进行中：只剩真两台机器联调** | 2026-07-15（本机部分） | 本机能做的全部落地并实测：①**devctl profiles**（edge/gpu），含此前 devctl 完全不管的 inference-server 全套生命周期；②**tokenizer-only fetch**（edge 侧 31MB vs 全量 5.2GB，独立标记防误判）；③**§7 四处预留全落**——#1 `verify_token()` 单一比对面 +`auth.devices` 预留（10 项测试锁单密钥期行为不变）、#2 部署铁则**代码化**（非回环绑定+空密钥=三服务全部拒启，实测）、#3 现场核实为**早已完成**（账本原记"无发送实现"有误，实为完整 APNs ES256 客户端+11 项测试）、#4 多端附着夹具 005/006（**经变异测试确认有牙**）。验收：金测试 **132** 全绿（+10 鉴权）、vitest **7** 过（+2 夹具）、泄漏 grep 空、**all-in-one 零破坏**（实测生成 27.6 tps）。同机双进程 gpu+edge 双 profile 全链路实测：edge 不加载权重、跨进程调 gpu 推理成功（20.3 tps，答案正确）。**待第二台机器**：真跨机联调（含审批/分支/断线重连/定时任务）。 |
 
 依赖关系：P0 → {A1→A2, B1}；A3、B2 依赖 P0（A3 的 RAG 部分与 B2 协同）；
 B3 依赖 B1+B2。A 线与 B 线在 P0 后**完全独立**，可并行或只做其一。
@@ -225,6 +225,42 @@ cd frontend && npm run test; cd ..
   （`_collection_of_raw_file()`：文件所在目录即它当初入的库），再加目标库同路径清理（同类重跑
   去重），两处并集。**教训：这条只有真跑"未分类→有分类"的重灌序列才会现形，
   文档和 dry-run 都照不出来；数据搬运类改动必须把每条分支都真跑一遍。**
+- 2026-07-15 / B3 / **§7 表格第 3 行是错的：APNs 发送器早就完整实现了**（账本滞后于现场的
+  实例）。表格记"`/push/*` 注册面已存在，无发送实现"，而现场是完整的 ES256 JWT 直发客户端
+  （`framework/push/apns.py`，生产/沙箱环境自动回退 + 学到的环境粘滞回注册表）、
+  `NotificationDispatcher`、config `push` 段（连 Key ID/Team ID 都填好了）、11 项测试。
+  缺 .p8 时抛 `APNsDisabled`、调用方静默降级——正是"预留"想要的 no-op 语义，只是**做过头了**。
+  **教训：§R 第 3 步"以现场为准"不只针对本文的进度表，§7/§D 这类看似静态的表格同样会过期；
+  动手前先 grep 一遍要落的东西是不是已经在了。**
+- 2026-07-15 / B3 / **"部署铁则"此前只是散文，现已代码化**：§8 写着"非回环绑定只允许出现在
+  受信内网"，但代码里改 host 与设了 key 是两个独立动作——先改 host 后忘 key，服务就对整个
+  tailnet 裸奔，且**只打印一行启动告警**（谁看启动日志？backend 那行告警甚至已经写明"接口对
+  可达网络裸奔"，仍然只是告警）。profile 让非回环绑定成为常规操作，故三服务
+  （backend/inference/rag）各自实现同一条护栏：非回环 + 空密钥 = **拒启**（SystemExit），
+  回环时空密钥仍放行（dev 不变）。三处独立实现不共享代码——RAG/inference 各自独立 venv，
+  与 §S.3 B2a 补 RAG 鉴权时同一条纪律。护栏放在 `__main__` 里、**先于加载权重**：
+  配置错误在 1 秒内暴露，而不是等几十秒加载完才报。
+- 2026-07-15 / B3 / **macOS 自带 bash 3.2 会把紧跟变量的全角字符吃进变量名**：
+  `"$INFER_MODE）"` → `INFER_MODE）: unbound variable`（`set -u` 下直接崩）。
+  devctl.sh 头部第 46-49 行**早就记着这个坑**并用 LANG/LC_ALL 兜底，但兜不住——
+  既有代码一律写 `${VAR}` 花括号正是这个原因。新增代码照抄这条纪律。
+  自检：`grep -n '\$[A-Z_]*[（）—，：]' devctl.sh` 应为空。
+- 2026-07-15 / B3 / **tokenizer-only 必须用独立标记，否则埋雷**：edge 只拉分词器（31MB），
+  若也写 `.download_complete`，同一台机器日后切回 `mode=inprocess` 会命中标记、跳过下载，
+  然后加载器缺权重报错——**正是标记机制当初要防的"半截模型被判有效"**（§S.3 P0）。
+  故用 `.tokenizer_only_complete`，两标记可并存、全量标记优先（全量是分词器的超集，实测
+  gpu profile 下全量下载后两个标记同时存在、edge 秒过）。另：判据取 config 的
+  `inference.mode` 而非 profile 旗标——"要不要权重"取决于承载模式本身（同机 remote
+  双进程也一样不必在 backend 侧再拉一份）。实测该目录 `AutoTokenizer` 可加载、
+  23 键 special_tokens_map 齐全、`<|channel>`/`<channel|>`/`<|tool_call>`/`<tool_call|>`/`<eos>`
+  全部单 token（注意：`<start_of_turn>` 是 Gemma-3 写法，本模型**不用**，拿它自测会得到假警报）。
+- 2026-07-15 / B3 / **夹具建在"完整轮"上会一测一个准地骗过你**：给 §7 #4 写的头两版夹具建在
+  001（以 `turn_ended` 收尾）之上，全绿——但把归约器改成"收到 `stream_attached` 就重置状态"
+  的变异体**照样全绿**，即断言毫无意义。原因：`turn_ended` 的 payload 自带**完整** response，
+  终态是从它整个重建的，中途状态被冲掉也照样收敛。改建在 002（`awaiting_approval`，
+  状态全靠逐事件累积、无 turn_ended 可兜底）之上，同一变异体立刻被 006 抓红。
+  **纪律：新夹具落地前先跑一次变异测试（故意改坏实现，确认它会红）——不会红的夹具是装饰。**
+  已写进 `protocol/fixtures/README.md`。
 - 2026-07-15 / B2b / **换档护栏首次被"真实换档"触发**（B2a 只用篡改戳测过）：vl-2b 建的库
   （dim2048）在选回 text-0.6b（dim1024）后启动 → lifespan 抛 RuntimeError 拒启，报错同时点名
   两个档位/维度并指向 reembed。配套实跑 `reembed.py` 全流程（dump-categories → stop → wipe →
@@ -528,12 +564,28 @@ GET  /health  /metrics               devctl 探活 + 仪表
 
 ### 3.4 B3 —— 部署形态 + §7 接口预留 + 生产联调
 
-- [ ] devctl profiles：
-      `start`（现状 all-in-one，永不破坏）/
-      `start --profile edge`（设备 B：backend+frontend，校验远端可达）/
-      `start --profile gpu`（设备 A：inference-server + rag (+searxng +asr)）
-- [ ] §7 四处接口预留逐项落（见 §7 表格"预留动作"列）
+> **联调硬件的现实（2026-07-15 用户澄清）**：两台机器都是**轻量 Mac**，只能跑小模型。
+> 故 B3 的"设备 A"在联调期 = 一台 Mac 跑 `--profile gpu`（MLX 小模型 + RAG 0.6B），
+> **不是** §3.1 拓扑图里的 GPU 服务器。这与 §3.2 早定的推进策略一致（"先包 MLX 后端在
+> 两台 Mac 间验证分离，再换 CUDA"）——B3 验收的是**分离形态本身**（协议/profile/鉴权/
+> 断线重连），换 CUDA 是 A 线的事，两者解耦。8B RAG 与 CUDA 仍待真正的 GPU 机器。
+
+- [x] devctl profiles（2026-07-15）：
+      `start`（现状 all-in-one，永不破坏——实测生成 27.6 tps 正常）/
+      `start --profile edge`（设备 B：backend+frontend，校验远端 RAG 与推理可达）/
+      `start --profile gpu`（设备 A：inference-server + rag (+searxng)）。
+      配套：①devctl 此前**根本不管 inference-server**（B1 只手动起），补 start/stop/logs/status
+      全套（跑 backend 的 venv，无独立 venv）；②探活 URL 改为按 config 的**绑定地址**组装
+      （写死 127.0.0.1 会让绑 Tailscale 的服务被误判未就绪）；③`status` 对"本机无进程但探活通"
+      报**远端就绪**而非未运行；④`restart --profile X` 透传 profile
+- [x] **tokenizer-only fetch**（2026-07-15，§S.3 B1 早记的 B3 待办）：edge 侧
+      `inference.mode=remote` 时 backend 只拉分词器（实测 **31MB** vs 全量 5.2GB），
+      走**独立**标记 `.tokenizer_only_complete`——绝不写 `.download_complete`，否则同机切回
+      inprocess 会命中标记跳过下载、加载器缺权重报错。按 config 的 mode 判（非 profile 旗标）
+- [x] §7 四处接口预留逐项落（见 §7 表格"状态"列；#3 现场核实为**早已完成**，账本原记录有误）
 - [ ] 生产拓扑联调：A+B 真两台机器全链路（含审批、分支、断线重连、定时任务）
+      ——**待第二台机器**。同机双进程（gpu+edge 双 profile）已全链路实测通过：
+      edge 的 backend 不加载权重、跨进程调 gpu 的 inference-server 生成成功（20.3 tps）
 - [ ] 更新本文 / 报告可压缩历史
 
 ---
@@ -619,12 +671,12 @@ SwiftPM 包（TurnReducer + 协议模型 + API 客户端），UI 层各写各的
 
 **四处接口预留**（全部是"不写死错误假设"，B3 期落）：
 
-| # | 预留点 | 现状 | 预留动作 |
-|---|---|---|---|
-| 1 | **鉴权面：设备级票据** | 单一 `AGENT_API_KEY` 常量时间比对；原生 app 将**自持凭据** | auth 校验收敛为单一可替换函数（`verify_token(token) -> device_id?`）；config 预留 `auth.devices` 段。单密钥期行为全同 |
-| 2 | **绑定面：backend 直连暴露** | backend 绑 127.0.0.1，外部唯一入口是 5173 代理 | edge profile 允许绑 Tailscale 接口 + 直连 Bearer（原生 app 不走 Vite 代理）。非回环绑定只许出现在受信内网 |
-| 3 | **推送：APNs 发送器插槽** | `/push/*` 注册面已存在（PROTOCOL §2.8），无发送实现 | 发送器做成 provider 接口，未配置 APNs 证书时 no-op |
-| 4 | **多客户端并发附着** | 账本读者语义天然多端；web 单客户端实测，多端同时附着未验证 | 协议夹具补"双客户端同时 attach 同一会话"用例，把承诺变成被锁定的行为 |
+| # | 预留点 | 现状 | 预留动作 | 状态 |
+|---|---|---|---|---|
+| 1 | **鉴权面：设备级票据** | 单一 `AGENT_API_KEY` 常量时间比对；原生 app 将**自持凭据** | auth 校验收敛为单一可替换函数（`verify_token(token) -> device_id?`）；config 预留 `auth.devices` 段。单密钥期行为全同 | **已落**（B3）：`framework/api/auth.py` 的 `verify_token()` 是唯一比对面（换 JWT/mTLS 只改它）；`config.auth.devices` 留空 = 单密钥期，`request.state.device_id` 恒 `"default"`；`tests/test_auth.py` 10 项锁住"单密钥期行为不变"+ 吊销隔离 |
+| 2 | **绑定面：backend 直连暴露** | backend 绑 127.0.0.1，外部唯一入口是 5173 代理 | edge profile 允许绑 Tailscale 接口 + 直连 Bearer（原生 app 不走 Vite 代理） | **已落**（B3）：三服务的 host 本就来自 config（改值即可绑 Tailscale），补的是**代码强制的部署铁则**——非回环绑定 + 空密钥 = **拒启**（§8 此前只是散文）。三处各自实现（独立 venv 不共享代码），实测三服务全部拒启 |
+| 3 | **推送：APNs 发送器插槽** | ~~`/push/*` 注册面已存在，无发送实现~~ **账本滞后：B3 开工前就已完整实现** | ~~发送器做成 provider 接口~~ | **早已完成**（非 B3 所为）：`framework/push/apns.py` 是完整的 ES256 JWT 直发客户端（生产/沙箱环境自动回退 + 粘滞学习）、`dispatcher.py`、config `push` 段、`tests/test_push.py` 11 项。缺 .p8 时抛 `APNsDisabled`、调用方静默降级 = 预留想要的 no-op 语义 |
+| 4 | **多客户端并发附着** | 账本读者语义天然多端；web 单客户端实测，多端同时附着未验证 | 协议夹具补"双客户端同时 attach 同一会话"用例，把承诺变成被锁定的行为 | **已落**（B3）：夹具 `005-late-attach-rebuilds-pending`（晚到客户端只凭重放重建审批卡）+ `006-reattach-midturn-keeps-state`（流中途再来 `stream_attached` 不得冲掉累积态，**经变异测试确认会红**）。后端 fan-out 本就是每客户端一个 queue（`journal.py:142`），代码早支持、此前只是没人证明 |
 
 发现/配对不发明协议：依赖 Tailscale MagicDNS，app 内手动配 host + 票据。
 iOS 端无工具执行面（工具永远作用于 B），不触碰执行层任何代码。

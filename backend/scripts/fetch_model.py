@@ -14,19 +14,27 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from framework.utils.model_selection import resolve_selected_model
-from framework.utils.path_resolver import resolve_model_path
+from framework.utils.path_resolver import resolve_model_path, resolve_tokenizer_only_path
 
 
 def main() -> int:
+    # --tokenizer-only：edge profile（inference.mode=remote）用——设备 B 只做编排，
+    # 推理在设备 A，本机要的只是分词器（PromptBuilder/Parser/约束/仪表的消费面）。
+    # 拉全量权重在 16GB 笔记本上纯属浪费几 GB 磁盘与带宽。见 HETERO_COMPUTE §S.3 B1。
+    tokenizer_only = "--tokenizer-only" in sys.argv
     repo, revision, source = resolve_selected_model()
     origin = "启动选择 (.model-selection)" if source == "selection" else "config.yaml 默认"
-    print(f"📦 模型: {repo}" + (f" @ {revision[:8]}" if revision else "") + f"（{origin}）")
+    kind = "分词器（edge：不拉权重）" if tokenizer_only else "模型"
+    print(f"📦 {kind}: {repo}" + (f" @ {revision[:8]}" if revision else "") + f"（{origin}）")
     try:
-        path = resolve_model_path(repo, revision=revision)
+        if tokenizer_only:
+            path = resolve_tokenizer_only_path(repo, revision=revision)
+        else:
+            path = resolve_model_path(repo, revision=revision)
     except Exception as e:
-        print(f"❌ 模型准备失败: {e}", file=sys.stderr)
+        print(f"❌ {kind}准备失败: {e}", file=sys.stderr)
         return 1
-    print(f"✅ 模型就绪: {path}")
+    print(f"✅ {kind}就绪: {path}")
     return 0
 
 

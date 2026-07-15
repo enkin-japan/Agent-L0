@@ -1,0 +1,9 @@
+{"seq": 0, "turn_id": null, "ts": 1783601009.5, "type": "stream_attached", "data": {"v": 1, "last_seq": 8}}
+{"seq": 1, "turn_id": "t_b7d8e9000002", "ts": 1783601000.0, "type": "turn_queued", "data": {"prompt": "把 ~/notes.txt 里的旧地址全部替换成新地址", "attachments": [], "gen": {"enable_thinking": false, "thinking_budget": 2048, "max_tokens": 4096, "temperature": 0.2, "min_p": 0.05}, "origin": "chat"}}
+{"seq": 2, "turn_id": "t_b7d8e9000002", "ts": 1783601000.1, "type": "turn_started", "data": {}}
+{"seq": 3, "turn_id": "t_b7d8e9000002", "ts": 1783601000.2, "type": "iteration_started", "data": {"n": 1, "thinking": true}}
+{"seq": 4, "turn_id": "t_b7d8e9000002", "ts": 1783601005.0, "type": "thinking_delta", "data": {"text": "需要先读文件确认旧地址出现的位置,再执行替换。替换是写操作,会触发审批。"}}
+{"seq": 5, "turn_id": "t_b7d8e9000002", "ts": 1783601005.1, "type": "tool_started", "data": {"call_id": "d4e5f6a7", "name": "file_extract", "args": {"path": "~/notes.txt"}}}
+{"seq": 6, "turn_id": "t_b7d8e9000002", "ts": 1783601006.0, "type": "tool_result", "data": {"call_id": "d4e5f6a7", "name": "file_extract", "response": "…旧地址出现 3 处…", "status": "ok"}}
+{"seq": 7, "turn_id": "t_b7d8e9000002", "ts": 1783601006.5, "type": "iteration_started", "data": {"n": 2, "thinking": false}}
+{"seq": 8, "turn_id": "t_b7d8e9000002", "ts": 1783601009.0, "type": "awaiting_approval", "data": {"pending_tools": [{"name": "edit_file", "arguments": {"path": "~/notes.txt", "old": "旧地址", "new": "新地址", "replace_all": true}}]}}
