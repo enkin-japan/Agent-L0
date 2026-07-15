@@ -120,7 +120,8 @@ rag:
   #
   # 字段：modality=text 纯文本 / vl 视觉多模态（Qwen3-VL；图像真入库属 L2 另一期，
   #   当前 vl 档仅"加载 + 文本 I/O"，见 HETERO_COMPUTE §S.3）；embed_dim 该档向量维度
-  #   （护栏比对用，vl 档留 null 由运行时探测）；dtype 加载精度（fp16 现状 / bf16 开发机
+  #   （护栏比对用的**提示值**：启动恒以运行时探测为准，不符只告警，null=无提示）；
+  #   dtype 加载精度（fp16 现状 / bf16 开发机
   #   单拉 RAG 实测 VL / 8bit 量化归设备 A）；thresholds 该档余弦空间三阈值（分布随尺寸变，
   #   0.6B 为实测标定值，其余为占位继承、标注"待设备 A 标定"，真跑该档时用召回回归集重定）。
   active_tier: "text-0.6b"      # 当前档位 id（被 .rag-tier-selection 指针覆盖）
@@ -153,15 +154,15 @@ rag:
       modality: "vl"
       embed_repo: "Qwen/Qwen3-VL-Embedding-2B"
       rerank_repo: "Qwen/Qwen3-VL-Reranker-2B"
-      embed_dim: null            # 运行时探测（真机 2B VL 权重实测后回填）
+      embed_dim: 2048            # 实测回填（B2b：开发机 M4 bf16 单拉 RAG，与官方 1_Pooling 一致）
       dtype: "bf16"
       thresholds: { insert_routing_max_distance: 0.8, query_routing_max_distance: 0.85, rerank_min_score: 0.5 }
-      note: "多模态最小档 | 开发机单拉 RAG bf16 可实测加载 | 图像入库=L2 另一期"
+      note: "多模态最小档 | 加载契约已实测 ✓（阈值仍待标定）| 图像入库=L2 另一期"
     - id: "vl-8b"
       modality: "vl"
       embed_repo: "Qwen/Qwen3-VL-Embedding-8B"
       rerank_repo: "Qwen/Qwen3-VL-Reranker-8B"
-      embed_dim: null            # 运行时探测
+      embed_dim: 4096            # 官方模型表声明值，**未实测**（需设备 A）；启动仍以运行时探测为准
       dtype: "bf16"
       thresholds: { insert_routing_max_distance: 0.8, query_routing_max_distance: 0.85, rerank_min_score: 0.5 }
       note: "多模态生产档 | 需设备 A"

@@ -33,8 +33,11 @@
 - §D 的决策**不得重新讨论**（除非用户明确推翻）。不确定的事查代码，不猜。
 - 本文引用的行号以"截至 2026-07-14"为快照，重入时用 grep 重定位，不盲信行号。
 - 改动本文的架构方向（新增/砍掉阶段、换选型）= 改架构，须用户明确同意。
-- commit 时机由用户决定；每期验收通过后**建议**向用户请求一次 commit（工作
-  快照 + 本文状态同步入库，历史压缩后 git log 即离线进度佐证）。
+- **每期（含期内可独立验收的切片，如 B2a/B2b）完成 = 更新本文 + commit + push，
+  不必再问**（用户 2026-07-15 常设授权，取代原先的"commit 时机由用户决定"）。
+  次序固定：验收命令全过 → 更新 §S.1/§S.3/任务清单 → commit（message 带期号前缀）
+  → push origin main（D6 的 `enkin-japan/Agent`）。工作快照 + 本文状态同步入库，
+  历史压缩后 git log 即离线进度佐证。
 
 ---
 
@@ -49,7 +52,7 @@
 | A2 | CUDA 特性对齐（前缀缓存/投机/FP8 KV/约束） | 未开始 | — | — |
 | A3 | 周边件 CUDA 化（ASR / RAG 设备层） | 未开始 | — | — |
 | B1 | inference-server 服务化 + RemoteBackend | **完成** | 2026-07-14 | 金测试 122 全绿；泄漏 grep 空；vitest 5 过。同机双进程（:14161 包 MLX + backend mode=remote）实机冒烟全过：对话/跨轮 KV 热复用（次轮 7.6s）、分支克隆 kv_cache_reused=true（远程 clone 端点）、生成中取消（修复一处 SSE 收尾泄锁后 active_generations 归零）、审批挂起→批准续跑（shell 落盘验证）、math_research 与 web_research 沙箱子生成全走远程、约束采样跨网生效（constrained_steps 回填仪表）、图片经 /v1/media 内容寻址上传（识别正确）、音频转写、鉴权 401/401/200。实测 SSE 传输零吞吐损耗（端到端 29.1 tps=服务端 29.1 tps，首 chunk 0.35s）。拔线：SIGKILL 中断→轮次 fail 干净落账、重启服务端后同会话自愈（句柄换发+冷启动重建）；SIGTERM=uvicorn 优雅排水（在飞生成完成后才退）。mode=inprocess 回归零变化。ARCHITECTURE.md 拓扑图更新推迟到 B3（devctl profiles 一并画）。 |
-| B2 | RAG 家族参数化（含多模态加载）+ 鉴权 + 远程化 + 8B 升级 | **进行中：B2a 完成** | 2026-07-14（B2a） | B2a（本机可完成的可移植切片，用户追加"兼容 Qwen3 家族 5 档"方向）落地并验证：①RAG 档位注册表（config.rag.tiers 5 档/10 仓库：文本 0.6B/4B/8B + 视觉多模态 VL-2B/8B）+ 选择制换档（`./devctl.sh rag-model`→`.rag-tier-selection` 指针，镜像主模型选择）；②文本/VL 两条加载装配路径（文本族 0.6B 行为零变化；VL 族按 Qwen 约定 loads+文本 I/O，图像真入库=L2 另一期）；③换档护栏（建库盖维度戳 + 启动/入库比对不符即快速失败提示先 reembed）；④`rag/scripts/reembed.py` 全量重建脚本；⑤RAG Bearer 鉴权（补原**零鉴权**缺口，RAG_API_KEY 常量时间比对，空=dev 放行）+ backend 三客户端经 `config_loader.rag_auth_headers` 统一注入；⑥user_id 埋点（X-Rag-User，D3，只定约定与参数面）。验收：金测试 122 全绿、vitest 5 过；单拉 RAG 新码实测——health 报 tier=text-0.6b/dim=1024、鉴权 401/401/200、0.6B 检索全链路（embed→route→retrieve→rerank，1 命中经 rerank 阈值过滤）、护栏盖戳 + 篡改戳→11s 拒启（RuntimeError 附 reembed 指引）、devctl rag-model 列全 5 档、inprocess 全系统回归绿。**待设备 A/GPU**：8B 实跑、全量重建实跑、三阈值数值标定、L2 图像入 RAG、跨机远程化联调（并入 B3）。VL 加载路径代码到位但未下 2B VL 权重实测（多 GB 下载未擅动，留作下一步可下载校验）。 |
+| B2 | RAG 家族参数化（含多模态加载）+ 鉴权 + 远程化 + 8B 升级 | **进行中：B2a+B2b 完成** | 2026-07-15（B2b） | **B2b（VL 加载契约实测校准 + reembed 实跑，2026-07-15）**：用真机 2B VL 权重（各 4GB，单拉 RAG bf16）把 B2a"按约定装配"的 VL 路径校准为实测契约，并首次实跑 reembed——**揪出 1 个必崩错误 + 2 个静默 bug**（VL 重排加载直接 ValueError；重排收尾串误用使判别力静默打折；reembed 每跑一遍原文语料翻一倍）。①**VL 重排加载本会直接崩**：checkpoint 是 `Qwen3VLForConditionalGeneration`，`AutoModelForCausalLM` 不认 `Qwen3VLConfig`（ValueError）→ 改 `AutoModelForImageTextToText`（文本/VL 两族在此**分叉**，嵌入侧 `AutoModel`→`Qwen3VLModel` 则通用）。②**`trust_remote_code` 纯属多余**：两 repo 的 config.json 均无 auto_map，qwen3_vl 是 transformers 原生架构（venv 5.8.0）→ 三处全删（不给远程代码执行面）。③**重排收尾串必须按族分叉**：VL 自带 reranker.jinja 收在 `assistant\n`、无 `<think>` 块（文本族官方用例有）；实测误用文本收尾把相关/不相关分离度从 **0.61 打到 0.43**。④yes/no 口径**证实可复用**：VL 与文本 tokenizer 的 `yes=9693/no=2152` 完全一致，且与 VL 官方 `1_LogitScore` 声明相同——B2a 此处判断正确。⑤`embed_dim` 实测回填 vl-2b=**2048**（与官方 1_Pooling 一致；vl-8b=4096 仅取官方文档值、标注未实测）。验收：health 报 tier=vl-2b/modality=vl/dim=2048、VL 全链路检索通（embed→route→rerank，无关文档被阈值滤掉、命中 0.68）、**换档护栏首次真实换档触发**（vl-2b 库 dim2048 vs text-0.6b 运行 dim1024 → 拒启并指向 reembed，此前只用篡改戳测过）、**reembed.py 首次实跑全流程通**（dump-categories→wipe→start→rebuild，分类描述与检索均复原，0.999）。金测试 122 全绿、vitest 5 过、泄漏 grep 空、text-0.6b 回归零变化（收尾串分叉挂在 MODALITY 上）。**待设备 A 不变**：8B 实跑、三阈值标定、L2 图像入库、跨机远程化（并入 B3）。<br>**B2a（2026-07-14）**：①RAG 档位注册表（config.rag.tiers 5 档/10 仓库：文本 0.6B/4B/8B + 视觉多模态 VL-2B/8B）+ 选择制换档（`./devctl.sh rag-model`→`.rag-tier-selection` 指针，镜像主模型选择）；②文本/VL 两条加载装配路径（文本族 0.6B 行为零变化；VL 族按 Qwen 约定 loads+文本 I/O，图像真入库=L2 另一期）；③换档护栏（建库盖维度戳 + 启动/入库比对不符即快速失败提示先 reembed）；④`rag/scripts/reembed.py` 全量重建脚本；⑤RAG Bearer 鉴权（补原**零鉴权**缺口，RAG_API_KEY 常量时间比对，空=dev 放行）+ backend 三客户端经 `config_loader.rag_auth_headers` 统一注入；⑥user_id 埋点（X-Rag-User，D3，只定约定与参数面）。验收：金测试 122 全绿、vitest 5 过；单拉 RAG 新码实测——health 报 tier=text-0.6b/dim=1024、鉴权 401/401/200、0.6B 检索全链路（embed→route→retrieve→rerank，1 命中经 rerank 阈值过滤）、护栏盖戳 + 篡改戳→11s 拒启（RuntimeError 附 reembed 指引）、devctl rag-model 列全 5 档、inprocess 全系统回归绿。**待设备 A/GPU**：8B 实跑、全量重建实跑、三阈值数值标定、L2 图像入 RAG、跨机远程化联调（并入 B3）。VL 加载路径代码到位但未下 2B VL 权重实测（多 GB 下载未擅动，留作下一步可下载校验）。 |
 | B3 | devctl profiles + §7 接口预留 + 生产联调 | 未开始 | — | — |
 
 依赖关系：P0 → {A1→A2, B1}；A3、B2 依赖 P0（A3 的 RAG 部分与 B2 协同）；
@@ -60,7 +63,7 @@ B3 依赖 B1+B2。A 线与 B 线在 P0 后**完全独立**，可并行或只做�
 ### S.2 现场核实命令（重入时先跑，以输出为准修正 S.1）
 
 ```bash
-cd /Users/chouenkin/MacAgent
+cd /Volumes/enkin/project/Agent      # 仓库位置（2026-07-15 起；旧路径 ~/MacAgent 已废弃）
 git log --oneline -10        # 提交史里的期号标记（commit message 带 [P0]/[A1]/... 前缀）
 git status --short           # 未提交的进行中改动
 
@@ -180,6 +183,53 @@ cd frontend && npm run test; cd ..
 - 2026-07-14 / B2a / macOS 无 `timeout`（GNU coreutils，默认未装）——测试脚本里 `timeout 90 …`
   直接 exit 127（command not found），会假过（进程根本没跑）。护栏拒启测试改用后台起进程 +
   轮询"死亡 vs 就绪"判定，才真正验到 lifespan 抛错退出。测脚本踩坑，非产品代码。
+- 2026-07-15 / B2b / **仓库换位置 + 又是纯克隆状态**：仓库现居 `/Volumes/enkin/project/Agent`
+  （旧 `~/MacAgent` 已废弃，§S.2 命令已同步改），且同 P0 那次一样是纯克隆——venv/node_modules/
+  models/storage/.env.local 全缺席（gitignored 资产不随 git 走）。处置：`./devctl.sh setup`
+  一把重建（rag/backend/searxng venv + npm，约 5 分钟），pytest 仍需单独装
+  （`backend/.venv/bin/pip install pytest pytest-asyncio`，requirements 里没有）。基线复现：
+  金测试 122 全绿、vitest 5 过。**教训：账本里写死的绝对路径会过期，重入先 pwd 再照抄命令。**
+- 2026-07-15 / B2b / **"按通行约定装配"的三处猜测，实测两错一对**（B2a 诚实标注"待实测校准"
+  的价值兑现）：①`AutoModelForCausalLM` 加载 VL 重排**直接 ValueError**（不认 Qwen3VLConfig）——
+  VL checkpoint 是 `Qwen3VLForConditionalGeneration`，须走 `AutoModelForImageTextToText`；
+  嵌入侧 `AutoModel`→`Qwen3VLModel` 反而通用。**两族在重排加载类上分叉，是唯一必须分叉的加载点。**
+  ②`trust_remote_code=True` 多余（config.json 无 auto_map，qwen3_vl 原生于 transformers ≥4.57，
+  本 venv 5.8.0）——已全删：不给远程代码执行面是隐私项目的默认姿态。③yes/no 复用**判断正确**：
+  VL 与文本 tokenizer `yes=9693/no=2152` 同值，且与 VL 官方 `1_LogitScore` 声明一致。
+  **方法论：HF repo 的 config.json/1_Pooling/1_LogitScore/*.jinja 是免费的契约真相，
+  下权重前先 curl 一遍能省掉大半猜测（本次 10 个 repo 的存在性也是这么先验的）。**
+- 2026-07-15 / B2b / **重排收尾串按族分叉，且分叉有实测代价**：文本族 Qwen3-Reranker 官方用例
+  收尾 `<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n`；VL 族自带
+  `additional_chat_templates/reranker.jinja` 收在 `assistant\n` 即止、**无 think 块**（前缀两族
+  字节相同）。2B VL 实测：VL 收尾的相关/不相关分离度 **0.61**，误用文本收尾降到 **0.43**——
+  分数仍"能用"（不会崩、也不会明显报错），但判别力静默打折，正是最难发现的那类退化。
+  故收尾串挂 `MODALITY` 分派，text 路径字节不变。
+- 2026-07-15 / B2b / **reembed 实跑揪出原文语料翻倍（B2a 静默 bug，未跑过就发现不了）**：
+  `rebuild` 把 raw_files 的原文经 `/insert` 重灌，而 `auto_classify_and_insert` 每次都按新 uuid
+  **另写一份备份** → 实测 2 篇原文重建一次变 4 篇，再建变 8 篇（指数增长），且下一轮重建会把
+  副本也灌进库。**raw_files 是重建的承重网（脚本自己的 docstring 这么写的），迁移工具反而污染它
+  是最坏的一种 bug**——而账本原把"reembed 实跑"整个推给设备 A，等于让 8B 生产迁移去踩。
+  修法（守住"raw_files 是原文唯一真相、向量库是派生物"这条不变量）：`InsertRequest` 加可选
+  `source_path`＝"备份已在盘上，就地索引"，服务端跳过备份写入并直接用该路径作元数据；
+  reembed 传自己读的那个文件路径。缺省 None = 普通入库照旧另写备份（Agent 侧行为零变化）。
+  未采用 `reclassify_background_task` 那种"先复制再删原件"的既有惯例：迁移工具在后台入库失败时
+  会把承重网删掉，方向错了。附带两条：①`source_path` 必须落在 `storage/` 内（接口层 400 拦截）——
+  否则元数据能指向库外文件，而 `/document/delete` 正是照元数据删盘上文件的，等于把删除面扩到库外；
+  ②就地重索引前先 `delete(where={"source_path": ...})` 清旧切片，让 rebuild **可安全重跑**
+  （大语料迁移中途失败后操作员必然重跑——原本会静默灌出重复向量，实测同一篇命中两次）。
+- 2026-07-15 / B2b / **重灌未分类池会跨库留下孤儿切片（上一条修法的二阶 bug，实测才现形）**：
+  rebuild 把 `unclassified_raw/` 的原文以 category=None 重灌 → 路由到某分类（重建后 meta 库
+  已有分类了，正是常见情形）→ 原文被移进 `raw_files/{类}/`，但**旧切片仍躺在 unclassified_db**
+  里指向已移走的路径 → 实测同一篇命中两次（新旧路径各一）。原因：清理只按**移动后**的
+  路径清**目标库**。修法照 `reclassify_background_task` 的既有惯例——按**原路径**清**原库**
+  （`_collection_of_raw_file()`：文件所在目录即它当初入的库），再加目标库同路径清理（同类重跑
+  去重），两处并集。**教训：这条只有真跑"未分类→有分类"的重灌序列才会现形，
+  文档和 dry-run 都照不出来；数据搬运类改动必须把每条分支都真跑一遍。**
+- 2026-07-15 / B2b / **换档护栏首次被"真实换档"触发**（B2a 只用篡改戳测过）：vl-2b 建的库
+  （dim2048）在选回 text-0.6b（dim1024）后启动 → lifespan 抛 RuntimeError 拒启，报错同时点名
+  两个档位/维度并指向 reembed。配套实跑 `reembed.py` 全流程（dump-categories → stop → wipe →
+  start → rebuild）：分类路由描述从备份复原（非占位）、检索复原（0.999）。**流程设计经得起实跑**：
+  第 2 步"旧服务在跑时 dump"之所以成立，是因为换档指针只在重启时生效——先选档不影响在跑的旧服务。
 
 ---
 
@@ -443,19 +493,32 @@ GET  /health  /metrics               devctl 探活 + 仪表
 - [x] （B2a）**档位注册表 + 选择制换档**：`config.rag.tiers`（5 档/10 仓库，每档
       {embed_repo, rerank_repo, modality, embed_dim, dtype, thresholds}）+ `active_tier`；
       `./devctl.sh rag-model` 交互选择写 `.rag-tier-selection` 指针（镜像主模型 `.model-selection`）；
-      下载仍收敛 `rag/models/`。文本/VL 两条加载装配路径（VL 用 AutoProcessor.tokenizer +
-      trust_remote_code，loads+文本 I/O；**VL 加载契约待真机 2B VL 权重实测校准**）
+      下载仍收敛 `rag/models/`。文本/VL 两条加载装配路径
+- [x] （B2b, 2026-07-15）**VL 加载契约实测校准**（真机 2B VL 权重，单拉 RAG bf16）：
+      重排改 `AutoModelForImageTextToText`（原 `AutoModelForCausalLM` 会 ValueError 崩）、
+      删掉多余的 `trust_remote_code`、重排收尾串按族分派（VL 无 `<think>` 块，实测分离度
+      0.61 vs 误用文本收尾 0.43）、`embed_dim` 回填 vl-2b=2048。验收：health tier=vl-2b/dim=2048、
+      VL 全链路检索通、text-0.6b 回归零变化。**L2 图像入库仍未动**（另一期）
 - [x] （B2a）**换档护栏**：建库给 chroma 盖维度戳（`.tier_stamp.json`：模型身份+维度），
       启动探测运行维度比对——不符即快速失败并提示先 `reembed`；入库处 chroma 维度错误
       同样包装成"先重建"提示，兜底旧库无戳边缘情形
 - [x] （B2a）**reembed.py 脚本**：`rag/scripts/reembed.py`（dump-categories/wipe/rebuild/--dry-run）
-      遍历 `storage/raw_files/{类}/` 走既有 `/insert` 流水线重灌。**实跑**（8B 新库）待设备 A
+      遍历 `storage/raw_files/{类}/` 走既有 `/insert` 流水线重灌
+- [x] （B2b, 2026-07-15）**reembed 全流程首次实跑**（0.6B 库，真实换档触发护栏后重建）：
+      dump→wipe→start→rebuild 全通，分类描述与检索复原。**实跑揪出原文语料每重建翻一倍**
+      （raw_files 是承重网，迁移工具反而污染它）→ 修：`/insert` 加可选 `source_path`
+      ＝"备份已在盘上就地索引"（缺省 None 时行为零变化）+ storage/ 越界 400 拦截 +
+      就地重索引先清旧切片（按原路径清原库 + 目标库同路径，覆盖跨库重路由）使 rebuild
+      可安全重跑。四条分支均实跑验证：同类重跑 ×2 幂等、未分类→分类重路由（原文**移动**
+      而非复制、旧库无孤儿）、普通入库照旧另写备份、越界/不存在 source_path → 400。
+      **8B 新库上的实跑仍待设备 A**（脚本本身已验）
 - [x] （B2a）**user_id 埋点**（D3）：RAG API 加 header `X-Rag-User`（缺省 `"default"`，行为全同），
       `_scoped_collection` 默认用户返回原名；约定 collection `u_{user_id}__{category}`、
       原文 `storage/raw_files/{user_id}/{类}/`、meta 按 user 分库——**只定约定与参数面，不实现逻辑**
 - [ ] （设备 A）`config.yaml` 的 `rag.host` 指向服务器（键已两侧共用+鉴权已补，跨机联调并入 B3）
 - [ ] （设备 A）8B 权重落位 + 精度/显存档位按 §4.1 选定（档位表已备位，记录所选进 §S.1）
 - [ ] （设备 A）**全量重建实跑**：新库全量重建 → 新旧库并行查询对比 → 切流 → 旧库归档
+      （脚本机制已在 0.6B 上实跑验证并修好翻倍 bug，见 B2b；此处剩的是 8B 新库上的真实迁移）
 - [ ] （设备 A）**阈值重标**（不可跳过）：入类 0.8 / 软路由 0.85 / rerank 0.5 是 0.6B 余弦空间
       实测值，各档分布不同（档位 thresholds 面已备位）。现库真实文档做召回回归集扫参重定，
       写进 config 注释（标定日期+依据）

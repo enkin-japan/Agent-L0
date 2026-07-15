@@ -155,7 +155,9 @@ def _insert_file(path: Path, category, dry: bool) -> None:
         print(f"[dry-run] insert {path.name} → {category or '(auto-route)'}")
         return
     text = path.read_text(encoding="utf-8")
-    body = {"title": _title_from_filename(path), "document": text}
+    # source_path = "备份已在盘上，就地索引"：不带它服务端会另写一份新备份，原文语料每重建
+    # 一遍翻一倍（实测 2 篇→4 篇），而 raw_files 正是重建的承重网。见 HETERO_COMPUTE §S.3 B2b。
+    body = {"title": _title_from_filename(path), "document": text, "source_path": str(path)}
     if category:
         body["category"] = category
     rr = requests.post(f"{BASE_URL}/api/v1/document/insert", headers=_headers(), json=body, timeout=60)

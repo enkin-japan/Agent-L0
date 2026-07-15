@@ -203,27 +203,32 @@ def _load_vl_models(embed_path: str, rerank_path: str, dtype) -> dict:
     ⚠️ B2a L1 边界：本路径把 VL 模型**加载**并支持**文本 I/O**（分词器取自 AutoProcessor，
     池化/重排复用文本路径），足以在开发机单拉 RAG（bf16）实测"能选/能下/能加载/能出向量"。
     图像**真入库/检索**（processor 喂图、图文混合索引）属 L2 另一期，不在此实现。
-    VL 模型的确切加载契约（是否 trust_remote_code、专用类、池化口径）以真机 2B VL 权重
-    实测校准为准（见 HETERO_COMPUTE §S.3）；下面按 Qwen VL 通行约定装配，失败显式上抛。
+
+    加载契约已用真机 2B VL 权重实测校准（B2b，见 HETERO_COMPUTE §S.3）：
+    - **不需要 trust_remote_code**：qwen3_vl 是 transformers 原生架构（≥4.57，本 venv 5.8.0），
+      两个 repo 的 config.json 均无 auto_map。不传 = 不给远程代码执行面（隐私/安全默认）。
+    - **重排模型必须走 AutoModelForImageTextToText**：checkpoint 是 Qwen3VLForConditionalGeneration，
+      `AutoModelForCausalLM` 不认 Qwen3VLConfig（直接 ValueError）——文本族两条路径在此**分叉**。
+    - 嵌入侧 `AutoModel` → Qwen3VLModel，last_hidden_state + last_token_pool 口径与文本族同
+      （官方 1_Pooling/config.json 亦为 lasttoken + Normalize），实测 dim=2048、语义可分。
     """
-    from transformers import AutoProcessor
+    from transformers import AutoProcessor, AutoModelForImageTextToText
 
     def _tok_from_processor(path):
-        proc = AutoProcessor.from_pretrained(path, trust_remote_code=True)
+        proc = AutoProcessor.from_pretrained(path)
         tok = getattr(proc, "tokenizer", None)
         if tok is None:
-            tok = AutoTokenizer.from_pretrained(path, trust_remote_code=True, padding_side='left')
+            tok = AutoTokenizer.from_pretrained(path, padding_side='left')
         else:
             tok.padding_side = 'left'
         return tok
 
     return {
         "embed_tokenizer": _tok_from_processor(embed_path),
-        "embed_model": AutoModel.from_pretrained(
-            embed_path, dtype=dtype, trust_remote_code=True).to(DEVICE).eval(),
+        "embed_model": AutoModel.from_pretrained(embed_path, dtype=dtype).to(DEVICE).eval(),
         "rerank_tokenizer": _tok_from_processor(rerank_path),
-        "rerank_model": AutoModelForCausalLM.from_pretrained(
-            rerank_path, dtype=dtype, trust_remote_code=True).to(DEVICE).eval(),
+        "rerank_model": AutoModelForImageTextToText.from_pretrained(
+            rerank_path, dtype=dtype).to(DEVICE).eval(),
     }
 
 
@@ -427,7 +432,15 @@ def split_text_to_chunks(text: str, max_tokens: int = None, overlap_tokens: int 
 # ==========================================
 # 后台任务：入库流水线
 # ==========================================
-def auto_classify_and_insert(raw_document: str, doc_title: str, forced_category: Optional[str] = None):
+def _collection_of_raw_file(path: Path) -> str:
+    """原文备份所在目录 = 它当初入的库（unclassified_raw/ → unclassified_db；raw_files/{类}/ → {类}）。"""
+    return "unclassified_db" if path.parent == UNCLASSIFIED_DIR else path.parent.name
+
+
+def auto_classify_and_insert(raw_document: str, doc_title: str, forced_category: Optional[str] = None,
+                             existing_source_path: Optional[str] = None):
+    """入库流水线。existing_source_path 非空 = 原文备份**已在盘上**（reembed 重建场景）：
+    复用该文件而非另写一份，见步骤 4。"""
     logger.info(f"🚀 开始处理文档: {doc_title}")
 
     if forced_category:
@@ -466,21 +479,52 @@ def auto_classify_and_insert(raw_document: str, doc_title: str, forced_category:
         return
 
     # 4. 备份原始文件
-    safe_title = "".join(c for c in doc_title if c.isalnum() or c in " _-").strip()
-    file_name = f"{safe_title}_{uuid.uuid4().hex[:8]}.txt"
-
-    if target_category == "unclassified_db":
-        backup_path = UNCLASSIFIED_DIR / file_name
+    #    不变量：raw_files 是原文的**唯一真相**，向量库是它的派生物（reembed 据此重建）。
+    #    故"从原文重灌"绝不能再写一份原文——existing_source_path 即调用方声明"备份已在盘上，
+    #    就地索引"。没有它时 reembed 每跑一遍原文语料翻一倍（实测 2 篇→4 篇，见 §S.3 B2b）。
+    if existing_source_path:
+        original_path = Path(existing_source_path)   # 移动前的路径：旧切片按它清理（见步骤 5）
+        backup_path = original_path
+        # 路由到了与所在目录不符的分类（未分类池重灌时会发生）：移动而非复制，保持单份
+        expected_dir = (UNCLASSIFIED_DIR if target_category == "unclassified_db"
+                        else RAW_FILES_DIR / target_category)
+        if backup_path.parent != expected_dir:
+            expected_dir.mkdir(parents=True, exist_ok=True)
+            moved = expected_dir / backup_path.name
+            backup_path.rename(moved)
+            logger.info(f"📁 原文备份随路由迁移: {backup_path} → {moved}")
+            backup_path = moved
     else:
-        cat_dir = RAW_FILES_DIR / target_category
-        cat_dir.mkdir(parents=True, exist_ok=True)
-        backup_path = cat_dir / file_name
+        safe_title = "".join(c for c in doc_title if c.isalnum() or c in " _-").strip()
+        file_name = f"{safe_title}_{uuid.uuid4().hex[:8]}.txt"
 
-    with backup_path.open("w", encoding="utf-8") as f:
-        f.write(raw_document)
+        if target_category == "unclassified_db":
+            backup_path = UNCLASSIFIED_DIR / file_name
+        else:
+            cat_dir = RAW_FILES_DIR / target_category
+            cat_dir.mkdir(parents=True, exist_ok=True)
+            backup_path = cat_dir / file_name
+
+        with backup_path.open("w", encoding="utf-8") as f:
+            f.write(raw_document)
 
     # 5 & 6. 计算块级向量并入库
     target_db = get_chroma_collection(target_category)
+
+    # 就地重索引（reembed）= 同一篇原文再入一次：先清掉它的旧切片，否则重复入库。
+    # 让 rebuild 可安全重跑——大语料迁移中途失败后操作员必然重跑（正是最需要它的时刻）。
+    # 普通入库不走此路（每篇都是新 uuid 路径，无从冲突），故 Agent 侧行为不变。
+    # 两处都要清：①**原路径所在的旧库**——重灌未分类池时路由可能变（doc 从 unclassified_db
+    #   迁到某分类），旧切片会滞留在旧库里指向已移走的文件（实测同一篇命中两次）；照
+    #   reclassify_background_task 的既有惯例先按原路径删。②目标库的同路径（同类重跑去重）。
+    if existing_source_path:
+        for cat, sp in {(_collection_of_raw_file(original_path), str(original_path)),
+                        (target_category, str(backup_path))}:
+            try:
+                get_chroma_collection(cat).delete(where={"source_path": sp})
+            except Exception as e:
+                logger.warning(f"⚠️ 重索引前清理旧切片失败（库 {cat}，可能本就没有）: {e}")
+
     all_embeddings = []
 
     for i in range(0, total_chunks, BATCH_SIZE):
@@ -554,8 +598,14 @@ async def lifespan(app: FastAPI):
     GLOBAL_OBJECTS["rerank_prefix_tokens"] = GLOBAL_OBJECTS["rerank_tokenizer"].encode(
         "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n", add_special_tokens=False
     )
+    # 重排收尾串按族分叉（B2b 实测校准）：文本族 Qwen3-Reranker 官方用例带空 <think> 块；
+    # VL 族自带的 additional_chat_templates/reranker.jinja 收在 assistant\n 即止、**无** think 块。
+    # 前缀两族字节相同（已对过 VL 模板），只有收尾不同。实测 2B VL：用 VL 收尾的相关/不相关
+    # 分离度 0.61，误用文本族收尾降到 0.43（分数仍可用但判别力打折），故不可一族通吃。
     GLOBAL_OBJECTS["rerank_suffix_tokens"] = GLOBAL_OBJECTS["rerank_tokenizer"].encode(
-        "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n", add_special_tokens=False
+        "<|im_end|>\n<|im_start|>assistant\n" if MODALITY == "vl"
+        else "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+        add_special_tokens=False
     )
 
     # 换档护栏：探测运行维度 → 比对存储戳（不符即快速失败提示先 reembed），无戳则盖戳
@@ -582,6 +632,10 @@ class InsertRequest(BaseModel):
     # 调用方显式指定的目标分类：必须已存在（或 unclassified_db），不存在则 400 拒绝并返回现有目录；
     # 缺省 None 时走原有的向量自动路由（低于阈值进未分类池）
     category: Optional[str] = None
+    # 重建专用（reembed.py）：声明"本文的原文备份已在盘上的此路径"，服务端**跳过备份写入**、
+    # 直接以此为 source_path 元数据。缺省 None = 普通入库（照旧写一份新备份），Agent 侧不传。
+    # 必须落在 storage/ 内（接口层校验），否则 400。
+    source_path: Optional[str] = None
 
 class QueryRequest(BaseModel):
     query: str                   # 原始提问
@@ -654,9 +708,26 @@ async def insert_docs(req: InsertRequest, background_tasks: BackgroundTasks,
                 ),
             )
 
+    # 重建场景的 source_path：必须真实存在且落在 storage/ 内——越界路径会让 source_path 元数据
+    # 指向库外文件，而 /document/delete 按该元数据删盘上文件，等于把删除面扩到 storage 之外。
+    existing_source = (req.source_path or "").strip() or None
+    if existing_source:
+        p = Path(existing_source)
+        try:
+            inside = p.resolve().is_relative_to(STORAGE_BASE.resolve())
+        except (OSError, ValueError):
+            inside = False
+        if not inside:
+            raise HTTPException(status_code=400,
+                                detail=f"source_path 必须位于 {STORAGE_BASE} 之内，已拒绝: {existing_source}")
+        if not p.is_file():
+            raise HTTPException(status_code=400,
+                                detail=f"source_path 指向的原文备份不存在: {existing_source}")
+
     background_tasks.add_task(
         auto_classify_and_insert,
         raw_document=req.document, doc_title=req.title, forced_category=forced,
+        existing_source_path=existing_source,
     )
     if forced:
         return {"msg": f"后台入库已启动（目标分类: {forced}）"}
