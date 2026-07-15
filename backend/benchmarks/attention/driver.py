@@ -23,7 +23,7 @@ import requests
 
 BASE = os.environ.get("BENCH_BASE", "http://127.0.0.1:14159")
 SESSIONS = os.environ.get(
-    "BENCH_SESSIONS", "/Volumes/enkin/project/agent/MacAgent/sessions")
+    "BENCH_SESSIONS", "/Volumes/enkin/project/Agent/backend/sessions")
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 MAX_APPROVAL_ROUNDS = 15
 HTTP_TIMEOUT = 1800

@@ -28,7 +28,7 @@
 | MCP 工具 | `framework/mcp/tools/deck_tools.py`（deck_init/set_slide/remove/status/export_pdf）、`render_chart.py` |
 | 工具的会话归属机制 | `framework/agents/runtime.py` 的 `get_current_session()`（ContextVar，orchestrator `_invoke_tool` 登记） |
 | 资产/deck 出货端点 | `framework/api/routes.py` 的 `/api/v1/files/{sid}/assets/{name}` 与 `/api/v1/files/{sid}/deck` |
-| 前端渲染器（唯一渲染器） | `MacAgent-frontend/src/components/deck/slide-renderer.tsx` |
+| 前端渲染器（唯一渲染器） | `frontend/src/components/deck/slide-renderer.tsx` |
 | 前端预览/打印视图 | 同目录 `deck-preview.tsx` / `deck-print.tsx`（路由分支在 `main.tsx`） |
 | 前端 img 白名单 | `markdown-content.tsx`（只放行 `/api/v1/files/` 同源相对路径，防信标红线不破） |
 

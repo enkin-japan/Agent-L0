@@ -1,4 +1,4 @@
-// SplitStack Agent API 封装（见 API.md §3 / §7）
+// Agent API 封装（见 API.md §3 / §7）
 // 注意：POST /chat 是同步阻塞接口，耗时 = 模型完整生成时间，不要加短超时。
 
 import type {

@@ -1,6 +1,6 @@
 # rag —— Agent 知识与记忆数据库
 
-> [MacAgent](../README.md) monorepo 的检索服务。
+> [Agent](../README.md) monorepo 的检索服务。
 
 为 AI Agent 提供的本地化 RAG（检索增强生成）后端服务，用于存储和检索知识、记忆等信息。基于 **FastAPI + ChromaDB + Qwen3 双模型**（Embedding + Reranker）构建，全程本地运行，在 Apple Silicon 上使用 MPS 加速。
 
@@ -248,7 +248,7 @@ rag/
 ## 注意事项
 
 - **入库是异步的**：`insert` 接口立即返回，实际处理在后台进行，结果看服务日志
-- **系统类目 `agent_memory`**：MacAgent 启动时会自动创建该分类，用作其长期记忆沉淀汇——被上下文压缩折叠掉的对话原文存于此、供 `rag_search` 召回。请勿随意删除该分类的路由
+- **系统类目 `agent_memory`**：Agent 启动时会自动创建该分类，用作其长期记忆沉淀汇——被上下文压缩折叠掉的对话原文存于此、供 `rag_search` 召回。请勿随意删除该分类的路由
 - **分类描述决定路由质量**：`meta_classification_db` 中存的是分类描述的向量，描述写得越具体、越贴近该类文档的实际内容，自动分类越准
 - **删除分类 ≠ 删除数据**：`DELETE /api/v1/category/{db_name}` 只移除路由，该分类库中的向量数据仍在
 - **换档必重建**：库维度与档位绑定，靠 `.tier_stamp.json` + 运行时探测把关，不符即拒绝服务而非静默混库

@@ -233,7 +233,7 @@ components/deck/       SlideRenderer（Deck 唯一渲染器）+ /print/deck 打�
 ## 7. 磁盘布局（数据流的落点）
 
 ```
-MacAgent/                        （monorepo 根）
+Agent/                           （monorepo 根）
 ├── devctl.sh                    标准启动器：setup/start/stop/restart/status/logs；logs/*.log+pid
 ├── config.yaml                  全项目唯一配置（backend 与 rag 共读；段落归属见文件头注释）
 ├── .env(.local)                 密钥/环境变量（devctl source 后 export；Vite envDir 也指向这里）

@@ -390,7 +390,7 @@ async def lifespan(app: FastAPI):
 # 3. FastAPI 表现层服务配置
 # ==========================================
 app = FastAPI(
-    title="SplitStack Agent API",
+    title="Agent API",
     description="Based on MLX Framework and Domain Driven Design",
     version="2.0.0",
     lifespan=lifespan

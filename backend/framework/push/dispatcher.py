@@ -14,7 +14,7 @@
 内容分级（per-device prefs.content_level，隐私缓解的落点）：
   full        标题=会话名，正文含 prompt 头 / 工具名；
   category    标题=会话名，正文只说类别（默认）；
-  placeholder 统一"MacAgent 有新事件"，零内容出门。
+  placeholder 统一"Agent 有新事件"，零内容出门。
 """
 from __future__ import annotations
 
@@ -220,8 +220,8 @@ class NotificationDispatcher:
                  ctx: Dict[str, Any]) -> tuple:
         """按内容分级组装 (title, body)。placeholder 档零内容出门。"""
         if level == "placeholder":
-            return "MacAgent", "有新事件，点开查看。"
-        title = f"「{title_hint}」" if title_hint else "MacAgent"
+            return "Agent", "有新事件，点开查看。"
+        title = f"「{title_hint}」" if title_hint else "Agent"
         if kind == "approval":
             if level == "full" and ctx.get("tools"):
                 return title, "等待授权：" + "、".join(ctx["tools"][:4])

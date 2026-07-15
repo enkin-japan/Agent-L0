@@ -1,6 +1,6 @@
 #!/bin/bash
 # =======================================================
-# devctl.sh — MacAgent 单仓标准启动器（唯一入口）
+# devctl.sh — Agent 单仓标准启动器（唯一入口）
 #
 # 目录约定（monorepo）:
 #   backend/   Agent 主体（FastAPI, :14159）
@@ -27,7 +27,7 @@
 # 不阻断其余服务（此时 backend 的 web_research 探活失败、优雅不注册）。
 #
 # 典型远程用法（单条指令，进程以 nohup 常驻，ssh 退出不受影响）:
-#   ssh <host> '/Volumes/enkin/project/MacAgent/devctl.sh restart'
+#   ssh <host> '/Volumes/enkin/project/Agent/devctl.sh restart'
 # =======================================================
 set -u
 

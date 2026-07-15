@@ -222,7 +222,7 @@ async def lifespan(app: FastAPI):
         print(f"[Server] 后端释放异常: {e}")
 
 
-app = FastAPI(title="MacAgent inference-server", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Agent inference-server", version="1.0.0", lifespan=lifespan)
 
 
 @app.get("/health")

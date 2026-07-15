@@ -230,7 +230,7 @@ def test_alert_result_levels_and_cancelled_skipped(tmp_path):
     assert "统计季度报表" not in bodies["tc"]        # category：只说类别
     assert bodies["tp"] == "有新事件，点开查看。"     # placeholder：零内容
     titles = {s["token"]: s["payload"]["aps"]["alert"]["title"] for s in apns.sent}
-    assert titles["tp"] == "MacAgent"
+    assert titles["tp"] == "Agent"
 
     apns.sent.clear()
     run(route_turn(

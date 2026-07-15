@@ -1,6 +1,6 @@
 """Deck Spec：PPT 系统的单一真相（数据契约 + 校验 + 槽位展开）。
 
-设计源头见 /Volumes/enkin/project/agent/PPT.md。本文件是它落到 MacAgent 的裁剪版：
+设计源头见 /Volumes/enkin/project/agent/PPT.md。本文件是它落到 Agent 的裁剪版：
 
  · 单一真相：sessions/{id}/deck/deck.json。人和模型的修改都归一化为对它的读写；
    渲染（前端 SlideRenderer）、预览、PDF 导出全是它的下游投影。

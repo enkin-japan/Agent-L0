@@ -1,4 +1,4 @@
-// SplitStack Agent API 类型定义（与 API.md §6 保持一致）
+// Agent API 类型定义（与 API.md §6 保持一致）
 
 export interface ToolCall {
   type: "function" | "error"

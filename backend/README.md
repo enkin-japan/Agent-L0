@@ -1,6 +1,6 @@
 # backend —— Agent 主体服务
 
-> [MacAgent](../README.md) monorepo 的核心服务。Apple Silicon 本地多模态 AI Agent 服务，默认以 **MLX** 后端在本进程内推理。以 FastAPI 对外提供 HTTP 接口，内置 ReAct 多轮推理引擎、MCP 风格工具插件系统、KV Cache 前缀复用与会话分支能力，面向单用户、轻量并发场景。
+> [Agent](../README.md) monorepo 的核心服务。Apple Silicon 本地多模态 AI Agent 服务，默认以 **MLX** 后端在本进程内推理。以 FastAPI 对外提供 HTTP 接口，内置 ReAct 多轮推理引擎、MCP 风格工具插件系统、KV Cache 前缀复用与会话分支能力，面向单用户、轻量并发场景。
 
 ## 特性
 

@@ -1,4 +1,4 @@
-# MacAgent
+# Agent
 
 运行在 Apple Silicon Mac 上的**全本地** AI Agent：本地推理 + 分类路由式 RAG 长期记忆 + Web 前端，
 数据不出门。单仓（monorepo）组织，四个服务 + 一个可选搜索层。
@@ -7,7 +7,7 @@
 执行层与会话数据留在用户机——见下文「部署形态」。
 
 ```
-MacAgent/
+Agent/
 ├── devctl.sh            # 标准启动器（唯一入口）：setup / model / rag-model / start / stop / restart / status / logs
 ├── config.yaml          # 全项目唯一配置文件（backend / rag / inference-server 共读，改这里即可）
 ├── .env.example         # 环境变量模板（复制为 .env.local 填写密钥；各服务与前端代理共读）
