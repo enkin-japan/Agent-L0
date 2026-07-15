@@ -19,7 +19,7 @@ from framework.core.turn_runner import TurnRunner
 from framework.memory.session import SessionManager
 from framework.ingestion import Ingestion
 from framework.utils.file_handler import FileHandler
-from framework.utils.path_resolver import resolve_model_path
+from framework.utils.path_resolver import resolve_model_path, resolve_tokenizer_only_path
 from framework.memory.compactor import maybe_summarize_context
 from framework.api.routes import router, _maybe_summarize_active
 from framework.api.auth import verify_api_key
@@ -144,9 +144,18 @@ def enforce_bind_guardrail(host: str, key: str, *, service: str, key_env: str) -
 # ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print(f"🚀 [System] loading model: {MODEL}"
-          + ("（来自 .model-selection 启动选择）" if _model_source == "selection" else ""))
-    model_path = resolve_model_path(MODEL, revision=MODEL_REVISION)
+    # 推理承载（B1）先于路径解析定夺：mode=remote 时本进程只当编排端，权重在设备 A 的
+    # inference-server 里——这里若走全量 resolve_model_path，edge 机会照样拉满 4.9G，
+    # devctl 的 --tokenizer-only 预取也拦不住（那只让分词器先到位，全量解析看的是
+    # .download_complete 标记，缺了就重下）。故按 mode 选解析器，别按 profile 旗标。
+    _inference_cfg = config.get("inference") or {}
+    _mode = str(_inference_cfg.get("mode", "inprocess"))
+    _remote = _mode == "remote"
+    print(f"🚀 [System] {'resolving tokenizer for' if _remote else 'loading model:'} {MODEL}"
+          + ("（来自 .model-selection 启动选择）" if _model_source == "selection" else "")
+          + ("（mode=remote：只读分词器，不拉权重）" if _remote else ""))
+    model_path = (resolve_tokenizer_only_path(MODEL, revision=MODEL_REVISION) if _remote
+                  else resolve_model_path(MODEL, revision=MODEL_REVISION))
 
     print("🎵 [System] loading model: Silero VAD")
     vad_model = load_silero_vad()
@@ -178,10 +187,8 @@ async def lifespan(app: FastAPI):
     #    推理承载（B1）：mode=inprocess（现状默认）在本进程加载所选后端；
     #    mode=remote 改装 RemoteBackend（backends/remote/）连 inference-server——
     #    执行层/会话数据留在本机，本进程不加载权重（只在本地读分词器）。
-    _inference_cfg = config.get("inference") or {}
-    _mode = str(_inference_cfg.get("mode", "inprocess"))
-    _backend_name = "remote" if _mode == "remote" else str(_inference_cfg.get("backend") or "")
-    if _mode == "remote":
+    _backend_name = "remote" if _remote else str(_inference_cfg.get("backend") or "")
+    if _remote:
         _r = _inference_cfg.get("remote") or {}
         print(f"🔌 [System] 推理模式 remote：连接 inference-server "
               f"{_r.get('host', '127.0.0.1')}:{_r.get('port', 14161)}（本进程不加载权重）")
