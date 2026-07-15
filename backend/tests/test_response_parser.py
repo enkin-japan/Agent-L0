@@ -1,5 +1,5 @@
 """ResponseParser 容错单元测试:标记残缺的各种事故形态都不得把垃圾漏进正文。"""
-from framework.core.response_parser import ResponseParser
+from framework.dialects.gemma4.response_parser import ResponseParser
 
 
 class _Tok:

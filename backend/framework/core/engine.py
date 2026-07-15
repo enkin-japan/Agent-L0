@@ -4,8 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Optional, Callable
 
 from .backend_protocol import InferenceBackend
-from .prompt_builder import PromptBuilder
-from .response_parser import ResponseParser
+from .dialect_protocol import ModelDialect
 from .stream_filter import VisibleTextStreamer
 from .constrained import ToolConstraintEngine, ToolCallGuard, llguidance as _llg
 from ..memory.session import ChatSession
@@ -17,13 +16,18 @@ class AgentEngine:
     多轮编排（ReAct 循环、计划推进、失败路由、审批闸门）由 Orchestrator 负责；
     本层对上彻底屏蔽推理后端的物理复杂性，并持有全局推理互斥锁。
 
-    物理承载经 InferenceBackend 协议注入（backends/，P0 手术产物）：本层保留
-    全部后端无关资产——PromptBuilder / ResponseParser / VisibleTextStreamer /
-    推理互斥锁 / 专用推理执行器线程 / token 去向分解仪表 / 工具约束状态机。
+    两条协议注入，本层对二者皆无知：
+    - **物理承载** 经 InferenceBackend 协议（backends/，P0 手术产物）；
+    - **模型方言** 经 ModelDialect 协议（dialects/，R0 手术产物）——prompt 模板、
+      输出反序列化、频道/工具标记、调用体 schema 全部归方言，本层不认任何
+      模型家族的字面量。
+
+    本层保留的、既与后端无关也与方言无关的资产：VisibleTextStreamer / 推理互斥锁 /
+    专用推理执行器线程 / token 去向分解仪表 / 工具约束状态机（core/constrained.py）。
     """
     @classmethod
     async def create(cls, model_path, *, kv_config=None,
-                     suppress_ghost_thinking: bool = False, env=None,
+                     model_options=None, env=None,
                      backend: str = "", max_concurrency: int = 1) -> "AgentEngine":
         """标准构造路径：**在推理线程内加载模型**，再装配引擎。
 
@@ -34,6 +38,10 @@ class AgentEngine:
         max_concurrency（B1，config agent.max_inference_concurrency）：并发生成上限。
         进程内后端受"单线程 + 共享单例"物理约束强制钳制为 1（默认值，行为与现状全同）；
         仅远程后端（服务端自管并发）允许 >1——此时执行器线程数随之放宽。
+
+        model_options（R0）：config.yaml inference.model_registry 的所选条目。方言名
+        （dialect 键）与全部模型级行为开关（如 gemma-4 的 suppress_ghost_thinking）
+        都在里面，由方言自行解读——本层不解读任何一个，故换模型家族不动本签名。
         """
         max_concurrency = max(1, int(max_concurrency))
         if max_concurrency > 1 and backend != "remote":
@@ -46,20 +54,23 @@ class AgentEngine:
         backend_obj = await get_backend_class(backend).load(
             model_path, executor=executor, **(kv_config or {}))
         return cls(backend_obj, kv_config=kv_config,
-                   suppress_ghost_thinking=suppress_ghost_thinking, env=env,
+                   model_options=model_options, env=env,
                    _executor=executor, max_concurrency=max_concurrency)
 
     def __init__(self, backend: InferenceBackend, kv_config=None,
-                 suppress_ghost_thinking: bool = False,
+                 model_options=None,
                  env=None, _executor: "ThreadPoolExecutor | None" = None,
                  max_concurrency: int = 1):
         self.backend = backend
 
-        # suppress_ghost_thinking：Gemma-4 大杯（26b/31b）关思考时须预填空思考频道，
-        # 见 PromptBuilder 注释；按所选模型的注册表条目由 app.py 传入。
-        self.builder = PromptBuilder(backend.processor,
-                                     suppress_ghost_thinking=suppress_ghost_thinking, env=env)
-        self.parser = ResponseParser(backend.processor)
+        # 模型方言（R0）：prompt 模板 / 输出反序列化 / 频道与工具标记 / 调用体 schema
+        # 全部归方言。方言名与模型级开关（gemma-4 大杯的 suppress_ghost_thinking 等）
+        # 同走注册表条目——见 dialects/__init__.py。缺省即默认方言（gemma4）。
+        from ..dialects import get_dialect_class  # 方言命名收编在注册面（惰性导入）
+        model_options = model_options or {}
+        self.dialect: ModelDialect = get_dialect_class(
+            str(model_options.get("dialect") or "")).create(
+                backend.processor, options=model_options, env=env)
 
         # [Phase 2] 工具调用段约束采样（llguidance schema mask）。
         # 懒构建：LLTokenizer ~1s，首次带 tools 的生成时建；缺库/建失败 → 永久禁用（fail-open）。
@@ -125,7 +136,7 @@ class AgentEngine:
           name 字段的瞬间调用一次——执行前就知道要调什么。
           三个回调均在主事件循环线程被调（推理线程经 call_soon_threadsafe 跳转）。
         """
-        formatted_prompt = self.builder.build(
+        formatted_prompt = self.dialect.build_prompt(
             messages=session.history,
             tools=tools,
             enable_thinking=enable_thinking,
@@ -134,8 +145,8 @@ class AgentEngine:
             # 环境事实只注入主编排会话；沙箱一次性会话替身默认 False（隐私边界，opt-in）
             include_env=getattr(session, "inject_env_context", False),
         )
-        # 思考播种用 parser 的实际 token（而非硬编码字面量）：换模型/token 表时保持一致
-        generated_text = f"{self.parser.soc}thought\n" if enable_thinking else ""
+        # 思考播种用方言的实际 token（而非硬编码字面量）：换模型/token 表时保持一致
+        generated_text = self.dialect.thinking_prefill(enable_thinking)
         metrics: Dict[str, Any] = {}
         cancelled = False
 
@@ -152,9 +163,9 @@ class AgentEngine:
             return lambda s: _loop_for_hooks.call_soon_threadsafe(cb, s)
 
         if on_text_delta is not None or on_thinking_delta is not None or on_tool_pending is not None:
+            _mk = self.dialect.markers
             streamer = VisibleTextStreamer(
-                soc=self.parser.soc, eoc=self.parser.eoc,
-                stc=self.parser.stc, etc=self.parser.etc,
+                soc=_mk.soc, eoc=_mk.eoc, stc=_mk.stc, etc=_mk.etc,
                 in_thought=enable_thinking,
                 on_thinking=_hop(on_thinking_delta),
                 on_tool_pending=_hop(on_tool_pending),
@@ -174,9 +185,9 @@ class AgentEngine:
         features: Dict[str, Any] = {
             "enable_thinking": enable_thinking,
             "thinking_budget": thinking_budget,
-            # 预算锚点：本模型的频道 token（详见后端对预算裁决的说明）
-            "thinking_start_token": self.parser.soc,
-            "thinking_end_token": self.parser.eoc,
+            # 预算锚点：本方言的频道 token（详见后端对预算裁决的说明）
+            "thinking_start_token": self.dialect.markers.soc,
+            "thinking_end_token": self.dialect.markers.eoc,
             # 展示增量：仅在真流式时要求后端计算（detokenizer 差分有每 token 成本）
             "want_delta": streamer is not None,
         }
@@ -260,7 +271,7 @@ class AgentEngine:
             generated_text, metrics.get("generation_tokens", 0) or 0
         )
 
-        parsed = self.parser.parse(generated_text)
+        parsed = self.dialect.parse_response(generated_text)
         # 截断检测（供上层 max_tokens 恢复用）：底层生成流遇 EOS/停止符会 break、
         # 生成 token 数 < max_tokens；撞上 max_tokens 上限则是生成器自然耗尽、恰好产满
         # max_tokens 个 token。故 generation_tokens >= max_tokens 即判定本次生成被长度截断。
@@ -288,11 +299,14 @@ class AgentEngine:
             if self._constraint_engine is None:
                 tok = (self.processor.tokenizer
                        if hasattr(self.processor, "tokenizer") else self.processor)
-                stc = tok.encode(self.parser.stc, add_special_tokens=False)
-                etc = tok.encode(self.parser.etc, add_special_tokens=False)
+                _mk = self.dialect.markers
+                stc = tok.encode(_mk.stc, add_special_tokens=False)
+                etc = tok.encode(_mk.etc, add_special_tokens=False)
                 if len(stc) != 1 or len(etc) != 1:
                     raise RuntimeError("工具调用标记不是单 token，约束状态机无法锚定")
-                self._constraint_engine = ToolConstraintEngine(tok, stc[0], etc[0])
+                # schema 由方言提供（R0）：约束机制方言无关，调用体格式是方言事实
+                self._constraint_engine = ToolConstraintEngine(
+                    tok, stc[0], etc[0], self.dialect.tool_call_schema)
                 print("[Engine] 约束采样引擎就绪（llguidance）")
             eng = self._constraint_engine
             return ToolCallGuard(eng.matcher_for(tools), eng.stc_id, eng.etc_id, eng.vocab_size)
@@ -314,8 +328,9 @@ class AgentEngine:
             return len(self.processor.tokenizer.encode(s, add_special_tokens=False))
 
         thinking = visible = tool_json = 0
+        _mk = self.dialect.markers
         ch_pat = re.compile(
-            rf"{re.escape(self.parser.soc)}(.*?){re.escape(self.parser.eoc)}", re.DOTALL)
+            rf"{re.escape(_mk.soc)}(.*?){re.escape(_mk.eoc)}", re.DOTALL)
         for m in ch_pat.finditer(generated_text):
             parts = re.split(r"\s+", m.group(1).strip(), maxsplit=1)
             body = parts[1] if len(parts) == 2 else ""
@@ -325,7 +340,7 @@ class AgentEngine:
                 visible += enc(body)
         rest = ch_pat.sub("", generated_text)
         tool_pat = re.compile(
-            rf"{re.escape(self.parser.stc)}(.*?){re.escape(self.parser.etc)}", re.DOTALL)
+            rf"{re.escape(_mk.stc)}(.*?){re.escape(_mk.etc)}", re.DOTALL)
         for m in tool_pat.finditer(rest):
             tool_json += enc(m.group(1).strip())
         rest = tool_pat.sub("", rest)
@@ -364,7 +379,7 @@ class AgentEngine:
             {"role": "system", "content": self.SUMMARY_INSTRUCTION},
             {"role": "user", "content": "\n\n".join(parts)},
         ]
-        prompt = self.builder.build(messages=messages, tools=None, enable_thinking=False)
+        prompt = self.dialect.build_prompt(messages=messages, tools=None, enable_thinking=False)
 
         fresh_cache = self.backend.new_cache()  # 隔离缓存：不碰任何会话的 KV
         loop = asyncio.get_running_loop()
@@ -392,5 +407,5 @@ class AgentEngine:
             self.backend.release_cache(fresh_cache)
         if not text:
             return ""
-        parsed = self.parser.parse(text)
+        parsed = self.dialect.parse_response(text)
         return (parsed.get("text") or text).strip()

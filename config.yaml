@@ -35,37 +35,52 @@ inference:
   # suppress_ghost_thinking：官方 thinking 文档要求 12B/26B/31B 关思考时在 model 轮
   # 开头预填空思考频道抑制「幽灵思考」（e4b 模板无此要求）。PromptBuilder 按此开关生效。
   model_registry:
+    # dialect（R0）：模型方言 = prompt 模板 + 输出反序列化 + 频道/工具标记 + 调用体 schema。
+    # 实现在 backend/framework/dialects/<name>/，经注册面 get_dialect_class 取用；缺省 "gemma4"。
+    # 当前 9 条全是 gemma-4 家族（e4b/26b-a4b MoE/31b 稠密），故全填 gemma4。
+    # ⚠️ 换到 gemma-4 家族之外（Qwen3 / DeepSeek / GLM 等 ChatML 或 Harmony 系）时，
+    # 必须新增对应的 dialects/<name>/ 并在此声明——只改 repo 不改 dialect 会让 prompt
+    # 用错模板、工具调用全程解析不出来。方言与模型是绑定事实，不是可选配置。
     - repo: "mlx-community/gemma-4-e4b-it-4bit"
       revision: "deb1db712068b1c9f83fb1c97f08c1204b9459a1"
+      dialect: "gemma4"
       note: "5.2GB | 实机验证 ✓（默认）"
     - repo: "mlx-community/gemma-4-e4b-it-8bit"
       revision: "d8a1725bb38924b597ed9a3b9f29b4e582187e81"
+      dialect: "gemma4"
       note: "9.0GB | 静态校验 ✓"
     - repo: "mlx-community/gemma-4-e4b-it-nvfp4"
       revision: "6a7748a3df38d2307e9d8363af331b925f62b62c"
+      dialect: "gemma4"
       note: "6.9GB | 静态校验 ✓"
     - repo: "mlx-community/gemma-4-26b-a4b-it-4bit"
       revision: "efbeee6e582ebfd06abc9d65e90839c4b5d2116b"
+      dialect: "gemma4"
       suppress_ghost_thinking: true
       note: "15.6GB | 静态校验 ✓ | MoE，建议 ≥32GB 统一内存"
     - repo: "mlx-community/gemma-4-26b-a4b-it-8bit"
       revision: "d87327f1c28d03b74ef795156059e59b8290fb3e"
+      dialect: "gemma4"
       suppress_ghost_thinking: true
       note: "28.0GB | 静态校验 ✓ | MoE，建议 ≥48GB 统一内存"
     - repo: "mlx-community/gemma-4-26b-a4b-it-nvfp4"
       revision: "b3ee56a44b7495ef96735bfad93fdad9a7d2e3d2"
+      dialect: "gemma4"
       suppress_ghost_thinking: true
       note: "15.6GB | 静态校验 ✓ | MoE，建议 ≥32GB 统一内存"
     - repo: "mlx-community/gemma-4-31b-it-4bit"
       revision: "0d17175ead577037577f24963de2f0f5fafb72a5"
+      dialect: "gemma4"
       suppress_ghost_thinking: true
       note: "18.4GB | 静态校验 ✓ | 稠密，建议 ≥32GB 统一内存"
     - repo: "mlx-community/gemma-4-31b-it-8bit"
       revision: "fe92291011fc698452920c0b558b52f790dff711"
+      dialect: "gemma4"
       suppress_ghost_thinking: true
       note: "33.8GB | 静态校验 ✓ | 稠密，建议 ≥64GB 统一内存"
     - repo: "mlx-community/gemma-4-31b-it-nvfp4"
       revision: "eda14cbb01f82df32d8a40c15faaf93d5121f610"
+      dialect: "gemma4"
       suppress_ghost_thinking: true
       note: "18.4GB | 静态校验 ✓ | 稠密，建议 ≥32GB 统一内存"
 

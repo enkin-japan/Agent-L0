@@ -163,8 +163,10 @@ Agent 沟通的**窗口**，不是主体。
         │ 调度   core/scheduler.py       单 worker + ClassPolicy                 │
         │ 编排   core/orchestrator.py    ReAct 循环，护栏全是确定性代码           │
         │ 引擎   core/engine.py          单次生成（专用推理线程，事件循环不饿死） │
+        │ 方言   dialects/（R0）         prompt 模板 / 输出反序列化 / 标记 / schema │
+        │ 承载   backends/（P0/B1）      mlx（进程内）/ remote（inference-server） │
         │ 记忆   memory/                 冷热会话 / 三层压缩 / inflight 防丢       │
-        │ 工具   mcp/（20 工具）+ agents/（4 沙箱，物理隔离）                     │
+        │ 工具   mcp/（17 文件 34 类）+ agents/（3 沙箱，物理隔离）               │
         └──────────────────────────────────────────────────────────────────────┘
               │ rag_search        │ web_research（受限沙箱）   │ deck PDF 导出
               ▼                    ▼                           ▼
@@ -175,8 +177,14 @@ Agent 沟通的**窗口**，不是主体。
 **智能层（sacred，铁律 1）**：engine / orchestrator / memory / scheduler /
 mcp / agents / ingestion / patch。
 **交互脊柱（本次重整建立）**：turn_runner / journal / feed + 协议 + 双端归约器。
-**仅有的 gemma 方言层**：`PromptBuilder` / `ResponseParser` / `patch/`
-——协议改造不触碰。
+**方言层（R0 收编，2026-07-16）**：`dialects/gemma4/`（`PromptBuilder` /
+`ResponseParser` / `tool_schema`），经 `core/dialect_protocol.py` 的 `ModelDialect`
+协议注入引擎——**引擎不认任何模型家族的字面量**。换目标模型（30–70B 稠密 /
+100–300B MoE，必然离开 gemma-4 家族）= 加一个 `dialects/<name>/` + 注册表一行，
+不动承重代码。方言名跟着 `config.yaml` 的 `model_registry` 条目走（同
+`suppress_ghost_thinking` 那条路）。协议改造不触碰。
+> `backends/mlx/patch/` **不属方言层**：它是 `backend=mlx × dialect=gemma4` 的交叉
+> 产物，归属已由 `backends/` 的目录名表达（R0 刻意不收编它——强抽象会让手术范围失控）。
 
 ---
 
@@ -236,7 +244,7 @@ RAG 沉淀（原文可召回）。全量日志永远保留在 `history.jsonl`。
 
 **加一个功能**：
 1. 若涉及新协议行为 → 先落 `protocol/fixtures/` 夹具（铁律 5）；
-2. 后端改动 → 跑 `backend/tests/`（122 项金测试，FakeEngine 无模型毫秒级）
+2. 后端改动 → 跑 `backend/tests/`（142 项金测试，FakeEngine 无模型毫秒级）
    必须全绿；动 TurnRunner/编排/账本前**先读金测试**知道它守着哪些不变量；
 3. 两端归约器改动 → 跑夹具回放（web `npm run test` + Swift
    `Tests/run_reducer_fixtures.sh`）双绿；
@@ -274,8 +282,10 @@ RAG 沉淀（原文可召回）。全量日志永远保留在 `history.jsonl`。
 | API 封装 | `api/routes.py` | `api/agent.ts` | `API/AgentClient.swift` |
 | 协议类型 | `api/schemas.py` | `types/protocol.ts` | `API/ProtocolModels.swift` |
 | 智能层 | `core/{engine,orchestrator,scheduler}.py` `memory/` `mcp/` `agents/` `patch/` | — | — |
+| 模型方言 | `core/dialect_protocol.py` + `dialects/<name>/`（R0） | — | — |
+| 推理承载 | `core/backend_protocol.py` + `backends/<name>/`（P0/B1） | — | — |
 | 契约 | `PROTOCOL.md` + `protocol/fixtures/`（三端共享） | | |
-| 回归网 | `backend/tests/`（122 金测试） | `lib/turn-reducer.test.ts` | `Tests/run_reducer_fixtures.sh` + `run_e2e.sh` |
+| 回归网 | `backend/tests/`（**142** 金测试） | `lib/turn-reducer.test.ts` | `Tests/run_reducer_fixtures.sh` + `run_e2e.sh` |
 
 单配置：仓库根 `config.yaml`。单启动器：仓库根 `devctl.sh`。
 

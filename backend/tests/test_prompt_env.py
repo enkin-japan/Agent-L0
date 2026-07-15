@@ -3,7 +3,7 @@
 门控是隐私边界:个人事实(位置/语言/画像)只进主编排轮(include_env=True),
 沙箱一次性会话替身默认 include_env=False——个人信息绝不进沙箱子生成上下文。
 """
-from framework.core.prompt_builder import PromptBuilder
+from framework.dialects.gemma4.prompt_builder import PromptBuilder
 
 
 class _FakeTok:

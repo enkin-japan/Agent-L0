@@ -61,7 +61,7 @@ def run(model, processor, prompt, speculative, max_tokens=300):
 
 def main():
     from mlx_vlm import load
-    from framework.core.prompt_builder import PromptBuilder
+    from framework.dialects.gemma4.prompt_builder import PromptBuilder
 
     print(f"加载模型：{MODEL_DIR}")
     model, processor = load(MODEL_DIR)

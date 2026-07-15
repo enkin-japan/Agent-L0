@@ -13,8 +13,12 @@ JSON-schema 状态机做 logits mask，JSON 完成即只放行收尾标记；自
   张量库。数组端的 mask 应用由各推理后端的适配器完成（如 MLX 后端的
   _GuardAdapter），prompt 边界（既往历史不进状态机）与增量消费协议也由
   适配器维护。
+- 方言无关（R0 收编）：调用体的 JSON schema 与起止标记 id 是**方言事实**，
+  由调用方（AgentEngine）从 ModelDialect 取来喂进本模块——本模块只认「起止
+  标记夹一段 JSON」这个通用形状。原 build_tool_call_schema 已迁往
+  dialects/gemma4/tool_schema.py（它 docstring 自陈锚定 prompt_builder 的回放格式）。
 """
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
 
@@ -28,45 +32,20 @@ except Exception:  # pragma: no cover - 环境缺 llguidance 时整体禁用
     _llhf = None
 
 
-def build_tool_call_schema(tools: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """把注册工具的声明编成调用体 JSON schema（anyOf 按工具分支）。
-
-    锚定 prompt_builder 回放给模型看的格式：
-    {"type": "function", "name": <tool>, "arguments": {…}}（type 可省略）。
-    """
-    branches = []
-    for t in tools:
-        params = t.get("parameters") or {}
-        arg_schema: Dict[str, Any] = {"type": "object"}
-        props = params.get("properties") or {}
-        if props:
-            # 剥掉与 JSON 校验无关的键（description 等保留无害，但裁剪可缩小语法）
-            arg_schema["properties"] = props
-        required = params.get("required") or []
-        if required:
-            arg_schema["required"] = list(required)
-        arg_schema["additionalProperties"] = False
-        branches.append({
-            "type": "object",
-            "properties": {
-                "type": {"const": "function"},
-                "name": {"const": t.get("name")},
-                "arguments": arg_schema,
-            },
-            "required": ["name", "arguments"],
-            "additionalProperties": False,
-        })
-    return {"anyOf": branches} if branches else {"type": "object"}
-
-
 class ToolConstraintEngine:
-    """进程级单例部件：LLTokenizer + 按工具集缓存的语法/matcher。"""
+    """进程级单例部件：LLTokenizer + 按工具集缓存的语法/matcher。
 
-    def __init__(self, hf_tokenizer, stc_id: int, etc_id: int):
+    schema_builder（R0）：`tools -> JSON schema`，由方言提供
+    （ModelDialect.tool_call_schema）。本模块不解读它，只交给 llguidance 编语法。
+    """
+
+    def __init__(self, hf_tokenizer, stc_id: int, etc_id: int,
+                 schema_builder: Callable[[List[Dict[str, Any]]], Dict[str, Any]]):
         self._ltok = _llhf.from_tokenizer(hf_tokenizer)
         self.vocab_size = self._ltok.vocab_size
         self.stc_id = stc_id
         self.etc_id = etc_id
+        self._schema_builder = schema_builder
         self._matchers: Dict[tuple, Any] = {}  # 工具名元组 -> LLMatcher（复用，reset 后重入）
 
     def matcher_for(self, tools: List[Dict[str, Any]]):
@@ -83,7 +62,7 @@ class ToolConstraintEngine:
                 m = None
         if m is None:
             grammar = llguidance.LLMatcher.grammar_from_json_schema(
-                build_tool_call_schema(tools),
+                self._schema_builder(tools),
                 defaults={"whitespace_flexible": True},
             )
             m = llguidance.LLMatcher(self._ltok, grammar)

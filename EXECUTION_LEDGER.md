@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：账本刚建立，R0 未开工。下一步 = R0-1。**
+> 🟢 **2026-07-16：R0 ✅ 完成（142 金测试全绿，行为零变化已对拍）。下一步 = R1-1。**
 
 ---
 
@@ -67,8 +67,8 @@
 
 | 阶段 | 名称 | 状态 | 前置 | 硬件门槛 | 铁律风险 |
 |---|---|---|---|---|---|
-| **R0** | 模型方言层协议手术 | ⬜ | — | 建设无／真验证需 ≥32GB | 铁律 1（例外条款） |
-| **R1** | 子 Agent 统一执行器 | ⬜ | R0 | 无 | 铁律 1（沙箱三不变量） |
+| **R0** | 模型方言层协议手术 | ✅ **2026-07-16** | — | 建设无／真验证需 ≥32GB | 铁律 1（例外条款） |
+| **R1** | 子 Agent 统一执行器 | ⬜ | R0 ✅ | 无 | 铁律 1（沙箱三不变量） |
 | **R2a** | Skill 体系（显式调用） | ⬜ | R1 | 无 | 低 |
 | **R3** | 工具渲染格（协议变更） | ⬜ | — | 无 | **铁律 4 + 5** |
 | **R4** | 文件式长期记忆 | ⬜ | R2a | 无 | 低 |
@@ -82,13 +82,13 @@
 <details>
 <summary>展开细分（每完成一小项打勾）</summary>
 
-**R0** ⬜
-- [ ] R0-1 读金测试，列出护栏不变量清单
-- [ ] R0-2 判定 `core/constrained.py` 归属（工具段约束语法是否属方言）
-- [ ] R0-3 定义 `core/dialect_protocol.py`
-- [ ] R0-4 收编 gemma4 → `dialects/gemma4/`
-- [ ] R0-5 `model_registry` 加 `dialect` 字段；engine 按注册表选方言
-- [ ] R0-6 验收：132 金测试全绿 + 实机 A/B 对拍行为零变化
+**R0** ✅ 2026-07-16
+- [x] R0-1 读金测试，列出护栏不变量清单 → 见 §3.0「护栏不变量清单」
+- [x] R0-2 判定 `core/constrained.py` 归属 → **机制留 core，schema 归方言**（见 §3.0）
+- [x] R0-3 定义 `core/dialect_protocol.py`（`ModelDialect` + `DialectMarkers`）
+- [x] R0-4 收编 gemma4 → `dialects/gemma4/`（git mv 保历史；内部逻辑一行未改）
+- [x] R0-5 `model_registry` 9 条加 `dialect: "gemma4"`；engine 按注册表选方言
+- [x] R0-6 验收：**142 全绿**（132 基线 + 10 新方言金测试）+ 逐项 A/B 对拍一致
 
 **R1** ⬜
 - [ ] R1-1 提取 `EphemeralSession` → `agents/sandbox_runtime.py`
@@ -182,7 +182,75 @@ dialects/chatml/                 # 将来：Qwen3 / DeepSeek / GLM
 开发机 16GB，设备 A 亦非目标算力（`HETERO_COMPUTE.md` 记「等待真正的 GPU 设备 A」）。
 **R0 会长期停在「建设完成、零回归验证通过、未真换模型」状态——这是可接受的、也是设计目的。**
 
-**实测结果**：（完成后填写）
+---
+
+#### ✅ 实测结果（2026-07-16 完成）
+
+**R0-1 · 护栏不变量清单**（方言层直接相关的 17 项，`test_response_parser.py` 12 + `test_prompt_env.py` 5）：
+
+| 不变量 | 出处 |
+|---|---|
+| **标记残缺的任何事故形态都不得把垃圾漏进正文**（贯穿线，见文件首行 docstring） | `test_response_parser.py:1` |
+| 有头无尾的工具调用 → error 调用走纠错闭环（**非**漏成正文） | `:32` |
+| 有尾无头的残片 → error（实测事故：思考预算强插 `<channel\|>` 落在调用中间） | `:41` |
+| 未闭合思考频道 → 整段路由进 thoughts（实测事故：会话 e2348829，独白直呈用户） | `:86` |
+| error 的 `raw_input` 必须截断 <2000（它会被回显给模型并进账本，失控会自体膨胀） | `:68` |
+| 未闭合思考块内的完整调用照常执行（调用不因频道残缺而丢） | `:119` |
+| 游离标记从正文剥除 | `:59` |
+| **隐私门控**：个人环境事实只进主编排轮，`include_env=False` 时不注入（沙箱边界） | `test_prompt_env.py:42` |
+| 日期锚点两种情况都注入 | `test_prompt_env.py:49` |
+
+**R0-2 · `constrained.py` 归属判定 → 机制留 core，schema 归方言**：
+- 该模块首行自陈「框架无关（P0 收编）」；其机制（**起止标记夹一段 JSON**，llguidance 做 logits mask）
+  是**跨方言通用形状**，且已被参数化（`ToolConstraintEngine(tok, stc_id, etc_id)` 从外部收标记 id）。
+- 唯一的方言事实是 `build_tool_call_schema`——它的 docstring **自陈**「锚定 prompt_builder 回放给模型看的格式」。
+- **判定**：`ToolConstraintEngine` / `ToolCallGuard` 留 `core/`，新增 `schema_builder` 入参由方言喂；
+  `build_tool_call_schema` → `dialects/gemma4/tool_schema.py`。
+
+**关键发现（R0 的真正接缝所在）**：`ResponseParser` **事实上兼任了方言标记登记处**——
+engine 在 **5 处**直读 `self.parser.soc/eoc/stc/etc`（思考播种 `:138`、流过滤器 `:156`、
+features 预算锚点 `:178`、约束采样编码 `:291`、token 仪表正则 `:318/:328`）。
+R0 把这个隐式职责显式化为 `dialect.markers`，取值来源与结果完全不变。
+
+**落地产物**：
+```
+core/dialect_protocol.py          新增：ModelDialect 协议 + DialectMarkers
+dialects/__init__.py              新增：注册面（照 backends/ 同构，惰性导入）
+dialects/gemma4/dialect.py        新增：Gemma4Dialect（只做组装，无新逻辑）
+dialects/gemma4/prompt_builder.py ← git mv core/prompt_builder.py（内部一行未改）
+dialects/gemma4/response_parser.py ← git mv core/response_parser.py（内部一行未改）
+dialects/gemma4/tool_schema.py    ← 从 core/constrained.py 摘出（逻辑一行未改）
+```
+**引擎签名变更**：`AgentEngine.create(..., suppress_ghost_thinking=bool)` →
+`model_options=dict`（注册表条目整条透传）。理由：`suppress_ghost_thinking` 是
+**gemma-4 的方言事实**，出现在引擎签名里正是 R0 要消除的泄漏。唯一调用方 app.py 已同步。
+
+**验收（全绿）**：
+```
+基线（手术前）:  132 passed in 4.46s
+手术后:          142 passed in 2.57s     ← 132 全数保持 + 10 项新方言金测试
+```
+A/B 逐项对拍（`Gemma4Dialect` vs 原实现，同一 fake processor）：
+```
+build_prompt 一致: True (221 chars)      parse_response 一致: True
+markers 取自 parser: True               thinking_prefill 一致: True '<|channel>thought\n'
+tool_call_schema 一致: True             suppress_ghost_thinking 透传生效: True
+未知方言拒绝: OK → 未知模型方言: 'qwen3'（可用: gemma4）
+```
+装配路径校验：`AgentEngine.create` 签名含 `model_options`、不含 `suppress_ghost_thinking`；
+`core/` 下无方言模块残留。
+
+**新增金测试** `backend/tests/test_dialect.py`（10 项）——补的是**存量 132 项的空白**：
+它们走 FakeEngine，**不覆盖 AgentEngine 的方言装配**。新测钉死：注册面缺省与未知方言
+拒绝、markers 来源、build/parse 与原实现逐字节一致、思考播种用实际 token、
+**schema 与回放格式锚定**（脱锚会让约束采样把模型逼成没见过的形状，且因 fail-open 不报错）、
+空工具集 schema 宽松（空 anyOf 会让 llguidance 编译失败）、模型级开关经 options 透传、
+隐私门控穿过方言层不变。
+
+**⚠️ 诚实记账（`ROADMAP.md` 风险 2）**：以上只证明「**gemma4 收编无回归**」，
+**不证明「已支持 30–70B 大模型」**。真·换模型验证等硬件。第二个方言（ChatML 系）
+落地前，本接缝的正确性只有单实现背书——**单实现的抽象总是可疑的**，
+届时大概率要微调协议（这是正常的，不是返工）。
 
 ---
 

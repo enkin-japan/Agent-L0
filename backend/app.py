@@ -194,7 +194,9 @@ async def lifespan(app: FastAPI):
               f"{_r.get('host', '127.0.0.1')}:{_r.get('port', 14161)}（本进程不加载权重）")
     engine = await AgentEngine.create(
         model_path, kv_config=_inference_cfg,
-        suppress_ghost_thinking=bool(MODEL_OPTIONS.get("suppress_ghost_thinking", False)),
+        # 注册表条目整条透传（R0）：方言名与全部模型级开关（suppress_ghost_thinking 等）
+        # 由方言自行解读，引擎不解读——换模型家族不动 app.py 与 engine 的签名。
+        model_options=MODEL_OPTIONS,
         env=(config.get("agent") or {}).get("environment") or {},
         backend=_backend_name,
         max_concurrency=int((config.get("agent") or {}).get("max_inference_concurrency", 1)),
