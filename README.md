@@ -3,8 +3,10 @@
 运行在 Apple Silicon Mac 上的**全本地** AI Agent：本地推理 + 分类路由式 RAG 长期记忆 + Web 前端，
 数据不出门。单仓（monorepo）组织，四个服务 + 一个可选搜索层。
 
-默认单机跑全套（all-in-one）；也可把重型计算（模型推理 / RAG 嵌入重排）拆到另一台机器上，
-执行层与会话数据留在用户机——见下文「部署形态」。
+可单机跑全套（all-in-one），也可把重型计算（模型推理 / RAG 嵌入重排）拆到另一台机器上，
+执行层与会话数据留在用户机。**本仓库入库的 `config.yaml` 是算力分离形态**（B3 实证拓扑：
+`inference.mode: remote` + 指向设备 A 的两个 host），两台机器 pull 即同步，无需逐台改配置——
+退回单机见下文「部署形态」。
 
 ```
 Agent/
@@ -51,17 +53,18 @@ Agent/
 
 | 形态 | 命令 | 说明 |
 |---|---|---|
-| all-in-one（默认） | `./devctl.sh start` | 单机跑全部，`inference.mode: inprocess`，backend 进程内加载模型 |
-| 算力分离 · 设备 A | `./devctl.sh start --profile gpu` | inference-server + RAG（+ SearXNG）：只出算力，不碰会话 |
-| 算力分离 · 设备 B | `./devctl.sh start --profile edge` | backend + 前端：编排 / 工具 / 记忆 / 会话落盘，需 `inference.mode: remote` |
+| 算力分离 · 设备 A（入库形态） | `./devctl.sh start --profile gpu` | inference-server + RAG（+ SearXNG）：只出算力，不碰会话 |
+| 算力分离 · 设备 B（入库形态） | `./devctl.sh start --profile edge` | backend + 前端：编排 / 工具 / 记忆 / 会话落盘 |
+| all-in-one | `./devctl.sh start` | 单机跑全部；需先把 `inference.mode` 改回 `inprocess`、两个 host 改回 `127.0.0.1` |
 
-分离形态下两台机器各读自己的 `config.yaml`，但 `inference.remote.host` 与 `rag.host` 要填**同一个值**
-（设备 A 拿它当绑定地址，设备 B 拿它当拨号地址，一般是设备 A 的 Tailscale 地址），
-两侧 `.env.local` 的 `INFER_API_KEY` / `RAG_API_KEY` 也必须一致。会话数据（`history.jsonl` /
-`memory.json` / deck 等）**全部留在设备 B**，设备 A 只见 prompt 与媒体、不持久化会话。
+`inference.remote.host` 与 `rag.host` 是**同一个值**、且各自身兼两职：设备 A 拿它当绑定地址，
+设备 B 拿它当拨号地址（填设备 A 的 Tailscale 地址）。两机共用入库的这份 `config.yaml`，pull 即同步。
+密钥不入库：两侧 `.env.local` 的 `INFER_API_KEY` / `RAG_API_KEY` 须手工填成一致。
+会话数据（`history.jsonl` / `memory.json` / deck 等）**全部留在设备 B**，设备 A 只见 prompt
+与媒体、不持久化会话。
 
-edge 侧的 backend 不加载模型权重，只拉分词器（实测 31MB vs 全量 5.2GB）。
-完整拓扑与执行记录见 [HETERO_COMPUTE.md](HETERO_COMPUTE.md)。
+edge 侧的 backend 不加载模型权重，只拉分词器（B3 实测：31MB vs 全量 4.9GB；
+进程常驻 1.0GB vs 设备 A 推理侧 6.5GB）。完整拓扑与执行记录见 [HETERO_COMPUTE.md](HETERO_COMPUTE.md)。
 
 ## 配置与密钥
 

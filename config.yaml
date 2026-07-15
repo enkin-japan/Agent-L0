@@ -5,15 +5,18 @@ inference:
   host: "127.0.0.1"  # 仅本机回环：外部访问统一走前端的 /api 代理
   port: 14159
 
-  # 推理承载（HETERO_COMPUTE B1）：inprocess=本进程加载 backend 所指后端（现状默认）；
+  # 推理承载（HETERO_COMPUTE B1）：inprocess=本进程加载 backend 所指后端；
   # remote=经 backends/remote 连下面 remote 段所指的 inference-server（inference/server.py，
   # 服务端进程读同一份 config 的 backend 键决定它内包哪个后端）。
   # 远程模式密钥：两侧 .env.local 设同一 INFER_API_KEY（服务端校验、客户端携带）。
-  mode: "inprocess"             # inprocess | remote
+  # ⚠️ 本仓库已入库算力分离拓扑（B3 实证形态，私仓 + tailnet）：mode=remote 且下面
+  #    remote.host / rag.host 钉的是设备 A 的 Tailscale 地址，两台机器直接 pull 即同步。
+  #    要退回单机 all-in-one：mode 改 inprocess、两个 host 改回 127.0.0.1（三处一起改）。
+  mode: "remote"                # inprocess | remote
   backend: "mlx"                # mlx | cuda(A1 后)：进程内所用/服务端内包的后端
   remote:
-    host: "127.0.0.1"           # inference-server 地址（服务端绑定与客户端连接共用；
-    port: 14161                 #   跨机部署改为算力机的 Tailscale 地址，D7 端口约定 :14161）
+    host: "100.72.11.119"       # inference-server 地址（设备 A 拿它当绑定地址、设备 B 拿它当
+    port: 14161                 #   拨号地址——同一个键身兼两职。D7 端口约定 :14161）
     cache_ttl_minutes: 45       # 服务端缓存注册表空闲回收（略长于 backend 30min 冻结，只兜底）
   model: "mlx-community/gemma-4-e4b-it-4bit"
   # 钉死 HF 仓库 commit：上游 2026-07-06 重传（475b9088，裁掉共享 KV 权重）与 mlx-vlm 0.5.0
@@ -114,7 +117,11 @@ auth:
 
 # RAG 知识库服务（rag/ 进程读取本段 + tuning 段；backend 只读 host/port 与之握手）
 rag:
-  host: "127.0.0.1"  # 仅本机回环：RAG 与 Agent 同机部署，只供本机调用
+  # 设备 A 拿它当绑定地址、设备 B 的 backend 拿它当拨号地址——同 inference.remote.host，
+  # 一个键身兼两职。RAG 只有 backend 调用（rag_search/rag_admin/rag_sink 三个客户端都在
+  # backend 进程内），前端从不直连本服务。回环单机部署改回 127.0.0.1。
+  # ⚠️ 非回环绑定必须配 RAG_API_KEY（两侧 .env.local 同值），否则护栏拒绝启动。
+  host: "100.72.11.119"
   port: 14160
 
   # ── RAG 档位注册表（镜像 inference.model_registry 的选择制，HETERO_COMPUTE B2a）──
