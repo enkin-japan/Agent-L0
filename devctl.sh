@@ -714,17 +714,23 @@ case "$CMD" in
     start)
         case "$PROFILE" in
             edge)
-                # 设备 B：只起编排 + 前端。RAG/推理的可达性由 start_backend 内部校验
+                # 设备 B：起编排 + 搜索层 + 前端。RAG/推理的可达性由 start_backend 内部校验
                 # （RAG_READY_URL / INFER_READY_URL 已按 config 指向设备 A）。
-                info "profile=edge（设备 B：backend + 前端；推理/RAG 在远端）"
+                # SearXNG 归 edge 而非 gpu：它不是算力（无模型无 GPU），而是 web_research 的
+                # 工具依赖，且抓正文的 T0/T1/T2 三档本就在 backend 里跑——出网口已经在 B，
+                # 把「搜」放 A、「抓」放 B 是把一件事劈成两半。同机即回环，searxng_url 无需
+                # 改动，也就不必给这个无鉴权、limiter 已关的服务开 tailnet 端口。
+                # 必须先于 backend：web_research 的注册是启动期一次性探活，searx 晚到 = 整轮不注册。
+                info "profile=edge（设备 B：SearXNG + backend + 前端；推理/RAG 在远端）"
                 [ "$INFER_MODE" = "remote" ] || warn "inference.mode=${INFER_MODE}——edge 通常配 remote，否则推理仍在本机跑。"
-                start_backend && start_front
+                { start_searx || warn "SearXNG 未就绪，web_research 将不注册，继续"; true; } && start_backend && start_front
                 exit $?
                 ;;
             gpu)
                 # 设备 A：只起重型计算。不起 backend/前端（编排与会话数据留在设备 B，D2 隐私边界）。
-                info "profile=gpu（设备 A：inference-server + RAG (+SearXNG)）"
-                start_rag && { start_searx || warn "SearXNG 未就绪，设备 B 的 web_research 将不注册，继续"; true; } && start_infer
+                # 不含 SearXNG——见上方 edge 分支的归属说明。
+                info "profile=gpu（设备 A：inference-server + RAG）"
+                start_rag && start_infer
                 exit $?
                 ;;
         esac
@@ -741,8 +747,10 @@ case "$CMD" in
         ;;
     stop)
         case "$PROFILE" in
-            edge) stop_front; stop_backend; exit 0 ;;
-            gpu)  stop_infer; stop_searx; stop_rag; exit 0 ;;
+            edge) stop_front; stop_backend; stop_searx; exit 0 ;;
+            # gpu 不含 searx（B3：已归 edge）。设备 A 上若有旧部署残留的 SearXNG，
+            # 用 `./devctl.sh stop searx` 单停一次即可，不必为一次性迁移在此长留一行。
+            gpu)  stop_infer; stop_rag; exit 0 ;;
         esac
         case "$TARGET" in
             # all 停机含 infer：同机 remote 双进程（B1 验收形态）下它也是本机进程；没在跑则是 no-op

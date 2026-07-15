@@ -53,8 +53,8 @@ Agent/
 
 | 形态 | 命令 | 说明 |
 |---|---|---|
-| 算力分离 · 设备 A（入库形态） | `./devctl.sh start --profile gpu` | inference-server + RAG（+ SearXNG）：只出算力，不碰会话 |
-| 算力分离 · 设备 B（入库形态） | `./devctl.sh start --profile edge` | backend + 前端：编排 / 工具 / 记忆 / 会话落盘 |
+| 算力分离 · 设备 A（入库形态） | `./devctl.sh start --profile gpu` | inference-server + RAG：只出算力，不碰会话 |
+| 算力分离 · 设备 B（入库形态） | `./devctl.sh start --profile edge` | SearXNG + backend + 前端：编排 / 工具 / 记忆 / 会话落盘 |
 | all-in-one | `./devctl.sh start` | 单机跑全部；需先把 `inference.mode` 改回 `inprocess`、两个 host 改回 `127.0.0.1` |
 
 `inference.remote.host` 与 `rag.host` 是**同一个值**、且各自身兼两职：设备 A 拿它当绑定地址，
@@ -64,7 +64,11 @@ Agent/
 与媒体、不持久化会话。
 
 edge 侧的 backend 不加载模型权重，只拉分词器（B3 实测：31MB vs 全量 4.9GB；
-进程常驻 1.0GB vs 设备 A 推理侧 6.5GB）。完整拓扑与执行记录见 [HETERO_COMPUTE.md](HETERO_COMPUTE.md)。
+进程常驻 1.0GB vs 设备 A 推理侧 6.5GB）。
+
+拆分只按「是否出算力」划线：**SearXNG 归设备 B**（与 backend 同机）——它无模型无 GPU，是
+`web_research` 的工具依赖，而抓正文的三档升级本就在 backend 里跑，出网口已经在 B。
+完整拓扑与执行记录见 [HETERO_COMPUTE.md](HETERO_COMPUTE.md)。
 
 ## 配置与密钥
 
@@ -86,7 +90,7 @@ edge 侧的 backend 不加载模型权重，只拉分词器（B3 实测：31MB v
 | backend | 14159 | `127.0.0.1`（外部访问统一走前端 `/api` 代理） | `AGENT_API_KEY` |
 | inference-server | 14161 | `127.0.0.1`（仅 `inference.mode: remote` 时需要） | `INFER_API_KEY` |
 | rag | 14160 | `127.0.0.1`（分离形态下改为设备 A 的地址） | `RAG_API_KEY` |
-| searxng | 8080 | `127.0.0.1`（原生 venv 部署、无 Docker，只供 web_research 沙箱调用） | 无（仅回环） |
+| searxng | 8080 | `127.0.0.1`（**恒为回环**：始终与 backend 同机，分离形态下随 backend 在设备 B） | 无（故不可离开回环） |
 
 三个后端服务的密钥留空 = 未启用（告警后放行），便于首启 / dev。**但绑定到非回环地址时留空会被拒绝启动**：
 改 host 与设密钥是两个独立动作，先改 host 后忘密钥就等于对整个 tailnet 裸奔，故这条护栏是硬失败而非告警。

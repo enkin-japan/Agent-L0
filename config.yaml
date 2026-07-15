@@ -220,7 +220,12 @@ ingestion:
 # 需本机起 SearXNG（原生 venv 部署、无 Docker，devctl.sh 管理；须在 settings.yml 开启 json 输出）；
 # 离线则 web_research 自动不注册。
 web_search:
-  searxng_url: "http://127.0.0.1:8080"  # 本机 SearXNG（多引擎聚合，数据不出门）
+  # 恒为回环：SearXNG 与 backend 始终同机（all-in-one 自不必说；算力分离下它归 --profile edge
+  # 的设备 B，不是设备 A——它不出算力，只是 web_research 的依赖，抓正文的 T0/T1/T2 本就在
+  # backend 里跑）。故这里不像 inference.remote.host / rag.host 那样需要随拓扑改。
+  # ⚠️ 别改成远端地址：SearXNG 的 limiter 已关且无任何鉴权（不同于另外三个服务的 API_KEY），
+  # 一旦离开回环就是一个人人可用的搜索代理（见 searxng/settings.yml:9）。
+  searxng_url: "http://127.0.0.1:8080"
   timeout: 15                # 单次搜索/抓取的 HTTP 超时（秒）
   max_results: 8             # web_search 返回候选上限
   max_pages_per_call: 3      # 单次 open_pages 模型主动选取的抓取页数（与观察预算对齐）
