@@ -254,6 +254,22 @@ cd frontend && npm run test; cd ..
   双进程也一样不必在 backend 侧再拉一份）。实测该目录 `AutoTokenizer` 可加载、
   23 键 special_tokens_map 齐全、`<|channel>`/`<channel|>`/`<|tool_call>`/`<tool_call|>`/`<eos>`
   全部单 token（注意：`<start_of_turn>` 是 Gemma-3 写法，本模型**不用**，拿它自测会得到假警报）。
+- 2026-07-15 / B3 / **拆分只按「是否出算力」划线——SearXNG 被误分到设备 A，害 web_research
+  永不注册**：算力分离时把 `inference.remote.host` 与 `rag.host` 指向了设备 A，却漏了第三个
+  跨机依赖：searx 由 `--profile gpu` 起在设备 A 且绑回环，而 `web_search.searxng_url` 仍是
+  `127.0.0.1` ——edge 侧 backend 探活必失败，每次启动优雅不注册（B→A 8080 实测 000）。
+  **两个教训**：①**判归属看「出不出算力」，不看「像不像基础设施」**。SearXNG 无模型无 GPU，
+  是 web_research 的工具依赖；更决定性的是抓正文的 T0/T1/T2 三档本就跑在 backend 里——
+  出网口早在设备 B，把「搜」放 A、「抓」放 B 是把一件事劈成两半。移回 edge 后 searxng_url
+  恒为回环，遂**不必**给这个 limiter 已关、无任何鉴权的服务开 tailnet 端口（另三个服务有
+  API_KEY，它没有，settings.yml:9 早写明「绑 0.0.0.0 会让局域网白嫖搜索代理」）。
+  ②**「优雅降级」会把配置错误伪装成模型故障**：系统提示词仍在宣传 web_research，模型信以为真，
+  调不出来便去凑 web_read 现编 URL，编到一半在 JSON 字符串里夹进一句
+  "oops, I used `web_read` instead of `web_research`" 自言自语，撑破 JSON 报
+  `Unterminated tool call`。用户看见的是工具调用报错，根因却在两小时前的启动日志里——
+  **降级的告警必须跟着能力宣告走**，否则少一个依赖就变成一次模型幻觉事故。
+  实测修复后：searx 先于 backend 就绪（edge 冷启 11.4s）、`✅ 成功加载工具: web_research`、
+  「查查东京明天的天气」经气象厅返回 7/16 实况预报（概ね曇り 35°C/26°C），工具零报错。
 - 2026-07-15 / B3 / **夹具建在"完整轮"上会一测一个准地骗过你**：给 §7 #4 写的头两版夹具建在
   001（以 `turn_ended` 收尾）之上，全绿——但把归约器改成"收到 `stream_attached` 就重置状态"
   的变异体**照样全绿**，即断言毫无意义。原因：`turn_ended` 的 payload 自带**完整** response，
@@ -572,8 +588,10 @@ GET  /health  /metrics               devctl 探活 + 仪表
 
 - [x] devctl profiles（2026-07-15）：
       `start`（现状 all-in-one，永不破坏——实测生成 27.6 tps 正常）/
-      `start --profile edge`（设备 B：backend+frontend，校验远端 RAG 与推理可达）/
-      `start --profile gpu`（设备 A：inference-server + rag (+searxng)）。
+      `start --profile edge`（设备 B：searxng+backend+frontend，校验远端 RAG 与推理可达）/
+      `start --profile gpu`（设备 A：inference-server + rag）。
+      ⚠️ searxng 的归属 2026-07-15 由 gpu 改判 edge（原记 gpu 是错的，实测会让 web_research
+      永不注册，详见 §S.3 踩坑「拆分只按『是否出算力』划线」）。
       配套：①devctl 此前**根本不管 inference-server**（B1 只手动起），补 start/stop/logs/status
       全套（跑 backend 的 venv，无独立 venv）；②探活 URL 改为按 config 的**绑定地址**组装
       （写死 127.0.0.1 会让绑 Tailscale 的服务被误判未就绪）；③`status` 对"本机无进程但探活通"
