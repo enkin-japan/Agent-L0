@@ -44,8 +44,10 @@ if ! command -v npm >/dev/null 2>&1; then
     [ -n "$NVM_NODE_BIN" ] && export PATH="$NVM_NODE_BIN:$PATH"
 fi
 
-# 非交互 ssh 常常没有 locale（C locale），bash 会按字节误解析中文字符，
-# 甚至把「$VAR全角字符」吞成不存在的变量名，这里统一兜底为 UTF-8
+# 非交互 ssh 常常没有 locale（C locale），bash 会按字节误解析中文字符，这里兜底为 UTF-8。
+# ⚠️ 但它挡不住「$VAR全角字符」：macOS 自带 bash 3.2 仍会把紧跟的多字节首字节吞进变量名
+# （set -u 下报 unbound variable）。凡变量后紧跟中文，一律写 ${VAR} 显式界定——这是硬规矩，
+# 不是 locale 能兜的（实证：LC_ALL 已置 UTF-8，"$LOG_DIR。" 照样炸）。
 export LANG="${LANG:-en_US.UTF-8}"
 export LC_ALL="${LC_ALL:-en_US.UTF-8}"
 
@@ -147,6 +149,36 @@ listen_pids() {  # $1: port
 
 is_ready() {  # $1: url
     curl -sf -m 3 -o /dev/null "$1"
+}
+
+# 「已在运行，跳过」的前置判定。探活只能证明端口上有人应答，证不了那是本脚本起的
+# 服务——三种情形必须分开：
+#   本机无监听进程 + 探活通       = 服务在远端（profile 部署：设备 A 的 RAG/推理），正常跳过；
+#   本机有监听进程 + pid 记录存活 = 确是本脚本起的，正常跳过；
+#   本机有监听进程 + 无 pid 记录  = 端口被 devctl 管不着的进程占着（手工起的 / 残留 / 别的程序）。
+# 第三种此前与第二种一样被静默"跳过"：用户看到"已在运行 ✅"，实际 devctl 既没起它、
+# 也不认识它，故障推迟到访问时才以连不上的形式暴露（B3 实证：设备 B 报"backend 已在
+# 运行，跳过"，而 logs/ 里连 backend.log 都没有——真正该启动的服务被静默略过）。
+# 故第三种改为硬失败并报告占用者，让用户定夺——静默略过比报错难查得多。
+# 注意判据是"pid 记录仍存活"而非"记录 pid == 监听 pid"：前端的 pid 记的是 npm，
+# 真正监听 5173 的是它派生的 vite（stop_one 同样按端口兜底回收子进程）。
+managed_or_report() {  # $1: 名称  $2: 端口  $3: pid 文件  $4: stop 目标名 → 0=可跳过 1=被外部占用
+    local name="$1" port="$2" pidfile="$3" target="$4" owners recorded
+    owners="$(listen_pids "$port")"
+    [ -n "$owners" ] || return 0            # 本机没进程：服务在远端，不归本机管
+    if [ -f "$pidfile" ]; then
+        recorded="$(cat "$pidfile" 2>/dev/null)"
+        [ -n "$recorded" ] && kill -0 "$recorded" 2>/dev/null && return 0
+    fi
+    fail "$name 端口 ${port} 被本脚本管不着的进程占用（${pidfile} 无记录或记录已失效）："
+    for p in $owners; do
+        echo "      pid $p  $(ps -o comm= -p "$p" 2>/dev/null || echo '?')" >&2
+    done
+    # ${} 必须显式界定：紧跟其后的全角句号是多字节字符，$LOG_DIR。 会被 bash 连着
+    # 首字节当成变量名（set -u 下直接 unbound variable 报错）。
+    warn "  探活能通，但那不是本次 devctl 启动的服务，其日志也不在 ${LOG_DIR}。"
+    warn "  确认可回收则先停： $0 stop ${target}"
+    return 1
 }
 
 # 后台拉起常驻进程。
@@ -276,7 +308,10 @@ do_setup() {
 
 # ---- 启动 ----
 start_rag() {
-    if is_ready "$RAG_READY_URL"; then info "RAG 已在运行，跳过"; return 0; fi
+    if is_ready "$RAG_READY_URL"; then
+        managed_or_report "RAG" "$RAG_PORT" "$LOG_DIR/rag.pid" rag || return 1
+        info "RAG 已在运行，跳过"; return 0
+    fi
     [ -x "$RAG_DIR/.venv/bin/python" ] || { fail "缺少 rag/.venv，请先运行: ./devctl.sh setup"; return 1; }
     info "启动 RAG (port $RAG_PORT) → $LOG_DIR/rag.log"
     spawn_daemon "$RAG_DIR" "$LOG_DIR/rag.log" "$LOG_DIR/rag.pid" .venv/bin/python rag_server.py || return 1
@@ -339,7 +374,10 @@ remove_legacy_searx_container() {
 
 start_searx() {
     remove_legacy_searx_container
-    if is_ready "$SEARX_READY_URL"; then info "SearXNG 已在运行，跳过"; return 0; fi
+    if is_ready "$SEARX_READY_URL"; then
+        managed_or_report "SearXNG" "$SEARX_PORT" "$LOG_DIR/searx.pid" searx || return 1
+        info "SearXNG 已在运行，跳过"; return 0
+    fi
     [ -x "$SEARX_VENV/bin/python" ] || { warn "缺少 searxng/.venv（可选层），跳过 SearXNG；如需联网搜索请运行: ./devctl.sh setup"; return 1; }
     ensure_searx_settings
     info "启动 SearXNG (port $SEARX_PORT) → $LOG_DIR/searx.log"
@@ -350,7 +388,10 @@ start_searx() {
 }
 
 start_backend() {
-    if is_ready "$BACKEND_READY_URL"; then info "backend 已在运行，跳过"; return 0; fi
+    if is_ready "$BACKEND_READY_URL"; then
+        managed_or_report "backend" "$BACKEND_PORT" "$LOG_DIR/backend.pid" backend || return 1
+        info "backend 已在运行，跳过"; return 0
+    fi
     [ -x "$BACKEND_DIR/.venv/bin/python" ] || { fail "缺少 backend/.venv，请先运行: ./devctl.sh setup"; return 1; }
     # 硬性依赖顺序：RAG 完全就绪后 backend 才能启动（工具探活只发生在 backend 启动时）。
     # edge profile 下 RAG_READY_URL 已指向设备 A（rag.host），这一条同样是跨机可达性校验。
@@ -385,7 +426,10 @@ start_backend() {
 }
 
 start_front() {
-    if is_ready "$FRONT_READY_URL"; then info "前端已在运行，跳过"; return 0; fi
+    if is_ready "$FRONT_READY_URL"; then
+        managed_or_report "前端" "$FRONT_PORT" "$LOG_DIR/front.pid" front || return 1
+        info "前端已在运行，跳过"; return 0
+    fi
     command -v npm >/dev/null || { fail "找不到 npm（PATH=${PATH}）"; return 1; }
     [ -d "$FRONT_DIR/node_modules" ] || { fail "缺少 frontend/node_modules，请先运行: ./devctl.sh setup"; return 1; }
     info "启动前端 (port $FRONT_PORT) → $LOG_DIR/front.log"
@@ -430,7 +474,10 @@ stop_rag()     { stop_one "RAG"     "$RAG_PORT"     "$LOG_DIR/rag.pid"     15; }
 # 工作目录取 BACKEND_DIR，故 framework.* 可直接 import。SIGTERM = uvicorn 优雅排水
 # （在飞生成做完才退，见 §S.3 B1），故停机宽限给足。
 start_infer() {
-    if is_ready "$INFER_READY_URL"; then info "inference-server 已在运行，跳过"; return 0; fi
+    if is_ready "$INFER_READY_URL"; then
+        managed_or_report "inference-server" "$INFER_PORT" "$LOG_DIR/infer.pid" infer || return 1
+        info "inference-server 已在运行，跳过"; return 0
+    fi
     [ -x "$BACKEND_DIR/.venv/bin/python" ] || { fail "缺少 backend/.venv，请先运行: ./devctl.sh setup"; return 1; }
     # 权重预取走与 backend 相同的前台下载器（进度条直显），gpu 侧要的是全量权重
     info "检查模型（未下载时将前台下载并显示进度）…"
