@@ -3,6 +3,13 @@
 > 对比日期：2026-07-16 ｜ 对比对象：`/Volumes/enkin/project/cc-haha`（NanmiCoder/cc-haha, HEAD `eddaec54`）
 > 对比范围：本项目的**执行层（backend）+ 前端**——即算力分离拓扑下跑在设备 B 的那一半。
 > 不含 rag / inference-server / MLX 后端（cc-haha 无对应物，见 §1.2）。
+>
+> **⚠️ 2026-07-16 修订**：初版有三处事实错误，经用户指正后已修（§1.1 测试项、§1.3 形态、
+> §2.7 前端、§2.9 基建）。**根因**：原生 app 在 `apple-app/` 且 gitignored，本仓不可见，
+> 我据此误判前端只有 web 一端。教训见 `ROADMAP.md` 附录。
+>
+> **§5 的建议已被 `ROADMAP.md` 取代**（用户补充了目标模型体量、规模化立场、原生端形态三点后重排）。
+> 本文的**诊断部分（§1–§4）仍然有效**，是 ROADMAP 的依据。
 
 ---
 
@@ -28,8 +35,8 @@
 |---|---|---|---|
 | 源码行数 | ~29,800（backend 21,813 + frontend 7,966） | **606,150** | **20×** |
 | 文件数 | 119 + ~40 | **2,316** | ~15× |
-| 工具数 | 17（`mcp/tools/`） | 60+（`src/tools/`，53,027 行） | ~4× |
-| 测试文件 | 13（2,475 行） | **123** | ~10× |
+| 工具数 | 17 文件 / 34 类（`mcp/tools/`） | 60+（`src/tools/`，53,027 行） | ~2× |
+| 测试 | 132 项金测试（13 文件）+ 20 原生 E2E + 6 组三端夹具 | 123 个测试**文件** | 不可比，见 §2.9 |
 | 文档 | 8 篇根级 md | 71 篇 + VitePress 站点 | ~9× |
 | 提交数 | ~30 | 1,223 | — |
 
@@ -63,10 +70,30 @@ cc-haha 单是 `src/utils/` 一个目录（629 文件 / 187,715 行）就是你�
 
 ### 1.3 形态差
 
-cc-haha 已经从 CLI 转型为 **Electron 桌面工作台**（`desktop/` 目录，独立 vite+electron 工程），
-外加 5 个 IM 适配器（`adapters/`：飞书/钉钉/微信/Telegram/WhatsApp）。你是 Web 前端（React 19 + Vite）。
-形态选择不同，**不构成优劣**——但它的桌面端能做的事（本地文件系统直接访问、系统托盘、自动更新）
-你的 Web 形态要么做不了要么很别扭，这是 `DEFERRED.md` 里「客户端形态决策」该考虑的输入。
+> ⚠️ **本节于 2026-07-16 经用户指正后重写。原文误将本项目前端记为「仅 Web 形态」，
+> 并把桌面端列为待决策项——事实是原生 app 早已交付。**
+
+cc-haha 从 CLI 转型为 **Electron 桌面工作台**（`desktop/`，独立 vite+electron 工程），
+外加 5 个 IM 适配器（`adapters/`）。
+
+本项目是**三端**：backend + web（React 19）+ **Apple 原生 app**
+（`REARCHITECTURE.md:230`：native ✅ 2026-07-11 完成，v0.10.0，macOS 已装 `/Applications`，
+iOS build 10 已推 TestFlight）。原生代码在 `apple-app/`，**全程 gitignored 不入库**
+（`CHARTER.md:257`）——这是我此前误判的直接原因，本仓看不到 Swift 文件。
+
+**这不只是「也有桌面端」，形态上本项目反而更严格**：
+
+| | cc-haha | Agent |
+|---|---|---|
+| 桌面端 | Electron（Chromium 套壳，web 代码复用） | **SwiftUI 原生**（macOS + iOS） |
+| 多端一致性靠什么 | 同一份 web 代码 | **协议 + 夹具**（`PROTOCOL.md` v1 冻结 + `protocol/fixtures/` 六组，web vitest 与 Swift `run_reducer_fixtures.sh` 回放同一批） |
+| 客户端职责 | 较厚（Electron 主进程有逻辑） | **瘦渲染器**（铁律 4：`reduce(state, event) -> state` + UI 副作用，无旁路恢复） |
+
+Electron 复用 web 代码是**省事**；原生 + 协议夹具是**更贵但更正确**——代价是 TS 与 Swift
+不能共享代码，只能共享行为标准。你已经付过这个代价了（`REARCHITECTURE.md` Phase 2 两端各 2 批次）。
+
+**这一节的结论反转**：形态上你不落后，桌面端是原生而非套壳。但它**直接改变了 §5 的 R3**——
+任何「工具自带渲染」的方案在三端架构下都是不可能的，见 R3。
 
 ---
 
@@ -298,17 +325,26 @@ orchestrator 挂起 → `pending_approval` → 前端弹窗 → `resume_after_ap
 
 ### 2.7 前端
 
-| | Agent (`frontend/`, 7,966 行) | cc-haha |
-|---|---|---|
-| 形态 | Web (React 19 + Vite) | Ink/React 终端 UI + Electron 桌面端 + H5 远程 |
-| 工具渲染 | **通用灰框**（`chat-message.tsx:84`） | 每工具自带 render（见 §2.1） |
-| 状态 | zustand（`useChatStore.ts` 1,094 行） | `src/state/AppState.ts` + context |
-| 设计系统 | shadcn/ui（`components/ui/`） | `src/components/design-system/` |
-| i18n | ✅（`i18n.ts` 837 行） | 部分 |
+> 本节于 2026-07-16 修正：原文遗漏了原生端（见 §1.3）。
 
-`useChatStore.ts` 1,094 行是你前端最大的文件，占全部前端的 14%。这是一个**信号**——
-它大概率既管连接、又管消息、又管审批、又管任务。cc-haha 把这些拆在 `state/` + `context/` + 各 hook 里。
-（未深入审计，仅从体量给出的怀疑，建议自查。）
+| | Agent | cc-haha |
+|---|---|---|
+| 端数 | **3**（backend + web 7,966 行 + Apple 原生 `apple-app/`，不入库） | 2（终端 Ink UI + Electron 桌面端 + H5） |
+| 桌面端 | **SwiftUI 原生** | Electron |
+| 一致性保障 | **协议夹具双端回放**（web vitest 4/4 + Swift 3/3，同一批夹具） | 同一份 web 代码，无跨端夹具 |
+| 客户端厚度 | **瘦渲染器**（铁律 4，纯 reduce） | 较厚 |
+| 恢复路径 | **统一一条**（`GET /turn` + `GET /events?after`），补偿动物园已整体退役 | 多路径 |
+| 工具渲染 | **通用灰框**（`chat-message.tsx:84`） | 每工具自带 render（见 §2.1） |
+| 状态 | zustand（`useChatStore.ts` 1,094 行）/ `AgentStore.swift` | `src/state/AppState.ts` + context |
+
+**这一栏你赢的地方比输的多。** 「一份协议三处状态机零共享测试」正是 cc-haha **今天仍然是**
+的样子（`utils/`+`components/`+`desktop/` 各自解释状态），而这恰恰是你 `CHARTER.md:223`
+列为**已治好的第 2 条病**。你花了整个 Phase 2 把它治好，还立了夹具当契约。
+
+你唯一输的就是**工具渲染**——但这一条在三端架构下反而更难，见 R3。
+
+`useChatStore.ts` 1,094 行仍是个信号（占 web 前端 14%），建议自查职责边界。
+但注意它已经是**换过脊柱**的版本（Phase 2 退役了补偿动物园），不是旧账。
 
 ### 2.8 扩展性与生态
 
@@ -328,18 +364,29 @@ orchestrator 挂起 → `pending_approval` → 前端弹窗 → `resume_after_ap
 
 ### 2.9 工程基建
 
+> 本节于 2026-07-16 修正：原文用「13 个测试文件 vs 123 个测试文件」作比，是**不诚实的对比**
+> （文件数 vs 文件数，但你的 13 个文件里有 132 个测试项）。且完全遗漏了原生 E2E 与三端夹具。
+
 | | Agent | cc-haha |
 |---|---|---|
-| 测试 | 13 文件 / 2,475 行 | 123 文件 |
+| 测试 | **132 项**金测试（FakeEngine，无模型毫秒级）+ **20 项**原生 E2E + **6 组**三端协议夹具 | 123 个测试文件（项数未数） |
+| 测试的**性质** | 金测试守护**护栏不变量**；夹具是**三端可执行契约**（改协议先改夹具，铁律 5） | 常规单测为主，无跨端契约测试 |
 | 质量门 | ❌ | `quality-gate/`（coverage/quarantine/provider-smoke/desktop-smoke/persistence-upgrade） |
 | CI | ❌ | `.github/` + 完整 PR 检查链 |
 | git hooks | ❌ | `scripts/git-hooks/install.ts` |
 | 文档站 | md 文件 | VitePress 站点 + 71 篇 + 架构图 8 张 |
 | 类型 | Python 无强制 | TS strict + zod 运行时校验 |
 
-这是纯规模差，**且大部分不该追**（你是单人自持项目，`check:pr` 那套 12 个检查是给 1,223 次提交的开源社区用的）。
-但有两条便宜且有用：**gold tests 已经是你的铁律 1，可以固化成 pre-commit hook**；**架构图**（它有 8 张，
+**这一栏基本不是差距。** 你的 132 项金测试 + 20 项 E2E + 6 组夹具，对一个单人项目而言是**过量**的严谨，
+而且**质量高于数量**：cc-haha 没有任何等价于「三端共享夹具」的东西——它靠同一份 web 代码回避了这个问题。
+
+真正的规模差只在 CI/质量门/文档站，**且大部分不该追**（`check:pr` 那套 12 个检查是给 1,223 次提交的
+开源社区用的）。两条便宜且有用：**金测试固化成 pre-commit hook**；**架构图**（它有 8 张，
 你 `ARCHITECTURE.md` 的图还停在四组件、缺 inference-server）。
+
+**顺带发现的文档漂移**（`CHARTER.md` 与实测不符，建议顺手校正）：
+- `CHARTER.md:167` 记「mcp/（20 工具）+ agents/（4 沙箱）」→ 实为 **17 文件 / 34 类 + 3 沙箱**
+- `CHARTER.md:239` 记「122 项金测试」→ 实为 **132 项**（涨了，正常漂移）
 
 ---
 
@@ -411,9 +458,16 @@ math 有解释器回填），抽象要留出 hook，别硬压成一个模子。
 **做什么**：`BaseTool` 加一个可选的 `render_hint` —— 工具**声明**自己的结果该怎么渲染
 （`type: chart|table|slides|code|text|diff` + 结构化 payload），前端按 hint 分发到对应组件。
 
-**为什么不照抄 cc-haha**：它的工具**直接返回 React 组件**（`renderToolResultMessage(): React.ReactNode`），
-因为它的工具和 UI 在**同一个进程、同一种语言**。你是 Python backend + TS 前端，
-跨进程跨语言，**抄不了也不该抄**。声明式 hint 是同一目标在你的约束下的正确形态。
+**为什么不照抄 cc-haha**（2026-07-16 修正后此条更强）：它的工具**直接返回 React 组件**
+（`renderToolResultMessage(): React.ReactNode`），因为它的工具和 UI 在**同一进程、同一语言**。
+你是 Python backend + **TS web + Swift 原生**——三端、两种客户端语言、跨进程。
+「工具返回组件」在你这里**物理上不可能**，而且会同时违反铁律 4（客户端必须是瘦渲染器）。
+声明式 hint 是同一目标在三端架构下的**唯一**正确形态：hint 是**账本里的数据**，
+三端各自投影——这恰好就是铁律 4 要求的形状。
+
+⚠️ **这是协议变更，受铁律 5 约束**：先落 `protocol/fixtures/` 夹具 → 更新 `PROTOCOL.md`
+（新增字段不升版本）→ 三端实现 → 夹具回放全绿。成本比原估的高（要写 Swift 那一份），
+但没有捷径。
 
 **收益**：`render_chart` 出图、`deck_tools` 出预览、`rag_search` 出召回列表、`shell_exec` 出终端块——
 17 个工具不再长一个样。这是你「体验感散乱」感受里**最能立刻见效**的一条。
