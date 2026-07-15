@@ -1,10 +1,10 @@
 # backend —— Agent 主体服务
 
-> [MacAgent](../README.md) monorepo 的核心服务。基于 **MLX** 框架的 Apple Silicon 本地多模态 AI Agent 服务。以 FastAPI 对外提供 HTTP 接口，内置 ReAct 多轮推理引擎、MCP 风格工具插件系统、KV Cache 前缀复用与会话分支能力，面向单用户、轻量并发场景。
+> [MacAgent](../README.md) monorepo 的核心服务。Apple Silicon 本地多模态 AI Agent 服务，默认以 **MLX** 后端在本进程内推理。以 FastAPI 对外提供 HTTP 接口，内置 ReAct 多轮推理引擎、MCP 风格工具插件系统、KV Cache 前缀复用与会话分支能力，面向单用户、轻量并发场景。
 
 ## 特性
 
-- **纯本地推理**：基于 `mlx-vlm` 运行多模态模型（默认 `mlx-community/gemma-4-e4b-it-4bit`），文本 / 图像原生输入，无需云端
+- **纯本地推理（后端可插拔）**：推理面收敛在 `InferenceBackend` 协议（`core/backend_protocol.py`）后，编排/记忆/工具一律不认识 MLX。`inference.mode` 决定承载——`inprocess` 用 `backends/mlx/` 在本进程加载多模态模型（默认 `mlx-community/gemma-4-e4b-it-4bit`，文本 / 图像原生输入），`remote` 用 `backends/remote/` 把生成托给另一台机器的 inference-server（同一协议两个实现，见根 [HETERO_COMPUTE.md](../HETERO_COMPUTE.md)）。无论哪种，数据都不出自己的机器
 - **摄入解析层（多模态分路）**：文本 + 图像原生直喂模型；其余模态在进模型前的 worker 之外急解析——音频经 mlx-whisper 转写、PDF/办公文档折成带 provenance 标记的文本、扫描型 PDF 渲染成图走原生视觉、代码/大文件懒登记（只给路径不倾倒正文）；解析结果烘进历史日志、重放不重解析；模型可用 `file_extract` 逃生舱按 path 回源取精确内容（PDF 某页 / 音频某时段 / 代码某行区间）
 - **编排循环（多步任务 Agent）**：护栏是代码、计划是数据——模型通过结构化元工具（`update_plan` / `complete_step`）制定并推进多步计划，确定性护栏管预算（单步自纠上限 / 总迭代熔断 / 重规划上限）、失败路由（重试 / 改计划 / 降级 / 问用户兜底）与死循环拦截（同名同参调用直接打回）；任务可跨轮存续并随冷冻落盘恢复
 - **保持集中的推理约束**：借鉴大厂 agent loop，把「让模型专注当前步、少发散」的约束落到代码——**结构性提醒**（步骤边界 / 漂移 / 收尾验证的即时 nudge 贴到最新观察旁）、**完成门控**（计划未完成却提前吐文本收尾则有界推回，堵住「一段散文绕过整个计划」）、**输出截断恢复**（撞 `max_tokens` 先升档重试同一步、再多轮「从断点接着写」，消除半截答复→下轮道歉复述）；每处恢复分支均有界并带命名 transition，杜绝新增分支造成死循环；这些一次性护栏提醒走**可变尾部注入**（用完即弃、不进历史、不被摘要压缩污染）
@@ -35,10 +35,14 @@
 ```bash
 ../devctl.sh setup            # 首次部署（建 .venv + 装依赖）
 ../devctl.sh start backend    # 仅启动本服务（要求 RAG 已就绪）；start 缺省启动全部
+../devctl.sh model           # 从 inference.model_registry 选模型（钉死 revision）→ 写 .model-selection
 ```
 
 单独调试也可直接 `.venv/bin/python app.py`。
-模型解析顺序：本地绝对/相对路径 → `models/<模型名>/` → 从 Hugging Face Hub 自动下载。
+模型解析顺序：`.model-selection` 指针 → `inference.model` → 本地绝对/相对路径 → `models/<模型名>/`
+→ 从 Hugging Face Hub 自动下载（`utils/path_resolver.py`）。
+`inference.mode: remote` 时本服务**不加载权重**，只拉分词器（`scripts/fetch_model.py --tokenizer-only`，
+实测 31MB vs 全量 5.2GB）——分词器仍需本地，因为提示词组装与 token 计数在本进程。
 
 ### 配置（仓库根 config.yaml）
 
@@ -49,13 +53,21 @@
 inference:
   host: "127.0.0.1"         # 仅本机回环，外部访问统一走前端的 /api 代理
   port: 14159
+  mode: "inprocess"         # inprocess=本进程加载 backend 所指后端（默认）；remote=连 inference-server
+  backend: "mlx"            # mlx | cuda(A1 后)：进程内所用/服务端内包的后端
+  remote:                   # 仅 mode=remote 时用（密钥走 INFER_API_KEY，两侧同值）
+    host: "127.0.0.1"       # inference-server 地址；跨机部署改为算力机的 Tailscale 地址
+    port: 14161
+    cache_ttl_minutes: 45   # 服务端缓存注册表空闲回收（略长于本侧 30min 冻结，只兜底）
   model: "mlx-community/gemma-4-e4b-it-4bit"
+  model_revision: "deb1db71…"    # 钉死 HF commit：上游重传与 mlx-vlm 0.5.0 不兼容，勿改指 main
+  model_registry: [...]     # `devctl model` 的候选集（各项钉死 revision + 显存/验证等级备注）
   audio_max_length: 29      # 原生音频 VAD 切片的最大时长（秒），仅原生音频能力启用时用
   modalities: ["text", "image"]  # 模型原生模态：含 "audio" 才原生直喂音频，否则一律 ASR 转写
 
 rag:
-  host: "127.0.0.1"         # rag_search 工具依赖的 RAG 服务地址（同机部署）
-  port: 14160
+  host: "127.0.0.1"         # rag_search 工具依赖的 RAG 服务地址（分离部署时为设备 A 的地址）
+  port: 14160               # 密钥走 RAG_API_KEY，两侧同值
 
 ingestion:                  # 摄入解析层：非原生模态进模型前的急解析（worker 之外）
   asr_model: "mlx-community/whisper-large-v3-turbo"  # 音频转写引擎（mlx-whisper，懒加载）
@@ -81,6 +93,10 @@ server:                     # HTTP 鉴权与跨域：真 key 经 AGENT_API_KEY �
   api_key: ""               # 留空=未启用（启动告警后放行）；设了即强制 Bearer 校验
   allowed_origins:          # CORS 白名单（仅浏览器直连 14159 时生效）
     - "http://localhost:5173"
+
+auth:                       # 多设备票据（§7 预留）：留空 = 单密钥模式，行为与预留前逐字相同
+  devices: {}               # 例：{ mac-studio: "<token>", iphone-15: "<token>" }——一台一票，
+                            # 吊销一台不牵连其余；与 server.api_key 可并存（迁移期）
 
 agent:                      # 编排循环护栏（多步任务）
   tool_schema_mode: "full"  # full=全部工具 schema 常驻；catalog=目录常驻+按名取详情（工具规模大后切换）
@@ -265,18 +281,32 @@ curl -X POST http://localhost:14159/api/v1/chat/my_session/approval \
 ## 架构
 
 ```
-app.py                        # 装配入口：生命周期管理 + 依赖注入
+app.py                        # 装配入口：生命周期管理 + 依赖注入 + 绑定护栏
 framework/
 ├── api/                      # 表现层：路由与响应模型
 │   ├── routes.py
-│   └── schemas.py
-├── core/                     # 领域层：编排循环 + 推理引擎 + 任务调度
+│   ├── schemas.py
+│   └── auth.py               # Bearer 校验面（唯一比对点：共享密钥 + 多设备票据，常量时间）
+├── core/                     # 领域层：编排循环 + 推理引擎 + 任务调度 + 事件账本
+│   ├── backend_protocol.py   # ★ InferenceBackend 协议：推理面的唯一契约（MLX/远端/日后 CUDA 各自实现）
 │   ├── orchestrator.py       # 外层编排循环：计划推进、失败路由、预算护栏、结构性提醒/完成门控/截断恢复、只读并发调度、元工具拦截、挂起检查点、上下文压缩钩子
+│   ├── turn_runner.py        # 轮次生命周期的唯一属主（旧 SSE/阻塞端点退化为其薄适配器）
+│   ├── journal.py            # 事件账本：活跃轮内存环 + journal.jsonl 里程碑落盘
+│   ├── feed.py               # 事件分发：订阅者扇出 + 断线重连的 after=seq 重放
+│   ├── events.py             # 事件类型定义（协议 v1，见根 PROTOCOL.md）
 │   ├── scheduler.py          # 单 worker 任务调度器：任务级门闸、挂起/恢复、可插拔调度策略（自动调度插口）
 │   ├── task_state.py         # 任务状态对象：计划(数据)、结构化操作校验、序列化
 │   ├── engine.py             # 推理引擎：单次生成、取消检查点、推理互斥锁、上下文摘要器
+│   ├── constrained.py        # 工具段约束采样
+│   ├── stream_filter.py      # 流式输出过滤（思考/正文/工具段分流）
 │   ├── prompt_builder.py     # Prompt 组装（前缀分层：稳定前缀→追加历史→可变任务块）
 │   └── response_parser.py    # 模型输出解析（思考 / 文本 / 工具调用）
+├── backends/                 # 推理后端实现（协议的两个实现，编排层不认识其中任何一个）
+│   ├── mlx/                  # 进程内 MLX 后端
+│   │   ├── backend.py        # 协议实现：生成、缓存句柄、取消
+│   │   ├── asr.py            # mlx-whisper 转写
+│   │   └── patch/            # 防腐层：隔离 MLX 底层补丁（gemma4 流式生成 + KV 前缀复用）
+│   └── remote/backend.py     # 远端后端：连 inference-server（SSE 生成、媒体上传、缓存克隆）
 ├── mcp/                      # 插件层：MCP 风格工具系统
 │   ├── base.py               # BaseTool 基类（含 is_available 探活契约、is_concurrency_safe 并发标志）
 │   ├── registry.py           # 扫描、探活、注册与分发
@@ -288,10 +318,15 @@ framework/
 │       ├── rag_admin.py      # RAG 入库/分类治理/删除工具
 │       ├── file_extract.py   # 逃生舱：按 path 回源重解析已摄入文件（PDF页/音频时段/代码行区间）
 │       └── web_research.py    # 联网调查包壳（主体唯一可见的联网工具，内部跑受限沙箱、只回摘要）
-├── agents/                   # 受限调查沙箱（方案 b：物理隔离，脏工具不进插件目录）
-│   ├── runtime.py            # 进程级引擎/事件循环句柄（供 web_research 复用主模型生成）
+├── agents/                   # 受限子沙箱（方案 b：物理隔离，脏工具/子工具不进插件目录）
+│   ├── runtime.py            # 进程级引擎/事件循环句柄（供各沙箱复用主模型生成）
 │   ├── web_tools.py          # 脏工具：SearXNG 检索 + 抓取 + scrub/反投毒 + SSRF + 信任边界
-│   └── research_sandbox.py   # 受限 ReAct 循环（仅 web_search/open_pages，KV 隔离），折成事实摘要
+│   ├── research_sandbox.py   # 受限 ReAct 循环（仅 web_search/open_pages，KV 隔离），折成事实摘要
+│   ├── math_sandbox.py       # 数学攻坚沙箱（离线 Python/SymPy，多步写码-执行-验证）
+│   ├── math_tools.py         # 数学沙箱的子工具
+│   ├── excel_sandbox.py      # 表格攻坚沙箱
+│   ├── excel_tools.py        # 表格沙箱的子工具
+│   └── chart_tools.py        # 图表渲染子工具
 ├── ingestion/                # 摄入解析层：非原生模态进模型前的急解析（worker 之外）
 │   ├── router.py             # Ingestion：按 mime/扩展名分路，产出 images/ingested_text/attachments
 │   └── parsers/
@@ -303,12 +338,15 @@ framework/
 │   ├── session.py            # 冷热切换、KV Cache 状态、分支派生、挂起暂存、摘要旁挂与"摘要+尾部"重建
 │   ├── compactor.py          # 上下文压缩：机械式（预算驱逐 + 取代去重）+ 摘要式二次压缩（方案A）
 │   └── rag_sink.py           # 长期记忆沉淀汇：折叠内容原文写入 RAG agent_memory 类目（fail-open）
-├── patch/                    # 防腐层：隔离 MLX 底层补丁
-│   ├── gemma4_generate.py    # 流式生成 + KV Cache 前缀复用
-│   └── gemma4_utils.py
+├── ppt/                      # Deck（PPT）：Spec 模型、增删改、视觉路由、无头 Chrome 导出 PDF
+├── excel/                    # 表格：重算、渲染、校验、工作簿 diff / inspect
+├── schedule/                 # 定时任务：落盘存储（store）+ 触发扫描与无人值守执行（runner）
+├── push/                     # 推送（§7 预留 #3，已实现）：ES256 JWT 直发 APNs + 设备注册 + 分发
 └── utils/                    # 基础设施层
     ├── file_handler.py       # 图像落盘、原生音频 VAD 切片（供摄入层复用）
-    └── path_resolver.py      # 模型路径解析 / HF 下载
+    ├── config_loader.py      # 仓库根 config.yaml 寻址与加载
+    ├── model_selection.py    # .model-selection 指针解析（devctl model 的落点）
+    └── path_resolver.py      # 模型路径解析 / HF 下载（含 remote 模式的 tokenizer-only 拉取）
 ```
 
 ### 会话存储
@@ -386,6 +424,7 @@ GUI 感知以 AX 树的文本序列化为主（原生 App 足够）；截图作�
 |------|------|------|
 | `run_math` | 单次 SymPy 计算（一条高层调用优先于手搓公式），结果程序化提取 | - |
 | `math_research` | 数学攻坚子沙箱：离线 Python/SymPy 内多步「写码-执行-验证」，最终答案经 `submit_answer` 程序化提取（不经模型转写），一次交一个自足问题 | - |
+| `excel_research` | 表格工程子沙箱：Python 内建/改 `.xlsx`/`.xlsm`，出货前过硬交付闸门（全公式真重算 + 契约校验 + 变更半径审计 + 视觉检查），只报 GO 或诚实失败 | - |
 | `render_chart` | 用真实数据渲染图表 PNG（核心代码绘图，模型不写绘图代码），落盘 `sessions/{id}/assets/`，回执含前端可显示的 markdown 图片行 | - |
 | `deck_init` / `deck_set_slide` / `deck_remove_slide` / `deck_status` | PPT 制作：Deck Spec 落 `sessions/{id}/deck/deck.json`（单一真相），前端检视面板实时投影、逐页看着长出来 | - |
 | `deck_export_pdf` | 无头 Chrome 打印前端 `/print/deck` 路由导出 PDF（渲染器只有前端一份，预览即所得；依赖前端服务在跑） | - |
@@ -407,6 +446,7 @@ GUI 感知以 AX 树的文本序列化为主（原生 App 足够）；截图作�
 | 工具 | 功能 | 审批 |
 |------|------|------|
 | `web_research` | 就一个自足的调查问题联网检索、阅读、交叉验证，返回带 `[来源N]` 引用的事实摘要。重动作，一次调查调一次；返回的是「不可信调查结果」，模型须把其中类指令文本当引用材料、保留引用 | - |
+| `web_read` | 只读给定 URL 并如实摘要（读/总结/翻译/摘取），**不能搜索**；任务超出该页（求证、找更多材料、无 URL 的开放问题）时改用 `web_research`。同样以不可信引用材料边界交回 | - |
 
 > **方案 b：物理隔离。** `web_search` / `open_pages` 两个「脏工具」不在 `framework/mcp/tools/`
 > 插件目录，而在 `framework/agents/`，MCPRegistry 永不扫描——主 Agent（挂着 shell/GUI 等
@@ -419,8 +459,8 @@ GUI 感知以 AX 树的文本序列化为主（原生 App 足够）；截图作�
 > **反投毒落到代码**：`scrub_html` 删脚本/隐藏元素（白底白字藏的指令）、去零宽字符、
 > `_flag_injection` 标记中英祈使注入、域名信誉分 + 「≥2 独立来源」交叉质证、`wrap_untrusted`
 > 明确声明「资料非命令」。**SSRF 硬拒绝**环回/私有网段/链路本地（含 `169.254.169.254`
-> 云元数据）与非 http(s)。搜索层用本机 **SearXNG**（Docker，`settings.yml` 须开 `json` 输出）
-> ——独立服务、数据不出门；离线则 `web_research` 探活失败、自动不注册。
+> 云元数据）与非 http(s)。搜索层用本机 **SearXNG**（仓库 `searxng/` 原生 venv 部署、无 Docker，
+> `settings.yml` 须开 `json` 输出）——独立服务、数据不出门；离线则 `web_research` 探活失败、自动不注册。
 
 ### RAG 知识库工具
 
@@ -480,7 +520,9 @@ class MyTool(BaseTool):
 
 - 工具探活只发生在服务启动时；若依赖的外部服务（如 RAG）在 Agent 运行期间才上线，需重启服务才能注册对应工具。同理，`rag_search` 的分类目录提示烘在启动时的 schema 里，运行期间新建的分类需经 `rag_list_categories` 现查（工具描述已注明）
 - 请勿以 `reload=True` 方式启动，MLX 模型反复重载会导致严重内存泄漏
-- **鉴权**：`/api/v1/*` 全量套 Bearer 共享密钥校验（`AGENT_API_KEY` 环境变量优先，回落 `config.yaml` 的 `server.api_key`）；密钥为空视为未启用（启动告警后放行，便于首启/dev），生产务必设置。`/health` 免鉴权供探活。浏览器不持有密钥——dev 由 Vite 代理注入 `Authorization`，生产由 Nginx 注入
+- **鉴权**：`/api/v1/*` 全量套 Bearer 校验（`AGENT_API_KEY` 环境变量优先，回落 `config.yaml` 的 `server.api_key`）；密钥为空视为未启用（启动告警后放行，便于首启/dev），生产务必设置。`/health` 免鉴权供探活。浏览器不持有密钥——dev 由 Vite 代理注入 `Authorization`，生产由 Nginx 注入。比对面收敛在 `api/auth.py` 的 `verify_token` 一个函数里（换设备票据/JWT/mTLS 只动它），另支持 `auth.devices` 多设备票据——留空即单密钥模式，与预留前行为逐字相同（`tests/test_auth.py` 锁死这一点）
+- **绑定护栏**：绑定到非回环地址却没设密钥时**拒绝启动**（不是告警），在模型加载前失败。inference-server 与 rag 服务同此纪律。理由：改 host 与设密钥是两个独立动作，先改 host 后忘密钥，服务就对整个可达网络裸奔
+- **远程推理**：`inference.mode: remote` 时本服务不加载权重，生成经 `backends/remote/` 转发给设备 A 的 inference-server（`INFER_API_KEY` 两侧同值）。会话数据仍全部落在本机——服务端只见 prompt 与媒体、不持久化会话。部署见根 [README](../README.md#部署形态)
 - **CORS**：白名单收敛（`server.allowed_origins`，默认仅 `http://localhost:5173`）；走代理时为同源，CORS 仅在浏览器直连 14159 时触发，属纵深防御
 - **AppleScript 权限**：`run_applescript` 首次驱动某个应用时，macOS 会弹出「自动化」授权请求；部分操作还需在「系统设置 → 隐私与安全性 → 辅助功能 / 自动化」中授予运行 Agent 的进程（终端 / Python）权限，否则脚本会因权限不足报错
 - **Accessibility 权限**：GUI 工具（`read_ui_tree` / `click_ui_element` / `type_text` / `press_keys` / `set_ui_element_value`）需在「系统设置 → 隐私与安全性 → 辅助功能」中授予运行 Agent 的进程权限。未授权时工具会返回明确引导而非报错，运行期授予后**无需重启**即可生效（`list_applications` 免此权限）

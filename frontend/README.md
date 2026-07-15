@@ -50,7 +50,10 @@ npm run dev        # 监听 0.0.0.0:5173，Tailscale 内网设备可直接访问
 
 后端地址默认走同源 `/api` 相对路径，由 Vite dev server 代理到本机 Agent
 （`http://localhost:14159`，见 `vite.config.ts` 的 `server.proxy`）。
-Agent 与 RAG 服务只绑定 127.0.0.1，内网设备统一通过前端访问。
+backend 默认只绑定 127.0.0.1，内网设备统一通过前端访问——本端口是唯一对外入口。
+
+算力分离部署时（`../devctl.sh start --profile edge`）本前端与 backend 仍同机、代理路径不变；
+变的只是 backend 背后的推理与 RAG 跑在另一台机器上，前端无感。
 
 **鉴权**：后端启用 `AGENT_API_KEY` 后，密钥由代理在 Node 侧注入 `Authorization` 头，
 浏览器 bundle 永不持有 key。环境变量统一在**仓库根**（Vite 的 `envDir` 指向上级，
@@ -122,7 +125,7 @@ src/
 
 ## 错误处理约定
 
-后端业务失败不走 HTTP 错误码（见 API.md §5.4），前端按以下方式呈现：
+后端业务失败不走 HTTP 错误码（终态语义见根 [PROTOCOL.md](../PROTOCOL.md)），前端按以下方式呈现：
 
 - `status: "fail"`（引擎异常）→ 聊天流内红色提示条，traceback 仅打印到 console；该轮用户消息已被后端记入历史
 - `status: "warning"`（达到最大迭代次数）→ 黄色提示「未能得出结论，请重试或简化问题」

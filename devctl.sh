@@ -3,7 +3,8 @@
 # devctl.sh — MacAgent 单仓标准启动器（唯一入口）
 #
 # 目录约定（monorepo）:
-#   backend/   Agent 主体（FastAPI + MLX, :14159）
+#   backend/   Agent 主体（FastAPI, :14159）
+#   inference/ 推理服务（FastAPI, :14161, 仅 inference.mode=remote / --profile gpu 时跑）
 #   rag/       RAG 知识库（FastAPI + PyTorch, :14160）
 #   frontend/  Web 前端（Vite, :5173）
 #   searxng/   SearXNG 原生部署目录（settings.yml + searxng-src 源码 + .venv, :8080, 可选）
