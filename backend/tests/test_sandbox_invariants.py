@@ -20,6 +20,7 @@ inject_env_context」而偶然成立——本文件把它们升级为可执行�
 import pytest
 
 from framework.agents import math_sandbox
+from framework.agents.sandbox_runtime import EphemeralSession
 from tests.fake_engine import FakeEngine, bad_call, call
 
 
@@ -183,3 +184,64 @@ async def test_submit_answer_returns_interpreter_output_verbatim(monkeypatch):
 def math_tools_target():
     from framework.agents import math_tools
     return math_tools
+
+
+# ---------- 统一会话替身（R1-1：5 份拷贝收编成一个实现） ----------
+
+class _StubBackend:
+    def __init__(self):
+        self.handles = []
+
+    def new_cache(self):
+        h = object()
+        self.handles.append(h)
+        return h
+
+
+def test_ephemeral_session_privacy_is_explicit_not_accidental():
+    """隐私边界必须是**写死的类属性**，不是靠「忘了写」+ 引擎 getattr 兜底。
+
+    重构前 5 份拷贝都恰好没设这个属性，隐私边界因此偶然成立——任何一份哪天手抖
+    加上它，个人环境事实就会静默流进沙箱且无人报错。这里钉死：它必须显式存在。
+    """
+    assert "inject_env_context" in EphemeralSession.__dict__, \
+        "隐私边界必须显式定义在类上，不得退回靠属性缺失的偶然成立"
+    assert EphemeralSession.inject_env_context is False
+    assert EphemeralSession(_StubBackend(), "s", "o").inject_env_context is False
+
+
+def test_ephemeral_session_takes_fresh_cache_and_never_persists():
+    """KV 隔离 + 不落盘：这两条现在由单一实现保证，不再散在 5 处注释里。"""
+    b = _StubBackend()
+    sess = EphemeralSession(b, "sys", "open")
+    assert len(b.handles) == 1 and sess.brain_memory_state is b.handles[0]
+    for persist_api in ("append_log", "save_memory", "save_meta", "history_log"):
+        assert not hasattr(sess, persist_api), f"不得暴露持久化面: {persist_api}"
+
+
+def test_time_anchor_is_opt_in():
+    """分钟级时间锚只有 research 侧需要（沙箱无时间工具、KV 一次性）；math/excel 不带，
+    否则平白改变它们的提示前缀。"""
+    b = _StubBackend()
+    assert "Current date & time:" not in EphemeralSession(b, "sys", "o").history[0]["content"]
+    anchored = EphemeralSession(b, "sys", "o", time_anchor=True).history[0]["content"]
+    assert anchored.startswith("sys") and "Current date & time:" in anchored
+
+
+def test_images_ride_as_content_parts_before_text():
+    """带图会话的 user 内容必须是 [image..., text] 形状（excel 视觉回读依赖此形状）。"""
+    sess = EphemeralSession(_StubBackend(), "sys", "look", images=["/tmp/a.png"])
+    assert sess.history[1]["content"] == [{"type": "image"},
+                                          {"type": "text", "text": "look"}]
+    assert sess.images == ["/tmp/a.png"]
+
+
+def test_all_sandboxes_share_the_one_implementation():
+    """三个沙箱 + orchestrator 目标审计不得再各自持有会话替身拷贝（R1-1 的收编目标）。"""
+    import pathlib
+    root = pathlib.Path(math_sandbox.__file__).parent.parent
+    for rel in ("agents/research_sandbox.py", "agents/math_sandbox.py",
+                "agents/excel_sandbox.py", "core/orchestrator.py"):
+        src = (root / rel).read_text()
+        assert "class _EphemeralSession" not in src, f"{rel} 仍持有会话替身拷贝"
+        assert "class _AuditSession" not in src, f"{rel} 仍持有会话替身拷贝"

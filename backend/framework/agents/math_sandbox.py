@@ -12,9 +12,10 @@ ANSWER 是解释器对 answer_code 的执行输出——模型的自然语言只
 永远没有机会"转写"或"推翻"数值本身。
 """
 import asyncio
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from . import math_tools
+from .sandbox_runtime import EphemeralSession
 
 
 MATH_SANDBOX_SYSTEM_PROMPT = (
@@ -77,19 +78,6 @@ _SUBMIT_ANSWER_SCHEMA = {
 _TOOLS = [_RUN_PYTHON_SCHEMA, _SUBMIT_ANSWER_SCHEMA]
 
 
-class _EphemeralSession:
-    """一次性会话替身：只暴露 generate_once 读取的字段，全新 KV、用完即弃。不落盘。"""
-    def __init__(self, backend, problem: str):
-        self.brain_memory_state = backend.new_cache()
-        self.history: List[Dict] = [
-            {"role": "system", "content": MATH_SANDBOX_SYSTEM_PROMPT},
-            {"role": "user", "content": problem},
-        ]
-        self.images: List[str] = []
-        self.audios: List[str] = []
-        self.cancel_requested = False
-
-
 def _format_digest(answer_output: str, explanation: str,
                    verified_log: List[Tuple[str, str]]) -> str:
     """组装交回上层的结果：ANSWER 段为解释器原样输出（权威），解释只谈方法。"""
@@ -114,7 +102,7 @@ async def run_math_research(engine, problem: str, cfg: dict) -> str:
     沙箱主循环（协程，运行在主事件循环上）。返回结果摘要文本；其中 ANSWER 段
     为解释器输出原样嵌入。engine.generate_once 内部持有推理锁，与其他会话生成串行。
     """
-    sess = _EphemeralSession(engine.backend, problem)
+    sess = EphemeralSession(engine.backend, MATH_SANDBOX_SYSTEM_PROMPT, problem)
     max_steps = int(cfg.get("max_steps", 8))
     exec_timeout = int(cfg.get("exec_timeout", math_tools.DEFAULT_TIMEOUT))
     parse_retries = 0

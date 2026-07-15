@@ -12,10 +12,10 @@ ReAct 循环，把多步搜索/抓取/交叉验证折成一份干净摘要。
    轮次正 await 在工具线程上、已释放推理锁，故沙箱可安全取锁，不与自身争锁。
 """
 import time
-from datetime import datetime
 from typing import List, Dict, Optional
 
 from . import web_tools
+from .sandbox_runtime import EphemeralSession
 
 
 SANDBOX_SYSTEM_PROMPT = (
@@ -95,24 +95,6 @@ _OPEN_PAGES_SCHEMA = {
 _TOOLS = [_WEB_SEARCH_SCHEMA, _OPEN_PAGES_SCHEMA]
 
 
-class _EphemeralSession:
-    """一次性会话替身：只暴露 generate_once 读取的字段，全新 KV、用完即弃。不落盘。"""
-    def __init__(self, backend, query: str, system_prompt: str = SANDBOX_SYSTEM_PROMPT):
-        self.brain_memory_state = backend.new_cache()
-        # 分钟级时间锚：主循环刻意只注日粒度（KV 缓存跨天友好，精确时间靠 get_current_time
-        # 工具），但沙箱没有时间工具、KV 又是一次性的——直接注到分钟+时区零缓存代价。
-        # 缺锚时模型对天气/时刻类问题会触发「无实时能力」的先验拒答（见系统提示第 7 条）。
-        _now = datetime.now().astimezone()
-        _anchor = _now.strftime("%Y-%m-%d (%A) %H:%M %Z (UTC%z)")
-        self.history: List[Dict] = [
-            {"role": "system", "content": f"{system_prompt}\n\nCurrent date & time: {_anchor}"},
-            {"role": "user", "content": query},
-        ]
-        self.images: List[str] = []
-        self.audios: List[str] = []
-        self.cancel_requested = False
-
-
 def _extract_urls(args: dict) -> List[str]:
     urls = args.get("urls")
     if isinstance(urls, str):
@@ -148,7 +130,8 @@ async def run_research(engine, query: str, cfg: dict,
         except Exception:
             pass  # 进度是仪表，绝不影响调查本体
 
-    sess = _EphemeralSession(engine.backend, query)
+    sess = EphemeralSession(engine.backend, SANDBOX_SYSTEM_PROMPT, query,
+                            time_anchor=True)
     web_tools.reset_extraction_cache()  # 段落去重缓存按调查为界，防跨调查记仇（见函数注释）
     max_steps = int(cfg.get("max_steps", 6))
     deadline = (time.monotonic() + timeout_s) if timeout_s else None
@@ -289,8 +272,8 @@ async def run_page_digest(engine, question: str, material: str, cfg: dict) -> st
     material 须是 wrap_untrusted 包好的页面正文。
     """
     goal = (question or "").strip() or "General summary of the page(s)."
-    sess = _EphemeralSession(engine.backend, f"Reading goal: {goal}\n\n{material}",
-                             system_prompt=READER_SYSTEM_PROMPT)
+    sess = EphemeralSession(engine.backend, READER_SYSTEM_PROMPT,
+                            f"Reading goal: {goal}\n\n{material}", time_anchor=True)
     result = await engine.generate_once(
         sess, tools=None, temperature=0.2,
         max_tokens=int(cfg.get("max_summary_tokens", 2048)))

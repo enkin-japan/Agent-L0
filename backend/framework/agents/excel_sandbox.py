@@ -23,9 +23,10 @@ import asyncio
 import json
 import shutil
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, List, Optional
 
 from . import excel_tools
+from .sandbox_runtime import EphemeralSession
 from ..excel import inspect_workbook, verify_workbook
 
 _REFERENCES_DIR = Path(__file__).parent.parent / "excel" / "references"
@@ -178,25 +179,6 @@ _VISUAL_QA_SYSTEM = (
 )
 
 
-class _EphemeralSession:
-    """一次性会话替身：只暴露 generate_once 读取的字段，全新 KV、用完即弃。不落盘。"""
-    def __init__(self, backend, system_prompt: str, opening: str,
-                 images: Optional[List[str]] = None):
-        self.brain_memory_state = backend.new_cache()
-        if images:
-            content: object = [{"type": "image"} for _ in images]
-            content.append({"type": "text", "text": opening})
-        else:
-            content = opening
-        self.history: List[Dict] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": content},
-        ]
-        self.images: List[str] = list(images or [])
-        self.audios: List[str] = []
-        self.cancel_requested = False
-
-
 class _GateState:
     """门禁状态机：verdict 只由 harness 写入；哈希封印防"验证后偷改"。"""
     def __init__(self):
@@ -268,7 +250,7 @@ async def _visual_qa(engine, pages: List[str], max_pages: int = 2) -> str:
     """一次性单发视觉回读：每页一个全新 mini 会话（不污染主沙箱 KV）。"""
     findings = []
     for i, png in enumerate(pages[:max_pages]):
-        qa = _EphemeralSession(
+        qa = EphemeralSession(
             engine.backend, _VISUAL_QA_SYSTEM,
             f"Rendered page {i + 1} of the workbook you produced. Inspect it.",
             images=[png])
@@ -385,7 +367,7 @@ async def run_excel_task(engine, task: str, input_file: Optional[str],
         opening += ("No input file. Create the workbook in the current directory with a "
                     "descriptive bare filename (e.g. wb.save('report.xlsx')), then verify it.")
 
-    sess = _EphemeralSession(engine.backend, EXCEL_SANDBOX_SYSTEM_PROMPT, opening)
+    sess = EphemeralSession(engine.backend, EXCEL_SANDBOX_SYSTEM_PROMPT, opening)
     parse_retries = 0
     nudged = False
     visual_summary = ""

@@ -822,31 +822,25 @@ class Orchestrator:
         if backend is None:
             return True, "verifier unavailable"
 
-        class _AuditSession:
-            """一次性会话替身（与 agents/research_sandbox._EphemeralSession 同型），不落盘。"""
-            def __init__(self):
-                self.brain_memory_state = backend.new_cache()
-                self.history = [
-                    {"role": "system", "content": (
-                        "You are a strict completion auditor. Judge ONLY whether the answer "
-                        "delivers what the goal asked for. Reply with first line exactly "
-                        "'VERDICT: PASS' or 'VERDICT: FAIL', then ONE short reason line. "
-                        "FAIL when the answer omits requested deliverables, contains "
-                        "placeholders like '[value]' or 'TBD', claims required data was "
-                        "unavailable, or answers a different question. "
-                        "PASS when the answer is primarily a clarifying question to the user "
-                        "or an honest report of a concrete obstacle — pausing to ask is "
-                        "legitimate; only completion CLAIMS are audited strictly.")},
-                    {"role": "user", "content": (
-                        f"Goal:\n{goal}\n\nFinal answer:\n{answer}\n\n"
-                        "Does the answer fully deliver the goal?")},
-                ]
-                self.images: List[str] = []
-                self.audios: List[str] = []
-                self.cancel_requested = False
+        # 惰性导入：core 不静态依赖 agents（同 :989 的 agents.runtime 先例）。
+        from ..agents.sandbox_runtime import EphemeralSession
+
+        audit = EphemeralSession(
+            backend,
+            "You are a strict completion auditor. Judge ONLY whether the answer "
+            "delivers what the goal asked for. Reply with first line exactly "
+            "'VERDICT: PASS' or 'VERDICT: FAIL', then ONE short reason line. "
+            "FAIL when the answer omits requested deliverables, contains "
+            "placeholders like '[value]' or 'TBD', claims required data was "
+            "unavailable, or answers a different question. "
+            "PASS when the answer is primarily a clarifying question to the user "
+            "or an honest report of a concrete obstacle — pausing to ask is "
+            "legitimate; only completion CLAIMS are audited strictly.",
+            f"Goal:\n{goal}\n\nFinal answer:\n{answer}\n\n"
+            "Does the answer fully deliver the goal?")
 
         try:
-            r = await self.engine.generate_once(_AuditSession(), tools=None,
+            r = await self.engine.generate_once(audit, tools=None,
                                                 enable_thinking=False, temperature=0.1,
                                                 max_tokens=GOAL_VERIFY_MAX_TOKENS)
             verdict_text = (r.get("text") or "").strip()

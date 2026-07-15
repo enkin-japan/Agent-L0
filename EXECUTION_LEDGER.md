@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0 ✅ 完成；R1-0（建回归网）✅ 完成，151 金测试全绿。下一步 = R1-1（提取 EphemeralSession）。**
+> 🟢 **2026-07-16：R0 ✅；R1-0（建回归网）✅；R1-1（统一 EphemeralSession）✅，156 金测试全绿。下一步 = R1-2（提取 ReAct 循环 → `run_sandbox(spec)`）。**
 
 ---
 
@@ -68,7 +68,7 @@
 | 阶段 | 名称 | 状态 | 前置 | 硬件门槛 | 铁律风险 |
 |---|---|---|---|---|---|
 | **R0** | 模型方言层协议手术 | ✅ **2026-07-16** | — | 建设无／真验证需 ≥32GB | 铁律 1（例外条款） |
-| **R1** | 子 Agent 统一执行器 | 🟡 **R1-0 建网 ✅** | R0 ✅ | 无 | 铁律 1（沙箱三不变量） |
+| **R1** | 子 Agent 统一执行器 | 🟡 **R1-0 ✅ / R1-1 ✅** | R0 ✅ | 无 | 铁律 1（沙箱三不变量） |
 | **R2a** | Skill 体系（显式调用） | ⬜ | R1 | 无 | 低 |
 | **R3** | 工具渲染格（协议变更） | ⬜ | — | 无 | **铁律 4 + 5** |
 | **R4** | 文件式长期记忆 | ⬜ | R2a | 无 | 低 |
@@ -93,11 +93,12 @@
 **R1** 🟡 进行中
 - [x] **R1-0 建回归网**（**计划外，但必须先做**：审计发现沙箱零测试覆盖，见下）
       → `backend/tests/test_sandbox_invariants.py` 9 项，**151 全绿**
-- [ ] R1-1 提取 `EphemeralSession` → `agents/sandbox_runtime.py`
+- [x] **R1-1 提取 `EphemeralSession`** → `agents/sandbox_runtime.py`（**实为 5 份拷贝，非 3 份**）
+      → 净删 53 行，**156 全绿**（151 一字未改 + 5 项新契约）
 - [ ] R1-2 提取 ReAct 循环 → `run_sandbox(spec)`（骨架已实证同构，见下）
 - [ ] R1-3 三条隔离不变量升级为显式契约 + 金测试断言（R1-0 已完成契约部分）
 - [ ] R1-4 三沙箱改写为声明 + hook（保留 excel 状态机 / math 回填的差异）
-- [ ] R1-5 验收：**151 全绿**（含 R1-0 那 9 项一字不变）+ 三沙箱 A/B 对拍一致
+- [ ] R1-5 验收：**156 全绿**（含 R1-0 那 9 项一字不变）+ 三沙箱 A/B 对拍一致
 
 **R2a** ⬜
 - [ ] R2a-1 `skills/` 目录 + frontmatter 规范
@@ -286,7 +287,7 @@ excel_sandbox.py:1   math_sandbox.py:1   research_sandbox.py:1     ← 同一个
 
 **抽象的目标是消除拷贝，不是消除差异。**
 
-**验收**：**151 金测试全绿**（含 R1-0 那 9 项**一字不变**）+ 三沙箱 A/B 对拍一致。
+**验收**：**156 金测试全绿**（含 R1-0 那 9 项**一字不变**）+ 三沙箱 A/B 对拍一致。
 
 ---
 
@@ -320,6 +321,38 @@ CHARTER 警告的那件事**。故先建网再动刀——这不是决策，是�
 建网前:  142 passed
 建网后:  151 passed in 3.13s      ← R1 重构的验收基准
 ```
+
+**R1-1 · 统一 EphemeralSession（2026-07-16 完成）**
+
+产出 `backend/framework/agents/sandbox_runtime.py`：`EphemeralSession(backend,
+system_prompt, opening, images=None, time_anchor=False)`。净删 53 行，**156 全绿**
+（R1-0 那 9 项 + 存量 142 项一字未改，新增 5 项契约）。
+
+**实为 5 份拷贝，不是账本此前记的 3 份**——审计时 `grep` 抓出另外两处：
+ · `core/orchestrator.py:826` `_AuditSession`（目标校验），其 docstring 自陈
+   「与 agents/research_sandbox._EphemeralSession 同型」——**注释诚实地记着它是拷贝，
+   但注释阻止不了漂移**；
+ · `excel_sandbox.py:271` 视觉 QA 复用了 excel 自己那份（带图分支）。
+三条不变量此前散在 5 处注释里，改一处修不了另外四处——这正是收编的理由。
+
+**隐私边界：从「偶然成立」变成「写死」。** 重构前 5 份拷贝都恰好没设
+`inject_env_context`，引擎 `getattr(..., False)` 兜底 → 边界成立**纯属巧合**。任何
+一份哪天手抖加上它，个人环境事实就静默流进沙箱且无人报错。现在它是类属性
+`inject_env_context = False`，且金测试断言 `"inject_env_context" in
+EphemeralSession.__dict__`——**钉死"必须显式存在"，而非只断言取值为 False**（后者靠
+遗漏也能过，等于没测）。
+
+**行为零变化的取证**：金测试只走 math 一条路径，research/excel 的会话装配无覆盖，
+故另跑 A/B 脚本逐字段对拍 5 个调用点（scratchpad `verify_r1_1.py`）。据此发现一处
+差点漏掉的行为：旧 research 类**无条件**注时间锚，故 `run_page_digest`（web_read）
+也一直带锚——新签名下必须显式传 `time_anchor=True` 才是零变化。若只照"web_read 不需要
+时间"的直觉写，就会悄悄改掉既有提示前缀。
+
+**放置位置**：放 `agents/` 而非 `core/`。`agents/` 对 `core/` 是**零静态导入**的
+（沙箱只鸭子类型地收 `engine`——这正是 FakeEngine 能测它们的原因）；orchestrator 反向
+惰性导入，沿用 `orchestrator.py:989` 既有先例，不新增依赖边。
+
+---
 
 **R1-1/R1-2 的可行性实证**（三份源码逐段对读的结论）：
 
