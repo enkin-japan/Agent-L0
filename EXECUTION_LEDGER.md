@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0 ✅ 完成（142 金测试全绿，行为零变化已对拍）。下一步 = R1-1。**
+> 🟢 **2026-07-16：R0 ✅ 完成；R1-0（建回归网）✅ 完成，151 金测试全绿。下一步 = R1-1（提取 EphemeralSession）。**
 
 ---
 
@@ -68,7 +68,7 @@
 | 阶段 | 名称 | 状态 | 前置 | 硬件门槛 | 铁律风险 |
 |---|---|---|---|---|---|
 | **R0** | 模型方言层协议手术 | ✅ **2026-07-16** | — | 建设无／真验证需 ≥32GB | 铁律 1（例外条款） |
-| **R1** | 子 Agent 统一执行器 | ⬜ | R0 ✅ | 无 | 铁律 1（沙箱三不变量） |
+| **R1** | 子 Agent 统一执行器 | 🟡 **R1-0 建网 ✅** | R0 ✅ | 无 | 铁律 1（沙箱三不变量） |
 | **R2a** | Skill 体系（显式调用） | ⬜ | R1 | 无 | 低 |
 | **R3** | 工具渲染格（协议变更） | ⬜ | — | 无 | **铁律 4 + 5** |
 | **R4** | 文件式长期记忆 | ⬜ | R2a | 无 | 低 |
@@ -90,12 +90,14 @@
 - [x] R0-5 `model_registry` 9 条加 `dialect: "gemma4"`；engine 按注册表选方言
 - [x] R0-6 验收：**142 全绿**（132 基线 + 10 新方言金测试）+ 逐项 A/B 对拍一致
 
-**R1** ⬜
+**R1** 🟡 进行中
+- [x] **R1-0 建回归网**（**计划外，但必须先做**：审计发现沙箱零测试覆盖，见下）
+      → `backend/tests/test_sandbox_invariants.py` 9 项，**151 全绿**
 - [ ] R1-1 提取 `EphemeralSession` → `agents/sandbox_runtime.py`
-- [ ] R1-2 提取 ReAct 循环 → `run_sandbox(spec)`
-- [ ] R1-3 三条隔离不变量升级为显式契约 + 金测试断言
+- [ ] R1-2 提取 ReAct 循环 → `run_sandbox(spec)`（骨架已实证同构，见下）
+- [ ] R1-3 三条隔离不变量升级为显式契约 + 金测试断言（R1-0 已完成契约部分）
 - [ ] R1-4 三沙箱改写为声明 + hook（保留 excel 状态机 / math 回填的差异）
-- [ ] R1-5 验收：132 全绿 + 三沙箱 A/B 对拍一致
+- [ ] R1-5 验收：**151 全绿**（含 R1-0 那 9 项一字不变）+ 三沙箱 A/B 对拍一致
 
 **R2a** ⬜
 - [ ] R2a-1 `skills/` 目录 + frontmatter 规范
@@ -284,9 +286,74 @@ excel_sandbox.py:1   math_sandbox.py:1   research_sandbox.py:1     ← 同一个
 
 **抽象的目标是消除拷贝，不是消除差异。**
 
-**验收**：132 金测试全绿 + 三沙箱 A/B 对拍一致 + 三条隔离不变量的新增断言。
+**验收**：**151 金测试全绿**（含 R1-0 那 9 项**一字不变**）+ 三沙箱 A/B 对拍一致。
 
-**实测结果**：（完成后填写）
+---
+
+#### 🟡 实测结果（进行中）
+
+**R1-0 · 建回归网（计划外，2026-07-16 完成）**
+
+**为什么计划外**：开工前审计发现——**三个沙箱零测试覆盖**。142 项金测试无一碰沙箱循环
+（`grep -rln "sandbox|run_math_research|run_research|run_excel_task" backend/tests/` 仅命中
+`test_push.py` 的一处无关字样）。**在无回归网的情况下重构铁律 1 的承重代码，正是
+CHARTER 警告的那件事**。故先建网再动刀——这不是决策，是方法。
+
+产出 `backend/tests/test_sandbox_invariants.py`（9 项，以 math_sandbox 为载体）：
+- **不变量 1 工具集物理受限**：沙箱工具集恒为手工装配的 `{run_python, submit_answer}`
+  （皆纯计算，无 shell/文件写/GUI/网络）；每次生成传给引擎的 `n_tools` 恒为 2，
+  与主 MCPRegistry 的 34 个类无关。
+- **不变量 2 KV 隔离**：`new_cache()` 恰好被调 1 次，且沙箱的 `brain_memory_state`
+  **就是**那一份新建句柄（spy 后端验证）；会话替身不得暴露任何持久化面
+  （`append_log`/`save_memory`/`save_meta`/`history_log`）。
+- **不变量 3 隐私边界**：`getattr(sess, "inject_env_context", False) is False`。
+  ⚠️ **此前这条是靠「三个沙箱都忘了写这个属性」偶然成立的**——引擎 `getattr(..., False)`
+  兜底。R1-0 把它钉成契约；R1-1 统一会话时必须**显式**设 False，而不是继续靠遗漏。
+- **循环骨架 4 项**（重构必须逐条保持）：cancelled 返回标记 / 解析失败回灌纠错示例 /
+  纯文本结论推回一次后降级标注 UNVERIFIED / submit_answer 成功即以解释器输出早返。
+
+**建网中发现的既有行为**（此前无人记录）：`max_steps` 用尽后**还有一次强制收尾生成**
+（`math_sandbox.py:218`）。故驱动 `max_steps=N` 需要 `N+1` 条脚本。这不是 bug，
+是「到死也要逼它提交一次」的护栏——已在测试注释里钉住。
+
+```
+建网前:  142 passed
+建网后:  151 passed in 3.13s      ← R1 重构的验收基准
+```
+
+**R1-1/R1-2 的可行性实证**（三份源码逐段对读的结论）：
+
+*会话替身*——三份 `_EphemeralSession` 公共核完全一致
+（`backend.new_cache()` + `[system, user]` 两条历史 + `images`/`audios` + `cancel_requested`），
+差异仅三处：research 注**分钟级时间锚**（主循环只注日粒度，沙箱无时间工具且 KV 一次性，
+故直接注到分钟零缓存代价）、excel 支持**图像**（多模态 content 数组）、math 无。
+→ 统一签名：`EphemeralSession(backend, system_prompt, opening, images=None, time_anchor=False)`。
+
+*ReAct 循环*——骨架**实证同构**，math 与 excel 近乎逐行相同：
+```
+for step in range(max_steps):
+    result = await engine.generate_once(sess, tools=_TOOLS, temperature=0.2, max_tokens=N)
+    if result.get("cancelled"): return f"[{name}: generation cancelled]"
+    calls = [c for c in raw_calls if c.get("type") != "error"]
+    if not calls:
+        if errors and parse_retries < max: → 回灌纠错示例 + continue   ← 仅 JSON 示例不同
+        if not nudged: → 推回 + continue                              ← 仅推回话术不同
+        return <放弃话术>                                              ← 沙箱专属
+    sess.history.append(assistant)
+    responses = [dispatch(c) for c in calls]                          ← 沙箱专属（真差异）
+    sess.history.append(tool)
+<步数用尽处理>                                                          ← 沙箱专属
+```
+→ 可统一的：循环控制、cancelled 检查、调用过滤、纠错闭环（示例入 spec）、
+推回（话术入 spec，`None` = 无推回，research 即如此）、历史追加。
+→ 必须留 hook 的：`dispatch(calls) -> (responses, final)`（math 的 submit 早返、
+excel 的 `_deliver` 早返）、`on_give_up(text)`、`on_exhausted()`（research 与 math
+都要再跑一次收敛/强制提交生成）、`should_converge()`（research 独有的软截止）、
+`on_step(step)`（research 上报进度、math/excel 打印）。
+
+**判断**：hook 集收敛在 5 个以内，且每个都对应真实差异——**R1-2 可做，不是硬压模子**。
+但 excel 的 `INSPECT→PLAN→WRITE→VERIFY` 状态机与内部 QA 子会话（`excel_sandbox.py:271`
+另起一个 `_EphemeralSession`）是最复杂的一例，**R1-4 从 math 起步、excel 压后**。
 
 ---
 
