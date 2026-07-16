@@ -82,11 +82,13 @@ struct SettingsView: View {
                 }
                 #if os(macOS)
                 Section {
+                    // 路径框常显：它是开关的**前置输入**（先填路径再开），藏在开关后面
+                    // 会造成「说明书让先填、界面上却没有」的死锁——实机查验当场撞上
+                    TextField(L("仓库路径"), text: sidecarRepoRootBinding,
+                              prompt: Text("/path/to/Agent"))
+                        .autocorrectionDisabled()
                     Toggle(L("app 内建执行层（sidecar）"), isOn: sidecarEnabledBinding)
                     if store.settings.sidecarEnabled {
-                        TextField(L("仓库路径（开发形态；bundle 形态自动探测）"),
-                                  text: sidecarRepoRootBinding)
-                            .autocorrectionDisabled()
                         LabeledContent(L("状态"), value: sidecarStateLabel)
                         if case .failed(let detail) = sidecar.state {
                             // lib_edge.sh 的原话（端口占用者清单/依赖缺失/日志尾），不二次转译
