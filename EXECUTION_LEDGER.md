@@ -807,10 +807,18 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
   - 双端 BUILD SUCCEEDED；**bundle 布局的注入链路待 R5-9 组装后才可实测**（现在
     Resources/backend 尚不存在，bundle 分支不会被选中）
 
-- [ ] **R5-7 · Views 重做 + R3 的渲染格 Swift 侧**
+- [ ] **R5-7 · Views 重做 + R3 的渲染格 Swift 侧** —— 🟡 渲染格 ✅，Views 范围待用户定
   - 保留 `Store/`（归约器，夹具锁定）+ `API/`（§D.7）
-  - 重做 `Views/`（2,255 行）
-  - 落地 R3 的 `render_hint` 渲染（R3-6 只接了字段）
+  - [x] **渲染格 Swift 侧 ✅ 2026-07-16**：`ToolResponseItem.render`（hint 不收窄成枚举，
+    与 web 同一决定）+ `CitationItem.from` 容错解包 + `CitationsView`（与 web `Citations`
+    同一信息面，默认展开）。不认识的 hint 照旧灰框（fail-open）。双端 BUILD SUCCEEDED，
+    Swift 夹具 7/7（含 007）。v0.16.0(20)
+  - [x] **chart 接管交付：审视后不做**（防重议记录）。markdown 交付有三个 render 载荷
+    给不了的性质：①模型自己看得见（后续轮次能引用图；render 被 D.12 白名单隔离在
+    模型上下文外）②随文本进 history/RAG 沉淀 ③对所有客户端与历史会话统一生效。
+    `_append_missing_asset_links`（orchestrator.py:36）是确定性交付兜底，正是 R3 判
+    「chart 是最差试点」的原因——接管过去 = 用三端改动买一个更差的交付面
+  - [ ] 重做 `Views/`（2,322 行）——**范围待用户裁决**（全重做 / 轻改版 / 按需修）
 
 - [ ] **R5-8 · iOS 瘦客户端**（§D.3）
   - 角色不变；指向 macOS app 内的 backend（经 Tailscale）
