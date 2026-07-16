@@ -73,6 +73,7 @@ struct MacAgentApp: App {
                 .environmentObject(sidecar)
                 #endif
                 .preferredColorScheme(settings.colorScheme)
+                .tint(Theme.accent)   // 全局主色·青瓷（R5-7 色彩设计）：系统控件一并跟随
                 // 语言切换：整树重建让 L() 全部重查表（切换是低频操作，代价可接受）
                 .id(settings.language)
                 .task { push.bootstrap() }

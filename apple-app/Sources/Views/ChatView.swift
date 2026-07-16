@@ -49,6 +49,7 @@ struct ChatView: View {
                     }
                     .padding(16)
                 }
+                .background(Theme.canvas)
                 .onChange(of: store.messages.count) {
                     withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
@@ -145,7 +146,7 @@ struct ChatView: View {
                 } label: {
                     Label(L("思考中…"), systemImage: "brain")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.thoughts)
                 }
             }
 
@@ -159,8 +160,8 @@ struct ChatView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
+                HStack(spacing: Theme.s2) {
+                    ProgressView().controlSize(.small).tint(Theme.accent)
                     Text(activityLine)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -195,9 +196,9 @@ struct ChatView: View {
             Button(L("恢复续跑")) { store.resumeTask() }
                 .buttonStyle(.borderedProminent)
         }
-        .padding(12)
-        .background(Color.blue.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(Theme.s3)
+        .background(Theme.accent.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
     }
 
     private func banner(text: String, color: Color, dismiss: @escaping () -> Void) -> some View {

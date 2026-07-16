@@ -22,10 +22,10 @@ struct MessageView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .selectableOnIOS()
-                .padding(8)
+                .padding(Theme.s2)
                 .frame(maxWidth: .infinity)
-                .background(Color.primary.opacity(0.04))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .background(Theme.wash)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
         case .tool:
             // 渲染格（R3）：认识的 hint 走结构化视图，其余保持灰框（fail-open，与 web
             // 的 renderByHint 同一决策表）。灰框照旧收在 DisclosureGroup 里。
@@ -38,10 +38,10 @@ struct MessageView: View {
                         Text(message.toolDetail ?? "")
                             .font(.system(.caption, design: .monospaced))
                             .selectableOnIOS()
-                            .padding(8)
+                            .padding(Theme.s2)
                     }
-                    .background(Color.primary.opacity(0.05))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .background(Theme.wash)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall))
                 } label: {
                     Label(message.toolLabel ?? L("工具"), systemImage: "wrench.and.screwdriver")
                         .font(.caption)
@@ -59,8 +59,8 @@ struct MessageView: View {
             Text(message.text)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(Color.accentColor.opacity(0.16))
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .background(Theme.userBubble)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.radiusBubble))
                 .contextMenu {
                     Button {
                         Self.copy(message.text)
@@ -98,10 +98,14 @@ struct MessageView: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .selectableOnIOS()
+                            .padding(Theme.s2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Theme.thoughtsWash)
+                            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall))
                     } label: {
                         Label(L("思考过程"), systemImage: "brain")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.thoughts)
                     }
                 }
                 MarkdownText(text: message.text)
@@ -111,10 +115,12 @@ struct MessageView: View {
                         .foregroundStyle(.tertiary)
                 }
             }
-            .padding(12)
+            .padding(Theme.s3)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.primary.opacity(0.045))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .background(Theme.card)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusBubble))
+            .overlay(RoundedRectangle(cornerRadius: Theme.radiusBubble)
+                .strokeBorder(Theme.hairline, lineWidth: 1))
             .overlay(alignment: .topTrailing) {
                 #if os(macOS)
                 if hovering {
@@ -193,7 +199,7 @@ struct CitationsView: View {
         VStack(alignment: .leading, spacing: 6) {
             Label(label, systemImage: "text.quote")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.accent)
             ForEach(Array(items.enumerated()), id: \.offset) { _, c in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
@@ -224,10 +230,12 @@ struct CitationsView: View {
                             .truncationMode(.middle)
                     }
                 }
-                .padding(8)
+                .padding(Theme.s2)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.primary.opacity(0.04))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .background(Theme.card)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
+                .overlay(RoundedRectangle(cornerRadius: Theme.radiusCard)
+                    .strokeBorder(Theme.hairline, lineWidth: 1))
             }
         }
     }

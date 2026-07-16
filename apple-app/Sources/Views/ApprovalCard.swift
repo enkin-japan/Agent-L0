@@ -9,6 +9,7 @@ struct ApprovalCard: View {
         VStack(alignment: .leading, spacing: 10) {
             Label(L("以下敏感操作等待你的授权"), systemImage: "exclamationmark.shield")
                 .font(.headline)
+                .foregroundStyle(Theme.warning)
             ForEach(Array(tools.enumerated()), id: \.offset) { _, tool in
                 VStack(alignment: .leading, spacing: 4) {
                     Text(tool.name)
@@ -21,10 +22,10 @@ struct ApprovalCard: View {
                             .textSelection(.enabled)
                     }
                 }
-                .padding(8)
+                .padding(Theme.s2)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.primary.opacity(0.05))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .background(Theme.wash)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
             }
             HStack {
                 Button(role: .destructive) {
@@ -39,11 +40,13 @@ struct ApprovalCard: View {
                     Label(L("批准执行"), systemImage: "checkmark")
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(Theme.accent)
             }
         }
-        .padding(14)
-        .background(Color.orange.opacity(0.1))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.orange.opacity(0.5)))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(Theme.s4)
+        .background(Theme.warning.opacity(0.08))
+        .overlay(RoundedRectangle(cornerRadius: Theme.radiusBubble)
+            .strokeBorder(Theme.warning.opacity(0.45), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusBubble))
     }
 }

@@ -15,7 +15,65 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
+            // macOS 分 Tab（系统设置窗的惯例；单页 Form 七个 Section 已实证拥挤——
+            // 实机查验时用户在里面找不到新增项）；iOS 保持单列滚动（sheet 的惯例）。
+            #if os(macOS)
+            TabView {
+                Form { connectionSections }
+                    .formStyle(.grouped)
+                    .tabItem { Label(L("连接"), systemImage: "network") }
+                Form { notificationSection }
+                    .formStyle(.grouped)
+                    .tabItem { Label(L("通知"), systemImage: "bell") }
+                Form { sidecarSection; versionSection }
+                    .formStyle(.grouped)
+                    .tabItem { Label(L("执行层"), systemImage: "gearshape.2") }
+                Form { appearanceSection }
+                    .formStyle(.grouped)
+                    .tabItem { Label(L("外观"), systemImage: "paintpalette") }
+            }
+            .padding(.top, Theme.s2)
+            .navigationTitle(L("设置"))
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L("保存")) { save() }
+                }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(L("取消")) { dismiss() }
+                }
+            }
+            #else
             Form {
+                connectionSections
+                notificationSection
+                appearanceSection
+                versionSection
+            }
+            .navigationTitle(L("连接设置"))
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L("保存")) { save() }
+                }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(L("取消")) { dismiss() }
+                }
+            }
+            #endif
+        }
+        .onAppear {
+            urlText = store.settings.baseURLString
+            keyText = store.settings.apiKey
+            push.refreshAuthStatus()
+        }
+        #if os(macOS)
+        .frame(minWidth: 520, minHeight: 420)
+        #endif
+    }
+
+    // MARK: - 分区（macOS 各归各 Tab；iOS 顺序铺开）
+
+    @ViewBuilder
+    private var connectionSections: some View {
                 Section(L("后端地址")) {
                     TextField("http://127.0.0.1:14159", text: $urlText)
                         .autocorrectionDisabled()
@@ -39,6 +97,10 @@ struct SettingsView: View {
                         Text(result).font(.caption)
                     }
                 }
+    }
+
+    @ViewBuilder
+    private var notificationSection: some View {
                 Section {
                     Toggle(L("启用通知"), isOn: notifBinding(\.notifEnabled))
                     if push.authStatus == .denied {
@@ -67,6 +129,10 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                     #endif
                 }
+    }
+
+    @ViewBuilder
+    private var appearanceSection: some View {
                 Section(L("外观与语言")) {
                     Picker(L("外观"), selection: appearanceBinding) {
                         Text(L("跟随系统")).tag("system")
@@ -80,6 +146,10 @@ struct SettingsView: View {
                         Text("English").tag("en")
                     }
                 }
+    }
+
+    @ViewBuilder
+    private var sidecarSection: some View {
                 #if os(macOS)
                 Section {
                     // 路径框常显：它是开关的**前置输入**（先填路径再开），藏在开关后面
@@ -98,7 +168,7 @@ struct SettingsView: View {
                             // lib_edge.sh 的原话（端口占用者清单/依赖缺失/日志尾），不二次转译
                             Text(detail)
                                 .font(.caption.monospaced())
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(Theme.warning)
                                 .textSelection(.enabled)
                         }
                     }
@@ -109,28 +179,13 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 #endif
+    }
+
+    @ViewBuilder
+    private var versionSection: some View {
                 Section {
                     LabeledContent(L("App 版本"), value: Bundle.main.appVersionLabel)
                 }
-            }
-            .navigationTitle(L("连接设置"))
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(L("保存")) { save() }
-                }
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L("取消")) { dismiss() }
-                }
-            }
-        }
-        .onAppear {
-            urlText = store.settings.baseURLString
-            keyText = store.settings.apiKey
-            push.refreshAuthStatus()
-        }
-        #if os(macOS)
-        .frame(minWidth: 480, minHeight: 360)
-        #endif
     }
 
     #if os(macOS)

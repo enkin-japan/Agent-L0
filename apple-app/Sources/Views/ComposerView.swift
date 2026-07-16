@@ -76,15 +76,18 @@ struct ComposerView: View {
                     .textFieldStyle(.plain)
                     .lineLimit(1...8)
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(Color.primary.opacity(0.05))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .padding(.vertical, Theme.s2)
+                    .background(Theme.wash)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
+                    .overlay(RoundedRectangle(cornerRadius: Theme.radiusCard)
+                        .strokeBorder(Theme.hairline, lineWidth: 1))
                     .onSubmit(send)
 
                 Toggle(isOn: $thinking) {
                     Image(systemName: "brain")
                 }
                 .toggleStyle(.button)
+                .tint(Theme.thoughts)
                 .help(L("深度思考模式"))
 
                 if store.isGenerating {
@@ -101,6 +104,7 @@ struct ComposerView: View {
                     Button(action: send) {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.title2)
+                            .foregroundStyle(canSend ? Theme.accent : Color.secondary)
                     }
                     .buttonStyle(.plain)
                     .disabled(!canSend)

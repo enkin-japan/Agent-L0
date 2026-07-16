@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户 + AGENT_API_KEY 首启生成，注入链路待 R5-9 实测）。下一步 = R5-7（Views 重做 + 渲染格 Swift 侧）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 进展**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份），951M 运行时以 320/320 覆盖签名并**已提交公证**（submission `1e13bf2a`，等结论中；对照组 tiny.zip 亦 In Progress >25min ⇒ 当日服务端队列整体偏慢，非大包卡死）。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab，v0.16.0(21)）。下一步 = R5-8（iOS 瘦客户端核查）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 进展**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份），951M 运行时以 320/320 覆盖签名并**已提交公证**（submission `1e13bf2a`，等结论中；对照组 tiny.zip 亦 In Progress >25min ⇒ 当日服务端队列整体偏慢，非大包卡死）。**
 
 ---
 
@@ -807,7 +807,7 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
   - 双端 BUILD SUCCEEDED；**bundle 布局的注入链路待 R5-9 组装后才可实测**（现在
     Resources/backend 尚不存在，bundle 分支不会被选中）
 
-- [ ] **R5-7 · Views 重做 + R3 的渲染格 Swift 侧** —— 🟡 渲染格 ✅，Views 范围待用户定
+- [x] **R5-7 · Views 重做 + R3 的渲染格 Swift 侧** ✅ 2026-07-16（渲染格 + 轻改版色彩设计）
   - 保留 `Store/`（归约器，夹具锁定）+ `API/`（§D.7）
   - [x] **渲染格 Swift 侧 ✅ 2026-07-16**：`ToolResponseItem.render`（hint 不收窄成枚举，
     与 web 同一决定）+ `CitationItem.from` 容错解包 + `CitationsView`（与 web `Citations`
@@ -818,7 +818,18 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
     模型上下文外）②随文本进 history/RAG 沉淀 ③对所有客户端与历史会话统一生效。
     `_append_missing_asset_links`（orchestrator.py:36）是确定性交付兜底，正是 R3 判
     「chart 是最差试点」的原因——接管过去 = 用三端改动买一个更差的交付面
-  - [ ] 重做 `Views/`（2,322 行）——**范围待用户裁决**（全重做 / 轻改版 / 按需修）
+  - [x] **Views 轻改版 + 色彩设计 ✅ 2026-07-16**（用户裁决：轻改版+色彩，设计由我规划）
+    - **设计语言**（`Views/Theme.swift` 单一 token 源，各视图只引用不自造）：主色
+      「青瓷」（浅 #177A7A / 深 #66C4C4，刻意避开系统蓝——自定义状态一眼可辨是 app
+      的意志）；思考=紫罗兰、成功=苔绿、警示=琥珀、运行中=主色；浅色暖纸白底+白卡片、
+      深色碳灰底+浮起卡片；4pt 网格，气泡 12 / 卡片 8 / 小件 6 圆角
+    - 铺装面：MessageView（用户气泡青瓷染、助手卡片+发丝线、思考紫罗兰淡染块、
+      citations 卡片化）、ChatView（画布底、活动条主色、挂起横幅弃系统蓝）、
+      ComposerView（输入框描边、发送键主色、思考开关紫罗兰）、ApprovalCard（琥珀
+      语义收细）、全局 `.tint` 收口
+    - **设置页拆 Tab**（macOS：连接/通知/执行层/外观——实机查验实证的拥挤痛点；
+      iOS 保持单列 sheet 惯例）
+    - 双端 BUILD SUCCEEDED、夹具 7/7、v0.16.0(21) 已装；信息架构与 Store/ 归约器零改动
 
 - [ ] **R5-8 · iOS 瘦客户端**（§D.3）
   - 角色不变；指向 macOS app 内的 backend（经 Tailscale）
