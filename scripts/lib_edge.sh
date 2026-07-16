@@ -139,7 +139,9 @@ managed_or_report() {  # $1: 名称  $2: 端口  $3: pid 文件  $4: stop 目标
     done
     # ${} 必须显式界定：紧跟其后的全角句号是多字节字符，$EDGE_LOG_DIR。 会被 bash 连着
     # 首字节当成变量名（set -u 下直接 unbound variable 报错）。
-    warn "  探活能通，但那不是本次启动器拉起的服务，其日志也不在 ${EDGE_LOG_DIR}。"
+    # 措辞对两条进入路径都成立：探活通（像我们的服务但没记录）与探活不通（占用者
+    # 对 /health 回 404/拒答）都会走到这里
+    warn "  该端口的监听者不是本次启动器拉起的服务，其日志也不在 ${EDGE_LOG_DIR}。"
     warn "  确认可回收则先停： ${EDGE_STOP_CMD:-stop} ${target}"
     return 1
 }
@@ -180,6 +182,24 @@ wait_ready() {  # $1: 名称  $2: url  $3: 超时秒  $4: pid  $5: 日志文件
     done
     echo ""
     info "$name 就绪 ✅ ($url)"
+}
+
+# 「探活不通但端口有人监听」的岔路（start_* 的第二道前置）。此前这条路直接漏去 spawn：
+# 外来占用者若对 /health 回 404（如任意 http 服务占着端口），is_ready 不通、
+# managed_or_report 根本不会被调到，于是照常再拉一个进程——而 BSD 的 SO_REUSEADDR
+# 语义下「特定地址」与「通配地址」可**同端口共存**（实证：0.0.0.0 上的 http.server
+# 占着 14159，backend 绑 127.0.0.1:14159 照样成功、回环流量被它接走），双监听
+# 悄悄成立，谁也不报错。故探活不通时还要看端口：
+#   本机无监听            = 真没在跑 → 放行去 spawn（返回 0）
+#   有监听 + pid 记录存活  = 我们的实例正在启动中 → 等它就绪，不许再拉一份（返回 2）
+#   有监听 + 无 pid 记录   = 外来占用者 → managed_or_report 硬失败报告占用者（返回 1）
+guard_port_before_spawn() {  # $1名称 $2端口 $3pid文件 $4stop目标 $5就绪url $6超时 $7日志 → 0/1/2
+    local name="$1" port="$2" pidfile="$3" target="$4" url="$5" timeout="$6" log="$7"
+    [ -n "$(listen_pids "$port")" ] || return 0
+    managed_or_report "$name" "$port" "$pidfile" "$target" || return 1
+    info "$name 已在启动中（pid 记录存活，探活未通），等待其就绪而非再拉一份"
+    wait_ready "$name" "$url" "$timeout" "$(cat "$pidfile")" "$log" || return 1
+    return 2
 }
 
 stop_one() {  # $1: 名称  $2: 端口  $3: pid 文件  $4: 宽限秒（先 TERM 后 KILL）
@@ -302,6 +322,9 @@ start_searx() {
         managed_or_report "SearXNG" "$SEARX_PORT" "$EDGE_LOG_DIR/searx.pid" searx || return 1
         info "SearXNG 已在运行，跳过"; return 0
     fi
+    guard_port_before_spawn "SearXNG" "$SEARX_PORT" "$EDGE_LOG_DIR/searx.pid" searx \
+        "$SEARX_READY_URL" "$SEARX_TIMEOUT" "$EDGE_LOG_DIR/searx.log"
+    case $? in 1) return 1 ;; 2) return 0 ;; esac
     [ -x "$EDGE_SEARX_PY" ] || { warn "缺少 SearXNG 解释器（${EDGE_SEARX_PY}，可选层），跳过 SearXNG${EDGE_SETUP_HINT:+；如需联网搜索$EDGE_SETUP_HINT}"; return 1; }
     ensure_searx_settings
     info "启动 SearXNG (port $SEARX_PORT) → $EDGE_LOG_DIR/searx.log"
@@ -323,6 +346,9 @@ start_backend() {
         managed_or_report "backend" "$BACKEND_PORT" "$EDGE_LOG_DIR/backend.pid" backend || return 1
         info "backend 已在运行，跳过"; return 0
     fi
+    guard_port_before_spawn "backend" "$BACKEND_PORT" "$EDGE_LOG_DIR/backend.pid" backend \
+        "$BACKEND_READY_URL" "$BACKEND_TIMEOUT" "$EDGE_LOG_DIR/backend.log"
+    case $? in 1) return 1 ;; 2) return 0 ;; esac
     [ -x "$EDGE_BACKEND_PY" ] || { fail "缺少 backend 解释器（${EDGE_BACKEND_PY}）${EDGE_SETUP_HINT:+，$EDGE_SETUP_HINT}"; return 1; }
     # 硬性依赖顺序：RAG 完全就绪后 backend 才能启动（工具探活只发生在 backend 启动时）。
     # edge profile 下 RAG_READY_URL 已指向设备 A（rag.host），这一条同样是跨机可达性校验。
