@@ -44,25 +44,12 @@ struct RootView: View {
                 .navigationTitle("MacAgent")
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260)
         } detail: {
-            Group {
-                if store.selectedSessionId != nil {
-                    ChatView()
-                } else {
-                    ContentUnavailableView(L("选择或新建一个会话"),
-                                           systemImage: "bubble.left.and.bubble.right",
-                                           description: Text("\(L("左上角 ✎ 开始新对话")) · \(Bundle.main.appVersionLabel)"))
-                }
-            }
-            // 侧栏与工作区的常显分界（实机反馈：两侧底色接近时完全没有隔断，
-            // 新会话的选中行像流进了工作区）。注意悬浮玻璃侧栏形态下 detail 内容
-            // 延伸到侧栏底下：全向 ignoresSafeArea 会把线画到窗口最左缘、藏进侧栏
-            // 背后（v28 实证不可见）——只纵向穿透，横向停在可见分界；颜色用系统
-            // 分隔色（比 8% 发丝线醒目，深浅色自适应）
-            .overlay(alignment: .leading) {
-                Rectangle()
-                    .fill(Color(nsColor: .separatorColor))
-                    .frame(width: 1)
-                    .ignoresSafeArea(edges: .vertical)
+            if store.selectedSessionId != nil {
+                ChatView()
+            } else {
+                ContentUnavailableView(L("选择或新建一个会话"),
+                                       systemImage: "bubble.left.and.bubble.right",
+                                       description: Text("\(L("左上角 ✎ 开始新对话")) · \(Bundle.main.appVersionLabel)"))
             }
         }
         #endif

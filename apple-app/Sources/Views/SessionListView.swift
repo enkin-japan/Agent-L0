@@ -154,22 +154,26 @@ struct SessionListView: View {
 
     @ViewBuilder
     private var normalList: some View {
+        // 会话行必须有自己的 Section：裸行会被吸附进上一个分组的卡片里——
+        // 实机截图实证「任务」卡与第一条会话行融成一整块，毫无隔断
         #if os(iOS)
         List {
             taskCenterSection
-            if let draft = draftRow {
-                Label(draft, systemImage: "square.and.pencil")
-            }
-            ForEach(store.sessions) { item in
-                Button {
-                    store.select(sessionId: item.sessionId)
-                } label: {
-                    row(item)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
+            Section(L("会话")) {
+                if let draft = draftRow {
+                    Label(draft, systemImage: "square.and.pencil")
                 }
-                .buttonStyle(.plain)
-                .contextMenu { rowMenu(item) }
+                ForEach(store.sessions) { item in
+                    Button {
+                        store.select(sessionId: item.sessionId)
+                    } label: {
+                        row(item)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu { rowMenu(item) }
+                }
             }
         }
         #else
@@ -180,14 +184,16 @@ struct SessionListView: View {
             }
         )) {
             taskCenterSection
-            if let draft = draftRow {
-                Label(draft, systemImage: "square.and.pencil")
-                    .tag(store.selectedSessionId ?? "")
-            }
-            ForEach(store.sessions) { item in
-                row(item)
-                    .tag(item.sessionId)
-                    .contextMenu { rowMenu(item) }
+            Section(L("会话")) {
+                if let draft = draftRow {
+                    Label(draft, systemImage: "square.and.pencil")
+                        .tag(store.selectedSessionId ?? "")
+                }
+                ForEach(store.sessions) { item in
+                    row(item)
+                        .tag(item.sessionId)
+                        .contextMenu { rowMenu(item) }
+                }
             }
         }
         #endif

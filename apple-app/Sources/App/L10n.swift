@@ -55,6 +55,7 @@ enum L10n {
         "已连接": ("接続済み", "Connected"),
         "未连接": ("未接続", "Disconnected"),
         "连接中…": ("接続中…", "Connecting…"),
+        "会话": ("会話", "Chats"),
         "连接设置": ("接続設定", "Connection Settings"),
         // 任务中心
         "任务": ("タスク", "Tasks"),
