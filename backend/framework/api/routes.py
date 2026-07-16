@@ -87,6 +87,17 @@ async def list_tools(request: Request):
     return {"status": True, "count": len(tools), "tools": tools}
 
 
+@router.post("/api/v1/tools/rescan")
+async def rescan_tools(request: Request):
+    """
+    工具注册表热重扫（D 阶段工程票）：重探启动时被舍弃的工具（依赖后装场景），
+    新通过者补注册并重建剧本表/工具声明。只增不删；探活有真 IO，走线程。
+    """
+    from framework.agents import runtime as _runtime
+    result = await asyncio.to_thread(_runtime.rescan_tools)
+    return {"status": True, **result}
+
+
 @router.get("/api/v1/tasks", response_model=TaskListResponse)
 async def list_tasks(request: Request):
     """

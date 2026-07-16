@@ -12,6 +12,9 @@ class MCPRegistry:
         self.tools_dir = tools_dir
         self._tools: Dict[str, BaseTool] = {}
         self._schemas: List[Dict[str, Any]] = []
+        # 探活未过的工具实例留档（D 阶段热重扫）：依赖后装（LibreOffice 案）时经
+        # rescan_unavailable 重探补注册，不必重启执行层
+        self._discarded: List[BaseTool] = []
         self._load_all_tools()
 
     def _load_all_tools(self):
@@ -40,6 +43,7 @@ class MCPRegistry:
                             # 避免把注定失败的工具 Schema 暴露给 LLM
                             if not tool_instance.is_available():
                                 print(f"[MCP] ⛔ 工具 {tool_instance.name} 不可用（依赖服务探活失败），已舍弃。")
+                                self._discarded.append(tool_instance)
                                 continue
                             self.register(tool_instance)
                 except Exception as e:
@@ -58,11 +62,40 @@ class MCPRegistry:
         它的探活要看剧本表，而剧本表的 requires 探活要看工具表，两表互为前置，
         只能两段装配（见 app.py 装配处）。
         """
-        if not tool.is_available():
+        try:
+            ok = tool.is_available()
+        except Exception as e:  # 探活异常按不可用（目录扫描/重扫同一 fail-safe 口径）
+            print(f"[MCP] ⚠️ 工具 {tool.name} 探活异常，视为不可用: {e}")
+            ok = False
+        if not ok:
             print(f"[MCP] ⛔ 工具 {tool.name} 不可用（依赖服务探活失败），已舍弃。")
+            self._discarded.append(tool)
             return False
         self.register(tool)
         return True
+
+    def rescan_unavailable(self) -> List[str]:
+        """重探启动时被舍弃的工具，新通过者补注册（**只增不删**）。
+
+        只增的原因：删除/替换会与进行中轮次的工具执行竞态；「服务死了」的方向本就
+        由执行期真实报错兜底，不归重扫管。返回本次新注册的工具名列表。
+        探活异常按不可用处理（与目录扫描同一 fail-safe 口径），实例留档下次再试。
+        """
+        newly: List[str] = []
+        still: List[BaseTool] = []
+        for tool in self._discarded:
+            try:
+                ok = tool.is_available()
+            except Exception as e:
+                print(f"[MCP] ⚠️ 工具 {tool.name} 重探异常，仍视为不可用: {e}")
+                ok = False
+            if ok:
+                self.register(tool)
+                newly.append(tool.name)
+            else:
+                still.append(tool)
+        self._discarded = still
+        return newly
 
     def tool_names(self) -> set:
         """已注册的工具名集合（skill 剧本的 requires 探活据此判定）。"""

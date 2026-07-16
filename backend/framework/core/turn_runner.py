@@ -90,11 +90,17 @@ class TurnRunner:
 
             await self._abandon_paused_turn(session, sid)
 
-            # 斜杠点名剧本 → 确定性注入（D1/D.17：点名是机械可判的，不靠模型悟）
+            # 斜杠点名剧本 → 确定性注入（D1/D.17：点名是机械可判的，不靠模型悟）。
+            # 点名的是被舍弃剧本时先热重扫再分发：依赖可能装好了没生效（LibreOffice
+            # 时序案）——重扫是稀有慢路径（几秒探活），只在这一分支走 to_thread。
             from ..agents import runtime as _runtime
-            from .skill_registry import dispatch_slash_skill
-            prompt, ingested_text = dispatch_slash_skill(
-                prompt, ingested_text, _runtime.get_skill_registry())
+            from .skill_registry import dispatch_slash_skill, slash_name
+            skills = _runtime.get_skill_registry()
+            named = slash_name(prompt)
+            if skills is not None and named and skills.unavailable_reason(named):
+                await asyncio.to_thread(_runtime.rescan_tools)
+                skills = _runtime.get_skill_registry()  # 重扫换了新表
+            prompt, ingested_text = dispatch_slash_skill(prompt, ingested_text, skills)
 
             # 将新解析的资源加入本会话的生命周期
             session.images.extend(images)

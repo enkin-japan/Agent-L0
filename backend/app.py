@@ -248,6 +248,22 @@ async def lifespan(app: FastAPI):
     #     run_coroutine_threadsafe 投回本循环复用主模型生成，见 framework/agents）。
     research_runtime.set_runtime(engine, asyncio.get_running_loop())
 
+    # 2.2 工具注册表热重扫（D 阶段工程票）：依赖后装（LibreOffice 案）不再要求重启
+    #     执行层。编排与启动时的两段装配同构：重探工具 → 重建剧本表（requires 要看
+    #     新工具面）→ 二次重探（skill_invoke 的探活要看新剧本表）→ 刷新工具声明与
+    #     摘要阈值锚点。只增不删（删除与进行中轮次竞态；服务死亡由执行期报错兜底）。
+    def _rescan_tools() -> dict:
+        newly = mcp_registry.rescan_unavailable()
+        new_skills = SkillRegistry(SKILLS_DIR, tool_names=mcp_registry.tool_names())
+        research_runtime.set_skill_registry(new_skills)
+        newly += mcp_registry.rescan_unavailable()
+        if newly:
+            orchestrator.refresh_tools_declaration()
+            print(f"🔄 [System] 热重扫补注册工具: {newly}（声明与阈值已刷新）")
+        return {"newly_available_tools": newly,
+                "skills_available": new_skills.names()}
+    research_runtime.set_rescan_hook(_rescan_tools)
+
 
     # 3. 记忆层：初始化弹性冷热会话管理 (默认闲置 30 分钟冻结)。
     #    全局任务 feed(Phase 3):各会话账本的生命周期事件镜像于此,

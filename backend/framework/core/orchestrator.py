@@ -257,14 +257,22 @@ class Orchestrator:
         self.goal_verify = bool(cfg.get("goal_verify", True))
 
         # 工具声明属于稳定前缀：启动时构建一次（注册表就是单一数据源），
-        # 任务期内绝不变动，保证 KV 缓存的稳定段命中
+        # 任务期内绝不变动，保证 KV 缓存的稳定段命中。热重扫补注册工具后经
+        # refresh_tools_declaration 重建（稀有事件，接受一次 KV 前缀失配）。
+        self._summary_high_base = self.summary_high_threshold
+        self._summary_low_base = self.summary_low_threshold
+        self.refresh_tools_declaration()
+
+    def refresh_tools_declaration(self) -> None:
+        """重建工具声明并重锚摘要阈值（__init__ 与热重扫共用）。
+
+        前缀 token 估算：后端无 tokenizer，用 chars/4（对本声明 JSON 实测 4.02 字/token）；
+        catalog 模式下声明变小，估算与阈值随之自动收紧。"""
         self._tools_decl = self._build_tools_declaration()
-        # 前缀 token 估算（后端无 tokenizer，用 chars/4——对本声明 JSON 实测 4.02 字/token）；
-        # catalog 模式下声明变小，估算与阈值随之自动收紧
         self.stable_prefix_tokens_est = sum(
             len(json.dumps(t, ensure_ascii=False)) for t in self._tools_decl) // 4
-        self.summary_high_threshold += self.stable_prefix_tokens_est
-        self.summary_low_threshold += self.stable_prefix_tokens_est
+        self.summary_high_threshold = self._summary_high_base + self.stable_prefix_tokens_est
+        self.summary_low_threshold = self._summary_low_base + self.stable_prefix_tokens_est
 
     # ---------- 工具目录（两级可见性） ----------
     def _build_tools_declaration(self) -> List[Dict[str, Any]]:

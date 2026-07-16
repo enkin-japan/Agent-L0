@@ -97,6 +97,27 @@ def get_skill_registry():
     return _SKILLS
 
 
+# ---------- 工具注册表热重扫（D 阶段工程票） ----------
+# 同一惯例：app.py 装配阶段登记闭包（重扫编排要碰 MCPRegistry/SkillRegistry/
+# Orchestrator 三方，只有装配处齐活）。触发点：REST 端点 + 斜杠点名不可用剧本时
+# 的自动前置重扫（turn_runner）。钩子未登记时安全空转。
+_RESCAN = None            # Callable[[], dict]
+
+
+def set_rescan_hook(fn) -> None:
+    """启动时登记热重扫闭包（lifespan 内调用，须在 Orchestrator 之后）。"""
+    global _RESCAN
+    _RESCAN = fn
+
+
+def rescan_tools() -> dict:
+    """重探被舍弃工具并重建剧本表/工具声明。同步阻塞（探活有真 IO），
+    async 调用方经 asyncio.to_thread 进来。"""
+    if _RESCAN is None:
+        return {"newly_available_tools": [], "skills_available": []}
+    return _RESCAN()
+
+
 # ---------- 长期记忆笔记本（R4） ----------
 # 同一惯例。memory_write 是无状态工具；prompt_builder 侧的索引注入则由 engine 取用
 # （见 core/engine.py 的 env_extra）——两处都需要一个进程级句柄。

@@ -36,6 +36,9 @@ final class SidecarManager: ObservableObject {
         let libEdge: URL          // scripts/lib_edge.sh
         let env: [String: String] // EDGE_* + AGENT_DATA_DIR (+ dev 桥接的密钥)
         let logDir: URL
+        // 孤儿回收只在 bundle 布局做：app 专属数据根里的 pid 文件必然是上代 app 写的；
+        // repo 布局与 devctl 共用 logs/，pid 无法区分归属，reap 会误杀用户的开发后端
+        let isBundle: Bool
     }
 
     private var layout: Layout?
@@ -58,6 +61,13 @@ final class SidecarManager: ObservableObject {
             return
         }
         self.layout = layout
+        // 孤儿回收（bundle 布局限定）：app 被 SIGKILL 后守护进程活了下来，若不回收，
+        // 下面的探活会见「健康」而当 external 永远只用不管——孤儿从此跑着已删除的
+        // 旧 bundle 代码（R5-9 实证）。判据在 lib 的 reap：数据根 pid 文件仍存活 =
+        // 上代 app 所拉。repo 布局绝不 reap（与 devctl 共用 pid，无法区分归属）。
+        if layout.isBundle, let run = try? runLib(layout, command: "reap") {
+            _ = await run.waitAsync()
+        }
         // 先探活：已有人在跑（devctl 起的 dev 后端）就只用不管。收摊时也不碰它——
         // 「app 退出顺手杀掉用户的开发后端」是最恶劣的一种越权。
         if await healthOK() { state = .external; return }
@@ -213,7 +223,7 @@ final class SidecarManager: ObservableObject {
             let rag = Self.cleanKey(settings?.ragApiKey ?? "")
             if !rag.isEmpty { env["RAG_API_KEY"] = rag }
             return Layout(libEdge: res.appendingPathComponent("scripts/lib_edge.sh"),
-                          env: env, logDir: logDir)
+                          env: env, logDir: logDir, isBundle: true)
         }
         // repo 布局：设置里填的仓库检出（开发形态，与 devctl 共用 lib/日志/pid）
         guard let root = settings?.sidecarRepoRoot, !root.isEmpty else { return nil }
@@ -245,7 +255,7 @@ final class SidecarManager: ObservableObject {
             }
         }
         return Layout(libEdge: rootURL.appendingPathComponent("scripts/lib_edge.sh"),
-                      env: env, logDir: logDir)
+                      env: env, logDir: logDir, isBundle: false)
     }
 
     /// 首启生成的 AGENT_API_KEY：32 字节系统熵，base64url（无需人抄写，只走 Keychain）。

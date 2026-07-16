@@ -433,6 +433,33 @@ edge_down() {
     stop_searx
 }
 
+# ---- 孤儿回收（D 阶段工程票）----
+# 场景：app 被 SIGKILL（不走 willTerminate）后，本脚本拉起的守护进程带着 pid 文件
+# 活了下来；下一代 app 探活见「健康」便当 external 只用不管——孤儿从此永远跑着
+# 已删除的旧 bundle 代码。判据是 pid 文件本身：**谁的数据根谁的兵**——bundle 布局的
+# EDGE_LOG_DIR 在 app 专属数据根下，里面的 pid 记录必然是上代 app 经本脚本所拉。
+# ⚠️ 仅 bundle 布局可用（SidecarManager 侧把关）：repo 布局与 devctl 共用 logs/，
+# pid 文件无法区分归属，reap 会误杀用户的开发后端。
+edge_reap() {
+    edge_require_env || return 1
+    local reaped=0
+    local svc
+    for svc in backend searx; do
+        local pidfile="$EDGE_LOG_DIR/$svc.pid"
+        [ -f "$pidfile" ] || continue
+        local pid; pid="$(cat "$pidfile" 2>/dev/null)"
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            info "发现上代残留 $svc（pid $pid，pid 记录在本数据根），回收后重新拉起"
+            if [ "$svc" = "backend" ]; then stop_backend; else stop_searx; fi
+            reaped=$((reaped + 1))
+        else
+            rm -f "$pidfile"   # 记录已死：清掉陈尸的 pid 文件
+        fi
+    done
+    [ "$reaped" -eq 0 ] && info "无上代残留进程"
+    return 0
+}
+
 edge_status() {
     edge_require_env || return 1
     echo "[edge] 服务状态（inference.mode=${INFER_MODE}）："
@@ -456,9 +483,10 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     case "${1:-}" in
         up)     edge_up ;;
         down)   edge_down ;;
+        reap)   edge_reap ;;
         status) edge_status ;;
         *)
-            echo "用法: EDGE_*=... $0 up|down|status（布局参数见文件头）" >&2
+            echo "用法: EDGE_*=... $0 up|down|reap|status（布局参数见文件头）" >&2
             exit 1
             ;;
     esac

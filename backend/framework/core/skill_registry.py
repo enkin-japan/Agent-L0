@@ -30,6 +30,13 @@ from ..utils.frontmatter import parse_frontmatter
 _SLASH_RE = re.compile(r"^/([a-z0-9][a-z0-9-]*)(?:\s|$)", re.S)
 
 
+def slash_name(prompt: str) -> Optional[str]:
+    """prompt 若以斜杠点名开头，返回点名的剧本名；否则 None（turn_runner 的
+    前置热重扫判定用——点名了不可用剧本时先重扫再分发）。"""
+    m = _SLASH_RE.match(prompt.strip())
+    return m.group(1) if m else None
+
+
 def dispatch_slash_skill(prompt: str, ingested_text: str,
                          registry: "Optional[SkillRegistry]") -> Tuple[str, str]:
     """斜杠点名剧本的**确定性分发**（D1/D.17）。
@@ -55,9 +62,9 @@ def dispatch_slash_skill(prompt: str, ingested_text: str,
         if missing:
             notice = (f"[系统注入：用户点名的剧本「{m.group(1)}」当前不可用——依赖工具 "
                       f"{missing} 未注册（依赖未就绪，如缺 LibreOffice/SearXNG 一类外部件）。"
-                      "请直接告知用户这一点与缺失项，并提醒：工具注册表只在执行层启动时"
-                      "扫描一次——若依赖刚安装好，需重启执行层（设置 → 执行层 → 重启）"
-                      "才会生效。不要假装按剧本执行。]")
+                      "执行层刚刚已即时重扫过工具注册表，该依赖确实仍缺失。请直接告知"
+                      "用户这一点与缺失项，提醒检查对应依赖是否安装完整、服务是否在线。"
+                      "不要假装按剧本执行。]")
             combined = f"{notice}\n\n{ingested_text}" if ingested_text.strip() else notice
             return prompt, combined
         return prompt, ingested_text
