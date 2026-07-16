@@ -129,3 +129,102 @@ def test_shipped_skills_all_parse():
     for f in skills_dir.glob("*.md"):
         meta, body = _parse_frontmatter(f.read_text(encoding="utf-8"), f)
         assert meta.get("name") and meta.get("description") and body, f"{f.name} 元数据不全"
+
+
+# ---------- D1/D.17 · 斜杠点名的确定性分发 ----------
+
+def _registry_with_demo(tmp_path):
+    _write(tmp_path, "demo.md", _OK)
+    return SkillRegistry(tmp_path)
+
+
+def test_slash_dispatch_injects_playbook(tmp_path):
+    """`/demo 任务` → 剧本正文进 ingested 通道；prompt 原样（用户气泡不变）。"""
+    from framework.core.skill_registry import dispatch_slash_skill
+    reg = _registry_with_demo(tmp_path)
+    p, ing = dispatch_slash_skill("/demo 查一下天气", "", reg)
+    assert p == "/demo 查一下天气"
+    assert "Body line one." in ing and "系统注入" in ing and "/demo" in ing
+
+
+def test_slash_dispatch_preserves_existing_ingestion(tmp_path):
+    """已有摄入文本（如 PDF 提取）时剧本置于其前，两者都保留。"""
+    from framework.core.skill_registry import dispatch_slash_skill
+    reg = _registry_with_demo(tmp_path)
+    _, ing = dispatch_slash_skill("/demo", "PDF 正文", reg)
+    assert "Body line one." in ing and "PDF 正文" in ing
+    assert ing.index("Body line one.") < ing.index("PDF 正文")
+
+
+@pytest.mark.parametrize("prompt", [
+    "/unknown 干活",          # 未注册的斜杠：原样放行（可能是普通文本）
+    "普通问题 /demo 不在行首",  # 非行首不触发
+    "去看看 https://x.com/demo",  # URL 里的斜杠不触发
+])
+def test_slash_dispatch_leaves_non_matches_alone(tmp_path, prompt):
+    from framework.core.skill_registry import dispatch_slash_skill
+    reg = _registry_with_demo(tmp_path)
+    p, ing = dispatch_slash_skill(prompt, "原摄入", reg)
+    assert p == prompt and ing == "原摄入"
+
+
+def test_slash_dispatch_hyphen_names_and_nil_registry(tmp_path):
+    """连字符剧本名（chart-report）可分发；registry 未装配时零行为。"""
+    from framework.core.skill_registry import dispatch_slash_skill
+    _write(tmp_path, "cr.md", "---\nname: chart-report\ndescription: d\n---\nCR body.\n")
+    reg = SkillRegistry(tmp_path)
+    _, ing = dispatch_slash_skill("/chart-report 分析", "", reg)
+    assert "CR body." in ing
+    p, ing2 = dispatch_slash_skill("/chart-report 分析", "x", None)
+    assert p == "/chart-report 分析" and ing2 == "x"
+
+
+def test_turn_runner_wires_slash_dispatch():
+    """接线断言：accept_turn 里必须真调 dispatch_slash_skill（纯函数对了但没接上
+    = 全部白做，且症状是静默的）。"""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent
+           / "framework" / "core" / "turn_runner.py").read_text(encoding="utf-8")
+    assert "dispatch_slash_skill(" in src
+
+
+# ---------- D1 · 发货剧本对真实工具面（扩充纪律：每个新 skill 必须有金测试） ----------
+
+# 发货清单钉死：探活不过的剧本是**静默舍弃**（风险 5 同款症状——启动正常、剧本消失、
+# 无报错）。少一个名字这里就红，新增剧本必须同步登记。
+_SHIPPED_SKILLS = {"deck", "research", "chart-report", "ingest", "briefing"}
+
+
+def test_shipped_skills_requires_point_at_real_tools():
+    """`requires:` 里打错一个工具名 = 剧本在真机上静默蒸发。对着真实工具面核对：
+    MCPRegistry 目录扫描 + app.py 装配期补注册的两个（memory_write / skill_invoke）。"""
+    from pathlib import Path
+    from framework.mcp.registry import MCPRegistry
+
+    root = Path(__file__).resolve().parent.parent
+    universe = set(MCPRegistry(tools_dir=root / "framework" / "mcp" / "tools").tool_names())
+    universe |= {"memory_write", "skill_invoke"}   # 两表互为前置，装配期补注册
+
+    skills_dir = root.parent / "skills"
+    seen = set()
+    for f in sorted(skills_dir.glob("*.md")):
+        meta, _ = _parse_frontmatter(f.read_text(encoding="utf-8"), f)
+        seen.add(str(meta.get("name")))
+        missing = [t for t in (meta.get("requires") or []) if t not in universe]
+        assert not missing, f"{f.name} 的 requires 指向不存在的工具: {missing}"
+    assert seen == _SHIPPED_SKILLS, \
+        f"发货剧本清单漂移: 现场 {sorted(seen)} != 登记 {sorted(_SHIPPED_SKILLS)}"
+
+
+def test_shipped_skills_load_against_real_tool_universe():
+    """终局断言：对着真实工具面，发货剧本必须**一个不少**地加载成功——
+    解析、探活、重名任何一环失守都会让这里红。"""
+    from pathlib import Path
+    from framework.mcp.registry import MCPRegistry
+
+    root = Path(__file__).resolve().parent.parent
+    universe = set(MCPRegistry(tools_dir=root / "framework" / "mcp" / "tools").tool_names())
+    universe |= {"memory_write", "skill_invoke"}
+    reg = SkillRegistry(root.parent / "skills", tool_names=universe)
+    assert set(reg.names()) == _SHIPPED_SKILLS, \
+        f"加载结果 {reg.names()} != 发货清单 {sorted(_SHIPPED_SKILLS)}（有剧本被静默舍弃）"

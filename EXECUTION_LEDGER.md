@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 ✅（bundle 组装 1.0G 交付形态 + 无头验收全过 + GUI 三项用户实机确认 + 实机查验四轮修复（密钥入库/鉴权门/Developer ID 签名/会话恢复）+ 两轮 UI 打磨，v0.16.0(30)）。**R5 全线收官（2026-07-17），CHARTER 三处同步已获用户同意并落地**。下一步 = **D 阶段 · D1（skill 库扩充）**。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 ✅ 闭环**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份）；951M 运行时（322 Mach-O 覆盖签名）公证 **Accepted**（submission `1e13bf2a`，2026-07-16 通过；当日苹果队列积压 ~14h，对照组 tiny.zip 甚至更慢——大包无罪）。签名→公证全链路验证完毕，剩「对真实 .app 公证 + staple」在 R5 收官后的分发动作里做。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 ✅（bundle 组装 1.0G 交付形态 + 无头验收全过 + GUI 三项用户实机确认 + 实机查验四轮修复（密钥入库/鉴权门/Developer ID 签名/会话恢复）+ 两轮 UI 打磨，v0.16.0(30)）。**R5 全线收官（2026-07-17），CHARTER 三处同步已获用户同意并落地**。**D1 首批进行中**：新剧本 ×4 + D.17 斜杠确定性分发（e4b 不会主动调 skill_invoke，实测倒逼）+ 金测试 232；chart-report/ingest 验收 ✅，briefing 卡 e4b×schedule_create 参数（D2 待办），research 卡 `web_research` 沙箱内层 calls=[] 缺陷（**下一工作项**）。v0.16.0(32) 已装（剧本+分发随包）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 ✅ 闭环**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份）；951M 运行时（322 Mach-O 覆盖签名）公证 **Accepted**（submission `1e13bf2a`，2026-07-16 通过；当日苹果队列积压 ~14h，对照组 tiny.zip 甚至更慢——大包无罪）。签名→公证全链路验证完毕，剩「对真实 .app 公证 + staple」在 R5 收官后的分发动作里做。**
 
 ---
 
@@ -961,7 +961,7 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
 
 | | 内容 | 纪律 |
 |---|---|---|
-| **D1** | Skill 库扩充 | R2a 建好体系后 skill 是 md，AI 批量写。**每个需实测验收** |
+| **D1** | Skill 库扩充 🟡 首批进行中（2026-07-17，见下方 D1 进展） | R2a 建好体系后 skill 是 md，AI 批量写。**每个需实测验收** |
 | **D2** | Tool 扩充（现 17 文件 / 34 类 → 对标 cc-haha 60+） | **只加桌面级任务真需要的** |
 | **D3** | 子 Agent 种类扩充 | R1 后新 agent = 一份声明 |
 | **D4** | 切 `tool_schema_mode: catalog` | `config.yaml` 已预留。**D2 开工前先定「多少工具时切」的阈值**，别等出事 |
@@ -970,6 +970,44 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
 - 每个新 skill/tool **必须有金测试**，否则 132 项的回归网被稀释成摆设
 - 每个新 tool **必须声明 `is_available` 探活**，否则重演 SearXNG 那次「优雅不注册」事故（§S.3 已入账）
 - **宁可 20 个实测过的工具，不要 60 个没验过的**。cc-haha 的 60 个是 123 个测试文件撑着的
+
+### D1 进展（2026-07-17 首批）
+
+**新剧本 ×4**（全部只编排既有工具，零新增提权面；English 正文循 deck.md 惯例）：
+`research`（调研报告：子问题拆解/两独立来源/引用编号/落盘）、`chart-report`（先看
+数据形状/图型跟问题/图题写结论/被排数据要声明）、`ingest`（先列类目防近义增殖/提取
+后先读防乱码/存原文不存摘要/收录清单可审计）、`briefing`（三要素不齐先问/查重/先干跑
+一期/调度提示词必须自足）。UI 自动化剧本刻意押后（验收难度最高）。
+
+**金测试 225→232**：requires 对真实工具面核对（打错名 = 上线静默蒸发，风险 5 同款）、
+发货清单钉死、斜杠分发 ×5（注入/保摄入/三种不触发/连字符与空表/接线断言）。
+
+**D.17 · 斜杠点名确定性分发**（实测倒逼的机制补全）：验收发现 **e4b 对「使用 X 剧本」
+「/x」都不会主动调 `skill_invoke`**——四个案例全部裸奔（R2a 当年验的是机制路径，没验
+模型会不会真调）。R2a 语义本就是「用户点名才调」，点名是机械可判的：摄入期
+`dispatch_slash_skill`（`skill_registry.py`，turn_runner.accept_turn 接线）把
+`/<剧本名>` 的正文注入 `ingested_text` 通道（与 PDF 摄入同形态，烘史重放不重解析，
+用户气泡不变）。`skill_invoke` 保留为模型侧显式通路。零新增提权面（D.11 不变）。
+
+**实测验收记录**（对 v31 bundle 栈 + repo 栈，全真实模型轮次）：
+- `chart-report` ✅ 流程正确（inspect→analyze→chart，status success）；**揪出模型捏造
+  图表链接**（`example.com/chart_link` 顶替 render_chart 真链）→ 剧本补规则 6（链接
+  必须逐字来自工具返回）
+- `ingest` ✅ 流程正确（list→upsert→insert，类目/清理均验证）
+- `briefing` 🟡 分发后到达 schedule_create，但 **e4b 反复构造其参数失败**（JSON 结构
+  不合法，道歉收场）——记为 D2 工具人机学待办（schedule_create 的 schema 对小模型
+  过于复杂）；审批闸门无头旁路被权限系统正确拦截，**审批环节的验收留给用户在 app 真点**
+- `research` 🟡 分发生效、模型循剧本执行，但堵在 **`web_research` 内层沙箱缺陷**：
+  `[web_research] step n/6: calls=[]`——沙箱子循环里模型 0 工具调用产出，搜索根本
+  没发生（searx 本身直探有真结果）。**下一工作项**：单元级追查 sandbox_runtime
+  generate_once 的调用产出（怀疑面：R0 方言手术 × 沙箱提示词 × e4b 能力）
+- 验收环境教训：①先猜 `/turn` 字段名浪费一轮（真形状 `{"turn": {...}|null}`）；
+  ②证据（journal/history）要在删除会话**之前**取齐；③四轮并发提交会在推理队列互相
+  饿死，验收必须串行
+
+**附带发现（R5-9 尾巴）**：`kill -9` app 的实机测试留下**孤儿 backend/searx**（SIGKILL
+不走 willTerminate），此后每代 app 都把它当 external 只用不管——孤儿一直跑着已删除
+的旧 bundle 代码。已手工清；「sidecar 孤儿检测/回收」列为 D 阶段待办。
 
 ---
 

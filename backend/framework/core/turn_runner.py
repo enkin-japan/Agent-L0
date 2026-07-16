@@ -90,6 +90,12 @@ class TurnRunner:
 
             await self._abandon_paused_turn(session, sid)
 
+            # 斜杠点名剧本 → 确定性注入（D1/D.17：点名是机械可判的，不靠模型悟）
+            from ..agents import runtime as _runtime
+            from .skill_registry import dispatch_slash_skill
+            prompt, ingested_text = dispatch_slash_skill(
+                prompt, ingested_text, _runtime.get_skill_registry())
+
             # 将新解析的资源加入本会话的生命周期
             session.images.extend(images)
             session.audios.extend(audios)

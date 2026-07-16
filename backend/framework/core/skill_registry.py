@@ -20,10 +20,40 @@ frontmatter 解析共用 `utils/frontmatter.py`（R4 的笔记同格式，不再
 `requires:` 点名的工具是否都在注册表里（例：deck 剧本依赖 `deck_export_pdf`，而它自身
 探 playwright；playwright 缺失时该剧本整体不可用，不该advertise 给模型）。
 """
+import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from ..utils.frontmatter import parse_frontmatter
+
+# 斜杠点名：行首 /<剧本名>（名字允许小写字母数字与连字符），其后是任务正文（可空）
+_SLASH_RE = re.compile(r"^/([a-z0-9][a-z0-9-]*)(?:\s|$)", re.S)
+
+
+def dispatch_slash_skill(prompt: str, ingested_text: str,
+                         registry: "Optional[SkillRegistry]") -> Tuple[str, str]:
+    """斜杠点名剧本的**确定性分发**（D1/D.17）。
+
+    R2a 的语义本就是「用户点名才调」——而点名是机械可判的，不该指望模型悟：
+    D1 实测（e4b）「使用 X 剧本」「/x」两种说法模型都不会主动调 `skill_invoke`，
+    四个验收案例全部裸奔。故摄入期直接判：prompt 以 `/<已注册剧本名>` 开头时，
+    把剧本正文注入 `ingested_text` 通道（与 PDF 摄入同形态：作为紧随用户文本的
+    独立块烘进历史、重放不重解析），用户气泡与 prompt 原样保留。
+
+    不认识的斜杠原样放行（可能是普通文本）；`skill_invoke` 工具保留（模型侧的
+    显式通路 + 剧本目录的错误提示面）。零新增提权面：注入的只是文本，工具照走
+    主循环审批闸门（D.11 不变）。
+    """
+    m = _SLASH_RE.match(prompt.strip())
+    if not m or registry is None:
+        return prompt, ingested_text
+    skill = registry.get(m.group(1))
+    if skill is None:
+        return prompt, ingested_text
+    block = (f"[系统注入：用户以 /{skill.name} 点名了剧本「{skill.name}」"
+             f"（{skill.description}），正文如下——按剧本执行本轮任务]\n\n{skill.body}")
+    combined = f"{block}\n\n{ingested_text}" if ingested_text.strip() else block
+    return prompt, combined
 
 
 class Skill:
