@@ -12,7 +12,16 @@ final class AgentStore: ObservableObject {
     @Published var connectionOK: Bool?
     // 会话
     @Published var sessions: [SessionMetaItem] = []
-    @Published var selectedSessionId: String?
+    /// 持久化选中会话：杀进程/重启后自动回到原直播视图（铁律 4 的 ≤1s 恢复语义，
+    /// web 靠刷新同 URL 天然满足，native 必须显式记住）。draft（未落盘）id 也会
+    /// 存进去，恢复时经 restoreLastSession 的存在性校验过滤。
+    @Published var selectedSessionId: String? {
+        didSet {
+            let ud = UserDefaults.standard
+            if let id = selectedSessionId { ud.set(id, forKey: "session.lastSelected") }
+            else { ud.removeObject(forKey: "session.lastSelected") }
+        }
+    }
     @Published var messages: [ChatMessage] = []
     // 活跃轮直播态（预览;turn_ended 权威对账后清空）
     @Published var isGenerating = false
@@ -122,6 +131,15 @@ final class AgentStore: ObservableObject {
         selectedSessionId = Self.makeSessionId()
         messages = []
         knownTurnCount = 0
+    }
+
+    /// 启动恢复：回到上次的会话（仅当它仍存在于会话列表——draft/已删除的过滤掉）。
+    /// 在 loadSessions 之后调用；已有选中（深链等先到）则不抢。
+    func restoreLastSession() {
+        guard selectedSessionId == nil,
+              let last = UserDefaults.standard.string(forKey: "session.lastSelected"),
+              sessions.contains(where: { $0.sessionId == last }) else { return }
+        select(sessionId: last)
     }
 
     func select(sessionId: String) {

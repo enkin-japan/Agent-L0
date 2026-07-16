@@ -901,9 +901,24 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
     缺证书回落 ad-hoc）——ad-hoc 每次构建都是新身份，Keychain 按签名身份做 ACL，
     每次重装都可能读不回旧密钥（弹窗/静默空值）；Developer ID 的 designated
     requirement 跨构建稳定，密钥存一次终身有效
-  - [ ] **GUI 三项待实机查验（重测三）**：v25 首启若弹「访问钥匙串」对话框选**始终允许**；
-    重贴两把密钥（看长度回显与 .env.local 字符数一致）→ 重启执行层 → 对话；
-    然后：双击冷启时延；**杀进程恢复 ≤1s**（铁律 4）；sidecar 崩溃自动重启不丢轮次（铁律 2）
+  - **实机查验第四轮（2026-07-16）**：v25 观测点一击定案——盘点日志显示 up 时刻
+    **INFER=无 RAG=无**（AGENT=43 字自动生成的那把，链路通）；再查钥匙串：
+    **infer/rag 两条目从来不存在** ⇒ 主因是值从未成功入库（「引号」只是并发嫌疑），
+    前三轮全部自洽。处置：`security add-generic-password -T /Applications/MacAgent.app`
+    直接种入 .env.local 的两值 + ACL 授权（Developer ID 身份稳定，授权终身有效），
+    消掉「手工输入」变量。**对话打通**（用户转入验收三项）。
+  - **验收三项第一轮结果 + 修复（v0.16.0(26)）**：
+    - 杀进程恢复实测 2~3s，且 native 不持久化选中会话——重启后要手点才回到原会话，
+      不满足「回来 ≤1s 恢复完整直播视图」语义（web 刷新同 URL 天然满足）。修复：
+      `selectedSessionId` 持久化（UserDefaults）+ 启动 `restoreLastSession()`
+      （存在性校验过滤 draft/已删除；深链先到不抢）——重启自动回到原直播视图
+    - sidecar 自愈项**未真测到**：给用户的命令少了 `-sTCP:LISTEN`，`lsof -ti :14159`
+      连 app 自己的客户端连接一起命中，kill -9 把 app 也杀了（正确命令：
+      `lsof -ti :14159 -sTCP:LISTEN | xargs kill -9`）
+  - [ ] **GUI 验收待重测（v26）**：①杀进程（强退 app）→ 重开 → **自动**回到原会话，
+    计「UI 出现 → 直播视图完整」段 ≤1s；②sidecar 自愈：
+    `lsof -ti :14159 -sTCP:LISTEN | xargs kill -9` → 菜单栏「启动中→运行中」→ 轮次不丢；
+    ③双击冷启时延记录
 
 **CHARTER 需同步改动**（R5 完成时一并更新，**属架构方向改动**）：
 | 位置 | 现状 | 改为 |

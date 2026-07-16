@@ -89,6 +89,7 @@ struct SessionListView: View {
             .task {
                 await store.refreshConnection()
                 await store.loadSessions()
+                store.restoreLastSession()   // 杀进程/重启回到原会话（铁律 4 恢复语义）
                 if store.connectionOK != true {
                     showSettings = true
                 }
