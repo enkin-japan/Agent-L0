@@ -53,8 +53,9 @@ enum E2E2 {
                 print("     示例：\(first.name ?? first.id) — \(first.spec?.summary ?? "")")
             }
 
-            // 5. 资产拉取（现成图表 PNG）+ URLCache 复用
-            let assetPath = "/api/v1/files/charttest-1783432013/assets/chart-1783432029567-chart.png"
+            // 5. 资产拉取（自带夹具 PNG，run_e2e.sh 跑前种进数据根——写死历史会话
+            //    的路径在新环境/bundle 数据根必 404，R5-9 实证过）+ URLCache 复用
+            let assetPath = "/api/v1/files/e2efixture-chart/assets/chart-fixture.png"
             let png = try await client.fetchAsset(path: assetPath)
             check("资产可拉取（\(png.count) bytes）且为 PNG",
                   png.count > 1000 && png.prefix(4) == Data([0x89, 0x50, 0x4E, 0x47]))

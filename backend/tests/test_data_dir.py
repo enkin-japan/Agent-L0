@@ -104,3 +104,10 @@ def test_push_registry_not_anchored_on_base_dir():
     src = (_BACKEND / "app.py").read_text(encoding="utf-8")
     assert 'PushRegistry(DATA_DIR / "push")' in src
     assert 'PushRegistry(BASE_DIR' not in src
+
+
+def test_apns_key_falls_back_to_data_dir():
+    """APNs 密钥相对路径：仓库根落空 → 数据根兜底（R5-9）。bundle 形态仓库根 =
+    只读 Resources/，私钥永不入包，数据根（Application Support）是它唯一的家。"""
+    src = (_BACKEND / "app.py").read_text(encoding="utf-8")
+    assert "primary if primary.exists() else DATA_DIR / key_path" in src

@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab，v0.16.0(21)）；R5-8 ✅（iOS 瘦客户端核查：平台守卫审计 + 角色不变 + `release-ios.sh` 实跑上传 TestFlight）。下一步 = R5-9（验收——隐含前置：把 backend 代码 + `build/runtime` + `lib_edge.sh` + `config.yaml` 组装进 .app Resources，bundle 布局至今只存在于 SidecarManager 的分支判断里）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 进展**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份），951M 运行时以 320/320 覆盖签名并**已提交公证**（submission `1e13bf2a`，等结论中；对照组 tiny.zip 亦 In Progress >25min ⇒ 当日服务端队列整体偏慢，非大包卡死）。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 🟡 **无头部分全过**（`bundle-macos.sh` 组装 1.0G 交付形态 v0.16.0(22) 已装 /Applications；无头烟测：工具数 36 断言 + E2E 20 项（靶=bundle backend）+ 双端夹具 + 印章跑后完好（S.8）；冷启 6.6–9.8s；金测试 223）。**剩 GUI 三项待用户实机查验**（双击冷启时延 / 杀进程恢复 ≤1s / sidecar 崩溃重启不丢轮次），过完即 R5 收官 + CHARTER 同步改动（表见 R5-9 下方，属架构方向改动需用户点头）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 进展**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份），951M 运行时以 320/320 覆盖签名并**已提交公证**（submission `1e13bf2a`，等结论中；对照组 tiny.zip 亦 In Progress >25min ⇒ 当日服务端队列整体偏慢，非大包卡死）。**
 
 ---
 
@@ -846,12 +846,31 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
   - 附带发现：backend/.venv 经 R5-2 瘦身后无 pyjwt，`wait-testflight.py` 需独立 venv
     （其头注本就说「任意 venv」，发布工具依赖不回灌边缘 venv）
 
-- [ ] **R5-9 · 验收**
-  - 冷启动：app 双击 → searx 就绪 → backend 就绪 → 界面可用（记录时延）
-  - **原生 E2E 20 项全绿**（`Tests/run_e2e.sh`）
-  - **夹具双端回放全绿**（web vitest + Swift）
-  - **杀进程恢复 ≤1s**（铁律 4 的验收标准，`REARCHITECTURE.md` Phase 2）
-  - sidecar 崩溃后自动重启且不丢轮次（轮次是账本资源，铁律 2）
+- [~] **R5-9 · 验收** 🟡 无头部分 ✅ 2026-07-16；GUI 三项待实机查验
+  - **bundle 组装落地**（隐含前置，本阶段最大件）：新 `apple-app/bundle-macos.sh`——
+    Release 构建 → Resources/ 注入 backend（rsync 排除 .venv/数据目录/测试）+
+    skills/ + python（950M PBS 树，ditto 保符号链接）+ scripts/lib_edge.sh +
+    config.yaml → `compileall` 预编译（S.8）→ 私钥零泄漏断言（包内 .p8/.env* 即
+    组装失败）→ 重签 → 安装。产出 1.0G，v0.16.0(22)。与 install-macos.sh 分工：
+    彼为日用快装（repo 布局），此为交付形态（双击即全栈）
+  - **无头烟测**（复刻 SidecarManager bundle 分支 env，数据根=临时目录）：
+    searx 就绪（恒回环）→ 分词器 → backend 就绪；`/health` ok；**工具数 36 断言
+    通过**（= 仓库裸注册 34 + app.py 装配补注 memory_write/skill_invoke——风险 5
+    「打包后静默丢工具」排除）；跑一轮后 `codesign --verify` 印章完好（S.8 闭环）
+  - **冷启动（无头）**：全栈 down→up **6.6–9.8s**（searx+分词器解析+backend 就绪；
+    GUI 双击在此之上加 SwiftUI 启动，待实机；Gatekeeper 首验一次性成本另计）
+  - [x] **原生 E2E 20 项全绿**（`Tests/run_e2e.sh`）——**且靶子是 bundle backend**
+    （批 1 11 项含真实模型回复：bundle→设备 A 推理链路通；批 2 9 项）。附带修掉
+    E2E 环境耦合缺陷：批 2 资产检查写死已被回收的开发机会话 → 改为自带夹具
+    （`Tests/fixtures/chart-fixture.png`，run_e2e.sh 跑前种进 `AGENT_DATA_DIR`）
+  - [x] **夹具双端回放全绿**（web vitest 8/8 + Swift 7/7）；金测试 222→**223**
+    （+APNs 兜底断言）
+  - APNs 密钥 bundle 形态安家：相对路径仓库根落空 → **数据根兜底**（app.py，
+    私钥永不入包；放 `~/Library/Application Support/dev.enkin.macagent/.keys/` 即启用）
+  - 附带发现：bundle 首启需 HF 可达（tokenizer-only 拉取）——烟测当日撞上 HF
+    整站不可达（504/超时），种本地快照后通过；离线首启的预种优化留给 D 阶段
+  - [ ] **GUI 三项待实机查验**：双击冷启动时延（界面可用）；**杀进程恢复 ≤1s**
+    （铁律 4，`REARCHITECTURE.md` Phase 2）；sidecar 崩溃自动重启且不丢轮次（铁律 2）
 
 **CHARTER 需同步改动**（R5 完成时一并更新，**属架构方向改动**）：
 | 位置 | 现状 | 改为 |
@@ -987,6 +1006,18 @@ This operation can only be performed by the Account Holder`。
 都是独立入口）；②「fail-open 验证」证明的是**对端缺席时**的行为，永远替代不了
 把对端真启一次；③已补 `tests/test_entrypoints.py`：入口模块级 import 全通 +
 禁止家族字面量（`dialects.gemma4`）出现在 server 源码——两个断裂形态都钉死。
+
+### S.8 · Python 默认字节码写回会破坏只读 bundle 的 codesign 印章（2026-07-16）
+
+**事故**：R5-9 首次组装的 .app 烟测一切通过，但跑完 `codesign --verify` 报
+"a sealed resource is missing or invalid"——首启 import 把 `__pycache__` 写满了
+Resources/（rsync 组装时刻意排除了 backend 字节码；python/bin 也有缺口），印章
+在**功能全绿**的情况下被静默破坏，公证分发形态下这就是 Gatekeeper 拒启。
+
+**教训**：①「bundle 只读」不是声明出来的，是**验证出来的**——烟测收尾必须跑
+`codesign --verify`；②修法两层：组装期 `compileall` 让字节码随包进印章 +
+SidecarManager bundle 分支设 `PYTHONDONTWRITEBYTECODE=1` 兜漏网；③一切「运行后
+包内容不得变化」的断言，都要在**真跑过一轮之后**再验一次。
 
 ### S.2 · `git add -A` 会扫进不属于本次改动的东西（2026-07-15）
 

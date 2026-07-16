@@ -179,6 +179,9 @@ final class SidecarManager: ObservableObject {
             env["EDGE_LOG_DIR"] = logDir.path
             env["EDGE_CONFIG"] = res.appendingPathComponent("config.yaml").path
             env["AGENT_DATA_DIR"] = dataDir.path
+            // bundle 只读：字节码已在组装期 compileall 进印章，运行时一个 .pyc 都
+            // 不许写回包内（写了就破坏 codesign 印章——R5-9 实证）。repo 布局不设。
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
             // 密钥形态（R5-6）：bundle 里没有 .env.local，Keychain 是密钥的家。
             // AGENT_API_KEY 首启生成随机值——虽是同进程回环（可退化为空），但生成
             // 一把成本为零，还把「回环上其他本机进程白嫖 backend」也关掉了；

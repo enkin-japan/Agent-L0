@@ -389,6 +389,8 @@ schedules:
 push:
   enabled: true
   apns_key_path: "./.keys/AuthKey_645U4V9MAX.p8"                 # 例：.keys/AuthKey_ABC123DEFG.p8（绝对路径/~ 也认）
+                                    # 相对路径先按仓库根找，落空再按数据根（AGENT_DATA_DIR）找——
+                                    # app bundle 形态把 .p8 放 ~/Library/Application Support/dev.enkin.macagent/.keys/
   apns_key_id: "645U4V9MAX"                   # 密钥页显示的 Key ID（10 位）
   apns_team_id: "9A84P4ZS84"        # Apple Developer Team ID
   bundle_id: "dev.enkin.macagent"   # iOS app 的 bundle id（apns-topic）

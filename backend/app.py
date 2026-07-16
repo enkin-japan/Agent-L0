@@ -371,9 +371,12 @@ async def lifespan(app: FastAPI):
     if push_cfg.get("enabled", True):
         # 密钥相对路径 = 相对仓库根（config.yaml 所在处）：`.keys/AuthKey_X.p8` 在
         # 开发机/远程机都指向各自仓库副本里的同一位置，不受进程启动目录影响。
+        # bundle 形态（R5-9）仓库根 = 只读 Resources/，私钥永不打进 app 包——
+        # 相对路径落空时兜底到数据根（Application Support，用户级权限），放那即启用。
         key_path = str(push_cfg.get("apns_key_path") or "")
         if key_path and not Path(key_path).expanduser().is_absolute():
-            key_path = str(BASE_DIR.parent / key_path)
+            primary = BASE_DIR.parent / key_path
+            key_path = str(primary if primary.exists() else DATA_DIR / key_path)
         try:
             apns_client = APNsClient(
                 key_path,
