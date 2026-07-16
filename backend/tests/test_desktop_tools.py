@@ -74,11 +74,37 @@ def test_find_files_content_mode_and_folder_scope(monkeypatch, tmp_path):
     ran = _Ran(stdout="")
     monkeypatch.setattr("framework.mcp.tools.file_nav.subprocess.run", ran)
     out = FindFilesTool().execute("发票", search_content=True, folder=str(tmp_path))
-    assert ran.calls[0][0] == ["mdfind", "-onlyin", str(tmp_path), "发票"]
-    assert "No files matched" in out
+    # 显式内容模式：单次调用，不再降级
+    assert ran.calls == [(["mdfind", "-onlyin", str(tmp_path), "发票"], ran.calls[0][1])]
+    assert "No files matched" in out and "Full Disk Access" in out
     # 不存在的 folder 直接报错，不去跑 mdfind
     assert "folder not found" in FindFilesTool().execute("x", folder=str(tmp_path / "nope"))
     assert len(ran.calls) == 1
+
+
+def test_find_files_name_miss_falls_back_to_content(monkeypatch, tmp_path):
+    """D2 验收实证（アジャイル開発案）：e4b 漏传 search_content → 名字模式空手而归。
+    修复 = 名字 0 命中自动降级内容模式，结果如实标注匹配方式。"""
+    hit = tmp_path / "result.txt"
+    hit.write_text("x")
+
+    class _Seq:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, cmd, **kw):
+            self.calls.append(list(cmd))
+            r = subprocess.CompletedProcess(cmd, 0)
+            r.stdout = "" if "-name" in cmd else f"{hit}\n"  # 名字空、内容中
+            r.stderr = ""
+            return r
+
+    seq = _Seq()
+    monkeypatch.setattr("framework.mcp.tools.file_nav.subprocess.run", seq)
+    out = FindFilesTool().execute("アジャイル開発", folder=str(tmp_path))
+    assert seq.calls[0] == ["mdfind", "-onlyin", str(tmp_path), "-name", "アジャイル開発"]
+    assert seq.calls[1] == ["mdfind", "-onlyin", str(tmp_path), "アジャイル開発"]
+    assert "result.txt" in out and "match by file CONTENT" in out
 
 
 def test_find_files_rejects_empty_query():

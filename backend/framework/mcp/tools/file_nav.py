@@ -80,9 +80,10 @@ class ListDirTool(BaseTool):
 class FindFilesTool(BaseTool):
     name = "find_files"
     description = (
-        "Find files on the user's Mac by name (default) or by content keywords, via Spotlight. "
-        "Use this whenever the user asks to locate a file ('where is that PDF from last week') "
-        "instead of guessing paths. Returns up to 30 matches, newest first."
+        "Find files on the user's Mac via Spotlight: matches file names first and automatically "
+        "falls back to searching file contents. Use this whenever the user asks to locate a file "
+        "('where is that PDF from last week') instead of guessing paths. "
+        "Returns up to 30 matches, newest first."
     )
     requires_approval = False
     is_concurrency_safe = True  # 只读查询
@@ -109,24 +110,41 @@ class FindFilesTool(BaseTool):
         return None
 
     def execute(self, query: str, search_content: bool = False, folder: str = None) -> str:
-        cmd = ["mdfind"]
+        scope = []
         if folder:
             fp = Path(str(folder)).expanduser()
             if not fp.is_dir():
                 return f"System Error: folder not found: {fp}"
-            cmd += ["-onlyin", str(fp)]
-        cmd += [query.strip()] if search_content else ["-name", query.strip()]
+            scope = ["-onlyin", str(fp)]
+        q = query.strip()
+
+        def _mdfind(args):
+            return subprocess.run(["mdfind", *scope, *args],
+                                  capture_output=True, text=True, timeout=25)
+
+        # 名字模式 0 命中时自动降级内容模式（D2 首批验收实证：e4b 会漏传
+        # search_content，「在文稿里找提到 X 的文件」走成文件名搜索空手而归。
+        # 参数保留——显式 true 仍只搜内容；降级是确定性兜底，不指望模型重试补参）。
+        matched_by = "name"
         try:
-            out = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+            out = _mdfind([q] if search_content else ["-name", q])
+            paths = [ln for ln in out.stdout.splitlines() if ln.strip()]
+            if not paths and not search_content:
+                out = _mdfind([q])
+                paths = [ln for ln in out.stdout.splitlines() if ln.strip()]
+                matched_by = "content"
         except subprocess.TimeoutExpired:
             return "System Error: Spotlight search timed out (25s); try a narrower query or folder."
         if out.returncode != 0:
             return f"System Error: mdfind failed: {out.stderr.strip() or out.returncode}"
-        paths = [ln for ln in out.stdout.splitlines() if ln.strip()]
         if not paths:
             where = f" in {folder}" if folder else ""
-            return (f"No files matched {query!r}{where}. Spotlight only indexes user folders — "
-                    "try different keywords, or list_dir a likely folder.")
+            # 结果受进程 TCC 授权过滤（实证：外置卷命中被静默滤掉）——如实披露
+            return (f"No files matched {query!r}{where} by file name or content. Note: results "
+                    "are limited to folders this app may access — files on external volumes or "
+                    "protected folders stay invisible unless the app is granted Full Disk Access "
+                    "(System Settings → Privacy & Security). Try different keywords or list_dir "
+                    "a likely folder.")
 
         def _mtime(s: str) -> float:
             try:
@@ -136,7 +154,8 @@ class FindFilesTool(BaseTool):
 
         paths.sort(key=_mtime, reverse=True)
         shown = paths[:_FIND_CAP]
-        lines = [f"{len(paths)} matches (showing {len(shown)}, newest first):"]
+        note = " — no file NAME matched; these match by file CONTENT" if matched_by == "content" else ""
+        lines = [f"{len(paths)} matches (showing {len(shown)}, newest first{note}):"]
         for s in shown:
             try:
                 st = Path(s).stat()
