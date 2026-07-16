@@ -71,19 +71,47 @@ print('  ✅ 搬迁后 sys.prefix 自动跟随，重依赖可导入')
 rm -rf "$RELOC"
 
 if [[ -n "$SIGN_ID" ]]; then
-  echo "▶ 逐个签名（hardened runtime）"
+  echo "▶ 逐个签名（hardened runtime + 安全时间戳）"
   # 必须**由内向外**逐个签：Resources 里的嵌套 Mach-O 不会被外层 .app 的签名覆盖。
-  # 不用 `--deep`（Apple 已不建议，且会漏签/错签嵌套物）。实测 320 个 Mach-O / 3.6s。
+  # 不用 `--deep`（Apple 已不建议，且会漏签/错签嵌套物）。
   # hardened runtime 会启用 library validation → 所有 .so 必须与 .app 同一 Team ID 签，
   # 故这里的身份要和 app 构建用的是同一个。实测签完 212 金测试仍全绿。
+  #
+  # `--timestamp` 不能省：**公证强制要求安全时间戳**（`--timestamp=none` 签出来的
+  # 提交必被拒）。它对每个二进制都要向 Apple 的 TSA 发一次网络往返，但 8 路并行下
+  # 开销不显著——实测本脚本全程（解压→装依赖→验可搬→签名→核对）48s。
+  #
+  # 🔴 **前置：私钥的 partition list 必须先设好**，否则 codesign 会为每次用私钥弹一次
+  # 钥匙串授权框；在非交互 shell（CI、本脚本）里那个框弹不出来，进程就**无限挂起**，
+  # 且不报任何错。手工 `security import` 进来的私钥都有这个问题（`-T` 只设旧 ACL，
+  # 不设 partition list；Xcode 自己装的身份则已被设好，所以对比起来像是「这把钥匙坏了」）：
+  #     security set-key-partition-list -S apple-tool:,apple:,codesign: -s ~/Library/Keychains/login.keychain-db
   find "$OUT" -type f \( -name "*.so" -o -name "*.dylib" -o -perm +111 \) \
     -exec sh -c 'file -b "$1" | grep -q Mach-O && echo "$1"' _ {} \; \
-  | xargs -P 8 -I{} codesign --force --options runtime --timestamp -s "$SIGN_ID" {} 2>/dev/null
+  | xargs -P 8 -I{} codesign --force --options runtime --timestamp -s "$SIGN_ID" {} 2>&1 \
+  | grep -v "replacing existing signature" || true
+  # 上面只滤掉 `replacing existing signature` 这一句噪音，**不吞其余 stderr**——
+  # 曾经这里是个裸的 `2>/dev/null`，签名静默失败时脚本照样报成功（教训见 §S.5）。
   codesign -v --strict "$PY"
+
+  # 全量核对，不是抽验：数「带安全时间戳且由 Developer ID 签」的文件数，必须等于
+  # Mach-O 总数。只验 $PY 挡不住「部分文件漏签」——而漏签的后果要到公证被拒才出现，
+  # 那时离现场已经很远。
+  echo "▶ 核对签名覆盖"
+  MACHO_ALL="$(find "$OUT" -type f \( -name "*.so" -o -name "*.dylib" -o -perm +111 \) \
+    -exec sh -c 'file -b "$1" | grep -q Mach-O && echo "$1"' _ {} \;)"
+  TOTAL="$(echo "$MACHO_ALL" | grep -c . || true)"
+  OK="$(echo "$MACHO_ALL" | xargs -P 12 -I{} sh -c \
+    'codesign -dv --verbose=2 "$1" 2>&1 | grep -q "^Timestamp=" && echo ok' _ {} | grep -c . || true)"
+  echo "  带安全时间戳: ${OK}/${TOTAL}"
+  if [[ "$OK" != "$TOTAL" ]]; then
+    echo "  ❌ 有 $((TOTAL-OK)) 个二进制没签上（公证必拒）。若是挂起，先查 partition list（见上）" >&2
+    exit 1
+  fi
   # ${PY} 的花括号不能省：后面紧跟的是**全角** `）`，bash 会把它当作变量名的一部分
   # 一起吃掉（→ `PY）: unbound variable`）。本文件注释里全角括号很多，凡是紧跟变量的
   # 都要显式界定。
-  echo "  ✅ 已签（含 ${PY}）"
+  echo "  ✅ 全部已签（含 ${PY}）"
 fi
 
 echo "✅ 运行时就绪：${OUT}（$(du -sh "$OUT" | cut -f1)）"

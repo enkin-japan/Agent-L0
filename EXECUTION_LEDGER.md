@@ -711,7 +711,7 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
     |---|---|
     | 体积 | **950M** = 解释器 65M + edge 依赖 888M（对比：python.org 净解释器 307M） |
     | 启动时延 | 裸解释器 **~10ms**（与 python.org framework 无差）；`import app` **514ms 温 / 940ms 冷** |
-    | 签名 | 320 个 Mach-O 逐个签 hardened runtime = **3.6s**；`codesign -v --strict` 通过；**签完 212 金测试仍全绿** |
+    | 签名 | 320 个 Mach-O 逐个签 hardened runtime **+ 安全时间戳**，`320/320` 覆盖；**签完 212 金测试仍全绿**。整个「解压→装依赖→验可搬→签名→核对」全程 **48s**（pip 缓存热） |
 
   - **可搬性是这条路线的全部前提，已实测**：PBS 把 libpython **静态链进二进制**，`otool -L`
     只剩 `/usr/lib` 与 `/System/Library` 的系统库，无任何指向自身安装路径的绝对引用 →
@@ -855,6 +855,41 @@ This operation can only be performed by the Account Holder`。
 此时正确做法是承认不确定、把它作为不确定项交给用户，而不是拿一个弱信号当结论。
 
 **已付代价**：向用户报了一次错误结论，用户据此选了「我用 API 建」，做不到。
+
+### S.5 · 手工导入的签名私钥会让 codesign 无限挂起（2026-07-16）
+
+**事故**：拿新签发的 Developer ID 身份签运行时，`codesign` 一个文件都签不出来，
+进程无限挂起、不报错。我先怀疑 `--timestamp` 卡在苹果的 TSA 上，实测
+`timestamp.apple.com` 0.2s 回 302——通的。做了个能区分的测试（**同身份、去掉
+`--timestamp` 再签**），照样挂 → 与网络无关。
+
+**真因**：`security import -T /usr/bin/codesign` 只设了旧的 **ACL**，没设 macOS Sierra
+之后真正管事的 **partition list**。缺它，codesign 每次用该私钥都要弹钥匙串授权框；
+非交互 shell 里那个框弹不出来，于是**静默无限等**。修：
+
+    security set-key-partition-list -S apple-tool:,apple:,codesign: -s ~/Library/Keychains/login.keychain-db
+
+**为什么对比很误导**：此前用 Apple Development 身份签 320 个文件只要 3.6s，毫无征兆——
+因为**那把私钥的 partition list 是 Xcode 装它时设好的**。「同样是签名，换把钥匙就挂」
+看起来像钥匙坏了，其实是钥匙从没被授权过。
+
+**教训**：`security import` 不是完整的安装。凡是手工导入的签名私钥，partition list
+是必须的第二步。已写进 `scripts/build-runtime.sh` 的签名段注释。
+**更该记的**：那一步当初就该导进 `macagent-build` 钥匙串——它的密码在
+`~/.appstoreconnect/macagent-build-keychain-pass`，`release-ios.sh` 正靠它做非交互解锁，
+整个坑本可绕过。我只顾了「证书要和私钥同库」，漏了「自动化管线怎么解锁」。
+
+### S.6 · `2>/dev/null` 会把静默失败伪装成成功（2026-07-16）
+
+**事故**：`build-runtime.sh` 的签名行写成
+`xargs -I{} codesign ... {} 2>/dev/null`，本意是滤掉 `replacing existing signature`
+的噪音。结果 S.5 的挂起发生时，脚本这一段**看不出任何异常**。
+
+**教训**：要滤的是**已知的那一句噪音**，不是整条 stderr——
+`2>&1 | grep -v "replacing existing signature"`。与 §S.3（「优雅降级」把配置错误
+伪装成模型故障）是同一个病：**为了好看而丢掉的，正是出事时唯一的线索**。
+同时给签名加了**全量覆盖核对**（带时间戳的文件数必须等于 Mach-O 总数）——
+只验一个 `$PY` 挡不住部分漏签，而漏签要到公证被拒才暴露。
 
 ### S.2 · `git add -A` 会扫进不属于本次改动的东西（2026-07-15）
 
