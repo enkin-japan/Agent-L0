@@ -125,3 +125,33 @@ def test_env_gate_survives_the_seam():
         _Proc(), options={}, env={"inject_machine": False, "location": "东京"})
     assert "东京" in d.build_prompt(messages=[], include_env=True)
     assert "东京" not in d.build_prompt(messages=[], include_env=False)
+
+
+# ---- 工具观察的模型可见面（R3 前置） ----
+
+def test_tool_observation_exposes_only_whitelisted_keys():
+    """**tool_responses 条目是两用面**：既是模型上下文，又是账本/前端的渲染源。
+    只有 name/response/content 该进提示词；挂在同一条目上的元数据一律不进。
+
+    此前是整个 dict 序列化 → 压缩层的 `_safe`/`_target` 一路进了模型上下文
+    （`_` 前缀只在落盘 `_strip_internal_meta` 与 `public_turn` 处剥，提示词构建处
+    从来没剥过）。R3 的 `render` 载荷（可含整份图表 spec）若沿老路会更严重。
+    """
+    pb = PromptBuilder(_Proc(), suppress_ghost_thinking=False, env={})
+    out = pb._build_tool_responses([{
+        "name": "render_chart", "response": "ok",
+        "_safe": True, "_target": "k",
+        "render": {"hint": "chart", "payload": {"series": [1, 2, 3]}},
+    }])
+    assert '"name": "render_chart"' in out and '"response": "ok"' in out
+    # 逐键断言（不能裸搜 "render"——工具名 render_chart 本就含它）
+    for leaked in ('"_safe"', '"_target"', '"render"', '"series"'):
+        assert leaked not in out, f"{leaked} 不得进模型上下文（两用面，见白名单）"
+
+
+def test_tool_observation_content_fallback_survives_whitelist():
+    """回退路径（build 里 role=tool 但无 tool_responses 时）传的是 `content` 而非
+    `response`——白名单漏了它就会把观察正文整个丢给模型看空的。"""
+    pb = PromptBuilder(_Proc(), suppress_ghost_thinking=False, env={})
+    out = pb._build_tool_responses([{"name": "t", "content": "观察正文"}])
+    assert "观察正文" in out

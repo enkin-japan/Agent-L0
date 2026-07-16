@@ -101,10 +101,18 @@ class PromptBuilder:
             result += f"{self.stc_token}{call_json}{self.etc_token}\n"
         return result
 
+    #: 工具观察里**唯一**允许进模型上下文的键。白名单而非黑名单：tool_responses 条目
+    #: 同时是「模型上下文」与「账本/前端渲染源」两用面，新挂的元数据（压缩层的
+    #: _safe/_target、R3 的 render）默认都不该给模型看。黑名单会漏——此前正是整个 dict
+    #: 序列化，`"_safe": true` 一路进了提示词（`_` 前缀只在落盘与 public_turn 处剥，
+    #: 提示词构建处从来没剥过）。
+    _MODEL_VISIBLE_KEYS = ("name", "response", "content")
+
     def _build_tool_responses(self, tool_responses: List[Dict[str, Any]]) -> str:
         result = ""
         for resp in tool_responses:
-            resp_json = json.dumps(resp, ensure_ascii=False)
+            visible = {k: resp[k] for k in self._MODEL_VISIBLE_KEYS if k in resp}
+            resp_json = json.dumps(visible, ensure_ascii=False)
             result += f"{self.str_token}{resp_json}{self.etr_token}\n"
         return result
 
