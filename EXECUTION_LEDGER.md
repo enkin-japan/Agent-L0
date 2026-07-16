@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。下一步 = R5-5（SearXNG 随包）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 进展**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份），951M 运行时以 320/320 覆盖签名并**已提交公证**（submission `1e13bf2a`，等结论中；对照组 tiny.zip 亦 In Progress >25min ⇒ 当日服务端队列整体偏慢，非大包卡死）。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）。下一步 = R5-6（密钥形态改造 → Keychain）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 进展**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份），951M 运行时以 320/320 覆盖签名并**已提交公证**（submission `1e13bf2a`，等结论中；对照组 tiny.zip 亦 In Progress >25min ⇒ 当日服务端队列整体偏慢，非大包卡死）。**
 
 ---
 
@@ -775,9 +775,22 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
     - 实测：`up` 失败面全链路验过——searx 先行就绪、RAG 门拦下 backend 并给跨机指引、
       退出码 1 → Swift `.failed` 呈现 lib 原话；`down` 幂等清场
 
-- [ ] **R5-5 · SearXNG 随包**（§D.8，+138MB）
-  - `settings.yml` 由 app 首启生成（照 `devctl.sh` 的 `ensure_searx_settings`）
-  - **🔴 恒为回环**：limiter 已关且**无任何鉴权**，离开回环 = 人人可用的搜索代理（`searxng/settings.yml:9`）
+- [x] **R5-5 · SearXNG 随包** ✅ 2026-07-16 —— **一棵树两个服务**，实测 +40M（990M 总）
+  - **定案：searx 非 editable 装进 R5-3 的同一棵 PBS 运行时**，不背第二棵树（+174M）。
+    三方投票定的：`pip check` 干净（名字面交集只有 PyYAML 且同 pin）、searx 从树里
+    真跑通 JSON 搜索、**222 金测试在混装树上全绿**。`SEARX_COMMIT` pin 收编进
+    `lib_edge.sh`（devctl setup 与 build-runtime 共用一份）
+  - **两条顺序约束（实证，写进脚本注释）**：① searx 必须在**签名之前**装——签名后
+    hardened runtime 的 library validation 拒载非同 Team ID 的 `.so`（实证 msgspec
+    dlopen "different Team IDs"），**签过名的树从此拒绝带原生扩展的 pip 安装**；
+    ② 必须**非 editable**——editable 装的是指回 searxng-src 的引用，树一搬就断
+    （可搬性探针已加 searx 位置断言）。另：PBS 不带 setuptools，构建前先装
+  - `settings.yml` 由 lib 的 `ensure_searx_settings` 生成到**数据根**（bundle 只读；
+    R5-4 已参数化），bundle 形态全链路已实测：外源 settings + 签名树 + JSON 搜索 ✅
+  - **🔴 恒为回环已验**：`lsof` 实测监听仅 `localhost:8080`（limiter 已关且无任何鉴权，
+    离开回环 = 人人可用的搜索代理）
+  - SidecarManager bundle 布局同步：`EDGE_SEARX_PY` 指同一个 PBS python（v0.16.0(18)）
+  - 签名覆盖 320 → **322/322**（searx 的原生扩展一并入签）
 
 - [ ] **R5-6 · 密钥形态改造**
   - 现状：`.env.local` 的三个 KEY，由 `devctl.sh` source 后 export

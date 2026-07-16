@@ -169,8 +169,10 @@ final class SidecarManager: ObservableObject {
             var env = baseEnv()
             env["EDGE_BACKEND_DIR"] = res.appendingPathComponent("backend").path
             env["EDGE_BACKEND_PY"] = res.appendingPathComponent("python/bin/python3.13").path
-            env["EDGE_SEARX_DIR"] = res.appendingPathComponent("searxng").path
-            env["EDGE_SEARX_PY"] = res.appendingPathComponent("searxng/.venv/bin/python").path
+            // 一棵树两个服务（R5-5/D.8）：searx 非 editable 装进同一个 PBS 运行时
+            // （实测共享依赖仅 +40M；bundle 里没有 searxng/.venv 这回事）
+            env["EDGE_SEARX_DIR"] = dataDir.path   // 仅作 cwd；searx 以 -m 模块方式运行
+            env["EDGE_SEARX_PY"] = res.appendingPathComponent("python/bin/python3.13").path
             // bundle 只读：首启生成的 settings.yml 必须落数据根（D.16 同一根）
             env["EDGE_SEARX_SETTINGS"] = dataDir.appendingPathComponent("searxng-settings.yml").path
             env["EDGE_LOG_DIR"] = logDir.path

@@ -69,7 +69,7 @@ SEARX_DIR="$ROOT/searxng"                # settings.yml + 源码 + venv 所在�
 SEARX_SRC="$SEARX_DIR/searxng-src"       # 源码克隆（pip -e 的安装源，setup 时拉取）
 SEARX_VENV="$SEARX_DIR/.venv"
 SEARX_REPO="https://github.com/searxng/searxng"
-SEARX_COMMIT="b512eaa272c0ad6e6c2cca7c6f67dc1feb0ce1bd"  # 滚动发布无版本号，pin 到实测通过的提交
+# 源码 pin（SEARX_COMMIT）收编在 lib_edge.sh：devctl setup 与 build-runtime.sh 共用一份
 
 BACKEND_DIR="$ROOT/backend"
 

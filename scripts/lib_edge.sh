@@ -52,6 +52,9 @@ SEARX_PORT="${SEARX_PORT:-8080}"
 SEARX_READY_URL="http://127.0.0.1:${SEARX_PORT}/"
 SEARX_TIMEOUT="${SEARX_TIMEOUT:-60}"
 SEARX_LEGACY_CONTAINER="${SEARX_LEGACY_CONTAINER:-searxng}"
+# SearXNG 源码 pin（滚动发布无版本号，钉到实测通过的提交）。**单一真相**：
+# devctl setup 按它克隆/切换，scripts/build-runtime.sh 按它校验随包版本。
+SEARX_COMMIT="${SEARX_COMMIT:-b512eaa272c0ad6e6c2cca7c6f67dc1feb0ce1bd}"
 BACKEND_PORT="${BACKEND_PORT:-14159}"
 BACKEND_TIMEOUT="${BACKEND_TIMEOUT:-600}"    # 首次可能触发模型/分词器下载
 RAG_PORT="${RAG_PORT:-14160}"

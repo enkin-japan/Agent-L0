@@ -56,6 +56,30 @@ echo "▶ 装 edge 依赖（requirements-edge.txt = 不含推理与音频，见 
 "$PY" -m pip install --quiet --upgrade pip
 "$PY" -m pip install --quiet -r backend/requirements-edge.txt
 
+# SearXNG 随包（R5-5/D.8）：装进**同一棵树**——实测共享依赖只 +40M（第二棵树要
+# +174M），pip check 干净、222 金测试在混装树上全绿。两条顺序约束都不能破：
+#   ① 必须在下方签名步骤**之前**：签名后 hardened runtime 的 library validation
+#     会拒载任何非同 Team ID 的 .so——签过名的树从此拒绝带原生扩展的 pip 安装
+#     （实证：msgspec dlopen "different Team IDs"）。
+#   ② **非 editable**（不带 -e）：editable 装的是指回 searxng-src 的引用，
+#     树一搬就断，可搬性作废。非 editable 会把包数据（引擎表/模板/静态资源）
+#     一并拷进 site-packages（已实测四项俱全）。
+SEARX_SRC="searxng/searxng-src"
+if [[ -d "$SEARX_SRC" ]]; then
+  echo "▶ 装 SearXNG（同树随包，非 editable）"
+  "$PY" -m pip install --quiet -U setuptools wheel   # PBS 不带 setuptools，构建 searx 必需
+  "$PY" -m pip install --quiet -r "$SEARX_SRC/requirements.txt"
+  "$PY" -m pip install --quiet --no-build-isolation "$SEARX_SRC"
+  # 版本校验：pin 的单一真相在 lib_edge.sh（devctl setup 按它克隆）
+  PIN="$(sed -n 's/^SEARX_COMMIT="\${SEARX_COMMIT:-\([0-9a-f]*\)}".*/\1/p' scripts/lib_edge.sh)"
+  HEAD="$(git -C "$SEARX_SRC" rev-parse HEAD 2>/dev/null || echo unknown)"
+  if [[ -n "$PIN" && "$HEAD" != "$PIN" ]]; then
+    echo "⚠️ searxng-src HEAD(${HEAD:0:12}) ≠ pin(${PIN:0:12})——随包的不是实测版本" >&2
+  fi
+else
+  echo "▶ 跳过 SearXNG（${SEARX_SRC} 不存在；如需随包先 ./devctl.sh setup 拉源码）"
+fi
+
 # 装完立刻验可搬：搬走再 import。这一步不是仪式——它挡的正是「某个包在安装时把
 # 绝对路径烤进了 .pth/console_script」这类只有换路径才暴露的问题。
 echo "▶ 验可搬性"
@@ -66,6 +90,12 @@ import sys, pathlib
 assert pathlib.Path(sys.prefix).resolve() == pathlib.Path('$RELOC').resolve(), \
     f'sys.prefix 没跟着搬: {sys.prefix}'
 import fastapi, transformers, playwright, sympy, matplotlib, fitz, trafilatura
+try:
+    import searx   # 随包时一并验：editable 安装会在这里暴露（指回树外源码）
+    assert str(pathlib.Path(searx.__file__)).startswith(str(pathlib.Path('$RELOC').resolve())), \
+        f'searx 指回树外: {searx.__file__}'
+except ImportError:
+    pass           # 未随包（searxng-src 缺席）时不苛求
 print('  ✅ 搬迁后 sys.prefix 自动跟随，重依赖可导入')
 "
 rm -rf "$RELOC"
