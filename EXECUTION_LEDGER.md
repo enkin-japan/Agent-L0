@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 ✅（bundle 组装 1.0G 交付形态 + 无头验收全过 + GUI 三项用户实机确认 + 实机查验四轮修复（密钥入库/鉴权门/Developer ID 签名/会话恢复）+ 两轮 UI 打磨，v0.16.0(30)）。**R5 全线收官（2026-07-17），CHARTER 三处同步已获用户同意并落地**。**D1 首批进行中**：新剧本 ×4 + D.17 斜杠确定性分发（e4b 不会主动调 skill_invoke，实测倒逼）+ 金测试 232；chart-report/ingest 验收 ✅，briefing 卡 e4b×schedule_create 参数（D2 待办），research 卡 `web_research` 沙箱内层 calls=[] 缺陷（**下一工作项**）。v0.16.0(32) 已装（剧本+分发随包）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 ✅ 闭环**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份）；951M 运行时（322 Mach-O 覆盖签名）公证 **Accepted**（submission `1e13bf2a`，2026-07-16 通过；当日苹果队列积压 ~14h，对照组 tiny.zip 甚至更慢——大包无罪）。签名→公证全链路验证完毕，剩「对真实 .app 公证 + staple」在 R5 收官后的分发动作里做。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 ✅（bundle 组装 1.0G 交付形态 + 无头验收全过 + GUI 三项用户实机确认 + 实机查验四轮修复（密钥入库/鉴权门/Developer ID 签名/会话恢复）+ 两轮 UI 打磨，v0.16.0(30)）。**R5 全线收官（2026-07-17），CHARTER 三处同步已获用户同意并落地**。**D1 首批进行中**：新剧本 ×4 + D.17 斜杠确定性分发（e4b 不会主动调 skill_invoke，实测倒逼）+ 金测试 232；chart-report/ingest 验收 ✅，briefing/research/chart-report 三案疑难**同根归案（S.9）**：inference/server.py 约束采样构造少传 schema_builder → 服务端掩码永久禁用 → e4b 裸奔畸形 JSON——已修（一行）+ AST 调用点钉（金测试 233），infer 已重启、探针全绿。v0.16.0(32) 已装（剧本+分发随包），**待用户重测 /research /briefing /chart-report**（修复在服务端，包不用换）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 ✅ 闭环**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份）；951M 运行时（322 Mach-O 覆盖签名）公证 **Accepted**（submission `1e13bf2a`，2026-07-16 通过；当日苹果队列积压 ~14h，对照组 tiny.zip 甚至更慢——大包无罪）。签名→公证全链路验证完毕，剩「对真实 .app 公证 + staple」在 R5 收官后的分发动作里做。**
 
 ---
 
@@ -997,13 +997,26 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
 - `briefing` 🟡 分发后到达 schedule_create，但 **e4b 反复构造其参数失败**（JSON 结构
   不合法，道歉收场）——记为 D2 工具人机学待办（schedule_create 的 schema 对小模型
   过于复杂）；审批闸门无头旁路被权限系统正确拦截，**审批环节的验收留给用户在 app 真点**
-- `research` 🟡 分发生效、模型循剧本执行，但堵在 **`web_research` 内层沙箱缺陷**：
-  `[web_research] step n/6: calls=[]`——沙箱子循环里模型 0 工具调用产出，搜索根本
-  没发生（searx 本身直探有真结果）。**下一工作项**：单元级追查 sandbox_runtime
-  generate_once 的调用产出（怀疑面：R0 方言手术 × 沙箱提示词 × e4b 能力）
+- `research` 🟡→**根因已修**（见下）：`web_research` 内层沙箱 `calls=[]` 实为
+  **服务端约束采样死亡**的下游症状
 - 验收环境教训：①先猜 `/turn` 字段名浪费一轮（真形状 `{"turn": {...}|null}`）；
   ②证据（journal/history）要在删除会话**之前**取齐；③四轮并发提交会在推理队列互相
   饿死，验收必须串行
+
+**D1 验收连环案收官（2026-07-17）——一个 bug 解释全部疑难（S.9）**：最小复刻探针
+（scratchpad/probe_sandbox.py，直连设备 A 推理 + 独立 searx，不占 14159）拿到第一现场：
+沙箱模型每步都发 `call:web_search{query": ...}`——**首键丢开引号**的畸形 JSON，三次
+parse 重试全灭 → `calls=[]`。追到服务端日志一锤定音：
+`[Server] 约束采样构建失败，永久禁用: TypeError: ToolConstraintEngine.__init__()
+missing 1 required positional argument: 'schema_builder'`——R0 给构造加了方言
+schema_builder 参数，engine.py 改了，**没人 import 的 inference/server.py 又被落下**
+（S.7 的构造签名变体；import 级钉子对它全绿）。服务端约束死亡 = 全部生成裸奔，e4b
+畸形 JSON 概率大增：沙箱 calls=[]、briefing×schedule_create 参数崩、chart-report
+第二调畸形，**同一根因**。修复：server.py 补传 `S.dialect.tool_call_schema`（一行）；
+重启 infer 后探针全绿（掩码激活「71 步受 schema 约束」，web_search→open_pages→带
+[source N] 引用的真摘要）。金测试 +1（233）：`test_constraint_engine_call_sites_bind`
+——AST 抓两个入口的构造调用点按 __init__ 签名 bind，签名再漂移当场红。
+**用户可直接在 v32 重测 /research、/briefing、/chart-report（修复在服务端，包不用换）。**
 
 **附带发现（R5-9 尾巴）**：`kill -9` app 的实机测试留下**孤儿 backend/searx**（SIGKILL
 不走 willTerminate），此后每代 app 都把它当 external 只用不管——孤儿一直跑着已删除
@@ -1127,6 +1140,19 @@ Resources/（rsync 组装时刻意排除了 backend 字节码；python/bin 也�
 `codesign --verify`；②修法两层：组装期 `compileall` 让字节码随包进印章 +
 SidecarManager bundle 分支设 `PYTHONDONTWRITEBYTECODE=1` 兜漏网；③一切「运行后
 包内容不得变化」的断言，都要在**真跑过一轮之后**再验一次。
+
+### S.9 · 构造签名漂移在「没人 import 的入口」上静默积累（2026-07-17）
+
+**事故**：R0 给 `ToolConstraintEngine.__init__` 加 `schema_builder` 参数，engine.py
+同步改了，inference/server.py 没有——**import 级钉子（S.7 的 test_entrypoints）全绿**，
+因为炸点在运行时构造。结果服务端约束采样「构建失败，永久禁用」且 fail-open，全部
+生成裸奔：e4b 畸形 JSON 概率大增，D1 验收里沙箱 calls=[]、schedule_create 参数崩、
+chart-report 二调畸形全是它的下游症状，伪装成三个不相干的模型能力问题。
+
+**教训**：①改共享构造签名时 grep 的不只是 import，还有**调用点**（尤其独立入口）；
+②import 钉子挡不住运行时签名漂移——已补 AST 调用点 bind 钉
+（`test_constraint_engine_call_sites_bind`）；③多个「不相干」的模型行为劣化同时出现
+时，先怀疑**共同的基础设施**（这里是约束采样），再怀疑模型。
 
 ### S.2 · `git add -A` 会扫进不属于本次改动的东西（2026-07-15）
 

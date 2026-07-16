@@ -158,7 +158,10 @@ def _tool_guard(tool_specs) -> Optional[ToolCallGuard]:
             etc = tok.encode(S.dialect.markers.etc, add_special_tokens=False)
             if len(stc) != 1 or len(etc) != 1:
                 raise RuntimeError("工具调用标记不是单 token，约束状态机无法锚定")
-            S.constraint_engine = ToolConstraintEngine(tok, stc[0], etc[0])
+            # schema 由方言提供（R0/D1 修复）：少传这个参数 = TypeError → 约束永久禁用
+            # → e4b 裸奔发畸形 JSON（沙箱 calls=[] / schedule_create 参数崩的共同根因）
+            S.constraint_engine = ToolConstraintEngine(tok, stc[0], etc[0],
+                                                       S.dialect.tool_call_schema)
             print("[Server] 约束采样引擎就绪（llguidance）")
         eng = S.constraint_engine
         return ToolCallGuard(eng.matcher_for(tool_specs), eng.stc_id, eng.etc_id, eng.vocab_size)
