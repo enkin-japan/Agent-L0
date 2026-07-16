@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A），212 金测试全绿。下一步 = R5-3（Python runtime 打包选型）。Q5/Q6 均已定（D.13/D.14）。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。下一步 = R5-4（`SidecarManager.swift`）。Q5/Q6 已定（D.13/D.14）；**新增 Q7（可写数据搬出 bundle 后 dev 与 app 是否同路径，阻塞 R5-4）与 Q8（macOS 公证：缺 Developer ID 证书，行动项）**。**
 
 ---
 
@@ -61,6 +61,7 @@
 | **D.11** | **skill = 主轮次的提示词剧本**，不是自带工具集的隔离子会话。工具沿用主循环 → 审批闸门照常生效，**零新增提权面**。要给 skill 加 `tools:`，须先解决「审批从沙箱透出到前端」 | 2026-07-16 用户 | 本节 §3.2 实测结果 |
 | **D.14** | **整条音频路移设备 A**（Q6 定案，重构了原问法）：edge 不留 torch/librosa/silero/whisper，经**新增 `remote` ASR provider**（既有接缝 `backends/__init__.py:40`）+ A 侧 `/v1/transcribe`。**不选 Apple SpeechAnalyzer**——它是 Swift-only（ObjC 头只有旧的 SFSpeechRecognizer），PyObjC 够不到，会让 ASR 依赖 app 存在，与「无 app 的 dev/web-only/CUDA 线」冲突；且要先定 locale，牺牲现有的自动语言检测（`router.py:49`）。SpeechAnalyzer 日后可作同一接缝下的可选快路 | 2026-07-16 用户 | 本节 §3.5 R5-2 |
 | **D.13** | **edge 启动逻辑提成单一真相**（`scripts/lib_edge.sh` 或等价），`devctl.sh` 与 app 都调它；Swift 只做它独有的**进程监护**（崩溃重启/日志/端口冲突/随 app 收摊）。**不在 app 里重写一份**——那 799 行里的顺序与探活判据是多起事故换来的（RAG 未就绪即拒启 backend，因工具探活只在启动期发生一次）。前置：启动逻辑须对「仓库布局 vs bundle 布局」「`.env.local` vs Keychain」参数化 | 2026-07-16 用户 | 本节 §3.5 R5-4；R1 同一教训：消除拷贝，不消除差异 |
+| **D.15** | **内嵌运行时选 `python-build-standalone`**（R5-3 选型，三条判据全部实测）。**否决 PyInstaller**——与本仓库「文件系统即真相源」的约定直接相冲：`mcp/registry.py:26` 扫目录找 `.py` 发现工具、`skill_registry.py:58` 与 `memory/notes.py:86` 扫 `*.md`，冻结后统统扫不到；且 `:21-23` 目录不存在时**静默建空目录后 return** → **零工具注册且不报错**。**否决「venv 拷进 bundle」**——`backend/.venv/bin/python3.13` 是指向 `/Library/Frameworks/Python.framework` 的**绝对路径符号链接**（venv 里没有解释器本体），而该 framework 的 install-name 也是绝对路径、本身搬不动，净体积 307M 且签的是 PSF 的 Developer ID | 2026-07-16 实测 | 本节 §3.5 R5-3；`scripts/build-runtime.sh` |
 | **D.12** | **`tool_responses[]` 条目是「模型上下文 + 渲染源」两用面**，模型可见键走**白名单** `{name, response, content}`。R3 的 `render` 载荷挂同一条目但不进提示词；顺带修掉 `_safe`/`_target` 的既有泄漏。代价（已知并接受）：模型提示词发生变化，16GB 机上无真模型可验证质量 | 2026-07-16 用户 | 本节 §3.3 实测结果 |
 
 ---
@@ -700,9 +701,31 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
     标记文本且说清是哪台机器。新增 6 项金测试（`test_edge_slimming.py`）钉死顶层 import，
     并已变异测试确认它会红
 
-- [ ] **R5-3 · Python runtime 打包选型**
-  - 候选：`python-build-standalone` 嵌入 / PyInstaller / 完整 venv 拷进 bundle
-  - 判据：签名与公证（notarization）能否过、启动时延、体积
+- [x] **R5-3 · Python runtime 打包选型** ✅ 2026-07-16 —— **定 `python-build-standalone`**（D.15）
+  - 产出 `scripts/build-runtime.sh`（下载→装 edge 依赖→验可搬→逐个签名，全程可复现；
+    版本钉死 `PBS_TAG=20260623` / cpython 3.13.14，与 `backend/.venv` 同为 3.13.x）
+  - **三条判据的实测值**：
+
+    | 判据 | 实测 |
+    |---|---|
+    | 体积 | **950M** = 解释器 65M + edge 依赖 888M（对比：python.org 净解释器 307M） |
+    | 启动时延 | 裸解释器 **~10ms**（与 python.org framework 无差）；`import app` **514ms 温 / 940ms 冷** |
+    | 签名 | 320 个 Mach-O 逐个签 hardened runtime = **3.6s**；`codesign -v --strict` 通过；**签完 212 金测试仍全绿** |
+
+  - **可搬性是这条路线的全部前提，已实测**：PBS 把 libpython **静态链进二进制**，`otool -L`
+    只剩 `/usr/lib` 与 `/System/Library` 的系统库，无任何指向自身安装路径的绝对引用 →
+    搬到任意路径后 `sys.prefix` 自动跟随、212 金测试全绿。**故意不建 venv**：venv 的
+    `pyvenv.cfg` 里 `home=` 又是绝对路径，等于把刚拿到的可搬性再丢一次；依赖直接装进
+    PBS 自带的 site-packages，整棵树自成一体。此验证已固化进脚本（不是一次性手测）
+  - **首次启动会慢一次**：签名后首跑 9.22s → 二跑 1.45s。是 Gatekeeper 对新签名的一次性
+    校验（整棵树约 +7.8s），装后仅付一次。**冷启动验收（R5-9）计时须避开这一次**，否则会
+    把一次性成本误记成常态时延
+  - **`import app` 的 514ms 主要是 R5-2 的功劳不是 PBS 的**：同一份代码在开发机 2.1G 的
+    `.venv` 上要 **3,109ms**（torch 导入链）。别把这 6× 记到打包选型账上
+  - **🔴 遗留（三个候选都躲不掉，非 PBS 特有）**：`app.py:94` `BASE_DIR = Path(__file__).parent`，
+    而 `sessions/` `schedules/` `notes/`(R4 个人事实) `push/` 全挂它下面 → 装进 .app 后
+    **写 bundle 内部会破坏代码签名**，且 `/Applications` 下通常不可写。**可写数据必须搬出
+    bundle**（惯例位置 `~/Library/Application Support/`）。这是 R5-4 的前置，见 Q7
   - **参考**：cc-haha `desktop/electron/services/sidecarManager.ts` + `desktop/scripts/build-sidecars.ts`
     （它的 sidecar 是 TS 不是 Python，但**进程生命周期管理的形状**可借鉴）
 
@@ -714,6 +737,10 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
     Swift 侧**只做进程监护**——崩溃重启 / 日志落盘 / 端口冲突 / 随 app 收摊，这些才是 app 独有的。
     「启什么 / 什么顺序 / 怎么算就绪」一律不在 Swift 里重写（R1 同一教训：消除拷贝，不消除差异）。
     **前置**：启动逻辑须对「仓库布局 vs bundle 布局」「`.env.local` vs Keychain」参数化。
+  - 🔴 **前置（R5-3 挖出）**：**可写数据必须先搬出 bundle**——`app.py:94` 的 `BASE_DIR`
+    现在既是「代码在哪」也是「数据写哪」，而 `sessions/` `schedules/` `notes/`(R4 个人事实)
+    `push/` 全挂它下面；往 .app 内部写会**破坏代码签名**，`/Applications` 下通常也不可写。
+    **见 Q7**（dev 与 app 是否共用同一套路径），它与本条的「布局参数化」是同一个旋钮。
 
 - [ ] **R5-5 · SearXNG 随包**（§D.8，+138MB）
   - `settings.yml` 由 app 首启生成（照 `devctl.sh` 的 `ensure_searx_settings`）
@@ -778,7 +805,8 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
 | **1** | 「AI 写代码所以工作量不是问题」——**在新增上成立，在承重代码上不成立**。护栏参数「全是实测调的」（`CHARTER.md:42`），瓶颈是实测不是打字 | §D.4 一次只开一项；每项验收要人在回路 |
 | **2** | **R0 验证悬空**：16GB 开发机跑不动目标模型，设备 A 亦非目标算力 | 接受。验收只声明「零回归」，**不得**声明「已支持大模型」 |
 | **3** | ~~R5-4 的启动逻辑重复~~ | ✅ **已定 D.13**：提共享库，Swift 只做进程监护 |
-| **4** | R5-2 依赖瘦身可能发现「edge 去不掉 mlx」（若 ingestion 的 whisper 强依赖） | 去一个包跑一遍金测试；去不掉就接受体积 |
+| **4** | ~~R5-2 依赖瘦身可能发现「edge 去不掉 mlx」~~ | ✅ **已消**：mlx 去得掉（D.14）。**但担心错了对象**——真正钉住体积的是 `silero-vad`→torch，与 whisper 无关 |
+| **5** | **打包后的失败是静默的**：本仓多处以文件系统为真相源（工具/skills/notes 扫目录），扫不到时 `registry.py:21-23` 只是建个空目录后 return。选 PBS 已避开冻结（D.15），但 **bundle 内路径一旦搬错，症状仍是「启动正常、零工具、无报错」** | R5-9 验收**必须断言工具数**，不能只看「起来了」 |
 
 ---
 
@@ -788,6 +816,8 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
 |---|---|---|
 | ~~**Q5**~~ | **已定 → D.13**：提取共享启动库，`devctl.sh` 与 app 都调；Swift 只做进程监护 | ~~R5-4~~ ✅ |
 | ~~**Q6**~~ | **已定 → D.14**：整条音频路移 A（原问法有误：torch 是被 silero-vad 钉住的，不是 whisper——去掉 whisper 几乎不省空间） | ~~R5-2~~ ✅ |
+| **Q7** | **可写数据搬出 bundle 后，dev 与 app 走不走同一套路径？** `app.py:94` 的 `BASE_DIR = Path(__file__).parent` 现在同时是「代码在哪」和「数据写哪」，装进 .app 后后者必须分家（写 bundle = 破坏签名）。**选项 A**：一律搬 `~/Library/Application Support/dev.enkin.macagent/`，dev 也用 → 单一形态，但 dev 时数据离开仓库、不再随手可见可删。**选项 B**：`AGENT_DATA_DIR` 环境变量，dev 默认仓库内、app 注入 App Support → 保住 dev 手感，代价是两套路径都得测。**注**：D.13 的「启动逻辑对仓库布局 vs bundle 布局参数化」本就要求这个旋钮存在，B 与之同形 | R5-4 |
+| **Q8** | **macOS app 走不走公证？**（非设计问题，是行动项）现状 `project.yml:36` 是 `CODE_SIGN_IDENTITY: "-"` = **ad-hoc 自用**，`install-macos.sh` 直接 `ditto` 进 `/Applications`，无公证通路。而 D4 已把「打包签名公证管线」列为接受的持续成本，且「TCC 责任进程」要求**签名的** .app。**卡点**：`security find-identity` 只有 `Apple Distribution` 与 `Apple Development`，**没有 `Developer ID Application`**（Store 外分发+公证必需，需在开发者后台由账号持有人签发）。R5-3 已验到公证前的最后一步（hardened runtime 签名 + 212 金测试全绿），**提交公证这步在拿到证书前无法实测** | R5-9 验收形态 |
 
 ---
 
