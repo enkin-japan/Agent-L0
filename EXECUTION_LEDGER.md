@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0 ✅；R1 ✅；R2a ✅；R3 ✅；R4 ✅（文件式长期记忆：`memory_write` + 索引进主轮 + `agent_notes` 召回），206 金测试全绿。下一步 = R5（macOS app 收编执行层，最大的一块；开工前须先答 Q5）。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A），212 金测试全绿。下一步 = R5-3（Python runtime 打包选型）。Q5/Q6 均已定（D.13/D.14）。**
 
 ---
 
@@ -683,14 +683,22 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
     而资产目录的 `Contents.json` 是**源码不是派生物**——缺了 Xcode 不认 catalog、新克隆编不出图标，
     正好废掉 D.6 的前提。已删该规则
 
-- [ ] **R5-2 · edge 依赖瘦身**（硬前提，2.1GB 直接打包不现实）
-  - 判定 edge 形态（`inference.mode: remote`）真正需要什么：
-    - **可能可去**：`mlx` / `mlx-lm` / `mlx-vlm`（推理在远端）、`mlx-audio`
-    - **不能去**：`transformers`（backend 仍拉分词器，README:66）、`playwright`（T2 抓取档在 backend）、
-      `trafilatura`/`selectolax`（正文抽取）、ingestion 全家（PyMuPDF/markitdown）
-    - **待判**：`mlx-whisper`（音频 ASR 摄入**在 backend 跑**）、`torch`/`torchaudio`（被谁拖进来）
-  - 产出 `backend/requirements-edge.txt`；目标 **< 1GB**
-  - ⚠️ 这是**真实的裁剪工程**，不是顺手能做的。**去一个包就跑一遍 132 金测试。**
+- [x] **R5-2 · edge 依赖瘦身** ✅ 2026-07-16 —— **实测 2.1GB → 888M**（目标 <1GB 达成）
+  - 产出 `backend/requirements-edge.txt`（每条排除项都注了实测的反向依赖来源）
+  - **`torch` 的主人查错了**：不是 `mlx-whisper`（本体仅 1.9M），是 **`silero-vad`**
+    （`Requires: packaging, torch, torchaudio`）。见 D.14——原 Q6 问法建在这个错前提上
+  - 代码改动：VAD 惰性化（`app.py` + `utils/file_handler.py` 顶层 import 下沉；
+    默认 `modalities: ["text","image"]` 下 torch 本就从不参与音频路，却被无条件加载）；
+    **区间切片下放进 provider**（原在 `ingestion/parsers/asr.py` 用 librosa 做 →
+    会把 numba/llvmlite/scipy/sklearn 钉回 edge）
+  - 新增 `remote` ASR provider + A 侧 `POST /v1/transcribe`（复用既有 `/v1/media`
+    内容寻址上传；跑在 `S.executor` 单线程上 = 白拿「单 worker 串行」纪律）
+  - `ingestion.asr_provider` 改默认 `auto` = 跟随 `inference.mode`（两个旋钮各说各话时
+    症状极隐蔽：mode=remote 却把 asr 留 mlx_whisper，edge 白背 torch 全家且不报错）
+  - **实测验收**：干净 venv 装 888M；**206 金测试在无 torch/mlx/librosa 的 edge venv 里全绿**；
+    `import app` 成功（transformers 优雅降级为"只有分词器"）；A 不可达时 fail-open 成
+    标记文本且说清是哪台机器。新增 6 项金测试（`test_edge_slimming.py`）钉死顶层 import，
+    并已变异测试确认它会红
 
 - [ ] **R5-3 · Python runtime 打包选型**
   - 候选：`python-build-standalone` 嵌入 / PyInstaller / 完整 venv 拷进 bundle

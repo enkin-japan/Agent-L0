@@ -7,8 +7,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
-# 导入底层模型库
-from silero_vad import load_silero_vad
+# 注：silero_vad 刻意**不在顶层 import**——它会连带 import torch(385M)。
+# 它只服务原生音频直喂（modalities 含 "audio"），故改为按需惰性载入，见 lifespan。
 
 # 导入解耦后的架构组件
 from framework.mcp.registry import MCPRegistry
@@ -162,8 +162,19 @@ async def lifespan(app: FastAPI):
     model_path = (resolve_tokenizer_only_path(MODEL, revision=MODEL_REVISION) if _remote
                   else resolve_model_path(MODEL, revision=MODEL_REVISION))
 
-    print("🎵 [System] loading model: Silero VAD")
-    vad_model = load_silero_vad()
+    # VAD 只服务**原生音频直喂**（把音频切成 ≤29s 块喂多模态模型），而它由
+    # inference.modalities 含 "audio" 才启用（config.yaml 默认 ["text","image"]
+    # → 音频一律走 ASR 转写，不经 VAD）。此前这里无条件加载：默认配置下 torch(385M)
+    # + silero 被拉进内存却从不参与音频路——edge 打包时这是纯粹的 385M 死重（R5-2）。
+    # 惰性 import 同样必要：`from silero_vad import ...` 本身就会 import torch。
+    _native_audio = "audio" in ((config.get("inference") or {}).get("modalities") or ["text", "image"])
+    vad_model = None
+    if _native_audio:
+        print("🎵 [System] loading model: Silero VAD（原生音频直喂已启用）")
+        from silero_vad import load_silero_vad
+        vad_model = load_silero_vad()
+    else:
+        print("🎵 [System] 跳过 Silero VAD（modalities 不含 audio → 音频走 ASR 转写）")
 
     print("⚙️  [System] Initializing architecture components...")
     # 0. 长期记忆类目就绪（Stage 3）：在扫描 MCP 工具前确保 agent_memory 类目存在，

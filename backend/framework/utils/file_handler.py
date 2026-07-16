@@ -6,16 +6,21 @@ import mimetypes
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-import torch
-import librosa
-import soundfile
 from fastapi import UploadFile
-from silero_vad import get_speech_timestamps
+
+# 注：torch / librosa / soundfile / silero_vad 刻意**不在顶层 import**——它们只被
+# separate_audio（原生音频直喂路）用到，而那条路由 inference.modalities 含 "audio"
+# 才启用（默认不含 → 音频一律 ASR 转写）。顶层 import 会让 torch(385M) 无条件进内存，
+# 且让 edge 打包必须背上整条音频依赖（R5-2/D.14：整条音频路已移设备 A）。
+
 
 class FileHandler:
     """
     基础设施服务：负责处理用户上传的多模态文件（图片、音频）。
     包括音频的 VAD 智能切片、文件的本地化落盘等。
+
+    vad_model 为 None = 原生音频直喂未启用（modalities 不含 audio）；此时
+    separate_audio 不该被调用（Ingestion 的 native_audio 门控负责），调用即明确报错。
     """
     def __init__(self, vad_model: Any, audio_max_length: int = 29):
         self.vad_model = vad_model
@@ -24,7 +29,18 @@ class FileHandler:
     async def separate_audio(self, audio: UploadFile, name: str, audio_dir: Path) -> List[Path]:
         """
         基于 Silero VAD 的过大音频智能拆解算法
+
+        重依赖在此惰性载入（见模块头注）：本方法只在原生音频直喂启用时被调到。
         """
+        if self.vad_model is None:
+            raise RuntimeError(
+                "原生音频直喂未启用（inference.modalities 不含 'audio'），VAD 未加载。"
+                "音频应走 ASR 转写路——这里被调到说明 Ingestion 的 native_audio 门控漏了。")
+        import torch
+        import librosa
+        import soundfile
+        from silero_vad import get_speech_timestamps
+
         audio_path = []
         audio_byte = await audio.read()
         virtual_file = io.BytesIO(audio_byte)

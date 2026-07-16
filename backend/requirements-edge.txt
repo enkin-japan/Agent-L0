@@ -1,0 +1,76 @@
+# edge profile 依赖清单（R5-2/D.14）：执行层 + 前端在轻量设备，推理与转写在设备 A。
+#
+# 与 requirements.txt 的唯一差别 = **不含推理与音频**。两处都要改时以本文件为准的判据：
+#   「edge 上会不会真的执行到它？」mode=remote 下权重在 A，音频路整条在 A（D.14）。
+#
+# 实测：**888M**（requirements.txt 装出来是 2.1GB）。目标 <1GB 达成。
+# 剩下的大头都是有主的：playwright 133M / transformers 96M / onnxruntime 73M(←magika)
+# / sympy 72M / pandas 70M(←markitdown[xlsx]) / pymupdf 56M。
+# 用法：cd backend && python -m venv .venv && .venv/bin/pip install -r requirements-edge.txt
+#
+# ── 不在本清单里的，以及为什么（都是实测的反向依赖，不是猜的）─────────────
+# mlx / mlx-metal / mlx-lm / mlx-vlm / mlx-audio
+#     推理在设备 A（inference.mode: remote）。连带去掉 cv2(119M) 与
+#     datasets→pyarrow(126M)（均 ←mlx-vlm）。
+#     注：pandas(70M) **去不掉**——markitdown[xlsx] 的 extra 也声明了它（实测），
+#     而 markitdown 是摄入层要保留的。同理 onnxruntime(73M) ←magika←markitdown。
+# mlx-whisper
+#     转写在设备 A（D.14），经 backends/remote/asr.py → A 的 /v1/transcribe。
+#     注意：它本体只有 1.9M，去它是为了连带下面几个。
+# torch / torchaudio / torchvision / torchcodec
+#     torch(385M) 是被 **silero-vad** 钉住的（pip show silero-vad →
+#     Requires: packaging, torch, torchaudio），不是被 whisper。而 silero-vad 只服务
+#     原生音频直喂（inference.modalities 含 "audio"），config 默认 ["text","image"]
+#     → 音频一律 ASR 转写、不经 VAD。torchvision/torchcodec 实测无人反向依赖。
+# librosa / soundfile
+#     只用于音频重采样与区间切片，两者都已随音频路移到 A（区间切片下放进了
+#     backends/mlx/asr.py）。librosa 连带钉住 numba→llvmlite(125M) + scipy(97M)
+#     + scikit-learn(46M)——这才是它真正的重量。
+# silero_vad
+#     同上：原生音频直喂才需要。edge 若哪天要开 modalities: ["text","image","audio"]，
+#     得先想清楚 VAD 切片该在哪台机器做（那时 A 侧同样要改）。
+#
+# ── 刻意保留、别顺手删 ────────────────────────────────────────────
+# transformers：backend 仍需分词器（mode=remote 也要在本机 build prompt / 数 token）。
+# playwright + curl_cffi：T2/T1 抓取档在 backend 侧执行，不在 A。
+# trafilatura / selectolax：正文抽取，同上。
+# PyMuPDF / markitdown：摄入解析层（PDF / 办公文档）在 backend 侧。
+# sympy / matplotlib：run_math 与 render_chart 是 backend 侧工具。
+# pyobjc-*：macOS GUI 工具集在 edge（app 就在这台机器上）。
+
+fastapi==0.136.1
+fastapi-cli==0.0.13
+fastapi-cloud-cli==0.3.1
+python-multipart==0.0.20
+PyYAML==6.0.3
+requests==2.32.5
+transformers==5.8.0
+uvicorn==0.38.0
+huggingface_hub==1.15.0
+
+# 摄入解析层（Ingestion）：非原生模态急解析依赖。缺失时对应格式 fail-open。
+# 注：音频转写不在此列——它经 ASR provider 走设备 A（D.14）。
+PyMuPDF==1.27.2.3
+markitdown[docx,pptx,xlsx]==0.1.6  # extras 必带：基础包不含办公文档转换器
+
+# 联网调查（web_research 受限沙箱）：正文抽取 + HTML 净化。缺失时 web_research 不注册。
+trafilatura==2.0.0
+selectolax==0.4.10
+# 抓取升级阶梯（缺失时对应档位自动降级，不影响 web_research 注册）
+curl_cffi==0.15.0
+playwright==1.61.0
+
+# macOS GUI 工具集；非 macOS 或缺失时相关工具自动不注册
+pyobjc-framework-Cocoa==12.1
+pyobjc-framework-Quartz==12.1
+pyobjc-framework-ApplicationServices==12.1
+
+llguidance>=1.7  # 工具调用段约束采样；缺失时自动 fail-open
+
+# 数学工具（run_math / math_research 沙箱预载环境）：缺失时对应工具不注册
+sympy==1.14.0
+# 数据图表（render_chart / deck 视觉路由 chart 分支）：缺失时 render_chart 不注册
+matplotlib==3.11.0
+# iOS 推送（framework/push：APNs HTTP/2 直发 + .p8 ES256 签名）
+h2==4.3.0
+cryptography==49.0.0

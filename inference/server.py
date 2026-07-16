@@ -11,6 +11,7 @@
   POST   /v1/generate                  SSE 生成流（events: meta / chunk / done / error）
   POST   /v1/generate/{gen_id}/cancel  段粒度取消（对应引擎逐 chunk 的取消检查点）
   POST   /v1/media                     内容寻址上传（sha256 去重）→ {media_id}
+  POST   /v1/transcribe                音频转写（R5-2/D.14：edge 不留 whisper）→ {text}
   POST   /v1/cache                     新建缓存 → {cache_id}
   POST   /v1/cache/{id}/clone          分支克隆 → {cache_id}；不支持时 501（客户端冷启动回退）
   DELETE /v1/cache/{id}                冻结/删会话时释放
@@ -52,7 +53,8 @@ from framework.utils.model_selection import resolve_selected_model
 from framework.utils.path_resolver import resolve_model_path
 from framework.core.response_parser import ResponseParser
 from framework.core.constrained import ToolConstraintEngine, ToolCallGuard, llguidance as _llg
-from framework.backends import get_backend_class
+from framework.backends import (AsrProviderUnavailable, get_asr_provider,
+                                get_backend_class)
 
 MEDIA_DIR = Path(__file__).resolve().parent / "media"
 _MEDIA_ID_RE = re.compile(r"^[0-9a-f]{64}(\.[A-Za-z0-9]{1,8})?$")  # 内容寻址名，防路径穿越
@@ -257,6 +259,48 @@ async def cache_clone(cache_id: str):
 @app.delete("/v1/cache/{cache_id}", dependencies=[Depends(verify_api_key)])
 async def cache_release(cache_id: str):
     return {"released": S.registry.release(cache_id)}
+
+
+@app.post("/v1/transcribe", dependencies=[Depends(verify_api_key)])
+async def transcribe(request: Request):
+    """音频转写（R5-2/D.14）：edge 不再自带 whisper，整条音频路在设备 A。
+
+    音频经 /v1/media 先行上传（内容寻址、天然去重），此处只收 media_id——与生成路
+    对媒体的处理同一套，不另开上传通道。
+
+    **跑在 S.executor（单线程）上**：与生成共用同一个推理 worker，故转写与生成在 A 上
+    天然串行、不抢统一内存带宽——正是 CHARTER「单 worker 串行」那条铁律要的形状，
+    白拿。（edge 侧摄入本就在 run_turn 之前串行发生，两者不并发。）
+
+    fail-open 由调用方负责：edge 的 ingestion/parsers/asr.py 把任何异常收成
+    「[Audio transcription failed: …]」标记文本，绝不打断整轮对话。
+    """
+    body = await request.json()
+    media_id = str(body.get("media_id", ""))
+    if not _MEDIA_ID_RE.match(media_id):
+        raise HTTPException(status_code=400, detail="非法 media_id")
+    p = MEDIA_DIR / media_id
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail="媒体缺失（请先经 /v1/media 上传）")
+
+    model = body.get("model") or None
+    language = body.get("language") or None
+    # 区间切片也在 A 做（edge 不留 librosa，见 backends/remote/asr.py）
+    start = body.get("start")
+    end = body.get("end")
+    # A 侧就是本地实现——直接点名 mlx_whisper，不走 auto（auto 读的是 config 的
+    # inference.mode，而这份 config 与设备 B 共用一份；A 上 auto 会解析成 remote 打回自己）
+    fn = get_asr_provider("mlx_whisper")
+    loop = asyncio.get_running_loop()
+    try:
+        text = await loop.run_in_executor(
+            S.executor, lambda: fn(str(p), model=model, language=language,
+                                   start=start, end=end))
+    except AsrProviderUnavailable as e:
+        raise HTTPException(status_code=503, detail=f"ASR provider 不可用: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"转写失败: {e}")
+    return {"text": text or ""}
 
 
 @app.post("/v1/media", dependencies=[Depends(verify_api_key)])
