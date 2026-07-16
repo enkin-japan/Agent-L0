@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。下一步 = R5-4（`SidecarManager.swift`）。Q5/Q6 已定（D.13/D.14）；**新增 Q7（可写数据搬出 bundle 后 dev 与 app 是否同路径，阻塞 R5-4）与 Q8（macOS 公证：缺 Developer ID 证书，行动项）**。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。下一步 = R5-4（`SidecarManager.swift`）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 待用户操作**（公证只差 Developer ID 证书，且只能账号持有人本人在后台签发——ASC API 密钥无此权限，已实测；CSR 与配对私钥已备好，不阻塞 R5-4）。**
 
 ---
 
@@ -61,6 +61,7 @@
 | **D.11** | **skill = 主轮次的提示词剧本**，不是自带工具集的隔离子会话。工具沿用主循环 → 审批闸门照常生效，**零新增提权面**。要给 skill 加 `tools:`，须先解决「审批从沙箱透出到前端」 | 2026-07-16 用户 | 本节 §3.2 实测结果 |
 | **D.14** | **整条音频路移设备 A**（Q6 定案，重构了原问法）：edge 不留 torch/librosa/silero/whisper，经**新增 `remote` ASR provider**（既有接缝 `backends/__init__.py:40`）+ A 侧 `/v1/transcribe`。**不选 Apple SpeechAnalyzer**——它是 Swift-only（ObjC 头只有旧的 SFSpeechRecognizer），PyObjC 够不到，会让 ASR 依赖 app 存在，与「无 app 的 dev/web-only/CUDA 线」冲突；且要先定 locale，牺牲现有的自动语言检测（`router.py:49`）。SpeechAnalyzer 日后可作同一接缝下的可选快路 | 2026-07-16 用户 | 本节 §3.5 R5-2 |
 | **D.13** | **edge 启动逻辑提成单一真相**（`scripts/lib_edge.sh` 或等价），`devctl.sh` 与 app 都调它；Swift 只做它独有的**进程监护**（崩溃重启/日志/端口冲突/随 app 收摊）。**不在 app 里重写一份**——那 799 行里的顺序与探活判据是多起事故换来的（RAG 未就绪即拒启 backend，因工具探活只在启动期发生一次）。前置：启动逻辑须对「仓库布局 vs bundle 布局」「`.env.local` vs Keychain」参数化 | 2026-07-16 用户 | 本节 §3.5 R5-4；R1 同一教训：消除拷贝，不消除差异 |
+| **D.16** | **可写数据经 `AGENT_DATA_DIR` 旋钮分家**（Q7 定案，选项 B）：dev 默认仓库内（保住「数据随手可见可删」的手感），app 注入 `~/Library/Application Support/dev.enkin.macagent/`。**不选「一律搬 App Support、dev 也用」**——dev 时数据离开仓库会让排查与清库都变绕。代价是两套路径都得测。与 D.13 要求的「启动逻辑对仓库布局 vs bundle 布局参数化」**是同一个旋钮**，不是第二个 | 2026-07-16 用户 | 本节 §3.5 R5-4 |
 | **D.15** | **内嵌运行时选 `python-build-standalone`**（R5-3 选型，三条判据全部实测）。**否决 PyInstaller**——与本仓库「文件系统即真相源」的约定直接相冲：`mcp/registry.py:26` 扫目录找 `.py` 发现工具、`skill_registry.py:58` 与 `memory/notes.py:86` 扫 `*.md`，冻结后统统扫不到；且 `:21-23` 目录不存在时**静默建空目录后 return** → **零工具注册且不报错**。**否决「venv 拷进 bundle」**——`backend/.venv/bin/python3.13` 是指向 `/Library/Frameworks/Python.framework` 的**绝对路径符号链接**（venv 里没有解释器本体），而该 framework 的 install-name 也是绝对路径、本身搬不动，净体积 307M 且签的是 PSF 的 Developer ID | 2026-07-16 实测 | 本节 §3.5 R5-3；`scripts/build-runtime.sh` |
 | **D.12** | **`tool_responses[]` 条目是「模型上下文 + 渲染源」两用面**，模型可见键走**白名单** `{name, response, content}`。R3 的 `render` 载荷挂同一条目但不进提示词；顺带修掉 `_safe`/`_target` 的既有泄漏。代价（已知并接受）：模型提示词发生变化，16GB 机上无真模型可验证质量 | 2026-07-16 用户 | 本节 §3.3 实测结果 |
 
@@ -816,8 +817,8 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
 |---|---|---|
 | ~~**Q5**~~ | **已定 → D.13**：提取共享启动库，`devctl.sh` 与 app 都调；Swift 只做进程监护 | ~~R5-4~~ ✅ |
 | ~~**Q6**~~ | **已定 → D.14**：整条音频路移 A（原问法有误：torch 是被 silero-vad 钉住的，不是 whisper——去掉 whisper 几乎不省空间） | ~~R5-2~~ ✅ |
-| **Q7** | **可写数据搬出 bundle 后，dev 与 app 走不走同一套路径？** `app.py:94` 的 `BASE_DIR = Path(__file__).parent` 现在同时是「代码在哪」和「数据写哪」，装进 .app 后后者必须分家（写 bundle = 破坏签名）。**选项 A**：一律搬 `~/Library/Application Support/dev.enkin.macagent/`，dev 也用 → 单一形态，但 dev 时数据离开仓库、不再随手可见可删。**选项 B**：`AGENT_DATA_DIR` 环境变量，dev 默认仓库内、app 注入 App Support → 保住 dev 手感，代价是两套路径都得测。**注**：D.13 的「启动逻辑对仓库布局 vs bundle 布局参数化」本就要求这个旋钮存在，B 与之同形 | R5-4 |
-| **Q8** | **macOS app 走不走公证？**（非设计问题，是行动项）现状 `project.yml:36` 是 `CODE_SIGN_IDENTITY: "-"` = **ad-hoc 自用**，`install-macos.sh` 直接 `ditto` 进 `/Applications`，无公证通路。而 D4 已把「打包签名公证管线」列为接受的持续成本，且「TCC 责任进程」要求**签名的** .app。**卡点**：`security find-identity` 只有 `Apple Distribution` 与 `Apple Development`，**没有 `Developer ID Application`**（Store 外分发+公证必需，需在开发者后台由账号持有人签发）。R5-3 已验到公证前的最后一步（hardened runtime 签名 + 212 金测试全绿），**提交公证这步在拿到证书前无法实测** | R5-9 验收形态 |
+| ~~**Q7**~~ | **已定 → D.16**：`AGENT_DATA_DIR` 旋钮，dev 默认仓库内、app 注入 App Support | ~~R5-4~~ ✅ |
+| **Q8** | **macOS 公证：只差 Developer ID Application 证书，且只能由你本人签发**（行动项，不阻塞 R5-4）。已实测：ASC API 密钥 **notarytool 鉴权通过**（`notarytool history` → "No submission history"）；但**任何 ASC API 密钥都创建不了 Developer ID 证书**——`POST /v1/certificates` 返回 `403 FORBIDDEN_ERROR: This operation can only be performed by the Account Holder`，而 ASC API 密钥的可选角色里（Admin/App Manager/Developer/Marketing/Sales/Finance/Customer Support）**根本没有 Account Holder**。**待你操作**：developer.apple.com → Certificates → 新建 **Developer ID Application**，上传已备好的 `~/Desktop/DeveloperID.csr`（配对私钥已在 login Keychain，是唯一副本），下载 .cer 后双击装入即可。**选 G2**：经典的 "Developer ID Certification Authority" 中间证书 **2027-02-01 到期**（距今仅半年余），现在签发经典型等于拿一张很快要换的证书 | R5-9 验收形态 |
 
 ---
 
@@ -837,6 +838,23 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
 **与 `HETERO_COMPUTE.md` §R「verify site over ledger」不矛盾**：那条讲**现场状态**
 （服务是否在跑、配置是否生效）以实测为准；**架构事实**（有几个端、什么形态、什么纪律）以宪章账本为准。
 **两者适用域不同。**
+
+### S.4 · 「没报权限错」不等于「有权限」——校验顺序会骗人（2026-07-16）
+
+**事故**：为在不产生副作用的前提下探明 ASC API 密钥能否创建 Developer ID 证书，
+我用**故意无效的 CSR** 去 POST，理由是「CSR 无效就绝不可能真建出证书」。
+苹果回 `409 ENTITY_ERROR.ATTRIBUTE.INVALID: csrContent 无效`。我据此向用户报告
+「✅ 有权限（报的是 CSR 错，不是权限错）」。换上真 CSR 后立刻 `403 FORBIDDEN_ERROR:
+This operation can only be performed by the Account Holder`。
+
+**教训**：探针的「安全」设计和它的「有效」是两回事。那个 CSR 保证了不产生副作用——
+这部分是对的；但我从「错误信息不是权限错」反推「权限没问题」，**默认了服务端先查权限
+再校验属性**，而苹果的顺序恰好相反。**一个失败请求的错误类型，只能证明它走到了哪一步，
+不能证明它没走到的那些步会通过**。要判定权限，就得发一个除权限外一切都合法的请求——
+而那正是有副作用的那个。**「无副作用地探明有副作用的操作可行性」有时根本不可得**，
+此时正确做法是承认不确定、把它作为不确定项交给用户，而不是拿一个弱信号当结论。
+
+**已付代价**：向用户报了一次错误结论，用户据此选了「我用 API 建」，做不到。
 
 ### S.2 · `git add -A` 会扫进不属于本次改动的东西（2026-07-15）
 
