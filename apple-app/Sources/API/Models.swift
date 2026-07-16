@@ -18,6 +18,40 @@ struct ToolCallInfo: Codable {
 struct ToolResponseItem: Codable {
     let name: String?
     let response: String?
+    /// 渲染格（R3/PROTOCOL §2.3.1）：工具声明的客户端渲染载荷。缺失/不认识 = 灰框。
+    let render: ToolRender?
+}
+
+/// 工具渲染格：`hint` 刻意不收窄成枚举（web 端同一决定）——新 hint 只是"这版
+/// app 不认识 → 灰框"，不是解码失败把整条消息拖下水。
+struct ToolRender: Codable {
+    let hint: String
+    let payload: JSONValue?
+}
+
+/// citations 载荷的一条（rag_search 试点，R3）。字段容错：缺哪个都不崩。
+struct CitationItem {
+    let source: String
+    let path: String?
+    let score: Double?
+    let snippet: String?
+
+    static func from(_ payload: JSONValue?) -> [CitationItem] {
+        guard case .object(let obj)? = payload,
+              case .array(let items)? = obj["items"] else { return [] }
+        return items.compactMap { item in
+            guard case .object(let o) = item else { return nil }
+            func str(_ k: String) -> String? {
+                if case .string(let s)? = o[k] { return s }; return nil
+            }
+            func num(_ k: String) -> Double? {
+                if case .number(let n)? = o[k] { return n }; return nil
+            }
+            guard let source = str("source") else { return nil }
+            return CitationItem(source: source, path: str("path"),
+                                score: num("score"), snippet: str("snippet"))
+        }
+    }
 }
 
 /// 轮次里的一条消息（assistant / tool / system）。role 之外的字段按需出现。

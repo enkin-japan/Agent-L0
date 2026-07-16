@@ -27,19 +27,26 @@ struct MessageView: View {
                 .background(Color.primary.opacity(0.04))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         case .tool:
-            DisclosureGroup {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    Text(message.toolDetail ?? "")
-                        .font(.system(.caption, design: .monospaced))
-                        .selectableOnIOS()
-                        .padding(8)
+            // 渲染格（R3）：认识的 hint 走结构化视图，其余保持灰框（fail-open，与 web
+            // 的 renderByHint 同一决策表）。灰框照旧收在 DisclosureGroup 里。
+            if !message.citations.isEmpty {
+                CitationsView(items: message.citations,
+                              label: message.toolLabel ?? L("工具"))
+            } else {
+                DisclosureGroup {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Text(message.toolDetail ?? "")
+                            .font(.system(.caption, design: .monospaced))
+                            .selectableOnIOS()
+                            .padding(8)
+                    }
+                    .background(Color.primary.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                } label: {
+                    Label(message.toolLabel ?? L("工具"), systemImage: "wrench.and.screwdriver")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .background(Color.primary.opacity(0.05))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-            } label: {
-                Label(message.toolLabel ?? L("工具"), systemImage: "wrench.and.screwdriver")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -172,5 +179,56 @@ extension View {
         #else
         self
         #endif
+    }
+}
+
+/// 渲染格 citations（R3 试点，R5-7 落地）：与 web 的 `Citations` 同一信息面——
+/// 来源 + 分数（等宽数字右对齐）+ 摘录（限三行）+ 路径。默认展开（引用是结论的
+/// 依据，折叠等于白做）；标题行保留工具名，与灰框的心智一致。
+struct CitationsView: View {
+    let items: [CitationItem]
+    let label: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(label, systemImage: "text.quote")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(Array(items.enumerated()), id: \.offset) { _, c in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "doc.text")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(c.source)
+                            .font(.caption.weight(.medium))
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        if let score = c.score {
+                            Text(String(format: "%.2f", score))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if let snippet = c.snippet, !snippet.isEmpty {
+                        Text(snippet)
+                            .font(.caption)
+                            .foregroundStyle(.primary.opacity(0.8))
+                            .lineLimit(3)
+                    }
+                    if let path = c.path, !path.isEmpty {
+                        Text(path)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary.opacity(0.7))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.primary.opacity(0.04))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+        }
     }
 }

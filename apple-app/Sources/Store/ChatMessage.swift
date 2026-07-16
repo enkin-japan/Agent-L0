@@ -27,6 +27,8 @@ struct ChatMessage: Identifiable {
     var toolLabel: String?
     /// tool 行的完整内容（展开后显示）
     var toolDetail: String?
+    /// 渲染格（R3）：citations 试点的结构化载荷；空 = 按 toolDetail 画灰框（现状）
+    var citations: [CitationItem] = []
     /// 所属轮次在 history.jsonl 里的下标（分支锚点）。仅已落盘的轮次有值。
     var turnIndex: Int?
     /// 生成指标（附在轮次最后一条助手消息下的小字，如 "128 tok · 24.3 tok/s"）
@@ -91,8 +93,14 @@ extension ChatMessage {
                 }
             case "tool":
                 for item in msg.toolResponses ?? [] {
-                    out.append(.tool(label: "\(item.name ?? L("工具")) \(L("返回"))",
-                                     detail: item.response ?? ""))
+                    var m = ChatMessage.tool(label: "\(item.name ?? L("工具")) \(L("返回"))",
+                                             detail: item.response ?? "")
+                    // 渲染格分派（R3，与 web 的 renderByHint 同一决策表）：
+                    // 认识的 hint 走结构化渲染，不认识/缺载荷降级灰框——fail-open
+                    if item.render?.hint == "citations" {
+                        m.citations = CitationItem.from(item.render?.payload)
+                    }
+                    out.append(m)
                 }
             case "system":
                 if let content = msg.content, !content.isEmpty {
