@@ -99,20 +99,44 @@ def _not_found_feedback(text: str, old_string: str) -> str:
             ">>>>>>> end")
 
 
-def _check_path(path: str, must_exist: bool) -> Optional[str]:
-    """路径预检：返回错误消息（None = 通过）。错误消息面向模型，指明如何改正。"""
+# 相对路径落点 = 会话工作区（D1 实测：剧本让「写进 workspace」，工具侧却只收绝对
+# 路径——模型幻觉出 /workspace/ 撞上只读根目录 Errno 30。落点与 render_chart 同范式：
+# sessions/{sid}/assets/，经 /api/v1/files 出货，用户可点击下载）。
+# 文件名字符集与出货路由的 _ASSET_NAME_RE 对齐，否则写得进、取不出。
+_WORKSPACE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _resolve_path(path: str, must_exist: bool):
+    """路径解析：返回 (绝对路径, 出货URL或None, 错误消息或None)。
+
+    绝对路径/~ 开头：原语义不变。相对路径：视为会话工作区文件名，落
+    sessions/{sid}/assets/——这是模型产出交付物（报告/导出）的家。
+    """
     if not path or not str(path).strip():
-        return "System Error: 'path' is empty."
+        return None, None, "System Error: 'path' is empty."
     p = os.path.expanduser(str(path))
+    url = None
     if not os.path.isabs(p):
-        return (f"System Error: path must be absolute (got {path!r}). "
-                "Prepend the full directory, e.g. /Users/name/project/file.txt")
+        from ...agents import runtime
+        session = runtime.get_current_session()
+        if session is None:
+            return None, None, ("System Error: relative paths need a session workspace, which is "
+                                "unavailable here. Use an absolute path instead.")
+        name = str(path).strip()
+        if not _WORKSPACE_NAME_RE.match(name) or ".." in name:
+            return None, None, (f"System Error: {path!r} is not a valid workspace filename. "
+                                "Use a plain filename like report-topic.md (letters, digits, . _ -), "
+                                "or an absolute path for locations outside the workspace.")
+        assets = session.session_dir / "assets"
+        assets.mkdir(parents=True, exist_ok=True)
+        p = str(assets / name)
+        url = f"/api/v1/files/{session.session_id}/assets/{name}"
     if must_exist and not os.path.isfile(p):
-        return (f"System Error: file does not exist: {p}. "
-                "Check the path with run_shell_command (ls), or use write_file to create a new file.")
+        return None, None, (f"System Error: file does not exist: {p}. "
+                            "Check the path with run_shell_command (ls), or use write_file to create a new file.")
     if os.path.isdir(p):
-        return f"System Error: {p} is a directory, not a file."
-    return None
+        return None, None, f"System Error: {p} is a directory, not a file."
+    return p, url, None
 
 
 def _read_text(path: str) -> str:
@@ -155,7 +179,8 @@ class EditFileTool(BaseTool):
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Absolute path of the file to edit."
+                "description": ("Path of the file to edit: absolute for real filesystem locations, "
+                                "or a plain filename (e.g. report.md) for the session workspace.")
             },
             "old_string": {
                 "type": "string",
@@ -170,10 +195,9 @@ class EditFileTool(BaseTool):
     }
 
     def execute(self, path: str, old_string: str, new_string: str = "") -> str:
-        err = _check_path(path, must_exist=True)
+        p, _url, err = _resolve_path(path, must_exist=True)
         if err:
             return err
-        p = os.path.expanduser(str(path))
         old_string = str(old_string)
         new_string = str(new_string)
         if not old_string:
@@ -229,7 +253,10 @@ class WriteFileTool(BaseTool):
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Absolute path of the file to write. Parent directories are created if missing."
+                "description": ("Path to write: a plain filename (e.g. report-topic.md) lands in the "
+                                "session workspace and returns a download link for the user — use this "
+                                "for reports/deliverables. Absolute paths write to the real filesystem "
+                                "(parent directories created if missing).")
             },
             "content": {
                 "type": "string",
@@ -240,10 +267,9 @@ class WriteFileTool(BaseTool):
     }
 
     def execute(self, path: str, content: str = "") -> str:
-        err = _check_path(path, must_exist=False)
+        p, url, err = _resolve_path(path, must_exist=False)
         if err:
             return err
-        p = os.path.expanduser(str(path))
         content = str(content)
         if len(content) > _MAX_CONTENT_CHARS:
             return (f"System Error: content too large ({len(content)} chars, limit "
@@ -261,4 +287,10 @@ class WriteFileTool(BaseTool):
             return f"System Error: failed to write {p}: {e}"
 
         note = f" (previous version backed up to {p}.bak)" if backed_up else ""
+        if url:
+            # 工作区交付物：把可点击的下载链接交回——模型须把它原样放进回复
+            #（与 render_chart 同约定；链接逐字来自这里，不许改写）。
+            name = os.path.basename(p)
+            return (f"OK: wrote {len(content)} chars to workspace file {name}{note}. "
+                    f"Download link for your reply (copy verbatim): [{name}]({url})")
         return f"OK: wrote {len(content)} chars to {p}{note}."

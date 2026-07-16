@@ -195,17 +195,33 @@ def test_turn_runner_wires_slash_dispatch():
 _SHIPPED_SKILLS = {"deck", "research", "chart-report", "ingest", "briefing"}
 
 
-def test_shipped_skills_requires_point_at_real_tools():
-    """`requires:` 里打错一个工具名 = 剧本在真机上静默蒸发。对着真实工具面核对：
-    MCPRegistry 目录扫描 + app.py 装配期补注册的两个（memory_write / skill_invoke）。"""
+def _declared_tool_names():
+    """全部工具类的**声明名**（静态 AST 扫，不经探活）——「名字是否存在」与
+    「此刻是否可用」是两个问题：前者抓 requires 打错字，后者随环境浮动（例：
+    soffice 残链修复后 excel_research 在缺 LibreOffice 的机器上不注册，D1 实证）。"""
+    import ast
     from pathlib import Path
-    from framework.mcp.registry import MCPRegistry
+    names = {"memory_write", "skill_invoke"}   # 装配期补注册的两个
+    tools_dir = Path(__file__).resolve().parent.parent / "framework" / "mcp" / "tools"
+    for f in tools_dir.glob("*.py"):
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                for stmt in node.body:
+                    if (isinstance(stmt, ast.Assign)
+                            and any(getattr(t, "id", "") == "name" for t in stmt.targets)
+                            and isinstance(stmt.value, ast.Constant)
+                            and isinstance(stmt.value.value, str)):
+                        names.add(stmt.value.value)
+    return names
 
-    root = Path(__file__).resolve().parent.parent
-    universe = set(MCPRegistry(tools_dir=root / "framework" / "mcp" / "tools").tool_names())
-    universe |= {"memory_write", "skill_invoke"}   # 两表互为前置，装配期补注册
 
-    skills_dir = root.parent / "skills"
+def test_shipped_skills_requires_point_at_real_tools():
+    """`requires:` 里打错一个工具名 = 剧本在真机上静默蒸发。对着**声明名全集**核对
+    （静态，不受本机依赖缺失影响）。"""
+    from pathlib import Path
+    universe = _declared_tool_names()
+    skills_dir = Path(__file__).resolve().parent.parent.parent / "skills"
     seen = set()
     for f in sorted(skills_dir.glob("*.md")):
         meta, _ = _parse_frontmatter(f.read_text(encoding="utf-8"), f)
@@ -217,14 +233,22 @@ def test_shipped_skills_requires_point_at_real_tools():
 
 
 def test_shipped_skills_load_against_real_tool_universe():
-    """终局断言：对着真实工具面，发货剧本必须**一个不少**地加载成功——
-    解析、探活、重名任何一环失守都会让这里红。"""
+    """终局断言：对着**本机真实可用面**，「requires 满足的剧本」必须一个不少地加载
+    ——期望集按可用面条件推导（依赖缺失的剧本被舍弃是探活正确行为，不是回归；
+    例：本机 LibreOffice 残链 → excel_research 不注册 → chart-report 合法缺席）。"""
     from pathlib import Path
     from framework.mcp.registry import MCPRegistry
 
     root = Path(__file__).resolve().parent.parent
-    universe = set(MCPRegistry(tools_dir=root / "framework" / "mcp" / "tools").tool_names())
-    universe |= {"memory_write", "skill_invoke"}
-    reg = SkillRegistry(root.parent / "skills", tool_names=universe)
-    assert set(reg.names()) == _SHIPPED_SKILLS, \
-        f"加载结果 {reg.names()} != 发货清单 {sorted(_SHIPPED_SKILLS)}（有剧本被静默舍弃）"
+    available = set(MCPRegistry(tools_dir=root / "framework" / "mcp" / "tools").tool_names())
+    available |= {"memory_write", "skill_invoke"}
+    skills_dir = root.parent / "skills"
+    expected = set()
+    for f in skills_dir.glob("*.md"):
+        meta, _ = _parse_frontmatter(f.read_text(encoding="utf-8"), f)
+        if all(t in available for t in (meta.get("requires") or [])):
+            expected.add(str(meta.get("name")))
+    reg = SkillRegistry(skills_dir, tool_names=available)
+    assert set(reg.names()) == expected, \
+        f"加载结果 {sorted(reg.names())} != 可用面推导 {sorted(expected)}（有剧本被静默舍弃）"
+    assert expected, "本机可用面推导出的剧本集为空——环境坏得离谱，别让全绿骗过去"

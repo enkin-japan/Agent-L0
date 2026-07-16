@@ -58,14 +58,23 @@ _SOFFICE_FALLBACKS = (
 
 
 def find_soffice() -> Optional[str]:
-    """定位 soffice；找不到返回 None（包壳工具据此决定 excel_research 是否注册）。"""
-    for name in ("soffice", "libreoffice"):
-        p = shutil.which(name)
-        if p:
-            return p
-    for p in _SOFFICE_FALLBACKS:
-        if Path(p).is_file():
-            return p
+    """定位**可用的** soffice；找不到返回 None（包壳工具据此决定 excel_research 是否注册）。
+
+    实测事故（D1 验收）：brew cask 卸载 LibreOffice 后 `/opt/homebrew/bin/soffice`
+    残链仍在，`which` 照样命中——工具带病注册，运行到 soffice 一步才炸 exit 127。
+    探活必须真执行一次（--version），残链/坏装当场出局（扩充纪律：探活不是摆设）。
+    """
+    candidates = [p for name in ("soffice", "libreoffice") if (p := shutil.which(name))]
+    candidates += [p for p in _SOFFICE_FALLBACKS if Path(p).is_file()]
+    for p in candidates:
+        try:
+            r = subprocess.run([p, "--version"], capture_output=True, timeout=20)
+            if r.returncode == 0:
+                return p
+            print(f"[excel] soffice 候选 {p} 探活失败（exit {r.returncode}）——跳过。"
+                  "若为 brew 残链，可 `brew reinstall --cask libreoffice` 修复。")
+        except Exception as e:
+            print(f"[excel] soffice 候选 {p} 探活异常（{type(e).__name__}: {e}）——跳过。")
     return None
 
 

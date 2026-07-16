@@ -40,6 +40,9 @@ class WebResearchTool(BaseTool):
     requires_approval = False
     # 只读联网调查：无本地副作用，可与其他只读调用并发（沙箱内部取推理锁，与主生成互斥、不死锁）
     is_concurrency_safe = True
+    # 工具级超时 = 自身熔断 + 30s 余量（excel_research 同款）：此前只靠全局
+    # tool_timeout_seconds 兜底，total_timeout 一调大就会先撞全局墙（D1 实测）
+    timeout_seconds = int(_CFG.get("total_timeout", 110)) + 30
 
     parameters = {
         "properties": {

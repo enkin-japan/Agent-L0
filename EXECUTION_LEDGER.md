@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 ✅（bundle 组装 1.0G 交付形态 + 无头验收全过 + GUI 三项用户实机确认 + 实机查验四轮修复（密钥入库/鉴权门/Developer ID 签名/会话恢复）+ 两轮 UI 打磨，v0.16.0(30)）。**R5 全线收官（2026-07-17），CHARTER 三处同步已获用户同意并落地**。**D1 首批进行中**：新剧本 ×4 + D.17 斜杠确定性分发（e4b 不会主动调 skill_invoke，实测倒逼）+ 金测试 232；chart-report/ingest 验收 ✅，briefing/research/chart-report 三案疑难**同根归案（S.9）**：inference/server.py 约束采样构造少传 schema_builder → 服务端掩码永久禁用 → e4b 裸奔畸形 JSON——已修（一行）+ AST 调用点钉（金测试 233），infer 已重启、探针全绿。v0.16.0(32) 已装（剧本+分发随包），**待用户重测 /research /briefing /chart-report**（修复在服务端，包不用换）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 ✅ 闭环**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份）；951M 运行时（322 Mach-O 覆盖签名）公证 **Accepted**（submission `1e13bf2a`，2026-07-16 通过；当日苹果队列积压 ~14h，对照组 tiny.zip 甚至更慢——大包无罪）。签名→公证全链路验证完毕，剩「对真实 .app 公证 + staple」在 R5 收官后的分发动作里做。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 ✅（bundle 组装 1.0G 交付形态 + 无头验收全过 + GUI 三项用户实机确认 + 实机查验四轮修复（密钥入库/鉴权门/Developer ID 签名/会话恢复）+ 两轮 UI 打磨，v0.16.0(30)）。**R5 全线收官（2026-07-17），CHARTER 三处同步已获用户同意并落地**。**D1 首批进行中**：新剧本 ×4 + D.17 斜杠确定性分发（e4b 不会主动调 skill_invoke，实测倒逼）+ 金测试 232；chart-report/ingest 验收 ✅，briefing/research/chart-report 三案疑难**同根归案（S.9）**：inference/server.py 约束采样构造少传 schema_builder → 服务端掩码永久禁用 → e4b 裸奔畸形 JSON——已修（一行）+ AST 调用点钉（金测试 233），infer 已重启、探针全绿。实机第二轮又修三件架构事（交付物工作区落点 / soffice 残链探活 / web_research 预算 110→240），金测试 240，v0.16.0(33) 已装。**待用户重测**：/research（应产出可下载报告链接）、/briefing（干跑应不再超时；schedule_create 审批后建成）；chart-report 需先 `brew reinstall --cask libreoffice`。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 ✅ 闭环**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份）；951M 运行时（322 Mach-O 覆盖签名）公证 **Accepted**（submission `1e13bf2a`，2026-07-16 通过；当日苹果队列积压 ~14h，对照组 tiny.zip 甚至更慢——大包无罪）。签名→公证全链路验证完毕，剩「对真实 .app 公证 + staple」在 R5 收官后的分发动作里做。**
 
 ---
 
@@ -1017,6 +1017,21 @@ schema_builder 参数，engine.py 改了，**没人 import 的 inference/server.
 [source N] 引用的真摘要）。金测试 +1（233）：`test_constraint_engine_call_sites_bind`
 ——AST 抓两个入口的构造调用点按 __init__ 签名 bind，签名再漂移当场红。
 **用户可直接在 v32 重测 /research、/briefing、/chart-report（修复在服务端，包不用换）。**
+
+**实机第二轮（2026-07-17，用户四会话，只做架构侧）**：约束修复在生产坐实
+（research 案例真产出带证据链的汇率报告）。架构问题三件，全修（v0.16.0(33)）：
+- **交付物无处安放**：剧本说「写进 workspace」，工具侧只收绝对路径——模型幻觉
+  `/workspace/` 撞 macOS 只读根 Errno 30。修：write_file/edit_file 相对文件名落
+  `sessions/{sid}/assets/`（render_chart 同范式），返回出货链接逐字进回复；文件名
+  字符集与 `_ASSET_NAME_RE` 对齐（写得进必须取得出）；金测试 +6（test_file_workspace）
+- **soffice 残链带病注册**：brew 卸载 LibreOffice 后 `/opt/homebrew/bin/soffice`
+  残链仍中 `which`，excel_research 带病注册、运行到 soffice 才炸 exit 127。修：
+  `find_soffice` 真执行 `--version` 探活，残链出局（探活不是摆设）；本机想用
+  excel/chart-report 需 `brew reinstall --cask libreoffice`。发货剧本金测试改为
+  环境感知（名字合法性对声明名全集静态核对；加载断言按本机可用面条件推导）
+- **web_research 预算错配**：total_timeout 110s，实测远端 e4b 一次完整调查 2~3 分钟
+  ——简报干跑必超时。修：110→240 + 工具自带 timeout_seconds=+30 覆盖全局
+  （excel_research 同款）。金测试 240 全绿。
 
 **附带发现（R5-9 尾巴）**：`kill -9` app 的实机测试留下**孤儿 backend/searx**（SIGKILL
 不走 willTerminate），此后每代 app 都把它当 external 只用不管——孤儿一直跑着已删除

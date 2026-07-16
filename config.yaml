@@ -260,7 +260,10 @@ web_search:
   per_page_max_chars: 2500   # 每页正文注入沙箱上下文的字符上限（1500 实测会把说明页
                              # 铺垫之后的关键表格截掉，如税率速算表）
   max_steps: 6               # 沙箱 ReAct 循环步数上限
-  total_timeout: 110         # web_research 整体墙钟熔断（秒）；须 < agent.tool_timeout_seconds
+  total_timeout: 240         # web_research 整体墙钟熔断（秒）。110 → 240（2026-07-17 实测）：
+                             # 远端 e4b 上一次完整调查（3 次生成 + 抓取）约 2~3 分钟，110s
+                             # 连两次生成都放不下，简报干跑必超时。工具自带 timeout_seconds
+                             # = 此值+30 覆盖全局（excel_research 同款），不再受 180s 全局墙压制
   convergence_reserve_seconds: 30  # 距 total_timeout 不足此秒数时沙箱停发工具调用、
                                    # 用已收集材料强制收敛出摘要（把超时全损变为部分交付）
   engines: []                # 可选：限定 SearXNG 引擎（如 ["duckduckgo","brave"]），空=用默认

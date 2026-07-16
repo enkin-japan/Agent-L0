@@ -17,9 +17,11 @@ file with cited sources — not a chat answer.
 3. **`web_read` the 2-4 most load-bearing pages.** Search snippets are teasers, not
    evidence. Any claim that shapes a conclusion must come from a page you actually
    read.
-4. **Write the report with `write_file`** as `research-<topic>.md` in the workspace.
-   Structure: 结论先行 (the answers, 5-10 lines) → 各子问题分节 (evidence per
-   sub-question) → 来源清单 (numbered URLs). Give the file path in your reply.
+4. **Write the report with `write_file`** using a plain filename like
+   `research-<topic>.md` (a bare filename lands in the session workspace; the tool
+   returns a download link — copy that link verbatim into your reply). Structure:
+   结论先行 (the answers, 5-10 lines) → 各子问题分节 (evidence per sub-question) →
+   来源清单 (numbered URLs).
 
 ## Rules
 
