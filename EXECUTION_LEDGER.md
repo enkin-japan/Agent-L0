@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 🟡 **无头部分全过**（`bundle-macos.sh` 组装 1.0G 交付形态 v0.16.0(22) 已装 /Applications；无头烟测：工具数 36 断言 + E2E 20 项（靶=bundle backend）+ 双端夹具 + 印章跑后完好（S.8）；冷启 6.6–9.8s；金测试 223）。**剩 GUI 三项待用户实机查验**（双击冷启时延 / 杀进程恢复 ≤1s / sidecar 崩溃重启不丢轮次），过完即 R5 收官 + CHARTER 同步改动（表见 R5-9 下方，属架构方向改动需用户点头）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 ✅ 闭环**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份）；951M 运行时（322 Mach-O 覆盖签名）公证 **Accepted**（submission `1e13bf2a`，2026-07-16 通过；当日苹果队列积压 ~14h，对照组 tiny.zip 甚至更慢——大包无罪）。签名→公证全链路验证完毕，剩「对真实 .app 公证 + staple」在 R5 收官后的分发动作里做。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 ✅（bundle 组装 1.0G 交付形态 + 无头验收全过 + GUI 三项用户实机确认 + 实机查验四轮修复（密钥入库/鉴权门/Developer ID 签名/会话恢复）+ 两轮 UI 打磨，v0.16.0(30)）。**R5 全线收官（2026-07-17），CHARTER 三处同步已获用户同意并落地**。下一步 = **D 阶段 · D1（skill 库扩充）**。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 ✅ 闭环**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份）；951M 运行时（322 Mach-O 覆盖签名）公证 **Accepted**（submission `1e13bf2a`，2026-07-16 通过；当日苹果队列积压 ~14h，对照组 tiny.zip 甚至更慢——大包无罪）。签名→公证全链路验证完毕，剩「对真实 .app 公证 + staple」在 R5 收官后的分发动作里做。**
 
 ---
 
@@ -846,7 +846,8 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
   - 附带发现：backend/.venv 经 R5-2 瘦身后无 pyjwt，`wait-testflight.py` 需独立 venv
     （其头注本就说「任意 venv」，发布工具依赖不回灌边缘 venv）
 
-- [~] **R5-9 · 验收** 🟡 无头部分 ✅ 2026-07-16；GUI 三项待实机查验
+- [x] **R5-9 · 验收** ✅ 2026-07-17 **完整收官**（无头全过 + GUI 三项用户实机确认 +
+  两轮 UI 打磨定案 + CHARTER 三处同步已获用户同意并落地）
   - **bundle 组装落地**（隐含前置，本阶段最大件）：新 `apple-app/bundle-macos.sh`——
     Release 构建 → Resources/ 注入 backend（rsync 排除 .venv/数据目录/测试）+
     skills/ + python（950M PBS 树，ditto 保符号链接）+ scripts/lib_edge.sh +
@@ -933,8 +934,14 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
     - #2 决断：下拉刷新是 iOS 习语，macOS 上刷新控件收起与 List 更新天然打架——
       **macOS 撤掉下拉刷新**，由探活循环顺带巡刷列表（15s + 等值守卫 = 不变零重建）；
       iOS 保留下拉
-    - 新观感问题（实机反馈：侧栏与 worker 工作区零隔断，新会话选中行像流进工作区）：
-      detail 栏加常显左缘发丝线（不赌系统分栏线深浅）
+    - 新观感问题「worker 与会话列表零隔断」：两轮误诊为分栏线（v28/29，画了看不见——
+      悬浮玻璃侧栏下 detail 内容延伸到侧栏底下），**用户一张截图定案**：「worker」=
+      顶部任务卡，真因是会话行是裸行、被吸附进「任务」Section 的分组卡——会话列表
+      包显式 `Section(会话)`（v30），误诊的分栏线撤除。教训：UI 观感问题先要截图，
+      盲推一轮不中就停
+  - **CHARTER 同步三处已落地（2026-07-17 用户：「那三处改动没问题」）**：
+    `apple-app/` 入库条目 R5-1 时已改；部署纪律重述适用域（sidecar 按设计自启不受限，
+    开发流程照旧）；铁律 4 补注（app 兼任宿主，渲染部分仍是纯归约器投影）
 
 **CHARTER 需同步改动**（R5 完成时一并更新，**属架构方向改动**）：
 | 位置 | 现状 | 改为 |

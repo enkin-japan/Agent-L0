@@ -118,6 +118,8 @@ Agent 沟通的**窗口**，不是主体。
 （`Store/AgentStore.swift` + `Store/TurnReducer.swift`）都是**账本事件的纯
 归约器投影**：`reduce(state, event) -> state` + UI 副作用。两端读**同一批**
 `protocol/fixtures/` 夹具（web vitest + Swift `run_reducer_fixtures.sh`）。
+（R5 补注：macOS app 自 R5 起同时充当 backend 的宿主/监护者（sidecar），
+但其**渲染部分**仍是纯归约器投影——宿主身份不给渲染层任何后门，铁律不变。）
 
 **为什么**：旧架构"一份协议三处状态机零共享测试"，每改协议成本×3 且实证漂移
 （web 把工具事件解析了又扔、native 判 `"success"` 而后端发 `"ok"`）。
@@ -272,8 +274,10 @@ RAG 沉淀（原文可召回）。全量日志永远保留在 `history.jsonl`。
 语义要升版本。
 
 **部署纪律**（多机拓扑）：后端可能跑在另一台机器。**改后端后要提示用户重新
-同步**（"跟我说句，我重新同步一下"）。**不要**在开发机上替用户启动后端
-（Xcode 资源紧张，用户特意分开）。
+同步**（"跟我说句，我重新同步一下"）。**开发场景下不要**在开发机上替用户
+启动常驻后端（Xcode 资源紧张，用户特意分开）——此纪律约束的是**开发流程**；
+macOS app 内建执行层（sidecar，R5-4）按设计自启/监护 backend，不受此条限制
+（2026-07-16 随 R5 收官重述适用域）。测试性质的临时拉起要用完即收。
 
 **提交纪律**：一般阶段做完 commit；需要用户实机查验的阶段做完 commit+push。
 **`git add` 一律用显式路径，不要 `git add -A`**——曾因 `-A` 误扫进 `.env.example`。
