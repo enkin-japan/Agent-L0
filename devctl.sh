@@ -60,27 +60,18 @@ for envfile in "$ROOT/.env" "$ROOT/.env.local"; do
     fi
 done
 
-# ---- 服务定义（端口与 config.yaml / vite.config.ts 保持一致）----
+# ---- 服务定义（端口常量与就绪判据在 scripts/lib_edge.sh，单一真相）----
 RAG_DIR="$ROOT/rag"
-RAG_PORT=14160
-RAG_TIMEOUT="${RAG_TIMEOUT:-600}"        # 嵌入/重排模型加载可能较慢
-# RAG_READY_URL 在下方按 config 的绑定地址组装（profile 下可能非回环）
 
-# SearXNG：本机联网搜索层（原生 Python，无 Docker）。端口须与 config.yaml 的 web_search.searxng_url 一致。
+# SearXNG：本机联网搜索层（原生 Python，无 Docker）。运行期归 lib_edge.sh；
+# 这里只留 setup（克隆/venv）所需的部署常量。
 SEARX_DIR="$ROOT/searxng"                # settings.yml + 源码 + venv 所在目录
 SEARX_SRC="$SEARX_DIR/searxng-src"       # 源码克隆（pip -e 的安装源，setup 时拉取）
 SEARX_VENV="$SEARX_DIR/.venv"
 SEARX_REPO="https://github.com/searxng/searxng"
 SEARX_COMMIT="b512eaa272c0ad6e6c2cca7c6f67dc1feb0ce1bd"  # 滚动发布无版本号，pin 到实测通过的提交
-SEARX_PORT=8080
-SEARX_READY_URL="http://127.0.0.1:${SEARX_PORT}/"
-SEARX_TIMEOUT="${SEARX_TIMEOUT:-60}"
-SEARX_LEGACY_CONTAINER="searxng"         # 旧 docker 部署的容器名（迁移期自动清理）
 
 BACKEND_DIR="$ROOT/backend"
-BACKEND_PORT=14159
-BACKEND_TIMEOUT="${BACKEND_TIMEOUT:-600}"    # 首次可能触发模型下载
-# BACKEND_READY_URL 同样在下方组装（/health 免鉴权；启用 API key 后 /api/* 会 401）
 
 FRONT_DIR="$ROOT/frontend"
 FRONT_PORT=5173
@@ -90,134 +81,27 @@ FRONT_TIMEOUT="${FRONT_TIMEOUT:-60}"
 # inference-server（HETERO_COMPUTE B1/D7，:14161）：gpu profile 的推理承载。
 # 无独立 venv——跑在 backend 的 venv 里（B1 实证形态：cd backend && .venv/bin/python ../inference/server.py）。
 INFER_DIR="$ROOT/inference"
-INFER_PORT=14161
-INFER_TIMEOUT="${INFER_TIMEOUT:-600}"    # 首次可能触发模型下载 + 权重加载
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 info()  { echo -e "${GREEN}[devctl]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[devctl]${NC} $*"; }
 fail()  { echo -e "${RED}[devctl]${NC} $*" >&2; }
 
-# ---- 探活地址：取 config.yaml 里的**绑定地址**，不能写死 127.0.0.1 ----
-# profile 部署下服务可能绑 Tailscale 接口（§7 预留 2），此时回环探活打不通、devctl 会误判
-# 未就绪。绑 0.0.0.0/:: （全网卡）时回环可达，探活仍走 127.0.0.1。
-# 三个 host 一次读出（每次 python 启动约 0.1s，不值得多跑几趟）。
-probe_host() {  # $1: 配置里的绑定地址 → 可探活的地址
-    case "$1" in
-        ""|"0.0.0.0"|"::"|"*") echo "127.0.0.1" ;;
-        *) echo "$1" ;;
-    esac
-}
+# ---- edge 启动库（R5-4/D.13）：启什么/什么顺序/怎么算就绪的单一真相 ----
+# 仓库布局参数在此注入；macOS app 以 bundle 布局参数直接执行同一文件（up|down|status）。
+# 端口/超时常量、探活机制、SearXNG 配置生成、start/stop backend+searx 全在库里。
+EDGE_BACKEND_DIR="$BACKEND_DIR"
+EDGE_BACKEND_PY="$BACKEND_DIR/.venv/bin/python"
+EDGE_SEARX_DIR="$SEARX_DIR"
+EDGE_SEARX_PY="$SEARX_VENV/bin/python"
+EDGE_SEARX_SETTINGS="$SEARX_DIR/settings.yml"
+EDGE_LOG_DIR="$LOG_DIR"
+EDGE_CONFIG="$ROOT/config.yaml"
+EDGE_SETUP_HINT="请先运行: ./devctl.sh setup"
+EDGE_STOP_CMD="$0 stop"
+. "$ROOT/scripts/lib_edge.sh" || { fail "无法加载 scripts/lib_edge.sh"; exit 1; }
 
-_read_cfg_hosts() {
-    local py=""
-    for c in "$BACKEND_DIR/.venv/bin/python" "$RAG_DIR/.venv/bin/python"; do
-        [ -x "$c" ] && { py="$c"; break; }
-    done
-    [ -n "$py" ] || return 1
-    "$py" - "$ROOT/config.yaml" <<'PY' 2>/dev/null
-import sys, yaml
-c = yaml.safe_load(open(sys.argv[1], encoding="utf-8")) or {}
-inf = c.get("inference") or {}
-rem = inf.get("remote") or {}
-rag = c.get("rag") or {}
-print(inf.get("host", "127.0.0.1"))
-print(rem.get("host", "127.0.0.1"))
-print(rag.get("host", "127.0.0.1"))
-print(inf.get("mode", "inprocess"))
-PY
-}
 
-# 解析一次，供探活 URL 使用（venv 缺席时静默回落回环——setup 之前的形态）
-_CFG_LINES="$(_read_cfg_hosts)" || _CFG_LINES=""
-if [ -n "$_CFG_LINES" ]; then
-    BACKEND_HOST="$(printf '%s\n' "$_CFG_LINES" | sed -n 1p)"
-    INFER_HOST="$(printf '%s\n' "$_CFG_LINES" | sed -n 2p)"
-    RAG_HOST="$(printf '%s\n' "$_CFG_LINES" | sed -n 3p)"
-    INFER_MODE="$(printf '%s\n' "$_CFG_LINES" | sed -n 4p)"
-else
-    BACKEND_HOST="127.0.0.1"; INFER_HOST="127.0.0.1"; RAG_HOST="127.0.0.1"; INFER_MODE="inprocess"
-fi
-RAG_READY_URL="http://$(probe_host "$RAG_HOST"):${RAG_PORT}/health"
-BACKEND_READY_URL="http://$(probe_host "$BACKEND_HOST"):${BACKEND_PORT}/health"
-INFER_READY_URL="http://$(probe_host "$INFER_HOST"):${INFER_PORT}/health"
-
-# ---- 通用工具 ----
-listen_pids() {  # $1: port
-    lsof -ti "tcp:$1" -sTCP:LISTEN 2>/dev/null
-}
-
-is_ready() {  # $1: url
-    curl -sf -m 3 -o /dev/null "$1"
-}
-
-# 「已在运行，跳过」的前置判定。探活只能证明端口上有人应答，证不了那是本脚本起的
-# 服务——三种情形必须分开：
-#   本机无监听进程 + 探活通       = 服务在远端（profile 部署：设备 A 的 RAG/推理），正常跳过；
-#   本机有监听进程 + pid 记录存活 = 确是本脚本起的，正常跳过；
-#   本机有监听进程 + 无 pid 记录  = 端口被 devctl 管不着的进程占着（手工起的 / 残留 / 别的程序）。
-# 第三种此前与第二种一样被静默"跳过"：用户看到"已在运行 ✅"，实际 devctl 既没起它、
-# 也不认识它，故障推迟到访问时才以连不上的形式暴露（B3 实证：设备 B 报"backend 已在
-# 运行，跳过"，而 logs/ 里连 backend.log 都没有——真正该启动的服务被静默略过）。
-# 故第三种改为硬失败并报告占用者，让用户定夺——静默略过比报错难查得多。
-# 注意判据是"pid 记录仍存活"而非"记录 pid == 监听 pid"：前端的 pid 记的是 npm，
-# 真正监听 5173 的是它派生的 vite（stop_one 同样按端口兜底回收子进程）。
-managed_or_report() {  # $1: 名称  $2: 端口  $3: pid 文件  $4: stop 目标名 → 0=可跳过 1=被外部占用
-    local name="$1" port="$2" pidfile="$3" target="$4" owners recorded
-    owners="$(listen_pids "$port")"
-    [ -n "$owners" ] || return 0            # 本机没进程：服务在远端，不归本机管
-    if [ -f "$pidfile" ]; then
-        recorded="$(cat "$pidfile" 2>/dev/null)"
-        [ -n "$recorded" ] && kill -0 "$recorded" 2>/dev/null && return 0
-    fi
-    fail "$name 端口 ${port} 被本脚本管不着的进程占用（${pidfile} 无记录或记录已失效）："
-    for p in $owners; do
-        echo "      pid $p  $(ps -o comm= -p "$p" 2>/dev/null || echo '?')" >&2
-    done
-    # ${} 必须显式界定：紧跟其后的全角句号是多字节字符，$LOG_DIR。 会被 bash 连着
-    # 首字节当成变量名（set -u 下直接 unbound variable 报错）。
-    warn "  探活能通，但那不是本次 devctl 启动的服务，其日志也不在 ${LOG_DIR}。"
-    warn "  确认可回收则先停： $0 stop ${target}"
-    return 1
-}
-
-# 后台拉起常驻进程。
-# 注意：不能用 ( ... & ) 子壳包裹 —— macOS 自带 bash 3.2 的子壳会 wait4 等待
-# 后台子进程，而子壳又继承 ssh 会话的 stdout 管道，导致远程单条指令
-# `ssh <host> 'devctl.sh start'` 在服务存活期间永不返回。
-# 在主 shell 直接 nohup + & 则脚本退出时不等待后台任务，进程被 launchd 收养。
-spawn_daemon() {  # $1: 工作目录  $2: 日志  $3: pid 文件  $4...: 命令
-    local dir="$1" log="$2" pidfile="$3"
-    shift 3
-    cd "$dir" || return 1
-    nohup "$@" >>"$log" 2>&1 </dev/null &
-    echo $! >"$pidfile"
-    disown 2>/dev/null || true
-    cd "$ROOT" || return 1
-}
-
-# 轮询就绪探针；期间守护进程若已退出则立即失败并展示日志尾部
-wait_ready() {  # $1: 名称  $2: url  $3: 超时秒  $4: pid  $5: 日志文件
-    local name="$1" url="$2" timeout="$3" pid="$4" log="$5" waited=0
-    printf "[devctl] 等待 %s 就绪 " "$name"
-    while ! is_ready "$url"; do
-        if ! kill -0 "$pid" 2>/dev/null; then
-            echo ""
-            fail "$name 进程已退出，最近日志（${log}）："
-            tail -n 30 "$log" >&2
-            return 1
-        fi
-        if [ "$waited" -ge "$timeout" ]; then
-            echo ""
-            fail "$name 在 ${timeout}s 内未就绪，最近日志（${log}）："
-            tail -n 30 "$log" >&2
-            return 1
-        fi
-        sleep 2; waited=$((waited + 2)); printf "."
-    done
-    echo ""
-    info "$name 就绪 ✅ ($url)"
-}
 
 # ---- 首次部署（setup）：Python venv + 依赖 + 前端 node_modules ----
 # 吸收自各服务原先的 start_server.sh（已裁撤）：部署与启动分离，部署只在 setup 做一次。
@@ -318,112 +202,6 @@ start_rag() {
     wait_ready "RAG" "$RAG_READY_URL" "$RAG_TIMEOUT" "$(cat "$LOG_DIR/rag.pid")" "$LOG_DIR/rag.log"
 }
 
-# 确保 SearXNG 配置存在且开启 json 输出（web_research 靠 json 拿结构化结果）
-ensure_searx_settings() {
-    mkdir -p "$SEARX_DIR"
-    local sf="$SEARX_DIR/settings.yml"
-    if [ -f "$sf" ]; then
-        # 旧模板自愈（幂等）：标量 use_default_settings → 映射形式，从默认引擎表剔除
-        # 需 Tor 代理的暗网引擎（本机无 Tor，ahmia/torch 每次启动注册失败刷 ERROR）。
-        if grep -qE '^use_default_settings:[[:space:]]*true[[:space:]]*$' "$sf"; then
-            /usr/bin/perl -i -pe 's/^use_default_settings:\s*true\s*$/use_default_settings:\n  engines:\n    remove:          # 暗网引擎需 Tor 代理，本机注册必败；本项目不路由 onion\n      - ahmia\n      - torch/' "$sf"
-            info "SearXNG 配置自愈：已从默认引擎表剔除 ahmia/torch（无 Tor 代理，注册必败刷 ERROR）"
-        fi
-        grep -qE '^[[:space:]]*port:' "$sf" \
-            || warn "已有 $sf 未声明 server.port——原生 SearXNG 默认监听 8888，请在 server: 下加入 port: ${SEARX_PORT}"
-        if grep -qE '^[[:space:]]*-[[:space:]]*json([[:space:]]|$)' "$sf" || grep -qE 'formats:.*json' "$sf"; then
-            return 0
-        fi
-        warn "已有 $sf 但未开启 json 输出；web_research 需要它，请在 search.formats 下加入 - json"
-        return 0
-    fi
-    # 首次生成最小覆盖配置：use_default_settings 只覆写必要项，其余继承 SearXNG 默认
-    local secret
-    secret="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' 2>/dev/null)"
-    [ -n "$secret" ] || secret="devsecret-$(date +%s)"
-    cat > "$sf" <<EOF
-# 由 devctl.sh 生成：仅覆写必要项，其余继承 SearXNG 默认设置
-use_default_settings:
-  engines:
-    remove:          # 暗网引擎需 Tor 代理，本机注册必败（启动刷 ERROR）；本项目不路由 onion
-      - ahmia
-      - torch
-server:
-  secret_key: "$secret"
-  bind_address: "127.0.0.1"  # 仅本机回环：limiter 已关，绑 0.0.0.0 会让局域网白嫖搜索代理
-  port: $SEARX_PORT           # 原生 webapp 默认 8888，必须显式指到 config.yaml 约定的端口
-  limiter: false          # 本机自用可关；对外暴露务必开启
-search:
-  formats:
-    - html
-    - json                # web_research 靠 json 输出拿结构化结果，必须开启
-EOF
-    info "已生成 SearXNG 配置: ${sf}（已开启 html + json 输出）"
-}
-
-# 迁移期兼容：移除旧 docker 部署的 SearXNG 容器（带 --restart unless-stopped，
-# 不显式删除会一直复活并占着 8080）。docker 未装/未运行则静默跳过。
-remove_legacy_searx_container() {
-    command -v docker >/dev/null 2>&1 || return 0
-    if [ -n "$(docker ps -aq -f "name=^${SEARX_LEGACY_CONTAINER}$" 2>/dev/null)" ]; then
-        info "发现旧的 SearXNG docker 容器，移除（已迁移为原生部署）"
-        docker rm -f "$SEARX_LEGACY_CONTAINER" >/dev/null 2>&1 || true
-        sleep 1   # 等 docker 的端口代理释放 8080
-    fi
-}
-
-start_searx() {
-    remove_legacy_searx_container
-    if is_ready "$SEARX_READY_URL"; then
-        managed_or_report "SearXNG" "$SEARX_PORT" "$LOG_DIR/searx.pid" searx || return 1
-        info "SearXNG 已在运行，跳过"; return 0
-    fi
-    [ -x "$SEARX_VENV/bin/python" ] || { warn "缺少 searxng/.venv（可选层），跳过 SearXNG；如需联网搜索请运行: ./devctl.sh setup"; return 1; }
-    ensure_searx_settings
-    info "启动 SearXNG (port $SEARX_PORT) → $LOG_DIR/searx.log"
-    # bind_address/port 由 settings.yml 决定（127.0.0.1:8080，仅本机回环）
-    spawn_daemon "$SEARX_DIR" "$LOG_DIR/searx.log" "$LOG_DIR/searx.pid" \
-        env SEARXNG_SETTINGS_PATH="$SEARX_DIR/settings.yml" "$SEARX_VENV/bin/python" -m searx.webapp || return 1
-    wait_ready "SearXNG" "$SEARX_READY_URL" "$SEARX_TIMEOUT" "$(cat "$LOG_DIR/searx.pid")" "$LOG_DIR/searx.log"
-}
-
-start_backend() {
-    if is_ready "$BACKEND_READY_URL"; then
-        managed_or_report "backend" "$BACKEND_PORT" "$LOG_DIR/backend.pid" backend || return 1
-        info "backend 已在运行，跳过"; return 0
-    fi
-    [ -x "$BACKEND_DIR/.venv/bin/python" ] || { fail "缺少 backend/.venv，请先运行: ./devctl.sh setup"; return 1; }
-    # 硬性依赖顺序：RAG 完全就绪后 backend 才能启动（工具探活只发生在 backend 启动时）。
-    # edge profile 下 RAG_READY_URL 已指向设备 A（rag.host），这一条同样是跨机可达性校验。
-    if ! is_ready "$RAG_READY_URL"; then
-        fail "RAG 未就绪（探活 ${RAG_READY_URL}），拒绝启动 backend（否则 RAG 工具集不会注册）"
-        [ "$(probe_host "$RAG_HOST")" = "127.0.0.1" ] || \
-            warn "  RAG 配置在远端——请确认设备 A 上 './devctl.sh start --profile gpu' 已跑起来、Tailscale 可达。"
-        return 1
-    fi
-    # 模型预取（前台）：初次部署要下数 GB，HF 进度条直接显示在终端，杜绝「启动中假死」观感；
-    # 已就绪时命中标记瞬时通过。backend 内部的下载路径保留为自愈兜底。
-    # mode=remote：推理在设备 A，本机只需分词器（§S.3 B1）——按 config 的 mode 判，而非 profile 旗标，
-    # 因为"要不要权重"取决于承载模式本身（同机 remote 双进程也一样不必在 backend 侧再拉一份）。
-    if [ "$INFER_MODE" = "remote" ]; then
-        info "检查分词器（inference.mode=remote：推理在远端，本机不拉权重）…"
-        ( cd "$BACKEND_DIR" && .venv/bin/python scripts/fetch_model.py --tokenizer-only ) \
-            || { fail "分词器未就绪，中止 backend 启动"; return 1; }
-        if ! is_ready "$INFER_READY_URL"; then
-            fail "inference-server 未就绪（探活 ${INFER_READY_URL}），拒绝启动 backend"
-            warn "  mode=remote 下没有推理承载，任何生成都会整轮失败。"
-            warn "  请确认设备 A 上 './devctl.sh start --profile gpu' 已跑起来、Tailscale 可达。"
-            return 1
-        fi
-    else
-        info "检查模型（未下载时将前台下载并显示进度）…"
-        ( cd "$BACKEND_DIR" && .venv/bin/python scripts/fetch_model.py ) \
-            || { fail "模型未就绪，中止 backend 启动"; return 1; }
-    fi
-    info "启动 backend (port $BACKEND_PORT) → $LOG_DIR/backend.log"
-    spawn_daemon "$BACKEND_DIR" "$LOG_DIR/backend.log" "$LOG_DIR/backend.pid" .venv/bin/python app.py || return 1
-    wait_ready "backend" "$BACKEND_READY_URL" "$BACKEND_TIMEOUT" "$(cat "$LOG_DIR/backend.pid")" "$LOG_DIR/backend.log"
-}
 
 start_front() {
     if is_ready "$FRONT_READY_URL"; then
@@ -437,37 +215,9 @@ start_front() {
     wait_ready "前端" "$FRONT_READY_URL" "$FRONT_TIMEOUT" "$(cat "$LOG_DIR/front.pid")" "$LOG_DIR/front.log"
 }
 
-# ---- 停止 ----
-stop_one() {  # $1: 名称  $2: 端口  $3: pid 文件  $4: 宽限秒（先 TERM 后 KILL）
-    local name="$1" port="$2" pidfile="$3" grace="$4"
-    local pids=""
-    [ -f "$pidfile" ] && pids="$(cat "$pidfile" 2>/dev/null)"
-    pids="$(printf '%s\n%s' "$pids" "$(listen_pids "$port")" | sort -u | grep -E '^[0-9]+$' || true)"
-    if [ -z "$pids" ]; then
-        info "$name 未在运行"
-        rm -f "$pidfile"
-        return 0
-    fi
-    info "停止 $name (pid: $(echo $pids | tr '\n' ' '))"
-    # 先 TERM 给 FastAPI lifespan 留出收尾时间（如 backend 冻结会话落盘）
-    echo "$pids" | xargs kill 2>/dev/null
-    local waited=0
-    while [ "$waited" -lt "$grace" ]; do
-        local alive=""
-        for p in $pids; do kill -0 "$p" 2>/dev/null && alive="1"; done
-        [ -z "$alive" ] && [ -z "$(listen_pids "$port")" ] && break
-        sleep 1; waited=$((waited + 1))
-    done
-    # 宽限期后仍存活则强杀（含端口上的残留子进程，如 npm 下的 vite）
-    local rest
-    rest="$(printf '%s\n%s' "$pids" "$(listen_pids "$port")" | sort -u | grep -E '^[0-9]+$' || true)"
-    for p in $rest; do kill -0 "$p" 2>/dev/null && { warn "$name pid $p 未响应 TERM，强制结束"; kill -9 "$p" 2>/dev/null; }; done
-    rm -f "$pidfile"
-    info "$name 已停止"
-}
+# ---- 停止（机制 stop_one 在 lib_edge.sh）----
 
 stop_front()   { stop_one "前端"    "$FRONT_PORT"   "$LOG_DIR/front.pid"   5;  }
-stop_backend() { stop_one "backend" "$BACKEND_PORT" "$LOG_DIR/backend.pid" 20; }
 stop_rag()     { stop_one "RAG"     "$RAG_PORT"     "$LOG_DIR/rag.pid"     15; }
 
 # inference-server（gpu profile 的推理承载）。跑在 backend 的 venv 里（无独立 venv，B1 实证形态）；
@@ -491,42 +241,8 @@ start_infer() {
 }
 stop_infer()   { stop_one "inference-server" "$INFER_PORT" "$LOG_DIR/infer.pid" 30; }
 
-stop_searx() {
-    # 先清旧 docker 容器再走端口 pid——否则 lsof 命中的是 docker 的端口代理进程，误杀会连累 Docker Desktop
-    remove_legacy_searx_container
-    stop_one "SearXNG" "$SEARX_PORT" "$LOG_DIR/searx.pid" 5
-}
 
-# ---- 状态 ----
-status_one() {  # $1: 名称  $2: 端口  $3: 就绪 url
-    local pids; pids="$(listen_pids "$2" | tr '\n' ' ')"
-    if [ -n "$pids" ]; then
-        if is_ready "$3"; then
-            echo -e "  ${GREEN}●${NC} $1\tport $2\tpid $pids\t就绪"
-        else
-            echo -e "  ${YELLOW}●${NC} $1\tport $2\tpid $pids\t启动中/未就绪"
-        fi
-    elif is_ready "$3"; then
-        # 本机该端口没进程、但探活通 = 服务在远端（profile 部署：设备 A 的 RAG/推理）。
-        # 不能报"未运行"——那会让人在设备 B 上白折腾一个其实健康的远端服务。
-        echo -e "  ${GREEN}●${NC} $1\t远端\t\t就绪 ($3)"
-    else
-        echo -e "  ${RED}●${NC} $1\tport $2\t未运行"
-    fi
-}
-
-status_searx() {  # 与 status_one 同构，仅"未运行"标注（可选）
-    local pids; pids="$(listen_pids "$SEARX_PORT" | tr '\n' ' ')"
-    if [ -n "$pids" ]; then
-        if is_ready "$SEARX_READY_URL"; then
-            echo -e "  ${GREEN}●${NC} SearXNG \tport $SEARX_PORT\tpid $pids\t就绪"
-        else
-            echo -e "  ${YELLOW}●${NC} SearXNG \tport $SEARX_PORT\tpid $pids\t启动中/未就绪"
-        fi
-    else
-        echo -e "  ${RED}●${NC} SearXNG \tport $SEARX_PORT\t未运行（可选）"
-    fi
-}
+# ---- 状态（status_one/status_searx 在 lib_edge.sh）----
 
 do_status() {
     echo "[devctl] 服务状态（inference.mode=${INFER_MODE}）："
@@ -720,10 +436,11 @@ case "$CMD" in
                 # 工具依赖，且抓正文的 T0/T1/T2 三档本就在 backend 里跑——出网口已经在 B，
                 # 把「搜」放 A、「抓」放 B 是把一件事劈成两半。同机即回环，searxng_url 无需
                 # 改动，也就不必给这个无鉴权、limiter 已关的服务开 tailnet 端口。
-                # 必须先于 backend：web_research 的注册是启动期一次性探活，searx 晚到 = 整轮不注册。
+                # 顺序（searx 先于 backend）与容错收编在 lib_edge.sh 的 edge_up（D.13）——
+                # macOS app 执行的是同一个函数，此处不得另写一份编队。
                 info "profile=edge（设备 B：SearXNG + backend + 前端；推理/RAG 在远端）"
                 [ "$INFER_MODE" = "remote" ] || warn "inference.mode=${INFER_MODE}——edge 通常配 remote，否则推理仍在本机跑。"
-                { start_searx || warn "SearXNG 未就绪，web_research 将不注册，继续"; true; } && start_backend && start_front
+                edge_up && start_front
                 exit $?
                 ;;
             gpu)
@@ -747,7 +464,7 @@ case "$CMD" in
         ;;
     stop)
         case "$PROFILE" in
-            edge) stop_front; stop_backend; stop_searx; exit 0 ;;
+            edge) stop_front; edge_down; exit 0 ;;
             # gpu 不含 searx（B3：已归 edge）。设备 A 上若有旧部署残留的 SearXNG，
             # 用 `./devctl.sh stop searx` 单停一次即可，不必为一次性迁移在此长留一行。
             gpu)  stop_infer; stop_rag; exit 0 ;;

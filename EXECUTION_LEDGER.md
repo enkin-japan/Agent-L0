@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。下一步 = R5-4（`SidecarManager.swift`）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 进展**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份），951M 运行时以 320/320 覆盖签名并**已提交公证**（submission `1e13bf2a`，等结论中；对照组 tiny.zip 亦 In Progress >25min ⇒ 当日服务端队列整体偏慢，非大包卡死）。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 🟡（前置①② ✅：`AGENT_DATA_DIR` 旋钮 + `scripts/lib_edge.sh` 单一真相，220 金测试全绿；剩 Swift 侧 `SidecarManager.swift`）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 进展**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份），951M 运行时以 320/320 覆盖签名并**已提交公证**（submission `1e13bf2a`，等结论中；对照组 tiny.zip 亦 In Progress >25min ⇒ 当日服务端队列整体偏慢，非大包卡死）。**
 
 ---
 
@@ -730,18 +730,27 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
   - **参考**：cc-haha `desktop/electron/services/sidecarManager.ts` + `desktop/scripts/build-sidecars.ts`
     （它的 sidecar 是 TS 不是 Python，但**进程生命周期管理的形状**可借鉴）
 
-- [ ] **R5-4 · `SidecarManager.swift`**
+- [ ] **R5-4 · `SidecarManager.swift`** —— 🟡 两项前置已落地（2026-07-16），Swift 侧未动
   - 职责：启停 backend + searxng、就绪探活、端口冲突处理、崩溃重启、日志落盘
   - **🔴 顺序**：searxng **必须先于** backend 就绪——`web_research` 的注册是**启动期一次性探活**，
     searx 晚到 = 整轮不注册（`HETERO_COMPUTE.md` §S.3 已入账的事故）
-  - ✅ **Q5 已定（D.13）**：启动逻辑**提成单一真相**（`scripts/lib_edge.sh`），`devctl.sh` 与 app 都调它。
-    Swift 侧**只做进程监护**——崩溃重启 / 日志落盘 / 端口冲突 / 随 app 收摊，这些才是 app 独有的。
-    「启什么 / 什么顺序 / 怎么算就绪」一律不在 Swift 里重写（R1 同一教训：消除拷贝，不消除差异）。
-    **前置**：启动逻辑须对「仓库布局 vs bundle 布局」「`.env.local` vs Keychain」参数化。
-  - 🔴 **前置（R5-3 挖出）**：**可写数据必须先搬出 bundle**——`app.py:94` 的 `BASE_DIR`
-    现在既是「代码在哪」也是「数据写哪」，而 `sessions/` `schedules/` `notes/`(R4 个人事实)
-    `push/` 全挂它下面；往 .app 内部写会**破坏代码签名**，`/Applications` 下通常也不可写。
-    **见 Q7**（dev 与 app 是否共用同一套路径），它与本条的「布局参数化」是同一个旋钮。
+  - [x] **前置 ①（D.16）✅**：`AGENT_DATA_DIR` 旋钮落 `config_loader.data_dir()`。
+    账本原列 4 个写点，现场查出 **6 个**——`guardrail_events.jsonl`（events.py 直接写
+    backend 根）与 `models/`（权重下载目标）也是运行时写。events / path_resolver 直接
+    吃旋钮，app.py 换根。验证三层：8 项新金测试（AST 守卫已变异验证）+ 全量 220 绿 +
+    真 E2E（注入 env 起 app，六写点全落数据根）。顺带删无消费者的 `BASE_WORKSPACE`
+  - [x] **前置 ②（D.13）✅**：`scripts/lib_edge.sh` 提取完成（405 行）。机制函数
+    （probe/探活/spawn/wait/stop/status）+ SearXNG 配置生成 + `start_searx`/`start_backend`
+    + **`edge_up`/`edge_down` 编队**（searx 先于 backend、searx 容错）全部单一真相化；
+    devctl.sh 799→516 行，edge profile 分支改调 `edge_up`。布局参数化 = 7 个 `EDGE_*`
+    环境变量（bundle 与仓库的差异**只**在这里）；密钥不进 lib（devctl source `.env.local`，
+    app 将从 Keychain 注入——R5-6）。**SidecarManager 的调用形状**：直接执行
+    `lib_edge.sh up|down|status`（source 与直执自动区分）。实测：devctl status 全通、
+    searx 起→重入跳过（managed_or_report 认 pid）→停 全走新 lib、缺参数明确报错、
+    220 金测试全绿。⚠️ 第三次踩「变量后紧跟全角字符」坑（bash 3.2 吞字节），已给三个
+    shell 文件建了正则扫描，全部清零
+  - [ ] Swift 侧：`SidecarManager.swift` 进程监护（崩溃重启 / 日志呈现 / 端口冲突 UX /
+    随 app 收摊），经 `lib_edge.sh up|down` 拉起与收摊，**不重写编队**
 
 - [ ] **R5-5 · SearXNG 随包**（§D.8，+138MB）
   - `settings.yml` 由 app 首启生成（照 `devctl.sh` 的 `ensure_searx_settings`）
