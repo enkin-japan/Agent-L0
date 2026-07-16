@@ -49,6 +49,16 @@ def dispatch_slash_skill(prompt: str, ingested_text: str,
         return prompt, ingested_text
     skill = registry.get(m.group(1))
     if skill is None:
+        # 存在但被探活舍弃的剧本：如实告知而非静默放行（否则模型对着点名瞎打，
+        # 用户不知道为什么没按剧本走——D1 实机 /chart-report 实证）
+        missing = registry.unavailable_reason(m.group(1))
+        if missing:
+            notice = (f"[系统注入：用户点名的剧本「{m.group(1)}」当前不可用——依赖工具 "
+                      f"{missing} 未注册（依赖未就绪，如缺 LibreOffice/SearXNG 一类外部件）。"
+                      "请直接告知用户这一点与缺失项，再询问是否改用其他方式；"
+                      "不要假装按剧本执行。]")
+            combined = f"{notice}\n\n{ingested_text}" if ingested_text.strip() else notice
+            return prompt, combined
         return prompt, ingested_text
     block = (f"[系统注入：用户以 /{skill.name} 点名了剧本「{skill.name}」"
              f"（{skill.description}），正文如下——按剧本执行本轮任务]\n\n{skill.body}")
@@ -78,6 +88,9 @@ class SkillRegistry:
     def __init__(self, skills_dir: Path, tool_names: Optional[set] = None):
         self.skills_dir = skills_dir
         self._skills: Dict[str, Skill] = {}
+        # 被探活舍弃的剧本 → 缺失工具清单。用户点名它们时要**如实告知**而不是静默
+        # 放行（D1 实机：/chart-report 在 LibreOffice 缺失时无声穿透，模型瞎打）。
+        self._unavailable: Dict[str, List[str]] = {}
         self._load_all(tool_names or set())
 
     def _load_all(self, tool_names: set) -> None:
@@ -101,6 +114,7 @@ class SkillRegistry:
                 # 探活：依赖的工具不在注册表时舍弃，避免把注定跑不通的剧本交给模型
                 if not skill.is_available(tool_names):
                     missing = [t for t in skill.requires if t not in tool_names]
+                    self._unavailable[name] = missing
                     print(f"[Skill] ⛔ 剧本 {name} 不可用（缺工具 {missing}），已舍弃。")
                     continue
                 self._skills[name] = skill
@@ -110,6 +124,10 @@ class SkillRegistry:
 
     def get(self, name: str) -> Optional[Skill]:
         return self._skills.get(name)
+
+    def unavailable_reason(self, name: str) -> Optional[List[str]]:
+        """剧本存在但被探活舍弃时，返回缺失工具清单；否则 None。"""
+        return self._unavailable.get(name)
 
     def names(self) -> List[str]:
         return sorted(self._skills)

@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 ✅（bundle 组装 1.0G 交付形态 + 无头验收全过 + GUI 三项用户实机确认 + 实机查验四轮修复（密钥入库/鉴权门/Developer ID 签名/会话恢复）+ 两轮 UI 打磨，v0.16.0(30)）。**R5 全线收官（2026-07-17），CHARTER 三处同步已获用户同意并落地**。**D1 首批进行中**：新剧本 ×4 + D.17 斜杠确定性分发（e4b 不会主动调 skill_invoke，实测倒逼）+ 金测试 232；chart-report/ingest 验收 ✅，briefing/research/chart-report 三案疑难**同根归案（S.9）**：inference/server.py 约束采样构造少传 schema_builder → 服务端掩码永久禁用 → e4b 裸奔畸形 JSON——已修（一行）+ AST 调用点钉（金测试 233），infer 已重启、探针全绿。实机第二轮又修三件架构事（交付物工作区落点 / soffice 残链探活 / web_research 预算 110→240），金测试 240，v0.16.0(33) 已装。**待用户重测**：/research（应产出可下载报告链接）、/briefing（干跑应不再超时；schedule_create 审批后建成）；chart-report 需先 `brew reinstall --cask libreoffice`。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 ✅ 闭环**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份）；951M 运行时（322 Mach-O 覆盖签名）公证 **Accepted**（submission `1e13bf2a`，2026-07-16 通过；当日苹果队列积压 ~14h，对照组 tiny.zip 甚至更慢——大包无罪）。签名→公证全链路验证完毕，剩「对真实 .app 公证 + staple」在 R5 收官后的分发动作里做。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 ✅（bundle 组装 1.0G 交付形态 + 无头验收全过 + GUI 三项用户实机确认 + 实机查验四轮修复（密钥入库/鉴权门/Developer ID 签名/会话恢复）+ 两轮 UI 打磨，v0.16.0(30)）。**R5 全线收官（2026-07-17），CHARTER 三处同步已获用户同意并落地**。**D1 首批进行中**：新剧本 ×4 + D.17 斜杠确定性分发（e4b 不会主动调 skill_invoke，实测倒逼）+ 金测试 232；chart-report/ingest 验收 ✅，briefing/research/chart-report 三案疑难**同根归案（S.9）**：inference/server.py 约束采样构造少传 schema_builder → 服务端掩码永久禁用 → e4b 裸奔畸形 JSON——已修（一行）+ AST 调用点钉（金测试 233），infer 已重启、探针全绿。实机三轮后：**/research 端到端全通（D1 首个完整闭环）**；/briefing 剩模型智力项（观察清单：约束内调用块 2048 token 未收口）；点名不可用剧本改为如实告知（v0.16.0(34)，金测试 241）。chart-report 完整链路等 `brew reinstall --cask libreoffice` 后可测。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 ✅ 闭环**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份）；951M 运行时（322 Mach-O 覆盖签名）公证 **Accepted**（submission `1e13bf2a`，2026-07-16 通过；当日苹果队列积压 ~14h，对照组 tiny.zip 甚至更慢——大包无罪）。签名→公证全链路验证完毕，剩「对真实 .app 公证 + staple」在 R5 收官后的分发动作里做。**
 
 ---
 
@@ -1032,6 +1032,20 @@ schema_builder 参数，engine.py 改了，**没人 import 的 inference/server.
 - **web_research 预算错配**：total_timeout 110s，实测远端 e4b 一次完整调查 2~3 分钟
   ——简报干跑必超时。修：110→240 + 工具自带 timeout_seconds=+30 覆盖全局
   （excel_research 同款）。金测试 240 全绿。
+
+**实机第三轮（2026-07-17，用户重测三剧本）**：
+- `/research` ✅ **端到端全通**——web_research 真调查 + write_file 相对文件名落工作区
+  + 下载链接进回复。**D1 第一个完整闭环的剧本**。
+- `/briefing` 🟡 剧本流程对（补问主题→干跑）；干跑摘要只带候选未读页 + 后续轮模型
+  「口头承诺不行动」——偏模型智力（含一个观察项：约束内单次生成 2048 token 跑满、
+  调用块未收口，`[Constrained] 1951/2048 步受约束` + `calls=[]` 签名），按用户口径
+  **留待生产设备后再优化**，先入观察清单。
+- `/chart-report` 依赖缺失路径按设计舍弃剧本，但暴露架构缺口：**点名不可用剧本被
+  静默放行**，模型对着点名瞎打（run_math），用户不知道为什么没按剧本走。修
+  （v0.16.0(34)）：SkillRegistry 记录舍弃原因（`unavailable_reason`），分发时注入
+  如实告知（缺什么、别假装执行、剧本正文绝不注入）；金测试 +1（241）。
+  另：xlsx 摄入层已把表结构送进上下文（[Spreadsheet] 块）——无 excel_research 时
+  模型仍有数据可谈，降级路径成立。
 
 **附带发现（R5-9 尾巴）**：`kill -9` app 的实机测试留下**孤儿 backend/searx**（SIGKILL
 不走 willTerminate），此后每代 app 都把它当 external 只用不管——孤儿一直跑着已删除

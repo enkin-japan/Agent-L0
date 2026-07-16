@@ -179,6 +179,19 @@ def test_slash_dispatch_hyphen_names_and_nil_registry(tmp_path):
     assert p == "/chart-report 分析" and ing2 == "x"
 
 
+def test_slash_dispatch_reports_unavailable_skill(tmp_path):
+    """点名「存在但被探活舍弃」的剧本 → 注入如实告知（缺什么、别假装执行），
+    而非静默放行（D1 实机 /chart-report 无声穿透实证）。"""
+    from framework.core.skill_registry import dispatch_slash_skill
+    _write(tmp_path, "needs.md",
+           "---\nname: needs\ndescription: d\nrequires: [no_such_tool]\n---\nBody.\n")
+    reg = SkillRegistry(tmp_path, tool_names=set())
+    p, ing = dispatch_slash_skill("/needs 干活", "原摄入", reg)
+    assert p == "/needs 干活"
+    assert "不可用" in ing and "no_such_tool" in ing and "原摄入" in ing
+    assert "Body." not in ing   # 剧本正文绝不注入——它注定跑不通
+
+
 def test_turn_runner_wires_slash_dispatch():
     """接线断言：accept_turn 里必须真调 dispatch_slash_skill（纯函数对了但没接上
     = 全部白做，且症状是静默的）。"""
