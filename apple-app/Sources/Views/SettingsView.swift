@@ -4,6 +4,9 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var store: AgentStore
     @EnvironmentObject var push: PushManager
+    #if os(macOS)
+    @EnvironmentObject var sidecar: SidecarManager
+    #endif
     @Environment(\.dismiss) private var dismiss
 
     @State private var urlText = ""
@@ -77,6 +80,29 @@ struct SettingsView: View {
                         Text("English").tag("en")
                     }
                 }
+                #if os(macOS)
+                Section {
+                    Toggle(L("app 内建执行层（sidecar）"), isOn: sidecarEnabledBinding)
+                    if store.settings.sidecarEnabled {
+                        TextField(L("仓库路径（开发形态；bundle 形态自动探测）"),
+                                  text: sidecarRepoRootBinding)
+                            .autocorrectionDisabled()
+                        LabeledContent(L("状态"), value: sidecarStateLabel)
+                        if case .failed(let detail) = sidecar.state {
+                            // lib_edge.sh 的原话（端口占用者清单/依赖缺失/日志尾），不二次转译
+                            Text(detail)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.orange)
+                                .textSelection(.enabled)
+                        }
+                    }
+                } header: {
+                    Text(L("执行层"))
+                } footer: {
+                    Text(L("由 app 拉起并监护 backend + SearXNG（顺序与就绪判据在 scripts/lib_edge.sh，与 devctl 同一真相）。已有 devctl 启动的后端时只连接、不接管。"))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                #endif
                 Section {
                     LabeledContent(L("App 版本"), value: Bundle.main.appVersionLabel)
                 }
@@ -100,6 +126,34 @@ struct SettingsView: View {
         .frame(minWidth: 480, minHeight: 360)
         #endif
     }
+
+    #if os(macOS)
+    /// 开关即改即生效：开 = 立刻 autostart；关 = 收掉自己拉起的（external 不碰）。
+    private var sidecarEnabledBinding: Binding<Bool> {
+        Binding(get: { store.settings.sidecarEnabled },
+                set: { on in
+                    store.settings.sidecarEnabled = on
+                    Task { await sidecar.startStop() }
+                })
+    }
+
+    private var sidecarRepoRootBinding: Binding<String> {
+        Binding(get: { store.settings.sidecarRepoRoot },
+                set: { store.settings.sidecarRepoRoot = $0 })
+    }
+
+    private var sidecarStateLabel: String {
+        switch sidecar.state {
+        case .disabled: return L("未启用")
+        case .external: return L("外部后端在跑（devctl），只连接不接管")
+        case .starting: return L("启动中…")
+        case .running:  return sidecar.restartCount > 0
+            ? "\(L("运行中"))（\(L("已自动重启")) \(sidecar.restartCount)）"
+            : L("运行中")
+        case .failed:   return L("故障")
+        }
+    }
+    #endif
 
     /// 外观/语言即改即生效（不走「保存」按钮，那是连接设置的语义）
     private var appearanceBinding: Binding<String> {

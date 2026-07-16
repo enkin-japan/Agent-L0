@@ -84,6 +84,16 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(notifContentLevel, forKey: "notif.contentLevel") }
     }
 
+    // ---- Sidecar（R5-4，仅 macOS 生效）：app 内建执行层的开关与开发形态的仓库路径 ----
+    /// 默认关：bundle 形态要到 R5-9 验收才齐备；dev 形态由用户显式指仓库再开。
+    @Published var sidecarEnabled: Bool {
+        didSet { UserDefaults.standard.set(sidecarEnabled, forKey: "sidecar.enabled") }
+    }
+    /// repo 布局的仓库检出路径（bundle 布局自动探测 Resources/backend，不用此项）。
+    @Published var sidecarRepoRoot: String {
+        didSet { UserDefaults.standard.set(sidecarRepoRoot, forKey: "sidecar.repoRoot") }
+    }
+
     init() {
         baseURLString = UserDefaults.standard.string(forKey: "agent.baseURL") ?? "http://127.0.0.1:14159"
         apiKey = Keychain.loadAPIKey()
@@ -95,6 +105,8 @@ final class AppSettings: ObservableObject {
         notifScheduleStart = ud.object(forKey: "notif.scheduleStart") as? Bool ?? false
         notifApproval = ud.object(forKey: "notif.approval") as? Bool ?? true
         notifContentLevel = ud.string(forKey: "notif.contentLevel") ?? "category"
+        sidecarEnabled = ud.object(forKey: "sidecar.enabled") as? Bool ?? false
+        sidecarRepoRoot = ud.string(forKey: "sidecar.repoRoot") ?? ""
         L10n.current = AppLanguage(rawValue: language) ?? .system
     }
 
