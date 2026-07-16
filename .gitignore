@@ -48,8 +48,17 @@ logs/
 searxng/settings.yml
 searxng/searxng-src/
 
-# ═══════════ Apple 原生客户端（个人实验，不入库）═══════════
-apple-app/
+# ═══════════ Apple 原生客户端（源码入库，D.6；派生物与签名资产不入）═══════════
+# R5 要把执行层收编进 macOS app，app 源码从此是本仓库的一等公民——
+# 「记录遗失也能续工」的前提是它在库里（D.6）。只忽略派生物与本机签名资产。
+apple-app/build/
+apple-app/Generated/
+apple-app/MacAgentClient.xcodeproj/
+apple-app/.DS_Store
+# 签名资产：私钥/证书/描述文件绝不入库（apple-app/.gitignore 另有一份更细的同类规则）
+apple-app/**/*.p12
+apple-app/**/*.p8
+apple-app/**/*.mobileprovision
 
 # ═══════════ Claude Code 本地配置 ═══════════
 .claude/settings.local.json

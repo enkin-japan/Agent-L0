@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- TestFlight 管线：归档后直传 App Store Connect（无本地 ipa 落盘）。
+         手动签名：API key（App Manager 角色）没有云管理分发证书权限，
+         证书/描述文件经 ASC API 自建（见 release-ios.sh 头注），存 macagent-build 钥匙串。 -->
+    <key>method</key>
+    <string>app-store-connect</string>
+    <key>destination</key>
+    <string>upload</string>
+    <key>teamID</key>
+    <string>9A84P4ZS84</string>
+    <key>signingStyle</key>
+    <string>manual</string>
+    <key>signingCertificate</key>
+    <string>Apple Distribution</string>
+    <key>provisioningProfiles</key>
+    <dict>
+        <key>dev.enkin.macagent</key>
+        <string>MacAgent iOS AppStore</string>
+        <!-- Live Activity widget 扩展（推送批次新增）：描述文件由 asc-update-signing.py 创建 -->
+        <key>dev.enkin.macagent.widgets</key>
+        <string>MacAgent Widgets AppStore</string>
+    </dict>
+    <!-- 版本/构建号由 project.yml 统一管理（每批迭代手动自增），不让 Xcode 代管 -->
+    <key>manageAppVersionAndBuildNumber</key>
+    <false/>
+</dict>
+</plist>

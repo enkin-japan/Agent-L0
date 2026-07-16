@@ -1,0 +1,347 @@
+import Foundation
+
+// 与 frontend/src/types/agent-api.ts 逐一对应（只取 v1 需要的子集）。
+// 字段全部走宽容解码：历史落盘轮次可能缺字段，缺了不应让整页历史解不出来。
+
+struct ToolCallInfo: Codable {
+    let type: String?
+    let name: String?
+    let arguments: [String: JSONValue]?
+    let errorMsg: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type, name, arguments
+        case errorMsg = "error_msg"
+    }
+}
+
+struct ToolResponseItem: Codable {
+    let name: String?
+    let response: String?
+}
+
+/// 轮次里的一条消息（assistant / tool / system）。role 之外的字段按需出现。
+struct ResponseMessage: Codable {
+    let role: String
+    let content: String?
+    let thoughts: String?
+    let toolCalls: [ToolCallInfo]?
+    let toolResponses: [ToolResponseItem]?
+
+    enum CodingKeys: String, CodingKey {
+        case role, content, thoughts
+        case toolCalls = "tool_calls"
+        case toolResponses = "tool_responses"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        role = (try? c.decode(String.self, forKey: .role)) ?? "system"
+        content = try? c.decodeIfPresent(String.self, forKey: .content)
+        thoughts = try? c.decodeIfPresent(String.self, forKey: .thoughts)
+        toolCalls = try? c.decodeIfPresent([ToolCallInfo].self, forKey: .toolCalls)
+        toolResponses = try? c.decodeIfPresent([ToolResponseItem].self, forKey: .toolResponses)
+    }
+}
+
+struct PendingTool: Codable {
+    let name: String
+    let arguments: [String: JSONValue]?
+}
+
+struct AttachmentInfo: Codable {
+    let path: String?
+    let type: String?
+    let name: String?
+}
+
+/// 一轮问答（POST /chat 响应体 = history turns 元素 = SSE turn_end 数据）。
+struct Turn: Codable {
+    let status: String
+    let prompt: String?
+    let image: [String]?
+    let audio: [String]?
+    let ingestedText: String?
+    let attachments: [AttachmentInfo]?
+    let response: [ResponseMessage]?
+    let pendingTools: [PendingTool]?
+    let promptTokens: Double?
+    let generationTokens: Double?
+    let generationTps: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case status, prompt, image, audio, response, attachments
+        case ingestedText = "ingested_text"
+        case pendingTools = "pending_tools"
+        case promptTokens = "prompt_tokens"
+        case generationTokens = "generation_tokens"
+        case generationTps = "generation_tps"
+    }
+}
+
+struct SessionMetaItem: Codable, Identifiable, Hashable {
+    let sessionId: String
+    let title: String?
+    let turnCount: Int?
+    let createdAt: Double?
+    let lastUpdated: Double?
+    let pinned: Bool?
+    let active: Bool?
+
+    var id: String { sessionId }
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case title
+        case turnCount = "turn_count"
+        case createdAt = "created_at"
+        case lastUpdated = "last_updated"
+        case pinned, active
+    }
+}
+
+struct SessionListResponse: Codable {
+    let status: Bool
+    let sessions: [SessionMetaItem]
+}
+
+struct HistoryResponse: Codable {
+    let status: Bool
+    let sessionId: String
+    let turns: [Turn]
+
+    enum CodingKeys: String, CodingKey {
+        case status, turns
+        case sessionId = "session_id"
+    }
+}
+
+struct SimpleActionResponse: Codable {
+    let status: Bool
+    let response: String?
+}
+
+struct PinResponse: Codable {
+    let status: Bool
+    let pinned: Bool?
+    let response: String?
+}
+
+struct TaskStep: Codable, Identifiable {
+    let id: Int
+    let title: String
+    let status: String
+    let note: String?
+}
+
+struct TaskSnapshot: Codable {
+    let goal: String?
+    let plan: [TaskStep]?
+}
+
+struct ActivityStep: Codable {
+    let kind: String?
+    let label: String?
+    let detail: String?
+}
+
+struct LiveActivity: Codable {
+    let phase: String?
+    let current: String?
+    let steps: [ActivityStep]?
+}
+
+struct TaskStatusResponse: Codable {
+    let status: Bool
+    let active: Bool?
+    let generating: Bool?
+    let task: TaskSnapshot?
+    let activity: LiveActivity?
+}
+
+/// 全局单 worker 调度快照里的一个任务句柄（GET /api/v1/tasks）。
+struct TaskHandleInfo: Codable, Identifiable {
+    let sessionId: String
+    /// running / queued / suspended
+    let status: String
+    /// chat / resume / summarize / scheduled …
+    let kind: String?
+    let waitingSeconds: Double?
+    let runningSeconds: Double?
+
+    var id: String { sessionId }
+
+    enum CodingKeys: String, CodingKey {
+        case status, kind
+        case sessionId = "session_id"
+        case waitingSeconds = "waiting_seconds"
+        case runningSeconds = "running_seconds"
+    }
+}
+
+struct GlobalTasksResponse: Codable {
+    let status: Bool
+    let running: String?
+    let tasks: [TaskHandleInfo]
+}
+
+/// 已注册工具（GET /api/v1/tools）。
+struct ToolInfo: Codable, Identifiable {
+    let name: String
+    let description: String?
+    let requiresApproval: Bool?
+
+    var id: String { name }
+
+    enum CodingKeys: String, CodingKey {
+        case name, description
+        case requiresApproval = "requires_approval"
+    }
+}
+
+struct ToolsResponse: Codable {
+    let status: Bool
+    let tools: [ToolInfo]
+}
+
+struct SystemPromptResponse: Codable {
+    let status: Bool
+    let systemPrompt: String?
+    /// "session"=会话在用；"default"=会话未创建时的默认值
+    let source: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status, source
+        case systemPrompt = "system_prompt"
+    }
+}
+
+struct MemoryStatusResponse: Codable {
+    let status: Bool
+    let loaded: Bool?
+    let lastPromptTokens: Int?
+    let totalTurns: Int?
+    let summarizedTurns: Int?
+    let hasSummary: Bool?
+    let summaryChars: Int?
+    let highThreshold: Int?
+    let lowThreshold: Int?
+    let keepTailTurns: Int?
+    let sedimentToRag: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case status, loaded
+        case lastPromptTokens = "last_prompt_tokens"
+        case totalTurns = "total_turns"
+        case summarizedTurns = "summarized_turns"
+        case hasSummary = "has_summary"
+        case summaryChars = "summary_chars"
+        case highThreshold = "high_threshold"
+        case lowThreshold = "low_threshold"
+        case keepTailTurns = "keep_tail_turns"
+        case sedimentToRag = "sediment_to_rag"
+    }
+}
+
+struct BranchResponse: Codable {
+    let status: Bool
+    let sessionId: String?
+    let response: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status, response
+        case sessionId = "session_id"
+    }
+}
+
+// ---------- 定时任务 ----------
+
+struct ScheduleSpec: Codable {
+    let type: String?
+    let minutes: Int?
+    let at: String?
+    let weekday: Int?
+
+    /// 人话描述（与 web 侧展示口径一致）。
+    var summary: String {
+        switch type {
+        case "interval": return "每 \(minutes ?? 0) 分钟"
+        case "daily": return "每天 \(at ?? "")"
+        case "weekly":
+            let names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+            let day = (weekday ?? 0) >= 0 && (weekday ?? 0) < 7 ? names[weekday!] : "?"
+            return "每\(day) \(at ?? "")"
+        case "once": return "单次 \(at ?? "")"
+        default: return type ?? "未知"
+        }
+    }
+}
+
+struct ScheduleRun: Codable, Identifiable {
+    let runId: String?
+    let startedAt: Double?
+    let finishedAt: Double?
+    let status: String?
+    let summary: String?
+    let sessionId: String?
+
+    var id: String { runId ?? UUID().uuidString }
+
+    enum CodingKeys: String, CodingKey {
+        case status, summary
+        case runId = "run_id"
+        case startedAt = "started_at"
+        case finishedAt = "finished_at"
+        case sessionId = "session_id"
+    }
+}
+
+struct ScheduledTask: Codable, Identifiable {
+    let id: String
+    let name: String?
+    let prompt: String?
+    let spec: ScheduleSpec?
+    let enabled: Bool?
+    let nextRun: Double?
+    let running: Bool?
+    let lastRun: ScheduleRun?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, prompt, spec, enabled, running
+        case nextRun = "next_run"
+        case lastRun = "last_run"
+    }
+}
+
+struct ScheduleListResponse: Codable {
+    let status: Bool
+    let schedules: [ScheduledTask]
+}
+
+struct ScheduleActionResponse: Codable {
+    let status: Bool
+    let response: String?
+}
+
+struct ScheduleRunsResponse: Codable {
+    let status: Bool
+    let runs: [ScheduleRun]
+}
+
+/// 生成参数（与 web 端 ChatRequestParams 对应；system 走后端默认，不在 app 端定制）。
+struct ChatParams {
+    var prompt: String
+    var enableThinking: Bool = false
+    var thinkingBudget: Int = 2048
+    var maxTokens: Int = 4096
+    var temperature: Double = 0.2
+    var minP: Double = 0.05
+}
+
+/// 待上传的附件（文件/照片/录音统一形态）。
+struct Upload: Identifiable {
+    let id = UUID()
+    let filename: String
+    let mime: String
+    let data: Data
+}

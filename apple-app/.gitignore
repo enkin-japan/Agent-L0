@@ -1,0 +1,69 @@
+# ====================================================================
+# Xcode 核心构建文件与用户配置
+# ====================================================================
+build/
+DerivedData/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+!default.pbxuser
+!default.mode1v3
+!default.mode2v3
+!default.perspectivev3
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.xcscmblueprint
+*.xcuserstate
+# 注意：Assets.xcassets 的 Contents.json 是**源码不是派生物**——资产目录靠它描述
+# 图标切片与 catalog 结构，缺了 Xcode 直接不认这个 catalog。此前这里有一条裸的
+# `Contents.json` 忽略规则，在 apple-app/ 整体不入库时无害；R5-1 入库后它会让
+# 新克隆出来的仓库编不出图标，正好废掉 D.6「记录遗失也能续工」的前提。已删。
+
+# ====================================================================
+# 证书、私钥与敏感资产（🚨 极其重要！绝对不能上传）
+# ====================================================================
+*.p12
+*.p8
+*.mobileprovision
+*.key
+.env
+.env.*
+
+# ====================================================================
+# Swift Package Manager (SPM) 
+# ====================================================================
+.swiftpm/xcode/xcuserdata/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+
+# 注意：千万不要忽略 Package.resolved 文件！
+# Xcode Cloud 强依赖它来锁定第三方库的精准版本。
+# 如果你有引入 SPM 依赖，请确保 Package.resolved 被正常提交。
+
+# ====================================================================
+# macOS 系统特有垃圾文件
+# ====================================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+
+# ====================================================================
+# 常见第三方依赖管理（若未来用到）
+# ====================================================================
+# CocoaPods
+Pods/
+Podfile.lock
+
+# Carthage
+Carthage/Build/
+
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output

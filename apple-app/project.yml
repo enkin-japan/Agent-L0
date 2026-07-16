@@ -1,0 +1,142 @@
+# XcodeGen 工程定义：`xcodegen generate` 产出 MacAgentClient.xcodeproj（不入库，可随时重建）。
+# 两个 target 共享同一份 Sources：macOS 直接可跑；iOS 需在 Xcode 里选自己的签名 Team。
+name: MacAgentClient
+options:
+  bundleIdPrefix: dev.enkin
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.15.0"
+    CURRENT_PROJECT_VERSION: "15"
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+
+# 块级 Markdown 渲染（标题/列表/表格/引用等 GFM）——AttributedString 只认行内语法
+packages:
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: "2.4.0"
+
+targets:
+  MacAgent-macOS:
+    type: application
+    platform: macOS
+    sources: [Sources, Assets.xcassets]
+    dependencies:
+      - package: MarkdownUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.enkin.macagent.mac
+        PRODUCT_NAME: MacAgent
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+    info:
+      path: Generated/Info-macOS.plist
+      properties:
+        CFBundleDisplayName: MacAgent
+        # xcodegen 生成的 plist 默认写死 1.0/1，必须显式引用构建设置才能吃到顶部的版本号
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSMicrophoneUsageDescription: 语音输入需要使用麦克风（录音仅发送到你自己的后端做转写）。
+        # 后端可能是 http://127.0.0.1 或 Tailscale 明文 IP（WireGuard 隧道内已加密）。
+        # 推荐用 tailscale serve 的 HTTPS，之后可收紧此项。
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+
+  MacAgent-iOS:
+    type: application
+    platform: iOS
+    sources: [Sources, Assets.xcassets]
+    dependencies:
+      - package: MarkdownUI
+      # Live Activity（灵动岛/锁屏实时卡）承载在 widget 扩展里，随 app 打包分发
+      - target: MacAgentWidgets
+        embed: true
+    settings:
+      base:
+        # 与 App Store Connect 的 App 记录一致（用户网页上注册的是不带 .ios 后缀的 id）
+        PRODUCT_BUNDLE_IDENTIFIER: dev.enkin.macagent
+        PRODUCT_NAME: MacAgent
+        CODE_SIGN_STYLE: Automatic
+        # 付费开发者账号的 Team（ASC API seedId 查得）：xcodegen 重新生成工程会抹掉
+        # 在 Xcode GUI 里手选的 Team，写在这里才不随重建丢失。
+        DEVELOPMENT_TEAM: 9A84P4ZS84
+        TARGETED_DEVICE_FAMILY: "1,2"
+    # APNs 推送 + time-sensitive 中断级别（鉴权通知穿透专注模式）。
+    # aps-environment 写 development：分发签名时描述文件把它换成 production。
+    # 注意：App ID 的 capability 与分发描述文件须同步启用（release-ios.sh 头注的
+    # ASC API 自管签名流程——capability 变更后描述文件要重建）。
+    entitlements:
+      path: Generated/MacAgent-iOS.entitlements
+      properties:
+        aps-environment: development
+        com.apple.developer.usernotifications.time-sensitive: true
+    info:
+      path: Generated/Info-iOS.plist
+      properties:
+        CFBundleDisplayName: MacAgent
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        # iPad 多任务要求四个方向全声明（缺一个 App Store 包校验直接拒收）
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSMicrophoneUsageDescription: 语音输入需要使用麦克风（录音仅发送到你自己的后端做转写）。
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        # 不含自研加密（只用系统 TLS）：免去每个 TestFlight 构建的出口合规人工确认
+        ITSAppUsesNonExemptEncryption: false
+        # Live Activity（灵动岛/锁屏实时卡）
+        NSSupportsLiveActivities: true
+        # 灵动岛"查看详情"深链：macagent://session/{id}
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.enkin.macagent
+            CFBundleURLSchemes: [macagent]
+
+  # Live Activity 渲染扩展（iOS 独占；macOS 无灵动岛/锁屏活动）。
+  # 共享 Sources/LiveActivity（Attributes 契约 + 拒绝 Intent）与 L10n 词表；
+  # 纯渲染，无网络（拒绝 Intent 是 LiveActivityIntent，在 app 进程执行）。
+  MacAgentWidgets:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - Widgets
+      - Sources/LiveActivity
+      - Sources/App/L10n.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.enkin.macagent.widgets
+        PRODUCT_NAME: MacAgentWidgets
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 9A84P4ZS84
+        SKIP_INSTALL: true
+    info:
+      path: Generated/Info-Widgets.plist
+      properties:
+        CFBundleDisplayName: MacAgent
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+
+schemes:
+  MacAgent-macOS:
+    build:
+      targets:
+        MacAgent-macOS: all
+    run:
+      config: Debug
+  MacAgent-iOS:
+    build:
+      targets:
+        MacAgent-iOS: all
+    run:
+      config: Debug

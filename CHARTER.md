@@ -276,8 +276,14 @@ RAG 沉淀（原文可召回）。全量日志永远保留在 `history.jsonl`。
 （Xcode 资源紧张，用户特意分开）。
 
 **提交纪律**：一般阶段做完 commit；需要用户实机查验的阶段做完 commit+push。
-`apple-app/` 全程 gitignored（不入库）。模型权重收敛在项目内，绝不下载到
-`~/.cache`。
+**`git add` 一律用显式路径，不要 `git add -A`**——曾因 `-A` 误扫进 `.env.example`。
+模型权重收敛在项目内，绝不下载到 `~/.cache`。
+
+**`apple-app/` 源码入库**（D.6，2026-07-16 改自「全程 gitignored」）：R5 要把执行层
+收编进 macOS app，它从此是本仓库的一等公民——「记录遗失也能续工」的前提是它在库里。
+只忽略派生物（`build/` `Generated/` `*.xcodeproj/`）与本机签名资产（`*.p8` `*.p12`
+`*.mobileprovision`）。**签名凭据的标识符走 `.env.local`**（`ASC_KEY_ID` /
+`ASC_ISSUER_ID`），**私钥永不入库**。
 
 **原生发布**：每批 `./install-macos.sh`（Release→/Applications）+
 `./release-ios.sh`（TestFlight）+ `wait-testflight.py <build>`；发布前
