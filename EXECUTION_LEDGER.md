@@ -879,9 +879,20 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
     进「详细信息」，右键可复制全文——一个字不丢但不再刷屏；
     ③ 新对话按钮外露（实机反馈）：窄侧栏下 toolbar 图标收进 » 溢出菜单，macOS
     侧栏顶部加全宽主色按钮（safeAreaInset，toolbar 那枚保留）
-  - [ ] **GUI 三项待实机查验（重测）**：双击冷启动时延（界面可用；填好两把密钥后）；
-    **杀进程恢复 ≤1s**（铁律 4，`REARCHITECTURE.md` Phase 2）；sidecar 崩溃自动重启
-    且不丢轮次（铁律 2）
+  - **实机查验第二轮（2026-07-16）**：填钥匙+重启后 401 依旧。切割实验：同一 bundle
+    同一设备 A，env 直给 .env.local 值 → **0 个 401**（E2E 模型真回复）⇒ 问题必在
+    app 注入的**值**上。根因：`.env.local` 的值是 `KEY="xxx"` 引号包裹形态——shell
+    `source` 剥引号（devctl/烟测全对），SecureField 整段粘贴不剥（带引号直注 env
+    = 稳定 401，dev 值 4 字带引号变 6 字）。修复（v0.16.0(24)）：
+    ① 粘贴清洗 `SidecarManager.cleanKey`（去空白/换行+剥一层包裹引号），输入端
+    （binding）与注入端（resolveLayout，兜钥匙串里的旧脏值）各清一次；
+    ② **lib_edge 鉴权门**：`probe_auth` 带钥匙探 RAG `/api/v1/category` 与 infer
+    `/metrics`（/health 全免鉴权，探不出钥匙错）——401/403 当场 fail 并说人话
+    （「与 .env.local 同值、不含引号」），不再放 backend 起来后第一句话才炸；
+    实测：引号钥匙 up 退出码 1 + 原话进设置页故障详情；正钥匙全通 0 401；
+    ③ 密钥盘点日志（只记有无+长度）落 backend.log，下轮 401 类故障有第一现场
+  - [ ] **GUI 三项待实机查验（重测二）**：双击冷启动时延（界面可用；重贴两把密钥，
+    引号有无均可）；**杀进程恢复 ≤1s**（铁律 4）；sidecar 崩溃自动重启且不丢轮次（铁律 2）
 
 **CHARTER 需同步改动**（R5 完成时一并更新，**属架构方向改动**）：
 | 位置 | 现状 | 改为 |

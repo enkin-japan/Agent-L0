@@ -212,11 +212,13 @@ struct SettingsView: View {
                 set: { store.settings.sidecarRepoRoot = $0 })
     }
 
-    /// 设备 A 服务密钥即改即存（Keychain didSet），下次 up 生效
+    /// 设备 A 服务密钥即改即存（Keychain didSet），运行中的执行层重启后生效。
+    /// 粘贴清洗：`.env.local` 的值带双引号（shell source 会剥，env 注入不会）——
+    /// 整段拷贝时引号/换行混进来就是稳定 401（实机查验第二轮的根因）。
     private func sidecarKeyBinding(_ key: ReferenceWritableKeyPath<AppSettings, String>)
         -> Binding<String> {
         Binding(get: { store.settings[keyPath: key] },
-                set: { store.settings[keyPath: key] = $0 })
+                set: { store.settings[keyPath: key] = SidecarManager.cleanKey($0) })
     }
 
     private var sidecarStateLabel: String {

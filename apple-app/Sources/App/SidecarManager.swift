@@ -206,9 +206,12 @@ final class SidecarManager: ObservableObject {
             }
             if let key = settings?.apiKey, !key.isEmpty { env["AGENT_API_KEY"] = key }
             // 拨设备 A 的两把必须留（inference-server / rag 服务端各自校验）；
-            // 用户在设置里填（与设备 A 的 .env.local 同值），空 = 未启用鉴权的 dev 对端
-            if let k = settings?.inferApiKey, !k.isEmpty { env["INFER_API_KEY"] = k }
-            if let k = settings?.ragApiKey, !k.isEmpty { env["RAG_API_KEY"] = k }
+            // 用户在设置里填（与设备 A 的 .env.local 同值），空 = 未启用鉴权的 dev 对端。
+            // 注入端也清洗一次：钥匙串里可能躺着清洗逻辑上线前存入的带引号旧值。
+            let infer = Self.cleanKey(settings?.inferApiKey ?? "")
+            if !infer.isEmpty { env["INFER_API_KEY"] = infer }
+            let rag = Self.cleanKey(settings?.ragApiKey ?? "")
+            if !rag.isEmpty { env["RAG_API_KEY"] = rag }
             return Layout(libEdge: res.appendingPathComponent("scripts/lib_edge.sh"),
                           env: env, logDir: logDir)
         }
@@ -255,6 +258,17 @@ final class SidecarManager: ObservableObject {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .trimmingCharacters(in: CharacterSet(charactersIn: "="))
+    }
+
+    /// 密钥粘贴清洗：去首尾空白/换行 + 剥一层包裹引号。`.env.local` 的值是
+    /// `KEY="xxx"` 形态——shell source 会剥引号，env 直注不会；带引号的值对
+    /// inference/RAG 服务端就是稳定 401（实机查验第二轮根因）。
+    static func cleanKey(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.count >= 2, let f = s.first, f == s.last, f == "\"" || f == "'" {
+            s = String(s.dropFirst().dropLast())
+        }
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func baseEnv() -> [String: String] {

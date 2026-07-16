@@ -106,6 +106,10 @@ edge_resolve_urls() {
     RAG_READY_URL="http://$(probe_host "$RAG_HOST"):${RAG_PORT}/health"
     BACKEND_READY_URL="http://$(probe_host "$BACKEND_HOST"):${BACKEND_PORT}/health"
     INFER_READY_URL="http://$(probe_host "$INFER_HOST"):${INFER_PORT}/health"
+    # 鉴权探针（带钥匙的最便宜 GET）：/health 全是免鉴权的，探不出钥匙错——
+    # 钥匙不对时 backend 照样起来、第一句话才炸（实机查验第二轮实证）。
+    RAG_AUTH_URL="http://$(probe_host "$RAG_HOST"):${RAG_PORT}/api/v1/category"
+    INFER_AUTH_URL="http://$(probe_host "$INFER_HOST"):${INFER_PORT}/metrics"
 }
 
 # ---- 通用机制 ----
@@ -154,6 +158,24 @@ managed_or_report() {  # $1: 名称  $2: 端口  $3: pid 文件  $4: stop 目标
 # 后台子进程，而子壳又继承 ssh 会话的 stdout 管道，导致远程单条指令
 # `ssh <host> 'devctl.sh start'` 在服务存活期间永不返回。
 # 在主 shell 直接 nohup + & 则脚本退出时不等待后台任务，进程被 launchd 收养。
+# 带钥匙探一个鉴权端点：401/403 = 钥匙缺失或不对，当场失败并说清；
+# 其余状态码放行（服务语义错误不是这道门的事）。curl 失败（不可达）也放行——
+# 可达性由 is_ready 门负责，这里只裁决鉴权。
+probe_auth() {  # $1: 名称  $2: url  $3: key（可空）
+    local code
+    if [ -n "${3:-}" ]; then
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+                -H "Authorization: Bearer $3" "$2") || return 0
+    else
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$2") || return 0
+    fi
+    if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+        fail "$1 鉴权失败（HTTP ${code}，探针 ${2}）——对应 API key 缺失或不对：与设备 A 的 .env.local 同值、不含引号"
+        return 1
+    fi
+    return 0
+}
+
 spawn_daemon() {  # $1: 工作目录  $2: 日志  $3: pid 文件  $4...: 命令
     local dir="$1" log="$2" pidfile="$3"
     shift 3
@@ -361,6 +383,7 @@ start_backend() {
             warn "  RAG 配置在远端——请确认设备 A 上 './devctl.sh start --profile gpu' 已跑起来、Tailscale 可达。"
         return 1
     fi
+    probe_auth "RAG" "$RAG_AUTH_URL" "${RAG_API_KEY:-}" || return 1
     # 模型预取（前台）：初次部署要下数 GB，HF 进度条直接显示在终端，杜绝「启动中假死」观感；
     # 已就绪时命中标记瞬时通过。backend 内部的下载路径保留为绕过启动器直启时的自愈兜底。
     # mode=remote：推理在设备 A，本机只需分词器（§S.3 B1）——按 config 的 mode 判，而非 profile 旗标，
@@ -375,11 +398,17 @@ start_backend() {
             warn "  请确认设备 A 上 './devctl.sh start --profile gpu' 已跑起来、Tailscale 可达。"
             return 1
         fi
+        probe_auth "inference-server" "$INFER_AUTH_URL" "${INFER_API_KEY:-}" || return 1
     else
         info "检查模型（未下载时将前台下载并显示进度）…"
         ( cd "$EDGE_BACKEND_DIR" && "$EDGE_BACKEND_PY" scripts/fetch_model.py ) \
             || { fail "模型未就绪，中止 backend 启动"; return 1; }
     fi
+    # 密钥盘点（只记有无+长度，不记内容）：401 类故障的第一现场证据——app 注入的
+    # 值是否到达了 backend 环境、长度是否与 .env.local 里的一致（带引号会多 2）。
+    key_stat() { if [ -n "$1" ]; then echo "有(${#1}字)"; else echo "无"; fi; }
+    echo "[edge] 密钥盘点: AGENT=$(key_stat "${AGENT_API_KEY:-}") INFER=$(key_stat "${INFER_API_KEY:-}") RAG=$(key_stat "${RAG_API_KEY:-}")" \
+        >>"$EDGE_LOG_DIR/backend.log"
     info "启动 backend (port $BACKEND_PORT) → $EDGE_LOG_DIR/backend.log"
     spawn_daemon "$EDGE_BACKEND_DIR" "$EDGE_LOG_DIR/backend.log" "$EDGE_LOG_DIR/backend.pid" \
         "$EDGE_BACKEND_PY" app.py || return 1
