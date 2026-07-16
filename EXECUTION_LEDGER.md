@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 ✅（bundle 组装 1.0G 交付形态 + 无头验收全过 + GUI 三项用户实机确认 + 实机查验四轮修复（密钥入库/鉴权门/Developer ID 签名/会话恢复）+ 两轮 UI 打磨，v0.16.0(30)）。**R5 全线收官（2026-07-17），CHARTER 三处同步已获用户同意并落地**。**D1 首批进行中**：新剧本 ×4 + D.17 斜杠确定性分发（e4b 不会主动调 skill_invoke，实测倒逼）+ 金测试 232；chart-report/ingest 验收 ✅，briefing/research/chart-report 三案疑难**同根归案（S.9）**：inference/server.py 约束采样构造少传 schema_builder → 服务端掩码永久禁用 → e4b 裸奔畸形 JSON——已修（一行）+ AST 调用点钉（金测试 233），infer 已重启、探针全绿。实机三轮后：**/research 端到端全通（D1 首个完整闭环）**；/briefing 剩模型智力项（观察清单：约束内调用块 2048 token 未收口）；点名不可用剧本改为如实告知（v0.16.0(34)，金测试 241）。chart-report 补测通过（架构链路含纠错回环全贯通）。**D1 首批收官**（5 剧本全实测，7 架构缺陷修复，模型智力项入观察清单）。**D4 ✅ 已定**（2026-07-17 用户拍板：full 声明 >12k tokens（≈50 工具）时切 catalog，D2 全程留 full；切换有两张前置工程票——约束/提示词解耦（catalog 条目无 parameters 会把 arguments 钳死成 `{}`）+ 目录摘要瘦身；顺带修正摘要阈值口径：锚定稳定前缀，金测试 242）。**D2 首批 🟡 已落地**（2026-07-17：桌面日常七件套 find_files/list_dir/open_path/clipboard×2/notify_user/system_status，40 工具 full 声明 8.8k tokens < 阈值，金测试 255；选型口径=生产环境未定型前按通用日常使用率，用户真实需求清单后补）。首批九问实测验收 ✅（find_files 自动降级内容模式修复 + TCC 过滤定性 + 三调三返定性=护栏正常，v0.16.0(37)，金测试 256）。**第二批已落地**（日历读写/提醒/move/copy/trash 六件，46 工具 9.6k tokens，金测试 268，v0.16.0(38)）。下一步 = **第二批实测验收（三个 TCC 面首弹 + e4b 日期构造成功率）**。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 ✅ 闭环**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份）；951M 运行时（322 Mach-O 覆盖签名）公证 **Accepted**（submission `1e13bf2a`，2026-07-16 通过；当日苹果队列积压 ~14h，对照组 tiny.zip 甚至更慢——大包无罪）。签名→公证全链路验证完毕，剩「对真实 .app 公证 + staple」在 R5 收官后的分发动作里做。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 ✅（bundle 组装 1.0G 交付形态 + 无头验收全过 + GUI 三项用户实机确认 + 实机查验四轮修复（密钥入库/鉴权门/Developer ID 签名/会话恢复）+ 两轮 UI 打磨，v0.16.0(30)）。**R5 全线收官（2026-07-17），CHARTER 三处同步已获用户同意并落地**。**D1 首批进行中**：新剧本 ×4 + D.17 斜杠确定性分发（e4b 不会主动调 skill_invoke，实测倒逼）+ 金测试 232；chart-report/ingest 验收 ✅，briefing/research/chart-report 三案疑难**同根归案（S.9）**：inference/server.py 约束采样构造少传 schema_builder → 服务端掩码永久禁用 → e4b 裸奔畸形 JSON——已修（一行）+ AST 调用点钉（金测试 233），infer 已重启、探针全绿。实机三轮后：**/research 端到端全通（D1 首个完整闭环）**；/briefing 剩模型智力项（观察清单：约束内调用块 2048 token 未收口）；点名不可用剧本改为如实告知（v0.16.0(34)，金测试 241）。chart-report 补测通过（架构链路含纠错回环全贯通）。**D1 首批收官**（5 剧本全实测，7 架构缺陷修复，模型智力项入观察清单）。**D4 ✅ 已定**（2026-07-17 用户拍板：full 声明 >12k tokens（≈50 工具）时切 catalog，D2 全程留 full；切换有两张前置工程票——约束/提示词解耦（catalog 条目无 parameters 会把 arguments 钳死成 `{}`）+ 目录摘要瘦身；顺带修正摘要阈值口径：锚定稳定前缀，金测试 242）。**D2 首批 🟡 已落地**（2026-07-17：桌面日常七件套 find_files/list_dir/open_path/clipboard×2/notify_user/system_status，40 工具 full 声明 8.8k tokens < 阈值，金测试 255；选型口径=生产环境未定型前按通用日常使用率，用户真实需求清单后补）。首批九问实测验收 ✅（find_files 自动降级内容模式修复 + TCC 过滤定性 + 三调三返定性=护栏正常，v0.16.0(37)，金测试 256）。**第二批实测验收 ✅（2026-07-17 六问全过，三次磕绊全被护栏同轮接住，纠错回环首次全套野外验证）——D2 阶段性收官**（46 工具 9.6k tokens，金测试 268，v0.16.0(38)；用户真实需求清单待生产环境定型后补充，届时按需加第三批）。下一步候选 = **D 阶段工程票**（sidecar 孤儿检测/回收、注册表热重扫）或 **D3 子 Agent 扩充**（同样建议等真实需求）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 ✅ 闭环**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份）；951M 运行时（322 Mach-O 覆盖签名）公证 **Accepted**（submission `1e13bf2a`，2026-07-16 通过；当日苹果队列积压 ~14h，对照组 tiny.zip 甚至更慢——大包无罪）。签名→公证全链路验证完毕，剩「对真实 .app 公证 + staple」在 R5 收官后的分发动作里做。**
 
 ---
 
@@ -1153,8 +1153,15 @@ schema 参数构造。
 ④三个新 TCC 面（Calendar/Reminders/Finder 自动化）：-1743 错误带系统设置指引。
 金测试 256→268（argv 日期分量/覆盖拒绝/TCC 提示/元数据纪律）。
 **预算**：46 工具 full 声明 9.6k tokens < 12k，剩 ~10 个工具余量。
-**待实测面**：三个 TCC 授权首弹、Calendar `whose` 过滤在大日历上的耗时、
-e4b 对 'YYYY-MM-DD HH:MM' 的构造成功率（schedule_create 前科在案）。
+**实测验收 ✅（2026-07-17，用户六问全过，会话 app-256fc8ee9cd2 / app-c49610dee482，
+跨会话分测排除上下文记忆）**：六件全部真执行；calendar_add 一发命中（「明天下午三点」
+→ 正确的 'YYYY-MM-DD HH:MM'）；calendar_list 跨会话命中另一会话建的事件（走真日历）；
+move 改名/copy 目录语义/trash 进废纸篓全过。三次磕绊全被护栏同轮接住、无一漏到用户：
+①思考频道泄漏（`<|channel>thought` 原文）→ 解析器打回后恢复；②`due` 尾随 `)` →
+**参数预检在审批前打回**（用户没为坏调用点过弹窗，validate_call 设计兑现）；
+③`days: 202607189999…` 数字退化复读 + `202026` 畸形年份 → 两次打回后第三发正确。
+**三种报错文案（解析/预检/格式）全部换来同轮自纠——纠错回环首次全套野外验证**。
+观察清单新增：数字退化复读（约束内未收口家族的数值变体）。
 
 **刻意不加**：邮件/信息外发（外发面等真需求）、联系人、音量媒体控制（低频，
 run_applescript 可代）、硬删除（可逆优先，真要 rm 有 run_shell_command 审批路径）。
