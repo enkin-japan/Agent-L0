@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0 ✅；R1 ✅；R2a ✅（skill 剧本体系，显式调用），170 金测试全绿。下一步 = R3（工具渲染格 render_hint，夹具先行）。**
+> 🟢 **2026-07-16：R0 ✅；R1 ✅；R2a ✅；R3 ✅（渲染格 `render_hint` + `ToolOutput`，试点 citations），184 金测试全绿。下一步 = R4（文件式长期记忆）。**
 
 ---
 
@@ -72,7 +72,7 @@
 | **R0** | 模型方言层协议手术 | ✅ **2026-07-16** | — | 建设无／真验证需 ≥32GB | 铁律 1（例外条款） |
 | **R1** | 子 Agent 统一执行器 | ✅ 2026-07-16 | R0 ✅ | 无 | 铁律 1（沙箱三不变量） |
 | **R2a** | Skill 体系（显式调用） | ✅ 2026-07-16 | R1 | 无 | 低 |
-| **R3** | 工具渲染格（协议变更） | ⬜ | — | 无 | **铁律 4 + 5** |
+| **R3** | 工具渲染格（协议变更） | ✅ 2026-07-16 | — | 无 | **铁律 4 + 5** |
 | **R4** | 文件式长期记忆 | ⬜ | R2a | 无 | 低 |
 | **R5** | macOS app 收编执行层 | ⬜ | R0–R4 | 无 | 铁律 1/4 + 改 CHARTER |
 | **D1–D4** | 能力量变扩充 | ⬜ | R5 | 无 | 低 |
@@ -109,14 +109,15 @@
 - [x] R2a-4 首个 skill 试点：**`skills/deck.md`**（原定的 research 试点**不可行**，见下）
 - [x] R2a-5 验收：**170 金测试全绿** + 装配链路与显式调用闭环实测通过
 
-**R3** ⬜
-- [ ] R3-1 **先落夹具** `protocol/fixtures/007-render-hint.*`（铁律 5）
-- [ ] R3-2 `PROTOCOL.md` 加字段（新增字段**不升版本**，`CHARTER.md:148`）
-- [ ] R3-3 `mcp/base.py` 加 `render_hint` + `render_payload`（可选，不声明走灰框 = 零破坏）
-- [ ] R3-4 backend 发 hint 进账本
-- [ ] R3-5 web reducer 投影 + 2–3 个试点（`chart` / `slides` / `citations`）
-- [ ] R3-6 Swift reducer **接住字段**（最小实现保夹具绿；**渲染随 R5**，不在旧 app 上做）
-- [ ] R3-7 验收：夹具双端回放全绿
+**R3** ✅ 2026-07-16
+- [x] R3-0 **前置**：提示词白名单（D.12）——两用面隔离，顺带修 `_safe`/`_target` 泄漏
+- [x] R3-1 **先落夹具** `protocol/fixtures/007-render-hint.*`（铁律 5）
+- [x] R3-2 `PROTOCOL.md` §2.3.1 加字段（新增字段**不升版本**，§0.5 已含"未知字段须忽略"）
+- [x] R3-3 `mcp/base.py` 加 `render_hint` + `ToolOutput`（**改自 `render_payload`**，见实测）
+- [x] R3-4 backend 发 render 进账本（`execute_tool` 返回 `(text, render)`）
+- [x] R3-5 web 投影 + 试点 `citations`（**chart 试点作废**，见实测）
+- [x] R3-6 Swift **无需改动**（`transcript: [JSONValue]` 本就穿透，见实测）
+- [x] R3-7 验收：夹具双端回放全绿（web 8 / Swift 7）+ 后端 184 金测试全绿
 
 **R4** ⬜
 - [ ] R4-1 `memory/notes/` + `MEMORY.md` 索引（含行数/字节上限）
@@ -534,7 +535,50 @@ def render_payload(self, result) -> dict: ...
 
 **试点**：先上 2–3 个收益最大的 hint（`chart` / `slides` / `citations`），其余留灰框。
 
-**实测结果**：（完成后填写）
+**实测结果**（2026-07-16）：**本节原计划有四处与现场不符，逐条记下。**
+
+**① 病灶属实，但根因还深一层。** `chat-message.tsx` 确实对所有工具结果画同一个灰框。
+但渲染源不是 `tool_result` 事件——归约器只把它喂给 `preview.steps`（进行中的活动条）。
+transcript 是从 `turn_ended.response` **整个重建**的（`turn-reducer.ts:147` "response 原样"），
+而 `PROTOCOL.md` §2.3 明写该数组与 `session.history` **同构**——也就是**模型的上下文**。
+`render` 只能挂在这条两用面上（`tool_responses[]` 条目没有 `call_id`，另开平行面只能靠
+下标 join，错位 = 卡片配错工具结果）。→ 由此引出 D.12 与 R3-0。
+
+**② `_safe` / `_target` 早就在泄漏给模型**（顺手发现的既有缺陷）。
+`prompt_builder._build_tool_responses` 此前 `json.dumps` **整个 dict**，实测输出：
+`{"name":"x","response":"ok","_safe":true,"_target":"k"}`。
+`_` 前缀的「内部元数据」约定只在**落盘**（`_strip_internal_meta`）与**顶层**
+（`public_turn`）兑现，**提示词构建处从来没剥过**。R3-0 的白名单一并修掉。
+
+**③ R3-5 / R3-6 描述的工作不存在。** 两端 transcript 都**刻意是不透明子树**
+（web `...response` 直接展开；Swift `transcript: [JSONValue]`，`TurnReducer.swift:30`），
+新字段本就穿透。→ **Swift 侧零改动**；web 的真实工作在组件（`renderByHint`），不在归约器。
+故 007 是**守卫夹具而非验收夹具**：它在实现前就是绿的。按夹具 README 的规矩做了变异测试
+（把 web 归约器改成按字段挑选）——**只有 007 红，001–006 全绿**，证明这条不变量此前无人守
+（`003` 只守未知**事件类型**，未知**字段**没人守）且本夹具守得住。
+
+**④ chart 是最不该做的试点**（账本原话「先上收益最大的 chart」）——它是唯一**已经解决**
+交付的：`orchestrator.py:720` 的 `_append_missing_asset_links` 会确定性地把模型漏贴的
+资产链接补进答复正文，正是为「交付不该依赖模型的转写忠实度」而建。再加 chart 渲染格 =
+**同一张图出两次**。已实现后回退，改挑真正的空档 → **`citations`（`rag_search`）**：
+今天是灰框里一大坨 `--- Result N (Match Score: …) ---`，命中分/来源/路径全埋在文字里。
+（chart 接管交付留到 R5——原生 app 能渲染 render 之后再删 markdown，否则 app 侧图会直接消失。）
+
+**契约改动：`render_payload(result, args)` → `ToolOutput(text, payload)`。**
+原设计要工具**从自己刚格式化出的文本里再解析回结构**：chart 只是一行 markdown 尚可，
+`rag_search` 的 N 条结果就得靠 `--- Result N ---` 分隔符切，正文里出现同样的串就散架。
+结构在 `execute` 里本来就活着，直接交出去即可。`execute_tool` 改返回 `(text, render)`
+（**全仓只有 `orchestrator.py:1015` 一个调用点**，改动面极小）。
+两个白拿的好处：载荷**天然不吃观察截断**（截断只作用于给模型的文本——原设计里我曾专门
+写了 `raw_result` 绕开截断，新契约下这个坑由构造消失）；载荷**天然不进模型上下文**。
+`execute` 照旧可返回 `str`，存量工具一个未改。
+
+**夹具与真实后端逐字节对账**：007 的 `render` 与 `response` 文本均与 `rag_search` 真实产出
+实测比对一致（payload 顶层键、item 键、分值精度、全文）。夹具形状若和真实对不上，
+比没有夹具更糟——两端照着它实现，跑起来却对不上后端。
+
+**验收**：后端 **184 金测试全绿**（170 + R3-0 白名单 2 + 渲染格 12）；
+web vitest 8 / Swift 夹具 7 全绿；`tsc --noEmit` 与 eslint 干净。
 
 ---
 

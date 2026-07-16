@@ -13,6 +13,7 @@ import {
 
 import { cn } from "@/lib/utils"
 import type { ChatMessage as ChatMessageType } from "@/lib/agent-data"
+import type { ToolResponse } from "@/types/agent-api"
 import { useT } from "@/store/useUiStore"
 import { MarkdownContent } from "@/components/dashboard/markdown-content"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -22,6 +23,64 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+
+/** 工具渲染格投影（PROTOCOL.md §2.3.1）：hint 是账本里的数据，"怎么画"由本端决定
+ *  （铁律 4：客户端是薄渲染器）。返回 null = 交回灰框。
+ *
+ *  **不认识的 hint 必须降级灰框**（§0.5 向前兼容）：后端先于本端上线新 hint 是常态，
+ *  那时旧前端得照样把结果显示出来，而不是白屏或空卡。加新 hint 就在这里加一个分支。 */
+function renderByHint(tr: ToolResponse) {
+  const payload = tr.render?.payload
+  if (!payload) return null
+  switch (tr.render?.hint) {
+    case "citations": {
+      const items = Array.isArray(payload.items) ? (payload.items as Citation[]) : null
+      if (!items?.length) return null   // 载荷形状不对 → 灰框，不炸组件树
+      return <Citations items={items} />
+    }
+    default:
+      return null
+  }
+}
+
+interface Citation {
+  source?: string
+  path?: string
+  score?: number
+  snippet?: string
+}
+
+/** citations 渲染格：召回结果排成来源卡片。今天这里是灰框里一大坨
+ *  "--- Result N (Match Score: …) ---"，命中分和来源全埋在文字里。 */
+function Citations({ items }: { items: Citation[] }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      {items.map((c, i) => (
+        <div key={i} className="rounded-xl border border-border bg-muted/40 px-3 py-2">
+          <p className="flex items-center gap-1.5 text-xs font-medium">
+            <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{c.source || "Unknown"}</span>
+            {typeof c.score === "number" && (
+              <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">
+                {c.score.toFixed(2)}
+              </span>
+            )}
+          </p>
+          {c.snippet && (
+            <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-foreground/80">
+              {c.snippet}
+            </p>
+          )}
+          {c.path && (
+            <p className="mt-1 truncate text-[11px] text-muted-foreground/70" title={c.path}>
+              {c.path}
+            </p>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
 
 /** 思维链折叠块（enable_thinking=true 时出现）。内容由模型产出，按原样展示。 */
 function Thoughts({ text, label }: { text: string; label: string }) {
@@ -76,26 +135,30 @@ export const ChatMessage = memo(function ChatMessage({
     )
   }
 
-  // 工具执行结果：独立的信息卡片（工具名为内容，前缀"· result"本地化）
+  // 工具执行结果：有渲染格（PROTOCOL.md §2.3.1）的按格投影，其余照旧灰框
   if (message.role === "tool") {
     return (
       <div data-msg-id={message.id} className="flex w-full items-start gap-3 pl-11">
         <div className="flex max-w-[78%] flex-col gap-2">
-          {message.toolResponses?.map((tr, i) => (
-            <div key={i} className="group/tool rounded-xl border border-border bg-muted/40 px-3 py-2">
-              <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                <Wrench className="size-3.5" />
-                {t.message.toolResult(tr.name)}
-                <CopyButton
-                  text={tr.response}
-                  className="ml-auto opacity-0 transition-opacity focus-visible:opacity-100 group-hover/tool:opacity-100"
-                />
-              </p>
-              <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground/80">
-                {tr.response}
-              </pre>
-            </div>
-          ))}
+          {message.toolResponses?.map((tr, i) => {
+            const rendered = renderByHint(tr)
+            if (rendered) return <div key={i}>{rendered}</div>
+            return (
+              <div key={i} className="group/tool rounded-xl border border-border bg-muted/40 px-3 py-2">
+                <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <Wrench className="size-3.5" />
+                  {t.message.toolResult(tr.name)}
+                  <CopyButton
+                    text={tr.response}
+                    className="ml-auto opacity-0 transition-opacity focus-visible:opacity-100 group-hover/tool:opacity-100"
+                  />
+                </p>
+                <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground/80">
+                  {tr.response}
+                </pre>
+              </div>
+            )
+          })}
         </div>
       </div>
     )

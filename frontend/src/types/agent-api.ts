@@ -8,10 +8,24 @@ export interface ToolCall {
   error_msg?: string
 }
 
+/** 工具渲染格（PROTOCOL.md §2.3.1）：后端只声明"这是什么"，前端决定"怎么画"。
+ *  `hint` 不收窄成联合类型——协议要求不认识的 hint 降级灰框（§0.5），而不是让
+ *  TS 编译期把它当非法值。新 hint 上线时旧前端必须还能跑。 */
+export interface ToolRender {
+  hint: string
+  payload?: Record<string, unknown>
+}
+
+export interface ToolResponse {
+  name: string
+  response: string
+  render?: ToolRender
+}
+
 export type ResponseMessage =
   | { role: "assistant"; content: string; thoughts?: string }
   | { role: "assistant"; tool_calls: ToolCall[]; thoughts?: string }
-  | { role: "tool"; tool_responses: { name: string; response: string }[] }
+  | { role: "tool"; tool_responses: ToolResponse[] }
   | { role: "system"; content: string }
 
 /** 等待用户授权的敏感工具调用（status === "pending_approval" 时返回）。 */

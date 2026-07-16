@@ -1009,9 +1009,10 @@ class Orchestrator:
         # 长任务工具（excel_research 等多轮子 agent）可用 BaseTool.timeout_seconds
         # 覆盖全局值——工具自身的 total_timeout 硬熔断先触发，这里只是最外层兜底。
         timed_out = False
+        render = None            # 渲染格（R3）：工具没给就是 None = 灰框
         timeout_s = self.registry.tool_timeout(name) or self.tool_timeout_seconds
         try:
-            result_text = await asyncio.wait_for(
+            result_text, render = await asyncio.wait_for(
                 asyncio.to_thread(self.registry.execute_tool, name, args),
                 timeout=timeout_s,
             )
@@ -1025,11 +1026,14 @@ class Orchestrator:
 
         # [事件回流] 工具级错误反馈（含超时）也是涣散痕迹：参数马虎/路径不存在/匹配失败等
         # 由工具自身拦下的错误，与编排层护栏一起构成完整事件流（涣散度量的全部组分入流）。
-        if str(result_text).lstrip().startswith("System Error"):
+        errored = str(result_text).lstrip().startswith("System Error")
+        if errored:
             events.emit("tool_error", session=session.session_id, tool=name,
                         timeout=timed_out, msg=str(result_text)[:160])
 
         # [观察截断] 保护每步延迟与上下文（护栏参数，见 config agent.observation_max_chars）
+        # 注：截断只作用于给模型的文本。渲染载荷由工具在结构尚在时另行产出（ToolOutput），
+        # 从不经过这里——故不存在"从半截文本里投影出坏图表"的可能。
         if len(result_text) > self.observation_max_chars:
             result_text = (result_text[: self.observation_max_chars]
                            + f"\n...[observation truncated at {self.observation_max_chars} chars]")
@@ -1044,6 +1048,11 @@ class Orchestrator:
         # 判据用 is_read_only（而非 is_concurrency_safe）：read_ui_tree 这类「只读但不可并发」
         # 的观察最大、最需要取代去重，不能因退出并发批而失去 _safe。
         obs = {"name": name, "response": result_text}
+        # 渲染格：只在工具真跑成功时挂——超时/报错时没有载荷可言。
+        # `render` **不带 `_` 前缀**：它要随 append_log 落盘，重载会话后还得在
+        # （`_` 前缀会被 _strip_internal_meta 剥掉 → 刷新即退回灰框，且退得很安静）。
+        if render and not timed_out and not errored:
+            obs["render"] = render
         if not timed_out and self.registry.is_read_only(name, args):
             obs["_safe"] = True
             target = _observation_target(name, args)

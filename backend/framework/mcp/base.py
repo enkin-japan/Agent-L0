@@ -1,5 +1,29 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+
+
+class ToolOutput:
+    """工具产出：给模型的文本 + 给客户端的渲染载荷（R3）。
+
+    `execute` 照旧可以直接返回 str（存量 17 个工具一个都不用改）；只有需要渲染格的
+    工具改返回本类。**载荷在结构还活着的地方产出**——工具把结构化数据格式化成给模型
+    读的文本时，score / source / 引文列表这些结构就死了，让下游从格式化文本里再解析
+    回来既脆又蠢（分隔符撞上正文就散架）。
+
+    两条随之而来的好处：
+    - 载荷天然**不吃观察截断**（截断只作用于 text，护的是模型上下文）；
+    - 载荷天然**不进模型上下文**（白名单隔开，D.12），故可以放模型不必看的体量。
+    """
+
+    __slots__ = ("text", "payload")
+
+    def __init__(self, text: str, payload: Optional[Dict[str, Any]] = None):
+        self.text = str(text)
+        self.payload = payload
+
+    def __str__(self) -> str:
+        return self.text
+
 
 class BaseTool(ABC):
     """
@@ -26,6 +50,12 @@ class BaseTool(ABC):
     # （excel_research 等多轮子 agent）设为自身 total_timeout + 余量；覆盖值只改
     # 编排层对本工具的等待上限，其他工具不受影响。
     timeout_seconds: int = None
+    # 渲染格（R3）：本工具的结果该被画成什么。chart | table | slides | code | diff |
+    # citations | text；None = 不声明 = 客户端画现状的灰框（故接入是零破坏的，工具可
+    # 逐个迁移）。hint 是**账本里的数据**，不是渲染代码：后端只说"这是什么"，三端各自
+    # 决定"怎么画"（铁律 4）。工具直接返回 UI 组件在本项目物理不可能——后端 Python、
+    # web TS、原生 Swift 三种语言。
+    render_hint: str = None
 
     def needs_approval(self, arguments: Dict[str, Any]) -> bool:
         """

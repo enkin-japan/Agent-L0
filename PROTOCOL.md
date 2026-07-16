@@ -145,6 +145,40 @@
 暂停态放弃收尾的轮同样落盘并占下标)。SSE 实时下发**全量**;journal 持久化瘦身为
 `{status, turn_index}`(重启后重放旧轮靠 `/history` 补全,客户端本就如此加载)。
 
+#### 2.3.1 工具观察的渲染格 `render`(additive,2026-07-16;不升版本)
+
+`response` 里 `role:"tool"` 的 `tool_responses[]` 条目**可选**携带 `render`:
+
+```json
+{"name": "rag_search", "response": "[Search results …] --- Result 1 (Match Score: 0.91, …",
+ "render": {"hint": "citations",
+            "payload": {"query": "报销流程", "items": [
+              {"source": "员工手册.md", "path": "/kb/员工手册.md",
+               "score": 0.9123, "snippet": "报销需在事发后 30 日内提交。"}]}}}
+```
+
+- `hint`:`chart | table | slides | code | diff | citations | text` 之一。
+  **客户端遇到不认识的 hint 一律降级为灰框**(与未知字段同一条向前兼容规矩,§0.5)。
+- `payload`:该 hint 的投影数据,形状由 hint 决定。
+- **不声明 = 现状灰框**。故这是零破坏的增量迁移,工具可逐个接入。
+
+**hint 是账本里的数据,不是渲染代码**:后端只声明"这是什么",三端各自决定"怎么画"
+(铁律 4:客户端是薄渲染器)。工具直接返回 UI 组件在本项目物理不可能——
+后端 Python、web TS、原生 Swift。
+
+**`render` 不进模型上下文**:`tool_responses[]` 条目是"模型上下文 + 渲染源"两用面,
+模型可见键走白名单 `{name, response, content}`(见 `prompt_builder._MODEL_VISIBLE_KEYS`)。
+`render` 只朝客户端与落盘,不朝模型——否则整份引文列表会白烧 token 并打掉 KV 前缀。
+
+**载荷在结构还活着的地方产出**:后端工具返回 `ToolOutput(text, payload)`
+(`mcp/base.py`),`text` 给模型、`payload` 给客户端。故载荷**不吃观察截断**
+(截断只护模型上下文),也不必让谁从格式化文本里再解析回结构。
+
+**为什么挂在观察条目上而非另开 `turn_ended.renders[]` 平行面**:`tool_responses[]`
+条目不带 `call_id`,平行面只能靠下标 join,错位即"图配错工具结果";挂在条目上天然对齐。
+
+夹具:`007-render-hint`(该字段穿过两端归约器不被吞——两端 transcript 均为不透明子树)。
+
 ### 2.4 传输:SSE 附着流
 
 ```

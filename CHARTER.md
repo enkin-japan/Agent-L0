@@ -258,7 +258,7 @@ RAG 沉淀（原文可召回）。全量日志永远保留在 `history.jsonl`。
 
 **加一个功能**：
 1. 若涉及新协议行为 → 先落 `protocol/fixtures/` 夹具（铁律 5）；
-2. 后端改动 → 跑 `backend/tests/`（170 项金测试，FakeEngine 无模型毫秒级）
+2. 后端改动 → 跑 `backend/tests/`（184 项金测试，FakeEngine 无模型毫秒级）
    必须全绿；动 TurnRunner/编排/账本前**先读金测试**知道它守着哪些不变量；
 3. 两端归约器改动 → 跑夹具回放（web `npm run test` + Swift
    `Tests/run_reducer_fixtures.sh`）双绿；
@@ -299,8 +299,9 @@ RAG 沉淀（原文可召回）。全量日志永远保留在 `history.jsonl`。
 | 模型方言 | `core/dialect_protocol.py` + `dialects/<name>/`（R0） | — | — |
 | 推理承载 | `core/backend_protocol.py` + `backends/<name>/`（P0/B1） | — | — |
 | 流程剧本 | `core/skill_registry.py` + `skills/*.md`（R2a） | — | — |
+| 渲染格 | `mcp/base.py` 的 `render_hint` + `ToolOutput`（R3） | `chat-message.tsx` 的 `renderByHint` | 随 R5 |
 | 契约 | `PROTOCOL.md` + `protocol/fixtures/`（三端共享） | | |
-| 回归网 | `backend/tests/`（**170** 金测试） | `lib/turn-reducer.test.ts` | `Tests/run_reducer_fixtures.sh` + `run_e2e.sh` |
+| 回归网 | `backend/tests/`（**184** 金测试） | `lib/turn-reducer.test.ts` | `Tests/run_reducer_fixtures.sh` + `run_e2e.sh` |
 
 单配置：仓库根 `config.yaml`。单启动器：仓库根 `devctl.sh`。
 

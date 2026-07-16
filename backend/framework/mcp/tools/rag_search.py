@@ -1,6 +1,6 @@
 import json
 import requests
-from ..base import BaseTool
+from ..base import BaseTool, ToolOutput
 from ...utils.config_loader import load_section, rag_auth_headers
 
 # 配置统一在仓库根 config.yaml（rag 段），寻址走 config_loader
@@ -21,6 +21,10 @@ class RAGSearchTool(BaseTool):
     description = "Search the local high-precision RAG vector database. You must use this tool when you need to access a user’s personal knowledge base, local historical documents, or answer questions that require external sources for verification."
     requires_approval = False
     is_concurrency_safe = True  # 只读向量检索，可与其他只读调用并发
+    # 渲染格（R3 试点）：召回结果今天是灰框里一大坨格式化文本——命中分、来源、路径全
+    # 埋在文字里，用户要自己数 "--- Result N ---"。这些结构在 execute 里本来就有，
+    # 随 ToolOutput 交给客户端排成引文卡片即可（文本照旧给模型读）。
+    render_hint = "citations"
 
     def __init__(self):
         # 初始化时动态探测可用的知识库分类，构建 Schema；
@@ -100,6 +104,9 @@ class RAGSearchTool(BaseTool):
             
             # 格式化检索结果供大模型阅读
             formatted_context = f"[Search results for '{query}' in category '{category}': {len(docs)} highly relevant results found]\n\n"
+            # 渲染格载荷（R3）：与下面的格式化同源同循环——结构在这里还活着，
+            # 交给客户端排引文卡片，不必让谁再从格式化文本里解析回来。
+            citations = []
             for i, item in enumerate(docs):
                 score = item.get("rerank_score", 0)
                 doc_text = item.get("document", "")
@@ -113,8 +120,16 @@ class RAGSearchTool(BaseTool):
                     f"--- Result {i+1} (Match Score: {score:.2f}, Source: {source}, Path: {source_path}) ---\n"
                     f"{doc_text}\n\n"
                 )
-                
-            return formatted_context.strip()
+                citations.append({
+                    "source": source,
+                    "path": source_path,
+                    "score": round(float(score), 4),
+                    # 卡片只摆摘要，全文照旧在 response 文本里给模型读
+                    "snippet": doc_text[:280],
+                })
+
+            return ToolOutput(formatted_context.strip(),
+                              {"query": query, "category": category, "items": citations})
 
         except requests.ConnectionError as e:
             return f"System Error: Tool execution failed. Unable to connect to the RAG server (please check if {RAG_HOST}:{RAG_PORT} is running)."

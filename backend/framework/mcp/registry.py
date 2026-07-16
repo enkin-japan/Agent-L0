@@ -163,20 +163,31 @@ class MCPRegistry:
             for tool in self._tools.values()
         ]
 
-    def execute_tool(self, name: str, arguments: dict) -> str:
-        """
-        核心分发逻辑：纯粹的物理调用。
+    def execute_tool(self, name: str, arguments: dict) -> "tuple[str, Dict[str, Any]]":
+        """核心分发逻辑：纯粹的物理调用。返回 `(给模型的文本, 渲染格 或 None)`。
+
         注：这里不再拦截 _system_format_error，工具格式的解析容错将由上层 Engine 处理。
+
+        渲染格（R3）：工具返回 ToolOutput 且声明了 render_hint 时，组装成
+        `{hint, payload}` 一并交回；否则为 None（= 客户端画现状的灰框）。
+        **fail-open**：渲染是锦上添花，组装出问题只降级灰框，绝不能让一次已经成功的
+        工具调用看起来像失败（与 is_read_only 的 fail-safe 同一路数：坏了也别把主链路
+        带下水）。故此处只信 tool 自己给的载荷，不做任何可能抛错的加工。
         """
         if name not in self._tools:
-            return f"System Error: No tool named '{name}' was found in the MCP registry."
-        
+            return (f"System Error: No tool named '{name}' was found in the MCP registry.", None)
+
         try:
             tool = self._tools[name]
             result = tool.execute(**arguments)
-            # 统一转为字符串返回，对大语言模型更友好
-            return str(result)
+            # 统一转为字符串返回，对大语言模型更友好（ToolOutput.__str__ 即其 text）
+            text = str(result)
+            payload = getattr(result, "payload", None)
+            hint = getattr(tool, "render_hint", None)
+            render = {"hint": str(hint), "payload": payload} if (hint and payload is not None) else None
+            return (text, render)
         except Exception as e:
             import traceback
             # 返回明确的 Traceback 帮助大模型理解工具为什么崩溃
-            return f"System Error: Exception occurred while executing '{name}': {str(e)}\n{traceback.format_exc()}"
+            return (f"System Error: Exception occurred while executing '{name}': {str(e)}\n{traceback.format_exc()}",
+                    None)

@@ -1,0 +1,66 @@
+{
+  "turn_state": "none",
+  "transcript": [
+    {
+      "role": "user",
+      "content": "知识库里关于报销流程是怎么写的?"
+    },
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "type": "function",
+          "name": "rag_search",
+          "arguments": {
+            "query": "报销流程",
+            "category": "default",
+            "optimized_query": "报销 流程 规定"
+          }
+        }
+      ],
+      "thoughts": []
+    },
+    {
+      "role": "tool",
+      "tool_responses": [
+        {
+          "name": "rag_search",
+          "response": "[Search results for '报销流程' in category 'default': 2 highly relevant results found]\n\n--- Result 1 (Match Score: 0.91, Source: 员工手册.md, Path: /kb/员工手册.md) ---\n报销需在事发后 30 日内提交。\n\n--- Result 2 (Match Score: 0.62, Source: 财务FAQ.md, Path: /kb/财务FAQ.md) ---\n单据需附发票原件。",
+          "render": {
+            "hint": "citations",
+            "payload": {
+              "query": "报销流程",
+              "category": "default",
+              "items": [
+                {
+                  "source": "员工手册.md",
+                  "path": "/kb/员工手册.md",
+                  "score": 0.9123,
+                  "snippet": "报销需在事发后 30 日内提交。"
+                },
+                {
+                  "source": "财务FAQ.md",
+                  "path": "/kb/财务FAQ.md",
+                  "score": 0.6187,
+                  "snippet": "单据需附发票原件。"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "报销需在 30 日内提交,并附发票原件。"
+    }
+  ],
+  "preview": {
+    "prompt": "",
+    "text": "",
+    "thinking": "",
+    "steps": [],
+    "task": null
+  },
+  "pending_tools": []
+}

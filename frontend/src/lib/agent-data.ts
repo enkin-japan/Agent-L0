@@ -1,4 +1,4 @@
-import type { ChatResponse, ResponseMessage, ToolCall } from "@/types/agent-api"
+import type { ChatResponse, ResponseMessage, ToolCall, ToolResponse } from "@/types/agent-api"
 
 export type ChatRole = "user" | "assistant" | "tool" | "system"
 
@@ -17,7 +17,7 @@ export type ChatMessage = {
   /** enable_thinking=true 时模型输出的思维链。 */
   thoughts?: string
   toolCalls?: ToolCall[]
-  toolResponses?: { name: string; response: string }[]
+  toolResponses?: ToolResponse[]
   attachments?: MessageAttachment[]
   variant?: "error" | "warning"
   /** 该消息所属轮次在服务端历史里的下标（分支接口的 node_index）。 */

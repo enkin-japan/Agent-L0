@@ -96,7 +96,7 @@ class FakeTool:
     def __init__(self, name: str, result: str = "ok-result", *,
                  approval: bool = False, read_only: bool = True,
                  concurrency_safe: bool = True, timeout: Optional[int] = None,
-                 raises: Optional[Exception] = None, validate=None):
+                 raises: Optional[Exception] = None, validate=None, render=None):
         self.name = name
         self.result = result
         self.approval = approval
@@ -105,6 +105,7 @@ class FakeTool:
         self.timeout = timeout
         self.raises = raises
         self.validate = validate  # 可选参数预检: (args)->Optional[str]，对齐 validate_arguments
+        self.render = render      # 渲染格(R3): {hint,payload} 字面量或 (result)->dict
 
 
 class FakeRegistry:
@@ -150,13 +151,15 @@ class FakeRegistry:
 
     # --- 执行面(编排层经 asyncio.to_thread 调用,保持同步签名) ---
     def execute_tool(self, name, arguments):
+        """返回 (文本, 渲染格) —— 与 MCPRegistry.execute_tool 同构(R3)。
+        FakeTool.render 为 {hint,payload} 字面量;默认 None = 灰框(存量用例行为不变)。"""
         self.executed.append({"name": name, "args": dict(arguments or {})})
         t = self._tools.get(name)
         if t is None:
-            return f"System Error: No tool named '{name}' was found in the MCP registry."
+            return (f"System Error: No tool named '{name}' was found in the MCP registry.", None)
         if t.raises is not None:
-            return f"System Error: Exception occurred while executing '{name}': {t.raises}"
-        return t.result
+            return (f"System Error: Exception occurred while executing '{name}': {t.raises}", None)
+        return (t.result, t.render)
 
 
 def call(name: str, **arguments) -> Dict[str, Any]:
