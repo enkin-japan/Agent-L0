@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 ✅（bundle 组装 1.0G 交付形态 + 无头验收全过 + GUI 三项用户实机确认 + 实机查验四轮修复（密钥入库/鉴权门/Developer ID 签名/会话恢复）+ 两轮 UI 打磨，v0.16.0(30)）。**R5 全线收官（2026-07-17），CHARTER 三处同步已获用户同意并落地**。**D1 首批进行中**：新剧本 ×4 + D.17 斜杠确定性分发（e4b 不会主动调 skill_invoke，实测倒逼）+ 金测试 232；chart-report/ingest 验收 ✅，briefing/research/chart-report 三案疑难**同根归案（S.9）**：inference/server.py 约束采样构造少传 schema_builder → 服务端掩码永久禁用 → e4b 裸奔畸形 JSON——已修（一行）+ AST 调用点钉（金测试 233），infer 已重启、探针全绿。实机三轮后：**/research 端到端全通（D1 首个完整闭环）**；/briefing 剩模型智力项（观察清单：约束内调用块 2048 token 未收口）；点名不可用剧本改为如实告知（v0.16.0(34)，金测试 241）。chart-report 完整链路等 `brew reinstall --cask libreoffice` 后可测。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 ✅ 闭环**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份）；951M 运行时（322 Mach-O 覆盖签名）公证 **Accepted**（submission `1e13bf2a`，2026-07-16 通过；当日苹果队列积压 ~14h，对照组 tiny.zip 甚至更慢——大包无罪）。签名→公证全链路验证完毕，剩「对真实 .app 公证 + staple」在 R5 收官后的分发动作里做。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 ✅（bundle 组装 1.0G 交付形态 + 无头验收全过 + GUI 三项用户实机确认 + 实机查验四轮修复（密钥入库/鉴权门/Developer ID 签名/会话恢复）+ 两轮 UI 打磨，v0.16.0(30)）。**R5 全线收官（2026-07-17），CHARTER 三处同步已获用户同意并落地**。**D1 首批进行中**：新剧本 ×4 + D.17 斜杠确定性分发（e4b 不会主动调 skill_invoke，实测倒逼）+ 金测试 232；chart-report/ingest 验收 ✅，briefing/research/chart-report 三案疑难**同根归案（S.9）**：inference/server.py 约束采样构造少传 schema_builder → 服务端掩码永久禁用 → e4b 裸奔畸形 JSON——已修（一行）+ AST 调用点钉（金测试 233），infer 已重启、探针全绿。实机三轮后：**/research 端到端全通（D1 首个完整闭环）**；/briefing 剩模型智力项（观察清单：约束内调用块 2048 token 未收口）；点名不可用剧本改为如实告知（v0.16.0(34)，金测试 241）。chart-report 补测通过（架构链路含纠错回环全贯通）。**D1 首批收官**（5 剧本全实测，7 架构缺陷修复，模型智力项入观察清单）。下一步 = **D4 阈值决策**（D2 前置：多少工具时切 tool_schema_mode: catalog——需用户拍板）→ D2。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 ✅ 闭环**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份）；951M 运行时（322 Mach-O 覆盖签名）公证 **Accepted**（submission `1e13bf2a`，2026-07-16 通过；当日苹果队列积压 ~14h，对照组 tiny.zip 甚至更慢——大包无罪）。签名→公证全链路验证完毕，剩「对真实 .app 公证 + staple」在 R5 收官后的分发动作里做。**
 
 ---
 
@@ -961,7 +961,7 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
 
 | | 内容 | 纪律 |
 |---|---|---|
-| **D1** | Skill 库扩充 🟡 首批进行中（2026-07-17，见下方 D1 进展） | R2a 建好体系后 skill 是 md，AI 批量写。**每个需实测验收** |
+| **D1** | Skill 库扩充 ✅ **首批收官**（2026-07-17，5 剧本全实测，见 D1 进展） | R2a 建好体系后 skill 是 md，AI 批量写。**每个需实测验收** |
 | **D2** | Tool 扩充（现 17 文件 / 34 类 → 对标 cc-haha 60+） | **只加桌面级任务真需要的** |
 | **D3** | 子 Agent 种类扩充 | R1 后新 agent = 一份声明 |
 | **D4** | 切 `tool_schema_mode: catalog` | `config.yaml` 已预留。**D2 开工前先定「多少工具时切」的阈值**，别等出事 |
@@ -1051,6 +1051,17 @@ schema_builder 参数，engine.py 改了，**没人 import 的 inference/server.
   启动时扫一次**，装好 ≠ 生效。同代码同 PATH 现探针 0.28s 通过、excel_research 正常
   注册。修（v0.16.0(35)）：不可用告知补「重启执行层生效」指引。「注册表热重扫」
   列 D 阶段待办（两表互为前置，重扫需两段装配，非一行事）。
+
+**实机第四轮 = D1 首批收官（2026-07-17，/chart-report 补测）**：重启后注册表如实
+反映 LibreOffice 就位——剧本注入 ✓、excel_research 两次真执行（VERDICT 裁决行）✓、
+纠错回环实战通过（思考内起草调用被截 → 解析器精确指引 → 下步恢复合法）✓。未出图
+属模型侧（重复自查 + 流程复述当终答，与 briefing「承诺不行动」同族）→ 观察清单。
+**D1 首批判定**：5 剧本架构路径全实测——research 端到端全通；deck/ingest 通过；
+briefing/chart-report 架构贯通、卡模型智力。首批共修架构缺陷 7 件（约束采样死亡
+S.9 / 工作区落点 / soffice 探活 / 超时预算 / 静默放行 / 注册表时序告知 / 斜杠分发
+D.17）。**观察清单（模型智力，等生产设备）**：多步序列推进力（承诺不行动、重复
+自查、流程复述当终答）、约束内调用块 2048 token 未收口、schedule_create 复杂
+schema 参数构造。
 
 **附带发现（R5-9 尾巴）**：`kill -9` app 的实机测试留下**孤儿 backend/searx**（SIGKILL
 不走 willTerminate），此后每代 app 都把它当 external 只用不管——孤儿一直跑着已删除
