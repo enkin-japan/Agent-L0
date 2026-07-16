@@ -912,6 +912,19 @@ This operation can only be performed by the Account Holder`。
 同时给签名加了**全量覆盖核对**（带时间戳的文件数必须等于 Mach-O 总数）——
 只验一个 `$PY` 挡不住部分漏签，而漏签要到公证被拒才暴露。
 
+### S.7 · 模块收编手术会静默打断「没人 import 的入口」（2026-07-16）
+
+**事故**：R0 把 `core/response_parser.py` 收编进 `dialects/gemma4/`，
+`inference/server.py:54` 的旧路径 import 静默断裂。金测试 import 的是 framework
+包，**没有任何测试 import 这个独立进程入口**；R5-2 给它加 `/v1/transcribe` 时也只
+测了「A 不可达 fail-open」——服务器一次都没真启过。用户按 R5-4 查验步骤
+`start --profile gpu` 才炸出 ModuleNotFoundError，离引入隔了整整一个阶段。
+
+**教训**：①**移动模块时 grep 全仓引用，包括 backend/ 之外**（inference/ rag/ scripts/
+都是独立入口）；②「fail-open 验证」证明的是**对端缺席时**的行为，永远替代不了
+把对端真启一次；③已补 `tests/test_entrypoints.py`：入口模块级 import 全通 +
+禁止家族字面量（`dialects.gemma4`）出现在 server 源码——两个断裂形态都钉死。
+
 ### S.2 · `git add -A` 会扫进不属于本次改动的东西（2026-07-15）
 
 **事故**：`git add -A` 把用户未提交的 `.env.example`（`INFER_API_KEY="test"`）扫进了提交 `9e27465`。
