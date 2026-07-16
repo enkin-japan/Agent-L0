@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。下一步 = R5-4（`SidecarManager.swift`）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 待用户操作**（公证只差 Developer ID 证书，且只能账号持有人本人在后台签发——ASC API 密钥无此权限，已实测；CSR 与配对私钥已备好，不阻塞 R5-4）。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。下一步 = R5-4（`SidecarManager.swift`）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 进展**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份），951M 运行时以 320/320 覆盖签名并**已提交公证**（submission `1e13bf2a`，等结论中；对照组 tiny.zip 亦 In Progress >25min ⇒ 当日服务端队列整体偏慢，非大包卡死）。**
 
 ---
 
@@ -78,7 +78,7 @@
 | **R2a** | Skill 体系（显式调用） | ✅ 2026-07-16 | R1 | 无 | 低 |
 | **R3** | 工具渲染格（协议变更） | ✅ 2026-07-16 | — | 无 | **铁律 4 + 5** |
 | **R4** | 文件式长期记忆 | ✅ 2026-07-16 | R2a | 无 | 低 |
-| **R5** | macOS app 收编执行层 | ⬜ | R0–R4 | 无 | 铁律 1/4 + 改 CHARTER |
+| **R5** | macOS app 收编执行层 | 🟡 R5-1~3 ✅ / R5-4~9 ⬜ | R0–R4 | 无 | 铁律 1/4 + 改 CHARTER |
 | **D1–D4** | 能力量变扩充 | ⬜ | R5 | 无 | 低 |
 
 **R2b**（skill 自主发现）→ `DEFERRED.md`，触发条件：R0 完成 + 目标模型（30–70B）硬件到位。
@@ -96,7 +96,7 @@
 - [x] R0-5 `model_registry` 9 条加 `dialect: "gemma4"`；engine 按注册表选方言
 - [x] R0-6 验收：**142 全绿**（132 基线 + 10 新方言金测试）+ 逐项 A/B 对拍一致
 
-**R1** 🟡 进行中
+**R1** ✅ 2026-07-16
 - [x] **R1-0 建回归网**（**计划外，但必须先做**：审计发现沙箱零测试覆盖，见下）
       → `backend/tests/test_sandbox_invariants.py` 9 项，**151 全绿**
 - [x] **R1-1 提取 `EphemeralSession`** → `agents/sandbox_runtime.py`（**实为 5 份拷贝，非 3 份**）
@@ -133,7 +133,7 @@
 - [x] R4-5 隐私：索引随 `include_env` 门控（门写在 builder 里）；正文侧沙箱无 `rag_search`
 - [x] R4-6 验收：**206 金测试全绿**（184 + 22）+ 装配与隐私边界闭环实测
 
-**R5** ⬜ —— 见 §3.5 详细步骤
+**R5** 🟡 R5-1~3 ✅ —— 见 §3.5 详细步骤
 
 **D 阶段** ⬜ —— 见 §3.6
 
