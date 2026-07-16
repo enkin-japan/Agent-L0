@@ -163,6 +163,15 @@ struct SettingsView: View {
                         // repo 布局由 dev 桥接读仓库 .env.local，这里填了也无害）
                         SecureField("INFER_API_KEY", text: sidecarKeyBinding(\.inferApiKey))
                         SecureField("RAG_API_KEY", text: sidecarKeyBinding(\.ragApiKey))
+                        // 密钥是拉起时注入的（R5-6）：漏填/改错的实症是推理/RAG 一律
+                        // 401（实机查验撞过）。这里把「生效需重启」说破，并给按钮。
+                        Text(L("密钥即改即存入钥匙串；对正在运行的执行层，点下方重启后生效。"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button(L("重启执行层（应用新密钥）")) {
+                            Task { await sidecar.restart() }
+                        }
+                        .disabled(sidecar.state == .external || sidecar.state == .disabled)
                         LabeledContent(L("状态"), value: sidecarStateLabel)
                         if case .failed(let detail) = sidecar.state {
                             // lib_edge.sh 的原话（端口占用者清单/依赖缺失/日志尾），不二次转译

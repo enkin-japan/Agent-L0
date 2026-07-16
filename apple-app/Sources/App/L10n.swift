@@ -37,6 +37,12 @@ enum L10n {
         "工具": ("ツール", "Tool"),
         // 侧栏 / 会话
         "新对话": ("新規チャット", "New Chat"),
+        "详细信息": ("詳細", "Details"),
+        "复制全文": ("全文をコピー", "Copy full text"),
+        "密钥即改即存入钥匙串；对正在运行的执行层，点下方重启后生效。":
+            ("キーは即座にキーチェーンへ保存されます。実行中の実行レイヤーには下の再起動で反映されます。",
+             "Keys are saved to Keychain immediately; restart below to apply to a running execution layer."),
+        "重启执行层（应用新密钥）": ("実行レイヤーを再起動（新キーを適用）", "Restart execution layer (apply new keys)"),
         "选择或新建一个会话": ("チャットを選択または新規作成", "Select or create a chat"),
         "左上角 ✎ 开始新对话": ("左上の ✎ から新規チャット", "Tap ✎ to start a new chat"),
         "搜索会话内容…": ("チャット内容を検索…", "Search chat contents…"),

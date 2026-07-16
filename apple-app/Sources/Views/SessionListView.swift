@@ -13,6 +13,23 @@ struct SessionListView: View {
 
     var body: some View {
         sessionList
+            #if os(macOS)
+            // 高频入口不许折叠：窄侧栏下 toolbar 图标会收进 » 溢出菜单（实机反馈
+            // 「添加新会话折叠起来了」）——顶上放一枚全宽主色按钮，toolbar 那枚保留。
+            .safeAreaInset(edge: .top) {
+                Button {
+                    store.newSession()
+                } label: {
+                    Label(L("新对话"), systemImage: "square.and.pencil")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .padding(.horizontal, Theme.s3)
+                .padding(.vertical, Theme.s2)
+                .background(.bar)
+            }
+            #endif
             .refreshable { await store.loadSessions() }
             .alert(L("重命名会话"), isPresented: Binding(
                 get: { renaming != nil },

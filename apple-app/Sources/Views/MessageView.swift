@@ -18,14 +18,7 @@ struct MessageView: View {
         case .assistant:
             assistantView
         case .system:
-            Text(message.text)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .selectableOnIOS()
-                .padding(Theme.s2)
-                .frame(maxWidth: .infinity)
-                .background(Theme.wash)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
+            SystemNoticeView(text: message.text)
         case .tool:
             // 渲染格（R3）：认识的 hint 走结构化视图，其余保持灰框（fail-open，与 web
             // 的 renderByHint 同一决策表）。灰框照旧收在 DisclosureGroup 里。
@@ -173,6 +166,56 @@ struct MessageView: View {
         #else
         UIPasteboard.general.string = text
         #endif
+    }
+}
+
+/// 系统条（含后端报错）：只亮首行结论，traceback 之类的长尾折叠进「详细信息」。
+/// 全量堆栈铺在会话里既难看又没信息密度（实机反馈）——但一个字都不丢，
+/// 排障时展开即得、可复制。
+struct SystemNoticeView: View {
+    let text: String
+
+    private var headline: Substring {
+        text.prefix(while: { $0 != "\n" })
+    }
+    private var detail: String {
+        String(text.dropFirst(headline.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.s1) {
+            Text(String(headline))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .selectableOnIOS()
+                .frame(maxWidth: .infinity)
+            if !detail.isEmpty {
+                DisclosureGroup {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Text(detail)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .selectableOnIOS()
+                            .padding(Theme.s1)
+                    }
+                } label: {
+                    Text(L("详细信息"))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .contextMenu {
+                    Button {
+                        MessageView.copy(text)
+                    } label: {
+                        Label(L("复制全文"), systemImage: "doc.on.doc")
+                    }
+                }
+            }
+        }
+        .padding(Theme.s2)
+        .frame(maxWidth: .infinity)
+        .background(Theme.wash)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
     }
 }
 

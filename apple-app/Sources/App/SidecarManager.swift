@@ -75,6 +75,21 @@ final class SidecarManager: ObservableObject {
         }
     }
 
+    /// 设置里改了服务密钥（INFER/RAG_API_KEY）后手动触发：密钥是 spawn 时注入 env 的
+    /// （R5-6），正在跑的编队拿不到新值——收掉自己拉起的再按新布局拉起（autostart
+    /// 重新走 resolveLayout，从 Keychain 取最新值）。external（devctl 的后端）不碰。
+    func restart() async {
+        switch state {
+        case .running, .starting:
+            await down()
+            await autostart()
+        case .failed:
+            await autostart()
+        case .disabled, .external:
+            break
+        }
+    }
+
     /// app 退出路径（applicationShouldTerminate 里同步等待）。
     /// 只收自己拉起的：external 状态下一个进程都不碰。
     func shutdownSync() {

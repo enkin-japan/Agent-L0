@@ -869,8 +869,19 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
     私钥永不入包；放 `~/Library/Application Support/dev.enkin.macagent/.keys/` 即启用）
   - 附带发现：bundle 首启需 HF 可达（tokenizer-only 拉取）——烟测当日撞上 HF
     整站不可达（504/超时），种本地快照后通过；离线首启的预种优化留给 D 阶段
-  - [ ] **GUI 三项待实机查验**：双击冷启动时延（界面可用）；**杀进程恢复 ≤1s**
-    （铁律 4，`REARCHITECTURE.md` Phase 2）；sidecar 崩溃自动重启且不丢轮次（铁律 2）
+  - **实机查验第一轮（2026-07-16）**：连接/鉴权/执行层运行中/会话落 Application
+    Support 全过；首轮对话炸出「核心引擎故障」——**inference-server 401**：
+    INFER/RAG_API_KEY 是 spawn 时注入 env 的（R5-6），先开开关再填密钥 = 正在跑的
+    编队永远拿不到新值（RAG 建类目 401 同源）。修复（v0.16.0(23)）：
+    ① `SidecarManager.restart()`（收自己拉起的→重走 resolveLayout 取 Keychain 新值；
+    external 不碰）+ 设置页「重启执行层（应用新密钥）」按钮 + 生效说明文案；
+    ② 系统条报错精简（实机反馈）：`SystemNoticeView` 只亮首行结论，traceback 折叠
+    进「详细信息」，右键可复制全文——一个字不丢但不再刷屏；
+    ③ 新对话按钮外露（实机反馈）：窄侧栏下 toolbar 图标收进 » 溢出菜单，macOS
+    侧栏顶部加全宽主色按钮（safeAreaInset，toolbar 那枚保留）
+  - [ ] **GUI 三项待实机查验（重测）**：双击冷启动时延（界面可用；填好两把密钥后）；
+    **杀进程恢复 ≤1s**（铁律 4，`REARCHITECTURE.md` Phase 2）；sidecar 崩溃自动重启
+    且不丢轮次（铁律 2）
 
 **CHARTER 需同步改动**（R5 完成时一并更新，**属架构方向改动**）：
 | 位置 | 现状 | 改为 |
