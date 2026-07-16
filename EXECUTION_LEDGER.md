@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0 ✅；R1 ✅ 全部完成（R1-0…R1-5），157 金测试全绿。下一步 = R2a（skill 系统，显式调用）。**
+> 🟢 **2026-07-16：R0 ✅；R1 ✅；R2a ✅（skill 剧本体系，显式调用），170 金测试全绿。下一步 = R3（工具渲染格 render_hint，夹具先行）。**
 
 ---
 
@@ -58,6 +58,7 @@
 | **D.8** | **SearXNG 随 backend 进 app**（+138MB）。判据是我们自己 B3 定的「SearXNG 归 edge、与 backend 同机」 | 2026-07-16 | `HETERO_COMPUTE.md` §S.3 |
 | **D.9** | **R2b（skill 模型自主发现）挂目标模型硬件**，记入 `DEFERRED.md`，非本阶段目标 | 2026-07-16 | `ROADMAP.md` R2 分期 |
 | **D.10** | 规模化一分为二：**能力规模化追**（skill/tool/子agent），**协作规模化不追**（权限引擎/插件市场/CI/IM×5） | 2026-07-16 用户 | 用户补充 2 |
+| **D.11** | **skill = 主轮次的提示词剧本**，不是自带工具集的隔离子会话。工具沿用主循环 → 审批闸门照常生效，**零新增提权面**。要给 skill 加 `tools:`，须先解决「审批从沙箱透出到前端」 | 2026-07-16 用户 | 本节 §3.2 实测结果 |
 
 ---
 
@@ -69,7 +70,7 @@
 |---|---|---|---|---|---|
 | **R0** | 模型方言层协议手术 | ✅ **2026-07-16** | — | 建设无／真验证需 ≥32GB | 铁律 1（例外条款） |
 | **R1** | 子 Agent 统一执行器 | ✅ 2026-07-16 | R0 ✅ | 无 | 铁律 1（沙箱三不变量） |
-| **R2a** | Skill 体系（显式调用） | ⬜ | R1 | 无 | 低 |
+| **R2a** | Skill 体系（显式调用） | ✅ 2026-07-16 | R1 | 无 | 低 |
 | **R3** | 工具渲染格（协议变更） | ⬜ | — | 无 | **铁律 4 + 5** |
 | **R4** | 文件式长期记忆 | ⬜ | R2a | 无 | 低 |
 | **R5** | macOS app 收编执行层 | ⬜ | R0–R4 | 无 | 铁律 1/4 + 改 CHARTER |
@@ -100,12 +101,12 @@
 - [x] **R1-4 三沙箱改写为声明 + hook**（math → research → excel，按难度序）
 - [x] **R1-5 验收**：**157 全绿**（R1-0 那 9 项一字未改）+ 三沙箱提示词逐字节 A/B 对拍一致
 
-**R2a** ⬜
-- [ ] R2a-1 `skills/` 目录 + frontmatter 规范
-- [ ] R2a-2 `core/skill_registry.py`（照 `MCPRegistry` 形状，含 `is_available` 探活）
-- [ ] R2a-3 `mcp/tools/skill_invoke.py`
-- [ ] R2a-4 首个 skill 试点（建议：research 的六条规则从 Python 抽成 md）
-- [ ] R2a-5 验收：金测试 + 实测
+**R2a** ✅ 2026-07-16
+- [x] R2a-1 `skills/` 目录 + frontmatter 规范（`name` / `description` / `requires`；**无 `tools`**，见 D.11）
+- [x] R2a-2 `core/skill_registry.py`（照 `MCPRegistry` 形状，含探活舍弃）
+- [x] R2a-3 `mcp/tools/skill_invoke.py`（+ `MCPRegistry.load_tool` / `tool_names`）
+- [x] R2a-4 首个 skill 试点：**`skills/deck.md`**（原定的 research 试点**不可行**，见下）
+- [x] R2a-5 验收：**170 金测试全绿** + 装配链路与显式调用闭环实测通过
 
 **R3** ⬜
 - [ ] R3-1 **先落夹具** `protocol/fixtures/007-render-hint.*`（铁律 5）
@@ -456,7 +457,49 @@ mcp/tools/skill_invoke.py    # 一个工具，调用 skill
 
 **先别做**：skill 市场、MCP skill、skill 向量检索发现。先做能跑的最小闭环。
 
-**实测结果**：（完成后填写）
+**实测结果**（2026-07-16 完成）：
+
+产出 `core/skill_registry.py` + `mcp/tools/skill_invoke.py` + `skills/deck.md`，
+**170 金测试全绿**（新增 13 项）。
+
+**病灶描述要改准**：账本原文说 `grep -rni "skill"` **零命中**——实测有 4 处命中，但都是
+指向仓库根 `excel_skill/`（上游参考件）的注释，不是 skill 体系。病灶实质成立，措辞不实。
+
+**本节此前自相矛盾**，是 R2a 的第一个障碍：正文说 skill「不值得起子 agent（**不需隔离**）」，
+同节又加粗写「**跑在 R1 的统一执行器上**」+ frontmatter 草案带 `tools / max_steps / model`
+——前者是提示词剧本，后者是隔离子会话。两种读法的**安全后果完全不同**，故提交用户裁决 → D.11。
+
+**要害（此前无人算到）**：审批闸门**只存在于 `orchestrator.py:551`**（经
+`registry.requires_approval`）。沙箱从不碰 registry，`run_sandbox` **没有审批通路**，
+此前也不需要——不变量 1 保证沙箱工具由构造即无害。若 skill 能自带 `tools:` 又跑在沙箱
+执行器上，**一个 md 文件就成了绕过审批执行 `run_shell_command` / `write_file` 的路径**。
+这个洞今天不存在，不能由 skill 引入；R2b（模型自主选 skill）会把它放大成提权面。
+→ 用户选定剧本形态：工具沿用主循环，闸门照常生效，零新增提权面。
+
+**注入路径天然存在**：`skill_invoke` 把正文作为 tool 响应返回，正文即随 tool 响应落进
+主编排轮上下文，模型随后用主循环工具照做。不需要新的注入机制。
+
+**R2a-4 原定试点不可行**：账本原建议「research 的六条规则从 Python 抽成 md」。但
+research 的价值大半在它的 bespoke dispatch（来源注册表、归一化去重、候选池补位、账本
+拼装），md 表达不了；只抽提示词会得到一个**干不了 research 活的 skill**。且在剧本形态下，
+沙箱系统提示本就不是 skill——它们是沙箱的系统提示，留在原地。
+→ 改选 **`skills/deck.md`**：deck 的五个工具有天然多步序列（建纲→init→逐页→导出 PDF），
+今天**哪里都没写**，全靠模型从工具描述里自己拼。真实、可验、正是「不值得做成工具、
+不需隔离、需要复用」那个空档。
+
+**装配顺序有个死结**：`skill_invoke` 的探活要看剧本表，剧本表的 `requires` 探活要看工具表
+——**两表互为前置**，只能两段装配：MCPRegistry 目录扫描（此时 skill_invoke 必然被跳过）
+→ 建剧本表 → 登记 runtime → `mcp_registry.load_tool(SkillInvokeTool())` 补注册。
+为此给 MCPRegistry 加了 `load_tool()`（走同一条探活路径）与 `tool_names()`。
+skill_invoke 的探活在剧本表未装配时会打印说明行，免得后来者把 ⛔→✅ 的日志当故障。
+
+**探活不是摆设**：`deck.md` 的 `requires: [..., deck_export_pdf]`，而 `deck_export_pdf`
+自身探 playwright——playwright 缺失时整份剧本跑不通，此时剧本被舍弃、不 advertise 给模型。
+实测覆盖了这条真实路径。
+
+**D.11 由金测试守死**：`test_skill_grants_no_tool_authority` 断言 `Skill` 面上不得出现
+`tools` / `allowed_tools` / `max_steps` / `model` 任一字段。这条不是口味，是安全边界——
+加字段前必须先解决审批透出。
 
 ---
 

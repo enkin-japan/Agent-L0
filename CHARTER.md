@@ -166,7 +166,8 @@ Agent 沟通的**窗口**，不是主体。
         │ 方言   dialects/（R0）         prompt 模板 / 输出反序列化 / 标记 / schema │
         │ 承载   backends/（P0/B1）      mlx（进程内）/ remote（inference-server） │
         │ 记忆   memory/                 冷热会话 / 三层压缩 / inflight 防丢       │
-        │ 工具   mcp/（17 文件 34 类）+ agents/（3 沙箱，物理隔离）               │
+        │ 工具   mcp/（18 文件 35 类）+ agents/（3 沙箱，物理隔离）               │
+        │ 剧本   skills/*.md（主轮次提示词，经 skill_invoke 取用）              │
         └──────────────────────────────────────────────────────────────────────┘
               │ rag_search        │ web_research（受限沙箱）   │ deck PDF 导出
               ▼                    ▼                           ▼
@@ -226,6 +227,13 @@ RAG 沉淀（原文可召回）。全量日志永远保留在 `history.jsonl`。
 （声明 + hook），循环骨架不重写；照抄一份沙箱去改，等于把这三条不变量再复制一份
 注释——R1 收编前正是如此（会话替身有 5 份拷贝）。
 
+**审批闸门只有一处**：`orchestrator.py:551`（经 `registry.requires_approval`）。
+沙箱执行器**没有**审批通路，也不需要——不变量 1 保证沙箱工具由构造即无害。推论
+（R2a/D.11）：**skill 是主轮次的提示词剧本，不得自带工具集**。剧本能决定子会话拿
+哪些工具 + 沙箱无审批 = 一个 md 文件即可绕过闸门执行 `run_shell_command` /
+`write_file`。要给 skill 加 `tools:`，**先**解决「审批从沙箱透出到前端」，不能反过来。
+由 `tests/test_skill_registry.py::test_skill_grants_no_tool_authority` 钉死。
+
 ---
 
 ## 4. 反模式（治好的四条病，别复发）
@@ -250,7 +258,7 @@ RAG 沉淀（原文可召回）。全量日志永远保留在 `history.jsonl`。
 
 **加一个功能**：
 1. 若涉及新协议行为 → 先落 `protocol/fixtures/` 夹具（铁律 5）；
-2. 后端改动 → 跑 `backend/tests/`（157 项金测试，FakeEngine 无模型毫秒级）
+2. 后端改动 → 跑 `backend/tests/`（170 项金测试，FakeEngine 无模型毫秒级）
    必须全绿；动 TurnRunner/编排/账本前**先读金测试**知道它守着哪些不变量；
 3. 两端归约器改动 → 跑夹具回放（web `npm run test` + Swift
    `Tests/run_reducer_fixtures.sh`）双绿；
@@ -290,8 +298,9 @@ RAG 沉淀（原文可召回）。全量日志永远保留在 `history.jsonl`。
 | 智能层 | `core/{engine,orchestrator,scheduler}.py` `memory/` `mcp/` `agents/` `patch/` | — | — |
 | 模型方言 | `core/dialect_protocol.py` + `dialects/<name>/`（R0） | — | — |
 | 推理承载 | `core/backend_protocol.py` + `backends/<name>/`（P0/B1） | — | — |
+| 流程剧本 | `core/skill_registry.py` + `skills/*.md`（R2a） | — | — |
 | 契约 | `PROTOCOL.md` + `protocol/fixtures/`（三端共享） | | |
-| 回归网 | `backend/tests/`（**157** 金测试） | `lib/turn-reducer.test.ts` | `Tests/run_reducer_fixtures.sh` + `run_e2e.sh` |
+| 回归网 | `backend/tests/`（**170** 金测试） | `lib/turn-reducer.test.ts` | `Tests/run_reducer_fixtures.sh` + `run_e2e.sh` |
 
 单配置：仓库根 `config.yaml`。单启动器：仓库根 `devctl.sh`。
 

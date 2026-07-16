@@ -12,6 +12,8 @@ from silero_vad import load_silero_vad
 
 # 导入解耦后的架构组件
 from framework.mcp.registry import MCPRegistry
+from framework.mcp.tools.skill_invoke import SkillInvokeTool
+from framework.core.skill_registry import SkillRegistry
 from framework.core.engine import AgentEngine
 from framework.core.orchestrator import Orchestrator
 from framework.core.scheduler import TaskScheduler, ClassPolicy
@@ -93,6 +95,7 @@ BASE_DIR = Path(__file__).parent
 SESSIONS_DIR = BASE_DIR / "sessions"
 SCHEDULES_DIR = BASE_DIR / "schedules"   # 定时任务实体（与 sessions 平级，防会话扫描误认）
 TOOLS_DIR = BASE_DIR / "framework" / "mcp" / "tools"
+SKILLS_DIR = BASE_DIR.parent / "skills"      # 剧本是内容不是代码，与 backend/ 平级
 
 # 配置在仓库根（backend 与 rag 共用一份），寻址统一走 config_loader
 from framework.utils.config_loader import load_config
@@ -180,6 +183,14 @@ async def lifespan(app: FastAPI):
 
     # 1. 插件层：扫描并注册所有 MCP 工具
     mcp_registry = MCPRegistry(tools_dir=TOOLS_DIR)
+
+    # 1b. 剧本层（R2a）：skill = 主轮次的提示词剧本，工具沿用主循环 → 审批闸门照常生效。
+    #     两段装配是因为两表互为前置：剧本的 requires 探活要看工具表（故必在 MCPRegistry
+    #     之后），而 skill_invoke 的探活要看剧本表（故上一步的目录扫描必然跳过它，此处补注册）。
+    from framework.agents import runtime as research_runtime
+    skill_registry = SkillRegistry(SKILLS_DIR, tool_names=mcp_registry.tool_names())
+    research_runtime.set_skill_registry(skill_registry)
+    mcp_registry.load_tool(SkillInvokeTool())
     
     # 2. 领域层：推理引擎（单次生成）+ 编排循环（计划推进/失败路由/终止保护）。
     #    经 AgentEngine.create 在专用推理线程内加载模型并装配——推理宇宙(权重/惰性
@@ -206,7 +217,6 @@ async def lifespan(app: FastAPI):
 
     # 2.1 联网调查沙箱运行时：把引擎与主事件循环登记给 web_research（受限沙箱工具经
     #     run_coroutine_threadsafe 投回本循环复用主模型生成，见 framework/agents）。
-    from framework.agents import runtime as research_runtime
     research_runtime.set_runtime(engine, asyncio.get_running_loop())
 
 

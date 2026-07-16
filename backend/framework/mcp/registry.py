@@ -51,6 +51,23 @@ class MCPRegistry:
         self._schemas.append(tool.get_schema())
         print(f"[MCP] ✅ 成功加载工具: {tool.name}")
 
+    def load_tool(self, tool: BaseTool) -> bool:
+        """补注册单个工具，走与目录扫描同一条探活路径。返回是否注册成功。
+
+        用于「探活依赖的东西在目录扫描时还没装配好」的工具——目前仅 skill_invoke：
+        它的探活要看剧本表，而剧本表的 requires 探活要看工具表，两表互为前置，
+        只能两段装配（见 app.py 装配处）。
+        """
+        if not tool.is_available():
+            print(f"[MCP] ⛔ 工具 {tool.name} 不可用（依赖服务探活失败），已舍弃。")
+            return False
+        self.register(tool)
+        return True
+
+    def tool_names(self) -> set:
+        """已注册的工具名集合（skill 剧本的 requires 探活据此判定）。"""
+        return set(self._tools)
+
     def get_all_schemas(self) -> List[Dict[str, Any]]:
         """供给 LLM 的系统提示词使用的工具描述清单"""
         return self._schemas

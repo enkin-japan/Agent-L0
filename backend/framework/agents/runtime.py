@@ -79,3 +79,19 @@ def get_loop() -> "Optional[asyncio.AbstractEventLoop]":
 
 def is_ready() -> bool:
     return _ENGINE is not None and _LOOP is not None
+
+
+# ---------- Skill 剧本注册表（R2a） ----------
+# 与 _ENGINE/_LOOP 同一惯例：装配阶段登记，工具线程内取用。skill_invoke 是无状态工具，
+# 拿不到 app.state，故经此取剧本。
+_SKILLS = None            # framework.core.skill_registry.SkillRegistry
+
+
+def set_skill_registry(registry) -> None:
+    """启动时登记剧本注册表（lifespan 内调用，须在 MCPRegistry 之后——探活要看工具表）。"""
+    global _SKILLS
+    _SKILLS = registry
+
+
+def get_skill_registry():
+    return _SKILLS
