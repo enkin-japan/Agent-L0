@@ -46,7 +46,7 @@ struct SessionListView: View {
                     Circle()
                         .fill(connectionColor)
                         .frame(width: 7, height: 7)
-                    Text(store.connectionOK == true ? L("已连接") : L("未连接"))
+                    Text(connectionLabel)
                     Spacer()
                     Text(Bundle.main.appVersionLabel)
                 }
@@ -90,7 +90,9 @@ struct SessionListView: View {
                 await store.refreshConnection()
                 await store.loadSessions()
                 store.restoreLastSession()   // 杀进程/重启回到原会话（铁律 4 恢复语义）
-                if store.connectionOK != true {
+                // sidecar 开着时冷启必然有几秒「未连接」窗口——弹设置页是误伤，
+                // 底部黄灯（连接中）已说明状态；真故障由 SidecarManager 的五态呈现
+                if store.connectionOK != true, !store.settings.sidecarEnabled {
                     showSettings = true
                 }
             }
@@ -285,11 +287,21 @@ struct SessionListView: View {
         #endif
     }
 
+    /// 三态信号（实机反馈：原来只在设置页关闭时刷一次，静态且滞后）：
+    /// 绿=已连接；黄=连接中（探活在跑、还没放弃——含 sidecar 启动窗口）；红=未连接。
     private var connectionColor: Color {
-        switch store.connectionOK {
-        case .some(true): return .green
-        case .some(false): return .red
-        case .none: return .gray
+        switch store.connState {
+        case .connected: return Theme.success
+        case .connecting: return Theme.warning
+        case .offline: return .red
+        }
+    }
+
+    private var connectionLabel: String {
+        switch store.connState {
+        case .connected: return L("已连接")
+        case .connecting: return L("连接中…")
+        case .offline: return L("未连接")
         }
     }
 

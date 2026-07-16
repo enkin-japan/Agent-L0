@@ -10,6 +10,7 @@ import UserNotifications
 final class AgentStore: ObservableObject {
     // 连接
     @Published var connectionOK: Bool?
+    @Published var connState: ConnState = .connecting
     // 会话
     @Published var sessions: [SessionMetaItem] = []
     /// 持久化选中会话：杀进程/重启后自动回到原直播视图（铁律 4 的 ≤1s 恢复语义，
@@ -70,6 +71,8 @@ final class AgentStore: ObservableObject {
     private var knownTurnCount = 0
     /// 后台全局任务监听（macOS：进程后台常驻可轮询；iOS 挂起后自然停摆）。
     private var monitorTask: Task<Void, Never>?
+    private var connMonitorTask: Task<Void, Never>?
+    private var connFailures = 0
     /// 通知去重：同一会话 30s 内只报一次（自发轮次与全局监听两条路径都会命中完结）。
     private var notifiedAt: [String: Date] = [:]
 
@@ -89,12 +92,14 @@ final class AgentStore: ObservableObject {
         self.settings = settings
         self.client = settings.makeClient()
         startGlobalMonitor()
+        startConnectionMonitor()
     }
 
     /// 设置变更后重建客户端并重新对账（选中会话重新附着）。
     func applySettings() {
         client = settings.makeClient()
-        startGlobalMonitor()  // client 换了，监听循环重启
+        startGlobalMonitor()       // client 换了，监听循环重启
+        startConnectionMonitor()   // 连接探活同理重启（失败计数清零 → 黄灯重试）
         let sid = selectedSessionId
         detach()
         messages = []
@@ -106,8 +111,39 @@ final class AgentStore: ObservableObject {
     }
 
     func refreshConnection() async {
-        guard let client else { connectionOK = false; return }
-        connectionOK = (try? await client.health()) ?? false
+        guard let client else { connectionOK = false; connState = .offline; return }
+        let ok = (try? await client.health()) ?? false
+        connectionOK = ok
+        if ok { connState = .connected; connFailures = 0 }
+    }
+
+    // MARK: - 连接状态监控（实机反馈：信号原来只在设置页关闭时刷一次，静态且滞后）
+
+    /// 三态：连接中（黄，还在尝试）/ 已连接（绿）/ 未连接（红，连续失败 ~20s 判放弃）。
+    enum ConnState { case connecting, connected, offline }
+
+    /// 常驻探活循环：通了 15s 一巡（廉价 /health），断了 2s 一巡追赶 sidecar 启动；
+    /// 连续 10 次失败（约 20s）才降级红灯——短暂波动/启动窗口都算「连接中」。
+    func startConnectionMonitor() {
+        connMonitorTask?.cancel()
+        connFailures = 0
+        if connState != .connected { connState = .connecting }
+        connMonitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let ok = (try? await self.client?.health()) ?? false
+                if Task.isCancelled { return }
+                self.connectionOK = ok
+                if ok {
+                    self.connFailures = 0
+                    self.connState = .connected
+                } else {
+                    self.connFailures += 1
+                    self.connState = self.connFailures >= 10 ? .offline : .connecting
+                }
+                try? await Task.sleep(nanoseconds: ok ? 15_000_000_000 : 2_000_000_000)
+            }
+        }
     }
 
     // MARK: - 会话管理
@@ -120,7 +156,9 @@ final class AgentStore: ObservableObject {
                 if ($0.pinned ?? false) != ($1.pinned ?? false) { return $0.pinned ?? false }
                 return ($0.lastUpdated ?? 0) > ($1.lastUpdated ?? 0)
             }
-            sessions = items
+            // 等值守卫（实机反馈）：下拉刷新常常拿回一模一样的列表，无脑重赋值会让
+            // List 整体重建——刷新控件收起动画与内容重建打架，表现为瞬移回顶+双重残影
+            if items != sessions { sessions = items }
         } catch {
             errorMessage = L("会话列表加载失败：") + error.localizedDescription
         }
@@ -200,6 +238,15 @@ final class AgentStore: ObservableObject {
         }
     }
 
+    /// 首轮自动标题：取首条提问的第一行、压缩空白、截 20 字（超长加省略号）。
+    static func autoTitle(from prompt: String) -> String {
+        let firstLine = prompt.split(separator: "\n", maxSplits: 1,
+                                     omittingEmptySubsequences: true).first ?? ""
+        let squashed = firstLine.split(separator: " ").joined(separator: " ")
+        if squashed.count <= 20 { return String(squashed) }
+        return squashed.prefix(20) + "…"
+    }
+
     /// 会话改名(服务端一等,Phase 4b:双端同源)——写后端后刷新列表。
     func rename(_ item: SessionMetaItem, to title: String) {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -220,6 +267,10 @@ final class AgentStore: ObservableObject {
             sid = Self.makeSessionId()
             selectedSessionId = sid
         }
+        // 首轮自动命名（实机反馈：新会话在侧栏顶着随机 id 很生硬）——用首条提问的
+        // 首行截断当标题，写到服务端 meta（双端同源），用户随时可改名覆盖。
+        let firstTurn = knownTurnCount == 0
+            && !messages.contains(where: { $0.kind == .user || $0.kind == .assistant })
 
         var bubble = prompt
         if !uploads.isEmpty {
@@ -241,6 +292,13 @@ final class AgentStore: ObservableObject {
                 guard let self else { return }
                 self.outboxClear(sessionId: sid)
                 self.ensureAttached(sessionId: sid)  // 首条消息后会话才在服务端存在
+                if firstTurn {
+                    let title = Self.autoTitle(from: prompt)
+                    if !title.isEmpty {
+                        _ = try? await client.renameSession(sessionId: sid, title: title)
+                        await self.loadSessions()
+                    }
+                }
             } catch let conflict as TurnConflictError {
                 guard let self else { return }
                 self.outboxClear(sessionId: sid)

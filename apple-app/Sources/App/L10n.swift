@@ -54,6 +54,7 @@ enum L10n {
         "删除会话": ("チャットを削除", "Delete Chat"),
         "已连接": ("接続済み", "Connected"),
         "未连接": ("未接続", "Disconnected"),
+        "连接中…": ("接続中…", "Connecting…"),
         "连接设置": ("接続設定", "Connection Settings"),
         // 任务中心
         "任务": ("タスク", "Tasks"),

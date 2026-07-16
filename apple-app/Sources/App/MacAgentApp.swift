@@ -127,9 +127,14 @@ struct MenuBarPanel: View {
 
     var body: some View {
         Group {
-            Text(store.connectionOK == true
-                 ? "\(L("已连接")) · \(store.settings.baseURL?.host() ?? "")"
-                 : L("未连接"))
+            switch store.connState {
+            case .connected:
+                Text("\(L("已连接")) · \(store.settings.baseURL?.host() ?? "")")
+            case .connecting:
+                Text(L("连接中…"))
+            case .offline:
+                Text(L("未连接"))
+            }
             if let label = sidecarLabel {
                 Text(label)
             }
