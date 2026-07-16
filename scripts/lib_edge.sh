@@ -375,6 +375,12 @@ start_backend() {
         "$BACKEND_READY_URL" "$BACKEND_TIMEOUT" "$EDGE_LOG_DIR/backend.log"
     case $? in 1) return 1 ;; 2) return 0 ;; esac
     [ -x "$EDGE_BACKEND_PY" ] || { fail "缺少 backend 解释器（${EDGE_BACKEND_PY}）${EDGE_SETUP_HINT:+，$EDGE_SETUP_HINT}"; return 1; }
+    # 密钥盘点（只记有无+长度，不记内容）：401 类故障的第一现场证据。必须在
+    # 一切门（可达性/鉴权）**之前**记——门一拦，事后就没有「注入了什么」的证据
+    #（实机查验第三轮实证：鉴权门拦停后 backend.log 里空空如也）。
+    key_stat() { if [ -n "$1" ]; then echo "有(${#1}字)"; else echo "无"; fi; }
+    echo "[edge] $(date '+%H:%M:%S') 密钥盘点: AGENT=$(key_stat "${AGENT_API_KEY:-}") INFER=$(key_stat "${INFER_API_KEY:-}") RAG=$(key_stat "${RAG_API_KEY:-}")" \
+        >>"$EDGE_LOG_DIR/backend.log"
     # 硬性依赖顺序：RAG 完全就绪后 backend 才能启动（工具探活只发生在 backend 启动时）。
     # edge profile 下 RAG_READY_URL 已指向设备 A（rag.host），这一条同样是跨机可达性校验。
     if ! is_ready "$RAG_READY_URL"; then
@@ -404,11 +410,6 @@ start_backend() {
         ( cd "$EDGE_BACKEND_DIR" && "$EDGE_BACKEND_PY" scripts/fetch_model.py ) \
             || { fail "模型未就绪，中止 backend 启动"; return 1; }
     fi
-    # 密钥盘点（只记有无+长度，不记内容）：401 类故障的第一现场证据——app 注入的
-    # 值是否到达了 backend 环境、长度是否与 .env.local 里的一致（带引号会多 2）。
-    key_stat() { if [ -n "$1" ]; then echo "有(${#1}字)"; else echo "无"; fi; }
-    echo "[edge] 密钥盘点: AGENT=$(key_stat "${AGENT_API_KEY:-}") INFER=$(key_stat "${INFER_API_KEY:-}") RAG=$(key_stat "${RAG_API_KEY:-}")" \
-        >>"$EDGE_LOG_DIR/backend.log"
     info "启动 backend (port $BACKEND_PORT) → $EDGE_LOG_DIR/backend.log"
     spawn_daemon "$EDGE_BACKEND_DIR" "$EDGE_LOG_DIR/backend.log" "$EDGE_LOG_DIR/backend.pid" \
         "$EDGE_BACKEND_PY" app.py || return 1

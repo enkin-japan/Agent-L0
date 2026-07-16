@@ -260,11 +260,16 @@ final class SidecarManager: ObservableObject {
             .trimmingCharacters(in: CharacterSet(charactersIn: "="))
     }
 
-    /// 密钥粘贴清洗：去首尾空白/换行 + 剥一层包裹引号。`.env.local` 的值是
-    /// `KEY="xxx"` 形态——shell source 会剥引号，env 直注不会；带引号的值对
-    /// inference/RAG 服务端就是稳定 401（实机查验第二轮根因）。
+    /// 密钥粘贴清洗：去首尾空白/换行、剥 `KEY=` 前缀（整行拷贝）、剥一层包裹引号。
+    /// `.env.local` 的行是 `RAG_API_KEY="xxx"` 形态——shell source 会剥引号，
+    /// env 直注不会；带引号/带变量名的值对服务端就是稳定 401（实机二三轮根因域）。
+    /// 真钥匙是随机 token，不会长得像 `NAME=...`，前缀剥离不会误伤。
     static func cleanKey(_ raw: String) -> String {
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let m = s.range(of: #"^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*="#,
+                           options: .regularExpression) {
+            s = String(s[m.upperBound...])
+        }
         if s.count >= 2, let f = s.first, f == s.last, f == "\"" || f == "'" {
             s = String(s.dropFirst().dropLast())
         }

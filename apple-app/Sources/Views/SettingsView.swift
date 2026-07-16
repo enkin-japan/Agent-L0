@@ -163,6 +163,12 @@ struct SettingsView: View {
                         // repo 布局由 dev 桥接读仓库 .env.local，这里填了也无害）
                         SecureField("INFER_API_KEY", text: sidecarKeyBinding(\.inferApiKey))
                         SecureField("RAG_API_KEY", text: sidecarKeyBinding(\.ragApiKey))
+                        // 长度回显：SecureField 打点看不出存了什么——「存没存上/存的
+                        // 是不是清洗后的值」必须可见（实机三轮 401 的教训）。与设备 A
+                        // `.env.local` 里的字符数对得上即为正确。
+                        Text("\(L("已存长度"))：INFER \(store.settings.inferApiKey.count) · RAG \(store.settings.ragApiKey.count)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         // 密钥是拉起时注入的（R5-6）：漏填/改错的实症是推理/RAG 一律
                         // 401（实机查验撞过）。这里把「生效需重启」说破，并给按钮。
                         Text(L("密钥即改即存入钥匙串；对正在运行的执行层，点下方重启后生效。"))

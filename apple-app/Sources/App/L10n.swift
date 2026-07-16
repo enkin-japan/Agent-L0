@@ -43,6 +43,7 @@ enum L10n {
             ("キーは即座にキーチェーンへ保存されます。実行中の実行レイヤーには下の再起動で反映されます。",
              "Keys are saved to Keychain immediately; restart below to apply to a running execution layer."),
         "重启执行层（应用新密钥）": ("実行レイヤーを再起動（新キーを適用）", "Restart execution layer (apply new keys)"),
+        "已存长度": ("保存済みの長さ", "Stored length"),
         "选择或新建一个会话": ("チャットを選択または新規作成", "Select or create a chat"),
         "左上角 ✎ 开始新对话": ("左上の ✎ から新規チャット", "Tap ✎ to start a new chat"),
         "搜索会话内容…": ("チャット内容を検索…", "Search chat contents…"),

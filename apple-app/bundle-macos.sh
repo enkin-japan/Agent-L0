@@ -59,9 +59,19 @@ leaked=$(find "$APP" \( -name '*.p8' -o -name '.env' -o -name '.env.*' \) | head
 [ -z "$leaked" ] || { echo "❌ 包内发现私钥/环境文件：" >&2; echo "$leaked" >&2; exit 1; }
 
 echo "== 重签（资源注入破坏了 bundle 印章）=="
-# app 本体维持 ad-hoc（本机日用）；Resources 里的 Mach-O 保持各自已有的
-# Developer ID 签名不动（--deep 会用 ad-hoc 覆盖掉它们，绝不可用）。
-codesign --force -s - "$APP"
+# 身份优先 Developer ID：ad-hoc 每次构建都是新身份，Keychain 按签名身份做 ACL——
+# 每次重装 app 都读不回上次存的密钥（弹窗或静默空值，实机三轮 401 的嫌疑之一）。
+# Developer ID 的 designated requirement 跨构建稳定，密钥存一次终身有效。
+# Resources 里的 Mach-O 保持各自已有的签名不动（--deep 会覆盖掉它们，绝不可用）。
+SIGN_ID="${SIGN_ID:-$(security find-identity -v -p codesigning 2>/dev/null \
+    | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)}"
+if [ -n "$SIGN_ID" ]; then
+  echo "   签名身份: $SIGN_ID"
+  codesign --force --timestamp -s "$SIGN_ID" "$APP"
+else
+  echo "   ⚠️ 未找到 Developer ID 证书，回落 ad-hoc（每次重装需重存密钥）"
+  codesign --force -s - "$APP"
+fi
 
 echo "== 安装 =="
 osascript -e 'quit app "MacAgent"' 2>/dev/null || true
