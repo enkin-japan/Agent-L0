@@ -55,8 +55,9 @@ def dispatch_slash_skill(prompt: str, ingested_text: str,
         if missing:
             notice = (f"[系统注入：用户点名的剧本「{m.group(1)}」当前不可用——依赖工具 "
                       f"{missing} 未注册（依赖未就绪，如缺 LibreOffice/SearXNG 一类外部件）。"
-                      "请直接告知用户这一点与缺失项，再询问是否改用其他方式；"
-                      "不要假装按剧本执行。]")
+                      "请直接告知用户这一点与缺失项，并提醒：工具注册表只在执行层启动时"
+                      "扫描一次——若依赖刚安装好，需重启执行层（设置 → 执行层 → 重启）"
+                      "才会生效。不要假装按剧本执行。]")
             combined = f"{notice}\n\n{ingested_text}" if ingested_text.strip() else notice
             return prompt, combined
         return prompt, ingested_text

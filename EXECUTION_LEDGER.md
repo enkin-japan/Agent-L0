@@ -1046,6 +1046,11 @@ schema_builder 参数，engine.py 改了，**没人 import 的 inference/server.
   如实告知（缺什么、别假装执行、剧本正文绝不注入）；金测试 +1（241）。
   另：xlsx 摄入层已把表结构送进上下文（[Spreadsheet] 块）——无 excel_research 时
   模型仍有数据可谈，降级路径成立。
+  **续（用户纠正）**：测试时 LibreOffice 其实已装——真因是**时序**：backend 的 23:52
+  启动恰落在 `brew reinstall` 的删旧装新窗口（候选文件全空），而**注册表只在执行层
+  启动时扫一次**，装好 ≠ 生效。同代码同 PATH 现探针 0.28s 通过、excel_research 正常
+  注册。修（v0.16.0(35)）：不可用告知补「重启执行层生效」指引。「注册表热重扫」
+  列 D 阶段待办（两表互为前置，重扫需两段装配，非一行事）。
 
 **附带发现（R5-9 尾巴）**：`kill -9` app 的实机测试留下**孤儿 backend/searx**（SIGKILL
 不走 willTerminate），此后每代 app 都把它当 external 只用不管——孤儿一直跑着已删除
