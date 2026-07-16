@@ -673,11 +673,14 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
 
 **步骤**：
 
-- [ ] **R5-1 · app 源码入库**（§D.6）
-  - 改 `.gitignore:50`：`apple-app/` → 只忽略 `apple-app/build/`、`apple-app/Generated/`、`apple-app/*.xcodeproj/`
-  - 改 `CHARTER.md:257`（「`apple-app/` 全程 gitignored」）——**这是宪章改动，已获用户同意（§D.6）**
-  - 入库 `Sources/` `Tests/` `Widgets/` `project.yml` `install-macos.sh` 等
-  - ⚠️ 入库前先 `git status` 确认没有密钥/证书/描述文件（`ExportOptions.plist`、`asc-update-signing.py` 需检查）
+- [x] **R5-1 · app 源码入库**（§D.6）✅ 2026-07-16 —— 58 文件（37 swift + 图标/清单/脚本）
+  - 已改 `.gitignore` 与 `CHARTER.md` 提交纪律段（宪章改动，D.6 授权）
+  - **审计结果**：.p8 在仓库外 ✅；`Sources/` 走 Keychain、无硬编码密钥/Tailscale 地址 ✅；
+    **但**三个发布脚本 + README 硬编码了 ASC 的 Key ID / Issuer ID → **参数化走 `.env.local`**
+    （用户裁决；新增 `apple-app/asc_env.py` 供两个 py 共用，`release-ios.sh` 用 bash 原生 source）
+  - **潜伏 bug（入库才致命）**：`apple-app/.gitignore` 有条裸的 `Contents.json` 规则，
+    而资产目录的 `Contents.json` 是**源码不是派生物**——缺了 Xcode 不认 catalog、新克隆编不出图标，
+    正好废掉 D.6 的前提。已删该规则
 
 - [ ] **R5-2 · edge 依赖瘦身**（硬前提，2.1GB 直接打包不现实）
   - 判定 edge 形态（`inference.mode: remote`）真正需要什么：
