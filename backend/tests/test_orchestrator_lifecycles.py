@@ -650,3 +650,32 @@ def test_turn_stats_accumulate_across_approval(make_session):
     fresh = run(orch.run_turn(session, journal=session.journal, **GEN))
     assert fresh["metrics"]["generations"] == 1
     assert fresh["metrics"]["generation_tokens_turn"] == 20
+
+
+# ---------- 摘要阈值锚定稳定前缀（D4） ----------
+
+def test_summary_thresholds_anchor_stable_prefix():
+    """阈值 = 前缀估算 + 配置值：裸阈值会被工具声明地板（≥9k）单独吃满而恒触发折叠。
+
+    断言三件事：估算与声明体量同向增长；两个阈值都被抬高了恰好估算值；
+    「只有前缀、几乎没历史」的 prompt 规模不会越过高阈值（恒折叠的病根已除）。
+    """
+    import json as _json
+    engine = FakeEngine([])
+    small = FakeRegistry([FakeTool("a")])
+    big = FakeRegistry([FakeTool(f"tool_{i}") for i in range(40)])
+
+    cfg = dict(summary_high_threshold=8000, summary_low_threshold=2000)
+    orch_small = make_orch(engine, small, **cfg)
+    orch_big = make_orch(engine, big, **cfg)
+
+    for orch in (orch_small, orch_big):
+        est = sum(len(_json.dumps(t, ensure_ascii=False))
+                  for t in orch._tools_decl) // 4
+        assert orch.stable_prefix_tokens_est == est > 0
+        assert orch.summary_high_threshold == 8000 + est
+        assert orch.summary_low_threshold == 2000 + est
+        # 病根检验：prompt 只装着前缀（历史≈0）时必须够不着高阈值
+        assert orch.stable_prefix_tokens_est < orch.summary_high_threshold
+
+    assert orch_big.stable_prefix_tokens_est > orch_small.stable_prefix_tokens_est

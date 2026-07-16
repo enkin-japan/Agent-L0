@@ -242,6 +242,10 @@ class Orchestrator:
 
         # 摘要式压缩（Step 2，方案A）：越过阈值即把旧轮次折叠进滚动摘要。
         # 高阈值=活跃期兜底（轮次落盘后判定，昂贵路径，设高）；低阈值=空闲/freeze 前优化（免费，设低）。
+        # 配置值语义 = 「稳定前缀之上」的历史预算（D4）：比较基准 last_prompt_tokens 量的
+        # 是整个 prompt，而工具声明+系统提示的地板就 ≥9k——原裸阈值 8000 恒被前缀单独
+        # 吃满，条件恒真，超过 keep_tail 的会话每轮都在折叠，「高阈值兜底」名存实亡。
+        # 故两个阈值统一抬到 前缀估算+配置值，工具规模（D2）增长时自动跟随，无需重调参。
         self.summary_high_threshold = int(cfg.get("summary_high_threshold", 8000))
         self.summary_low_threshold = int(cfg.get("summary_low_threshold", 2000))
         self.summary_keep_tail_turns = int(cfg.get("summary_keep_tail_turns", 4))
@@ -255,6 +259,12 @@ class Orchestrator:
         # 工具声明属于稳定前缀：启动时构建一次（注册表就是单一数据源），
         # 任务期内绝不变动，保证 KV 缓存的稳定段命中
         self._tools_decl = self._build_tools_declaration()
+        # 前缀 token 估算（后端无 tokenizer，用 chars/4——对本声明 JSON 实测 4.02 字/token）；
+        # catalog 模式下声明变小，估算与阈值随之自动收紧
+        self.stable_prefix_tokens_est = sum(
+            len(json.dumps(t, ensure_ascii=False)) for t in self._tools_decl) // 4
+        self.summary_high_threshold += self.stable_prefix_tokens_est
+        self.summary_low_threshold += self.stable_prefix_tokens_est
 
     # ---------- 工具目录（两级可见性） ----------
     def _build_tools_declaration(self) -> List[Dict[str, Any]]:

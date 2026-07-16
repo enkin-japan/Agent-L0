@@ -365,8 +365,11 @@ agent:
   # 全量日志保留，model-facing 上下文重建为 [system]+[摘要]+[尾部]。触发共用一套摘要器：
   #   高阈值=活跃期兜底（轮次落盘后判定，会触发一次重预填充，设高、少触发）；
   #   低阈值=空闲/冻结前优化（KV 反正要释放，近乎免费，设低）。
-  summary_high_threshold: 8000  # 活跃期上下文 prompt token 越过即折叠旧轮
-  summary_low_threshold: 2000   # 空闲将冻结前上下文越过即折叠旧轮
+  # 阈值语义（D4 修正）：配置值 = 稳定前缀（工具声明）**之上**的历史 token 预算。
+  # 比较基准 last_prompt_tokens 量的是整个 prompt，而前缀地板 ≥9k——裸阈值会被前缀
+  # 单独吃满、恒触发折叠。启动时编排层自动抬为 前缀估算+配置值，工具增减免重调参。
+  summary_high_threshold: 8000  # 活跃期：历史超出前缀 8k token 即折叠旧轮
+  summary_low_threshold: 2000   # 空闲将冻结前：历史超出前缀 2k 即折叠旧轮
   summary_keep_tail_turns: 4    # 折叠时尾部保留的最近轮次数（这些保持原文）
   summary_idle_seconds: 300     # 会话空闲超过此秒数即进入低阈值摘要维护（应 < 冻结超时 1800）
 
