@@ -49,9 +49,12 @@ from fastapi import FastAPI, Depends, Form, Header, HTTPException, Request, Uplo
 from fastapi.responses import StreamingResponse
 
 from framework.utils.config_loader import load_config
-from framework.utils.model_selection import resolve_selected_model
+from framework.utils.model_selection import model_options, resolve_selected_model
 from framework.utils.path_resolver import resolve_model_path
-from framework.core.response_parser import ResponseParser
+# 方言经注册面取（R0）：server 只要工具段标记（dialect.markers.stc/etc 喂约束采样），
+# 不 import 任何家族私有模块——直接 import gemma4 的 ResponseParser 就是把
+# 「引擎不认模型家族字面量」（CHARTER 方言层）在服务入口这儿重新违反一遍。
+from framework.dialects import get_dialect_class
 from framework.core.constrained import ToolConstraintEngine, ToolCallGuard, llguidance as _llg
 from framework.backends import (AsrProviderUnavailable, get_asr_provider,
                                 get_backend_class)
@@ -134,7 +137,7 @@ class ServerState:
     gens: Dict[str, Dict[str, Any]] = {}          # gen_id → {"cancel": bool}（进行中的生成）
     constraint_engine = None                      # 懒建（LLTokenizer ~1s）
     constraint_disabled = _llg is None
-    parser = None
+    dialect = None                                # ModelDialect：按模型注册表条目装配（R0）
     metrics = {"generations_total": 0, "cancelled_total": 0, "errors_total": 0}
 
 
@@ -151,8 +154,8 @@ def _tool_guard(tool_specs) -> Optional[ToolCallGuard]:
         if S.constraint_engine is None:
             proc = S.backend.processor
             tok = proc.tokenizer if hasattr(proc, "tokenizer") else proc
-            stc = tok.encode(S.parser.stc, add_special_tokens=False)
-            etc = tok.encode(S.parser.etc, add_special_tokens=False)
+            stc = tok.encode(S.dialect.markers.stc, add_special_tokens=False)
+            etc = tok.encode(S.dialect.markers.etc, add_special_tokens=False)
             if len(stc) != 1 or len(etc) != 1:
                 raise RuntimeError("工具调用标记不是单 token，约束状态机无法锚定")
             S.constraint_engine = ToolConstraintEngine(tok, stc[0], etc[0])
@@ -190,7 +193,10 @@ async def lifespan(app: FastAPI):
     S.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="inference")
     S.backend = await get_backend_class(backend_name).load(
         model_path, executor=S.executor, **INFERENCE_CFG)
-    S.parser = ResponseParser(S.backend.processor)
+    # 方言跟着所选模型的注册表条目走（与 engine.py 同一条路）；server 只消费 markers
+    _opts = model_options(model)
+    S.dialect = get_dialect_class(str(_opts.get("dialect") or "")).create(
+        S.backend.processor, options=_opts)
     S.registry = CacheRegistry(S.backend, CACHE_TTL_SECONDS)
     S.gen_lock = asyncio.Lock()
     MEDIA_DIR.mkdir(parents=True, exist_ok=True)
