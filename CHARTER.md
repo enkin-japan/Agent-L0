@@ -220,6 +220,12 @@ RAG 沉淀（原文可召回）。全量日志永远保留在 `history.jsonl`。
 主体上下文**（方案 b 隔离）。注入即便劫持沙箱也够不到危险工具。新增子 agent
 遵循同一边界。
 
+三条隔离不变量——工具集物理受限 / KV 隔离（一次性会话，全新缓存）/ 隐私边界
+（个人环境事实不进子生成）——由 `agents/sandbox_runtime.py` **单点实现**并由
+`tests/test_sandbox_invariants.py` 钉死。新增子 agent = 写一份 `SandboxSpec`
+（声明 + hook），循环骨架不重写；照抄一份沙箱去改，等于把这三条不变量再复制一份
+注释——R1 收编前正是如此（会话替身有 5 份拷贝）。
+
 ---
 
 ## 4. 反模式（治好的四条病，别复发）
@@ -244,7 +250,7 @@ RAG 沉淀（原文可召回）。全量日志永远保留在 `history.jsonl`。
 
 **加一个功能**：
 1. 若涉及新协议行为 → 先落 `protocol/fixtures/` 夹具（铁律 5）；
-2. 后端改动 → 跑 `backend/tests/`（142 项金测试，FakeEngine 无模型毫秒级）
+2. 后端改动 → 跑 `backend/tests/`（157 项金测试，FakeEngine 无模型毫秒级）
    必须全绿；动 TurnRunner/编排/账本前**先读金测试**知道它守着哪些不变量；
 3. 两端归约器改动 → 跑夹具回放（web `npm run test` + Swift
    `Tests/run_reducer_fixtures.sh`）双绿；
@@ -285,7 +291,7 @@ RAG 沉淀（原文可召回）。全量日志永远保留在 `history.jsonl`。
 | 模型方言 | `core/dialect_protocol.py` + `dialects/<name>/`（R0） | — | — |
 | 推理承载 | `core/backend_protocol.py` + `backends/<name>/`（P0/B1） | — | — |
 | 契约 | `PROTOCOL.md` + `protocol/fixtures/`（三端共享） | | |
-| 回归网 | `backend/tests/`（**142** 金测试） | `lib/turn-reducer.test.ts` | `Tests/run_reducer_fixtures.sh` + `run_e2e.sh` |
+| 回归网 | `backend/tests/`（**157** 金测试） | `lib/turn-reducer.test.ts` | `Tests/run_reducer_fixtures.sh` + `run_e2e.sh` |
 
 单配置：仓库根 `config.yaml`。单启动器：仓库根 `devctl.sh`。
 

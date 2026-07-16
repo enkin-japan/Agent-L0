@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from . import excel_tools
-from .sandbox_runtime import EphemeralSession
+from .sandbox_runtime import EphemeralSession, SandboxSpec, run_sandbox
 from ..excel import inspect_workbook, verify_workbook
 
 _REFERENCES_DIR = Path(__file__).parent.parent / "excel" / "references"
@@ -368,8 +368,6 @@ async def run_excel_task(engine, task: str, input_file: Optional[str],
                     "descriptive bare filename (e.g. wb.save('report.xlsx')), then verify it.")
 
     sess = EphemeralSession(engine.backend, EXCEL_SANDBOX_SYSTEM_PROMPT, opening)
-    parse_retries = 0
-    nudged = False
     visual_summary = ""
     budget_notice_sent = False
 
@@ -455,150 +453,105 @@ async def run_excel_task(engine, task: str, input_file: Optional[str],
         return _format_digest(session_id, fname, state, summary, assumptions,
                               visual_summary, note)
 
-    try:
-        for step in range(max_steps):
-            result = await engine.generate_once(sess, tools=_TOOLS, temperature=0.2,
-                                                max_tokens=1536)
-            if result.get("cancelled"):
-                return "[excel_research: generation cancelled]"
-            raw_calls = result.get("tool_calls", [])
-            calls = [c for c in raw_calls if c.get("type") != "error"]
-            text = result.get("text", "")
-            thoughts = result.get("thoughts", "")
-            print(f"[excel_sandbox] step {step + 1}/{max_steps}: "
-                  f"calls={[c.get('name') for c in calls]} repairs={state.repairs}")
+    async def _dispatch(calls):
+        responses = []
+        for c in calls:
+            name = c.get("name")
+            args = c.get("arguments", {}) or {}
 
-            if not calls:
-                errors = [c for c in raw_calls if c.get("type") == "error"]
-                if errors and parse_retries < max_parse_retries:
-                    # 工具格式崩了：反馈正确示例让它重试（对齐 math/web 的容错闭环）
-                    parse_retries += 1
-                    bad = errors[0]
-                    sess.history.append({"role": "assistant", "content": text,
-                                         "thoughts": thoughts, "tool_calls": raw_calls})
-                    sess.history.append({"role": "tool", "tool_responses": [{
-                        "name": "system",
-                        "response": (
-                            "System Error: your tool call could not be parsed and was not "
-                            f"executed.\nYour invalid output: {bad.get('raw_input')}\n"
-                            f"Parser error: {bad.get('error_msg')}\n"
-                            "A tool call must be valid JSON with double quotes, parameters "
-                            "inside an arguments object. For example:\n"
-                            '{"name": "run_python", "arguments": {"code": "print(1)"}}\n'
-                            "Resend immediately in the correct format.")}]})
+            if name == "inspect_workbook":
+                try:
+                    target = (_resolve_in_work(ws.work, args["file"])
+                              if args.get("file")
+                              else _default_target(ws.work, staged_name))
+                except ValueError as e:
+                    responses.append({"name": name, "response": f"System Error: {e}"})
                     continue
-                if not nudged:
-                    # 纯文本 = 想绕开工作流：推回，强制走工具
-                    nudged = True
-                    sess.history.append({"role": "assistant", "content": text,
-                                         "thoughts": thoughts, "tool_calls": []})
-                    sess.history.append({"role": "user", "content": (
-                        "Plain text is not a deliverable here. Use the tools: inspect / "
-                        "write with run_python / verify_workbook, and end with finish. "
-                        "If you are blocked, call finish(blocked=true, summary=<why>).")})
+                if target is None or not target.exists():
+                    responses.append({"name": name, "response":
+                                      "System Error: no workbook found in the work "
+                                      "directory. Create/save one first, or pass "
+                                      "file=<name>."})
                     continue
-                return (text.strip() + "\n\n[excel_research: the sub-module stopped "
-                        "calling tools and delivered nothing — treat as FAILED]") if \
-                    text.strip() else "[excel_research: no tool activity; nothing delivered]"
+                _report("拆解表格结构", target.name)
+                info = await asyncio.to_thread(
+                    inspect_workbook, target, args.get("grid_sheet"))
+                responses.append({"name": name, "response": _wrap_untrusted(
+                    json.dumps(info, ensure_ascii=False, indent=1, default=str))})
 
-            sess.history.append({"role": "assistant", "content": text,
-                                 "thoughts": thoughts, "tool_calls": calls})
+            elif name == "run_python":
+                _report("执行代码", "")
+                r = await asyncio.to_thread(
+                    repl.run, args.get("code", ""), args.get("timeout"))
+                out = r["output"] if r["output"] else (
+                    "(no output — print() what you need to see)" if r["ok"] else
+                    "(failed with no output)")
+                if r.get("restarted"):
+                    out = ("[sandbox restarted — previous variables are lost; reload "
+                           "workbooks before using them]\n" + out)
+                if not r["ok"]:
+                    out = "Sandbox error (fix the code and retry):\n" + out
+                responses.append({"name": name, "response": out})
 
-            responses = []
-            for c in calls:
-                name = c.get("name")
-                args = c.get("arguments", {}) or {}
+            elif name == "verify_workbook":
+                responses.append({"name": name, "response": await _do_verify(args)})
 
-                if name == "inspect_workbook":
-                    try:
-                        target = (_resolve_in_work(ws.work, args["file"])
-                                  if args.get("file")
-                                  else _default_target(ws.work, staged_name))
-                    except ValueError as e:
-                        responses.append({"name": name, "response": f"System Error: {e}"})
-                        continue
-                    if target is None or not target.exists():
-                        responses.append({"name": name, "response":
-                                          "System Error: no workbook found in the work "
-                                          "directory. Create/save one first, or pass "
-                                          "file=<name>."})
-                        continue
-                    _report("拆解表格结构", target.name)
-                    info = await asyncio.to_thread(
-                        inspect_workbook, target, args.get("grid_sheet"))
-                    responses.append({"name": name, "response": _wrap_untrusted(
-                        json.dumps(info, ensure_ascii=False, indent=1, default=str))})
+            elif name == "read_reference":
+                doc = str(args.get("doc", ""))
+                p = _REFERENCES_DIR / f"{doc}.md"
+                responses.append({"name": name, "response":
+                                  p.read_text(encoding="utf-8") if p.is_file() else
+                                  f"System Error: unknown doc {doc!r} "
+                                  "(available: pitfalls, formulas)"})
 
-                elif name == "run_python":
-                    _report("执行代码", "")
-                    r = await asyncio.to_thread(
-                        repl.run, args.get("code", ""), args.get("timeout"))
-                    out = r["output"] if r["output"] else (
-                        "(no output — print() what you need to see)" if r["ok"] else
-                        "(failed with no output)")
-                    if r.get("restarted"):
-                        out = ("[sandbox restarted — previous variables are lost; reload "
-                               "workbooks before using them]\n" + out)
-                    if not r["ok"]:
-                        out = "Sandbox error (fix the code and retry):\n" + out
-                    responses.append({"name": name, "response": out})
+            elif name == "finish":
+                summary = str(args.get("summary", ""))
+                assumptions = [str(a) for a in (args.get("assumptions") or [])]
+                if args.get("blocked"):
+                    return responses, _format_digest(
+                        session_id, None, state, summary, assumptions, visual_summary,
+                        note="[excel_research: the sub-module is BLOCKED and delivered "
+                             "nothing. Relay its question/blocker to the user.]")
+                if not state.verified:
+                    reason = (json.dumps(_trim_report(state.report),
+                                         ensure_ascii=False)[:1500]
+                              if state.report else
+                              "verify_workbook has not been run on the current file.")
+                    responses.append({"name": name, "response": (
+                        "❌ Delivery refused — no GO verdict.\n"
+                        f"Latest gate state: {reason}\n"
+                        "Fix the failures, rerun verify_workbook until GO, then call "
+                        "finish. Never mask formula errors with hardcoded values.")})
+                    continue
+                if not state.intact():
+                    state.verified = False
+                    responses.append({"name": name, "response": (
+                        "❌ Delivery refused — the file was modified AFTER the GO "
+                        "verdict (hash mismatch). Rerun verify_workbook on the final "
+                        "state, then finish without touching the file again.")})
+                    continue
+                return responses, await _deliver(summary, assumptions)
 
-                elif name == "verify_workbook":
-                    responses.append({"name": name, "response": await _do_verify(args)})
+            else:
+                responses.append({"name": name, "response":
+                                  f"Unknown tool {name!r} (this sandbox has "
+                                  "inspect_workbook / run_python / verify_workbook / "
+                                  "read_reference / finish)"})
+        return responses, None
 
-                elif name == "read_reference":
-                    doc = str(args.get("doc", ""))
-                    p = _REFERENCES_DIR / f"{doc}.md"
-                    responses.append({"name": name, "response":
-                                      p.read_text(encoding="utf-8") if p.is_file() else
-                                      f"System Error: unknown doc {doc!r} "
-                                      "(available: pitfalls, formulas)"})
+    async def _on_step_end() -> None:
+        nonlocal budget_notice_sent
+        if state.repairs > repair_budget and not budget_notice_sent:
+            budget_notice_sent = True
+            sess.history.append({"role": "user", "content": (
+                "Repair budget exhausted (repeated NO-GO). Stop patching. Call "
+                "finish(blocked=true) now, stating what is broken, what you tried, "
+                "and what information you need.")})
 
-                elif name == "finish":
-                    summary = str(args.get("summary", ""))
-                    assumptions = [str(a) for a in (args.get("assumptions") or [])]
-                    if args.get("blocked"):
-                        return _format_digest(
-                            session_id, None, state, summary, assumptions, visual_summary,
-                            note="[excel_research: the sub-module is BLOCKED and delivered "
-                                 "nothing. Relay its question/blocker to the user.]")
-                    if not state.verified:
-                        reason = (json.dumps(_trim_report(state.report),
-                                             ensure_ascii=False)[:1500]
-                                  if state.report else
-                                  "verify_workbook has not been run on the current file.")
-                        responses.append({"name": name, "response": (
-                            "❌ Delivery refused — no GO verdict.\n"
-                            f"Latest gate state: {reason}\n"
-                            "Fix the failures, rerun verify_workbook until GO, then call "
-                            "finish. Never mask formula errors with hardcoded values.")})
-                        continue
-                    if not state.intact():
-                        state.verified = False
-                        responses.append({"name": name, "response": (
-                            "❌ Delivery refused — the file was modified AFTER the GO "
-                            "verdict (hash mismatch). Rerun verify_workbook on the final "
-                            "state, then finish without touching the file again.")})
-                        continue
-                    return await _deliver(summary, assumptions)
-
-                else:
-                    responses.append({"name": name, "response":
-                                      f"Unknown tool {name!r} (this sandbox has "
-                                      "inspect_workbook / run_python / verify_workbook / "
-                                      "read_reference / finish)"})
-
-            sess.history.append({"role": "tool", "tool_responses": responses})
-
-            if state.repairs > repair_budget and not budget_notice_sent:
-                budget_notice_sent = True
-                sess.history.append({"role": "user", "content": (
-                    "Repair budget exhausted (repeated NO-GO). Stop patching. Call "
-                    "finish(blocked=true) now, stating what is broken, what you tried, "
-                    "and what information you need.")})
-
-        # 步数用尽。验证过且封印完好的成品照常交付（比丢弃已验证工作诚实且有用）；
-        # 否则如实交回失败状态。
+    async def _exhausted() -> str:
+        """步数用尽。验证过且封印完好的成品照常交付（比丢弃已验证工作诚实且有用）；
+        否则如实交回失败状态。**注意：与 web/math 不同，此处不再做强制收尾生成**——
+        交付资格由门禁状态决定，多问模型一次也变不出 GO。"""
         if state.verified and state.intact():
             return await _deliver(
                 "", [],
@@ -608,5 +561,32 @@ async def run_excel_task(engine, task: str, input_file: Optional[str],
         return _format_digest(
             session_id, None, state, "", [], visual_summary,
             note="[excel_research: step budget exhausted with no verified deliverable]")
+
+    try:
+        return await run_sandbox(engine, SandboxSpec(
+            tag="excel_research",
+            session=sess,
+            tools=_TOOLS,
+            max_steps=max_steps,
+            max_tokens=1536,
+            dispatch=_dispatch,
+            on_give_up=lambda text: (
+                text.strip() + "\n\n[excel_research: the sub-module stopped "
+                "calling tools and delivered nothing — treat as FAILED]") if text.strip()
+                else "[excel_research: no tool activity; nothing delivered]",
+            on_exhausted=_exhausted,
+            max_parse_retries=max_parse_retries,
+            parse_feedback=(
+                "A tool call must be valid JSON with double quotes, parameters "
+                "inside an arguments object. For example:\n"
+                '{"name": "run_python", "arguments": {"code": "print(1)"}}\n'
+                "Resend immediately in the correct format."),
+            # 纯文本 = 想绕开工作流：推回，强制走工具
+            nudge=("Plain text is not a deliverable here. Use the tools: inspect / "
+                   "write with run_python / verify_workbook, and end with finish. "
+                   "If you are blocked, call finish(blocked=true, summary=<why>)."),
+            on_step_end=_on_step_end,
+            trace_extra=lambda: f"repairs={state.repairs}",
+        ))
     finally:
         repl.close()

@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0 ✅；R1-0（建回归网）✅；R1-1（统一 EphemeralSession）✅，156 金测试全绿。下一步 = R1-2（提取 ReAct 循环 → `run_sandbox(spec)`）。**
+> 🟢 **2026-07-16：R0 ✅；R1 ✅ 全部完成（R1-0…R1-5），157 金测试全绿。下一步 = R2a（skill 系统，显式调用）。**
 
 ---
 
@@ -68,7 +68,7 @@
 | 阶段 | 名称 | 状态 | 前置 | 硬件门槛 | 铁律风险 |
 |---|---|---|---|---|---|
 | **R0** | 模型方言层协议手术 | ✅ **2026-07-16** | — | 建设无／真验证需 ≥32GB | 铁律 1（例外条款） |
-| **R1** | 子 Agent 统一执行器 | 🟡 **R1-0 ✅ / R1-1 ✅** | R0 ✅ | 无 | 铁律 1（沙箱三不变量） |
+| **R1** | 子 Agent 统一执行器 | ✅ 2026-07-16 | R0 ✅ | 无 | 铁律 1（沙箱三不变量） |
 | **R2a** | Skill 体系（显式调用） | ⬜ | R1 | 无 | 低 |
 | **R3** | 工具渲染格（协议变更） | ⬜ | — | 无 | **铁律 4 + 5** |
 | **R4** | 文件式长期记忆 | ⬜ | R2a | 无 | 低 |
@@ -95,10 +95,10 @@
       → `backend/tests/test_sandbox_invariants.py` 9 项，**151 全绿**
 - [x] **R1-1 提取 `EphemeralSession`** → `agents/sandbox_runtime.py`（**实为 5 份拷贝，非 3 份**）
       → 净删 53 行，**156 全绿**（151 一字未改 + 5 项新契约）
-- [ ] R1-2 提取 ReAct 循环 → `run_sandbox(spec)`（骨架已实证同构，见下）
-- [ ] R1-3 三条隔离不变量升级为显式契约 + 金测试断言（R1-0 已完成契约部分）
-- [ ] R1-4 三沙箱改写为声明 + hook（保留 excel 状态机 / math 回填的差异）
-- [ ] R1-5 验收：**156 全绿**（含 R1-0 那 9 项一字不变）+ 三沙箱 A/B 对拍一致
+- [x] **R1-2 提取 ReAct 循环** → `run_sandbox(spec)` + `SandboxSpec`（**hook 实为 6 个，非预估的 ≤5**）
+- [x] **R1-3** 三条隔离不变量升级为显式契约 + 金测试断言（R1-0 建契约，R1-1 把隐私那条从「偶然」改为写死）
+- [x] **R1-4 三沙箱改写为声明 + hook**（math → research → excel，按难度序）
+- [x] **R1-5 验收**：**157 全绿**（R1-0 那 9 项一字未改）+ 三沙箱提示词逐字节 A/B 对拍一致
 
 **R2a** ⬜
 - [ ] R2a-1 `skills/` 目录 + frontmatter 规范
@@ -354,7 +354,49 @@ EphemeralSession.__dict__`——**钉死"必须显式存在"，而非只断言�
 
 ---
 
-**R1-1/R1-2 的可行性实证**（三份源码逐段对读的结论）：
+**R1-2/R1-4 · ReAct 循环收编（2026-07-16 完成）**
+
+产出 `run_sandbox(engine, spec)` + `SandboxSpec`（声明 + hook）。三沙箱改写完毕，
+**157 全绿**（R1-0 那 9 项一字未改，新增 1 项分歧契约）。
+
+骨架拥有：步数循环与软截止 · 取消检查 · 调用过滤（`type != "error"`）· 解析纠错闭环
+· 纯文本推回 · assistant/tool 两类历史追加 · 预算用尽转收尾。
+
+**两处与此前可行性分析不符**（先前那份分析是逐段对读得出的，仍不够准——教训同 R1-1）：
+ · **`on_exhausted` 不是同一形状**：web/math 在步数用尽后还要再做一次强制生成，
+   **excel 不做**——交付资格由门禁状态决定，多问模型一次也变不出 GO。故此 hook 是
+   完整 async 回调，不是「补一句提示词再生成」的模板。
+ · **hook 实为 6 个，不是预估的 ≤5**：漏算了 excel 的修复预算通告（在 tool 响应入历史
+   **之后**追加，故需 `on_step_end`）。6 个里 3 必需（dispatch / on_give_up /
+   on_exhausted）+ 3 可选（should_converge / on_step / on_step_end），每个仍对应一个
+   真实差异，未出现「为了凑数把不同的东西塞进同一个模子」。
+
+**刻意不统一的：三段解析纠错提示词。** 三份措辞不同且各自调优过——research 那两句额外
+引导（"the exact same format as your successful web_search call" / "Do not flatten the
+parameters…"）源于一次真实事故：沙箱曾因单次格式错误就「未能形成结论」。把它们揉成一个
+模板 = 在没有真模型可验证的 16GB 机器上**悄悄改提示词**。故骨架只统一闭环控制流
+（计数/入历史/continue），提示词原文（`parse_feedback` / `nudge`）归各沙箱自带。
+
+**提示词漂移的取证**：这是本阶段的真风险——散文是手工搬运的，金测试只覆盖 math 一条
+路径，漂移了不报错、只会让模型在 research/excel 上悄悄变笨。故拿重构前的 git 版本
+（`2057897`）逐字节对拍：math/web 走 spec 截获比对，excel 因需真实工作区改用 AST 取
+字面量比对（scratchpad `verify_r1_2.py`）。三份纠错提示词 + 两份 nudge + 预算参数 +
+取消标记文案，全部一致。
+
+**清掉的死代码**：math 的 `last_submit`（赋值后从未被读）、excel 残留的 `parse_retries`
+/ `nudged`（职责已归骨架）。
+
+**一处刻意的非零变化**：诊断 print 统一进骨架（`[{tag}] step i/n: calls=[...]`）。
+此前 math/excel 各印各的、research 干脆没有——调试时三个沙箱三种可见度本身就是缺陷。
+stdout 无任何测试/契约依赖，故判定可改；excel 的 `repairs=N` 经 `trace_extra` 保留。
+
+**新钉的契约**：`test_sandboxes_keep_their_real_differences` 守三条**分歧**（research
+无推回 / 只有 research 有软截止 / token 预算按产物形态不同）。抽象消除的是拷贝、不是
+差异——这三条最容易被后来者「顺手统一」掉，故钉死。
+
+---
+
+**R1-1/R1-2 的可行性实证**（三份源码逐段对读的结论，**事后校正见上**）：
 
 *会话替身*——三份 `_EphemeralSession` 公共核完全一致
 （`backend.new_cache()` + `[system, user]` 两条历史 + `images`/`audios` + `cancel_requested`），

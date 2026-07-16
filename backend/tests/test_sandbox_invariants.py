@@ -236,6 +236,48 @@ def test_images_ride_as_content_parts_before_text():
     assert sess.images == ["/tmp/a.png"]
 
 
+def test_sandboxes_keep_their_real_differences():
+    """R1-2 的边界：抽象消除的是拷贝，**不是差异**。这三条分歧最容易被后来者
+    「顺手统一」掉，故钉死——每一条都对应一个真实理由，不是遗漏。"""
+    import asyncio
+    import framework.agents.sandbox_runtime as sr
+    from framework.agents import research_sandbox
+
+    grabbed = {}
+    orig = sr.run_sandbox
+
+    async def _spy(engine, spec):
+        grabbed[spec.tag] = spec
+        return await orig(engine, spec)
+
+    class _Cancel:
+        backend = _StubBackend()
+
+        async def generate_once(self, sess, **kw):
+            return {"cancelled": True}
+
+    for mod in (math_sandbox, research_sandbox):
+        mod.run_sandbox = _spy
+    try:
+        asyncio.run(math_sandbox.run_math_research(_Cancel(), "1+1", {}))
+        asyncio.run(research_sandbox.run_research(_Cancel(), "q", {}))
+    finally:
+        for mod in (math_sandbox, research_sandbox):
+            mod.run_sandbox = orig
+
+    # 1. research 不推回：摘要本就是文本产物，推回它等于逼它把结论重说一遍。
+    assert grabbed["web_research"].nudge is None
+    assert grabbed["math_research"].nudge is not None
+
+    # 2. 只有 research 有软截止（时间预算 → 减配交付而非硬超时全损）。
+    assert grabbed["web_research"].should_converge is not None
+    assert grabbed["math_research"].should_converge is None
+
+    # 3. 产物形态不同 → token 预算不同（math 短代码 1024 / web 摘要 2048）。
+    assert grabbed["math_research"].max_tokens == 1024
+    assert grabbed["web_research"].max_tokens == 2048
+
+
 def test_all_sandboxes_share_the_one_implementation():
     """三个沙箱 + orchestrator 目标审计不得再各自持有会话替身拷贝（R1-1 的收编目标）。"""
     import pathlib
@@ -245,3 +287,9 @@ def test_all_sandboxes_share_the_one_implementation():
         src = (root / rel).read_text()
         assert "class _EphemeralSession" not in src, f"{rel} 仍持有会话替身拷贝"
         assert "class _AuditSession" not in src, f"{rel} 仍持有会话替身拷贝"
+
+    # R1-2：ReAct 骨架同理——三个沙箱不得再各自写一遍步数循环。
+    for rel in ("agents/research_sandbox.py", "agents/math_sandbox.py",
+                "agents/excel_sandbox.py"):
+        src = (root / rel).read_text()
+        assert "for step in range(" not in src, f"{rel} 仍持有自己的 ReAct 循环骨架"

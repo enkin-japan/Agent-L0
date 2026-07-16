@@ -15,7 +15,7 @@ import asyncio
 from typing import List, Optional, Tuple
 
 from . import math_tools
-from .sandbox_runtime import EphemeralSession
+from .sandbox_runtime import EphemeralSession, SandboxSpec, run_sandbox
 
 
 MATH_SANDBOX_SYSTEM_PROMPT = (
@@ -100,79 +100,24 @@ def _format_digest(answer_output: str, explanation: str,
 async def run_math_research(engine, problem: str, cfg: dict) -> str:
     """
     沙箱主循环（协程，运行在主事件循环上）。返回结果摘要文本；其中 ANSWER 段
-    为解释器输出原样嵌入。engine.generate_once 内部持有推理锁，与其他会话生成串行。
+    为解释器输出原样嵌入。循环骨架见 sandbox_runtime.run_sandbox。
     """
     sess = EphemeralSession(engine.backend, MATH_SANDBOX_SYSTEM_PROMPT, problem)
     max_steps = int(cfg.get("max_steps", 8))
     exec_timeout = int(cfg.get("exec_timeout", math_tools.DEFAULT_TIMEOUT))
-    parse_retries = 0
-    max_parse_retries = int(cfg.get("max_parse_retries", 2))
-    nudged = False  # 无工具调用直接给结论时，推回一次（先验答题的典型形态）
     ok_log: List[Tuple[str, str]] = []  # 成功执行的 (code, output)，供摘要核对与兜底
-    last_submit: Optional[Tuple[str, str]] = None  # 最近一次成功 submit（output, explanation）
 
-    for step in range(max_steps):
-        # max_tokens 收紧到 1024：沙箱产物只该是短代码调用/短结论，实测 2048 预算下
-        # 失控生成单次就能写掉近 2000 token，直接吃穿整体墙钟。
-        result = await engine.generate_once(sess, tools=_TOOLS, temperature=0.2, max_tokens=1024)
-        if result.get("cancelled"):
-            return "[math_research: generation cancelled]"
-        print(f"[math_sandbox] step {step + 1}/{max_steps}: "
-              f"calls={[c.get('name') for c in result.get('tool_calls', []) if c.get('type') != 'error']}")
+    async def _run(code: str, timeout=None) -> dict:
+        return await asyncio.to_thread(math_tools.execute_code, code,
+                                       timeout if timeout is not None else exec_timeout)
 
-        raw_calls = result.get("tool_calls", [])
-        calls = [c for c in raw_calls if c.get("type") != "error"]
-        text = result.get("text", "")
-        thoughts = result.get("thoughts", "")
-
-        if not calls:
-            errors = [c for c in raw_calls if c.get("type") == "error"]
-            if errors and parse_retries < max_parse_retries:
-                # 工具格式崩了：反馈正确示例让它重试（对齐 research_sandbox 的容错闭环）
-                parse_retries += 1
-                bad = errors[0]
-                sess.history.append({"role": "assistant", "content": text,
-                                     "thoughts": thoughts, "tool_calls": raw_calls})
-                feedback = (
-                    "System Error: your tool call could not be parsed and was not executed.\n"
-                    f"Your invalid output: {bad.get('raw_input')}\n"
-                    f"Parser error: {bad.get('error_msg')}\n"
-                    "A tool call must be valid JSON with double quotes, with parameters inside an "
-                    "arguments object. For example:\n"
-                    '{"name": "run_python", "arguments": {"code": "solve(x**2 - 5*x + 6, x)"}}\n'
-                    "Resend immediately in the correct format."
-                )
-                sess.history.append({"role": "tool",
-                                     "tool_responses": [{"name": "system", "response": feedback}]})
-                continue
-            if not nudged:
-                # 纯文本结论 = 想靠记忆答题：推回，强制走 submit_answer
-                nudged = True
-                sess.history.append({"role": "assistant", "content": text,
-                                     "thoughts": thoughts, "tool_calls": []})
-                sess.history.append({"role": "user", "content": (
-                    "You stated a conclusion without computing it. Recall is not acceptable here. "
-                    "Compute the result with run_python, verify it, then call submit_answer — its "
-                    "printed output is the only channel for the final answer.")})
-                continue
-            # 已推回过仍拒绝提交：诚实降级，标注未经验证
-            note = "[math_research: the sub-module concluded WITHOUT submitting a computed answer — treat as UNVERIFIED]"
-            if ok_log:
-                code, out = ok_log[-1]
-                note += f"\nLast successful computation for reference:\n>>> {' '.join(code.split())[:160]}\n{out}"
-            return (text.strip() + "\n\n" + note) if text.strip() else note
-
-        sess.history.append({"role": "assistant", "content": text,
-                             "thoughts": thoughts, "tool_calls": calls})
-
+    async def _dispatch(calls):
         responses = []
         for c in calls:
             name = c.get("name")
             args = c.get("arguments", {}) or {}
             if name == "run_python":
-                r = await asyncio.to_thread(
-                    math_tools.execute_code, args.get("code", ""),
-                    args.get("timeout", exec_timeout))
+                r = await _run(args.get("code", ""), args.get("timeout", exec_timeout))
                 if r["ok"]:
                     if r["output"]:
                         ok_log.append((args.get("code", ""), r["output"]))
@@ -183,11 +128,10 @@ async def run_math_research(engine, problem: str, cfg: dict) -> str:
                     responses.append({"name": name,
                                       "response": "Sandbox error (fix the code and retry):\n" + r["output"]})
             elif name == "submit_answer":
-                r = await asyncio.to_thread(
-                    math_tools.execute_code, args.get("answer_code", ""), exec_timeout)
+                r = await _run(args.get("answer_code", ""))
                 if r["ok"] and r["output"]:
                     # 提交成功：答案即解释器输出，立即收束返回
-                    return _format_digest(r["output"], str(args.get("explanation", "")), ok_log)
+                    return responses, _format_digest(r["output"], str(args.get("explanation", "")), ok_log)
                 # answer_code 跑不出结果：反馈报错，循环继续
                 msg = r["output"] if not r["ok"] else (
                     "answer_code produced no output — it must PRINT the final answer "
@@ -197,24 +141,55 @@ async def run_math_research(engine, problem: str, cfg: dict) -> str:
             else:
                 responses.append({"name": name,
                                   "response": f"Unknown tool {name!r} (this sandbox only has run_python / submit_answer)"})
-        sess.history.append({"role": "tool", "tool_responses": responses})
+        return responses, None
 
-    # 步数用尽：最后一次机会，强制 submit_answer
-    sess.history.append({"role": "user", "content": (
-        "Step budget exhausted. Call submit_answer NOW with answer_code that recomputes and prints "
-        "your best verified result. This is the final step.")})
-    result = await engine.generate_once(sess, tools=_TOOLS, temperature=0.2, max_tokens=1024)
-    for c in result.get("tool_calls", []) or []:
-        if c.get("type") != "error" and c.get("name") == "submit_answer":
-            args = c.get("arguments", {}) or {}
-            r = await asyncio.to_thread(
-                math_tools.execute_code, args.get("answer_code", ""), exec_timeout)
-            if r["ok"] and r["output"]:
-                return _format_digest(r["output"], str(args.get("explanation", "")), ok_log)
-    # 到死没提交：拿最后一次成功执行兜底，明确标注未经 submit 校验
-    if ok_log:
-        code, out = ok_log[-1]
-        return ("[math_research: step budget exhausted before a formal submit_answer; "
-                "returning the LAST SUCCESSFUL computation instead]\n"
-                f">>> {' '.join(code.split())[:160]}\n{out}")
-    return "[math_research: step budget exhausted with no successful computation]"
+    def _give_up(text: str) -> str:
+        """已推回过仍拒绝提交：诚实降级，标注未经验证。"""
+        note = "[math_research: the sub-module concluded WITHOUT submitting a computed answer — treat as UNVERIFIED]"
+        if ok_log:
+            code, out = ok_log[-1]
+            note += f"\nLast successful computation for reference:\n>>> {' '.join(code.split())[:160]}\n{out}"
+        return (text.strip() + "\n\n" + note) if text.strip() else note
+
+    async def _exhausted() -> str:
+        """步数用尽：最后一次机会，强制 submit_answer。"""
+        sess.history.append({"role": "user", "content": (
+            "Step budget exhausted. Call submit_answer NOW with answer_code that recomputes and prints "
+            "your best verified result. This is the final step.")})
+        result = await engine.generate_once(sess, tools=_TOOLS, temperature=0.2, max_tokens=1024)
+        for c in result.get("tool_calls", []) or []:
+            if c.get("type") != "error" and c.get("name") == "submit_answer":
+                args = c.get("arguments", {}) or {}
+                r = await _run(args.get("answer_code", ""))
+                if r["ok"] and r["output"]:
+                    return _format_digest(r["output"], str(args.get("explanation", "")), ok_log)
+        # 到死没提交：拿最后一次成功执行兜底，明确标注未经 submit 校验
+        if ok_log:
+            code, out = ok_log[-1]
+            return ("[math_research: step budget exhausted before a formal submit_answer; "
+                    "returning the LAST SUCCESSFUL computation instead]\n"
+                    f">>> {' '.join(code.split())[:160]}\n{out}")
+        return "[math_research: step budget exhausted with no successful computation]"
+
+    return await run_sandbox(engine, SandboxSpec(
+        tag="math_research",
+        session=sess,
+        tools=_TOOLS,
+        max_steps=max_steps,
+        # max_tokens 收紧到 1024：沙箱产物只该是短代码调用/短结论，实测 2048 预算下
+        # 失控生成单次就能写掉近 2000 token，直接吃穿整体墙钟。
+        max_tokens=1024,
+        dispatch=_dispatch,
+        on_give_up=_give_up,
+        on_exhausted=_exhausted,
+        max_parse_retries=int(cfg.get("max_parse_retries", 2)),
+        parse_feedback=(
+            "A tool call must be valid JSON with double quotes, with parameters inside an "
+            "arguments object. For example:\n"
+            '{"name": "run_python", "arguments": {"code": "solve(x**2 - 5*x + 6, x)"}}\n'
+            "Resend immediately in the correct format."),
+        # 纯文本结论 = 想靠记忆答题：推回，强制走 submit_answer
+        nudge=("You stated a conclusion without computing it. Recall is not acceptable here. "
+               "Compute the result with run_python, verify it, then call submit_answer — its "
+               "printed output is the only channel for the final answer."),
+    ))

@@ -15,7 +15,7 @@ import time
 from typing import List, Dict, Optional
 
 from . import web_tools
-from .sandbox_runtime import EphemeralSession
+from .sandbox_runtime import EphemeralSession, SandboxSpec, run_sandbox
 
 
 SANDBOX_SYSTEM_PROMPT = (
@@ -149,52 +149,15 @@ async def run_research(engine, query: str, cfg: dict,
             return digest
         return (digest + "\n\nSources (machine-generated fetch ledger; numbering matches "
                          "[source N] above):\n" + ledger)
-    parse_retries = 0
-    max_parse_retries = int(cfg.get("max_parse_retries", 2))
 
-    for step in range(max_steps):
-        if deadline is not None and time.monotonic() > deadline - reserve:
-            break  # 剩余时间不够再跑一轮「生成+抓取」→ 提前收敛，把已有材料折成摘要
+    def _converge() -> bool:
+        """软截止：剩余时间不够再跑一轮「生成+抓取」→ 提前收敛，把已有材料折成摘要。"""
+        return deadline is not None and time.monotonic() > deadline - reserve
+
+    async def _on_step(step: int) -> None:
         _report(f"联网调查：思考中（{step + 1}/{max_steps}）")
-        result = await engine.generate_once(sess, tools=_TOOLS, temperature=0.2, max_tokens=2048)
-        if result.get("cancelled"):
-            return "[web_research: generation cancelled]"
 
-        raw_calls = result.get("tool_calls", [])
-        # 宽容过滤：原生 function 与纯 JSON 调用都收，只排除解析失败（对齐主 Agent 的 type!="error"）
-        calls = [c for c in raw_calls if c.get("type") != "error"]
-        text = result.get("text", "")
-        thoughts = result.get("thoughts", "")
-
-        if not calls:
-            # 模型想调工具但格式崩了（type=error）：反馈正确 JSON 示例让它重试，而不是直接放弃。
-            # 这是主 Agent 早有、沙箱此前缺失的容错闭环——沙箱曾因一次格式错误就「未能形成结论」。
-            errors = [c for c in raw_calls if c.get("type") == "error"]
-            if errors and parse_retries < max_parse_retries:
-                parse_retries += 1
-                bad = errors[0]
-                sess.history.append({"role": "assistant", "content": text,
-                                     "thoughts": thoughts, "tool_calls": raw_calls})
-                feedback = (
-                    "System Error: your tool call could not be parsed and was not executed.\n"
-                    f"Your invalid output: {bad.get('raw_input')}\n"
-                    f"Parser error: {bad.get('error_msg')}\n"
-                    "A tool call must be valid JSON with double quotes, with parameters inside an "
-                    "arguments object — the exact same format as your successful web_search call. "
-                    "For example, to fetch pages:\n"
-                    '{"name": "open_pages", "arguments": {"urls": ["https://a.example", "https://b.example"]}}\n'
-                    "Do not flatten the parameters, do not omit the arguments wrapper, do not add "
-                    "extra symbols. Resend immediately in the correct format."
-                )
-                sess.history.append({"role": "tool",
-                                     "tool_responses": [{"name": "system", "response": feedback}]})
-                continue
-            return _finish(text.strip()) or "[web_research: no conclusion reached]"
-
-        # 记下这一步的 assistant 轮（含 tool_calls），供下一次前缀复用
-        sess.history.append({"role": "assistant", "content": text,
-                             "thoughts": thoughts, "tool_calls": calls})
-
+    async def _dispatch(calls):
         responses = []
         for c in calls:
             name = c.get("name")
@@ -230,17 +193,41 @@ async def run_research(engine, query: str, cfg: dict,
             else:
                 responses.append({"name": name,
                                   "response": f"Unknown tool {name!r} (this sandbox only has web_search / open_pages)"})
-        sess.history.append({"role": "tool", "tool_responses": responses})
+        return responses, None
 
-    # 步数或时间预算用尽 → 强制收敛出摘要
-    _report("联网调查：归纳结论")
-    sess.history.append({"role": "user",
-                        "content": ("Investigation budget (steps or time) exhausted. Produce the final "
-                                    "factual digest from the material collected above, honestly noting "
-                                    "where evidence is insufficient.")})
-    result = await engine.generate_once(sess, tools=_TOOLS, temperature=0.2, max_tokens=2048)
-    return (_finish((result.get("text", "") or "").strip())
-            or "[web_research: budget exhausted without a conclusion]")
+    async def _exhausted() -> str:
+        """步数或时间预算用尽 → 强制收敛出摘要。"""
+        _report("联网调查：归纳结论")
+        sess.history.append({"role": "user",
+                            "content": ("Investigation budget (steps or time) exhausted. Produce the final "
+                                        "factual digest from the material collected above, honestly noting "
+                                        "where evidence is insufficient.")})
+        result = await engine.generate_once(sess, tools=_TOOLS, temperature=0.2, max_tokens=2048)
+        return (_finish((result.get("text", "") or "").strip())
+                or "[web_research: budget exhausted without a conclusion]")
+
+    return await run_sandbox(engine, SandboxSpec(
+        tag="web_research",
+        session=sess,
+        tools=_TOOLS,
+        max_steps=max_steps,
+        max_tokens=2048,
+        dispatch=_dispatch,
+        # 不再调工具即视为已得结论：摘要本就是文本产物，推回它等于逼它重说一遍。
+        on_give_up=lambda text: _finish(text.strip()) or "[web_research: no conclusion reached]",
+        on_exhausted=_exhausted,
+        max_parse_retries=int(cfg.get("max_parse_retries", 2)),
+        # 这两句额外引导源于一次真实事故：沙箱曾因单次格式错误就「未能形成结论」。
+        parse_feedback=(
+            "A tool call must be valid JSON with double quotes, with parameters inside an "
+            "arguments object — the exact same format as your successful web_search call. "
+            "For example, to fetch pages:\n"
+            '{"name": "open_pages", "arguments": {"urls": ["https://a.example", "https://b.example"]}}\n'
+            "Do not flatten the parameters, do not omit the arguments wrapper, do not add "
+            "extra symbols. Resend immediately in the correct format."),
+        should_converge=_converge,
+        on_step=_on_step,
+    ))
 
 
 # ==========================================================================
