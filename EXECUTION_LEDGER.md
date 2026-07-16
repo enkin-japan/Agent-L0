@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ 代码全齐（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护，220 金测试全绿，双端 BUILD SUCCEEDED，已装 v0.16.0；**崩溃重启/随 app 收摊待实机查验**）。下一步 = R5-5（SearXNG 随包）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 进展**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份），951M 运行时以 320/320 覆盖签名并**已提交公证**（submission `1e13bf2a`，等结论中；对照组 tiny.zip 亦 In Progress >25min ⇒ 当日服务端队列整体偏慢，非大包卡死）。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。下一步 = R5-5（SearXNG 随包）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 进展**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份），951M 运行时以 320/320 覆盖签名并**已提交公证**（submission `1e13bf2a`，等结论中；对照组 tiny.zip 亦 In Progress >25min ⇒ 当日服务端队列整体偏慢，非大包卡死）。**
 
 ---
 
@@ -730,7 +730,7 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
   - **参考**：cc-haha `desktop/electron/services/sidecarManager.ts` + `desktop/scripts/build-sidecars.ts`
     （它的 sidecar 是 TS 不是 Python，但**进程生命周期管理的形状**可借鉴）
 
-- [ ] **R5-4 · `SidecarManager.swift`** —— 🟡 两项前置已落地（2026-07-16），Swift 侧未动
+- [x] **R5-4 · `SidecarManager.swift`** ✅ 2026-07-16（含用户实机查验五步全过）
   - 职责：启停 backend + searxng、就绪探活、端口冲突处理、崩溃重启、日志落盘
   - **🔴 顺序**：searxng **必须先于** backend 就绪——`web_research` 的注册是**启动期一次性探活**，
     searx 晚到 = 整轮不注册（`HETERO_COMPUTE.md` §S.3 已入账的事故）
@@ -749,8 +749,19 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
     searx 起→重入跳过（managed_or_report 认 pid）→停 全走新 lib、缺参数明确报错、
     220 金测试全绿。⚠️ 第三次踩「变量后紧跟全角字符」坑（bash 3.2 吞字节），已给三个
     shell 文件建了正则扫描，全部清零
-  - [x] Swift 侧：`Sources/App/SidecarManager.swift` ✅ 2026-07-16（代码完成，双端 BUILD
-    SUCCEEDED，已装 /Applications v0.16.0(16)；**崩溃重启与随 app 收摊待用户实机查验**）
+  - [x] **实机查验五步全过** ✅ 2026-07-16（用户执行）：external 不误杀（app 退出后
+    devctl 的 backend 存活）/ 接管态拉起 / kill -9 崩溃自愈 / 随 app 收摊干净 / 端口
+    冲突呈现。**查验揪出两个真 bug 并当场修掉**：①设置页仓库路径框藏在开关后面，
+    与「先填路径再开开关」的使用顺序自相矛盾（v0.16.0(17) 改常显）；②**端口守卫
+    盲区**——占用者对 /health 回 404 时 is_ready 不通、managed_or_report 根本不会被
+    调到，照常 spawn；且 BSD 的 SO_REUSEADDR 语义下特定地址与通配地址可**同端口
+    共存**（0.0.0.0 的 http.server 占着 14159，backend 绑 127.0.0.1 照样成功），双监听
+    悄悄成立。修法 = `guard_port_before_spawn` 第二道前置：有监听无 pid 记录 → 硬失败
+    点名占用者；有监听 pid 存活 → 等就绪不双拉（顺带修掉「对启动中服务重复 start 会
+    双 spawn」的既有缺陷）。盲区从 devctl 原样搬来非提取引入；单一真相兑现——修一处
+    devctl 与 app 同时得到
+  - [x] Swift 侧：`Sources/App/SidecarManager.swift` ✅ 2026-07-16（双端 BUILD
+    SUCCEEDED，已装 /Applications v0.16.0(17)）
     - 五态机：disabled / **external**（devctl 起的只连接不接管——app 退出也不碰它，
       「顺手杀掉用户的开发后端」是最恶劣的越权）/ starting / running / failed(lib 原话)
     - 崩溃重启：`DispatchSourceProcess`（kqueue EVFILT_PROC，同用户可盯**非子进程**——
