@@ -137,6 +137,9 @@ final class AgentStore: ObservableObject {
                 if ok {
                     self.connFailures = 0
                     self.connState = .connected
+                    // 顺带巡刷会话列表（macOS 无下拉刷新后的自动更新通道）：
+                    // 等值守卫兜底，列表没变不会引起任何视图重建
+                    await self.loadSessions()
                 } else {
                     self.connFailures += 1
                     self.connState = self.connFailures >= 10 ? .offline : .connecting

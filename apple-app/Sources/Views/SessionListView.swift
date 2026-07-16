@@ -13,6 +13,12 @@ struct SessionListView: View {
 
     var body: some View {
         sessionList
+            // 下拉刷新是 iOS 习语；macOS 上刷新控件收起与 List 更新天然打架
+            //（实机反馈：等值守卫后仍有残影）——macOS 撤掉，改由探活循环顺带
+            // 自动刷新列表（15s 一巡 + 等值守卫 = 不变零重建）
+            #if os(iOS)
+            .refreshable { await store.loadSessions() }
+            #endif
             #if os(macOS)
             // 高频入口不许折叠：窄侧栏下 toolbar 图标会收进 » 溢出菜单（实机反馈
             // 「添加新会话折叠起来了」）——顶上放一枚全宽主色按钮，toolbar 那枚保留。
@@ -30,7 +36,6 @@ struct SessionListView: View {
                 .background(.bar)
             }
             #endif
-            .refreshable { await store.loadSessions() }
             .alert(L("重命名会话"), isPresented: Binding(
                 get: { renaming != nil },
                 set: { if !$0 { renaming = nil } })) {
