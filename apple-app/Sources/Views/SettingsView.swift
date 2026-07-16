@@ -89,6 +89,10 @@ struct SettingsView: View {
                         .autocorrectionDisabled()
                     Toggle(L("app 内建执行层（sidecar）"), isOn: sidecarEnabledBinding)
                     if store.settings.sidecarEnabled {
+                        // 拨设备 A 的两把服务密钥（R5-6，只在 bundle 布局被消费；
+                        // repo 布局由 dev 桥接读仓库 .env.local，这里填了也无害）
+                        SecureField("INFER_API_KEY", text: sidecarKeyBinding(\.inferApiKey))
+                        SecureField("RAG_API_KEY", text: sidecarKeyBinding(\.ragApiKey))
                         LabeledContent(L("状态"), value: sidecarStateLabel)
                         if case .failed(let detail) = sidecar.state {
                             // lib_edge.sh 的原话（端口占用者清单/依赖缺失/日志尾），不二次转译
@@ -142,6 +146,13 @@ struct SettingsView: View {
     private var sidecarRepoRootBinding: Binding<String> {
         Binding(get: { store.settings.sidecarRepoRoot },
                 set: { store.settings.sidecarRepoRoot = $0 })
+    }
+
+    /// 设备 A 服务密钥即改即存（Keychain didSet），下次 up 生效
+    private func sidecarKeyBinding(_ key: ReferenceWritableKeyPath<AppSettings, String>)
+        -> Binding<String> {
+        Binding(get: { store.settings[keyPath: key] },
+                set: { store.settings[keyPath: key] = $0 })
     }
 
     private var sidecarStateLabel: String {

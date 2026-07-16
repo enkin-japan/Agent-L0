@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import SwiftUI
 
 #if os(macOS)
@@ -178,8 +179,18 @@ final class SidecarManager: ObservableObject {
             env["EDGE_LOG_DIR"] = logDir.path
             env["EDGE_CONFIG"] = res.appendingPathComponent("config.yaml").path
             env["AGENT_DATA_DIR"] = dataDir.path
-            // R5-6：INFER_API_KEY / RAG_API_KEY 从 Keychain 注入到这里；AGENT_API_KEY
-            // 同进程回环可退化。在那之前 bundle 布局对设备 A 的鉴权拨号是缺密钥的。
+            // 密钥形态（R5-6）：bundle 里没有 .env.local，Keychain 是密钥的家。
+            // AGENT_API_KEY 首启生成随机值——虽是同进程回环（可退化为空），但生成
+            // 一把成本为零，还把「回环上其他本机进程白嫖 backend」也关掉了；
+            // 存进 settings.apiKey（Keychain 落盘）使 app 自己的客户端同时拿到它。
+            if let settings, settings.apiKey.isEmpty {
+                settings.apiKey = Self.randomKey()
+            }
+            if let key = settings?.apiKey, !key.isEmpty { env["AGENT_API_KEY"] = key }
+            // 拨设备 A 的两把必须留（inference-server / rag 服务端各自校验）；
+            // 用户在设置里填（与设备 A 的 .env.local 同值），空 = 未启用鉴权的 dev 对端
+            if let k = settings?.inferApiKey, !k.isEmpty { env["INFER_API_KEY"] = k }
+            if let k = settings?.ragApiKey, !k.isEmpty { env["RAG_API_KEY"] = k }
             return Layout(libEdge: res.appendingPathComponent("scripts/lib_edge.sh"),
                           env: env, logDir: logDir)
         }
@@ -214,6 +225,18 @@ final class SidecarManager: ObservableObject {
         }
         return Layout(libEdge: rootURL.appendingPathComponent("scripts/lib_edge.sh"),
                       env: env, logDir: logDir)
+    }
+
+    /// 首启生成的 AGENT_API_KEY：32 字节系统熵，base64url（无需人抄写，只走 Keychain）。
+    private static func randomKey() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            return UUID().uuidString + UUID().uuidString   // 熵源失败的兜底，仍不可猜
+        }
+        return Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "="))
     }
 
     private func baseEnv() -> [String: String] {

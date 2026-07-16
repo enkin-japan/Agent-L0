@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）。下一步 = R5-6（密钥形态改造 → Keychain）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 进展**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份），951M 运行时以 320/320 覆盖签名并**已提交公证**（submission `1e13bf2a`，等结论中；对照组 tiny.zip 亦 In Progress >25min ⇒ 当日服务端队列整体偏慢，非大包卡死）。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户 + AGENT_API_KEY 首启生成，注入链路待 R5-9 实测）。下一步 = R5-7（Views 重做 + 渲染格 Swift 侧）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 进展**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份），951M 运行时以 320/320 覆盖签名并**已提交公证**（submission `1e13bf2a`，等结论中；对照组 tiny.zip 亦 In Progress >25min ⇒ 当日服务端队列整体偏慢，非大包卡死）。**
 
 ---
 
@@ -792,11 +792,20 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
   - SidecarManager bundle 布局同步：`EDGE_SEARX_PY` 指同一个 PBS python（v0.16.0(18)）
   - 签名覆盖 320 → **322/322**（searx 的原生扩展一并入签）
 
-- [ ] **R5-6 · 密钥形态改造**
-  - 现状：`.env.local` 的三个 KEY，由 `devctl.sh` source 后 export
-  - app 内：`.env.local` 不再适用 → **Keychain** + 首启生成
-  - `AGENT_API_KEY` 在 app 内是**同进程回环**，可退化；`INFER_API_KEY` / `RAG_API_KEY` 要拨设备 A，**必须留**
-  - **🔴 护栏保持**：非回环绑定 + 空密钥 = **拒绝启动**（硬失败，不是告警）
+- [x] **R5-6 · 密钥形态改造** ✅ 2026-07-16 —— Keychain 多账户 + 首启生成（v0.16.0(19)）
+  - Keychain 枚举扩为多账户（`load/save(account)`），既有 `agent-api-key` 账户名
+    不变——老用户的钥匙串条目继续有效
+  - **AGENT_API_KEY 首启生成**（32 字节系统熵 base64url）而非退化为空：虽是同进程
+    回环，生成一把成本为零，还顺带关掉「回环上其他本机进程白嫖 backend」；存进
+    `settings.apiKey` 使 app 客户端与注入 backend 的是同一把
+  - `INFER_API_KEY` / `RAG_API_KEY`：设置页两个 SecureField（即改即存 Keychain），
+    bundle 布局注入子进程环境，与设备 A 的 `.env.local` 填同值
+  - 两布局分工（R5-4 已定形）：repo 布局走 dev 桥接读仓库 `.env(.local)`；
+    bundle 布局走 Keychain——本期只补 bundle 侧
+  - **🔴 护栏保持**：非回环绑定 + 空密钥 = 拒绝启动——backend 侧既有代码
+    （B3 §7 预留 2 已代码化），本期零改动、自然保持
+  - 双端 BUILD SUCCEEDED；**bundle 布局的注入链路待 R5-9 组装后才可实测**（现在
+    Resources/backend 尚不存在，bundle 分支不会被选中）
 
 - [ ] **R5-7 · Views 重做 + R3 的渲染格 Swift 侧**
   - 保留 `Store/`（归约器，夹具锁定）+ `API/`（§D.7）

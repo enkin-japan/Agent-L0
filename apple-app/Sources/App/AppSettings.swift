@@ -2,14 +2,14 @@ import Foundation
 import Security
 import SwiftUI
 
-/// Keychain 里只存一条：后端 Bearer key。
+/// Keychain 存密钥（R5-6 起多账户）：后端 Bearer key + 拨设备 A 的两把服务密钥。
 /// web 端的安全模型是「浏览器永不持 key、由代理注入」；原生 app 是受信客户端，
 /// key 落本机 Keychain 是标准做法（网络层另有 Tailscale 设备身份兜底）。
+/// app 形态下 `.env.local` 不存在（那是仓库/devctl 的形态），这里就是密钥的家。
 enum Keychain {
     private static let service = "dev.enkin.macagent"
-    private static let account = "agent-api-key"
 
-    static func loadAPIKey() -> String {
+    static func load(_ account: String) -> String {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -24,7 +24,7 @@ enum Keychain {
         return key
     }
 
-    static func saveAPIKey(_ key: String) {
+    static func save(_ account: String, _ key: String) {
         let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -37,6 +37,10 @@ enum Keychain {
         attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         SecItemAdd(attrs as CFDictionary, nil)
     }
+
+    // 既有调用面保持原名（`agent-api-key` 账户不变，老用户的钥匙串条目继续有效）
+    static func loadAPIKey() -> String { load("agent-api-key") }
+    static func saveAPIKey(_ key: String) { save("agent-api-key", key) }
 }
 
 /// 连接设置：服务器地址进 UserDefaults，key 进 Keychain。
@@ -93,6 +97,15 @@ final class AppSettings: ObservableObject {
     @Published var sidecarRepoRoot: String {
         didSet { UserDefaults.standard.set(sidecarRepoRoot, forKey: "sidecar.repoRoot") }
     }
+    /// 拨设备 A 的两把服务密钥（R5-6）：bundle 布局下注入 backend 子进程环境，
+    /// 对应 inference-server / rag 服务端的同名校验。与设备 A 的 `.env.local` 填同值。
+    /// repo 布局不用这两条——dev 桥接直接读仓库的 `.env(.local)`（R5-4）。
+    @Published var inferApiKey: String {
+        didSet { Keychain.save("infer-api-key", inferApiKey) }
+    }
+    @Published var ragApiKey: String {
+        didSet { Keychain.save("rag-api-key", ragApiKey) }
+    }
 
     init() {
         baseURLString = UserDefaults.standard.string(forKey: "agent.baseURL") ?? "http://127.0.0.1:14159"
@@ -107,6 +120,8 @@ final class AppSettings: ObservableObject {
         notifContentLevel = ud.string(forKey: "notif.contentLevel") ?? "category"
         sidecarEnabled = ud.object(forKey: "sidecar.enabled") as? Bool ?? false
         sidecarRepoRoot = ud.string(forKey: "sidecar.repoRoot") ?? ""
+        inferApiKey = Keychain.load("infer-api-key")
+        ragApiKey = Keychain.load("rag-api-key")
         L10n.current = AppLanguage(rawValue: language) ?? .system
     }
 
