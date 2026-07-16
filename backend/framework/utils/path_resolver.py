@@ -14,10 +14,14 @@ from huggingface_hub import constants as _hf_constants
 from huggingface_hub import snapshot_download
 _hf_constants.HF_HUB_DISABLE_XET = True
 
-_path = Path(__file__)
-_utils_path = _path.parent
-_framework_path = _utils_path.parent
-BASE_WORKSPACE = _framework_path.parent
+from .config_loader import data_dir as _data_dir
+
+
+def _models_root() -> Path:
+    """权重下载目标目录（R5-4/D.16 起挂可写数据根）：下载是**运行时写**，app 模式下
+    写进 bundle 会破坏签名。dev 缺省 = `backend/models/`，与历史行为逐字节相同。
+    CHARTER 的「权重收敛在项目内」在 app 形态下的语义即「收敛在数据根内」。"""
+    return _data_dir() / "models"
 
 # 下载完整性标记：snapshot_download 成功返回后才写入。不能用「目录非空」判完整——
 # hf 下载一开始就建 .cache/huggingface 元数据目录，中断残留必然非空，曾导致半截
@@ -49,7 +53,7 @@ def resolve_tokenizer_only_path(model_id_or_path: str, revision: Optional[str] =
     p = Path(model_id_or_path)
     if p.exists() and p.is_dir():
         return model_id_or_path
-    model_path = BASE_WORKSPACE / "models" / p.name
+    model_path = _models_root() / p.name
     if (model_path / _MARKER_NAME).exists():
         return str(model_path)          # 已有全量权重，分词器自然在内
     if (model_path / _TOKENIZER_MARKER_NAME).exists():
@@ -87,7 +91,7 @@ def resolve_model_path(model_id_or_path: str, revision: Optional[str] = None) ->
         print(f"✅ Local model directory detected: {model_id_or_path}")
         return model_id_or_path
 
-    model_path = BASE_WORKSPACE / "models" / Path(model_id_or_path).name
+    model_path = _models_root() / Path(model_id_or_path).name
     marker = model_path / _MARKER_NAME
     if marker.exists():
         # 标记记录了当时下载的 revision：与钉死值一致（或双方任一未指定）即命中。

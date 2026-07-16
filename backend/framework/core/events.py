@@ -16,7 +16,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 _LOCK = threading.Lock()
-_PATH = Path(__file__).resolve().parents[2] / "guardrail_events.jsonl"
+# 落盘在可写数据根而非代码树（R5-4/D.16）：dev 缺省两者相同（backend/），
+# app 模式下代码树在签名的 bundle 里，写进去会破坏签名。
+from ..utils.config_loader import data_dir
+_PATH = data_dir() / "guardrail_events.jsonl"
 
 
 def set_path(path) -> None:

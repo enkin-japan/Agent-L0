@@ -20,6 +20,20 @@ REPO_ROOT = BACKEND_DIR.parent                       # 仓库根（config.yaml �
 CONFIG_PATH = REPO_ROOT / "config.yaml"
 
 
+def data_dir() -> Path:
+    """可写数据根（R5-4/D.16）：`AGENT_DATA_DIR` 环境变量，缺省 = `backend/`。
+
+    「代码在哪」与「数据写哪」在此分家：装进 .app 后代码树在 bundle 里（往里写 =
+    破坏代码签名），app 注入 `~/Library/Application Support/dev.enkin.macagent/`；
+    dev 不设变量，数据留仓库内，随手可见可删（D.16 选 B 的全部理由）。
+
+    写这里而不是 app.py：`sessions/` 等六个写点分属 app.py / core/events.py /
+    utils/path_resolver.py 三处，旋钮必须比它们都低层。每次调用现读 env——
+    进程启动后 env 不变，而测试要能各自注入。"""
+    raw = os.environ.get("AGENT_DATA_DIR", "").strip()
+    return Path(raw).expanduser() if raw else BACKEND_DIR
+
+
 @lru_cache(maxsize=1)
 def load_config() -> Dict[str, Any]:
     """读取仓库根 config.yaml（缓存单份）。文件缺失/损坏时抛出，由启动方尽早失败。"""

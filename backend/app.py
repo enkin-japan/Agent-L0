@@ -92,15 +92,22 @@ async def _session_cleanup_loop(session_manager, cfg: dict):
 # 1. 路径与配置初始化
 # ==========================================
 BASE_DIR = Path(__file__).parent
-SESSIONS_DIR = BASE_DIR / "sessions"
-SCHEDULES_DIR = BASE_DIR / "schedules"   # 定时任务实体（与 sessions 平级，防会话扫描误认）
+
+# 「代码在哪」与「数据写哪」分家（R5-4/D.16）：BASE_DIR 从此只锚**只读内容**
+# （代码树、剧本、自托管打印包）；一切运行时写入挂 DATA_DIR。dev 不设
+# AGENT_DATA_DIR 时两者相同（backend/），行为与分家前逐字节一致；app 模式注入
+# ~/Library/Application Support/dev.enkin.macagent/——bundle 是签名的，写进去即破坏签名。
+from framework.utils.config_loader import load_config, data_dir
+DATA_DIR = data_dir()
+DATA_DIR.mkdir(parents=True, exist_ok=True)   # 全新数据根（app 首启）时各消费方的父目录
+
+SESSIONS_DIR = DATA_DIR / "sessions"
+SCHEDULES_DIR = DATA_DIR / "schedules"  # 定时任务实体（与 sessions 平级，防会话扫描误认）
+NOTES_DIR = DATA_DIR / "notes"          # 长期记忆笔记（R4）：用户个人事实，绝不进代码树
 TOOLS_DIR = BASE_DIR / "framework" / "mcp" / "tools"
 SKILLS_DIR = BASE_DIR.parent / "skills"      # 剧本是内容不是代码，与 backend/ 平级
-NOTES_DIR = BASE_DIR / "notes"               # 长期记忆笔记（R4）：用户个人事实，
-                                             # 与 sessions/ 平级并同样 gitignore，绝不进代码树
 
 # 配置在仓库根（backend 与 rag 共用一份），寻址统一走 config_loader
-from framework.utils.config_loader import load_config
 config = load_config()
 
 # 模型来源：.model-selection 指针（./devctl.sh model 写入）→ 注册表条目；无选择时用
@@ -359,7 +366,7 @@ async def lifespan(app: FastAPI):
     #     本地通知不依赖本层）。纯出站 HTTPS，回环绑定的隐私边界不变。
     from framework.push import APNsClient, APNsDisabled, PushRegistry, NotificationDispatcher
     push_cfg = config.get("push") or {}
-    push_registry = PushRegistry(BASE_DIR / "push")
+    push_registry = PushRegistry(DATA_DIR / "push")
     apns_client = None
     if push_cfg.get("enabled", True):
         # 密钥相对路径 = 相对仓库根（config.yaml 所在处）：`.keys/AuthKey_X.p8` 在
