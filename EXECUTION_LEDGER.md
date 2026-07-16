@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab，v0.16.0(21)）。下一步 = R5-8（iOS 瘦客户端核查）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 进展**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份），951M 运行时以 320/320 覆盖签名并**已提交公证**（submission `1e13bf2a`，等结论中；对照组 tiny.zip 亦 In Progress >25min ⇒ 当日服务端队列整体偏慢，非大包卡死）。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab，v0.16.0(21)）；R5-8 ✅（iOS 瘦客户端核查：平台守卫审计 + 角色不变 + `release-ios.sh` 实跑上传 TestFlight）。下一步 = R5-9（验收——隐含前置：把 backend 代码 + `build/runtime` + `lib_edge.sh` + `config.yaml` 组装进 .app Resources，bundle 布局至今只存在于 SidecarManager 的分支判断里）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 进展**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份），951M 运行时以 320/320 覆盖签名并**已提交公证**（submission `1e13bf2a`，等结论中；对照组 tiny.zip 亦 In Progress >25min ⇒ 当日服务端队列整体偏慢，非大包卡死）。**
 
 ---
 
@@ -831,9 +831,20 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
       iOS 保持单列 sheet 惯例）
     - 双端 BUILD SUCCEEDED、夹具 7/7、v0.16.0(21) 已装；信息架构与 Store/ 归约器零改动
 
-- [ ] **R5-8 · iOS 瘦客户端**（§D.3）
-  - 角色不变；指向 macOS app 内的 backend（经 Tailscale）
-  - 保留 `release-ios.sh` / TestFlight 通路
+- [x] **R5-8 · iOS 瘦客户端** ✅ 2026-07-16（§D.3）——核查项，非建设项
+  - **平台守卫审计**：两 target 共享同一份 `Sources/`，R5-4~7 全部新增件核过——
+    `SidecarManager.swift` 全文件 `#if os(macOS)`；`SettingsView` 执行层 Section 内建守卫；
+    `Theme.swift` 双端各有 dynamic 实现（NSColor/UIColor）；`AppSettings` 的 sidecar 四字段
+    在 iOS 侧只是闲置的 UserDefaults/Keychain 读写，无副作用（SidecarManager 类型在 iOS
+    不存在，误引用会直接编译失败——守卫是编译期强制的）
+  - **角色不变核实**：iOS 仍是纯瘦客户端（铁律 4），默认回环地址；跨设备按既有说明
+    `tailscale serve` 反代 14159——sidecar 拉起的 backend 与 devctl 同为回环绑定，
+    iOS 侧无感知差异（指向 macOS app 内的 backend ✅，无需任何 iOS 改动）
+  - **通路实证**：iOS Debug BUILD SUCCEEDED；`release-ios.sh` 全程无人值守跑通
+    （xcodegen → Release 归档 → 直传 ASC，Upload succeeded），v0.16.0(21) 已上
+    TestFlight（青瓷主题 + citations 渲染格随包到 iPhone）
+  - 附带发现：backend/.venv 经 R5-2 瘦身后无 pyjwt，`wait-testflight.py` 需独立 venv
+    （其头注本就说「任意 venv」，发布工具依赖不回灌边缘 venv）
 
 - [ ] **R5-9 · 验收**
   - 冷启动：app 双击 → searx 就绪 → backend 就绪 → 界面可用（记录时延）
