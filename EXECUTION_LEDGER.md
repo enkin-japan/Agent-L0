@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 🟡 **无头部分全过**（`bundle-macos.sh` 组装 1.0G 交付形态 v0.16.0(22) 已装 /Applications；无头烟测：工具数 36 断言 + E2E 20 项（靶=bundle backend）+ 双端夹具 + 印章跑后完好（S.8）；冷启 6.6–9.8s；金测试 223）。**剩 GUI 三项待用户实机查验**（双击冷启时延 / 杀进程恢复 ≤1s / sidecar 崩溃重启不丢轮次），过完即 R5 收官 + CHARTER 同步改动（表见 R5-9 下方，属架构方向改动需用户点头）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 进展**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份），951M 运行时以 320/320 覆盖签名并**已提交公证**（submission `1e13bf2a`，等结论中；对照组 tiny.zip 亦 In Progress >25min ⇒ 当日服务端队列整体偏慢，非大包卡死）。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 🟡 **无头部分全过**（`bundle-macos.sh` 组装 1.0G 交付形态 v0.16.0(22) 已装 /Applications；无头烟测：工具数 36 断言 + E2E 20 项（靶=bundle backend）+ 双端夹具 + 印章跑后完好（S.8）；冷启 6.6–9.8s；金测试 223）。**剩 GUI 三项待用户实机查验**（双击冷启时延 / 杀进程恢复 ≤1s / sidecar 崩溃重启不丢轮次），过完即 R5 收官 + CHARTER 同步改动（表见 R5-9 下方，属架构方向改动需用户点头）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 ✅ 闭环**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份）；951M 运行时（322 Mach-O 覆盖签名）公证 **Accepted**（submission `1e13bf2a`，2026-07-16 通过；当日苹果队列积压 ~14h，对照组 tiny.zip 甚至更慢——大包无罪）。签名→公证全链路验证完毕，剩「对真实 .app 公证 + staple」在 R5 收官后的分发动作里做。**
 
 ---
 
@@ -921,7 +921,7 @@ iOS app（瘦客户端，§D.3）── Tailscale ──→ macOS app 的 backen
 | ~~**Q5**~~ | **已定 → D.13**：提取共享启动库，`devctl.sh` 与 app 都调；Swift 只做进程监护 | ~~R5-4~~ ✅ |
 | ~~**Q6**~~ | **已定 → D.14**：整条音频路移 A（原问法有误：torch 是被 silero-vad 钉住的，不是 whisper——去掉 whisper 几乎不省空间） | ~~R5-2~~ ✅ |
 | ~~**Q7**~~ | **已定 → D.16**：`AGENT_DATA_DIR` 旋钮，dev 默认仓库内、app 注入 App Support | ~~R5-4~~ ✅ |
-| **Q8** | **macOS 公证：只差 Developer ID Application 证书，且只能由你本人签发**（行动项，不阻塞 R5-4）。已实测：ASC API 密钥 **notarytool 鉴权通过**（`notarytool history` → "No submission history"）；但**任何 ASC API 密钥都创建不了 Developer ID 证书**——`POST /v1/certificates` 返回 `403 FORBIDDEN_ERROR: This operation can only be performed by the Account Holder`，而 ASC API 密钥的可选角色里（Admin/App Manager/Developer/Marketing/Sales/Finance/Customer Support）**根本没有 Account Holder**。**待你操作**：developer.apple.com → Certificates → 新建 **Developer ID Application**，上传已备好的 `~/Desktop/DeveloperID.csr`（配对私钥已在 login Keychain，是唯一副本），下载 .cer 后双击装入即可。**选 G2**：经典的 "Developer ID Certification Authority" 中间证书 **2027-02-01 到期**（距今仅半年余），现在签发经典型等于拿一张很快要换的证书 | R5-9 验收形态 |
+| **Q8** | ✅ **已闭环（2026-07-16）**：Developer ID Application (G2) 证书由用户在门户签发（API 建不了——Account Holder 专属，见 S.4）；951M 运行时公证 **Accepted**（submission `1e13bf2a`）。签名→公证链路全通，真实 .app 的公证 + staple 留到分发动作 | R5-9 验收形态 |
 
 ---
 
