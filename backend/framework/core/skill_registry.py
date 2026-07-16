@@ -14,12 +14,16 @@
 路径——这个洞今天不存在，不能由 skill 引入。剧本形态下工具沿用主循环，闸门照常生效，
 **零新增提权面**。
 
+frontmatter 解析共用 `utils/frontmatter.py`（R4 的笔记同格式，不再各拷一份）。
+
 照 `MCPRegistry` 的形状：目录扫描 + 探活舍弃 + 名字索引。探活对 skill 的含义 =
 `requires:` 点名的工具是否都在注册表里（例：deck 剧本依赖 `deck_export_pdf`，而它自身
 探 playwright；playwright 缺失时该剧本整体不可用，不该advertise 给模型）。
 """
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
+
+from ..utils.frontmatter import parse_frontmatter
 
 
 class Skill:
@@ -38,34 +42,6 @@ class Skill:
         return all(t in tool_names for t in self.requires)
 
 
-def _parse_frontmatter(text: str, source: Path) -> "tuple[Dict[str, Any], str]":
-    """解析 `---` 包裹的 YAML frontmatter，返回 (meta, body)。
-
-    刻意只认最小子集（`key: value` 与 `key: [a, b]`）而不引 YAML 解析器：skill 是本地
-    可信文件，但少一个解析器就少一类解析歧义；真需要复杂结构时说明该做成工具而非剧本。
-    """
-    if not text.startswith("---"):
-        raise ValueError(f"{source.name}: 缺少 frontmatter（首行须为 ---）")
-    end = text.find("\n---", 3)
-    if end == -1:
-        raise ValueError(f"{source.name}: frontmatter 未闭合（缺少结束的 ---）")
-    meta: Dict[str, Any] = {}
-    for line in text[3:end].strip().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if ":" not in line:
-            raise ValueError(f"{source.name}: frontmatter 行无法解析: {line!r}")
-        key, _, val = line.partition(":")
-        val = val.strip()
-        if val.startswith("[") and val.endswith("]"):
-            meta[key.strip()] = [v.strip() for v in val[1:-1].split(",") if v.strip()]
-        else:
-            meta[key.strip()] = val
-    body = text[end + 4:].strip()
-    return meta, body
-
-
 class SkillRegistry:
     """Skill 注册中心：扫描 skills_dir 下的 *.md，探活后按名索引。"""
 
@@ -81,7 +57,7 @@ class SkillRegistry:
             return
         for file in sorted(self.skills_dir.glob("*.md")):
             try:
-                meta, body = _parse_frontmatter(file.read_text(encoding="utf-8"), file)
+                meta, body = parse_frontmatter(file.read_text(encoding="utf-8"), file)
                 name = str(meta.get("name") or "").strip()
                 description = str(meta.get("description") or "").strip()
                 if not name or not description:

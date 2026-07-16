@@ -118,7 +118,8 @@ class PromptBuilder:
 
     def build(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None,
               enable_thinking: bool = False, task_block: Optional[str] = None,
-              tail_notes: Optional[List[str]] = None, include_env: bool = False) -> str:
+              tail_notes: Optional[List[str]] = None, include_env: bool = False,
+              env_extra: Optional[List[str]] = None) -> str:
         """
         前缀分层布局（KV 缓存友好）：
         [稳定前缀] system 提示词 + 工具声明（启动后不变）
@@ -188,8 +189,14 @@ class PromptBuilder:
         # 沙箱子生成复用同一 builder 但默认 include_env=False，个人信息绝不入沙箱上下文（隐私边界）。
         _now = datetime.now()
         env_lines = [f"Current date: {_now.strftime('%Y-%m-%d')} ({_now.strftime('%A')})"]
-        if include_env and self.static_env_lines:
-            env_lines.extend(self.static_env_lines)
+        if include_env:
+            # 门控写在这里而不是靠调用方自觉：env_extra（R4 的长期记忆索引）同样是个人
+            # 事实，沙箱即便误传了也必须被这道闸门挡下（R1-1 的教训：不变量要写死，
+            # 不能靠"调用方不会那么干"）。
+            if self.static_env_lines:
+                env_lines.extend(self.static_env_lines)
+            if env_extra:
+                env_lines.extend(l for l in env_extra if l and l.strip())
         prompt += f"{self.sot_token}system\n" + "\n".join(env_lines) + f"\n{self.eot_token}\n"
 
         prompt += f"{self.sot_token}assistant\n"

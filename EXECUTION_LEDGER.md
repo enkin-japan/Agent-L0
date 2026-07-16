@@ -29,7 +29,7 @@
    ls backend/framework/agents/sandbox_runtime.py  # R1 是否已落地
    ls backend/framework/core/skill_registry.py     # R2a 是否已落地
    ls protocol/fixtures/007-*                      # R3 是否已落地
-   ls backend/framework/memory/notes/              # R4 是否已落地
+   ls backend/framework/memory/notes.py            # R4 是否已落地（笔记数据在 backend/notes/，gitignore）
    git ls-files apple-app | wc -l                  # R5.1 是否已入库（>0 = 已入库）
    ```
 3. **对照 §2 进度表**认领下一个 ⬜ 项。**一次只开一项**（§D.4）。
@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0 ✅；R1 ✅；R2a ✅；R3 ✅（渲染格 `render_hint` + `ToolOutput`，试点 citations），184 金测试全绿。下一步 = R4（文件式长期记忆）。**
+> 🟢 **2026-07-16：R0 ✅；R1 ✅；R2a ✅；R3 ✅；R4 ✅（文件式长期记忆：`memory_write` + 索引进主轮 + `agent_notes` 召回），206 金测试全绿。下一步 = R5（macOS app 收编执行层，最大的一块；开工前须先答 Q5）。**
 
 ---
 
@@ -73,7 +73,7 @@
 | **R1** | 子 Agent 统一执行器 | ✅ 2026-07-16 | R0 ✅ | 无 | 铁律 1（沙箱三不变量） |
 | **R2a** | Skill 体系（显式调用） | ✅ 2026-07-16 | R1 | 无 | 低 |
 | **R3** | 工具渲染格（协议变更） | ✅ 2026-07-16 | — | 无 | **铁律 4 + 5** |
-| **R4** | 文件式长期记忆 | ⬜ | R2a | 无 | 低 |
+| **R4** | 文件式长期记忆 | ✅ 2026-07-16 | R2a | 无 | 低 |
 | **R5** | macOS app 收编执行层 | ⬜ | R0–R4 | 无 | 铁律 1/4 + 改 CHARTER |
 | **D1–D4** | 能力量变扩充 | ⬜ | R5 | 无 | 低 |
 
@@ -119,12 +119,15 @@
 - [x] R3-6 Swift **无需改动**（`transcript: [JSONValue]` 本就穿透，见实测）
 - [x] R3-7 验收：夹具双端回放全绿（web 8 / Swift 7）+ 后端 184 金测试全绿
 
-**R4** ⬜
-- [ ] R4-1 `memory/notes/` + `MEMORY.md` 索引（含行数/字节上限）
-- [ ] R4-2 四类型分类学 + 「不该存什么」清单（借鉴 cc-haha `memoryTypes.ts` 的 **prompt 设计**，不抄代码）
-- [ ] R4-3 RAG 新类目 `agent_notes`
-- [ ] R4-4 笔记写入工具；召回走既有 `rag_search`
-- [ ] R4-5 隐私：笔记**绝不进沙箱上下文**（沿用 `include_env=False` 惯例）
+**R4** ✅ 2026-07-16
+- [x] R4-1 `memory/notes.py`（NoteStore）+ `MEMORY.md` 索引（上限 40 行 / 4000 字符）
+      **数据落 `backend/notes/`**（与 `sessions/` 平级并 gitignore），**不是**账本原写的
+      `backend/framework/memory/notes/`——那是代码包，个人事实会被提交上 GitHub
+- [x] R4-2 四类型分类学 + 「不该存什么」清单 → `mcp/tools/memory_write.py` 的描述
+- [x] R4-3 RAG 新类目 `agent_notes`（`rag_sink.ensure_notes_category`，须先于 MCPRegistry）
+- [x] R4-4 `memory_write` 工具；召回走既有 `rag_search`
+- [x] R4-5 隐私：索引随 `include_env` 门控（门写在 builder 里）；正文侧沙箱无 `rag_search`
+- [x] R4-6 验收：**206 金测试全绿**（184 + 22）+ 装配与隐私边界闭环实测
 
 **R5** ⬜ —— 见 §3.5 详细步骤
 
@@ -609,7 +612,40 @@ web vitest 8 / Swift 夹具 7 全绿；`tsc --noEmit` 与 eslint 干净。
 
 **🔴 隐私红线**：笔记走本地嵌入不出门；**绝不进沙箱上下文**（沿用 `agent.environment` 的 `include_env=False` 惯例）。
 
-**实测结果**：（完成后填写）
+**实测结果**（2026-07-16）：
+
+**① 落盘位置：账本原写的 `memory/notes/` 是错的**（§R 再入清单里那行 `ls
+backend/framework/memory/notes/` 已一并改掉）。那是**代码包内部**——笔记是用户的个人
+事实，进代码树就等于被提交上 GitHub。仓库既有惯例很明确：运行时数据一律
+`backend/<name>/` 且 gitignore（`sessions/` `schedules/` `push/`）。故笔记落
+**`backend/notes/`**，`.gitignore` 同步加一条，并由金测试钉死那条 gitignore 存在。
+（`skills/` 放仓库根是因为剧本是**要入库的内容**；笔记恰恰相反，两者不是一回事。）
+
+**② 两条召回路，缺一不可。** 账本说「召回走 RAG」，但只有 RAG 是不够的：模型压根不会
+想到去搜一件它不知道存在的事。故 `MEMORY.md` 的一行摘要**随环境块注入主编排轮**，
+模型先"知道自己知道"，再按需用 `rag_search` 取正文。索引带上限（40 行 / 4000 字符，
+超出时**明说"还有 N 条，去搜"**而不是悄悄截断——悄悄截断会让模型以为那就是全部）。
+
+**③ 隐私红线由既有闸门承担，不另造。** 索引经 `build_prompt(env_extra=...)` 与静态个人
+事实**共用同一道 `include_env` 门**，且**门写在 builder 里**而不是靠调用方自觉——R1-1 的
+教训：不变量要写死（当年 5 份沙箱拷贝全靠引擎的 `getattr` 兜底才没泄漏）。实测：
+主轮含笔记与"東京"，沙箱两者皆无。正文侧则由构造保证——**三沙箱的工具集里根本没有
+`rag_search`**（沙箱不变量 1），金测试扫源码钉死这条。
+
+**④ frontmatter 解析器提成共用**（`utils/frontmatter.py`）。笔记与 skill 剧本同格式，
+按 R1 的教训——拷一份就会漂移——不再各写一个。
+
+**⑤ 顺带修掉一个真 bug**：名字校验原本收大写，而 macOS/Windows 文件系统大小写不敏感
+——`X.md` 与 `x.md` 是同一个文件，内存字典却当两条：索引说两条、磁盘只有一条，
+后写的悄悄盖掉先写的。改为只收小写 kebab-case，入口挡掉。
+
+**⑥ 装配顺序**：`agent_notes` 类目与笔记本句柄都必须先于 `MCPRegistry`——`rag_search`
+在 `__init__` 里探测类目来构建自己的 schema，晚了它就不认识这个类目、笔记正文再也搜不到
+（`rag_sink` 的既有注释早就写着这条，照办）。与 `skill_invoke` 不同，这里没有互为前置
+的环，一段装配即可。实测 RAG 离线时 `memory_write` 照常注册——笔记文件与索引不依赖 RAG，
+只有全文检索降级（fail-open）。
+
+**验收**：**206 金测试全绿**（184 + 22）；装配与隐私边界闭环实测通过。
 
 ---
 

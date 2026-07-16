@@ -55,11 +55,12 @@ class Gemma4Dialect:
                      enable_thinking: bool = False,
                      task_block: Optional[str] = None,
                      tail_notes: Optional[List[str]] = None,
-                     include_env: bool = False) -> str:
+                     include_env: bool = False,
+                     env_extra: Optional[List[str]] = None) -> str:
         return self._builder.build(messages=messages, tools=tools,
                                    enable_thinking=enable_thinking,
                                    task_block=task_block, tail_notes=tail_notes,
-                                   include_env=include_env)
+                                   include_env=include_env, env_extra=env_extra)
 
     def parse_response(self, raw: str) -> Dict[str, Any]:
         return self._parser.parse(raw)

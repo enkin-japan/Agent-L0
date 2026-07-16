@@ -96,6 +96,8 @@ SESSIONS_DIR = BASE_DIR / "sessions"
 SCHEDULES_DIR = BASE_DIR / "schedules"   # 定时任务实体（与 sessions 平级，防会话扫描误认）
 TOOLS_DIR = BASE_DIR / "framework" / "mcp" / "tools"
 SKILLS_DIR = BASE_DIR.parent / "skills"      # 剧本是内容不是代码，与 backend/ 平级
+NOTES_DIR = BASE_DIR / "notes"               # 长期记忆笔记（R4）：用户个人事实，
+                                             # 与 sessions/ 平级并同样 gitignore，绝不进代码树
 
 # 配置在仓库根（backend 与 rag 共用一份），寻址统一走 config_loader
 from framework.utils.config_loader import load_config
@@ -170,6 +172,16 @@ async def lifespan(app: FastAPI):
         from framework.memory.rag_sink import ensure_memory_category
         await asyncio.to_thread(ensure_memory_category)
 
+    # 0.0b 长期记忆笔记本（R4）：与上面同一个理由必须先于 MCPRegistry——rag_search 在
+    #      __init__ 里探测类目来构建自己的 schema，agent_notes 晚了它就不认识，笔记正文
+    #      再也搜不到。笔记本句柄同样先于工具扫描登记（memory_write 的探活要看它）；
+    #      与 skill_invoke 不同，这里没有互为前置的环，一段装配即可。
+    from framework.agents import runtime as research_runtime
+    from framework.memory.notes import NoteStore
+    from framework.memory.rag_sink import ensure_notes_category
+    research_runtime.set_note_store(NoteStore(NOTES_DIR))
+    await asyncio.to_thread(ensure_notes_category)
+
     # 0.1 定时任务仓库：须先于 MCPRegistry 注入进程全局句柄（schedule_* 工具经
     #     framework.schedule.get_store() 取用，对齐 agents/runtime.py 惯例）。
     from framework.schedule import ScheduleStore, ScheduleRunner, set_store
@@ -187,7 +199,6 @@ async def lifespan(app: FastAPI):
     # 1b. 剧本层（R2a）：skill = 主轮次的提示词剧本，工具沿用主循环 → 审批闸门照常生效。
     #     两段装配是因为两表互为前置：剧本的 requires 探活要看工具表（故必在 MCPRegistry
     #     之后），而 skill_invoke 的探活要看剧本表（故上一步的目录扫描必然跳过它，此处补注册）。
-    from framework.agents import runtime as research_runtime
     skill_registry = SkillRegistry(SKILLS_DIR, tool_names=mcp_registry.tool_names())
     research_runtime.set_skill_registry(skill_registry)
     mcp_registry.load_tool(SkillInvokeTool())

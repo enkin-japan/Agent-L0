@@ -9,7 +9,8 @@
 """
 import pytest
 
-from framework.core.skill_registry import SkillRegistry, _parse_frontmatter
+from framework.core.skill_registry import SkillRegistry
+from framework.utils.frontmatter import parse_frontmatter as _parse_frontmatter
 
 
 def _write(tmp_path, name, text):

@@ -95,3 +95,19 @@ def set_skill_registry(registry) -> None:
 
 def get_skill_registry():
     return _SKILLS
+
+
+# ---------- 长期记忆笔记本（R4） ----------
+# 同一惯例。memory_write 是无状态工具；prompt_builder 侧的索引注入则由 engine 取用
+# （见 core/engine.py 的 env_extra）——两处都需要一个进程级句柄。
+_NOTES = None             # framework.memory.notes.NoteStore
+
+
+def set_note_store(store) -> None:
+    """启动时登记笔记本（lifespan 内调用）。"""
+    global _NOTES
+    _NOTES = store
+
+
+def get_note_store():
+    return _NOTES

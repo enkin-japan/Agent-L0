@@ -69,13 +69,16 @@ class ModelDialect(Protocol):
                      enable_thinking: bool = False,
                      task_block: Optional[str] = None,
                      tail_notes: Optional[List[str]] = None,
-                     include_env: bool = False) -> str:
+                     include_env: bool = False,
+                     env_extra: Optional[List[str]] = None) -> str:
         """组装完整 prompt 字符串。
 
         实现须保持**前缀分层布局**（KV 缓存友好）：稳定前缀（system+工具声明）→
         追加区（历史，只增不改）→ 可变尾部（task_block + tail_notes）。
         include_env 是**隐私门控**：个人环境事实只进主编排轮，沙箱一次性会话
         替身传 False（backend/tests/test_prompt_env.py 守着这条）。
+        env_extra（R4）是运行期才知道的环境事实（如长期记忆索引），实现**必须**把它
+        与静态环境事实一起压在同一条 include_env 门控之下——它同样是个人事实。
         """
         ...
 

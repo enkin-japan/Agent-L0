@@ -108,6 +108,22 @@ class AgentEngine:
     def processor(self):
         return self.backend.processor
 
+    @staticmethod
+    def _notes_index() -> "Optional[List[str]]":
+        """长期记忆索引（R4）。笔记本未装配（测试/未启用）时返回 None。
+
+        惰性反向 import：`core` 不静态依赖 `agents.runtime`（沿用 `orchestrator.py`
+        取 runtime 句柄的先例）。索引自带行数/字节上限，见 `memory/notes.py`。
+        """
+        try:
+            from ..agents import runtime
+            store = runtime.get_note_store()
+            return store.index_lines() if store is not None else None
+        except Exception as e:
+            # 记忆索引取不到只是"这轮想不起来"，绝不能因此让生成失败
+            print(f"[Engine] ⚠️ 取长期记忆索引失败（本轮不注入）: {e}")
+            return None
+
     async def generate_once(self,
                             session: ChatSession,
                             tools: Optional[List[Dict[str, Any]]] = None,
@@ -144,6 +160,10 @@ class AgentEngine:
             tail_notes=tail_notes,
             # 环境事实只注入主编排会话；沙箱一次性会话替身默认 False（隐私边界，opt-in）
             include_env=getattr(session, "inject_env_context", False),
+            # 长期记忆索引（R4）：模型得先"知道自己知道"，才谈得上去召回正文。
+            # 同样是个人事实，故与静态环境事实共用 include_env 这一道门（门在 builder 里，
+            # 此处即便传了，沙箱也拿不到）。
+            env_extra=self._notes_index(),
         )
         # 思考播种用方言的实际 token（而非硬编码字面量）：换模型/token 表时保持一致
         generated_text = self.dialect.thinking_prefill(enable_thinking)
