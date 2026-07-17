@@ -1469,7 +1469,10 @@ TestFlight 52 已传。
   （app 侧「RAG 密钥」设置项与 .env.local 两处同步换）。iOS 不涉及（sidecar 是 macOS
   专属路径），无需发 53 的 TestFlight。
 
-**阶段 3 = 全项目复盘（RETROSPECTIVE.md）+ 文档总更新，随本波收官提交。**
+**阶段 3 ✅（2026-07-18 收官）**：`RETROSPECTIVE.md` 落档（全项目复盘：时间线/
+做对的七条/踩坑四类提炼/未竟清单/风险与建议——用户要求的整项目复盘）；文档总更新
+（README 拓扑与密钥表、ARCHITECTURE 五组件+rag 双面图、CHARTER 地图 :14160/:14162、
+HETERO_COMPUTE §3.1 图+B2c 落账、rag/README 拆分章节——§6 漂移表 ARCHITECTURE 行销案）。
 
 ## §4 风险（已识别，持续有效）
 
@@ -1637,7 +1640,7 @@ kwargs/TypedDict 有拼写保护，字符串键字典没有——凡「配置以
 |---|---|---|
 | `CHARTER.md:167` | `mcp/（20 工具）+ agents/（4 沙箱）` | **17 文件 / 34 类 + 3 沙箱** |
 | `CHARTER.md:239` | 122 项金测试 | **132 项** |
-| `ARCHITECTURE.md` | 开篇「四个组件」，缺 inference-server；`:462` 图仍标 `SearXNG（跟随部署，可选）` | 五组件；SearXNG 已归 edge（B3） |
+| ~~`ARCHITECTURE.md`~~ | ~~开篇「四个组件」，缺 inference-server~~ | **已修**（2026-07-18 随 B2c 文档波：五组件 + rag 双面 + 服务表补 inference/计算面） |
 | `MacAgent.docx` 图1 | 单机分层，无算力分离 / inference-server | 待重画（用户未答复过） |
 
 ---

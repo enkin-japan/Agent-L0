@@ -19,10 +19,12 @@ Agent/
 ├── PROTOCOL.md          # 交互协议 v1（事件账本契约，三端行为标准）
 ├── HETERO_COMPUTE.md    # 异构算力落地方案（执行账本）：CUDA 兼容层 + 算力分离 + RAG 档位
 ├── DEFERRED.md          # 未竟架构账本（轻量已交付·完整版待做；与 CHARTER §7 非目标相区分）
+├── RETROSPECTIVE.md     # 全项目复盘（B2c 收官时点：走过的路 / 做对的 / 踩坑提炼 / 未竟清单）
 ├── protocol/fixtures/   # 协议测试夹具（web 与原生 app 共享的行为标准）
 ├── backend/             # Agent 主体（FastAPI, :14159）：编排循环 / 工具 / 会话记忆 / 推理后端
 ├── inference/           # 推理服务（FastAPI, :14161）：把推理后端 HTTP/SSE 化，供算力分离部署
-├── rag/                 # RAG 知识库（FastAPI + PyTorch MPS, :14160）：嵌入 + 重排 + ChromaDB
+├── rag/                 # RAG 知识库：数据面（:14160，ChromaDB+原文+路由，归工作端）
+│                        #   + 计算面（:14162，嵌入/重排，PyTorch MPS，归算力端；可融合单进程）
 ├── frontend/            # Web 前端（React 19 + Vite, :5173）：聊天 / 审批 / 任务 / Deck / 定时任务
 ├── searxng/             # SearXNG 原生部署目录（settings.yml + 源码 + venv, :8080, 可选联网搜索层）
 └── logs/                # 各服务运行日志与 pid（devctl 管理，不入库）
@@ -53,15 +55,16 @@ Agent/
 
 | 形态 | 命令 | 说明 |
 |---|---|---|
-| 算力分离 · 设备 A（入库形态） | `./devctl.sh start --profile gpu` | inference-server + RAG：只出算力，不碰会话 |
-| 算力分离 · 设备 B（入库形态） | `./devctl.sh start --profile edge` | SearXNG + backend + 前端：编排 / 工具 / 记忆 / 会话落盘 |
-| all-in-one | `./devctl.sh start` | 单机跑全部；需先把 `inference.mode` 改回 `inprocess`、两个 host 改回 `127.0.0.1` |
+| 算力分离 · 算力端（入库形态） | `./devctl.sh start --profile gpu` | inference-server + RAG 计算面：**完全无状态**，只出算力，不落任何用户数据 |
+| 算力分离 · 工作端（入库形态） | `./devctl.sh start --profile edge` | RAG 数据面 + SearXNG + backend + 前端：编排 / 工具 / 记忆 / 会话与知识库落盘 |
+| all-in-one | `./devctl.sh start` | 单机跑全部；需把 `inference.mode` 改回 `inprocess`、`inference.remote.host` 与 `rag.compute.host` 改回环/留空 |
 
-`inference.remote.host` 与 `rag.host` 是**同一个值**、且各自身兼两职：设备 A 拿它当绑定地址，
-设备 B 拿它当拨号地址（填设备 A 的 Tailscale 地址）。两机共用入库的这份 `config.yaml`，pull 即同步。
-密钥不入库：两侧 `.env.local` 的 `INFER_API_KEY` / `RAG_API_KEY` 须手工填成一致。
-会话数据（`history.jsonl` / `memory.json` / deck 等）**全部留在设备 B**，设备 A 只见 prompt
-与媒体、不持久化会话。
+`inference.remote.host` 与 `rag.compute.host` 各自身兼两职：算力端拿它当绑定地址，
+工作端拿它当拨号地址（填算力端的 Tailscale 地址）。两机共用入库的这份 `config.yaml`，pull 即同步。
+密钥不入库：两侧 `.env.local` 的 `INFER_API_KEY` / `RAG_COMPUTE_API_KEY` 须手工填成一致。
+用户数据——会话（`history.jsonl` / `memory.json` / deck 等）与**整个知识库**（Chroma 向量库 +
+原文备份，B2c 拆分后随数据面归工作端）——**全部留在工作端**，算力端只见 prompt
+与在途文本、不持久化任何内容。
 
 edge 侧的 backend 不加载模型权重，只拉分词器（B3 实测：31MB vs 全量 4.9GB；
 进程常驻 1.0GB vs 设备 A 推理侧 6.5GB）。
@@ -77,9 +80,10 @@ edge 侧的 backend 不加载模型权重，只拉分词器（B3 实测：31MB v
   `agent` / `schedules` → backend；`inference` 的 `backend` + `remote` 键 → inference-server；
   `rag`（含档位注册表 `tiers`；host/port 两侧共用）/ `tuning` → rag；`auth.devices` → 后端多设备
   票据（留空即单密钥模式）。各项含义见文件内注释。
-- **`.env.local`（仓库根，不入库）**：`cp .env.example .env.local` 后填写三个密钥——
+- **`.env.local`（仓库根，不入库）**：`cp .env.example .env.local` 后填写密钥——
   `AGENT_API_KEY`（前端 → backend）、`INFER_API_KEY`（backend → inference-server）、
-  `RAG_API_KEY`（backend → rag）。devctl 启动时自动 source 并 export 给各服务；Vite 代理
+  `RAG_API_KEY`（backend → rag 数据面）、`RAG_COMPUTE_API_KEY`（rag 数据面 → 计算面，
+  拆分部署两侧同值）。devctl 启动时自动 source 并 export 给各服务；Vite 代理
   （`envDir` 指向仓库根）读同一份文件、在 Node 侧注入 `Authorization` 头——浏览器永不持有密钥。
 
 ## 端口与安全边界
@@ -89,10 +93,11 @@ edge 侧的 backend 不加载模型权重，只拉分词器（B3 实测：31MB v
 | frontend (Vite) | 5173 | `0.0.0.0`（唯一对外入口，仅限受信通路暴露） | 无（代理代持密钥） |
 | backend | 14159 | `127.0.0.1`（外部访问统一走前端 `/api` 代理） | `AGENT_API_KEY` |
 | inference-server | 14161 | `127.0.0.1`（仅 `inference.mode: remote` 时需要） | `INFER_API_KEY` |
-| rag | 14160 | `127.0.0.1`（分离形态下改为设备 A 的地址） | `RAG_API_KEY` |
-| searxng | 8080 | `127.0.0.1`（**恒为回环**：始终与 backend 同机，分离形态下随 backend 在设备 B） | 无（故不可离开回环） |
+| rag 数据面 | 14160 | `127.0.0.1`（拆分后归工作端本机；过渡拓扑可绑算力端地址） | `RAG_API_KEY` |
+| rag 计算面 | 14162 | 按 `rag.compute.host`（拆分形态绑算力端 Tailscale 地址；空=不启用/融合） | `RAG_COMPUTE_API_KEY` |
+| searxng | 8080 | `127.0.0.1`（**恒为回环**：始终与 backend 同机，分离形态下随 backend 在工作端） | 无（故不可离开回环） |
 
-三个后端服务的密钥留空 = 未启用（告警后放行），便于首启 / dev。**但绑定到非回环地址时留空会被拒绝启动**：
+各后端服务的密钥留空 = 未启用（告警后放行），便于首启 / dev。**但绑定到非回环地址时留空会被拒绝启动**：
 改 host 与设密钥是两个独立动作，先改 host 后忘密钥就等于对整个 tailnet 裸奔，故这条护栏是硬失败而非告警。
 
 ⚠️ 5173 + 代理注入密钥意味着**能访问 5173 的设备等于免钥使用 Agent**（含 shell 等强力工具），

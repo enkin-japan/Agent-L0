@@ -1,7 +1,8 @@
 # 项目运行架构逻辑示意图
 
-> 描述本仓库（monorepo）四个组件——backend（Agent 主体）、rag（RAG 数据库）、
-> frontend（交互前端）与可选的 SearXNG——的运行架构与关键数据流。
+> 描述本仓库（monorepo）五个组件——backend（Agent 主体）、inference-server（推理
+> 服务化，算力分离用）、rag（RAG 数据库：数据面 + 计算面，B2c）、frontend（交互前端）
+> 与可选的 SearXNG——的运行架构与关键数据流。
 > 配置统一在仓库根 config.yaml，启动统一走根 devctl.sh。
 >
 > **交互层已重整为事件账本架构**（2026-07 完成）：轮次是可寻址、可重放的持久资源，
@@ -21,7 +22,9 @@
 |---|---|---|---|---|
 | frontend | 5173 | 0.0.0.0 | React 19 + Vite + Zustand | 用户交互界面（唯一对外入口） |
 | backend | 14159 | 127.0.0.1 | FastAPI + MLX (gemma-4-e4b 4bit) | Agent 主体：推理/编排/工具/会话 |
-| rag | 14160 | 127.0.0.1 | FastAPI + PyTorch(MPS) + ChromaDB | 分类路由式向量知识库 |
+| inference-server | 14161 | 按 `inference.remote.host` | FastAPI + MLX/CUDA | 推理服务化（`mode: remote` 时算力端承载） |
+| rag 数据面 | 14160 | 127.0.0.1 | FastAPI + ChromaDB | 分类路由向量库：数据/路由/治理（用户数据只落这里） |
+| rag 计算面 | 14162 | 按 `rag.compute.host` | FastAPI + PyTorch(MPS/CUDA) | 嵌入/重排/分词（无状态；`compute.host` 空=融合进数据面） |
 | SearXNG（可选） | 8080 | 原生 venv | searxng/.venv + searxng-src（pin 提交） | 联网搜索聚合（web_research 依赖） |
 
 启停统一走根目录 `devctl.sh`（`setup` 首次部署；启动顺序 RAG → SearXNG → backend → 前端；日志在 `logs/`）。
@@ -58,9 +61,16 @@
           记忆沉淀 HTTP │              │             │  否则打后端自托管包;渲染器同一份）
                        ▼              ▼             ▼
         ┌──────────────────┐  ┌──────────────┐  ┌──────────────────────────┐
-        │   rag :14160     │  │SearXNG :8080 │  │ 前端 :5173 /print/deck    │
-        │  (仅回环, 无鉴权) │  │  (原生 venv) │  │ 或 backend/static/webapp  │
-        └──────────────────┘  └──────────────┘  └──────────────────────────┘
+        │ rag 数据面 :14160 │  │SearXNG :8080 │  │ 前端 :5173 /print/deck    │
+        │ (回环, Bearer；   │  │  (原生 venv) │  │ 或 backend/static/webapp  │
+        │  数据/路由/治理)  │  └──────────────┘  └──────────────────────────┘
+        └────────┬─────────┘
+                 │ /embed /rerank /tokenize（Bearer，Tailscale）
+                 ▼
+        ┌──────────────────────┐
+        │ rag 计算面 :14162     │ ← 算力端；无状态（B2c 拆分。融合模式=并入数据面进程）
+        │ (嵌入+重排, MPS/CUDA) │
+        └──────────────────────┘
 ```
 
 ---
@@ -129,8 +139,12 @@
 
 ## 4. rag 内部流程
 
+> B2c 拆分：下图流程全在**数据面**（:14160）编排；标 ◆ 的模型计算（嵌入/重排/token
+> 计数）经计算面执行——融合模式=同进程内调（compute_core），拆分模式=HTTP 拨算力端
+> :14162（无状态，Bearer）。数据（ChromaDB + storage 原文）只落数据面一侧。
+
 ```
-                        ┌─────────────── rag :14160 ───────────────┐
+                        ┌────────── rag 数据面 :14160 ──────────────┐
    入库 POST /insert    │                                          │
   (title,doc,category?) │  Qwen3-Embedding-0.6B (MPS, fp16)        │
   ──────────────────────┼─▶ ①有 category：校验存在否则 400 拒绝     │

@@ -468,20 +468,24 @@ vLLM 的决定性理由——几个月调出来的四项智能层优化全有原
 ### 3.1 目标拓扑
 
 ```
-   设备 B（用户 Mac：执行层+前端）                 设备 A（GPU 服务器）
+   工作端（用户 Mac：执行层+前端+数据）             算力端（GPU 服务器 / mini）
   ┌─────────────────────────────────┐            ┌────────────────────────────────┐
   │ frontend :5173                   │            │ inference-server :14161        │
   │ backend  :14159                  │            │   §1.1 协议的 HTTP/SSE 化       │
   │   编排/护栏/记忆/调度/账本        │  Tailscale │   （内包 vLLM CUDA 或 MLX 后端）│
-  │   工具执行（作用于本机）          │◀══════════▶│ rag :14160（8B 嵌入+重排）      │
-  │   RemoteBackend（协议实现）       │   Bearer   │ ASR（faster-whisper，可选）     │
-  └─────────────────────────────────┘            │ SearXNG :8080（跟随部署，可选） │
-                                                  └────────────────────────────────┘
+  │   工具执行（作用于本机）          │◀══════════▶│ rag 计算面 :14162（B2c）        │
+  │   RemoteBackend（协议实现）       │   Bearer   │   嵌入+重排+分词，无状态        │
+  │ rag 数据面 :14160（B2c）          │            │ ASR（faster-whisper，可选）     │
+  │   ChromaDB+原文备份+路由（回环）   │            └────────────────────────────────┘
+  │ SearXNG :8080（回环，可选）       │
+  └─────────────────────────────────┘
 ```
 
-- 会话数据（history.jsonl / memory.json / deck 等）**全部留在设备 B**——隐私
-  边界不动：服务端只见 prompt 与媒体，不持久化会话。
+- 用户数据——会话（history.jsonl / memory.json / deck 等）与**整个知识库**（Chroma
+  向量库 + `storage/` 原文备份，B2c 拆分后随数据面归工作端）——**全部留在工作端**：
+  算力端完全无状态，只见 prompt 与在途文本，不持久化任何内容。
 - 单机模式 = InProcess 后端（现状）；分离模式 = RemoteBackend。同一协议两个实现。
+  RAG 同构：`rag.compute.host` 空 = 融合（模型就地加载）/ 非空 = 数据面拨号计算面。
 
 ### 3.2 B1 —— inference-server（新顶层目录 `inference/`，FastAPI，:14161）
 
@@ -567,7 +571,23 @@ GET  /health  /metrics               devctl 探活 + 仪表
 - [x] （B2a）**user_id 埋点**（D3）：RAG API 加 header `X-Rag-User`（缺省 `"default"`，行为全同），
       `_scoped_collection` 默认用户返回原名；约定 collection `u_{user_id}__{category}`、
       原文 `storage/raw_files/{user_id}/{类}/`、meta 按 user 分库——**只定约定与参数面，不实现逻辑**
-- [ ] （设备 A）`config.yaml` 的 `rag.host` 指向服务器（键已两侧共用+鉴权已补，跨机联调并入 B3）
+- [x] ~~（设备 A）`config.yaml` 的 `rag.host` 指向服务器~~ **被 B2c 取代**（2026-07-18）：
+      数据/计算拆分后 `rag.host` 恒回环（数据面在工作端），跨机的是 `rag.compute.host`。
+      过渡拓扑（整 RAG 在算力端）曾实跑过渡期（2026-07-16~18），已切换退役
+- [x] **B2c 数据/计算拆分**（2026-07-18 用户拍板并全量落地）：动机=贯彻 §3.1 隐私边界
+      （拆分前算力端落着原文两份明文：raw_files + Chroma documents）+ 8B 生产档必须留在
+      算力端。形态=配置分派缺省融合（镜像 InProcess/RemoteBackend）：`compute_core.py`
+      原样抽取模型侧；`compute_server.py`（:14162）无状态四原语 /embed /rerank /tokenize
+      /health，Bearer=RAG_COMPUTE_API_KEY+非回环空钥拒启；`rag_server.py`=数据面
+      （Chroma/原文/路由/切块/治理），计算面离线时照常启动（纯数据操作恒可用、计算类
+      503 自愈——比拆分前"backend 被远端 RAG 卡启动"更韧）；换档护栏改「存储戳 vs 计算面
+      identity」；阈值随档位 identity 下发。RAG_CONFIG/RAG_DATA_DIR 布局旋钮；lib_edge
+      编队收编 rag-data（`rag_is_local` 判据+reap 双判据+监护第三服务）；bundle 随包
+      rag_server.py+chromadb（运行时 990M→1.2G，337/337 签名）。**实机切换完成**：
+      数据迁移 mini 的 app 数据根（1.7M+24K，戳 text-0.6b 一致）、旧融合 RAG 退役、
+      计算面上线（tailnet 绑定+鉴权 200）、app 53 编队全链路实测（rag-data 拉起→backend
+      RAG 工具注册→检索穿透 embed→route→rerank）。融合/拆分同链路重排分**逐位一致**；
+      金测试 291（backend 三客户端零改动）
 - [ ] （设备 A）8B 权重落位 + 精度/显存档位按 §4.1 选定（档位表已备位，记录所选进 §S.1）
 - [ ] （设备 A）**全量重建实跑**：新库全量重建 → 新旧库并行查询对比 → 切流 → 旧库归档
       （脚本机制已在 0.6B 上实跑验证并修好翻倍 bug，见 B2b；此处剩的是 8B 新库上的真实迁移）
