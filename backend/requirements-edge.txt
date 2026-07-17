@@ -76,3 +76,6 @@ h2==4.3.0
 cryptography==49.0.0
 # 媒体抓取（media_download）：纯 Python 无原生扩展，签名树可后装；另需系统 ffmpeg
 yt-dlp==2026.7.4
+# RAG 数据面（B2c 拆分，rag/rag_server.py 随包；数据面不 import torch——
+# torch/transformers 归算力端的计算面）：缺失时 sidecar 拉不起 rag-data
+chromadb==1.5.9

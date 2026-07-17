@@ -142,11 +142,11 @@ final class SidecarManager: ObservableObject {
     private func watchPids() {
         cancelWatchers()
         guard let layout else { return }
-        for name in ["backend", "searx"] {
+        for name in ["backend", "searx", "rag"] {
             let pidFile = layout.logDir.appendingPathComponent("\(name).pid")
             guard let text = try? String(contentsOf: pidFile, encoding: .utf8),
                   let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)),
-                  kill(pid, 0) == 0 else { continue }   // searx 可选：没起就不盯
+                  kill(pid, 0) == 0 else { continue }   // searx 可选、rag 仅本机数据面时有：没起就不盯
             let src = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit,
                                                        queue: .main)
             src.setEventHandler { [weak self] in
@@ -222,6 +222,15 @@ final class SidecarManager: ObservableObject {
             if !infer.isEmpty { env["INFER_API_KEY"] = infer }
             let rag = Self.cleanKey(settings?.ragApiKey ?? "")
             if !rag.isEmpty { env["RAG_API_KEY"] = rag }
+            // B2c 拆分：RAG 数据面随包（config 的 rag.host 为回环时 lib_edge 编队自动拉起，
+            // 先于 backend；指远端 = 过渡拓扑，不拉）。数据落数据根，代码目录保持只读。
+            env["EDGE_RAG_DIR"] = res.appendingPathComponent("rag").path
+            env["EDGE_RAG_PY"] = res.appendingPathComponent("python/bin/python3.13").path
+            env["EDGE_RAG_DATA_DIR"] = dataDir.appendingPathComponent("rag").path
+            // 数据面拨算力端计算面的钥匙与「RAG 密钥」共用同一个设置项：两种拓扑
+            //（过渡=整 RAG 在算力端走 RAG_API_KEY / 拆分=计算面走 RAG_COMPUTE_API_KEY）
+            // 各用其一，闲置的一侧被忽略——用户无需理解两个变量名。
+            if !rag.isEmpty { env["RAG_COMPUTE_API_KEY"] = rag }
             return Layout(libEdge: res.appendingPathComponent("scripts/lib_edge.sh"),
                           env: env, logDir: logDir, isBundle: true)
         }
@@ -254,6 +263,11 @@ final class SidecarManager: ObservableObject {
                 if !k.isEmpty { env[k] = v }
             }
         }
+        // B2c：仓库布局的 RAG 数据面承载（与 devctl 同一套 rag/.venv）；
+        // EDGE_RAG_DATA_DIR 不设 = 数据根缺省 rag/ 本目录（devctl 现状）。
+        // RAG_COMPUTE_API_KEY 无需单独注入：上面的 .env(.local) 平面解析已带全部键。
+        env["EDGE_RAG_DIR"] = rootURL.appendingPathComponent("rag").path
+        env["EDGE_RAG_PY"] = rootURL.appendingPathComponent("rag/.venv/bin/python").path
         return Layout(libEdge: rootURL.appendingPathComponent("scripts/lib_edge.sh"),
                       env: env, logDir: logDir, isBundle: false)
     }

@@ -89,7 +89,7 @@ rm -rf "$RELOC"; cp -R "$OUT" "$RELOC"
 import sys, pathlib
 assert pathlib.Path(sys.prefix).resolve() == pathlib.Path('$RELOC').resolve(), \
     f'sys.prefix 没跟着搬: {sys.prefix}'
-import fastapi, transformers, playwright, sympy, matplotlib, fitz, trafilatura
+import fastapi, transformers, playwright, sympy, matplotlib, fitz, trafilatura, chromadb
 try:
     import searx   # 随包时一并验：editable 安装会在这里暴露（指回树外源码）
     assert str(pathlib.Path(searx.__file__)).startswith(str(pathlib.Path('$RELOC').resolve())), \

@@ -40,6 +40,11 @@ rsync -a --delete \
   "$ROOT/backend/" "$RES/backend/"
 # 剧本内容（app.py: SKILLS_DIR = backend 的父目录/skills → Resources/skills）
 rsync -a --delete --exclude='__pycache__' "$ROOT/skills/" "$RES/skills/"
+# RAG 数据面（B2c）：只随 rag_server.py——bundle 形态只支持拆分模式（计算面在算力端），
+# compute_core/compute_server 依赖 torch，不进包。数据（chroma_data/storage）落数据根
+# （EDGE_RAG_DATA_DIR，SidecarManager 注入），代码目录保持只读。
+mkdir -p "$RES/rag"
+cp "$ROOT/rag/rag_server.py" "$RES/rag/rag_server.py"
 # 运行时（已按 hardened runtime 逐 Mach-O 签名，ditto 保留符号链接与权限）
 rm -rf "$RES/python"
 ditto "$RUNTIME" "$RES/python"

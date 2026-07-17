@@ -136,7 +136,8 @@ rag:
   # 一个键身兼两职。RAG 只有 backend 调用（rag_search/rag_admin/rag_sink 三个客户端都在
   # backend 进程内），前端从不直连本服务。回环单机部署改回 127.0.0.1。
   # ⚠️ 非回环绑定必须配 RAG_API_KEY（两侧 .env.local 同值），否则护栏拒绝启动。
-  host: "100.72.11.119"
+  # B2c 拆分后数据面归工作端本机（回环）；知识库数据（chroma_data/storage）随之在工作端。
+  host: "127.0.0.1"
   port: 14160
 
   # ── 数据/计算拆分（HETERO_COMPUTE B2c）────────────────────────────────────
@@ -149,7 +150,7 @@ rag:
   #   空 key = 拒启）。拓扑切换步骤：数据目录（chroma_data/ + storage/）先从算力端
   #   迁到工作端，再改本段 + rag.host，最后算力端改跑 `start --profile gpu`。
   compute:
-    host: ""
+    host: "100.72.11.119"
     port: 14162
 
   # ── RAG 档位注册表（镜像 inference.model_registry 的选择制，HETERO_COMPUTE B2a）──

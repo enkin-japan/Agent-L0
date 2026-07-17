@@ -128,7 +128,14 @@ class _LocalCompute:
         self.core = None
 
     def start(self) -> None:
-        import compute_core as core   # 仅融合模式 import（拆分模式的数据面不背 torch）
+        try:
+            import compute_core as core   # 仅融合模式 import（拆分模式的数据面不背 torch）
+        except ImportError as e:
+            # bundle 形态只随 rag_server.py（torch 不进包）：融合模式在该布局天然不可用
+            raise SystemExit(
+                f"❌ [rag] 融合模式需要模型依赖（compute_core/torch），本布局未随包：{e}\n"
+                f"   请在 config.yaml 设置 rag.compute.host 指向算力端（拆分模式），"
+                f"或在完整仓库布局下运行融合模式。")
         self.core = core
         core.load_models()
         self.identity = core.identity()
