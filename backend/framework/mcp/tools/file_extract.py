@@ -14,6 +14,8 @@ from typing import Optional
 
 from ..base import BaseTool
 from ...ingestion.parsers import asr, pdf, document, text as textparser
+# 扩展名口径与摄入层共享单一真相（防两份拷贝漂移，S.7）
+from ...ingestion.router import LEGACY_DOC_EXTS, LEGACY_TEXTUTIL_EXTS, OFFICE_EXTS
 
 # PDF 单次输出预算：编排层单条观察截断 observation_max_chars 默认 4000——工具级预算
 # 压到 3400，保证「页对齐截断 + 头部续读路标」完整活过编排层截断（否则路标被剪掉，
@@ -69,7 +71,24 @@ class FileExtractTool(BaseTool):
         if mime_audio:
             return asr.transcribe_audio(str(p), start=start, end=end)
 
-        if suf in {".docx", ".pptx", ".xlsx", ".doc", ".ppt", ".xls", ".odt", ".odp", ".ods", ".rtf", ".epub"}:
+        if suf in LEGACY_DOC_EXTS:
+            # 无本地转换器：给可行动出路而不是让二进制流进文本读取器变乱码
+            if suf in LEGACY_TEXTUTIL_EXTS:
+                return (f"System Error: no local converter for {suf}. Convert it first via "
+                        f"shell: textutil -convert docx \"{p}\" (writes a .docx next to it), "
+                        f"then call file_extract on the converted file.")
+            return (f"System Error: no local converter for {suf} (needs PowerPoint/LibreOffice). "
+                    f"Ask the user for a .pptx/.xlsx export of this file.")
+
+        if suf in {".xlsm", ".xltx"}:
+            # markitdown 只认 .xlsx——宏表/模板走 openpyxl 结构摘要（与摄入层同路）
+            from ...excel import summarize_for_ingestion
+            try:
+                return summarize_for_ingestion(str(p), max_chars=max_chars)
+            except Exception as e:
+                return f"System Error: spreadsheet summary failed for {p.name}: {e}"
+
+        if suf in OFFICE_EXTS:
             return document.parse_document(str(p), max_chars=max_chars)
 
         # 代码 / 纯文本：按行区间读取

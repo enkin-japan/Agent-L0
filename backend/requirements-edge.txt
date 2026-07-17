@@ -51,7 +51,7 @@ huggingface_hub==1.15.0
 # 摄入解析层（Ingestion）：非原生模态急解析依赖。缺失时对应格式 fail-open。
 # 注：音频转写不在此列——它经 ASR provider 走设备 A（D.14）。
 PyMuPDF==1.27.2.3
-markitdown[docx,pptx,xlsx]==0.1.6  # extras 必带：基础包不含办公文档转换器
+markitdown[docx,pptx,xlsx,xls]==0.1.6  # extras 必带：基础包不含办公文档转换器；xls=xlrd（极小）
 
 # 联网调查（web_research 受限沙箱）：正文抽取 + HTML 净化。缺失时 web_research 不注册。
 trafilatura==2.0.0

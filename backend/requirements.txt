@@ -23,7 +23,7 @@ huggingface_hub==1.15.0
 # 不打断对话），但要让音频转写/办公文档解析真正生效需安装。PyMuPDF 提供 import fitz。
 mlx-whisper==0.4.3
 PyMuPDF==1.27.2.3
-markitdown[docx,pptx,xlsx]==0.1.6  # extras 必带：基础包不含办公文档转换器，缺了 docx/xlsx/pptx 解析会报 MissingDependency
+markitdown[docx,pptx,xlsx,xls]==0.1.6  # extras 必带：基础包不含办公文档转换器，缺了 docx/xlsx/pptx 解析会报 MissingDependency；xls=xlrd（旧版 Excel 真支持）
 # 联网调查（web_research 受限沙箱）：正文抽取 + HTML 净化。缺失时 web_research 不注册（探活失败）。
 # SearXNG 本身是独立 Docker 服务（本机搜索层），不在 pip 依赖内，须另行 docker run。
 trafilatura==2.0.0

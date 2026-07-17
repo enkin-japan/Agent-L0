@@ -24,9 +24,17 @@ from typing import Any, Dict, List, Optional
 
 from .parsers import asr, pdf, document, text as textparser
 
-# 办公文档扩展名（xlsx/xlsm/xltx 走结构摘要，其余交给 markitdown）
-OFFICE_EXTS = {".docx", ".pptx", ".xlsx", ".xlsm", ".xltx", ".doc", ".ppt", ".xls",
-               ".odt", ".odp", ".ods", ".rtf", ".epub"}
+# 办公文档扩展名（xlsx/xlsm/xltx 走结构摘要，其余交给 markitdown）。
+# 只列本地真解析得动的格式：markitdown 转换器实际覆盖 docx/pptx/xlsx/epub，
+# .xls 需 requirements 里 markitdown 的 xls extra（xlrd），.xlsm/.xltx 靠 openpyxl
+# 结构摘要。没有本地转换器的格式在 LEGACY_DOC_EXTS——宣告跟着能力走（S.3）：
+# 假装支持只会让模型看到「解析失败」而不是可行动的转换指引。
+OFFICE_EXTS = {".docx", ".pptx", ".xlsx", ".xlsm", ".xltx", ".xls", ".epub"}
+
+# 无本地转换器的文档格式：不解析、登记路径并给转换出路。
+# 前三者 macOS 自带 textutil 可转 docx；后三者需 PowerPoint/LibreOffice 级工具。
+LEGACY_TEXTUTIL_EXTS = {".doc", ".rtf", ".odt"}
+LEGACY_DOC_EXTS = LEGACY_TEXTUTIL_EXTS | {".ppt", ".odp", ".ods"}
 
 
 def _spreadsheet_summary(path: str, max_chars: int) -> str:
@@ -68,6 +76,8 @@ class Ingestion:
             return "pdf"
         if suf in OFFICE_EXTS:
             return "document"
+        if suf in LEGACY_DOC_EXTS:
+            return "legacy_doc"
         if textparser.is_code(filename):
             return "code"
         if (mime and mime.startswith("text/")) or suf in {".txt", ".md", ".log", ".csv"}:
@@ -177,6 +187,21 @@ class Ingestion:
                             f"[Document · {fname}]\n{body}\n[Original file: {p}; for full text use file_extract(path)]"
                         )
                     result["attachments"].append({"path": str(p), "type": "document", "name": fname})
+
+                elif route == "legacy_doc":
+                    # 无本地转换器：登记路径 + 可行动的转换指引（textutil 可转的三种给命令）
+                    p = self._save(file, attach_dir, name)
+                    suf = Path(fname).suffix.lower()
+                    if suf in LEGACY_TEXTUTIL_EXTS:
+                        hint = (f"no local converter for {suf}; convert it first via shell: "
+                                f"textutil -convert docx \"{p}\" (writes a .docx next to it), "
+                                f"then file_extract the converted file")
+                    else:
+                        hint = (f"no local converter for {suf}; ask the user for a "
+                                f".pptx/.xlsx export of this file")
+                    text_parts.append(
+                        f"[Document · {fname} · not parsed]\nPath: {p}\n[{hint}]")
+                    result["attachments"].append({"path": str(p), "type": "attach", "name": fname})
 
                 elif route in ("code", "text"):
                     p = self._save(file, attach_dir, name)

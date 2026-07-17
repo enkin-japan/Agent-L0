@@ -1530,6 +1530,20 @@ HETERO_COMPUTE §3.1 图+B2c 落账、rag/README 拆分章节——§6 漂移表
 flush+抽取指引一张票、工具输出硬上限、检索侧 MMR+子串召回同批。全部为建议，
 **未动任何代码**，采纳与否待用户拍板。）
 
+### 评估采纳落地波（2026-07-18 用户拍板「这三个都不是什么大工程，一起做了吧」）
+
+拍板范围 = ①四张低成本票（时间锚定/输出硬上限/memory flush+抽取/dream 整理
++检索侧增强）②codegraph 进工具面 ③markitdown 扩展名校准。逐项落地：
+
+1. **markitdown 扩展名名实校准 ✅**：OFFICE_EXTS 收敛为本地真解析得动的 7 格式
+   （.xls 补 requirements 两处 `xls` extra=xlrd 96KB 转正；.xlsm/.xltx 在
+   file_extract 补 openpyxl 结构摘要分支——旧表里根本没有它们，二进制流进文本
+   读取器变乱码）；无本地转换器的 6 格式入 LEGACY_DOC_EXTS 走新 legacy_doc 路：
+   摄入登记路径+转换指引（.doc/.rtf/.odt 给 `textutil -convert docx` 命令，
+   .ppt/.odp/.ods 指路要 .pptx/.xlsx 导出），file_extract 同口径 System Error
+   指引。两侧共享同一组常量（S.7 防拷贝漂移）。金测试 291→311（+20：两表互斥/
+   路由参数化/两类指引措辞/宏表走摘要/xls 走 markitdown/xlrd 在位）。
+
 | | 风险 | 缓解 |
 |---|---|---|
 | **1** | 「AI 写代码所以工作量不是问题」——**在新增上成立，在承重代码上不成立**。护栏参数「全是实测调的」（`CHARTER.md:42`），瓶颈是实测不是打字 | §D.4 一次只开一项；每项验收要人在回路 |
