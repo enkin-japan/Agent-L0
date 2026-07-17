@@ -48,3 +48,5 @@ matplotlib==3.11.0
 # iOS 推送（framework/push：APNs HTTP/2 直发 + .p8 ES256 签名）：缺失时 iOS 推送禁用，macOS 本地通知不受影响
 h2==4.3.0
 cryptography==49.0.0
+# 媒体抓取（media_download：在线视频/音频取回）：缺失时工具不注册；另需系统 ffmpeg（brew install ffmpeg）
+yt-dlp==2026.7.4

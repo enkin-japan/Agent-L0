@@ -74,3 +74,5 @@ matplotlib==3.11.0
 # iOS 推送（framework/push：APNs HTTP/2 直发 + .p8 ES256 签名）
 h2==4.3.0
 cryptography==49.0.0
+# 媒体抓取（media_download）：纯 Python 无原生扩展，签名树可后装；另需系统 ffmpeg
+yt-dlp==2026.7.4
