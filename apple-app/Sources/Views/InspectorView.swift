@@ -471,9 +471,18 @@ struct MediaPlayerSheet: View {
         }
         .padding(Theme.s3)
         #if os(macOS)
-        .frame(minWidth: 560, minHeight: 380)
+        // max 不设的话 sheet 尺寸区间为零，macOS 上窗口会被锁死不可拖拽（实机反馈）
+        .frame(minWidth: 560, idealWidth: 840, maxWidth: .infinity,
+               minHeight: 380, idealHeight: 560, maxHeight: .infinity)
         #endif
         .onAppear {
+            #if os(iOS)
+            // iOS 默认音频类别 .soloAmbient 跟随静音拨键——静音模式下播放被消声
+            // （实机反馈：app 内无声、存出去用系统 app 放就有声）。.playback =
+            // 正经媒体播放语义：无视静音键，与系统播放器行为一致。
+            try? AVAudioSession.sharedInstance().setCategory(.playback)
+            try? AVAudioSession.sharedInstance().setActive(true)
+            #endif
             let asset = AVURLAsset(url: request.url,
                                    options: ["AVURLAssetHTTPHeaderFieldsKey": request.headers])
             let p = AVPlayer(playerItem: AVPlayerItem(asset: asset))
