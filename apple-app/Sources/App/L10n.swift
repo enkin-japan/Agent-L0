@@ -30,6 +30,11 @@ enum L10n {
         "关闭": ("閉じる", "Close"),
         "保存": ("保存", "Save"),
         "分享": ("共有", "Share"),
+        "复制": ("コピー", "Copy"),
+        "重新生成": ("再生成", "Regenerate"),
+        "重新生成会立即重启执行层；其他设备须重新填入新 Key":
+            ("再生成すると実行レイヤーが直ちに再起動します。他のデバイスでは新しいキーの再入力が必要です",
+             "Regenerating restarts the execution layer immediately; other devices must re-enter the new key"),
         "取消": ("キャンセル", "Cancel"),
         "删除": ("削除", "Delete"),
         "恢复": ("再開", "Resume"),

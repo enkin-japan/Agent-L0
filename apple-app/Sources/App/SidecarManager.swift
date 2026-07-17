@@ -259,7 +259,8 @@ final class SidecarManager: ObservableObject {
     }
 
     /// 首启生成的 AGENT_API_KEY：32 字节系统熵，base64url（无需人抄写，只走 Keychain）。
-    private static func randomKey() -> String {
+    /// 设置页的「重新生成」（key 轮换）也用它——同一把熵源、同一形态。
+    static func randomKey() -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
         guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
             return UUID().uuidString + UUID().uuidString   // 熵源失败的兜底，仍不可猜

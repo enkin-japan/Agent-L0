@@ -12,6 +12,10 @@ struct SettingsView: View {
     @State private var urlText = ""
     @State private var keyText = ""
     @State private var testResult: String?
+    #if os(macOS)
+    @State private var keyCopied = false
+    @State private var copyResetTask: Task<Void, Never>?
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -87,6 +91,24 @@ struct SettingsView: View {
                 }
                 Section("API Key") {
                     SecureField(L("AGENT_API_KEY（存入钥匙串）"), text: $keyText)
+                    #if os(macOS)
+                    // 工作端才有这两枚钮：复制（SecureField 抄不出来——iPhone 填 key
+                    // 的真实痛点）；重新生成 = key 轮换，仅内建执行层可用（external/
+                    // repo 布局的 key 在 .env.local，这里换了对不上）。
+                    HStack(spacing: Theme.s2) {
+                        Button(L("复制")) { copyKey() }
+                            .disabled(keyText.isEmpty)
+                        if keyCopied {
+                            Text(L("已复制")).font(.caption).foregroundStyle(.secondary)
+                        }
+                        if sidecarManaged {
+                            Button(L("重新生成")) { regenerateKey() }
+                            Text(L("重新生成会立即重启执行层；其他设备须重新填入新 Key"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    #endif
                     Text(L("与仓库根 .env 里的 AGENT_API_KEY 相同；后端未启用鉴权时留空。"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -270,6 +292,40 @@ struct SettingsView: View {
         store.applySettings()
         dismiss()
     }
+
+    #if os(macOS)
+    /// 内建执行层在管（含故障态）才轮换得动 key。写成显式 switch 而非链式 ==：
+    /// ViewBuilder 里裸 `.failed` 会被类型检查器解析到 SwiftUI 自家的枚举上去
+    /// （实报 PencilSqueezeGesturePhase，Release 构建失败）。
+    private var sidecarManaged: Bool {
+        switch sidecar.state {
+        case .running, .starting, .failed: return true
+        case .disabled, .external: return false
+        }
+    }
+
+    /// 复制当前 key 到剪贴板（配合 iPhone 通用剪贴板跨端填 key）。1.5s 反馈复位。
+    private func copyKey() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(keyText, forType: .string)
+        copyResetTask?.cancel()
+        keyCopied = true
+        copyResetTask = Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            if !Task.isCancelled { keyCopied = false }
+        }
+    }
+
+    /// key 轮换：新随机值即刻生效（钥匙串 + 本 app 客户端 + 执行层带新 env 重启）。
+    /// 旧 key 随即作废——其他拨号端（iPhone 等）401，须重新填入，这是轮换的本意。
+    private func regenerateKey() {
+        let newKey = SidecarManager.randomKey()
+        keyText = newKey
+        store.settings.apiKey = newKey
+        store.applySettings()
+        Task { await sidecar.restart() }
+    }
+    #endif
 
     private func test() {
         testResult = L("测试中…")
