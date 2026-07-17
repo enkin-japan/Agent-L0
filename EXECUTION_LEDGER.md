@@ -1510,6 +1510,13 @@ HETERO_COMPUTE §3.1 图+B2c 落账、rag/README 拆分章节——§6 漂移表
    不搬其 agent 循环（R1 单执行器纪律）。**挂起等模型智力**（vision 优先每步
    截图，远超 e4b；D1 纪律）+ 真实需求。当下动作零；「敏感数据占位符」模式
    （模型看 `{{KEY}}` 不看值）记入将来凭据类工具设计要求。
+4. **codegraph**（`evaluations/codegraph.md`）✅：五个对象里融合路径最清晰——
+   **单工具 CLI 包壳**（media_download 模式全复用：探活门控 `codegraph version`、
+   遥测强关 CODEGRAPH_TELEMETRY=0+DO_NOT_TRACK=1、init 模式过审批+timeout 900、
+   查询前置 sync、路径守卫沿用 find_files）。价值与「架构补模型智力」双同频
+   （图遍历下沉工具侧、一次调用一份紧凑上下文）；「一强工具胜一排细工具」实测
+   结论旁证 D4。排除真 MCP 协议对接（一个工具不成比例）。**归 D2 第三批候选**
+   等用户确认需求；诚实保留项：消化源码仍需代码阅读力，大问题等 31B。
 
 | | 风险 | 缓解 |
 |---|---|---|
