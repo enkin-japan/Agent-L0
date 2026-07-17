@@ -396,6 +396,10 @@ struct MediaPreviewRequest: Identifiable {
 
 /// 流式播放 sheet：AVURLAsset 注入 Authorization 头，Range 断点由后端 206 支持，
 /// 拖进度条按字节段取——不用整片下完（个人流媒体的全部基本盘）。
+/// ⚠️ 不用 SwiftUI 的 VideoPlayer：它在 macOS 27 beta 上实例化即崩
+/// （_AVKit_SwiftUI 泛型元数据初始化 getSuperclassMetadata fatalError，
+/// 实机崩溃报告 ×2 同签名）——走老牌 AVPlayerView/AVPlayerViewController
+/// 的 representable 包壳，完全绕开 _AVKit_SwiftUI。
 struct MediaPlayerSheet: View {
     let request: MediaPreviewRequest
     @Environment(\.dismiss) private var dismiss
@@ -412,8 +416,14 @@ struct MediaPlayerSheet: View {
                 Button(L("关闭")) { dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
-            VideoPlayer(player: player)
-                .aspectRatio(16 / 9, contentMode: .fit)
+            Group {
+                if let player {
+                    ClassicPlayerView(player: player)
+                } else {
+                    Color.black
+                }
+            }
+            .aspectRatio(16 / 9, contentMode: .fit)
         }
         .padding(Theme.s3)
         #if os(macOS)
@@ -422,9 +432,42 @@ struct MediaPlayerSheet: View {
         .onAppear {
             let asset = AVURLAsset(url: request.url,
                                    options: ["AVURLAssetHTTPHeaderFieldsKey": request.headers])
-            player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
-            player?.play()
+            let p = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+            player = p
+            p.play()
         }
         .onDisappear { player?.pause() }
     }
 }
+
+#if os(macOS)
+/// AVKit 经典播放视图的 SwiftUI 包壳（见 MediaPlayerSheet 头注的崩溃规避）。
+struct ClassicPlayerView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.player = player
+        view.controlsStyle = .inline
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        view.player = player
+    }
+}
+#else
+struct ClassicPlayerView: UIViewControllerRepresentable {
+    let player: AVPlayer
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let vc = AVPlayerViewController()
+        vc.player = player
+        return vc
+    }
+
+    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
+        vc.player = player
+    }
+}
+#endif

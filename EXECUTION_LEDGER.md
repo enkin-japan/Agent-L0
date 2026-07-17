@@ -1340,6 +1340,13 @@ Bearer 鉴权后面，浏览器 401——**浏览器路线是死路，app 内接
 （YoutubeDL 实例认账 + 前缀断言 + 极端消毒形态过白名单），291。既有搁浅文件已
 手工改名归位（media-kaguya-sama-PV-ED-v9nUcqxVXc.mp4）。
 
+**返修 46 实机复验：窗口宽度 ✅、文件可见 ✅，但点视频即崩（47 返修）**：崩溃报告
+×2 同签名——`_AVKit_SwiftUI` 泛型元数据初始化 `getSuperclassMetadata` fatalError，
+即 **SwiftUI 的 VideoPlayer 组件在 macOS 27 beta 上实例化即崩**（系统 beta 兼容
+问题，非调用姿势）。规避：换 AVKit 经典 `AVPlayerView`（macOS，NSViewRepresentable
+包壳）/ `AVPlayerViewController`（iOS），完全不走 _AVKit_SwiftUI 代码路径；
+AVURLAsset 鉴权头注入与流式 Range 语义不变。v0.16.0(47)。
+
 ## §4 风险（已识别，持续有效）
 
 | | 风险 | 缓解 |
