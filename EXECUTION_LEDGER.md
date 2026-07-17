@@ -1503,6 +1503,13 @@ HETERO_COMPUTE §3.1 图+B2c 落账、rag/README 拆分章节——§6 漂移表
    性价比之王）、**标识符子串召回**（数据面 query 管线加 contains 预取一路，治
    纯向量对文件名/hash 的弱召回；不搬英文中心的 BM25/spaCy）、**抽取指引并入
    memory flush**（与 grok-build §3.1 同票：压缩摘要一次调用双产出）。
+3. **browser-use**（`evaluations/browser-use.md`）✅：有真实补充（交互式网页
+   操作是 web_research 构造性做不了的）但**绝不融入 web search**——与 MediaCrawler
+   同判据，读写分离是沙箱体系地基；正确形态 = 独立第四沙箱（独立 venv 隔离其
+   `==` 钉死依赖、遥测全关、写动作全过审批门），且只取其 browser/dom 执行底座、
+   不搬其 agent 循环（R1 单执行器纪律）。**挂起等模型智力**（vision 优先每步
+   截图，远超 e4b；D1 纪律）+ 真实需求。当下动作零；「敏感数据占位符」模式
+   （模型看 `{{KEY}}` 不看值）记入将来凭据类工具设计要求。
 
 | | 风险 | 缓解 |
 |---|---|---|
