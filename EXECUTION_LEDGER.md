@@ -1543,6 +1543,13 @@ flush+抽取指引一张票、工具输出硬上限、检索侧 MMR+子串召回
    .ppt/.odp/.ods 指路要 .pptx/.xlsx 导出），file_extract 同口径 System Error
    指引。两侧共享同一组常量（S.7 防拷贝漂移）。金测试 291→311（+20：两表互斥/
    路由参数化/两类指引措辞/宏表走摘要/xls 走 markitdown/xlrd 在位）。
+2. **时间锚定纪律 ✅**（mem0 §3.1）：`_turn_to_text` 每轮头部盖
+   `[YYYY-MM-DD HH:MM]` 日期戳（轮次 timestamp 字段现成）——一石二鸟：摘要器
+   有了换算依据、rag_sink 沉淀原文自带日期；SUMMARY_INSTRUCTION 明令相对时间
+   转绝对（附「下月读到 'trip next week' 已是谜语」示例）；memory_write 的
+   body 指引升级为全类型通则（原只 project 类型有）；沉淀 title 加 ISO 日期。
+   scratchpad 型 remember 元工具有意不加（轮内即弃，日期不腐烂）。金测试 315
+   （+4：日期戳形状/坏时间戳静默跳过/两处指引钉住）。
 
 | | 风险 | 缓解 |
 |---|---|---|

@@ -52,7 +52,9 @@ class MemoryWriteTool(BaseTool):
                      "description": "user | feedback | project | reference"},
             "body": {"type": "string",
                      "description": "The fact itself. For feedback/project, follow with why it "
-                                    "matters and how to apply it."},
+                                    "matters and how to apply it. Convert relative dates to "
+                                    "absolute ('2026-07-18', not 'today'/'yesterday') — notes "
+                                    "are read months later, when relative words have rotted."},
         },
         "required": ["name", "description", "type", "body"],
     }

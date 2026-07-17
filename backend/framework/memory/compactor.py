@@ -31,6 +31,7 @@ Claude Code 的 microcompaction）——从「保最近 N 条、更早一律砍�
 import asyncio
 import json
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from . import rag_sink
@@ -111,8 +112,20 @@ def compact_tool_observations(history: List[Dict[str, Any]], *,
 
 
 def _turn_to_text(turn: Dict[str, Any]) -> str:
-    """把一条已落盘轮次抽成供摘要的纯文本（用户输入 + 助手答复 + 用到的工具名）。"""
+    """把一条已落盘轮次抽成供摘要的纯文本（用户输入 + 助手答复 + 用到的工具名）。
+
+    头部盖轮次日期戳（时间锚定纪律，源自 mem0 评估）：这段文本有两个下游——
+    摘要器（靠它把「明天/上周」换算成绝对日期）与 rag_sink 沉淀（agent_memory
+    里的原文自带日期，几个月后召回仍知道「当时是哪天」）。相对时间不锚定，
+    沉淀就是在存会过期的谜语。
+    """
     parts: List[str] = []
+    ts = turn.get("timestamp")
+    if ts:
+        try:
+            parts.append(f"[{datetime.fromtimestamp(float(ts)).strftime('%Y-%m-%d %H:%M')}]")
+        except Exception:
+            pass
     prompt = str(turn.get("prompt", "")).strip()
     if prompt:
         parts.append(f"User: {prompt}")
@@ -187,7 +200,8 @@ async def maybe_summarize_context(session, engine, *, threshold_tokens: int,
     # 沉淀（Stage 3）：把被折叠掉的对话原文存入 RAG 长期记忆（无损承重网），
     # 供日后 rag_search（agent_memory 类目）召回。fail-open、在线程里做，绝不阻塞或影响压缩。
     if sediment:
-        title = f"{session.session_id} · turns {old_watermark}-{fold_until} · {int(time.time())}"
+        title = (f"{session.session_id} · turns {old_watermark}-{fold_until} · "
+                 f"{time.strftime('%Y-%m-%d')} · {int(time.time())}")
         await asyncio.to_thread(rag_sink.sediment, batch_text, title)
 
     # 重建 model-facing 上下文为 [system]+[摘要]+[尾部]；旧 KV 由下次推理前缀匹配自动对齐
