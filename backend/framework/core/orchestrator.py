@@ -1052,9 +1052,19 @@ class Orchestrator:
         # [观察截断] 保护每步延迟与上下文（护栏参数，见 config agent.observation_max_chars）
         # 注：截断只作用于给模型的文本。渲染载荷由工具在结构尚在时另行产出（ToolOutput），
         # 从不经过这里——故不存在"从半截文本里投影出坏图表"的可能。
+        # 保头 2/3 + 尾 1/3（grok-build 评估采纳）：shell/日志类输出的错误行多在尾部，
+        # 只保头会把最有用的部分砍掉；中缝标注原始体积 + 收窄取回的出路（S.3：给路）。
         if len(result_text) > self.observation_max_chars:
-            result_text = (result_text[: self.observation_max_chars]
-                           + f"\n...[observation truncated at {self.observation_max_chars} chars]")
+            total = len(result_text)
+            head_n = self.observation_max_chars * 2 // 3
+            tail_n = self.observation_max_chars - head_n
+            result_text = (
+                result_text[:head_n]
+                + f"\n...[observation truncated: {total} chars total, showing first {head_n} "
+                  f"and last {tail_n}; re-fetch a narrower slice (page/start/end/limit args) "
+                  f"if you need the omitted middle]...\n"
+                + result_text[-tail_n:]
+            )
         # 实时反馈：记录一条已完成的工具步骤（结果取首行摘要）
         summary = result_text.strip().splitlines()[0] if result_text.strip() else ""
         session.push_activity("tool", name, summary)

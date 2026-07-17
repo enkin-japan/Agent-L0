@@ -158,8 +158,8 @@ def test_payload_does_not_ride_the_truncated_text_path(make_session):
     session = make_session()
     session.journal.emit("turn_queued", {"prompt": "p"}, turn_id=new_turn_id())
     obs = asyncio.run(orch._invoke_tool(session, call("t_long"), "c2", session.journal))
-    assert obs["render"]["payload"]["n"] == 500          # 载荷完好
-    assert "truncated at 100 chars" in obs["response"]   # 文本照旧截断
+    assert obs["render"]["payload"]["n"] == 500              # 载荷完好
+    assert "observation truncated" in obs["response"]        # 文本照旧截断（头+尾保留式）
 
 
 def test_failed_tool_gets_no_render(make_session):
