@@ -196,7 +196,11 @@ struct SettingsView: View {
                         Text(L("密钥即改即存入钥匙串；对正在运行的执行层，点下方重启后生效。"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Button(L("重启执行层（应用新密钥）")) {
+                        // 语义分工（用户拍板 2026-07-18）：这枚 = 纯重启（故障自救/
+                        // 应用改过的密钥），**不动任何 key**；换 AGENT_API_KEY 走
+                        // 连接页的「重新生成」。旧标签「（应用新密钥）」读起来像会
+                        // 动 key，正名为纯动作。
+                        Button(L("重启执行层")) {
                             Task { await sidecar.restart() }
                         }
                         .disabled(sidecar.state == .external || sidecar.state == .disabled)

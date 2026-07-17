@@ -449,12 +449,37 @@ edge_reap() {
         [ -f "$pidfile" ] || continue
         local pid; pid="$(cat "$pidfile" 2>/dev/null)"
         if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            info "发现上代残留 $svc（pid $pid，pid 记录在本数据根），回收后重新拉起"
+            # ${} 必须显式界定：紧跟全角括号（多字节）会被 bash 吞首字节当变量名
+            info "发现上代残留 ${svc}（pid ${pid}，pid 记录在本数据根），回收后重新拉起"
             if [ "$svc" = "backend" ]; then stop_backend; else stop_searx; fi
             reaped=$((reaped + 1))
         else
             rm -f "$pidfile"   # 记录已死：清掉陈尸的 pid 文件
         fi
+    done
+    # 第二判据：无档孤儿。pid 档案可能丢失（实机 2026-07-17 事故：孤儿 backend 无
+    # pid 文件，探活「健康」被误判 external，从此永远只连不管、跑着旧代码）——
+    # 端口占用者的解释器路径属于本布局（bundle 的 Resources/python）即是自家兵：
+    # devctl/repo 后端绝不会用 bundle 解释器，按路径认领不存在误杀面。
+    local port py p cmd
+    for svc in backend searx; do
+        if [ "$svc" = "backend" ]; then port="$BACKEND_PORT" py="$EDGE_BACKEND_PY"
+        else port="$SEARX_PORT" py="$EDGE_SEARX_PY"; fi
+        for p in $(listen_pids "$port"); do
+            cmd="$(ps -o command= -p "$p" 2>/dev/null)"
+            case "$cmd" in
+                "$py"*)
+                    info "发现无档孤儿 ${svc}（pid ${p}，解释器属本布局），回收后重新拉起"
+                    kill "$p" 2>/dev/null
+                    local waited=0
+                    while [ "$waited" -lt 20 ] && kill -0 "$p" 2>/dev/null; do
+                        sleep 1; waited=$((waited + 1))
+                    done
+                    kill -0 "$p" 2>/dev/null && { warn "${svc} pid ${p} 未响应 TERM，强制结束"; kill -9 "$p" 2>/dev/null; }
+                    reaped=$((reaped + 1))
+                    ;;
+            esac
+        done
     done
     [ "$reaped" -eq 0 ] && info "无上代残留进程"
     return 0

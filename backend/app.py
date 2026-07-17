@@ -510,4 +510,7 @@ if __name__ == "__main__":
     # 绑定护栏先于加载模型：非回环 + 空密钥立即拒启，不浪费几十秒权重加载才发现
     enforce_bind_guardrail(AGENT_HOST, API_KEY, service="backend", key_env="AGENT_API_KEY")
     # 建议不要在此处使用 reload=True，MLX 模型反复重载会导致严重内存泄漏
-    uvicorn.run(app, host=AGENT_HOST, port=AGENT_PORT)
+    # timeout_graceful_shutdown：默认 None = 无限等连接排空——挂着 SSE 长连时
+    # SIGTERM 形同虚设（实机 2026-07-17：孤儿 backend 无视 TERM 20s 被 -9），
+    # 收摊方一旦在升级 -9 前被打断（quit 看门狗）就留孤儿。5s 足够冻结落盘。
+    uvicorn.run(app, host=AGENT_HOST, port=AGENT_PORT, timeout_graceful_shutdown=5)
