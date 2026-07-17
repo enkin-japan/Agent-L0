@@ -1,6 +1,9 @@
 import SwiftUI
 import AVKit
 import QuickLook
+#if os(iOS)
+import UIKit
+#endif
 
 /// 检查器面板（对齐 web 端右侧栏）：计划 / 幻灯片 / 文件 / 工具集。
 /// （系统提示词展示已按用户要求移除；工具只列名字。）
@@ -31,6 +34,9 @@ struct InspectorView: View {
     @State private var mediaPreview: MediaPreviewRequest?
     @State private var imagePreviewPath: String?
     @State private var quickLookURL: URL?
+    #if os(iOS)
+    @State private var shareRequest: ShareRequest?
+    #endif
 
     var body: some View {
         VStack(spacing: 0) {
@@ -85,6 +91,14 @@ struct InspectorView: View {
             }
         }
         .quickLookPreview($quickLookURL)
+        #if os(iOS)
+        // 分享面板（存到文件 / 存入相册 / 转发到他 app）——macOS 的 打开/保存 在
+        // iOS 上的对位物就是这一张系统 share sheet
+        .sheet(item: $shareRequest) { req in
+            ActivityShareView(url: req.url)
+                .presentationDetents([.medium, .large])
+        }
+        #endif
     }
 
     @ViewBuilder
@@ -228,6 +242,10 @@ struct InspectorView: View {
                 MessageActionButton(icon: "square.and.arrow.down", help: L("保存")) {
                     save(item)
                 }
+                #else
+                MessageActionButton(icon: "square.and.arrow.up", help: L("分享")) {
+                    share(item)
+                }
                 #endif
             }
         }
@@ -262,6 +280,13 @@ struct InspectorView: View {
         download(item) { NSWorkspace.shared.open($0) }
         #endif
     }
+
+    #if os(iOS)
+    /// iOS 的行内操作：下载完弹系统分享面板（存到文件 / 存入相册 / AirDrop / 转发）。
+    private func share(_ item: AssetFileItem) {
+        download(item) { shareRequest = ShareRequest(url: $0) }
+    }
+    #endif
 
     private func save(_ item: AssetFileItem) {
         #if os(macOS)
@@ -393,6 +418,25 @@ struct MediaPreviewRequest: Identifiable {
     let headers: [String: String]
     var id: String { name }
 }
+
+#if os(iOS)
+struct ShareRequest: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
+}
+
+/// 系统分享面板的 SwiftUI 包壳（UIActivityViewController 没有原生 SwiftUI 呈现件；
+/// ShareLink 是按钮不是面板，接不上「下载完成后再弹」的时序）。
+struct ActivityShareView: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
+}
+#endif
 
 /// 流式播放 sheet：AVURLAsset 注入 Authorization 头，Range 断点由后端 206 支持，
 /// 拖进度条按字节段取——不用整片下完（个人流媒体的全部基本盘）。
