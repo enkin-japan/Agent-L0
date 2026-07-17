@@ -1465,9 +1465,17 @@ TestFlight 52 已传。
   阶段 2 初测曾误报"rag 未被收走"，实为检查过早）。
 - 探针小坑：.env.local 的值带引号时，shell source 会剥引号而 `cut` 不会——手工 curl
   探鉴权 401 别急着怪服务端，先 `tr -d '\"'`。
-- 遗留：RAG_API_KEY 现值仅 6 字符（用户手填的 dev 值）——生产前建议换强随机串
-  （app 侧「RAG 密钥」设置项与 .env.local 两处同步换）。iOS 不涉及（sidecar 是 macOS
-  专属路径），无需发 53 的 TestFlight。
+- 遗留提醒 ×2（2026-07-18 用户要求落档）：
+  ① **RAG 密钥现值仅 6 字符**（用户手填的 dev 值，且两条跨机通道同值共用）——生产/
+  多设备前换强随机串（`openssl rand -base64 32`），**两处同步**：`.env.local`
+  （RAG_API_KEY + RAG_COMPUTE_API_KEY）与 app 设置「RAG 密钥」一项；改完重启
+  rag-compute 与 app。
+  ② **独立办公 Mac 到位时的三步迁移**（B2c 已铺平）：新机装 app（≥53）→ 拷数据根
+  `…/dev.enkin.macagent/rag/`（会话一并迁则拷整个数据根）→ config **不用动**
+  （rag.host 恒回环，compute/inference.remote 仍指 mini），app 设置填三把密钥即可；
+  若算力端也换新 GPU 设备，才需改 config 两个 host + 新机跑 `--profile gpu`。
+  迁移正是换强密钥（①）的好时机。
+  另：iOS 不涉及（sidecar 是 macOS 专属路径），无需发 53 的 TestFlight。
 
 **阶段 3 ✅（2026-07-18 收官）**：`RETROSPECTIVE.md` 落档（全项目复盘：时间线/
 做对的七条/踩坑四类提炼/未竟清单/风险与建议——用户要求的整项目复盘）；文档总更新
