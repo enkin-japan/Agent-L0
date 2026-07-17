@@ -64,6 +64,16 @@ struct ChatView: View {
             Divider()
             ComposerView()
         }
+        // 产物链接接管：消息里的 [xxx](/api/v1/files/{sid}/assets/{file}) 是相对路径
+        // 且端点要 Bearer 头——丢给系统必死（-50 / 浏览器 401）。命中白名单就改开
+        // 检查器文件页签并高亮该文件；外部 http(s) 链接照旧交给系统浏览器。
+        .environment(\.openURL, OpenURLAction { url in
+            guard let name = Self.assetName(from: url) else { return .systemAction }
+            store.revealedAssetName = nil   // 同名重点也要触发 onChange：先清再置
+            showInspector = true
+            DispatchQueue.main.async { store.revealedAssetName = name }
+            return .handled
+        })
         .inspector(isPresented: $showInspector) {
             InspectorView()
                 .inspectorColumnWidth(min: 260, ideal: 300, max: 420)
@@ -85,7 +95,7 @@ struct ChatView: View {
                 } label: {
                     Image(systemName: "sidebar.trailing")
                 }
-                .help(L("检查器（计划 / 幻灯片 / 工具集）"))
+                .help(L("检查器（计划 / 幻灯片 / 文件 / 工具集）"))
             }
             ToolbarItem(placement: .primaryAction) {
                 Menu {
@@ -126,6 +136,18 @@ struct ChatView: View {
                       document: exportDocument,
                       contentType: ConversationExport.contentType,
                       defaultFilename: exportTitle) { _ in }
+    }
+
+    /// 产物链接白名单解析：/api/v1/files/{sid}/assets/{file} → 文件名；其余 nil。
+    /// 只认无 scheme 的相对链接（工具回执的固定形态）；带 host 的绝对 http(s) 链接
+    /// 一律交给系统——避免把撞巧同路径的外站链接也劫下来。
+    static func assetName(from url: URL) -> String? {
+        guard url.scheme == nil else { return nil }
+        let parts = url.path.split(separator: "/").map(String.init)
+        // ["api", "v1", "files", sid, "assets", file]
+        guard parts.count == 6, parts[0] == "api", parts[1] == "v1",
+              parts[2] == "files", parts[4] == "assets" else { return nil }
+        return parts[5]
     }
 
     /// 导出文件名/标题：会话标题优先，兜底会话 ID。

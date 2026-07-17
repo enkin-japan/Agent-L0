@@ -82,9 +82,17 @@ enum L10n {
         "导出会话 (Markdown)…": ("チャットを書き出す (Markdown)…", "Export Chat (Markdown)…"),
         "删除最后一轮问答": ("最後のやり取りを削除", "Delete Last Turn"),
         "查看演示文稿": ("スライドを表示", "View Slides"),
-        "检查器（计划 / 幻灯片 / 工具集）":
-            ("インスペクタ（計画 / スライド / ツール）",
-             "Inspector (Plan / Slides / Tools)"),
+        "检查器（计划 / 幻灯片 / 文件 / 工具集）":
+            ("インスペクタ（計画 / スライド / ファイル / ツール）",
+             "Inspector (Plan / Slides / Files / Tools)"),
+        // 文件页签
+        "文件": ("ファイル", "Files"),
+        "打开": ("開く", "Open"),
+        "当前会话还没有产物文件。图表、导出的 PDF、下载的音视频会出现在这里。":
+            ("このセッションにはまだ成果ファイルがありません。チャート、書き出したPDF、ダウンロードした音声・動画がここに表示されます。",
+             "No output files in this session yet. Charts, exported PDFs, and downloaded media will appear here."),
+        "保存失败：": ("保存に失敗：", "Save failed: "),
+        "下载失败：": ("ダウンロードに失敗：", "Download failed: "),
         // 消息菜单
         "复制原文": ("原文をコピー", "Copy Text"),
         "已复制": ("コピーしました", "Copied"),

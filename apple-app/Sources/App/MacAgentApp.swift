@@ -91,7 +91,9 @@ struct MacAgentApp: App {
                     #endif
                 }
                 #if os(macOS)
-                .frame(minWidth: 760, minHeight: 520)
+                // 860 = 左侧栏 min 220 + 检查器 min 260 + 聊天区下限（三栏全开时
+                // SwiftUI 不再硬压侧栏突破 min 导致标题错位——实机反馈）
+                .frame(minWidth: 860, minHeight: 520)
                 #endif
         }
 

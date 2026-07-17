@@ -257,6 +257,25 @@ struct SkillsResponse: Codable {
     let skills: [SkillItem]
 }
 
+/// 会话产物文件（GET /api/v1/files/{sid}，检查器「文件」页签）。
+/// 只含 assets/（Agent 生成/制作/下载的规范出口）。
+struct AssetFileItem: Codable, Identifiable, Equatable {
+    let name: String
+    let size: Int64
+    let mtime: Double
+
+    var id: String { name }
+    /// 出货路径（fetchAsset / 流式播放共用口径）
+    func assetPath(sessionId: String) -> String {
+        "/api/v1/files/\(sessionId)/assets/\(name)"
+    }
+}
+
+struct SessionFilesResponse: Codable {
+    let status: Bool
+    let files: [AssetFileItem]
+}
+
 struct SystemPromptResponse: Codable {
     let status: Bool
     let systemPrompt: String?

@@ -302,6 +302,39 @@ final class AgentClient {
 
     /// 拉取会话资产（图表 PNG 等）：带鉴权头 GET 相对路径。文件名含时间戳恒不复用，
     /// 后端发 immutable 长缓存头，URLCache 自动生效。
+    /// 会话产物清单（检查器「文件」页签）。
+    func sessionFiles(sessionId: String) async throws -> [AssetFileItem] {
+        let res: SessionFilesResponse = try await send(try request("GET", "/api/v1/files/\(sessionId)"))
+        return res.files
+    }
+
+    /// 下载会话产物到本地临时文件（流式落盘，视频可上 GB——绝不整块进内存）。
+    /// 返回的 URL 在系统临时目录，调用方负责搬走或用完即弃。
+    func downloadAsset(path: String, suggestedName: String) async throws -> URL {
+        let req = try request("GET", path, timeout: 3600)
+        let (tmp, response) = try await session.download(for: req)
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            throw AgentError.http(http.statusCode, "")
+        }
+        // download(for:) 的临时文件名是随机串：换成真名（默认 app 打开/分享都靠扩展名）
+        let dest = FileManager.default.temporaryDirectory
+            .appendingPathComponent("macagent-assets", isDirectory: true)
+            .appendingPathComponent(suggestedName)
+        try? FileManager.default.createDirectory(at: dest.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: dest)
+        try FileManager.default.moveItem(at: tmp, to: dest)
+        return dest
+    }
+
+    /// 产物的绝对 URL + 鉴权头（AVPlayer 流式播放用：AVURLAsset 自带 Range 断点能力，
+    /// 但 Authorization 头得由我们注入）。
+    func assetPlaybackSource(path: String) -> (url: URL, headers: [String: String])? {
+        guard let url = URL(string: path, relativeTo: baseURL) else { return nil }
+        let headers = apiKey.isEmpty ? [:] : ["Authorization": "Bearer \(apiKey)"]
+        return (url, headers)
+    }
+
     func fetchAsset(path: String) async throws -> Data {
         var req = try request("GET", path)
         req.cachePolicy = .returnCacheDataElseLoad

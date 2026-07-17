@@ -114,6 +114,14 @@ class SkillsResponse(BaseModel):
     status: bool
     skills: List[Dict[str, Any]]  # 每项含 name / description / available / missing
 
+class SessionFilesResponse(BaseModel):
+    """
+    会话产物文件清单响应体（检查器「文件」页签的数据源）。
+    只列 assets/（Agent 生成/制作/下载的规范出口）；上传原件与任意路径写盘不在此列。
+    """
+    status: bool
+    files: List[Dict[str, Any]]  # 每项含 name / size(字节) / mtime(epoch 秒)，按 mtime 降序
+
 class ApprovalRequest(BaseModel):
     """
     敏感工具审批决议请求体：approve=True 执行挂起的工具调用，False 则拒绝。

@@ -51,6 +51,9 @@ final class AgentStore: ObservableObject {
     @Published var deck: DeckSpec?
     // 「编辑并重发」把上一条用户输入回填进输入框的通道
     @Published var composerPrefill: String?
+    /// 消息里点了产物链接 → 打开检查器「文件」页签并高亮该文件的通道
+    /// （ChatView 据此开 inspector，InspectorView 据此切页签+高亮，用完置回 nil）
+    @Published var revealedAssetName: String?
     // 任务中心：全局调度快照（跨会话，监听循环持续刷新）
     @Published var globalTasks: [TaskHandleInfo] = []
     // 内容搜索

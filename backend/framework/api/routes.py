@@ -29,6 +29,7 @@ from .schemas import (
     SystemPromptResponse,
     TaskListResponse,
     TaskStatusResponse,
+    SessionFilesResponse,
     SkillsResponse,
     ToolsResponse,
 )
@@ -277,6 +278,30 @@ async def get_session_asset(session_id: str, filename: str, request: Request):
     if not path.is_relative_to(sessions_dir) or not path.is_file():
         raise HTTPException(status_code=404, detail="资产不存在。")
     return FileResponse(path, headers={"Cache-Control": "private, max-age=31536000, immutable"})
+
+
+@router.get("/api/v1/files/{session_id}", response_model=SessionFilesResponse)
+async def list_session_files(session_id: str, request: Request):
+    """会话产物清单（检查器「文件」页签数据源）：只列 assets/——Agent 生成/制作/
+    下载的规范出口（render_chart PNG、deck PDF、media_download 音视频等）。
+    上传原件（image/audio/attach）与任意路径写盘（file_edit/shell）有意不在此列
+    （2026-07-18 用户拍板：面板语义 = Agent 产物）。没有 assets 目录 = 空清单。"""
+    if not _ASSET_NAME_RE.match(session_id) or ".." in session_id:
+        raise HTTPException(status_code=400, detail="非法的会话 ID。")
+    sessions_dir = request.app.state.session_manager.sessions_dir.resolve()
+    assets = (sessions_dir / session_id / "assets").resolve()
+    if not assets.is_relative_to(sessions_dir) or not assets.is_dir():
+        return {"status": True, "files": []}
+    out = []
+    for p in assets.iterdir():
+        # 隐藏文件（.DS_Store 一类）与子目录不出货；名字须过出货白名单正则，
+        # 否则列出来也点不开（get_session_asset 会 400）
+        if not p.is_file() or not _ASSET_NAME_RE.match(p.name):
+            continue
+        st = p.stat()
+        out.append({"name": p.name, "size": st.st_size, "mtime": st.st_mtime})
+    out.sort(key=lambda f: f["mtime"], reverse=True)
+    return {"status": True, "files": out}
 
 
 @router.get("/api/v1/files/{session_id}/deck")
