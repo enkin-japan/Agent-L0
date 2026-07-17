@@ -1482,7 +1482,20 @@ TestFlight 52 已传。
 （README 拓扑与密钥表、ARCHITECTURE 五组件+rag 双面图、CHARTER 地图 :14160/:14162、
 HETERO_COMPUTE §3.1 图+B2c 落账、rag/README 拆分章节——§6 漂移表 ARCHITECTURE 行销案）。
 
-## §4 风险（已识别，持续有效）
+### 五开源项目过夜评估（2026-07-18 用户布置，评估文档落 `evaluations/`）
+
+用户临睡布置 5 项评估：① grok-build 深层对比 ② mem0 记忆借鉴 ③ browser-use
+融合形态 ④ codegraph 融合方案 ⑤ markitdown 文件解析。产出统一落 `evaluations/`
+目录（每项目一文档），本节只记结论一行，细节看各文档：
+
+1. **grok-build**（`evaluations/grok-build.md`）✅：与本项目架构信仰高度同源
+   （权威 jsonl 账本/markdown 记忆+向量索引/配置分派选实现/分层权限），无「方向
+   错了」级信号。真实差距三处，全部低-中成本且基础设施现成：**压缩前记忆冲洗**
+   （摘要压缩前给模型一次「写笔记抢救」机会，R4+compactor 现成）、**dream 式笔记
+   整理**（三重闸挂进既有空闲维护回合，治笔记只增不理）、**审批记忆**（记住已批
+   前缀+危险表除外）。另值得：工具输出进模型前硬上限（40KB 一道闸）、MMR 多样性
+   过滤（数据面 query 管线）；prefire 两遍压缩/后台任务执行挂条件；TUI/hooks/
+   persona/OS 沙箱/可靠性件明确不借鉴（物种或问题域不同）。
 
 | | 风险 | 缓解 |
 |---|---|---|
