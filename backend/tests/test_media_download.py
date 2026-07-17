@@ -18,11 +18,28 @@ from framework.mcp.tools.media_download import (
 def test_ydl_opts_video_guards():
     opts = build_ydl_opts("video", Path("/tmp/x"), max_height=720, max_filesize_mb=100)
     assert opts["noplaylist"] is True
-    assert opts["restrictedfilenames"] is True
     assert "height<=720" in opts["format"]
     assert opts["merge_output_format"] == "mp4"
     assert opts["max_filesize"] == 100 * 1024 * 1024
     assert opts["outtmpl"].startswith("/tmp/x/")
+
+
+def test_filenames_conform_to_asset_whitelist():
+    """文件名守护要对着真实消费方钉（S.10：restrictedfilenames 错键名被 yt-dlp
+    静默忽略、日文原题落盘——自己写的字典自己验 = 自洽但错）：
+    ① 键名必须被 yt-dlp 本尊认账；② 模板首字符恒定过出货白名单。"""
+    import yt_dlp
+    from framework.api.routes import _ASSET_NAME_RE
+
+    opts = build_ydl_opts("video", Path("/tmp/x"))
+    # 模板以恒定 ASCII 前缀开头：restrictfilenames 消毒后 CJK 标题可能只剩前导
+    # 下划线，而白名单要求首字符字母数字——前缀兜死这一层。
+    # （先取再实例化：YoutubeDL 会把 outtmpl 原地规整成 dict）
+    tmpl = Path(opts["outtmpl"]).name
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        assert ydl.params.get("restrictfilenames") is True
+    assert tmpl.startswith("media-")
+    assert _ASSET_NAME_RE.match("media-_PV_-v9nUcqxVXc.mp4")  # 消毒后的极端形态可出货
 
 
 def test_ydl_opts_audio_extracts_m4a():

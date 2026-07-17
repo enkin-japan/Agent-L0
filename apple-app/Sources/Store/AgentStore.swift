@@ -54,6 +54,9 @@ final class AgentStore: ObservableObject {
     /// 消息里点了产物链接 → 打开检查器「文件」页签并高亮该文件的通道
     /// （ChatView 据此开 inspector，InspectorView 据此切页签+高亮，用完置回 nil）
     @Published var revealedAssetName: String?
+    /// 检查器开合（上移到 store：窗口 minWidth 要按它动态取值——三栏全开的实测
+    /// 最低需求 ~934pt，恒定大 min 又会惩罚不开检查器的窄窗用户）
+    @Published var showInspector = false
     // 任务中心：全局调度快照（跨会话，监听循环持续刷新）
     @Published var globalTasks: [TaskHandleInfo] = []
     // 内容搜索

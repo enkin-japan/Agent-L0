@@ -1323,6 +1323,22 @@ Bearer 鉴权后面，浏览器 401——**浏览器路线是死路，app 内接
   iOS 是追加的瘦屏幕拨工作端 API；面板走 API 本机零代价、iOS 自动免费获得。
 - **窄窗修复**：窗口 minWidth 760→860（= 侧栏 min 220 + 检查器 min 260 + 聊天区
   下限；三栏全开时 SwiftUI 不再硬压侧栏突破 min 导致标题错位）。
+  **→ 实机复测不过（46 返修）**：860 时聊天列拒绝压缩到 ~414 以下，三栏总需求
+  ~934，两侧同时溢出被裁（左侧栏文字缺头、检查器页签缺尾）。改**动态最窄**：
+  showInspector 上移 store，检查器开 = 960 / 关 = 760（恒定大 min 会惩罚不开
+  检查器的窄窗用户）；检查器页签 picker 加 controlSize(.small)（四页签日文词表
+  260pt 默认字号放不下）。
+
+### 文件面板返修 ×2（2026-07-18 实机截图反馈，v0.16.0(46)）
+
+用户截图两问题：①窄窗错位没修好且左侧栏也错位；②点视频链接进了文件区但列表空白。
+
+**②的根因 = S.10**（yt-dlp 选项键名错，`restrictedfilenames`→静默忽略→日文原题
+落盘→过不了出货白名单：listing 滤掉 + serving 400，链接从生下来就是死的）。修复：
+正确键名 `restrictfilenames` + outtmpl 加恒定 `media-` 前缀（消毒后 CJK 标题可能
+只剩前导下划线，白名单要求首字符字母数字，前缀兜死）；金测试改对真实消费方钉
+（YoutubeDL 实例认账 + 前缀断言 + 极端消毒形态过白名单），291。既有搁浅文件已
+手工改名归位（media-kaguya-sama-PV-ED-v9nUcqxVXc.mp4）。
 
 ## §4 风险（已识别，持续有效）
 
@@ -1453,6 +1469,19 @@ chart-report 二调畸形全是它的下游症状，伪装成三个不相干的�
 ②import 钉子挡不住运行时签名漂移——已补 AST 调用点 bind 钉
 （`test_constraint_engine_call_sites_bind`）；③多个「不相干」的模型行为劣化同时出现
 时，先怀疑**共同的基础设施**（这里是约束采样），再怀疑模型。
+
+### S.10 · 选项字典的错误键名会被消费方静默忽略——自己写的字典自己验 = 自洽但错（2026-07-18）
+
+**事故**：media_download 给 yt-dlp 传 `restrictedfilenames: True`（正确键名是
+`restrictfilenames`，无 ed）。yt-dlp 对不认识的 params 键不报错不告警，ASCII 文件名
+守护整个失效——日文原题落盘，名字过不了出货白名单 `_ASSET_NAME_RE`：listing 滤掉
+（文件面板空白）、serving 400（链接死）。**金测试当时是绿的**，因为它断言的是
+「我写的字典里有我写的键」——测试和实现共享同一个错误认知，自洽但错。
+
+**教训**：跨库传选项字典时，守护类断言要**对着真实消费方钉**：不测自己的 dict，
+测消费方实例化后的认账结果（`YoutubeDL(opts).params.get("restrictfilenames")`）。
+kwargs/TypedDict 有拼写保护，字符串键字典没有——凡「配置以 dict 交给第三方」的
+守护项都该这么钉。同型风险：ffmpeg 参数、requests kwargs、playwright options。
 
 ### S.2 · `git add -A` 会扫进不属于本次改动的东西（2026-07-15）
 

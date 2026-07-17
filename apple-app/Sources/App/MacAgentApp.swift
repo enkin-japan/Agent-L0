@@ -91,9 +91,11 @@ struct MacAgentApp: App {
                     #endif
                 }
                 #if os(macOS)
-                // 860 = 左侧栏 min 220 + 检查器 min 260 + 聊天区下限（三栏全开时
-                // SwiftUI 不再硬压侧栏突破 min 导致标题错位——实机反馈）
-                .frame(minWidth: 860, minHeight: 520)
+                // 动态最窄：检查器开 = 三栏（侧栏 260 + 聊天区实测下限 ~420 +
+                // 检查器 260 + 余量），关 = 双栏照旧 760。恒定 860 实机复测仍
+                // 溢出错位（聊天列不肯压到 414 以下，两侧同时被裁）——按开合
+                // 取值，窄窗只在真需要三栏时才被顶宽。
+                .frame(minWidth: store.showInspector ? 960 : 760, minHeight: 520)
                 #endif
         }
 

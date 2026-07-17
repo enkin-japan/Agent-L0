@@ -10,7 +10,6 @@ struct ChatView: View {
     @State private var showDeck = false
     @State private var exportDocument: MarkdownFileDocument?
     @State private var showExporter = false
-    @State private var showInspector = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -70,11 +69,11 @@ struct ChatView: View {
         .environment(\.openURL, OpenURLAction { url in
             guard let name = Self.assetName(from: url) else { return .systemAction }
             store.revealedAssetName = nil   // 同名重点也要触发 onChange：先清再置
-            showInspector = true
+            store.showInspector = true
             DispatchQueue.main.async { store.revealedAssetName = name }
             return .handled
         })
-        .inspector(isPresented: $showInspector) {
+        .inspector(isPresented: $store.showInspector) {
             InspectorView()
                 .inspectorColumnWidth(min: 260, ideal: 300, max: 420)
         }
@@ -91,7 +90,7 @@ struct ChatView: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    showInspector.toggle()
+                    store.showInspector.toggle()
                 } label: {
                     Image(systemName: "sidebar.trailing")
                 }

@@ -10,8 +10,8 @@ sessions/{id}/assets/（与 deck PDF 同一条出口），经 /api/v1/files/ 出
   noplaylist 取单集。没有这道闸，一个 URL 能拖回几百个文件。
 - 分辨率上限（默认 1080p）+ 体积熔断（默认 2GB，yt-dlp max_filesize 在已知体积
   超限时中止）——开发机 16GB/磁盘有限，4K 整片不该默认可拖。
-- 文件名 restrictedfilenames（纯 ASCII）：markdown 链接里空格/中文会断链，
-  原标题在回执文本里给模型。
+- 文件名 restrictfilenames（纯 ASCII）+ 恒定 media- 前缀：markdown 链接里空格/CJK
+  会断链、出货白名单要求首字符字母数字；原标题在回执文本里给模型。
 
 依赖：pip yt-dlp + 系统 ffmpeg（合流与抽音轨都要它）；缺任一不注册（探活舍弃）。
 """
@@ -22,8 +22,10 @@ from typing import Any, Dict
 from ..base import BaseTool
 from ...agents import runtime
 
-# 下载产物文件名模板：标题截 80 字节 + 站点视频 id 保证唯一；ext 由后处理器决定
-_OUTTMPL = "%(title).80B-%(id)s.%(ext)s"
+# 下载产物文件名模板：恒定前缀保首字符过出货白名单（restrictfilenames 消毒后 CJK
+# 标题可能剩下前导下划线，而 _ASSET_NAME_RE 要求首字符是字母数字）+ 标题截 60 字节
+# + 站点视频 id 保唯一；ext 由后处理器决定
+_OUTTMPL = "media-%(title).60B-%(id)s.%(ext)s"
 
 
 def build_ydl_opts(mode: str, dest_dir: Path, max_height: int = 1080,
@@ -34,7 +36,10 @@ def build_ydl_opts(mode: str, dest_dir: Path, max_height: int = 1080,
     """
     opts: Dict[str, Any] = {
         "outtmpl": str(dest_dir / _OUTTMPL),
-        "restrictedfilenames": True,   # 纯 ASCII 文件名：markdown 链接不因空格/中文断链
+        # 纯 ASCII 文件名：markdown 链接不因空格/CJK 断链，出货白名单正则才放行。
+        # ⚠️ 键名是 restrictfilenames（无 ed）——曾写错成 restrictedfilenames 被
+        # yt-dlp 静默忽略，日文原题直接落盘（实机 v0.16.0(44) 事故，S.10）
+        "restrictfilenames": True,
         "noplaylist": True,            # 单视频带 list= 参数时只取当前集
         "quiet": True,
         "no_warnings": True,

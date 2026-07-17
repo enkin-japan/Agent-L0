@@ -40,6 +40,9 @@ struct InspectorView: View {
                 }
             }
             .pickerStyle(.segmented)
+            // 四页签 + 日文词表（計画/スライド/ファイル/ツール）在检查器 min 260pt
+            // 内默认字号会被裁——小号控件才放得下（实机 v0.16.0(45) 截图实证）
+            .controlSize(.small)
             .padding(10)
             Divider()
             ScrollView {
