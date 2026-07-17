@@ -87,6 +87,7 @@ enum L10n {
              "Inspector (Plan / Slides / Tools)"),
         // 消息菜单
         "复制原文": ("原文をコピー", "Copy Text"),
+        "已复制": ("コピーしました", "Copied"),
         "复制回复": ("返信をコピー", "Copy Reply"),
         "复制回复（markdown 原文）": ("返信をコピー（markdown 原文）", "Copy reply (raw markdown)"),
         "从这一轮分支出新会话": ("このターンから分岐", "Branch From This Turn"),

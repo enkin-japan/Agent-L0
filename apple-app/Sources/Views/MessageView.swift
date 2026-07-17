@@ -2,14 +2,25 @@ import SwiftUI
 
 /// 单条消息渲染：用户右侧气泡 / 助手左侧气泡（含边界）/ 系统居中灰条 / 工具折叠行。
 /// 菜单直接挂在气泡上（挂整行会让 iOS 长按预览高亮整排、超出内容边界）。
-/// 文本选中只在 iOS 开（macOS 上可选文本的系统菜单会吃掉自定义右键菜单）；
-/// macOS 的复制走悬停按钮 + 右键菜单。
+/// 文本选中只在 iOS 开（macOS 上可选文本的系统菜单会吃掉自定义右键菜单）。
+/// 主操作（复制/撤回重编/分支/重新生成）以气泡下方的小钮行为准（Claude AI 形态）；
+/// 右键菜单保留同一组动作作为第二入口，后续还会往里放更多功能。
 struct MessageView: View {
     let message: ChatMessage
     @EnvironmentObject var store: AgentStore
     #if os(macOS)
     @State private var hovering = false
     #endif
+
+    /// 操作行可见性：macOS 上最后一条常显、旧消息悬停浮现（行始终占位，只变
+    /// 透明度——绝不让布局跳动）；iOS 没有悬停，一律常显。
+    private func actionRowOpacity(alwaysVisible: Bool) -> Double {
+        #if os(macOS)
+        return (alwaysVisible || hovering) ? 1 : 0
+        #else
+        return 1
+        #endif
+    }
 
     var body: some View {
         switch message.kind {
@@ -49,26 +60,42 @@ struct MessageView: View {
     private var userView: some View {
         HStack {
             Spacer(minLength: 48)
-            Text(message.text)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Theme.userBubble)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.radiusBubble))
-                .contextMenu {
-                    Button {
-                        Self.copy(message.text)
-                    } label: {
-                        Label(L("复制原文"), systemImage: "doc.on.doc")
-                    }
-                    // 分支操作只留在助手回复上（同一轮的分支语义，两处入口多余）
-                    if isLastUser, !store.isGenerating {
+            VStack(alignment: .trailing, spacing: Theme.s1) {
+                Text(message.text)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Theme.userBubble)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.radiusBubble))
+                    .contextMenu {
                         Button {
-                            store.editLastTurn()
+                            Self.copy(message.text)
                         } label: {
-                            Label(L("编辑并重发（回退这一轮）"), systemImage: "pencil.and.outline")
+                            Label(L("复制原文"), systemImage: "doc.on.doc")
+                        }
+                        // 分支操作只留在助手回复上（同一轮的分支语义，两处入口多余）
+                        if isLastUser, !store.isGenerating {
+                            Button {
+                                store.editLastTurn()
+                            } label: {
+                                Label(L("编辑并重发（回退这一轮）"), systemImage: "pencil.and.outline")
+                            }
+                        }
+                    }
+                HStack(spacing: Theme.s1) {
+                    CopyActionButton(text: message.text, help: L("复制原文"))
+                    if isLastUser, !store.isGenerating {
+                        MessageActionButton(icon: "pencil.and.outline",
+                                            help: L("编辑并重发（回退这一轮）")) {
+                            store.editLastTurn()
                         }
                     }
                 }
+                .opacity(actionRowOpacity(alwaysVisible: isLastUser))
+            }
+            #if os(macOS)
+            .onHover { hovering = $0 }
+            .animation(.easeInOut(duration: 0.12), value: hovering)
+            #endif
         }
     }
 
@@ -84,76 +111,84 @@ struct MessageView: View {
 
     private var assistantView: some View {
         HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 6) {
-                if let thoughts = message.thoughts, !thoughts.isEmpty {
-                    DisclosureGroup {
-                        Text(thoughts)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .selectableOnIOS()
-                            .padding(Theme.s2)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Theme.thoughtsWash)
-                            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall))
-                    } label: {
-                        Label(L("思考过程"), systemImage: "brain")
-                            .font(.caption)
-                            .foregroundStyle(Theme.thoughts)
+            VStack(alignment: .leading, spacing: Theme.s1) {
+                assistantBubble
+                HStack(spacing: Theme.s1) {
+                    CopyActionButton(text: message.text, help: L("复制回复（markdown 原文）"))
+                    if let index = message.turnIndex {
+                        MessageActionButton(icon: "arrow.triangle.branch",
+                                            help: L("从这一轮分支出新会话")) {
+                            store.branch(fromTurnIndex: index)
+                        }
+                    }
+                    if isLastAssistant, !store.isGenerating {
+                        MessageActionButton(icon: "arrow.clockwise",
+                                            help: L("重新生成回答")) {
+                            store.regenerateLastTurn()
+                        }
                     }
                 }
-                MarkdownText(text: message.text)
-                if let meta = message.meta {
-                    Text(meta)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .padding(Theme.s3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.card)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusBubble))
-            .overlay(RoundedRectangle(cornerRadius: Theme.radiusBubble)
-                .strokeBorder(Theme.hairline, lineWidth: 1))
-            .overlay(alignment: .topTrailing) {
-                #if os(macOS)
-                if hovering {
-                    Button {
-                        Self.copy(message.text)
-                    } label: {
-                        Image(systemName: "doc.on.doc")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.borderless)
-                    .padding(8)
-                    .help(L("复制回复（markdown 原文）"))
-                }
-                #endif
-            }
-            .contextMenu {
-                Button {
-                    Self.copy(message.text)
-                } label: {
-                    Label(L("复制回复"), systemImage: "doc.on.doc")
-                }
-                if let index = message.turnIndex {
-                    Button {
-                        store.branch(fromTurnIndex: index)
-                    } label: {
-                        Label(L("从这一轮分支出新会话"), systemImage: "arrow.triangle.branch")
-                    }
-                }
-                if isLastAssistant, !store.isGenerating {
-                    Button {
-                        store.regenerateLastTurn()
-                    } label: {
-                        Label(L("重新生成回答"), systemImage: "arrow.clockwise")
-                    }
-                }
+                .opacity(actionRowOpacity(alwaysVisible: isLastAssistant))
             }
             #if os(macOS)
             .onHover { hovering = $0 }
+            .animation(.easeInOut(duration: 0.12), value: hovering)
             #endif
             Spacer(minLength: 36)
+        }
+    }
+
+    private var assistantBubble: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let thoughts = message.thoughts, !thoughts.isEmpty {
+                DisclosureGroup {
+                    Text(thoughts)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .selectableOnIOS()
+                        .padding(Theme.s2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.thoughtsWash)
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall))
+                } label: {
+                    Label(L("思考过程"), systemImage: "brain")
+                        .font(.caption)
+                        .foregroundStyle(Theme.thoughts)
+                }
+            }
+            MarkdownText(text: message.text)
+            if let meta = message.meta {
+                Text(meta)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(Theme.s3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusBubble))
+        .overlay(RoundedRectangle(cornerRadius: Theme.radiusBubble)
+            .strokeBorder(Theme.hairline, lineWidth: 1))
+        .contextMenu {
+            Button {
+                Self.copy(message.text)
+            } label: {
+                Label(L("复制回复"), systemImage: "doc.on.doc")
+            }
+            if let index = message.turnIndex {
+                Button {
+                    store.branch(fromTurnIndex: index)
+                } label: {
+                    Label(L("从这一轮分支出新会话"), systemImage: "arrow.triangle.branch")
+                }
+            }
+            if isLastAssistant, !store.isGenerating {
+                Button {
+                    store.regenerateLastTurn()
+                } label: {
+                    Label(L("重新生成回答"), systemImage: "arrow.clockwise")
+                }
+            }
         }
     }
 
@@ -216,6 +251,57 @@ struct SystemNoticeView: View {
         .frame(maxWidth: .infinity)
         .background(Theme.wash)
         .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
+    }
+}
+
+/// 气泡下方的操作小钮（Claude AI 形态）：无边框图标钮 + 悬停提示。
+struct MessageActionButton: View {
+    let icon: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
+/// 复制小钮：点击写入剪贴板后图标翻成成功色对勾，1.5s 复位（成功反馈）。
+/// 连点时取消上一枚复位任务重新计时，不会闪跳。
+struct CopyActionButton: View {
+    let text: String
+    let help: String
+    @State private var copied = false
+    @State private var resetTask: Task<Void, Never>?
+
+    var body: some View {
+        Button {
+            MessageView.copy(text)
+            withAnimation(.easeOut(duration: 0.15)) { copied = true }
+            resetTask?.cancel()
+            resetTask = Task {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeIn(duration: 0.2)) { copied = false }
+            }
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.caption)
+                .foregroundStyle(copied ? Theme.success : Color.secondary)
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .help(copied ? L("已复制") : help)
+        .accessibilityLabel(copied ? L("已复制") : help)
     }
 }
 
