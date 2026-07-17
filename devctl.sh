@@ -5,7 +5,8 @@
 # 目录约定（monorepo）:
 #   backend/   Agent 主体（FastAPI, :14159）
 #   inference/ 推理服务（FastAPI, :14161, 仅 inference.mode=remote / --profile gpu 时跑）
-#   rag/       RAG 知识库（FastAPI + PyTorch, :14160）
+#   rag/       RAG 知识库（FastAPI, :14160 数据面；B2c 拆分时另有 :14162 计算面，
+#              rag/compute_server.py，torch/transformers 归计算面——按 rag.compute.host 分派）
 #   frontend/  Web 前端（Vite, :5173）
 #   searxng/   SearXNG 原生部署目录（settings.yml + searxng-src 源码 + .venv, :8080, 可选）
 #   config.yaml     全项目唯一配置（backend 与 rag 共读）
@@ -99,6 +100,10 @@ EDGE_LOG_DIR="$LOG_DIR"
 EDGE_CONFIG="$ROOT/config.yaml"
 EDGE_SETUP_HINT="请先运行: ./devctl.sh setup"
 EDGE_STOP_CMD="$0 stop"
+# RAG 数据面承载（B2c）：仓库布局用 rag/.venv（融合模式的模型也在这套 venv 里；
+# 拆分模式的数据面不 import torch，同一解释器两模式通用）。数据根缺省 rag/ 本目录。
+EDGE_RAG_DIR="$RAG_DIR"
+EDGE_RAG_PY="$RAG_DIR/.venv/bin/python"
 . "$ROOT/scripts/lib_edge.sh" || { fail "无法加载 scripts/lib_edge.sh"; exit 1; }
 
 
@@ -191,15 +196,26 @@ do_setup() {
 }
 
 # ---- 启动 ----
-start_rag() {
-    if is_ready "$RAG_READY_URL"; then
-        managed_or_report "RAG" "$RAG_PORT" "$LOG_DIR/rag.pid" rag || return 1
-        info "RAG 已在运行，跳过"; return 0
+# RAG（数据面或融合服务，按 config rag.compute.host 分派）：机制收编在 lib_edge.sh
+# 的 start_rag_local（B2c——bundle 布局的 sidecar 走同一函数，编队不得两份）。
+start_rag() { start_rag_local; }
+
+# RAG 计算面（B2c 拆分，:14162，算力端）：无状态嵌入/重排/分词服务，跑在 rag/.venv
+#（torch/transformers 在此）。仅 rag.compute.host 非空（拆分模式）时有它。
+start_rag_compute() {
+    if is_ready "$RAGC_READY_URL"; then
+        managed_or_report "RAG计算面" "$RAGC_PORT" "$LOG_DIR/rag-compute.pid" rag-compute || return 1
+        info "RAG 计算面已在运行，跳过"; return 0
     fi
+    guard_port_before_spawn "RAG计算面" "$RAGC_PORT" "$LOG_DIR/rag-compute.pid" rag-compute \
+        "$RAGC_READY_URL" "$RAG_TIMEOUT" "$LOG_DIR/rag-compute.log"
+    case $? in 1) return 1 ;; 2) return 0 ;; esac
     [ -x "$RAG_DIR/.venv/bin/python" ] || { fail "缺少 rag/.venv，请先运行: ./devctl.sh setup"; return 1; }
-    info "启动 RAG (port $RAG_PORT) → $LOG_DIR/rag.log"
-    spawn_daemon "$RAG_DIR" "$LOG_DIR/rag.log" "$LOG_DIR/rag.pid" .venv/bin/python rag_server.py || return 1
-    wait_ready "RAG" "$RAG_READY_URL" "$RAG_TIMEOUT" "$(cat "$LOG_DIR/rag.pid")" "$LOG_DIR/rag.log"
+    info "启动 RAG 计算面 (port $RAGC_PORT) → $LOG_DIR/rag-compute.log"
+    spawn_daemon "$RAG_DIR" "$LOG_DIR/rag-compute.log" "$LOG_DIR/rag-compute.pid" \
+        .venv/bin/python compute_server.py || return 1
+    wait_ready "RAG计算面" "$RAGC_READY_URL" "$RAG_TIMEOUT" \
+        "$(cat "$LOG_DIR/rag-compute.pid")" "$LOG_DIR/rag-compute.log"
 }
 
 
@@ -218,7 +234,8 @@ start_front() {
 # ---- 停止（机制 stop_one 在 lib_edge.sh）----
 
 stop_front()   { stop_one "前端"    "$FRONT_PORT"   "$LOG_DIR/front.pid"   5;  }
-stop_rag()     { stop_one "RAG"     "$RAG_PORT"     "$LOG_DIR/rag.pid"     15; }
+stop_rag()     { stop_rag_local; }
+stop_rag_compute() { stop_one "RAG计算面" "$RAGC_PORT" "$LOG_DIR/rag-compute.pid" 15; }
 
 # inference-server（gpu profile 的推理承载）。跑在 backend 的 venv 里（无独立 venv，B1 实证形态）；
 # 工作目录取 BACKEND_DIR，故 framework.* 可直接 import。SIGTERM = uvicorn 优雅排水
@@ -247,6 +264,10 @@ stop_infer()   { stop_one "inference-server" "$INFER_PORT" "$LOG_DIR/infer.pid" 
 do_status() {
     echo "[devctl] 服务状态（inference.mode=${INFER_MODE}）："
     status_one "RAG     " "$RAG_PORT" "$RAG_READY_URL"
+    # B2c 拆分模式（rag.compute.host 非空）才有独立计算面；融合模式无此服务
+    if [ -n "${RAGC_HOST:-}" ]; then
+        status_one "RAG计算 " "$RAGC_PORT" "$RAGC_READY_URL"
+    fi
     status_searx
     # 仅 remote 模式才该有独立推理服务：inprocess 下权重在 backend 进程内，
     # 这一行标红只会让人去查一个按设计就不存在的东西。
@@ -261,16 +282,17 @@ do_status() {
 do_logs() {
     case "${1:-all}" in
         rag)     tail -n 50 "$LOG_DIR/rag.log" ;;
+        rag-compute) tail -n 50 "$LOG_DIR/rag-compute.log" 2>/dev/null || echo "(无日志)" ;;
         searx)   tail -n 50 "$LOG_DIR/searx.log" 2>/dev/null || echo "(无日志)" ;;
         infer)   tail -n 50 "$LOG_DIR/infer.log" 2>/dev/null || echo "(无日志)" ;;
         backend) tail -n 50 "$LOG_DIR/backend.log" ;;
         front)   tail -n 50 "$LOG_DIR/front.log" ;;
         all)     echo "===== rag ====="; tail -n 20 "$LOG_DIR/rag.log" 2>/dev/null || echo "(无日志)"
                  echo "===== searx ====="; tail -n 20 "$LOG_DIR/searx.log" 2>/dev/null || echo "(无日志)"
-                 for f in infer backend front; do
+                 for f in rag-compute infer backend front; do
                      echo "===== $f ====="; tail -n 20 "$LOG_DIR/$f.log" 2>/dev/null || echo "(无日志)"
                  done ;;
-        *)       fail "未知服务: ${1}（可选 rag|searx|infer|backend|front）"; exit 1 ;;
+        *)       fail "未知服务: ${1}（可选 rag|rag-compute|searx|infer|backend|front）"; exit 1 ;;
     esac
 }
 
@@ -446,20 +468,30 @@ case "$CMD" in
             gpu)
                 # 设备 A：只起重型计算。不起 backend/前端（编排与会话数据留在设备 B，D2 隐私边界）。
                 # 不含 SearXNG——见上方 edge 分支的归属说明。
-                info "profile=gpu（设备 A：inference-server + RAG）"
-                start_rag && start_infer
+                # B2c 拆分（rag.compute.host 非空）：A 只跑无状态计算面，知识库数据在工作端；
+                # 融合（host 空）：过渡拓扑，整个 RAG 仍在 A（拆分前现状）。按 config 分派。
+                if [ -n "${RAGC_HOST:-}" ]; then
+                    info "profile=gpu（设备 A：inference-server + RAG 计算面；知识库数据在工作端）"
+                    start_rag_compute && start_infer
+                else
+                    info "profile=gpu（设备 A：inference-server + RAG）"
+                    start_rag && start_infer
+                fi
                 exit $?
                 ;;
         esac
         case "$TARGET" in
             # SearXNG 为可选层：起不来只告警不阻断（web_research 会优雅不注册），故不并入 && 链
-            all)     start_rag && { start_searx || warn "SearXNG 未就绪，web_research 将不注册，继续启动其余服务"; true; } && start_backend && start_front ;;
+            # all-in-one 单机拆分（compute.host 指回环）时计算面也归 all；融合/远端计算则不启
+            all)     { [ -n "${RAGC_HOST:-}" ] && [ "$(probe_host "$RAGC_HOST")" = "127.0.0.1" ] && { start_rag_compute || exit 1; }; true; } \
+                     && start_rag && { start_searx || warn "SearXNG 未就绪，web_research 将不注册，继续启动其余服务"; true; } && start_backend && start_front ;;
             rag)     start_rag ;;
+            rag-compute) start_rag_compute ;;
             searx)   start_searx ;;
             infer)   start_infer ;;
             backend) start_backend ;;   # 内部会校验 RAG 已就绪
             front)   start_front ;;
-            *) fail "未知服务: ${TARGET}（可选 rag|searx|infer|backend|front|all）"; exit 1 ;;
+            *) fail "未知服务: ${TARGET}（可选 rag|rag-compute|searx|infer|backend|front|all）"; exit 1 ;;
         esac
         ;;
     stop)
@@ -467,17 +499,19 @@ case "$CMD" in
             edge) stop_front; edge_down; exit 0 ;;
             # gpu 不含 searx（B3：已归 edge）。设备 A 上若有旧部署残留的 SearXNG，
             # 用 `./devctl.sh stop searx` 单停一次即可，不必为一次性迁移在此长留一行。
-            gpu)  stop_infer; stop_rag; exit 0 ;;
+            # 拆分/融合两形态的 rag 服务都停（没在跑则是 no-op）
+            gpu)  stop_infer; stop_rag_compute; stop_rag; exit 0 ;;
         esac
         case "$TARGET" in
             # all 停机含 infer：同机 remote 双进程（B1 验收形态）下它也是本机进程；没在跑则是 no-op
-            all)     stop_front; stop_backend; stop_infer; stop_searx; stop_rag ;;
+            all)     stop_front; stop_backend; stop_infer; stop_searx; stop_rag; stop_rag_compute ;;
             rag)     stop_rag ;;
+            rag-compute) stop_rag_compute ;;
             searx)   stop_searx ;;
             infer)   stop_infer ;;
             backend) stop_backend ;;
             front)   stop_front ;;
-            *) fail "未知服务: ${TARGET}（可选 rag|searx|infer|backend|front|all）"; exit 1 ;;
+            *) fail "未知服务: ${TARGET}（可选 rag|rag-compute|searx|infer|backend|front|all）"; exit 1 ;;
         esac
         ;;
     restart)
@@ -504,11 +538,11 @@ case "$CMD" in
         echo "用法: $0 setup                                   # 首次部署（venv/依赖/node_modules）"
         echo "      $0 model                                   # 从注册表选择启动模型（钉死 revision）"
         echo "      $0 rag-model                                # 从 rag.tiers 选择 RAG 档位（写 .rag-tier-selection）"
-        echo "      $0 start|stop|restart [rag|searx|infer|backend|front|all]"
-        echo "      $0 start|stop|restart --profile edge   # 设备 B：backend+前端（推理/RAG 在设备 A）"
-        echo "      $0 start|stop|restart --profile gpu    # 设备 A：inference-server + RAG (+SearXNG)"
+        echo "      $0 start|stop|restart [rag|rag-compute|searx|infer|backend|front|all]"
+        echo "      $0 start|stop|restart --profile edge   # 工作端：RAG 数据面(若本机)+backend+前端"
+        echo "      $0 start|stop|restart --profile gpu    # 算力端：inference-server + RAG 计算面/融合RAG"
         echo "      $0 status"
-        echo "      $0 logs [rag|searx|infer|backend|front]"
+        echo "      $0 logs [rag|rag-compute|searx|infer|backend|front]"
         echo "      $0 bundle-print                            # 构建 deck 打印包进 backend（前端不跑也能导 PDF）"
         echo "远程示例: ssh <host> '$ROOT/devctl.sh restart'"
         exit 1

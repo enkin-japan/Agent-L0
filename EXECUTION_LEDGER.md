@@ -40,7 +40,7 @@
 6. **`git add` 用显式路径，不要 `git add -A`**——见 §S.2。
 
 **当前位置（每次完成一项后更新这一行）**：
-> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 ✅（bundle 组装 1.0G 交付形态 + 无头验收全过 + GUI 三项用户实机确认 + 实机查验四轮修复（密钥入库/鉴权门/Developer ID 签名/会话恢复）+ 两轮 UI 打磨，v0.16.0(30)）。**R5 全线收官（2026-07-17），CHARTER 三处同步已获用户同意并落地**。**D1 首批进行中**：新剧本 ×4 + D.17 斜杠确定性分发（e4b 不会主动调 skill_invoke，实测倒逼）+ 金测试 232；chart-report/ingest 验收 ✅，briefing/research/chart-report 三案疑难**同根归案（S.9）**：inference/server.py 约束采样构造少传 schema_builder → 服务端掩码永久禁用 → e4b 裸奔畸形 JSON——已修（一行）+ AST 调用点钉（金测试 233），infer 已重启、探针全绿。实机三轮后：**/research 端到端全通（D1 首个完整闭环）**；/briefing 剩模型智力项（观察清单：约束内调用块 2048 token 未收口）；点名不可用剧本改为如实告知（v0.16.0(34)，金测试 241）。chart-report 补测通过（架构链路含纠错回环全贯通）。**D1 首批收官**（5 剧本全实测，7 架构缺陷修复，模型智力项入观察清单）。**D4 ✅ 已定**（2026-07-17 用户拍板：full 声明 >12k tokens（≈50 工具）时切 catalog，D2 全程留 full；切换有两张前置工程票——约束/提示词解耦（catalog 条目无 parameters 会把 arguments 钳死成 `{}`）+ 目录摘要瘦身；顺带修正摘要阈值口径：锚定稳定前缀，金测试 242）。**D2 首批 🟡 已落地**（2026-07-17：桌面日常七件套 find_files/list_dir/open_path/clipboard×2/notify_user/system_status，40 工具 full 声明 8.8k tokens < 阈值，金测试 255；选型口径=生产环境未定型前按通用日常使用率，用户真实需求清单后补）。首批九问实测验收 ✅（find_files 自动降级内容模式修复 + TCC 过滤定性 + 三调三返定性=护栏正常，v0.16.0(37)，金测试 256）。**第二批实测验收 ✅（2026-07-17 六问全过，三次磕绊全被护栏同轮接住，纠错回环首次全套野外验证）——D2 阶段性收官**（46 工具 9.6k tokens，金测试 268，v0.16.0(38)；用户真实需求清单待生产环境定型后补充，届时按需加第三批）。**D 阶段工程票 ×2 ✅**（2026-07-17：注册表热重扫（只增不删 + 斜杠前置自动重扫 + REST 端点）、sidecar 孤儿 reap（bundle 布局限定），金测试 274，v0.16.0(39)；孤儿回收的实机回归 ✅ 通过（2026-07-18 用户复刻 kill -9，旧 pid 死/pid 文件换新/对话正常，销案））。**UI 打磨 ✅**（2026-07-17：消息主操作移到气泡下小钮行 + 复制成功反馈 + 删助手气泡右上角悬停复制钮，右键菜单保留待扩充，v0.16.0(40)；第二批：输入栏文件拖放 + 会话列表/消息时间戳三档规则（轮次 timestamp 字段 additive 入协议 §2.3），金测试 276，v0.16.0(41)；第三批：斜杠候选提示（GET /api/v1/skills + 前缀过滤候选 + ↑↓/Tab/回车补全 + 命中徽标，缺依赖灰显），金测试 280，v0.16.0(42)。R2b 澄清：skill_invoke 工具轨一直在，31B 后口头点名零代码实测即可；第四批：会话列表冷启快照（按后端地址隔离，真相到达即替换），v0.16.0(43)）。**媒体抓取 ✅**（2026-07-17：media_download 工具（yt-dlp 包壳，probe/audio/video 三模式，播放列表闸+1080p/2GB 熔断+ASCII 文件名，产物走会话 assets 出链接），金测试 286，v0.16.0(44)，用户后续要补充细节；MediaCrawler=用户拍板放弃，remotion/skills=挂起等需求（目录制渐进披露+需 Claude Code 级编码力，等 31B）。**文件面板 ✅**（2026-07-18：产物链接 -50 根治（相对路径+Bearer 双层死，app 内接管唯一正确）——GET /api/v1/files/{sid} listing + 检查器第四页签「文件」（音视频 AVPlayer 流式（Range 206+faststart 皆实证）/图片/QuickLook 三路预览 + 打开/保存）+ OpenURLAction 白名单劫持 + 窗口 minWidth 760→860 修侧栏错位，金测试 290，v0.16.0(45)；返修×2：46=yt-dlp 键名 S.10+动态 minWidth 960/760，金测试 291；47=SwiftUI VideoPlayer 在 macOS 27 beta 实例化即崩→换经典 AVPlayerView；**iOS 对齐 ✅**：共享源免费得全套+行内「分享」钮（UIActivityViewController），TestFlight build 48 已传；49=iOS 实机返修：静音拨键消声（AVAudioSession→.playback）+ macOS 播放窗不可调（frame 补 max），双端 49 已发；50=key 轮换两枚钮（复制/重新生成，macOS-only，重新生成即刻重启执行层旧 key 作废；算力端同模式挂起等生产设备）；51=无档孤儿事故：pid 档丢失→误判 external 永久礼让——reap 补解释器路径第二判据 + backend timeout_graceful_shutdown=5（TERM 恒有效）+「重启执行层」正名（纯重启不动 key，与「重新生成」语义分工，51 用户复验通过）；52=UI 打磨第五批：复制钮原位画勾 + 重新生成三态反馈 + 会话多选批量删除（macOS ⌘/⇧ 点选、iOS 编辑态圈选）+ 输入栏 ⇧↩ 换行，双端已发）。下一步 = **D3 子 Agent 扩充**（建议等生产环境/真实需求定型）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 ✅ 闭环**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份）；951M 运行时（322 Mach-O 覆盖签名）公证 **Accepted**（submission `1e13bf2a`，2026-07-16 通过；当日苹果队列积压 ~14h，对照组 tiny.zip 甚至更慢——大包无罪）。签名→公证全链路验证完毕，剩「对真实 .app 公证 + staple」在 R5 收官后的分发动作里做。**
+> 🟢 **2026-07-16：R0–R4 ✅；R5-1 ✅（app 源码入库）；R5-2 ✅（edge 瘦身 2.1G→888M，音频路移设备 A）；R5-3 ✅（内嵌运行时定 python-build-standalone，950M 可搬树，hardened runtime 签名后 212 金测试全绿）。R5-4 ✅ **完整收官**（D.16 旋钮 + `lib_edge.sh` 单一真相 + `SidecarManager.swift` 五态监护 + **实机查验五步全过**，查验揪出并修掉 2 个真 bug；222 金测试全绿）。R5-5 ✅（SearXNG 同树随包 +40M，990M 总，322/322 签名，恒为回环实测）；R5-6 ✅（Keychain 多账户）；R5-7 ✅（渲染格 citations + 轻改版色彩设计「青瓷」，设置页拆 Tab）；R5-8 ✅（iOS 瘦客户端核查 + TestFlight 实跑，build 21 已分发）；R5-9 ✅（bundle 组装 1.0G 交付形态 + 无头验收全过 + GUI 三项用户实机确认 + 实机查验四轮修复（密钥入库/鉴权门/Developer ID 签名/会话恢复）+ 两轮 UI 打磨，v0.16.0(30)）。**R5 全线收官（2026-07-17），CHARTER 三处同步已获用户同意并落地**。**D1 首批进行中**：新剧本 ×4 + D.17 斜杠确定性分发（e4b 不会主动调 skill_invoke，实测倒逼）+ 金测试 232；chart-report/ingest 验收 ✅，briefing/research/chart-report 三案疑难**同根归案（S.9）**：inference/server.py 约束采样构造少传 schema_builder → 服务端掩码永久禁用 → e4b 裸奔畸形 JSON——已修（一行）+ AST 调用点钉（金测试 233），infer 已重启、探针全绿。实机三轮后：**/research 端到端全通（D1 首个完整闭环）**；/briefing 剩模型智力项（观察清单：约束内调用块 2048 token 未收口）；点名不可用剧本改为如实告知（v0.16.0(34)，金测试 241）。chart-report 补测通过（架构链路含纠错回环全贯通）。**D1 首批收官**（5 剧本全实测，7 架构缺陷修复，模型智力项入观察清单）。**D4 ✅ 已定**（2026-07-17 用户拍板：full 声明 >12k tokens（≈50 工具）时切 catalog，D2 全程留 full；切换有两张前置工程票——约束/提示词解耦（catalog 条目无 parameters 会把 arguments 钳死成 `{}`）+ 目录摘要瘦身；顺带修正摘要阈值口径：锚定稳定前缀，金测试 242）。**D2 首批 🟡 已落地**（2026-07-17：桌面日常七件套 find_files/list_dir/open_path/clipboard×2/notify_user/system_status，40 工具 full 声明 8.8k tokens < 阈值，金测试 255；选型口径=生产环境未定型前按通用日常使用率，用户真实需求清单后补）。首批九问实测验收 ✅（find_files 自动降级内容模式修复 + TCC 过滤定性 + 三调三返定性=护栏正常，v0.16.0(37)，金测试 256）。**第二批实测验收 ✅（2026-07-17 六问全过，三次磕绊全被护栏同轮接住，纠错回环首次全套野外验证）——D2 阶段性收官**（46 工具 9.6k tokens，金测试 268，v0.16.0(38)；用户真实需求清单待生产环境定型后补充，届时按需加第三批）。**D 阶段工程票 ×2 ✅**（2026-07-17：注册表热重扫（只增不删 + 斜杠前置自动重扫 + REST 端点）、sidecar 孤儿 reap（bundle 布局限定），金测试 274，v0.16.0(39)；孤儿回收的实机回归 ✅ 通过（2026-07-18 用户复刻 kill -9，旧 pid 死/pid 文件换新/对话正常，销案））。**UI 打磨 ✅**（2026-07-17：消息主操作移到气泡下小钮行 + 复制成功反馈 + 删助手气泡右上角悬停复制钮，右键菜单保留待扩充，v0.16.0(40)；第二批：输入栏文件拖放 + 会话列表/消息时间戳三档规则（轮次 timestamp 字段 additive 入协议 §2.3），金测试 276，v0.16.0(41)；第三批：斜杠候选提示（GET /api/v1/skills + 前缀过滤候选 + ↑↓/Tab/回车补全 + 命中徽标，缺依赖灰显），金测试 280，v0.16.0(42)。R2b 澄清：skill_invoke 工具轨一直在，31B 后口头点名零代码实测即可；第四批：会话列表冷启快照（按后端地址隔离，真相到达即替换），v0.16.0(43)）。**媒体抓取 ✅**（2026-07-17：media_download 工具（yt-dlp 包壳，probe/audio/video 三模式，播放列表闸+1080p/2GB 熔断+ASCII 文件名，产物走会话 assets 出链接），金测试 286，v0.16.0(44)，用户后续要补充细节；MediaCrawler=用户拍板放弃，remotion/skills=挂起等需求（目录制渐进披露+需 Claude Code 级编码力，等 31B）。**文件面板 ✅**（2026-07-18：产物链接 -50 根治（相对路径+Bearer 双层死，app 内接管唯一正确）——GET /api/v1/files/{sid} listing + 检查器第四页签「文件」（音视频 AVPlayer 流式（Range 206+faststart 皆实证）/图片/QuickLook 三路预览 + 打开/保存）+ OpenURLAction 白名单劫持 + 窗口 minWidth 760→860 修侧栏错位，金测试 290，v0.16.0(45)；返修×2：46=yt-dlp 键名 S.10+动态 minWidth 960/760，金测试 291；47=SwiftUI VideoPlayer 在 macOS 27 beta 实例化即崩→换经典 AVPlayerView；**iOS 对齐 ✅**：共享源免费得全套+行内「分享」钮（UIActivityViewController），TestFlight build 48 已传；49=iOS 实机返修：静音拨键消声（AVAudioSession→.playback）+ macOS 播放窗不可调（frame 补 max），双端 49 已发；50=key 轮换两枚钮（复制/重新生成，macOS-only，重新生成即刻重启执行层旧 key 作废；算力端同模式挂起等生产设备）；51=无档孤儿事故：pid 档丢失→误判 external 永久礼让——reap 补解释器路径第二判据 + backend timeout_graceful_shutdown=5（TERM 恒有效）+「重启执行层」正名（纯重启不动 key，与「重新生成」语义分工，51 用户复验通过）；52=UI 打磨第五批：复制钮原位画勾 + 重新生成三态反馈 + 会话多选批量删除（macOS ⌘/⇧ 点选、iOS 编辑态圈选）+ 输入栏 ⇧↩ 换行，双端已发）。**RAG 数据/计算拆分 B2c · 阶段 1 ✅**（2026-07-18 用户拍板拆分：`compute_core.py` 原样抽取模型侧 + `compute_server.py`（:14162 无状态四原语，RAG_COMPUTE_API_KEY + 非回环空钥拒启）+ 数据面按 `rag.compute.host` 分派（空=融合逐字现状/非空=HTTP 拨号；计算面离线时数据面照常启动、计算类 503 自愈——比拆分前更韧）+ RAG_CONFIG/RAG_DATA_DIR 布局旋钮 + lib_edge 编队收编 rag-data + devctl gpu 按 config 分派；实测融合/拆分链路分数逐位一致、护栏 6 项全过、金测试 291，backend 三客户端零改动；config 暂持融合现网零扰动，阶段 2=bundle 集成，阶段 3=拓扑切换+复盘）。下一步 = **D3 子 Agent 扩充**（建议等生产环境/真实需求定型）。Q5/Q6/Q7 已定（D.13/D.14/D.16）；**Q8 ✅ 闭环**：Developer ID Application (G2) 证书已由用户签发装入（有效期至 2031-07-17，partition list 已设，`.p12` 已由用户导出备份）；951M 运行时（322 Mach-O 覆盖签名）公证 **Accepted**（submission `1e13bf2a`，2026-07-16 通过；当日苹果队列积压 ~14h，对照组 tiny.zip 甚至更慢——大包无罪）。签名→公证全链路验证完毕，剩「对真实 .app 公证 + staple」在 R5 收官后的分发动作里做。**
 
 ---
 
@@ -1412,6 +1412,42 @@ iOS 长按菜单「选择多个」进编辑态圈选（Button 行会抢编辑态
 响应链动作 `insertNewlineIgnoringFieldEditor`（⌥↩ 同款）光标处插行；斜杠候选
 弹窗期回车语义不变；iOS 软键盘不受影响。词表 +7。macOS 52 装机（SEAL-OK），
 TestFlight 52 已传。
+
+### RAG 数据/计算拆分 B2c（2026-07-18 用户拍板「按你的思路来」）
+
+**动机（用户提出，方向=贯彻既有不变量）**：整个 RAG 在算力端时，设备 A 落着用户
+原文的**两份明文**（`storage/raw_files` 原文备份 + Chroma `documents` 字段存的切块
+原文），与 §3.1「会话数据全部留在设备 B，服务端不持久化」的隐私边界相悖——RAG 是
+这条边界上唯一的例外。且 8B 生产档在轻量工作端跑不动，计算必须留在 A → 拆。
+
+**形态（配置分派、缺省融合——镜像 InProcess/RemoteBackend「同一契约两个实现」）**：
+- `rag/compute_core.py`：从 rag_server **原样抽取**的模型侧（档位解析/下载/加载/
+  嵌入/重排/token 计数）。重排模板与收尾串随权重走（模型家族绑定事实归计算侧）；
+  嵌入分批（BATCH_SIZE）责任移入计算侧——拆分下逐批 HTTP 往返只是延迟税。
+- `rag/compute_server.py`（:14162，算力端）：无状态四原语 `/embed /rerank /tokenize
+  /health`；Bearer=RAG_COMPUTE_API_KEY（.env.example +1）；非回环+空钥拒启（§8 同律）。
+- `rag_server.py` = 数据面：Chroma/原文/路由/切块/治理全留；`rag.compute.host` 空 =
+  融合（进程内 import compute_core，行为与拆分前逐字一致、torch 不进拆分模式的数据
+  面）；非空 = HTTP 拨号。三阈值随计算面身份（identity 带档位 thresholds）到位时覆盖
+  tuning 兜底；换档护栏改为「存储戳 vs 计算面身份」：启动可达即比对（不符拒启），
+  不可达则**照常启动**（工作端开机不再被 A 卡死——纯数据操作恒可用，计算类操作 503
+  + 恢复自愈；此前 backend 启动门会因 A 离线整个拒启，拆分反而更韧）。
+- 新环境变量 `RAG_CONFIG` / `RAG_DATA_DIR`（bundle/测试布局注入数据根；reembed.py
+  同步识别）。lib_edge：rag-data 入 edge 编队（`rag_is_local` 判据：rag.host 指本机
+  才归本编队，指远端=过渡拓扑照旧只探活）、reap 双判据覆盖第三服务、状态含计算面；
+  devctl：`start rag-compute`、gpu profile 按 compute.host 分派（非空=A 只跑计算面）。
+- config.yaml 增 `rag.compute{host,port}`，**本仓库先保持 host:"" 融合**——现网拓扑
+  （A 上整 RAG）零扰动，拓扑切换（数据迁工作端）与阶段 2 一起做。
+
+**实测（本机=设备 A，全部走 24160/24162 临时端口 + scratch 数据根，不碰现网 14160）**：
+融合全链路（建类/入库/查询 rerank 0.9995/盖戳/tokenize）✅；拆分同链路**分数逐位
+一致** ✅；计算面离线韧性（health 正常/列类可用/查询入库 503 且报错指向 devctl）✅；
+鉴权三态（无钥 401/对钥 200/两侧不一致→500 明说「检查 .env.local 同值」而非伪装成
+网络错）✅；篡改戳→启动拒服务并指向 reembed ✅；0.0.0.0+空钥拒启 ✅。金测试 291
+全绿（backend 三客户端零改动——拆分对调用方完全透明）。
+
+**待办（阶段 2/3）**：bundle 集成 rag-data（chromadb 入运行时 + SidecarManager）→
+拓扑切换（数据 A→工作端迁移 + A 改跑 `--profile gpu` 计算面）→ 全项目复盘+文档。
 
 ## §4 风险（已识别，持续有效）
 

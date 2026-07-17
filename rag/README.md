@@ -4,6 +4,23 @@
 
 为 AI Agent 提供的本地化 RAG（检索增强生成）后端服务，用于存储和检索知识、记忆等信息。基于 **FastAPI + ChromaDB + Qwen3 双模型**（Embedding + Reranker）构建，全程本地运行，在 Apple Silicon 上使用 MPS 加速。
 
+## 数据/计算拆分（B2c）
+
+服务分两面，按 `config.yaml` 的 `rag.compute.host` 分派，**同一套代码两种形态**：
+
+| | 数据面 `rag_server.py`（:14160） | 计算面 `compute_server.py`（:14162） |
+|---|---|---|
+| 职责 | Chroma 向量库、原文备份、分类路由、切块、治理、检索编排 | 嵌入 / 重排 / token 计数（无状态，不落任何用户数据） |
+| 部署 | **工作端**（用户数据只落这里） | **算力端**（跑大档位模型） |
+| 依赖 | 不 import torch/transformers | torch + transformers（`compute_core.py`） |
+
+- **`compute.host` 留空 = 融合模式**：`rag_server.py` 进程内加载模型（`compute_core.py`），
+  单机 all-in-one 现状，行为与拆分前完全一致。
+- **非空 = 拆分模式**：数据面跨机拨号计算面。计算面离线时数据面照常启动——纯数据操作
+  （列类/删除）恒可用，需要计算的操作返回 503、计算面恢复后自愈（工作端开机不被算力端卡死）。
+- 环境变量布局旋钮：`RAG_CONFIG`（config 路径覆盖）、`RAG_DATA_DIR`（`chroma_data/`+
+  `storage/` 的数据根覆盖；bundle 布局注入 app 数据根，缺省 = 本目录现状）。
+
 ## 核心特性
 
 - **自动分类入库**：文档插入时根据向量相似度自动路由到对应的分类库，无法匹配的流入未分类库兜底
@@ -49,12 +66,17 @@
 ../devctl.sh start rag   # 仅启动本服务；start 缺省启动全部
 ```
 
-单独调试也可直接 `.venv/bin/python rag_server.py`。
-服务默认监听 `127.0.0.1:14160`，交互式 API 文档见 `http://127.0.0.1:14160/docs`。
+单独调试也可直接 `.venv/bin/python rag_server.py`（数据面/融合）或
+`.venv/bin/python compute_server.py`（计算面）。
+数据面默认监听 `127.0.0.1:14160`，交互式 API 文档见 `http://127.0.0.1:14160/docs`。
 
-算力分离部署时本服务跑在设备 A（`../devctl.sh start --profile gpu`），`rag.host` 改为该机的
-Tailscale 地址，设备 B 的 backend 跨机调用。此时**必须**设 `RAG_API_KEY`——
-绑定非回环地址却没有密钥会被护栏拒绝启动（见「鉴权」）。
+算力分离部署（B2c 拆分）：数据面留在工作端（`rag.host` 回环，随 `--profile edge` /
+app sidecar 启动），计算面跑在算力端（`../devctl.sh start --profile gpu`，
+`rag.compute.host` 填算力端 Tailscale 地址——算力端拿它当绑定地址、工作端拿它当拨号
+地址，一键两职）。跨机时**必须**两侧 `.env.local` 设同一 `RAG_COMPUTE_API_KEY`——
+计算面绑定非回环地址却没有密钥会被护栏拒绝启动（见「鉴权」）。
+（过渡拓扑：`compute.host` 留空 + `rag.host` 填算力端地址 = 整个融合 RAG 在算力端，
+拆分前的旧形态，仍受支持；此时跨机密钥是 `RAG_API_KEY`。）
 
 ## 档位与换档
 
@@ -96,13 +118,20 @@ python scripts/reembed.py rebuild               # 6) 重建分类 + 全量重灌
 
 ## 鉴权
 
-`/api/v1/*` 全量套 Bearer 校验，密钥读环境变量 `RAG_API_KEY`（仓库根 `.env.local`，
-与 backend 侧三个 rag 客户端 `rag_search` / `rag_admin` / `rag_sink` 填同一个值）。
-`/health` 免鉴权供探活。
+两面各一把钥匙，`/health` 均免鉴权供探活：
+
+- **数据面** `/api/v1/*`：`RAG_API_KEY`（backend 侧三个 rag 客户端
+  `rag_search` / `rag_admin` / `rag_sink` 填同一个值）
+- **计算面** `/api/v1/*`：`RAG_COMPUTE_API_KEY`（数据面作为客户端读同一变量携带；
+  两台机器的 `.env.local` 填同一个值）
+
+通则（部署铁则 §8，四个服务同一条纪律）：
 
 - 密钥留空 = 未启用（启动告警后放行），仅限开发 / 回环
 - **绑定非回环地址 + 密钥留空 = 拒绝启动**（不是告警）：跨机部署时"改 host"和"设密钥"是两个
   独立动作，先改 host 后忘密钥，服务就对整个内网裸奔
+- 数据面与计算面密钥不一致时，数据面返回 500 并明说「检查两侧 .env.local 同值」，
+  不伪装成网络错误
 
 ## 配置说明（仓库根 config.yaml 的 rag / tuning 段）
 
@@ -110,8 +139,12 @@ python scripts/reembed.py rebuild               # 6) 重建分类 + 全量重灌
 
 ```yaml
 rag:
-  host: "127.0.0.1"                 # 分离部署时改为设备 A 的 Tailscale 地址（两侧填同一个值）
+  host: "127.0.0.1"                 # 数据面绑定/拨号地址（拆分部署=工作端回环；
+                                    #   过渡拓扑=算力端 Tailscale 地址，两侧同值）
   port: 14160
+  compute:
+    host: ""                        # 空=融合模式；非空=算力端 Tailscale 地址（拆分模式）
+    port: 14162
   active_tier: "text-0.6b"          # 当前档位 id（被 .rag-tier-selection 指针覆盖）
   tiers:                            # 档位注册表（字段见 config.yaml 内注释）
     - id: "text-0.6b"
@@ -231,7 +264,9 @@ curl -X POST http://127.0.0.1:14160/api/v1/document/query \
 
 ```
 rag/
-├── rag_server.py          # 服务主程序（档位解析、模型加载、切块、路由、检索、重排、换档护栏）
+├── rag_server.py          # 数据面（切块、路由、检索编排、治理、换档护栏；融合模式内含计算）
+├── compute_core.py        # 计算核（档位解析、模型下载/加载、嵌入、重排、token 计数）
+├── compute_server.py      # 计算面 HTTP 服务（:14162，无状态；拆分模式跑在算力端）
 ├── scripts/
 │   └── reembed.py         # 换档/升级用的全量重建（dump-categories / wipe / rebuild）
 ├── requirements.txt       # Python 依赖（配置见仓库根 config.yaml，部署/启动走根 devctl.sh）

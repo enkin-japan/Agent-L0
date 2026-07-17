@@ -139,6 +139,19 @@ rag:
   host: "100.72.11.119"
   port: 14160
 
+  # ── 数据/计算拆分（HETERO_COMPUTE B2c）────────────────────────────────────
+  # compute.host 空 = 融合模式：rag_server 就地加载模型（拆分前现状，行为逐字不变）。
+  # 非空 = 拆分模式：rag_server 只当数据面（Chroma 向量库 + 原文备份 + 路由/治理，
+  #   跑在工作端、通常绑回环），嵌入/重排/分词拨号该地址的 compute_server（:14162，
+  #   跑在算力端、无状态不落任何用户数据）。host 一键两职（同 inference.remote.host）：
+  #   算力端拿它当绑定地址、工作端拿它当拨号地址。
+  # ⚠️ 拆分跨机必须两侧 .env.local 设同一 RAG_COMPUTE_API_KEY（compute 非回环绑定 +
+  #   空 key = 拒启）。拓扑切换步骤：数据目录（chroma_data/ + storage/）先从算力端
+  #   迁到工作端，再改本段 + rag.host，最后算力端改跑 `start --profile gpu`。
+  compute:
+    host: ""
+    port: 14162
+
   # ── RAG 档位注册表（镜像 inference.model_registry 的选择制，HETERO_COMPUTE B2a）──
   # 一个"档位" = 一对 {嵌入模型, 重排模型}（同尺寸同家族）。调试期换档走**选择**而非手填：
   #   ./devctl.sh rag-model   交互选择 → 写仓库根 .rag-tier-selection（gitignored 指针）

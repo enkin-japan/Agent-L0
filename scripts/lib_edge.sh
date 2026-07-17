@@ -22,6 +22,16 @@
 #   EDGE_CONFIG          config.yaml 路径       仓库: <root>/config.yaml
 #   EDGE_SETUP_HINT      缺解释器时的提示（可选） 仓库: "请先运行: ./devctl.sh setup"
 #
+# 可选（RAG 数据面，B2c 拆分——rag.host 为本机时它属于 edge 编队，先于 backend）：
+#   EDGE_RAG_DIR         rag 代码目录           仓库: <root>/rag       bundle: Resources/rag
+#   EDGE_RAG_PY          rag 解释器             仓库: rag/.venv/bin/python
+#                                               bundle: Resources/python/bin/python3.13
+#                                               （数据面不 import torch，backend 运行时可承载）
+#   EDGE_RAG_DATA_DIR    rag 数据根（可选）      仓库: 空（缺省 rag/ 本目录）
+#                                               bundle: $AGENT_DATA_DIR/rag（bundle 只读）
+#   未注入 EDGE_RAG_PY = 本布局无 rag 承载：rag.host 指远端时无影响；指本机时
+#   start_backend 的 RAG 就绪门会拦下并说明。
+#
 # 密钥不在本文件的职责内：devctl 在 source 前已把 .env.local 灌进环境；app 从
 # Keychain 取出后注入子进程环境（R5-6）。本文件只透传，不读任何密钥文件。
 # =======================================================
@@ -83,10 +93,13 @@ c = yaml.safe_load(open(sys.argv[1], encoding="utf-8")) or {}
 inf = c.get("inference") or {}
 rem = inf.get("remote") or {}
 rag = c.get("rag") or {}
+ragc = rag.get("compute") or {}
 print(inf.get("host", "127.0.0.1"))
 print(rem.get("host", "127.0.0.1"))
 print(rag.get("host", "127.0.0.1"))
 print(inf.get("mode", "inprocess"))
+print((ragc.get("host") or "").strip())
+print(ragc.get("port") or 14162)
 PY
 }
 
@@ -100,10 +113,16 @@ edge_resolve_urls() {
         INFER_HOST="$(printf '%s\n' "$lines" | sed -n 2p)"
         RAG_HOST="$(printf '%s\n' "$lines" | sed -n 3p)"
         INFER_MODE="$(printf '%s\n' "$lines" | sed -n 4p)"
+        RAGC_HOST="$(printf '%s\n' "$lines" | sed -n 5p)"
+        RAGC_PORT="$(printf '%s\n' "$lines" | sed -n 6p)"
     else
         BACKEND_HOST="127.0.0.1"; INFER_HOST="127.0.0.1"; RAG_HOST="127.0.0.1"; INFER_MODE="inprocess"
+        RAGC_HOST=""; RAGC_PORT=14162
     fi
+    RAGC_PORT="${RAGC_PORT:-14162}"
     RAG_READY_URL="http://$(probe_host "$RAG_HOST"):${RAG_PORT}/health"
+    # RAG 计算面（B2c 拆分；RAGC_HOST 空 = 融合模式，无独立计算服务）
+    RAGC_READY_URL="http://$(probe_host "$RAGC_HOST"):${RAGC_PORT}/health"
     BACKEND_READY_URL="http://$(probe_host "$BACKEND_HOST"):${BACKEND_PORT}/health"
     INFER_READY_URL="http://$(probe_host "$INFER_HOST"):${INFER_PORT}/health"
     # 鉴权探针（带钥匙的最便宜 GET）：/health 全是免鉴权的，探不出钥匙错——
@@ -365,6 +384,37 @@ stop_searx() {
     stop_one "SearXNG" "$SEARX_PORT" "$EDGE_LOG_DIR/searx.pid" 5
 }
 
+# ---- RAG 数据面（B2c 拆分：rag.host 为本机时归 edge 编队，先于 backend）----
+# 判据：rag.host 指本机（回环/通配/空）= 数据面是本机编队成员；指远端 = 只探活不管
+#（拆分切换前的过渡拓扑：整个 RAG 还在算力端，本判据让 edge 行为与切换前逐字一致）。
+rag_is_local() {
+    case "$RAG_HOST" in
+        ""|"127.0.0.1"|"localhost"|"::1"|"0.0.0.0"|"::"|"*") return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+start_rag_local() {
+    if is_ready "$RAG_READY_URL"; then
+        managed_or_report "RAG" "$RAG_PORT" "$EDGE_LOG_DIR/rag.pid" rag || return 1
+        info "RAG 已在运行，跳过"; return 0
+    fi
+    guard_port_before_spawn "RAG" "$RAG_PORT" "$EDGE_LOG_DIR/rag.pid" rag \
+        "$RAG_READY_URL" "$RAG_TIMEOUT" "$EDGE_LOG_DIR/rag.log"
+    case $? in 1) return 1 ;; 2) return 0 ;; esac
+    [ -n "${EDGE_RAG_PY:-}" ] || { fail "本布局未注入 RAG 承载（EDGE_RAG_PY）而 rag.host 指向本机"; return 1; }
+    [ -x "$EDGE_RAG_PY" ] || { fail "缺少 RAG 解释器（${EDGE_RAG_PY}）${EDGE_SETUP_HINT:+，$EDGE_SETUP_HINT}"; return 1; }
+    info "启动 RAG (port $RAG_PORT) → $EDGE_LOG_DIR/rag.log"
+    # RAG_CONFIG/RAG_DATA_DIR 布局注入：bundle 的代码目录只读，数据必须落数据根；
+    # 仓库布局 EDGE_RAG_DATA_DIR 为空 → rag_server 缺省用 rag/ 本目录（现状）
+    spawn_daemon "$EDGE_RAG_DIR" "$EDGE_LOG_DIR/rag.log" "$EDGE_LOG_DIR/rag.pid" \
+        env RAG_CONFIG="$EDGE_CONFIG" RAG_DATA_DIR="${EDGE_RAG_DATA_DIR:-}" \
+        "$EDGE_RAG_PY" rag_server.py || return 1
+    wait_ready "RAG" "$RAG_READY_URL" "$RAG_TIMEOUT" "$(cat "$EDGE_LOG_DIR/rag.pid")" "$EDGE_LOG_DIR/rag.log"
+}
+
+stop_rag_local() { stop_one "RAG" "$RAG_PORT" "$EDGE_LOG_DIR/rag.pid" 15; }
+
 # ---- backend ----
 start_backend() {
     if is_ready "$BACKEND_READY_URL"; then
@@ -424,6 +474,11 @@ stop_backend() { stop_one "backend" "$BACKEND_PORT" "$EDGE_LOG_DIR/backend.pid" 
 edge_up() {
     edge_require_env || return 1
     mkdir -p "$EDGE_LOG_DIR"
+    # RAG 数据面最先（B2c）：backend 启动门硬依赖 RAG 就绪（工具探活一次性）。
+    # rag.host 指远端（拆分切换前的过渡拓扑）时不归本编队，交由 backend 门探活跨机校验。
+    if rag_is_local; then
+        start_rag_local || return 1
+    fi
     { start_searx || warn "SearXNG 未就绪，web_research 将不注册，继续"; true; } && start_backend
 }
 
@@ -431,6 +486,9 @@ edge_down() {
     edge_require_env || return 1
     stop_backend
     stop_searx
+    if rag_is_local && [ -n "${EDGE_RAG_PY:-}" ]; then
+        stop_rag_local
+    fi
 }
 
 # ---- 孤儿回收（D 阶段工程票）----
@@ -444,14 +502,18 @@ edge_reap() {
     edge_require_env || return 1
     local reaped=0
     local svc
-    for svc in backend searx; do
+    for svc in backend searx rag; do
         local pidfile="$EDGE_LOG_DIR/$svc.pid"
         [ -f "$pidfile" ] || continue
         local pid; pid="$(cat "$pidfile" 2>/dev/null)"
         if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
             # ${} 必须显式界定：紧跟全角括号（多字节）会被 bash 吞首字节当变量名
             info "发现上代残留 ${svc}（pid ${pid}，pid 记录在本数据根），回收后重新拉起"
-            if [ "$svc" = "backend" ]; then stop_backend; else stop_searx; fi
+            case "$svc" in
+                backend) stop_backend ;;
+                searx)   stop_searx ;;
+                rag)     stop_rag_local ;;
+            esac
             reaped=$((reaped + 1))
         else
             rm -f "$pidfile"   # 记录已死：清掉陈尸的 pid 文件
@@ -462,9 +524,13 @@ edge_reap() {
     # 端口占用者的解释器路径属于本布局（bundle 的 Resources/python）即是自家兵：
     # devctl/repo 后端绝不会用 bundle 解释器，按路径认领不存在误杀面。
     local port py p cmd
-    for svc in backend searx; do
-        if [ "$svc" = "backend" ]; then port="$BACKEND_PORT" py="$EDGE_BACKEND_PY"
-        else port="$SEARX_PORT" py="$EDGE_SEARX_PY"; fi
+    for svc in backend searx rag; do
+        case "$svc" in
+            backend) port="$BACKEND_PORT" py="$EDGE_BACKEND_PY" ;;
+            searx)   port="$SEARX_PORT"   py="$EDGE_SEARX_PY" ;;
+            rag)     port="$RAG_PORT"     py="${EDGE_RAG_PY:-}"
+                     [ -n "$py" ] || continue ;;   # 本布局无 rag 承载：无从按解释器认领
+        esac
         for p in $(listen_pids "$port"); do
             cmd="$(ps -o command= -p "$p" 2>/dev/null)"
             case "$cmd" in
@@ -489,6 +555,8 @@ edge_status() {
     edge_require_env || return 1
     echo "[edge] 服务状态（inference.mode=${INFER_MODE}）："
     status_one "RAG     " "$RAG_PORT" "$RAG_READY_URL"
+    # B2c 拆分模式（rag.compute.host 非空）才有独立计算面；融合模式无此服务
+    [ -n "${RAGC_HOST:-}" ] && status_one "RAG计算 " "$RAGC_PORT" "$RAGC_READY_URL"
     status_searx
     if [ "$INFER_MODE" = "remote" ]; then
         status_one "推理服务" "$INFER_PORT" "$INFER_READY_URL"

@@ -32,12 +32,15 @@ import requests
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = REPO_ROOT / "config.yaml"
 RAG_DIR = REPO_ROOT / "rag"
-STORAGE = RAG_DIR / "storage"
+# 与 rag_server.py 同一套环境变量覆盖（B2c）：RAG_CONFIG 指配置、RAG_DATA_DIR 指数据根
+# （bundle/测试布局；缺省 = 仓库现状）
+CONFIG_PATH = Path(os.environ.get("RAG_CONFIG", "").strip() or REPO_ROOT / "config.yaml")
+DATA_ROOT = Path(os.environ.get("RAG_DATA_DIR", "").strip() or RAG_DIR)
+STORAGE = DATA_ROOT / "storage"
 RAW_FILES = STORAGE / "raw_files"
 UNCLASSIFIED = STORAGE / "unclassified_raw"
-CHROMA_DB = RAG_DIR / "chroma_data"
+CHROMA_DB = DATA_ROOT / "chroma_data"
 CATEGORIES_BACKUP = STORAGE / "categories_backup.json"
 
 _cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
