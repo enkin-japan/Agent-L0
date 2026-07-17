@@ -15,6 +15,8 @@ struct SettingsView: View {
     #if os(macOS)
     @State private var keyCopied = false
     @State private var copyResetTask: Task<Void, Never>?
+    private enum RegenPhase { case idle, restarting, done }
+    @State private var regenPhase: RegenPhase = .idle
     #endif
 
     var body: some View {
@@ -96,13 +98,28 @@ struct SettingsView: View {
                     // 的真实痛点）；重新生成 = key 轮换，仅内建执行层可用（external/
                     // repo 布局的 key 在 .env.local，这里换了对不上）。
                     HStack(spacing: Theme.s2) {
-                        Button(L("复制")) { copyKey() }
-                            .disabled(keyText.isEmpty)
-                        if keyCopied {
-                            Text(L("已复制")).font(.caption).foregroundStyle(.secondary)
+                        // 反馈在按钮原位画勾（用户定：挤开邻钮的旁注难看）；ZStack
+                        // 定宽避免勾/字互换时布局跳动
+                        Button { copyKey() } label: {
+                            ZStack {
+                                Text(L("复制")).opacity(keyCopied ? 0 : 1)
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(Theme.success)
+                                    .opacity(keyCopied ? 1 : 0)
+                            }
                         }
+                        .disabled(keyText.isEmpty)
                         if sidecarManaged {
-                            Button(L("重新生成")) { regenerateKey() }
+                            // 三态反馈：重启中…（禁点）→ ✓ 已更新（1.5s）→ 复位
+                            switch regenPhase {
+                            case .idle:
+                                Button(L("重新生成")) { regenerateKey() }
+                            case .restarting:
+                                Button(L("重启中…")) {}.disabled(true)
+                            case .done:
+                                Label(L("已更新"), systemImage: "checkmark")
+                                    .foregroundStyle(Theme.success)
+                            }
                             Text(L("重新生成会立即重启执行层；其他设备须重新填入新 Key"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -313,10 +330,12 @@ struct SettingsView: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(keyText, forType: .string)
         copyResetTask?.cancel()
-        keyCopied = true
+        withAnimation(.easeOut(duration: 0.15)) { keyCopied = true }
         copyResetTask = Task {
             try? await Task.sleep(for: .seconds(1.5))
-            if !Task.isCancelled { keyCopied = false }
+            if !Task.isCancelled {
+                withAnimation(.easeIn(duration: 0.2)) { keyCopied = false }
+            }
         }
     }
 
@@ -327,7 +346,15 @@ struct SettingsView: View {
         keyText = newKey
         store.settings.apiKey = newKey
         store.applySettings()
-        Task { await sidecar.restart() }
+        regenPhase = .restarting
+        Task {
+            // restart() 等到执行层重新就绪（state==running）才返回——「已更新」
+            // 出现即代表新 key 已实际生效，不是空头反馈
+            await sidecar.restart()
+            withAnimation { regenPhase = .done }
+            try? await Task.sleep(for: .seconds(1.5))
+            withAnimation { regenPhase = .idle }
+        }
     }
     #endif
 

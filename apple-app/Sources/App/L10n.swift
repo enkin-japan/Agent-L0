@@ -32,6 +32,13 @@ enum L10n {
         "分享": ("共有", "Share"),
         "复制": ("コピー", "Copy"),
         "重新生成": ("再生成", "Regenerate"),
+        "重启中…": ("再起動中…", "Restarting…"),
+        "已更新": ("更新しました", "Updated"),
+        "完成": ("完了", "Done"),
+        "选择多个": ("複数選択", "Select Multiple"),
+        "删除所选": ("選択項目を削除", "Delete Selected"),
+        "确认删除所选会话？": ("選択したチャットを削除しますか？", "Delete selected chats?"),
+        "（不可恢复）": ("（元に戻せません）", "(cannot be undone)"),
         "重新生成会立即重启执行层；其他设备须重新填入新 Key":
             ("再生成すると実行レイヤーが直ちに再起動します。他のデバイスでは新しいキーの再入力が必要です",
              "Regenerating restarts the execution layer immediately; other devices must re-enter the new key"),

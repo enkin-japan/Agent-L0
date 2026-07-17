@@ -166,10 +166,22 @@ struct ComposerView: View {
                         completeSlash(slashCandidates[clampedSlashSelection])
                         return .handled
                     }
-                    .onKeyPress(.return) {
-                        guard !slashCandidates.isEmpty else { return .ignored }
-                        completeSlash(slashCandidates[clampedSlashSelection])
-                        return .handled
+                    .onKeyPress(keys: [.return], phases: .down) { press in
+                        if !slashCandidates.isEmpty {
+                            completeSlash(slashCandidates[clampedSlashSelection])
+                            return .handled
+                        }
+                        #if os(macOS)
+                        // ⇧↩ = 换行（用户定；此前与 ↩ 同为发送）。光标处插行借
+                        // field editor 的标准响应链动作（⌥↩ 同款）——SwiftUI 的
+                        // TextField 拿不到光标位置，拼接字符串会插错地方。
+                        if press.modifiers.contains(.shift) {
+                            NSApp.sendAction(#selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)),
+                                             to: nil, from: nil)
+                            return .handled
+                        }
+                        #endif
+                        return .ignored   // 素 ↩ 走原路：onSubmit 发送
                     }
                     .onChange(of: draft) { slashSelection = 0 }
 

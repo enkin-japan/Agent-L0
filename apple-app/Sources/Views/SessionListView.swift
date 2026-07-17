@@ -10,6 +10,12 @@ struct SessionListView: View {
     @State private var showSchedules = false
     @State private var renaming: SessionMetaItem?
     @State private var renameText = ""
+    // 多选（批量删除）：macOS 走 ⌘/⇧ 原生点选；iOS 长按菜单进编辑态圈选。
+    @State private var multiSelection = Set<String>()
+    @State private var confirmBulkDelete = false
+    #if os(iOS)
+    @State private var editMode: EditMode = .inactive
+    #endif
 
     var body: some View {
         sessionList
@@ -157,32 +163,64 @@ struct SessionListView: View {
         // 会话行必须有自己的 Section：裸行会被吸附进上一个分组的卡片里——
         // 实机截图实证「任务」卡与第一条会话行融成一整块，毫无隔断
         #if os(iOS)
-        List {
+        // 编辑态 = 多选（长按菜单「选择多个」进入）：行换成可勾选形态（Button 会
+        // 抢编辑态的点选），双指滑动圈选是 List(selection:) 的系统赠品。
+        List(selection: $multiSelection) {
             taskCenterSection
             Section(L("会话")) {
                 if let draft = draftRow {
                     Label(draft, systemImage: "square.and.pencil")
                 }
                 ForEach(store.sessions) { item in
-                    Button {
-                        store.select(sessionId: item.sessionId)
-                    } label: {
+                    if editMode == .active {
                         row(item)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
+                            .tag(item.sessionId)
+                    } else {
+                        Button {
+                            store.select(sessionId: item.sessionId)
+                        } label: {
+                            row(item)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            rowMenu(item)
+                            Button(L("选择多个"), systemImage: "checkmark.circle") {
+                                multiSelection = [item.sessionId]
+                                editMode = .active
+                            }
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .contextMenu { rowMenu(item) }
                 }
             }
         }
-        #else
-        List(selection: Binding(
-            get: { store.selectedSessionId },
-            set: { newValue in
-                if let id = newValue { store.select(sessionId: id) }
+        .environment(\.editMode, $editMode)
+        .toolbar {
+            if editMode == .active {
+                ToolbarItemGroup(placement: .bottomBar) {
+                    Button(role: .destructive) {
+                        confirmBulkDelete = true
+                    } label: {
+                        Text("\(L("删除所选"))（\(multiSelection.count)）")
+                    }
+                    .disabled(multiSelection.isEmpty)
+                    Spacer()
+                    Button(L("完成")) {
+                        editMode = .inactive
+                        multiSelection.removeAll()
+                    }
+                }
             }
-        )) {
+        }
+        .confirmationDialog(bulkDeleteTitle, isPresented: $confirmBulkDelete,
+                            titleVisibility: .visible) {
+            Button(L("删除"), role: .destructive) { bulkDelete() }
+            Button(L("取消"), role: .cancel) {}
+        }
+        #else
+        // Set 选择 = ⌘ 点选 / ⇧ 范围选免费获得；单选仍即点即入会话（onChange 分流）。
+        List(selection: $multiSelection) {
             taskCenterSection
             Section(L("会话")) {
                 if let draft = draftRow {
@@ -192,10 +230,53 @@ struct SessionListView: View {
                 ForEach(store.sessions) { item in
                     row(item)
                         .tag(item.sessionId)
-                        .contextMenu { rowMenu(item) }
                 }
             }
         }
+        // 选区级右键菜单：单选 = 原三项（重命名/置顶/删除），多选 = 批量删除。
+        // （行级 .contextMenu 与 forSelectionType 互斥——行级会赢，多选菜单永远出不来）
+        .contextMenu(forSelectionType: String.self) { ids in
+            if ids.count > 1 {
+                Button("\(L("删除所选"))（\(ids.count)）", role: .destructive) {
+                    multiSelection = ids
+                    confirmBulkDelete = true
+                }
+            } else if let id = ids.first,
+                      let item = store.sessions.first(where: { $0.sessionId == id }) {
+                rowMenu(item)
+            }
+        }
+        .onChange(of: multiSelection) {
+            if multiSelection.count == 1, let id = multiSelection.first,
+               id != store.selectedSessionId {
+                store.select(sessionId: id)
+            }
+        }
+        // 别处换会话（新对话/搜索/深链）时选区跟随；多选进行中不打扰
+        .onChange(of: store.selectedSessionId) {
+            if let id = store.selectedSessionId, multiSelection.count <= 1 {
+                multiSelection = [id]
+            }
+        }
+        .confirmationDialog(bulkDeleteTitle, isPresented: $confirmBulkDelete,
+                            titleVisibility: .visible) {
+            Button(L("删除"), role: .destructive) { bulkDelete() }
+            Button(L("取消"), role: .cancel) {}
+        }
+        #endif
+    }
+
+    private var bulkDeleteTitle: String {
+        "\(L("确认删除所选会话？"))（\(multiSelection.count)）\(L("（不可恢复）"))"
+    }
+
+    /// 批量删除：逐条走既有单删链路（后端逐会话落盘删除，无批量端点——个人量级够用）。
+    private func bulkDelete() {
+        let items = store.sessions.filter { multiSelection.contains($0.sessionId) }
+        items.forEach { store.deleteSession($0) }
+        multiSelection.removeAll()
+        #if os(iOS)
+        editMode = .inactive
         #endif
     }
 
