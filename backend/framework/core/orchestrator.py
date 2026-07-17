@@ -232,6 +232,8 @@ class Orchestrator:
         # 续跑首轮同样自动思考（重定向）。first_only：关→全不思考，开→仅首轮；
         # manual：旧语义直通。沙箱/摘要器直调 generate_once，不经本策略。
         self.thinking_mode = str(cfg.get("thinking_mode", "dynamic"))
+        # dream 式笔记整理旋钮（framework/memory/dream.py 消费；app 空闲维护回合调用）
+        self.notes_dream_cfg = dict(cfg.get("notes_dream") or {})
 
         # 上下文压缩（Step 1：机械式工具观察压缩）：任务沉降后削旧观察，保留最近若干条原文，
         # 把 model-facing 上下文规模钉在有界范围（原始观察总量 ≤ keep_recent × 单条上限）。

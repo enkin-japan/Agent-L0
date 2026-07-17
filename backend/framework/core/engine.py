@@ -407,9 +407,18 @@ class AgentEngine:
         if prior_summary.strip():
             parts.append("[Existing summary]\n" + prior_summary.strip())
         parts.append("[New conversation]\n" + content.strip())
+        return await self.oneshot_instruction(
+            self.SUMMARY_INSTRUCTION, "\n\n".join(parts),
+            max_tokens=max_tokens, temperature=temperature, cancel_check=cancel_check)
+
+    async def oneshot_instruction(self, instruction: str, content: str, *,
+                                  max_tokens: int = 640, temperature: float = 0.3,
+                                  cancel_check=None) -> str:
+        """通用一次性裸生成（summarize 的抽象化，dream 笔记整理等系统回合共用）：
+        不带工具、隔离缓存、持推理锁串行、被 cancel_check 抢占即返空串。"""
         messages = [
-            {"role": "system", "content": self.SUMMARY_INSTRUCTION},
-            {"role": "user", "content": "\n\n".join(parts)},
+            {"role": "system", "content": instruction},
+            {"role": "user", "content": content},
         ]
         prompt = self.dialect.build_prompt(messages=messages, tools=None, enable_thinking=False)
 

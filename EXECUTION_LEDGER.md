@@ -1562,6 +1562,16 @@ flush+抽取指引一张票、工具输出硬上限、检索侧 MMR+子串召回
    写笔记本+RAG 镜像。**只增不覆盖**（mem0 ADD-only 纪律：名字已存在即跳过，
    自动产出绝不盖手写笔记；更新语义留给显式 memory_write）；坏行静默跳过
    （模型智力维度 D1，e4b 产出质量待实测入观察清单）。金测试 325（+8）。
+5. **dream 式笔记整理 ✅**（grok-build §3.2）：`framework/memory/dream.py`——
+   三重闸（enabled / 距上次 ≥min_hours=24 / 变动笔记 ≥min_new_notes=4，
+   `.dream_stamp.json` 记账）+ DREAM_INSTRUCTION（只认 DROP/REWRITE 两操作、
+   cap 6、CLEAN 表干净）+ 机械护栏（**DROP 只许删含「自动抢救」标记的笔记**，
+   手写只能改写；改动前原文件备份 `.dream_backup/<ts>/`；幻觉名字跳过）。
+   挂载：app 空闲维护回合尾部，**全系统安静才跑**（任何会话忙/在调度即让路）；
+   engine 抽出通用 `oneshot_instruction`（summarize 改为薄委托，dream 共用隔离
+   缓存+推理锁路径）；NoteStore 补 delete（工具面有意不暴露）；config
+   `agent.notes_dream` 三旋钮。空输出（被抢占）不盖戳、下次重试；CLEAN 也盖戳
+   （看过即消耗配额）。金测试 336（+11）。
 
 | | 风险 | 缓解 |
 |---|---|---|

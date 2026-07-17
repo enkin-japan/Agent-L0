@@ -159,6 +159,18 @@ class NoteStore:
         self._write_index()
         return path
 
+    def delete(self, name: str) -> bool:
+        """删除一条笔记并重建索引（dream 整理专用；工具面有意不暴露删除）。"""
+        note = self._notes.pop(name, None)
+        if note is None:
+            return False
+        try:
+            if note.source and note.source.exists():
+                note.source.unlink()
+        finally:
+            self._write_index()
+        return True
+
     def _write_index(self) -> None:
         """重建 `MEMORY.md`。它是**产物不是真相**——真相是各 md 文件本身，
         故每次全量重建而不做增量修补（增量修补是索引和事实分叉的经典来源）。"""

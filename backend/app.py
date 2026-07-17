@@ -23,6 +23,7 @@ from framework.ingestion import Ingestion
 from framework.utils.file_handler import FileHandler
 from framework.utils.path_resolver import resolve_model_path, resolve_tokenizer_only_path
 from framework.memory.compactor import maybe_summarize_context
+from framework.memory import dream as notes_dream
 from framework.api.routes import router, _maybe_summarize_active
 from framework.api.auth import verify_api_key
 
@@ -63,6 +64,17 @@ async def _idle_maintenance_loop(session_manager, scheduler, orchestrator, inter
                         # 复位抢占取消标志（ClassPolicy 抢占后台摘要时置位），防止污染下一轮
                         session.cancel_requested = False
                         await scheduler.release(sid)
+
+            # dream 式笔记整理（评估采纳）：全系统安静时才做（任何会话在忙/在调度即让路——
+            # 整理梦占一次生成，不能顶到用户轮次前面）。闸门（时限+变动数）在 dream 内部。
+            busy = any(
+                s.lock.locked() or scheduler.is_active(sid_)
+                for sid_, s in list(session_manager._all_sessions.items()))
+            if not busy:
+                applied = await notes_dream.maybe_dream(
+                    orchestrator.engine, orchestrator.notes_dream_cfg)
+                if applied:
+                    print(f"[Maintenance] dream 笔记整理：应用 {applied} 项操作")
         except asyncio.CancelledError:
             break
         except Exception as e:
