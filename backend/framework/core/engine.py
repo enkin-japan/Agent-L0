@@ -383,12 +383,20 @@ class AgentEngine:
         "later; 'trip the week of 2026-07-20' stays meaningful.\n"
         "If [Existing summary] is provided, merge [New conversation] into it and output the "
         "updated complete summary without losing still-valid information from the old one. "
-        "Output only the summary body — no explanations, no preamble or suffix."
+        "Output only the summary body — no explanations, no preamble or suffix.\n"
+        "Finally, rescue durable facts: if [New conversation] contains facts worth keeping "
+        "across sessions (who the user is, stable preferences, confirmed decisions, "
+        "ongoing-project facts), append a block starting with the exact line 'MEMO:' followed "
+        "by at most 3 lines, each formatted as:\n"
+        "- kebab-case-name | user|feedback|project|reference | one self-contained factual "
+        "sentence with absolute dates\n"
+        "If nothing qualifies, do not output a MEMO block at all."
     )
 
     async def summarize(self, content: str, prior_summary: str = "",
-                        max_tokens: int = 512, temperature: float = 0.3,
+                        max_tokens: int = 640, temperature: float = 0.3,
                         cancel_check=None) -> str:
+        # max_tokens 512→640：给尾部 MEMO 抢救块（压缩前记忆冲洗，≤3 行）留余量
         """
         对一段对话历史做要点摘要（摘要式压缩）。一次性裸生成：不带工具、不复用会话 KV
         （用后端新建的隔离缓存），与任何会话的推理状态隔离。持有推理锁保证与生成串行。

@@ -31,10 +31,11 @@ Claude Code 的 microcompaction）——从「保最近 N 条、更早一律砍�
 import asyncio
 import json
 import time
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import rag_sink
+from .notes import NOTE_TYPES
 
 # 模块级默认（与 config.yaml agent 段默认保持一致；编排层按 config 覆盖，其余调用方用默认）
 DEFAULT_KEEP_RECENT = 6
@@ -148,6 +149,62 @@ def _turn_to_text(turn: Dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+# ---------- 压缩前记忆冲洗（memory flush，grok-build/mem0 评估合并票） ----------
+# 摘要调用一次双产出：摘要正文 + 尾部 MEMO 抢救块（≤3 行「name | type | 事实句」）。
+# 理念：折叠原文已由 rag_sink 无损沉淀（承重网），flush 的增量价值是把耐久事实
+# **提升**到笔记层（有索引、随环境块注入、模型「知道自己知道」）。本地推理一次
+# 调用很贵，故不另起 flush 回合而是搭摘要的车——mem0 抽取指引融进 SUMMARY_INSTRUCTION。
+
+_FLUSH_MAX_NOTES = 3
+
+
+def _split_memo(text: str) -> Tuple[str, List[str]]:
+    """把摘要输出拆成（纯摘要, MEMO 行列表）。无 MEMO 块 = 原文照返、空列表。"""
+    lines = text.splitlines()
+    for i, ln in enumerate(lines):
+        if ln.strip().upper() == "MEMO:":
+            memo = [l.strip() for l in lines[i + 1:] if l.strip().startswith("-")]
+            return "\n".join(lines[:i]).rstrip(), memo
+    return text, []
+
+
+def _flush_rescued_notes(memo_lines: List[str], session_id: str) -> int:
+    """把 MEMO 行写进笔记本（+ RAG 正文镜像）。全程 fail-open，返回成功条数。
+
+    只增不覆盖（mem0 ADD-only 纪律）：名字已存在即跳过——自动冲洗的产出质量
+    低于 agent 深思后的 memory_write，绝不能让它悄悄盖掉手写笔记；更新语义
+    留给显式工具调用。格式/类型/slug 不合法的行静默跳过（模型智力维度，D1）。
+    """
+    from ..agents import runtime  # 惰性导入避免 memory↔agents 环
+    store = runtime.get_note_store()
+    if store is None:
+        return 0
+    written = 0
+    for raw in memo_lines[:_FLUSH_MAX_NOTES]:
+        parts = [p.strip() for p in raw.lstrip("-").strip().split("|", 2)]
+        if len(parts) != 3:
+            continue
+        name, type_, fact = parts
+        if type_ not in NOTE_TYPES or not fact:
+            continue
+        if store.get(name) is not None:
+            continue  # 只增不覆盖
+        desc = fact if len(fact) <= 120 else fact[:117] + "…"
+        body = (f"{fact}\n\n（压缩前记忆冲洗自动抢救：会话 {session_id}，"
+                f"{date.today().isoformat()}。如与手写笔记冲突，以手写为准。）")
+        try:
+            store.write(name, desc, type_, body)
+        except Exception as e:
+            print(f"[Flush] 抢救笔记 {name!r} 写入失败（跳过）: {e}")
+            continue
+        try:
+            rag_sink.sediment_note(name, desc, type_, body)
+        except Exception:
+            pass  # RAG 镜像失败不影响：文件已落盘、索引已重建
+        written += 1
+    return written
+
+
 async def maybe_summarize_context(session, engine, *, threshold_tokens: int,
                                   keep_tail_turns: int, last_prompt_tokens: Optional[int],
                                   batch_min: int = 1, sediment: bool = True) -> int:
@@ -190,6 +247,9 @@ async def maybe_summarize_context(session, engine, *, threshold_tokens: int,
     new_summary = await engine.summarize(
         batch_text, session.rolling_summary,
         cancel_check=lambda: bool(getattr(session, "cancel_requested", False)))
+    # 压缩前记忆冲洗：剥出尾部 MEMO 抢救块（滚动摘要绝不能被它污染——
+    # 下次合并时 [Existing summary] 里冒出 MEMO 会教坏模型重复输出）
+    new_summary, memo_lines = _split_memo(new_summary)
     if not new_summary.strip():
         return 0  # 摘要为空（生成异常）：保持原样，下次再试
 
@@ -203,6 +263,13 @@ async def maybe_summarize_context(session, engine, *, threshold_tokens: int,
         title = (f"{session.session_id} · turns {old_watermark}-{fold_until} · "
                  f"{time.strftime('%Y-%m-%d')} · {int(time.time())}")
         await asyncio.to_thread(rag_sink.sediment, batch_text, title)
+
+    # 压缩前记忆冲洗落笔（fail-open，线程里做：写文件 + 重建索引 + RAG 镜像）
+    if memo_lines:
+        rescued = await asyncio.to_thread(
+            _flush_rescued_notes, memo_lines, session.session_id)
+        if rescued:
+            print(f"[Flush] 压缩前抢救 {rescued} 条耐久事实入笔记本")
 
     # 重建 model-facing 上下文为 [system]+[摘要]+[尾部]；旧 KV 由下次推理前缀匹配自动对齐
     # （系统前缀命中复用，摘要块起始处发散、其后重新预填充——即"只保 system 前缀复用"）。
