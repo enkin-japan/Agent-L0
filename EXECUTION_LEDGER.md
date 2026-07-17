@@ -1583,6 +1583,25 @@ flush+抽取指引一张票、工具输出硬上限、检索侧 MMR+子串召回
    （scratch 数据面 :24160 对拆分计算面：对抗查询「optimized_query 全是拉面话题
    +chunk_k=1」下向量路只召回拉面文档，ZX-9987-KEY 文档被 🔩 子串路捞回、
    重排 1.0 胜出——弱召回场景实证闭环；用完即收）。金测试 343（+7）。
+7. **code_explore 工具 ✅**（codegraph 评估方案落地）：单工具五模式
+   （explore/symbol→node/impact/status/init）CLI 包壳，media_download 模式全
+   复用——探活 `shutil.which("codegraph")` 缺则不注册；**遥测强关**每次子进程
+   注入 CODEGRAPH_TELEMETRY=0+DO_NOT_TRACK=1；**init 走 needs_approval 动态
+   钩子单独过审批**（写用户仓 .codegraph/ + 分钟级建图，timeout 900），查询类
+   免审只读；查询前置 `codegraph sync`（fail-open，秒级，不引常驻 daemon）；
+   validate_arguments 预检拦必败调用（坏 mode/缺 query 不骗审批）；路径守卫
+   （绝对路径 + 系统目录黑名单）。金测试 352（+9，全离线 mock 子进程）。
+   **实测验收待装机**：本机 PATH 尚无 codegraph 二进制（`curl -fsSL
+   https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh`
+   一条命令），装上即自动注册，届时 `codegraph init` 自己的仓 + 对话里问一句
+   「Agent 项目里审批续跑怎么实现」即可验收全链。
+
+**落地波收官（2026-07-18）**：拍板三件全部落地——③校准 / ①五张票（时间锚定、
+观察截断头尾式、memory flush、dream 整理、检索两增强）/ ②code_explore。金测试
+291→352（+61），七个 commit 已推送。**用户复测点**：正常对话数轮触发压缩后看
+`backend/notes/` 有无 MEMO 抢救笔记；装 codegraph 后验 code_explore；其余全部
+后台自动生效。遗留观察项（模型智力维度）：e4b 的 MEMO 行格式遵循度、dream
+操作行质量——机械护栏已兜死（坏行跳过/手写不可删/备份在案），质量等 31B。
 
 | | 风险 | 缓解 |
 |---|---|---|
