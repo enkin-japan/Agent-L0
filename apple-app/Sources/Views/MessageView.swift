@@ -81,16 +81,24 @@ struct MessageView: View {
                             }
                         }
                     }
+                // 操作钮随悬停隐显，时间戳常显（钮始终占位，时间戳不漂移）
                 HStack(spacing: Theme.s1) {
-                    CopyActionButton(text: message.text, help: L("复制原文"))
-                    if isLastUser, !store.isGenerating {
-                        MessageActionButton(icon: "pencil.and.outline",
-                                            help: L("编辑并重发（回退这一轮）")) {
-                            store.editLastTurn()
+                    HStack(spacing: Theme.s1) {
+                        CopyActionButton(text: message.text, help: L("复制原文"))
+                        if isLastUser, !store.isGenerating {
+                            MessageActionButton(icon: "pencil.and.outline",
+                                                help: L("编辑并重发（回退这一轮）")) {
+                                store.editLastTurn()
+                            }
                         }
                     }
+                    .opacity(actionRowOpacity(alwaysVisible: isLastUser))
+                    if let ts = message.timestamp {
+                        Text(Timestamps.messageLabel(ts))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
-                .opacity(actionRowOpacity(alwaysVisible: isLastUser))
             }
             #if os(macOS)
             .onHover { hovering = $0 }
@@ -113,22 +121,30 @@ struct MessageView: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: Theme.s1) {
                 assistantBubble
+                // 操作钮随悬停隐显，时间戳常显（钮始终占位，时间戳不漂移）
                 HStack(spacing: Theme.s1) {
-                    CopyActionButton(text: message.text, help: L("复制回复（markdown 原文）"))
-                    if let index = message.turnIndex {
-                        MessageActionButton(icon: "arrow.triangle.branch",
-                                            help: L("从这一轮分支出新会话")) {
-                            store.branch(fromTurnIndex: index)
+                    HStack(spacing: Theme.s1) {
+                        CopyActionButton(text: message.text, help: L("复制回复（markdown 原文）"))
+                        if let index = message.turnIndex {
+                            MessageActionButton(icon: "arrow.triangle.branch",
+                                                help: L("从这一轮分支出新会话")) {
+                                store.branch(fromTurnIndex: index)
+                            }
+                        }
+                        if isLastAssistant, !store.isGenerating {
+                            MessageActionButton(icon: "arrow.clockwise",
+                                                help: L("重新生成回答")) {
+                                store.regenerateLastTurn()
+                            }
                         }
                     }
-                    if isLastAssistant, !store.isGenerating {
-                        MessageActionButton(icon: "arrow.clockwise",
-                                            help: L("重新生成回答")) {
-                            store.regenerateLastTurn()
-                        }
+                    .opacity(actionRowOpacity(alwaysVisible: isLastAssistant))
+                    if let ts = message.timestamp {
+                        Text(Timestamps.messageLabel(ts))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
                 }
-                .opacity(actionRowOpacity(alwaysVisible: isLastAssistant))
             }
             #if os(macOS)
             .onHover { hovering = $0 }

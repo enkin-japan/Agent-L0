@@ -33,6 +33,8 @@ struct ChatMessage: Identifiable {
     var turnIndex: Int?
     /// 生成指标（附在轮次最后一条助手消息下的小字，如 "128 tok · 24.3 tok/s"）
     var meta: String?
+    /// 轮次完结时间（同轮消息同值）。旧历史行没有 timestamp 字段 → nil 不显示。
+    var timestamp: Date?
 
     static func user(_ text: String) -> ChatMessage {
         ChatMessage(kind: .user, text: text)
@@ -114,6 +116,10 @@ extension ChatMessage {
         }
         if let turnIndex {
             for i in out.indices { out[i].turnIndex = turnIndex }
+        }
+        if let ts = turn.timestamp {
+            let date = Date(timeIntervalSince1970: ts)
+            for i in out.indices { out[i].timestamp = date }
         }
         // 生成指标附在本轮最后一条助手消息下
         if let tokens = turn.generationTokens, tokens > 0,

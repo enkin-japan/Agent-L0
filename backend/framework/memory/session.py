@@ -466,6 +466,10 @@ class ChatSession:
         if not self.session_dir.exists():
             print(f"[Memory] Session {self.session_id} 目录已不存在，跳过落盘（会话可能已被删除）")
             return
+        # 轮次完结时间戳（epoch 秒）：落盘是唯一漏斗，在这里盖章即覆盖所有路径；
+        # 有意 setdefault 在**调用方的原 dict** 上——/chat 响应与 turn_end 事件
+        # 在落盘之后引用同一 dict，三个面（响应/事件/历史）天然同值。
+        response_data.setdefault("timestamp", time.time())
         with open(self.history_log, "a", encoding="utf-8") as f:
             # default=str 兜底：个别字段（如 Path）不可序列化时降级为字符串，
             # 避免推理已成功却因落盘序列化失败导致整个请求 500

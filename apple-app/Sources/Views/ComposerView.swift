@@ -13,6 +13,8 @@ struct ComposerView: View {
     @State private var thinking = false
     @State private var showImporter = false
     @State private var micDenied = false
+    /// 文件正拖悬在输入区上方（虚线主色框反馈）
+    @State private var dropTargeted = false
     #if os(iOS)
     @State private var showPhotos = false
     @State private var photoItems: [PhotosPickerItem] = []
@@ -113,6 +115,19 @@ struct ComposerView: View {
             }
         }
         .padding(10)
+        // 从 Finder / 文件 App 拖文件进输入区 → 附件化（与文件选择器/⌘V 同一条导入路）。
+        // 悬停时描一圈虚线主色框作为可放提示；生成中拒收（与其他附件入口口径一致）。
+        .dropDestination(for: URL.self) { urls, _ in
+            guard !store.isGenerating else { return false }
+            addFileURLs(urls)
+            return true
+        } isTargeted: { dropTargeted = $0 }
+        .overlay {
+            if dropTargeted {
+                RoundedRectangle(cornerRadius: Theme.radiusCard)
+                    .strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 2, dash: [6]))
+            }
+        }
         .fileImporter(isPresented: $showImporter,
                       allowedContentTypes: [.item],
                       allowsMultipleSelection: true) { result in
@@ -230,7 +245,14 @@ struct ComposerView: View {
 
     private func importFiles(_ result: Result<[URL], Error>) {
         guard case .success(let urls) = result else { return }
-        for url in urls {
+        addFileURLs(urls)
+    }
+
+    /// 文件 URL → 附件（文件选择器 / ⌘V 粘贴 / 拖放 三路共用）。
+    /// security scope 按需取还（选择器/iOS 拖放需要；macOS 拖放/粘贴返回 false 无害）。
+    /// 读不出的（目录、无权限）静默跳过——与既有选择器行为一致。
+    private func addFileURLs(_ urls: [URL]) {
+        for url in urls where url.isFileURL {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             if let data = try? Data(contentsOf: url) {
@@ -275,13 +297,7 @@ struct ComposerView: View {
             let pasteboard = NSPasteboard.general
             if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
                urls.contains(where: \.isFileURL) {
-                for url in urls where url.isFileURL {
-                    if let data = try? Data(contentsOf: url) {
-                        uploads.append(Upload(filename: url.lastPathComponent,
-                                              mime: Multipart.mime(for: url.lastPathComponent),
-                                              data: data))
-                    }
-                }
+                addFileURLs(urls)
                 return nil  // 已消费
             }
             if pasteboard.string(forType: .string) != nil {

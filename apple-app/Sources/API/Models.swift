@@ -102,9 +102,11 @@ struct Turn: Codable {
     let promptTokens: Double?
     let generationTokens: Double?
     let generationTps: Double?
+    /// 轮次完结 epoch 秒（PROTOCOL.md §2.3 additive，2026-07-17）。旧历史行没有。
+    let timestamp: Double?
 
     enum CodingKeys: String, CodingKey {
-        case status, prompt, image, audio, response, attachments
+        case status, prompt, image, audio, response, attachments, timestamp
         case ingestedText = "ingested_text"
         case pendingTools = "pending_tools"
         case promptTokens = "prompt_tokens"

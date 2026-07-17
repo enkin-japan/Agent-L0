@@ -346,7 +346,9 @@ struct SessionListView: View {
             HStack(spacing: 6) {
                 Text("\(item.turnCount ?? 0) \(L("轮"))")
                 if let updated = item.lastUpdated {
-                    Text(Date(timeIntervalSince1970: updated), style: .relative)
+                    // 最后对话的时间点而非经过时长（用户定）：
+                    // 当日=时分秒 / 7 天内=周几 / 更早=年月日
+                    Text(Timestamps.listLabel(Date(timeIntervalSince1970: updated)))
                 }
             }
             .font(.caption2)

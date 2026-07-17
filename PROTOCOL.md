@@ -137,13 +137,18 @@
                 {"role": "assistant", "content": "最终答复"} ],
   "prompt_tokens": 1234, "generation_tokens": 567, "generation_tps": 21.3,
   "token_breakdown": {…}, "generations": 3,
-  "turn_index": 7
+  "turn_index": 7,
+  "timestamp": 1752710400.5
 }
 ```
 
 新增字段仅 `turn_index`(落盘后该轮在 `history.jsonl` 中的下标,分支定位用;
 暂停态放弃收尾的轮同样落盘并占下标)。SSE 实时下发**全量**;journal 持久化瘦身为
 `{status, turn_index}`(重启后重放旧轮靠 `/history` 补全,客户端本就如此加载)。
+
+`timestamp`(additive,2026-07-17;不升版本):轮次完结的 epoch 秒,落盘时由
+`append_log` 盖章——落盘是唯一漏斗,故 `/chat` 响应、`turn_ended` 事件与
+`history.jsonl` 三面同值。**可选**:旧历史行没有,客户端缺省不显示时间(§0.5)。
 
 #### 2.3.1 工具观察的渲染格 `render`(additive,2026-07-16;不升版本)
 
