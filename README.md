@@ -20,6 +20,7 @@ Agent/
 ├── HETERO_COMPUTE.md    # 异构算力落地方案（执行账本）：CUDA 兼容层 + 算力分离 + RAG 档位
 ├── DEFERRED.md          # 未竟架构账本（轻量已交付·完整版待做；与 CHARTER §7 非目标相区分）
 ├── RETROSPECTIVE.md     # 全项目复盘（B2c 收官时点：走过的路 / 做对的 / 踩坑提炼 / 未竟清单）
+├── evaluations/         # 开源项目评估文档（grok-build / mem0 / browser-use / codegraph / markitdown）
 ├── protocol/fixtures/   # 协议测试夹具（web 与原生 app 共享的行为标准）
 ├── backend/             # Agent 主体（FastAPI, :14159）：编排循环 / 工具 / 会话记忆 / 推理后端
 ├── inference/           # 推理服务（FastAPI, :14161）：把推理后端 HTTP/SSE 化，供算力分离部署
