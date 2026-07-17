@@ -89,10 +89,21 @@ final class AgentStore: ObservableObject {
     /// 发送暂存（outbox）：提交前落 UserDefaults,202 受理即清——App 在 multipart
     /// 上传途中被杀时,这是唯一能证明"有话没送达"的凭据。
     private let outboxKey = "macagent.outbox"
+    /// 会话列表快照（冷启空窗填充）：sidecar 拉起前先摆上次的列表，服务端真相
+    /// 到达即替换（loadSessions 的等值守卫兜底——不变则不闪）。
+    private let sessionsSnapshotKey = "macagent.sessions.snapshot"
+
+    /// 快照按后端地址隔离：连远程时闪出本机的会话列表是**错误信息**，
+    /// 比空列表更糟；地址对不上宁可空着。
+    private struct SessionsSnapshot: Codable {
+        let backendURL: String
+        let items: [SessionMetaItem]
+    }
 
     init(settings: AppSettings) {
         self.settings = settings
         self.client = settings.makeClient()
+        restoreSessionsSnapshot()
         startGlobalMonitor()
         startConnectionMonitor()
     }
@@ -102,6 +113,9 @@ final class AgentStore: ObservableObject {
         client = settings.makeClient()
         startGlobalMonitor()       // client 换了，监听循环重启
         startConnectionMonitor()   // 连接探活同理重启（失败计数清零 → 黄灯重试）
+        // 可能换了后端：旧列表立即撤下，摆新地址的快照（没有就空着等真相）
+        sessions = []
+        restoreSessionsSnapshot()
         let sid = selectedSessionId
         detach()
         messages = []
@@ -163,7 +177,10 @@ final class AgentStore: ObservableObject {
             }
             // 等值守卫（实机反馈）：下拉刷新常常拿回一模一样的列表，无脑重赋值会让
             // List 整体重建——刷新控件收起动画与内容重建打架，表现为瞬移回顶+双重残影
-            if items != sessions { sessions = items }
+            if items != sessions {
+                sessions = items
+                saveSessionsSnapshot()   // 只有真变了才落快照（探活 15s 一巡，别空写）
+            }
         } catch {
             errorMessage = L("会话列表加载失败：") + error.localizedDescription
         }
@@ -171,6 +188,22 @@ final class AgentStore: ObservableObject {
         // 拉不到就保持旧值——候选提示是锦上添花，不值得为它弹错误横幅
         if let fetched = try? await client.skills() {
             skills = fetched
+        }
+    }
+
+    /// 读上次的列表快照（仅当后端地址一致）。摆的是元数据（标题/轮数/时间戳），
+    /// 点击行为照常：连接建立前拉历史会失败弹横幅，几秒窗口，不值得禁点。
+    private func restoreSessionsSnapshot() {
+        guard let data = UserDefaults.standard.data(forKey: sessionsSnapshotKey),
+              let snap = try? JSONDecoder().decode(SessionsSnapshot.self, from: data),
+              snap.backendURL == settings.baseURLString else { return }
+        sessions = snap.items
+    }
+
+    private func saveSessionsSnapshot() {
+        let snap = SessionsSnapshot(backendURL: settings.baseURLString, items: sessions)
+        if let data = try? JSONEncoder().encode(snap) {
+            UserDefaults.standard.set(data, forKey: sessionsSnapshotKey)
         }
     }
 
