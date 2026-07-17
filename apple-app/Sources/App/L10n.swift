@@ -108,6 +108,7 @@ enum L10n {
         "麦克风权限被拒绝": ("マイクへのアクセスが拒否されました", "Microphone Access Denied"),
         "请在系统设置中允许本 App 使用麦克风。": ("システム設定でマイクの使用を許可してください。", "Allow microphone access in System Settings."),
         "（见附件）": ("（添付参照）", "(see attachments)"),
+        "缺依赖：": ("依存不足：", "Missing: "),
         // 审批
         "以下敏感操作等待你的授权": ("以下の機密操作が承認待ちです", "Sensitive operations awaiting your approval"),
         "拒绝": ("拒否", "Deny"),

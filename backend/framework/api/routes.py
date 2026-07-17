@@ -29,6 +29,7 @@ from .schemas import (
     SystemPromptResponse,
     TaskListResponse,
     TaskStatusResponse,
+    SkillsResponse,
     ToolsResponse,
 )
 from ..core.journal import TurnJournal
@@ -85,6 +86,17 @@ async def list_tools(request: Request):
     registry = request.app.state.mcp_registry
     tools = registry.list_tools()
     return {"status": True, "count": len(tools), "tools": tools}
+
+
+@router.get("/api/v1/skills", response_model=SkillsResponse)
+async def list_skills(request: Request):
+    """
+    剧本清单（斜杠候选提示 / 前端罗列）：名字 + 描述 + 可用性。缺依赖者也返回
+    （available=False + missing），前端灰显——点名它们会触发前置自动重扫。
+    """
+    from framework.agents import runtime as _runtime
+    reg = _runtime.get_skill_registry()
+    return {"status": True, "skills": reg.listing() if reg is not None else []}
 
 
 @router.post("/api/v1/tools/rescan")

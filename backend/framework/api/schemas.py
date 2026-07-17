@@ -106,6 +106,14 @@ class ToolsResponse(BaseModel):
     count: int
     tools: List[Dict[str, Any]]  # 每项含 name / description / parameters / requires_approval
 
+class SkillsResponse(BaseModel):
+    """
+    剧本清单响应体（斜杠候选提示 / 前端罗列）。含被探活舍弃者
+    （available=False + missing 缺失工具清单，前端灰显）。
+    """
+    status: bool
+    skills: List[Dict[str, Any]]  # 每项含 name / description / available / missing
+
 class ApprovalRequest(BaseModel):
     """
     敏感工具审批决议请求体：approve=True 执行挂起的工具调用，False 则拒绝。

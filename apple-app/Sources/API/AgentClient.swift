@@ -386,6 +386,11 @@ final class AgentClient {
         return res.tools
     }
 
+    func skills() async throws -> [SkillItem] {
+        let res: SkillsResponse = try await send(try request("GET", "/api/v1/skills"))
+        return res.skills
+    }
+
     func systemPrompt(sessionId: String) async throws -> SystemPromptResponse {
         try await send(try request("GET", "/api/v1/chat/\(sessionId)/system"))
     }

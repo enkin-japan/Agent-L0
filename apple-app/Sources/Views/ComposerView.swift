@@ -15,6 +15,8 @@ struct ComposerView: View {
     @State private var micDenied = false
     /// 文件正拖悬在输入区上方（虚线主色框反馈）
     @State private var dropTargeted = false
+    /// 斜杠候选列表的当前选中行（↑↓ 移动，Tab/回车补全）
+    @State private var slashSelection = 0
     #if os(iOS)
     @State private var showPhotos = false
     @State private var photoItems: [PhotosPickerItem] = []
@@ -37,6 +39,68 @@ struct ComposerView: View {
                         }
                     }
                 }
+            }
+
+            // 斜杠候选（Claude Code 式）：/ 起头即弹，前缀过滤，↑↓ 选择，Tab/回车补全。
+            // 缺依赖的剧本灰显 + 注明缺什么（点名它仍会发出：后端会前置自动重扫）。
+            if !slashCandidates.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(slashCandidates.enumerated()), id: \.element.id) { index, skill in
+                        Button {
+                            completeSlash(skill)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text("/" + skill.name)
+                                    .font(.callout.monospaced())
+                                    .foregroundStyle(skill.available == false
+                                                     ? AnyShapeStyle(.secondary)
+                                                     : AnyShapeStyle(Theme.accent))
+                                Text(skill.description)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                                if skill.available == false {
+                                    Text(L("缺依赖：") + (skill.missing ?? []).joined(separator: ", "))
+                                        .font(.caption2)
+                                        .foregroundStyle(Theme.warning)
+                                        .lineLimit(1)
+                                }
+                            }
+                            .padding(.horizontal, Theme.s2)
+                            .padding(.vertical, 5)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(index == clampedSlashSelection
+                                        ? Theme.accent.opacity(0.12) : Color.clear)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .background(Theme.card)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
+                .overlay(RoundedRectangle(cornerRadius: Theme.radiusCard)
+                    .strokeBorder(Theme.hairline, lineWidth: 1))
+            }
+
+            // 命中徽标：首令牌 = 已知剧本 → 确认本轮将按剧本确定性分发
+            if let skill = matchedSkill {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.caption)
+                        .foregroundStyle(Theme.success)
+                    Text("/" + skill.name)
+                        .font(.caption.monospaced().weight(.medium))
+                    Text(skill.description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, Theme.s2)
+                .padding(.vertical, 4)
+                .background(Theme.success.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall))
             }
 
             HStack(alignment: .bottom, spacing: 8) {
@@ -84,6 +148,30 @@ struct ComposerView: View {
                     .overlay(RoundedRectangle(cornerRadius: Theme.radiusCard)
                         .strokeBorder(Theme.hairline, lineWidth: 1))
                     .onSubmit(send)
+                    // 候选弹出期间键盘接管：↑↓ 移选、Tab/回车补全；候选收起后
+                    // 全部 .ignored 走原路（回车 onSubmit 发送）。剧本名是 ASCII，
+                    // 弹出窗口期不与中文输入法的回车确认冲突。
+                    .onKeyPress(.upArrow) {
+                        guard !slashCandidates.isEmpty else { return .ignored }
+                        moveSlashSelection(-1)
+                        return .handled
+                    }
+                    .onKeyPress(.downArrow) {
+                        guard !slashCandidates.isEmpty else { return .ignored }
+                        moveSlashSelection(1)
+                        return .handled
+                    }
+                    .onKeyPress(.tab) {
+                        guard !slashCandidates.isEmpty else { return .ignored }
+                        completeSlash(slashCandidates[clampedSlashSelection])
+                        return .handled
+                    }
+                    .onKeyPress(.return) {
+                        guard !slashCandidates.isEmpty else { return .ignored }
+                        completeSlash(slashCandidates[clampedSlashSelection])
+                        return .handled
+                    }
+                    .onChange(of: draft) { slashSelection = 0 }
 
                 Toggle(isOn: $thinking) {
                     Image(systemName: "brain")
@@ -225,6 +313,44 @@ struct ComposerView: View {
             .frame(width: 28, height: 28)
             .clipShape(RoundedRectangle(cornerRadius: 6))
         #endif
+    }
+
+    // MARK: - 斜杠候选（剧本提示）
+
+    /// 正在敲斜杠名（行首 / 且其后尚无空白）时的过滤词；否则 nil = 不弹候选。
+    /// 与后端 _SLASH_RE 同一心智：首令牌到第一个空白为止。
+    private var slashQuery: String? {
+        guard draft.hasPrefix("/") else { return nil }
+        let rest = draft.dropFirst()
+        guard !rest.contains(where: \.isWhitespace) else { return nil }
+        return String(rest)
+    }
+
+    private var slashCandidates: [SkillItem] {
+        guard let query = slashQuery else { return [] }
+        return store.skills.filter { query.isEmpty || $0.name.hasPrefix(query) }
+    }
+
+    private var clampedSlashSelection: Int {
+        min(slashSelection, max(slashCandidates.count - 1, 0))
+    }
+
+    /// 首令牌恰好命中已知剧本（名字后已敲空白）→ 确认徽标。
+    private var matchedSkill: SkillItem? {
+        guard slashQuery == nil, draft.hasPrefix("/") else { return nil }
+        let token = String(draft.dropFirst().prefix(while: { !$0.isWhitespace }))
+        return store.skills.first { $0.name == token }
+    }
+
+    private func completeSlash(_ skill: SkillItem) {
+        draft = "/\(skill.name) "
+        slashSelection = 0
+    }
+
+    private func moveSlashSelection(_ delta: Int) {
+        let count = slashCandidates.count
+        guard count > 0 else { return }
+        slashSelection = (clampedSlashSelection + delta + count) % count
     }
 
     // MARK: - 发送

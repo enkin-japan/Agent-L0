@@ -13,6 +13,8 @@ final class AgentStore: ObservableObject {
     @Published var connState: ConnState = .connecting
     // 会话
     @Published var sessions: [SessionMetaItem] = []
+    /// 剧本清单（斜杠候选提示）：随会话列表一并加载，含缺依赖者（候选里灰显）
+    @Published var skills: [SkillItem] = []
     /// 持久化选中会话：杀进程/重启后自动回到原直播视图（铁律 4 的 ≤1s 恢复语义，
     /// web 靠刷新同 URL 天然满足，native 必须显式记住）。draft（未落盘）id 也会
     /// 存进去，恢复时经 restoreLastSession 的存在性校验过滤。
@@ -164,6 +166,11 @@ final class AgentStore: ObservableObject {
             if items != sessions { sessions = items }
         } catch {
             errorMessage = L("会话列表加载失败：") + error.localizedDescription
+        }
+        // 剧本清单搭车刷新：变动频率极低（装依赖/加剧本），无须独立轮询；
+        // 拉不到就保持旧值——候选提示是锦上添花，不值得为它弹错误横幅
+        if let fetched = try? await client.skills() {
+            skills = fetched
         }
     }
 

@@ -240,6 +240,23 @@ struct ToolsResponse: Codable {
     let tools: [ToolInfo]
 }
 
+/// 剧本条目（GET /api/v1/skills，斜杠候选提示用）。
+/// available=false = 缺依赖被探活舍弃（missing 列缺什么），候选里灰显——
+/// 点名它仍会发出：后端会前置自动重扫，依赖刚装好就即时可用。
+struct SkillItem: Codable, Identifiable {
+    let name: String
+    let description: String
+    let available: Bool?
+    let missing: [String]?
+
+    var id: String { name }
+}
+
+struct SkillsResponse: Codable {
+    let status: Bool
+    let skills: [SkillItem]
+}
+
 struct SystemPromptResponse: Codable {
     let status: Bool
     let systemPrompt: String?

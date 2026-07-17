@@ -22,7 +22,7 @@ frontmatter 解析共用 `utils/frontmatter.py`（R4 的笔记同格式，不再
 """
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..utils.frontmatter import parse_frontmatter
 
@@ -99,6 +99,9 @@ class SkillRegistry:
         # 被探活舍弃的剧本 → 缺失工具清单。用户点名它们时要**如实告知**而不是静默
         # 放行（D1 实机：/chart-report 在 LibreOffice 缺失时无声穿透，模型瞎打）。
         self._unavailable: Dict[str, List[str]] = {}
+        # 被舍弃剧本的描述留档：斜杠候选提示里它们要灰显 + 注明缺什么，
+        # 而不是凭空消失（用户装完依赖后点名会触发前置自动重扫，见 turn_runner）
+        self._unavailable_desc: Dict[str, str] = {}
         self._load_all(tool_names or set())
 
     def _load_all(self, tool_names: set) -> None:
@@ -123,6 +126,7 @@ class SkillRegistry:
                 if not skill.is_available(tool_names):
                     missing = [t for t in skill.requires if t not in tool_names]
                     self._unavailable[name] = missing
+                    self._unavailable_desc[name] = description
                     print(f"[Skill] ⛔ 剧本 {name} 不可用（缺工具 {missing}），已舍弃。")
                     continue
                 self._skills[name] = skill
@@ -145,3 +149,17 @@ class SkillRegistry:
         自主挑选 = R2b，挂在 DEFERRED.md（e4b 上剧本一多大概率选不准）。"""
         return [{"name": s.name, "description": s.description}
                 for s in (self._skills[n] for n in self.names())]
+
+    def listing(self) -> List[Dict[str, Any]]:
+        """全量清单（含被探活舍弃者）：GET /api/v1/skills 的数据源，斜杠候选提示用。
+        缺依赖的剧本也要出现——前端灰显 + 注明缺什么，比凭空消失可解释；
+        用户点名它们时 turn_runner 会前置自动重扫，依赖已装好就即时可用。"""
+        out: List[Dict[str, Any]] = [
+            {"name": s.name, "description": s.description,
+             "available": True, "missing": []}
+            for s in (self._skills[n] for n in self.names())
+        ]
+        out += [{"name": n, "description": self._unavailable_desc.get(n, ""),
+                 "available": False, "missing": list(self._unavailable[n])}
+                for n in sorted(self._unavailable)]
+        return out
