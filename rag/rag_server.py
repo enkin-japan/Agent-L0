@@ -36,6 +36,8 @@ import chromadb
 import requests
 import yaml
 
+from retrieval_extras import extract_identifiers, mmr_select
+
 # ==========================================
 # 全局配置与数据根
 # ==========================================
@@ -741,6 +743,29 @@ async def trigger_reclassification(background_tasks: BackgroundTasks):
     return {"msg": "数据重构清洗任务已置入后台运行"}
 
 # ---------------- 核心并发检索 ----------------
+_CONTAINS_LIMIT_PER_TOKEN = 5   # 每个标识符 token 最多补几条（重排是裁判，池别撑爆）
+
+
+def _contains_prefetch(col_name: str, tokens: List[str]) -> List[dict]:
+    """按标识符 token 做 where_document $contains 预取（fail-open，逐 token 限量）。"""
+    out: List[dict] = []
+    try:
+        col = get_chroma_collection(col_name)
+        if col.count() == 0:
+            return out
+        for tok in tokens:
+            res = col.get(where_document={"$contains": tok},
+                          limit=_CONTAINS_LIMIT_PER_TOKEN,
+                          include=["documents", "metadatas"])
+            for doc, meta, doc_id in zip(res.get("documents") or [],
+                                         res.get("metadatas") or [],
+                                         res.get("ids") or []):
+                out.append({"db": col_name, "id": doc_id, "document": doc, "metadata": meta})
+    except Exception as e:
+        logger.warning(f"标识符预取 {col_name} 失败（跳过该路）: {e}")
+    return out
+
+
 def _query_single_db(col_name: str, query_emb: list, top_k: int):
     """供线程池使用的独立查库函数"""
     try:
@@ -795,6 +820,22 @@ def advanced_query_rag(req: QueryRequest):
     for future in as_completed(futures):
         all_retrieved_chunks.extend(future.result())
 
+    # 3b. 标识符子串预取（mem0 评估采纳）：纯向量把文件名/hash/键名摊平成语义噪声，
+    #     对查询里的标识符 token 做 contains 预取并入重排池——重排当裁判，无关命中
+    #     会被 rerank_min_score 筛掉，这一路只扩池不定序。
+    idents = extract_identifiers(req.query, req.optimized_query)
+    if idents:
+        seen_ids = {c["id"] for c in all_retrieved_chunks}
+        extra = 0
+        for db_name in target_dbs:
+            for c in _contains_prefetch(db_name, idents):
+                if c["id"] not in seen_ids:
+                    all_retrieved_chunks.append(c)
+                    seen_ids.add(c["id"])
+                    extra += 1
+        if extra:
+            logger.info(f"🔩 标识符预取 {idents} 补入 {extra} 条候选")
+
     if not all_retrieved_chunks:
         return {"original_query": req.query, "scanned_dbs": target_dbs, "total_chunks_retrieved": 0, "results": []}
 
@@ -810,7 +851,9 @@ def advanced_query_rag(req: QueryRequest):
         chunk for chunk in all_retrieved_chunks
         if chunk["rerank_score"] >= THRESHOLDS["rerank_min_score"]
     ]
-    final_results = confident_chunks[:req.rerank_top_k]
+    # MMR 多样性选择（grok-build 评估采纳）：候选多于名额时防 top-k 全是同一
+    # 文档的近邻块；候选不足名额时原样通过（没得挑就不挑，行为与旧版全同）。
+    final_results = mmr_select(confident_chunks, req.rerank_top_k)
 
     logger.info(f"📊 原始召回 {len(all_retrieved_chunks)} 条，动态置信度过滤后剩 {len(confident_chunks)} 条，最终喂给模型 {len(final_results)} 条。")
 
