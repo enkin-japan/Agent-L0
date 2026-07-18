@@ -1,0 +1,29 @@
+# 完整字段示范（enabled: false，永不注册）。复制改名后按需删减。
+name: example_todo_add
+description: >
+  Add a todo item to my personal todo service. Call when the user explicitly asks
+  to add/record a todo. Returns the created item as JSON.
+endpoint: "http://127.0.0.1:8700/todos/{list_id}"
+method: POST
+params:
+  properties:
+    list_id:
+      type: string
+      description: which todo list to add into (e.g. "inbox")
+    title:
+      type: string
+      description: the todo text
+  required: [list_id, title]
+auth:
+  env: TODO_API_KEY          # 实值放 .env.local，此处只写变量名
+  header: Authorization
+  format: "Bearer {key}"
+headers:
+  X-Client: agent
+timeout: 15
+# requires_approval 不写 = 按方法默认：POST 弹审批
+# canary 是巡检期的**真实调用**：只给只读接口声明；变更类接口（如本例 POST）
+# 别挂探针——每次巡检都会真写一条数据。此处仅示范字段形状。
+canary:
+  arguments: {list_id: "inbox", title: "canary"}
+enabled: false
