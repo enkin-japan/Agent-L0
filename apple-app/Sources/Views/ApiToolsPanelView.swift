@@ -166,11 +166,10 @@ struct ApiToolsPanelView: View {
     private var content: some View {
         Group {
             if let tools {
-                if tools.isEmpty {
-                    toolsHintList(L("还没有 API 工具声明"), icon: "wrench.and.screwdriver")
-                } else {
-                    toolList(tools)
-                }
+                // 空清单也走 toolList：添加按钮是列表内的一行（macOS 设置 sheet 的
+                // toolbar 被设置页的 取消/保存 占据，嵌入面板的 toolbar 项浮不出来
+                // ——实机截图反馈：看不到添加入口）
+                toolList(tools)
             } else if failed {
                 toolsHintList(L("加载失败"), icon: "exclamationmark.triangle")
             } else {
@@ -237,10 +236,25 @@ struct ApiToolsPanelView: View {
     private func toolList(_ items: [ApiToolItem]) -> some View {
         List {
             Section {
-                ForEach(items) { item in row(item) }
-            } footer: {
-                Text(L("仓库 api_tools/ 里的手写声明只读；在这里添加的声明保存于数据目录。修改或删除已注册的工具需重启后端生效。"))
-                    .font(.caption)
+                Button { draft = ApiToolDraft() } label: {
+                    Label(L("添加 API 工具"), systemImage: "plus.circle")
+                }
+                #if os(macOS)
+                .buttonStyle(.plain).foregroundStyle(.tint)
+                #endif
+            }
+            if items.isEmpty {
+                Section {
+                    Label(L("还没有 API 工具声明"), systemImage: "wrench.and.screwdriver")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Section {
+                    ForEach(items) { item in row(item) }
+                } footer: {
+                    Text(L("仓库 api_tools/ 里的手写声明只读；在这里添加的声明保存于数据目录。修改或删除已注册的工具需重启后端生效。"))
+                        .font(.caption)
+                }
             }
         }
     }

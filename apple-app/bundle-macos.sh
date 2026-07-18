@@ -36,10 +36,15 @@ rsync -a --delete \
   --exclude='.venv' --exclude='__pycache__' --exclude='.pytest_cache' \
   --exclude='tests' --exclude='benchmarks' --exclude='docs' \
   --exclude='models' --exclude='sessions' --exclude='schedules' --exclude='notes' \
-  --exclude='*.jsonl' --exclude='logs' \
+  --exclude='*.jsonl' --exclude='logs' --exclude='api_tools' \
   "$ROOT/backend/" "$RES/backend/"
+# ⚠️ backend/api_tools 是 dev 形态的数据目录（UI 添加的声明 + .secrets.env 密钥文件），
+#    绝不进包——密钥红线；app 形态由 DATA_DIR（App Support）承接同名目录。
 # 剧本内容（app.py: SKILLS_DIR = backend 的父目录/skills → Resources/skills）
 rsync -a --delete --exclude='__pycache__' "$ROOT/skills/" "$RES/skills/"
+# 手写 API 工具声明（api_tool_factory: DECL_DIR = 仓库根/api_tools → Resources/api_tools，
+# 与 skills 同解析逻辑）：只读内容，UI 添加的另落数据根
+rsync -a --delete "$ROOT/api_tools/" "$RES/api_tools/"
 # RAG 数据面（B2c）：只随 rag_server.py——bundle 形态只支持拆分模式（计算面在算力端），
 # compute_core/compute_server 依赖 torch，不进包。数据（chroma_data/storage）落数据根
 # （EDGE_RAG_DATA_DIR，SidecarManager 注入），代码目录保持只读。

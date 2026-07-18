@@ -1828,8 +1828,14 @@ subAgent 层刻意无注册接口（沙箱=安全边界，dispatch 语义在代�
 - 金测试 460（+11：secrets 权限/upsert/环境变量优先、跨目录去重、save 五分支
   （registered/unavailable/restart_required/400/409）、delete、试调回程密钥不落盘），
   端点测试用假 Request 直调处理器（项目无 TestClient 惯例）。双端 Debug 编译过，
-  macOS 59 装机、iOS 59 上传 TestFlight。实机验证（表单添加→试调→保存→模型调用）
-  待用户走一轮。
+  macOS 59 装机、iOS 59 上传 TestFlight → VALID。
+- **〔实机 59 两坑，60 修复〕**①添加按钮放 toolbar 不显示——macOS 设置 sheet 的
+  toolbar 被设置页自己的 取消/保存 占据，嵌入面板（TabView 内容）的 toolbar 项浮
+  不出来；修：添加按钮改为列表内第一行（空清单也可见）。②bundle 缺仓库 api_tools/
+  （手写声明进不了包）——bundle-macos.sh 补 rsync（与 skills 同解析逻辑）；顺带堵住
+  真正的危险口：`backend/api_tools/`（dev 数据目录，含 UI 密钥 `.secrets.env`）此前
+  会被 backend rsync 整目录打进包——加 exclude，**密钥红线**。包内实证：
+  Resources/api_tools/ 有 example.yaml，backend/api_tools 不存在。双端 60 发布。
 
 ---
 
