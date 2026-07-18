@@ -268,6 +268,10 @@ class MLXBackend:
             if spec_stats and spec_stats.get("drafted"):
                 extra = {"spec_drafted": spec_stats["drafted"],
                          "spec_accepted": spec_stats["accepted"]}
+            # 前缀命中仪表（T4R）：0 也回吐——冷预填就该被看见
+            rp = getattr(cache.state, "last_reused_prefix", None)
+            if rp is not None:
+                extra["reused_prefix"] = rp
             yield GenChunk(
                 text=result.text,
                 delta=delta,

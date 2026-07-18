@@ -277,6 +277,14 @@ class AgentEngine:
             metrics["spec_drafted"] = extra["spec_drafted"]
             metrics["spec_accepted"] = extra.get("spec_accepted", 0)
 
+        # 前缀命中仪表（T4R）：每次生成一行，命中率异常（本该热的轮次 reused≈0）
+        # 直接在日志里现形——M7 里 app 实测 23tps vs 台架 34tps 的缺口靠它在实况定位
+        if "reused_prefix" in extra:
+            metrics["reused_prefix"] = extra["reused_prefix"]
+            pt = metrics.get("prompt_tokens") or 0
+            print(f"[Engine] 前缀命中 {extra['reused_prefix']}/{pt} tokens，"
+                  f"gen {metrics.get('generation_tps', 0):.1f} tps")
+
         if guard is not None and guard.masked_positions:
             metrics["constrained_steps"] = guard.masked_positions
             print(f"[Constrained] 本次生成有 {guard.masked_positions} 步受工具 schema 约束"

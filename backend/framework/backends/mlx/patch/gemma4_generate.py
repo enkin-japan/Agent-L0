@@ -605,6 +605,10 @@ def stream_generate(
         prefix_len = prompt_cache_state.find_prefix_length(full_input_ids_list)
         if prefix_len > 0 and prefix_len < input_ids.shape[1]:
             reused_prefix_len = prefix_len
+    # 前缀命中可观测性（T4R）：挂在 state 上供后端读走进 GenChunk.extra——
+    # 命中退化（装配层把易变段挪到了前面）只有被看见才会被修
+    if prompt_cache_state is not None:
+        prompt_cache_state.last_reused_prefix = reused_prefix_len
             # Trim to only new tokens
             input_ids = input_ids[:, prefix_len:]
             new_ids = input_ids.flatten().tolist()
