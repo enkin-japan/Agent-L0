@@ -711,6 +711,115 @@ async def delete_category(db_name: str):
     db.delete(ids=[db_name])
     return {"msg": f"分类 {db_name} 路由已删除（实际数据保留）"}
 
+# ---------------- 数据浏览与真删（记忆治理波 P1：管理面板数据源） ----------------
+TRASH_DIR = STORAGE_BASE / ".trash"   # 删除类操作归档先行（红线）：不 rm，移入回收目录
+
+
+def _category_raw_dir(name: str) -> Path:
+    return UNCLASSIFIED_DIR if name == "unclassified_db" else RAW_FILES_DIR / name
+
+
+def _count_raw_files(name: str) -> int:
+    d = _category_raw_dir(name)
+    if not d.is_dir():
+        return 0
+    return sum(1 for f in d.iterdir() if f.is_file() and not f.name.startswith("."))
+
+
+@app.get("/api/v1/document/list", tags=["数据治理"])
+async def list_documents(category: Optional[str] = None):
+    """管理面板数据源（P1）。不带 category = 分类总览；带 = 该分类的文档清单。
+
+    纯数据操作：计算面离线也可用（与 list_categories 同理，面板不能被算力端卡住）。
+    文档清单以向量库切片按 source_path 聚合，再并上盘上孤儿文件——原文目录是唯一
+    真相，切片丢了文件还在的文档也必须让用户看见（chunks=0 即入库残缺的实症）。
+    """
+    if category is None:
+        meta = get_chroma_collection("meta_classification_db")
+        data = meta.get()
+        cats = {id_: (doc or "") for id_, doc in zip(data["ids"], data["documents"])}
+        cats.setdefault("unclassified_db", "自动路由未能归类的文档池")
+        out = []
+        for name in sorted(cats):
+            try:
+                chunk_count = get_chroma_collection(name).count()
+            except Exception:
+                chunk_count = 0
+            out.append({"name": name, "description": cats[name],
+                        "doc_count": _count_raw_files(name), "chunk_count": chunk_count})
+        return {"categories": out}
+
+    col = get_chroma_collection(category)
+    docs: Dict[str, dict] = {}
+    try:
+        got = col.get(include=["metadatas"])
+    except Exception as e:
+        logger.warning(f"⚠️ 列举分类 {category} 切片失败（仅按盘上文件列举）: {e}")
+        got = {}
+    for m in got.get("metadatas") or []:
+        sp = (m or {}).get("source_path")
+        if not sp:
+            continue
+        d = docs.setdefault(sp, {"source_path": sp, "title": m.get("title") or Path(sp).stem,
+                                 "created_at": "", "chunks": 0, "size_bytes": 0, "stale": ""})
+        d["chunks"] += 1
+        if m.get("created_at"):
+            d["created_at"] = str(m["created_at"])
+        if m.get("stale"):
+            d["stale"] = str(m["stale"])
+    raw_dir = _category_raw_dir(category)
+    if raw_dir.is_dir():
+        for f in raw_dir.iterdir():
+            if not f.is_file() or f.name.startswith("."):
+                continue
+            d = docs.setdefault(str(f), {
+                "source_path": str(f), "title": f.name.rsplit("_", 1)[0],
+                "created_at": "", "chunks": 0, "size_bytes": 0, "stale": ""})
+            try:
+                st = f.stat()
+                d["size_bytes"] = st.st_size
+                if not d["created_at"]:   # 存量旧切片无戳：文件 mtime 兜底
+                    d["created_at"] = time.strftime("%Y-%m-%dT%H:%M:%S",
+                                                    time.localtime(st.st_mtime))
+            except OSError:
+                pass
+    ordered = sorted(docs.values(), key=lambda d: d["created_at"], reverse=True)
+    return {"category": category, "documents": ordered}
+
+
+@app.delete("/api/v1/category/{db_name}/purge", tags=["数据治理"])
+async def purge_category(db_name: str):
+    """真删分类（P1）：向量 collection 整库丢弃 + 原文目录移入 .trash 回收 + 路由条目删除。
+
+    与 DELETE /category/{name}（只删路由条目、数据保留）分工：那是「取消分拣路由」，
+    这才是「删库」。原文不 rm——移入 storage/.trash/<时间戳>_<库名>/（归档先行红线）。
+    """
+    if db_name == "meta_classification_db":
+        raise HTTPException(status_code=400, detail="系统路由表不可删除")
+    client = get_chroma_client()
+    dropped = False
+    try:
+        client.delete_collection(db_name)
+        dropped = True
+    except Exception:
+        pass   # collection 本就不存在
+    archived = False
+    raw_dir = _category_raw_dir(db_name)
+    if raw_dir.is_dir():
+        TRASH_DIR.mkdir(parents=True, exist_ok=True)
+        raw_dir.rename(TRASH_DIR / f"{time.strftime('%Y%m%d%H%M%S')}_{db_name}")
+        archived = True
+        if db_name == "unclassified_db":   # 未分类池是常驻结构，移走后重建空池
+            UNCLASSIFIED_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        get_chroma_collection("meta_classification_db").delete(ids=[db_name])
+    except Exception:
+        pass
+    logger.info(f"🗑️ 分类 '{db_name}' 已真删（collection={dropped}, 原文归档={archived}）")
+    return {"msg": f"分类 {db_name} 已删除（原文已移入回收目录，可手工找回）",
+            "collection_dropped": dropped, "raw_archived": archived}
+
+
 # ---------------- 数据流向与治理 ----------------
 @app.post("/api/v1/document/insert", tags=["数据入库"])
 async def insert_docs(req: InsertRequest, background_tasks: BackgroundTasks,
@@ -780,10 +889,15 @@ async def delete_document_by_path(source_path: str = Body(embed=True)):
         except Exception as e:
             logger.error(f"清理库 {col_info.name} 时出错: {e}")
 
-    # 同步删除磁盘上的原始备份文件
+    # 原始备份文件移入回收目录（归档先行红线：不 rm，可手工找回）
     backup_file = Path(source_path)
     if backup_file.is_file() and backup_file.resolve().is_relative_to(STORAGE_BASE.resolve()):
-        backup_file.unlink(missing_ok=True)
+        try:
+            TRASH_DIR.mkdir(parents=True, exist_ok=True)
+            backup_file.rename(
+                TRASH_DIR / f"{time.strftime('%Y%m%d%H%M%S')}_{backup_file.name}")
+        except OSError as e:
+            logger.warning(f"⚠️ 原文移入回收目录失败（切片已清，文件留在原处）: {e}")
 
     if deleted_chunks == 0:
         # 教学式反馈：零命中大概率是路径不精确，引导调用方先检索拿到确切 Path

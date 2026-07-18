@@ -1652,10 +1652,10 @@ T2→T1→T6 六 commit（`078159e`…`82b0a8c`），金测试 352→386，T3/T2
 
 | 票 | 内容 | 体量 | 状态 |
 |---|---|---|---|
-| P2a | 入库 metadata 加 `created_at`；笔记侧 `last_reviewed_at` 巡检戳存储 | 小 | ⬜ |
-| U2 | 检索片段头带入库日期（模型自判时效，「答错」降级「带保留地答」） | 小 | ⬜ |
-| U1 | 替换式导入：同分类+同标题=新版本（清旧切片+旧原文归档 `.versions/`+新版入库），复用 `existing_source_path` 清理路径 | 小中 | ⬜ |
-| P1 | 管理面板三层：rag_server `GET /document/list` + `DELETE /category/{name}/purge`（现 delete_category 只删路由条目，collection+raw_files 不动=假删库）→ backend `/api/v1/rag/*` 薄代理（RAG 只听回环，远程客户端必须经 backend，铁律 4 同形）→ app 知识库面板（分类卡片+文档列表+删除+stale 徽章位） | 中 | ⬜ |
+| P2a | 入库 metadata 加 `created_at`；笔记侧 `last_reviewed_at` 巡检戳存储 | 小 | ✅ `9eb25cd` 重索引取文件 mtime 不刷新年龄；巡检戳走旁车 JSON（写 frontmatter 会向闸门喂假「变动」信号） |
+| U2 | 检索片段头带入库日期（模型自判时效，「答错」降级「带保留地答」） | 小 | ✅ `ae1d0f0` format_results 抽纯函数（实例化触发网络探活，类方法不可金测）；存量无戳切片整段省略不猜 |
+| U1 | 替换式导入：同分类+同标题=新版本（清旧切片+旧原文归档 `.versions/`+新版入库），复用 `existing_source_path` 清理路径 | 小中 | ✅ `42c32df` fail-open（清不掉退回并存）；insert 工具描述教模型「重导即更新」；实机冒烟②：同名再入仍 1 篇、检索只见新版 |
+| P1 | 管理面板三层：rag_server `GET /document/list` + `DELETE /category/{name}/purge`（现 delete_category 只删路由条目，collection+raw_files 不动=假删库）→ backend `/api/v1/rag/*` 薄代理（RAG 只听回环，远程客户端必须经 backend，铁律 4 同形）→ app 知识库面板（分类卡片+文档列表+删除+stale 徽章位） | 中 | ✅ 单篇删除同步改归档先行（unlink→.trash）；文档清单=切片聚合∪盘上孤儿（chunks=0 显「未索引」）；面板 Agent 记忆分区单独警示文案；隔离实例（14170+scratch 数据根+复用活计算面）四步冒烟全过；金测试 399 |
 | P2b | dream 窗口=最久未巡检 N 条+最近变动；巡检盖戳轮转（顺带解决 8000 字符截断后尾部笔记永远轮不到） | 中 | ⬜ |
 | P2c+U3 | 巡检时机械层从 agent_memory 检索证据附进提示词，新增 STALE 操作（只标记）；`rag_mark_stale` 工具打通用户文档（Chroma metadata update），检索带出警示+面板徽章 | 中 | ⬜ |
 | U4 | origin 记录+面板手动刷新（外部真相源重取走 U1 替换） | 暂缓 | 等 P1 用出需求 |

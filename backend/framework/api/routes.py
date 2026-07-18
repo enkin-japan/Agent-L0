@@ -803,3 +803,73 @@ async def attach_events(session_id: str, request: Request, after: int = 0):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
+
+
+# ---------------- RAG 知识库管理代理（记忆治理波 P1） ----------------
+# RAG 数据面只听回环（安全红线），远程客户端（iPhone/真两机拓扑）够不着它——
+# 管理面板必须经 backend 转发。薄代理：不加语义，透传 JSON 与错误详情；
+# RAG 离线 → 503，面板据此显示离线态（铁律 4：客户端只渲染）。
+
+def _rag_base() -> str:
+    # 惰性导入并每次取值：与 rag_search/rag_sink 同一配置源，测试可打桩
+    from ..mcp.tools.rag_search import RAG_HOST, RAG_PORT
+    return f"http://{RAG_HOST}:{RAG_PORT}"
+
+
+async def _rag_proxy(method: str, path: str, **kw):
+    import requests
+    from ..utils.config_loader import rag_auth_headers
+
+    def _do():
+        return requests.request(method, f"{_rag_base()}{path}", timeout=15,
+                                headers=rag_auth_headers(), **kw)
+    try:
+        resp = await asyncio.to_thread(_do)
+    except Exception:
+        raise HTTPException(status_code=503, detail="RAG 服务不可达（数据面离线或未配置）")
+    if resp.status_code >= 400:
+        try:
+            body = resp.json()
+            detail = body.get("detail") or body.get("msg") or str(body)
+        except Exception:
+            detail = (resp.text or "")[:300]
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+    return resp.json()
+
+
+def _validate_category_name(name: str) -> str:
+    # 分类名进代理 URL 路径：沿用路径 ID 白名单，杜绝 ../ 等穿越载荷进 RAG 侧文件操作
+    if not _ASSET_NAME_RE.match(name) or ".." in name:
+        raise HTTPException(status_code=400, detail="非法的分类名")
+    return name
+
+
+@router.get("/api/v1/rag/overview")
+async def rag_overview():
+    """分类总览：名称/描述/文档数/切片数（含 agent_memory/agent_notes 记忆类目）。"""
+    return await _rag_proxy("GET", "/api/v1/document/list")
+
+
+@router.get("/api/v1/rag/documents")
+async def rag_documents(category: str):
+    """单分类文档清单：标题/入库日期/切片数/体积/过时标记。"""
+    _validate_category_name(category)
+    return await _rag_proxy("GET", "/api/v1/document/list",
+                            params={"category": category})
+
+
+@router.delete("/api/v1/rag/document")
+async def rag_delete_document(body: dict):
+    """删除单篇文档（切片清除 + 原文入回收目录）。body: {"source_path": ...}"""
+    sp = str(body.get("source_path") or "").strip()
+    if not sp:
+        raise HTTPException(status_code=400, detail="缺少 source_path")
+    return await _rag_proxy("DELETE", "/api/v1/document/delete",
+                            json={"source_path": sp})
+
+
+@router.delete("/api/v1/rag/category/{category}")
+async def rag_purge_category(category: str):
+    """真删整个分类（collection 丢弃 + 原文目录入回收 + 路由条目删除）。"""
+    _validate_category_name(category)
+    return await _rag_proxy("DELETE", f"/api/v1/category/{category}/purge")

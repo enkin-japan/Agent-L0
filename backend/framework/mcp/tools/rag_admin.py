@@ -248,8 +248,9 @@ class RAGDeleteDocumentTool(BaseTool):
     """按 source_path 跨库整篇删除文档（不可逆敏感操作，需用户授权）"""
     name = "rag_delete_document"
     description = (
-        "Permanently delete an entire document from the RAG knowledge base: all its chunks across "
-        "every category database plus the raw backup file on disk. Identify the document by its "
+        "Delete an entire document from the RAG knowledge base: all its chunks across every "
+        "category database are removed from search, and the raw backup file is moved to a "
+        "recoverable trash folder (storage/.trash). Identify the document by its "
         "source_path, which appears as 'Path: ...' in rag_search results. When the user asks for "
         "this, call the tool directly — do NOT ask for permission in conversation. The system "
         "automatically shows the user a confirmation dialog before execution, and the tool "

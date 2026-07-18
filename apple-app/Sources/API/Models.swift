@@ -326,6 +326,57 @@ struct BranchResponse: Codable {
     }
 }
 
+// ---------- RAG 知识库管理（记忆治理波 P1；backend /api/v1/rag/* 薄代理） ----------
+
+struct RagCategory: Codable, Identifiable {
+    let name: String
+    let description: String
+    let docCount: Int
+    let chunkCount: Int
+
+    var id: String { name }
+    /// agent_memory / agent_notes 是 Agent 的记忆，UI 须与用户知识视觉区分并警示
+    var isAgentMemory: Bool { name == "agent_memory" || name == "agent_notes" }
+
+    enum CodingKeys: String, CodingKey {
+        case name, description
+        case docCount = "doc_count"
+        case chunkCount = "chunk_count"
+    }
+}
+
+struct RagOverviewResponse: Codable {
+    let categories: [RagCategory]
+}
+
+struct RagDocument: Codable, Identifiable {
+    let sourcePath: String
+    let title: String
+    let createdAt: String     // ISO 串；空 = 未知
+    let chunks: Int
+    let sizeBytes: Int
+    let stale: String         // 非空 = 已标记过时（U3），值为原因
+
+    var id: String { sourcePath }
+    var createdDate: String { String(createdAt.prefix(10)) }
+
+    enum CodingKeys: String, CodingKey {
+        case title, chunks, stale
+        case sourcePath = "source_path"
+        case createdAt = "created_at"
+        case sizeBytes = "size_bytes"
+    }
+}
+
+struct RagDocumentsResponse: Codable {
+    let category: String
+    let documents: [RagDocument]
+}
+
+struct RagActionResponse: Codable {
+    let msg: String?
+}
+
 // ---------- 定时任务 ----------
 
 struct ScheduleSpec: Codable {

@@ -349,6 +349,31 @@ final class AgentClient {
         try await send(try request("GET", "/api/v1/chat/\(sessionId)/memory"))
     }
 
+    // MARK: - RAG 知识库管理（P1：经 backend 薄代理，RAG 数据面只听回环）
+
+    func ragOverview() async throws -> RagOverviewResponse {
+        try await send(try request("GET", "/api/v1/rag/overview"))
+    }
+
+    func ragDocuments(category: String) async throws -> RagDocumentsResponse {
+        let encoded = category.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? category
+        return try await send(try request("GET", "/api/v1/rag/documents?category=\(encoded)"))
+    }
+
+    struct RagDeleteBody: Encodable { let source_path: String }
+
+    @discardableResult
+    func ragDeleteDocument(sourcePath: String) async throws -> RagActionResponse {
+        try await send(try request("DELETE", "/api/v1/rag/document",
+                                   json: RagDeleteBody(source_path: sourcePath)))
+    }
+
+    @discardableResult
+    func ragPurgeCategory(_ name: String) async throws -> RagActionResponse {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        return try await send(try request("DELETE", "/api/v1/rag/category/\(encoded)"))
+    }
+
     /// 会话 Deck Spec；该会话没有 deck 时返回 nil（404 不是错误）。
     func deck(sessionId: String) async throws -> DeckSpec? {
         let req = try request("GET", "/api/v1/files/\(sessionId)/deck")
