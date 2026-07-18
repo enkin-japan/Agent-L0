@@ -168,6 +168,30 @@ class AgentEngine:
             pass
         print(f"[Engine] 会话 {getattr(session, 'session_id', '?')} 起步于基座前缀缓存")
 
+    def _prepare_session_cache(self, session: ChatSession) -> None:
+        """处女缓存的两级热启动（T2+T3）：解冻热恢复（含整段会话历史）优先，
+        其次基座克隆（只含 system+tools），都不行走冷路。只动处女缓存。"""
+        if session.brain_memory_state is None \
+                or not self._cache_is_virgin(session.brain_memory_state):
+            return
+        persist_path = getattr(session, "kv_persist_path", None)
+        if persist_path is not None and hasattr(self.backend, "restore_cache"):
+            restored = None
+            try:
+                restored = self.backend.restore_cache(str(persist_path))
+            except Exception as e:
+                print(f"[Engine] KV 热恢复异常（退基座/冷路）: {e}")
+            if restored is not None:
+                old = session.brain_memory_state
+                session.brain_memory_state = restored
+                try:
+                    self.backend.release_cache(old)
+                except Exception:
+                    pass
+                print(f"[Engine] 会话 {session.session_id} 解冻热恢复（KV 从盘装载）")
+                return
+        self._adopt_base_cache(session)
+
     async def prewarm_base_cache(self, system_prompt: str,
                                  tools: Optional[List[Dict[str, Any]]] = None) -> bool:
         """预填基座前缀（system+tools，与真实轮次同一 builder 同一入参）。
@@ -232,10 +256,10 @@ class AgentEngine:
           name 字段的瞬间调用一次——执行前就知道要调什么。
           三个回调均在主事件循环线程被调（推理线程经 call_soon_threadsafe 跳转）。
         """
-        # T3：主编排会话的处女缓存改为克隆基座起步（沙箱替身系统提示不同，不采用——
-        # 克隆了也只会在前缀匹配处几乎全裁掉，白付一次拷贝）
+        # T2+T3：主编排会话的处女缓存两级热启动——解冻热恢复优先，其次克隆基座
+        # （沙箱替身系统提示不同，不采用：克隆了也会在前缀匹配处几乎全裁掉）
         if getattr(session, "inject_env_context", False):
-            self._adopt_base_cache(session)
+            self._prepare_session_cache(session)
 
         formatted_prompt = self.dialect.build_prompt(
             messages=session.history,

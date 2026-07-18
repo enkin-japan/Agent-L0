@@ -14,10 +14,16 @@ P0 平移物：原 core/engine.py 的 MLX 物理层（模型加载 / KV 量化�
 """
 import asyncio
 import copy
+import json
+from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 import mlx.core as mx
 from mlx_vlm.generate import PromptCacheState
+
+#: KV 落盘格式版本（T2）：字段/布局变更时递增，旧文件直接判不可恢复（冷路兜底），
+#: 绝不做跨版本迁移——缓存是纯派生数据，重预填就能重建
+CACHE_PERSIST_VERSION = "1"
 
 from .patch.gemma4_generate import stream_generate as _patched_stream_generate
 from ...core.backend_protocol import GenChunk
@@ -138,7 +144,7 @@ class MLXBackend:
             loop = asyncio.get_running_loop()
             model, processor = await loop.run_in_executor(
                 executor, lambda: _vlm_load(model_path))
-        return cls(model, processor, cfg)
+        return cls(model, processor, {**cfg, "model_path": str(model_path)})
 
     def __init__(self, model, processor, cfg: Optional[Dict[str, Any]] = None):
         self.model = model
@@ -147,6 +153,8 @@ class MLXBackend:
 
         # KV Cache 量化配置（默认关闭）：kv_bits 为 None 时走稠密缓存，
         # 与未配置时行为完全一致；设为小数（如 3.5）则底层 generate_step 启用 TurboQuant。
+        # 模型身份（T2 落盘产物的归属校验：换模型后旧 KV 文件必须被拒收）
+        self.model_key = str(cfg.get("model_path", ""))
         self.kv_bits = cfg.get("kv_bits", None)
         self.kv_quant_scheme = cfg.get("kv_quant_scheme", "turboquant")
         self.quantized_kv_start = int(cfg.get("quantized_kv_start", 0))
@@ -177,6 +185,92 @@ class MLXBackend:
         state = getattr(h, "state", None)
         if state is not None and state.cache:
             state.cache.clear()
+
+    # ---- 缓存持久化（T2）：冻结落盘 / 解冻热恢复 ----
+
+    def persist_cache(self, h, dest: str) -> bool:
+        """把缓存序列化到 dest（safetensors）。M3 实测：8k 会话 153MB、save ~0.1s，
+        vs 解冻重预填 ~13s。空缓存返回 False；任何失败清理半成品并返回 False（冷路兜底）。
+
+        格式：L{i}_{j} 扁平张量 + metadata（version/model/layers/token_ids）。层对象经
+        state/meta_state 协议原样往返（KVCache/RotatingKVCache 均实测续写一致）；state
+        含非张量元素的层型（如量化缓存的嵌套结构）不支持——整体放弃，不出半份文件。"""
+        state = getattr(h, "state", None)
+        if state is None or not state.cache:
+            return False
+        dest_p = Path(dest)
+        # 临时名必须保住 .safetensors 后缀：mx.save_safetensors 会给其他后缀自动
+        # 追加 .safetensors，写出的文件名和 replace 的源名对不上（实测踩过）
+        tmp = dest_p.with_name(f"{dest_p.stem}.tmp.safetensors")
+        try:
+            tensors: Dict[str, Any] = {}
+            layers = []
+            for i, c in enumerate(state.cache):
+                st = c.state
+                if not isinstance(st, (tuple, list)):
+                    st = (st,)
+                if not all(isinstance(a, mx.array) for a in st):
+                    return False          # 嵌套/非张量 state：本版不落盘
+                for j, arr in enumerate(st):
+                    tensors[f"L{i}_{j}"] = arr
+                meta = c.meta_state
+                if isinstance(meta, str):
+                    # KVCache 的 meta_state 是空串（无元状态）：必须存成空，
+                    # 回设非空会触发 "no meta_state but a meta_state was set"
+                    meta = (meta,) if meta else ()
+                layers.append({"cls": type(c).__name__, "n": len(st),
+                               "meta": list(meta or ())})
+            metadata = {
+                "version": CACHE_PERSIST_VERSION,
+                "model": self.model_key,
+                "layers": json.dumps(layers),
+                "token_ids": json.dumps(state.token_ids or []),
+            }
+            dest_p.parent.mkdir(parents=True, exist_ok=True)
+            mx.save_safetensors(str(tmp), tensors, metadata=metadata)
+            tmp.replace(dest_p)
+            return True
+        except Exception as e:
+            print(f"[Memory] KV 缓存落盘失败（解冻将走冷路）: {e}")
+            tmp.unlink(missing_ok=True)
+            return False
+
+    def restore_cache(self, src: str) -> Optional[MLXCacheHandle]:
+        """从 persist_cache 产物重建句柄。文件缺失/版本不符/模型不符/任何异常 → None。"""
+        p = Path(src)
+        if not p.is_file():
+            return None
+        try:
+            tensors, metadata = mx.load(str(p), return_metadata=True)
+            if metadata.get("version") != CACHE_PERSIST_VERSION:
+                return None
+            if metadata.get("model", "") != self.model_key:
+                print(f"[Memory] KV 落盘产物属于其他模型，忽略: {p.name}")
+                return None
+            from mlx_vlm.models import cache as cache_mod
+            layers: List[Any] = []
+            for i, lm in enumerate(json.loads(metadata["layers"])):
+                cls = getattr(cache_mod, str(lm["cls"]), None)
+                if cls is None:
+                    return None
+                try:
+                    c = cls()
+                except TypeError:
+                    c = cls(None)     # RotatingKVCache(max_size)：占位，meta_state 恢复真值
+                arrs = tuple(tensors[f"L{i}_{j}"] for j in range(int(lm["n"])))
+                c.state = arrs if len(arrs) > 1 else arrs[0]
+                meta = lm.get("meta") or []
+                if meta:
+                    c.meta_state = tuple(meta)
+                layers.append(c)
+            h = MLXCacheHandle()
+            h.state.cache = layers
+            token_ids = json.loads(metadata.get("token_ids", "[]"))
+            h.state.token_ids = token_ids or None
+            return h
+        except Exception as e:
+            print(f"[Memory] KV 缓存恢复失败（冷路兜底）: {e}")
+            return None
 
     def shutdown(self) -> None:
         mx.clear_cache()  # 强制释放苹果芯片的显存/内存

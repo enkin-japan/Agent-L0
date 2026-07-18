@@ -141,6 +141,8 @@ class ChatSession:
         self.meta_file = self.session_dir / "meta.json"  # 会话血缘元数据（分支溯源）
         self.task_file = self.session_dir / "task.json"  # 跨轮多步任务的落盘快照
         self.memory_file = self.session_dir / "memory.json"  # 摘要式压缩旁挂（方案A）
+        # T2 冻结落盘：KV 缓存的持久化位置（会话目录内——随会话删除自然清理）
+        self.kv_persist_path = self.session_dir / "kv_cache.safetensors"
 
         # 摘要式压缩状态（方案A）：rolling_summary 为已折叠旧轮次的滚动摘要，
         # summarized_turns 为已并入摘要的「前导日志行数」水位线。全量日志 history.jsonl
@@ -250,9 +252,18 @@ class ChatSession:
             self.task_state = None
             self.cancel_requested = False
 
-            # 释放推理缓存的底层内存（后端负责物理释放，句柄换新）
+            # 释放推理缓存的底层内存（后端负责物理释放，句柄换新）。
+            # T2：释放前先落盘（有能力的后端才做；远程后端暂无此面——隐私边界待决），
+            # 解冻首轮经 restore 热恢复省掉全量重预填（M3 实测 ~0.1s vs ~13s）
             if self._backend is not None:
                 if self.brain_memory_state is not None:
+                    if hasattr(self._backend, "persist_cache"):
+                        try:
+                            if self._backend.persist_cache(self.brain_memory_state,
+                                                           str(self.kv_persist_path)):
+                                print(f"[Memory] Session {self.session_id} KV 已落盘，解冻可热恢复")
+                        except Exception as e:
+                            print(f"[Memory] KV 落盘异常（解冻走冷路）: {e}")
                     self._backend.release_cache(self.brain_memory_state)
                 self.brain_memory_state = self._backend.new_cache()
             
