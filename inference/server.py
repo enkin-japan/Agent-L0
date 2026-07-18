@@ -42,6 +42,9 @@ from typing import Any, Dict, Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "backend"))  # framework 包住在 backend/ 下
+# 同目录模块（openai_facade）：作为脚本跑时 sys.path[0] 就是本目录，但金测试按路径
+# 装载本文件时没有这条——显式补上，S.7「没人 import 的入口」纪律
+sys.path.insert(0, str(REPO_ROOT / "inference"))
 
 import os
 import uvicorn
@@ -58,6 +61,9 @@ from framework.dialects import get_dialect_class
 from framework.core.constrained import ToolConstraintEngine, ToolCallGuard, llguidance as _llg
 from framework.backends import (AsrProviderUnavailable, get_asr_provider,
                                 get_backend_class)
+from framework.core.stream_filter import VisibleTextStreamer
+
+import openai_facade as oai  # 同目录纯逻辑层（T6 门面）
 
 MEDIA_DIR = Path(__file__).resolve().parent / "media"
 _MEDIA_ID_RE = re.compile(r"^[0-9a-f]{64}(\.[A-Za-z0-9]{1,8})?$")  # 内容寻址名，防路径穿越
@@ -133,6 +139,9 @@ class ServerState:
     backend = None
     executor: Optional[ThreadPoolExecutor] = None
     registry: Optional[CacheRegistry] = None
+    model_name: str = ""                          # /v1/models 报告用
+    facade_cache = None                           # T6 门面专用缓存（不入注册表、不 TTL；
+                                                  # 聊天客户端全量重发历史 → 前缀匹配白拿增量预填）
     gen_lock: Optional[asyncio.Lock] = None       # 生成互斥：底层共享单例不可并发
     gens: Dict[str, Dict[str, Any]] = {}          # gen_id → {"cancel": bool}（进行中的生成）
     constraint_engine = None                      # 懒建（LLTokenizer ~1s）
@@ -202,6 +211,7 @@ async def lifespan(app: FastAPI):
         S.backend.processor, options=_opts)
     S.registry = CacheRegistry(S.backend, CACHE_TTL_SECONDS)
     S.gen_lock = asyncio.Lock()
+    S.model_name = str(model)
     MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
     async def _sweep_loop():
@@ -449,6 +459,136 @@ async def generate(request: Request):
 
             def _finish(_fut=None):
                 S.gens.pop(gen_id, None)
+                S.gen_lock.release()
+
+            if task is None:
+                _finish()
+            else:
+                task.add_done_callback(_finish)
+
+    return StreamingResponse(_sse(), media_type="text/event-stream")
+
+
+# ---------- T6 OpenAI 入口门面（/v1/models + /v1/chat/completions） ----------
+# 同一份常驻权重顺便服务任何 OpenAI 客户端（lm-eval、编辑器插件），不双载模型。
+# 无状态门面：不暴露缓存句柄/约束采样/思考预算（Agent 自家协议的控制面）；
+# 服务端留一个门面专用缓存吃前缀匹配（聊天客户端全量重发历史 → 增量预填白拿）。
+
+
+def _facade_streamer() -> VisibleTextStreamer:
+    """把方言频道标记（思考/工具段）从门面输出里滤掉——OpenAI 客户端只该看到正文。"""
+    mk = S.dialect.markers
+    return VisibleTextStreamer(soc=mk.soc, eoc=mk.eoc, stc=mk.stc, etc=mk.etc,
+                               in_thought=False)
+
+
+@app.get("/v1/models", dependencies=[Depends(verify_api_key)])
+async def oai_models():
+    return oai.models_response(S.model_name)
+
+
+@app.post("/v1/chat/completions", dependencies=[Depends(verify_api_key)])
+async def oai_chat_completions(request: Request):
+    body = await request.json()
+    err = oai.validate_messages(body.get("messages"))
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    prompt = S.dialect.build_prompt(
+        messages=oai.to_dialect_messages(body["messages"]), tools=None,
+        include_env=False)
+    sampling = oai.parse_sampling(body)
+    if S.facade_cache is None:
+        S.facade_cache = S.backend.new_cache()
+    cid = oai.new_completion_id()
+    loop = asyncio.get_running_loop()
+
+    if not bool(body.get("stream")):
+        filt = _facade_streamer()
+
+        def _run():
+            last, parts = None, []
+            for ch in S.backend.stream_generate(prompt, cache=S.facade_cache,
+                                                sampling=sampling, features={}):
+                last = ch
+                v = filt.feed(ch.text)
+                if v:
+                    parts.append(v)
+            tail = filt.close()
+            if tail:
+                parts.append(tail)
+            return "".join(parts), last
+
+        async with S.gen_lock:
+            text, last = await loop.run_in_executor(S.executor, _run)
+        pt = last.prompt_tokens if last else 0
+        gt = last.generation_tokens if last else 0
+        return oai.completion_response(
+            S.model_name, cid, text, pt, gt,
+            oai.finish_reason_of(gt, sampling["max_tokens"]))
+
+    # 流式：复用 /v1/generate 的纪律（有界队列背压 + 绝不在 finally await + done-callback 放锁）
+    queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+    stop = {"flag": False}
+    filt = _facade_streamer()
+
+    def _blocking():
+        last = None
+        try:
+            for ch in S.backend.stream_generate(prompt, cache=S.facade_cache,
+                                                sampling=sampling, features={}):
+                last = ch
+                v = filt.feed(ch.text)
+                if not v:
+                    if stop["flag"]:
+                        return last
+                    continue
+                fut = asyncio.run_coroutine_threadsafe(queue.put(v), loop)
+                while True:
+                    if stop["flag"]:
+                        fut.cancel()
+                        return last
+                    try:
+                        fut.result(timeout=0.5)
+                        break
+                    except FuturesTimeout:
+                        continue
+                    except Exception:
+                        return last
+            return last
+        except Exception as e:
+            print(f"[Facade] 生成异常: {type(e).__name__}: {e}")
+            return last
+
+    async def _sse():
+        await S.gen_lock.acquire()
+        task = None
+        try:
+            yield oai.stream_line(S.model_name, cid, role="assistant")
+            task = loop.run_in_executor(S.executor, _blocking)
+            while True:
+                get_q = asyncio.ensure_future(queue.get())
+                await asyncio.wait({get_q, task}, return_when=asyncio.FIRST_COMPLETED)
+                if get_q.done():
+                    yield oai.stream_line(S.model_name, cid, content=get_q.result())
+                    continue
+                get_q.cancel()
+                last = task.result()
+                while not queue.empty():
+                    yield oai.stream_line(S.model_name, cid,
+                                          content=queue.get_nowait())
+                tail = filt.close()
+                if tail:
+                    yield oai.stream_line(S.model_name, cid, content=tail)
+                gt = last.generation_tokens if last else 0
+                yield oai.stream_line(
+                    S.model_name, cid,
+                    finish_reason=oai.finish_reason_of(gt, sampling["max_tokens"]))
+                yield oai.done_line()
+                break
+        finally:
+            stop["flag"] = True
+
+            def _finish(_f=None):
                 S.gen_lock.release()
 
             if task is None:
