@@ -396,6 +396,41 @@ final class AgentClient {
         return try await send(try request("DELETE", "/api/v1/rag/category/\(encoded)"))
     }
 
+    // MARK: - 私人 API 工具管理（声明式工具工厂表单面；校验/落盘/注册全在后端）
+
+    struct ApiToolSaveBody: Encodable {
+        var name: String
+        var description: String
+        var endpoint: String
+        var method: String
+        var params: JSONValue?
+        var auth: JSONValue?
+        var headers: JSONValue?
+        var timeout: Double?
+        var requires_approval: Bool?
+        var enabled: Bool
+        var secret: String?              // 密钥实值：后端写 0600 secrets 文件，不入声明
+        var arguments: JSONValue?        // 仅试调端点读取；保存端点忽略
+    }
+
+    func listApiTools() async throws -> ApiToolListResponse {
+        try await send(try request("GET", "/api/v1/api-tools"))
+    }
+
+    func saveApiTool(_ body: ApiToolSaveBody) async throws -> ApiToolActionResponse {
+        try await send(try request("POST", "/api/v1/api-tools", json: body))
+    }
+
+    func testApiTool(_ body: ApiToolSaveBody) async throws -> ApiToolTestResponse {
+        try await send(try request("POST", "/api/v1/api-tools/test", json: body,
+                                   timeout: 90))
+    }
+
+    @discardableResult
+    func deleteApiTool(name: String) async throws -> ApiToolActionResponse {
+        try await send(try request("DELETE", "/api/v1/api-tools/\(name)"))
+    }
+
     /// 会话 Deck Spec；该会话没有 deck 时返回 nil（404 不是错误）。
     func deck(sessionId: String) async throws -> DeckSpec? {
         let req = try request("GET", "/api/v1/files/\(sessionId)/deck")

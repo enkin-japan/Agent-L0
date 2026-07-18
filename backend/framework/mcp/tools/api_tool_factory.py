@@ -52,9 +52,54 @@ _NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}
 _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 
-#: 声明目录：仓库根 api_tools/（backend 的兄弟目录，dev 与 app bundle 同布局——
+#: 手写声明目录：仓库根 api_tools/（backend 的兄弟目录，dev 与 app bundle 同布局——
 #: 与 app.py 的 SKILLS_DIR = BASE_DIR.parent/"skills" 同一解析逻辑）
 DECL_DIR = Path(__file__).resolve().parents[4] / "api_tools"
+
+
+def user_decl_dir() -> Path:
+    """UI 添加的声明目录：数据根下 api_tools/。**不能写仓库目录**——app 模式下
+    代码树在签名的 bundle 里，写进去破坏签名（guardrail_events 同一教训）。
+    每次现读 data_dir()（进程内 env 不变，测试要能各自注入）。"""
+    from ...utils.config_loader import data_dir
+    return data_dir() / "api_tools"
+
+
+def secrets_path() -> Path:
+    """UI 录入的密钥文件（0600，数据根下，天然不入 git）。格式：每行 KEY=VALUE。"""
+    return user_decl_dir() / ".secrets.env"
+
+
+def read_secret(env_name: str) -> str:
+    """密钥读取顺序：环境变量（.env.local，devctl source）优先 → secrets 文件兜底。"""
+    val = os.environ.get(env_name, "")
+    if val:
+        return val
+    try:
+        for line in secrets_path().read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                if k.strip() == env_name:
+                    return v.strip()
+    except OSError:
+        pass
+    return ""
+
+
+def write_secret(env_name: str, value: str) -> None:
+    """upsert 一条密钥（建目录、去重旧行、写回后 chmod 0600）。"""
+    path = secrets_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines: List[str] = []
+    try:
+        lines = [l for l in path.read_text(encoding="utf-8").splitlines()
+                 if l.strip() and l.split("=", 1)[0].strip() != env_name]
+    except OSError:
+        pass
+    lines.append(f"{env_name}={value}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.chmod(path, 0o600)
 
 
 def _validate(decl: Any) -> Optional[str]:
@@ -91,6 +136,9 @@ class _ApiCore:
     (_ApiCore, BaseTool) 双基类拼出完整工具。
     """
 
+    #: 试调通道（/api-tools/test）：未保存的密钥直接挂实例，绕过 env/secrets 读取
+    _secret_override: Optional[str] = None
+
     def _bind(self, decl: Dict[str, Any]) -> None:
         self._decl = decl
         self.name = decl["name"]
@@ -113,11 +161,17 @@ class _ApiCore:
         self.drift_fix = (f"私人 API 探针连续失败：检查服务是否在跑、"
                           f"api_tools/ 里 {self.name} 的声明是否仍与服务端一致")
 
+    def _key_value(self) -> str:
+        if self._secret_override is not None:
+            return self._secret_override
+        auth = self._decl.get("auth")
+        return read_secret(str(auth["env"])) if auth else ""
+
     def is_available(self) -> bool:
         auth = self._decl.get("auth")
-        if auth and not os.environ.get(str(auth["env"]), ""):
-            print(f"[ApiTool] ⛔ {self.name}：环境变量 {auth['env']} 未设置"
-                  f"（.env.local），不注册。")
+        if auth and not self._key_value():
+            print(f"[ApiTool] ⛔ {self.name}：密钥 {auth['env']} 未设置"
+                  f"（.env.local 或 UI 录入），不注册。")
             return False
         return True
 
@@ -132,9 +186,8 @@ class _ApiCore:
         headers = {str(k): str(v) for k, v in (self._decl.get("headers") or {}).items()}
         auth = self._decl.get("auth")
         if auth:
-            key_val = os.environ.get(str(auth["env"]), "")
             headers[str(auth.get("header") or "Authorization")] = str(
-                auth.get("format") or "Bearer {key}").replace("{key}", key_val)
+                auth.get("format") or "Bearer {key}").replace("{key}", self._key_value())
         kw: Dict[str, Any] = {}
         if self._method in ("GET", "HEAD"):
             if args:
@@ -164,52 +217,69 @@ def _canary_method(self):
     return ok, f"HTTP {status}" + ("" if ok else f"：{(text or '')[:200]}")
 
 
-def build_tool_classes(decl_dir: Path) -> List[type]:
-    """读目录下全部 *.yaml/*.yml 声明，合成零参可实例化的工具类列表。
+def synth_class(decl: Dict[str, Any], origin: str = "?") -> type:
+    """把一份**已通过 _validate** 的声明合成为零参可实例化的工具类
+    （registry 扫描/load_tool 契约）。canary 只在声明了探针时才挂（巡检纳入判据）。"""
 
-    坏声明/停用/重名 fail-open 跳过并打印原因。纯函数：金测试直接喂临时目录。
-    """
-    classes: List[type] = []
+    def __init__(self):
+        self._bind(decl)
+
+    ns: Dict[str, Any] = {
+        "__init__": __init__,
+        "__doc__": f"声明式 API 工具（{origin}）",
+    }
+    if decl.get("canary") is not None:
+        ns["canary"] = _canary_method
+    return type(f"ApiTool_{decl['name']}", (_ApiCore, BaseTool), ns)
+
+
+def load_declarations(decl_dir: Path, source: str) -> List[Dict[str, Any]]:
+    """读目录下全部 *.yaml/*.yml 声明（含坏的），供装配与管理端点共用。
+    每项：{file, source, decl, problem}；problem 非 None = 坏声明（fail-open）。"""
+    out: List[Dict[str, Any]] = []
     if not decl_dir.exists():
-        return classes
-    seen: set = set()
+        return out
     for f in sorted(decl_dir.glob("*.yaml")) + sorted(decl_dir.glob("*.yml")):
         try:
             decl = yaml.safe_load(f.read_text(encoding="utf-8"))
         except Exception as e:
-            print(f"[ApiTool] ⚠️ 声明 {f.name} 解析失败，跳过：{e}")
+            out.append({"file": f.name, "source": source, "decl": None,
+                        "problem": f"解析失败：{e}"})
             continue
-        problem = _validate(decl)
+        out.append({"file": f.name, "source": source, "decl": decl,
+                    "problem": _validate(decl)})
+    return out
+
+
+def build_tool_classes(decl_dir: Path, seen: Optional[set] = None,
+                       source: str = "api_tools") -> List[type]:
+    """读目录声明合成工具类列表。坏声明/停用/重名 fail-open 跳过并打印原因。
+    seen 跨目录去重（仓库目录先扫、先到先得）。纯函数：金测试直接喂临时目录。"""
+    classes: List[type] = []
+    seen = seen if seen is not None else set()
+    for item in load_declarations(decl_dir, source):
+        decl, problem = item["decl"], item["problem"]
         if problem:
-            print(f"[ApiTool] ⚠️ 声明 {f.name} 非法，跳过：{problem}")
+            print(f"[ApiTool] ⚠️ 声明 {item['file']} 非法，跳过：{problem}")
             continue
         if decl.get("enabled", True) is False:
             continue
         if decl["name"] in seen:
-            print(f"[ApiTool] ⚠️ 声明 {f.name} 工具名重复：{decl['name']}，跳过后者。")
+            print(f"[ApiTool] ⚠️ 声明 {item['file']} 工具名重复：{decl['name']}，跳过后者。")
             continue
         seen.add(decl["name"])
-
-        def _make_init(bound_decl):
-            def __init__(self):
-                self._bind(bound_decl)
-            return __init__
-
-        ns: Dict[str, Any] = {
-            "__init__": _make_init(decl),
-            "__doc__": f"声明式 API 工具（api_tools/{f.name}）",
-        }
-        if decl.get("canary") is not None:
-            ns["canary"] = _canary_method
-        classes.append(type(f"ApiTool_{decl['name']}", (_ApiCore, BaseTool), ns))
+        classes.append(synth_class(decl, f"{source}/{item['file']}"))
     return classes
 
 
 def _install() -> None:
     """模块导入即装配：合成类挂进模块命名空间，交给 registry 的目录扫描发现。
-    收进函数作用域——模块级循环变量会残留成模块属性，getmembers 把同一个类
-    数两次 → registry 重复注册（实测冒烟抓到的坑）。"""
-    for cls in build_tool_classes(DECL_DIR):
+    双目录：仓库 api_tools/（手写）先扫，数据根 api_tools/（UI 添加）后扫，
+    跨目录同名先到先得。收进函数作用域——模块级循环变量会残留成模块属性，
+    getmembers 把同一个类数两次 → registry 重复注册（实测冒烟抓到的坑）。"""
+    seen: set = set()
+    for cls in (build_tool_classes(DECL_DIR, seen, "api_tools")
+                + build_tool_classes(user_decl_dir(), seen, "data/api_tools")):
         globals()[cls.__name__] = cls
 
 

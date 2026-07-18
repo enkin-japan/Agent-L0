@@ -1806,6 +1806,31 @@ subAgent 层刻意无注册接口（沙箱=安全边界，dispatch 语义在代�
   按 D1 等生产设备）；接入标准 MCP 协议属架构方向变更，评估过不推荐现在动。
 - 金测试 449（+19）；纯后端改动，无需重打包（重启 backend 生效）。
 
+### API 工具表单面：设置页添加/编辑/试调 UI（2026-07-19 用户「明白了，可以开工」）
+
+用户提议把 yaml 手写升级为设置页表单（区分必选/可选、逐项提示）。评估确认三个
+设计决定后实施：①**写入只落数据根 api_tools/**（app 模式代码树在签名 bundle 里，
+写仓库目录=破坏签名）——工厂双目录扫描，仓库手写先到先得；②**密钥 UI 录入**走
+数据根 0600 `.secrets.env`（不入 git，读取顺序=环境变量优先→文件兜底），表单密钥
+永不回传（清单只回 has_secret）；③**生效语义如实转述**：新增=保存即合成类走
+`registry.load_tool` 补注册（rescan 不重扫目录！新声明必须端点直接注册）+刷新工具
+声明；覆盖已注册/删除=重启生效（只增不删纪律，UI 文案明示）。
+
+- 后端：工厂加 `user_decl_dir()/read_secret/write_secret/synth_class/load_declarations`
+  （管理端点与装配共用一套解析）；四端点 `GET/POST /api/v1/api-tools`、
+  `POST .../test`（试调不落盘，密钥随行 `_secret_override`）、`DELETE .../{name}`
+  （仓库手写声明 404/409 保护）。`.gitignore` 补 `backend/api_tools/`（dev 数据根）。
+- 表单 UI（双端共享 `ApiToolsPanelView`）：macOS 设置新 Tab「API 工具」、iOS 设置
+  「数据」区入口。清单（方法徽标/已上架/未上架/坏声明/手写只读）；表单四区
+  （必填/参数/鉴权/高级）逐区 footer 提示；参数用**扁平行**（名/类型/说明/必需），
+  嵌套 schema 留手写 yaml 后门；**试调区**按行录试调值、真实调用回显响应（保存前
+  即时发现声明错误——表单相对手写 yaml 的核心价值）。
+- 金测试 460（+11：secrets 权限/upsert/环境变量优先、跨目录去重、save 五分支
+  （registered/unavailable/restart_required/400/409）、delete、试调回程密钥不落盘），
+  端点测试用假 Request 直调处理器（项目无 TestClient 惯例）。双端 Debug 编译过，
+  macOS 59 装机、iOS 59 上传 TestFlight。实机验证（表单添加→试调→保存→模型调用）
+  待用户走一轮。
+
 ---
 
 ## §5 待决（开工前需拍板）

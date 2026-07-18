@@ -1,10 +1,14 @@
 """api_tool_factory 金测试：声明校验 fail-open、合成类的注册契约（零参实例化）、
-请求语义（路径模板/参数位置/鉴权头）、审批缺省、canary 选择性挂载。"""
+请求语义（路径模板/参数位置/鉴权头）、审批缺省、canary 选择性挂载、
+双目录/secrets（UI 管理面）与管理端点流程。"""
+import asyncio
+
 import requests as _requests
 
 import pytest
 
 from framework.mcp.base import BaseTool
+from framework.mcp.tools import api_tool_factory as factory_mod
 from framework.mcp.tools.api_tool_factory import build_tool_classes
 
 
@@ -160,6 +164,158 @@ def test_http_error_and_exception_degrade(tmp_path, monkeypatch):
         raise ConnectionError("refused")
     monkeypatch.setattr(_requests, "request", boom)
     assert "API 调用失败" in tool.execute()
+
+
+# ---------- secrets 与双目录（UI 管理面） ----------
+
+def test_secret_env_first_then_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("S_KEY", raising=False)
+    assert factory_mod.read_secret("S_KEY") == ""
+    factory_mod.write_secret("S_KEY", "from-file")
+    assert factory_mod.read_secret("S_KEY") == "from-file"
+    assert oct(factory_mod.secrets_path().stat().st_mode & 0o777) == "0o600"
+    factory_mod.write_secret("S_KEY", "v2")               # upsert 不叠行
+    text = factory_mod.secrets_path().read_text()
+    assert text.count("S_KEY=") == 1 and "v2" in text
+    monkeypatch.setenv("S_KEY", "from-env")               # 环境变量优先
+    assert factory_mod.read_secret("S_KEY") == "from-env"
+
+
+def test_secrets_file_gates_availability(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("S2_KEY", raising=False)
+    tool = _build_one(tmp_path, _MINIMAL + "auth: {env: S2_KEY}\n")
+    assert tool.is_available() is False
+    factory_mod.write_secret("S2_KEY", "sk-9")            # UI 录入密钥后即可上架
+    assert tool.is_available() is True
+
+
+def test_cross_dir_dedup_repo_wins(tmp_path):
+    repo, user = tmp_path / "repo", tmp_path / "user"
+    repo.mkdir(); user.mkdir()
+    _write(repo, "a.yaml", _MINIMAL)
+    _write(user, "b.yaml", _MINIMAL)                      # 同名 UI 声明
+    seen: set = set()
+    classes = (build_tool_classes(repo, seen, "repo")
+               + build_tool_classes(user, seen, "user"))
+    assert len(classes) == 1                              # 先到先得
+
+
+def test_load_declarations_reports_problems(tmp_path):
+    _write(tmp_path, "bad.yaml", "{{{ not yaml")
+    _write(tmp_path, "ok.yaml", _MINIMAL)
+    items = factory_mod.load_declarations(tmp_path, "user")
+    by_file = {i["file"]: i for i in items}
+    assert by_file["bad.yaml"]["problem"] is not None
+    assert by_file["ok.yaml"]["problem"] is None
+
+
+# ---------- 管理端点流程（假 Request 直调处理器） ----------
+
+class _FakeRegistry:
+    def __init__(self, names=()):
+        self._names = set(names)
+        self.loaded = []
+
+    def tool_names(self):
+        return set(self._names)
+
+    def load_tool(self, tool):
+        ok = tool.is_available()
+        if ok:
+            self._names.add(tool.name)
+            self.loaded.append(tool.name)
+        return ok
+
+
+class _FakeOrch:
+    refreshed = 0
+
+    def refresh_tools_declaration(self):
+        type(self).refreshed += 1
+
+
+class _FakeReq:
+    def __init__(self, registry):
+        class _S: pass
+        self.app = _S(); self.app.state = _S()
+        self.app.state.mcp_registry = registry
+        self.app.state.orchestrator = _FakeOrch()
+
+
+def _save(body_kw, registry, tmp_path, monkeypatch):
+    from fastapi import HTTPException
+    from framework.api.routes import save_api_tool
+    from framework.api.schemas import ApiToolSaveRequest
+    monkeypatch.setenv("AGENT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(factory_mod, "DECL_DIR", tmp_path / "repo")
+    try:
+        return asyncio.run(save_api_tool(_FakeReq(registry), ApiToolSaveRequest(**body_kw)))
+    except HTTPException as e:
+        return {"http_error": e.status_code, "detail": e.detail}
+
+
+_BODY = {"name": "ping_api", "description": "ping", "endpoint": "http://127.0.0.1:9/p"}
+
+
+def test_save_registers_new_tool(tmp_path, monkeypatch):
+    reg = _FakeRegistry()
+    out = _save(_BODY, reg, tmp_path, monkeypatch)
+    assert out["effect"] == "registered" and "ping_api" in reg.tool_names()
+    assert (tmp_path / "data" / "api_tools" / "ping_api.yaml").exists()
+
+
+def test_save_existing_name_needs_restart(tmp_path, monkeypatch):
+    out = _save(_BODY, _FakeRegistry(names={"ping_api"}), tmp_path, monkeypatch)
+    assert out["effect"] == "restart_required"
+
+
+def test_save_missing_secret_saved_but_unavailable(tmp_path, monkeypatch):
+    monkeypatch.delenv("NO_SUCH_KEY", raising=False)
+    out = _save({**_BODY, "auth": {"env": "NO_SUCH_KEY"}},
+                _FakeRegistry(), tmp_path, monkeypatch)
+    assert out["effect"] == "unavailable"
+
+
+def test_save_with_secret_registers_and_persists_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("UI_KEY", raising=False)
+    out = _save({**_BODY, "auth": {"env": "UI_KEY"}, "secret": "sk-ui"},
+                _FakeRegistry(), tmp_path, monkeypatch)
+    assert out["effect"] == "registered"
+    assert factory_mod.read_secret("UI_KEY") == "sk-ui"
+
+
+def test_save_rejects_invalid_and_repo_conflict(tmp_path, monkeypatch):
+    out = _save({**_BODY, "endpoint": "ftp://x"}, _FakeRegistry(), tmp_path, monkeypatch)
+    assert out["http_error"] == 400
+    (tmp_path / "repo").mkdir()
+    _write(tmp_path / "repo", "ping.yaml", _MINIMAL)      # 仓库同名手写声明
+    out = _save(_BODY, _FakeRegistry(), tmp_path, monkeypatch)
+    assert out["http_error"] == 409
+
+
+def test_delete_user_declaration(tmp_path, monkeypatch):
+    from fastapi import HTTPException
+    from framework.api.routes import delete_api_tool
+    reg = _FakeRegistry()
+    _save(_BODY, reg, tmp_path, monkeypatch)
+    out = asyncio.run(delete_api_tool("ping_api", _FakeReq(reg)))
+    assert out["effect"] == "restart_required"            # 实例仍在内存（只增不删）
+    with pytest.raises(HTTPException):
+        asyncio.run(delete_api_tool("ping_api", _FakeReq(reg)))   # 已删 → 404
+
+
+def test_test_endpoint_roundtrip(tmp_path, monkeypatch):
+    from framework.api.routes import test_api_tool
+    from framework.api.schemas import ApiToolTestRequest
+    calls = _capture(monkeypatch, _Resp(200, "pong"))
+    body = ApiToolTestRequest(**_BODY, auth={"env": "X_KEY"},
+                              secret="sk-t", arguments={"q": "1"})
+    out = asyncio.run(test_api_tool(_FakeReq(_FakeRegistry()), body))
+    assert out["result"] == "pong"
+    assert calls["headers"]["Authorization"] == "Bearer sk-t"   # 随行密钥不落盘直接生效
+    assert not factory_mod.secrets_path().exists() or "X_KEY" not in factory_mod.secrets_path().read_text()
 
 
 # ---------- 模块命名空间卫生（registry 扫描面） ----------

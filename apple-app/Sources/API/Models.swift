@@ -349,6 +349,56 @@ struct RagOverviewResponse: Codable {
     let categories: [RagCategory]
 }
 
+// ---------- 私人 API 工具管理（backend /api/v1/api-tools；声明式工具工厂表单面） ----------
+
+struct ApiToolItem: Codable, Identifiable {
+    let file: String
+    let source: String            // repo=仓库手写（只读）| user=UI 添加
+    let problem: String?          // 非空 = 坏声明原因
+    let name: String?
+    let description: String?
+    let endpoint: String?
+    let method: String
+    let enabled: Bool
+    let params: JSONValue?        // {properties: {...}, required: [...]}
+    let headers: JSONValue?
+    let timeout: Double?
+    let authEnv: String?
+    let authHeader: String?
+    let authFormat: String?
+    let hasSecret: Bool
+    let requiresApproval: Bool
+    let hasCanary: Bool
+    let registered: Bool
+
+    var id: String { source + "/" + file }
+    var isUserOwned: Bool { source == "user" }
+
+    enum CodingKeys: String, CodingKey {
+        case file, source, problem, name, description, endpoint, method, enabled
+        case params, headers, timeout, registered
+        case authEnv = "auth_env"
+        case authHeader = "auth_header"
+        case authFormat = "auth_format"
+        case hasSecret = "has_secret"
+        case requiresApproval = "requires_approval"
+        case hasCanary = "has_canary"
+    }
+}
+
+struct ApiToolListResponse: Codable {
+    let tools: [ApiToolItem]
+}
+
+struct ApiToolActionResponse: Codable {
+    let effect: String            // registered | unavailable | saved_disabled | restart_required | deleted
+    let detail: String?
+}
+
+struct ApiToolTestResponse: Codable {
+    let result: String
+}
+
 struct RagDocument: Codable, Identifiable {
     let sourcePath: String
     let title: String

@@ -148,6 +148,40 @@ class LocationReport(BaseModel):
     error: Optional[str] = None
 
 
+class ApiToolSaveRequest(BaseModel):
+    """私人 API 工具声明（UI 表单面）：字段与 api_tools/*.yaml 一一对应。
+    secret 是随行密钥**实值**——只写数据根 0600 secrets 文件，绝不入声明文件/git。"""
+    name: str
+    description: str
+    endpoint: str
+    method: str = "GET"
+    params: Optional[Dict[str, Any]] = None
+    auth: Optional[Dict[str, Any]] = None
+    headers: Optional[Dict[str, Any]] = None
+    timeout: Optional[float] = None
+    requires_approval: Optional[bool] = None
+    enabled: bool = True
+    canary: Optional[Dict[str, Any]] = None
+    secret: Optional[str] = None
+
+    def to_decl(self) -> Dict[str, Any]:
+        """折回 yaml 声明形状（None 字段不落盘；enabled 只在停用时显式写）。"""
+        decl: Dict[str, Any] = {"name": self.name, "description": self.description,
+                                "endpoint": self.endpoint, "method": self.method}
+        for key in ("params", "auth", "headers", "timeout", "requires_approval", "canary"):
+            val = getattr(self, key)
+            if val is not None:
+                decl[key] = val
+        if self.enabled is False:
+            decl["enabled"] = False
+        return decl
+
+
+class ApiToolTestRequest(ApiToolSaveRequest):
+    """试调请求：声明 + 一组实参，真实调用一次并回显响应（不落盘）。"""
+    arguments: Optional[Dict[str, Any]] = None
+
+
 class PushRegisterRequest(BaseModel):
     """
     推送设备注册/更新（upsert）：device_id 是 app 生成并持久化的稳定标识；

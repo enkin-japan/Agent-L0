@@ -36,6 +36,9 @@ struct SettingsView: View {
                 // 知识看设置）。embedded：复用本页外层 NavigationStack 推入文档页。
                 KnowledgePanelView(embedded: true)
                     .tabItem { Label(L("知识库"), systemImage: "books.vertical") }
+                // 私人 API 工具（声明式工具工厂表单面）：同为全局数据实体，归设置
+                ApiToolsPanelView(embedded: true)
+                    .tabItem { Label(L("API 工具"), systemImage: "wrench.and.screwdriver") }
                 Form { sidecarSection; versionSection }
                     .formStyle(.grouped)
                     .tabItem { Label(L("执行层"), systemImage: "gearshape.2") }
@@ -63,6 +66,11 @@ struct SettingsView: View {
                         KnowledgePanelView(embedded: true)
                     } label: {
                         Label(L("知识库"), systemImage: "books.vertical")
+                    }
+                    NavigationLink {
+                        ApiToolsPanelView(embedded: true)
+                    } label: {
+                        Label(L("API 工具"), systemImage: "wrench.and.screwdriver")
                     }
                 }
                 appearanceSection

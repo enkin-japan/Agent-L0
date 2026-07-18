@@ -12,7 +12,7 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: "0.16.0"
-    CURRENT_PROJECT_VERSION: "58"
+    CURRENT_PROJECT_VERSION: "59"
     ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
 # 块级 Markdown 渲染（标题/列表/表格/引用等 GFM）——AttributedString 只认行内语法

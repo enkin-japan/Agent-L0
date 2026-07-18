@@ -8,6 +8,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from .schemas import (
     ChatResponse,
+    ApiToolSaveRequest,
+    ApiToolTestRequest,
     ApprovalRequest,
     CancelResponse,
     DeleteSessionResponse,
@@ -110,6 +112,120 @@ async def rescan_tools(request: Request):
     from framework.agents import runtime as _runtime
     result = await asyncio.to_thread(_runtime.rescan_tools)
     return {"status": True, **result}
+
+
+# ---------------- 私人 API 工具管理（api_tool_factory 管理面，UI 表单后端） ----------------
+# 铁律 4：校验/落盘/注册全在这里，客户端只渲染。写入只落数据根 api_tools/
+# （app 模式代码树在签名 bundle 里，写仓库目录=破坏签名）；仓库手写声明只读展示。
+
+
+def _atf():
+    from ..mcp.tools import api_tool_factory as factory
+    return factory
+
+
+@router.get("/api/v1/api-tools")
+async def list_api_tools(request: Request):
+    """全部声明清单（仓库手写 + UI 添加），含注册状态与坏声明原因。密钥永不回传，
+    只回传 has_secret（是否已配）。"""
+    factory = _atf()
+    registered = request.app.state.mcp_registry.tool_names()
+    items = []
+    for item in (factory.load_declarations(factory.DECL_DIR, "repo")
+                 + factory.load_declarations(factory.user_decl_dir(), "user")):
+        decl = item["decl"] if isinstance(item["decl"], dict) else {}
+        name = decl.get("name")
+        auth = decl.get("auth") or {}
+        method = str(decl.get("method") or "GET").upper()
+        ra = decl.get("requires_approval")
+        items.append({
+            "file": item["file"], "source": item["source"], "problem": item["problem"],
+            "name": name, "description": decl.get("description"),
+            "endpoint": decl.get("endpoint"), "method": method,
+            "enabled": decl.get("enabled", True) is not False,
+            "params": decl.get("params") or {},
+            "headers": decl.get("headers") or {},
+            "timeout": decl.get("timeout"),
+            "auth_env": auth.get("env") or None,
+            "auth_header": auth.get("header") or None,
+            "auth_format": auth.get("format") or None,
+            "has_secret": bool(auth.get("env")) and bool(factory.read_secret(str(auth.get("env")))),
+            "requires_approval": bool(ra) if ra is not None else method in factory._MUTATING,
+            "has_canary": decl.get("canary") is not None,
+            "registered": bool(name) and name in registered,
+        })
+    return {"status": True, "tools": items}
+
+
+@router.post("/api/v1/api-tools")
+async def save_api_tool(request: Request, body: ApiToolSaveRequest):
+    """保存（upsert）一份 UI 声明并尽力即时上架。effect：
+    registered=已注册可用｜unavailable=已保存但探活未过｜saved_disabled=已保存停用｜
+    restart_required=覆盖了已注册工具（rescan 只增不删，重启生效）。"""
+    import yaml as _yaml
+    factory = _atf()
+    decl = body.to_decl()
+    problem = factory._validate(decl)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+    for item in factory.load_declarations(factory.DECL_DIR, "repo"):
+        if isinstance(item["decl"], dict) and item["decl"].get("name") == decl["name"]:
+            raise HTTPException(status_code=409,
+                                detail="仓库 api_tools/ 已有同名手写声明，UI 不覆盖")
+    if body.secret and decl.get("auth"):
+        factory.write_secret(str(decl["auth"]["env"]), body.secret)
+    user_dir = factory.user_decl_dir()
+    user_dir.mkdir(parents=True, exist_ok=True)
+    (user_dir / f"{decl['name']}.yaml").write_text(
+        _yaml.safe_dump(decl, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    registry = request.app.state.mcp_registry
+    if decl["name"] in registry.tool_names():
+        return {"status": True, "effect": "restart_required"}
+    if decl.get("enabled", True) is False:
+        return {"status": True, "effect": "saved_disabled"}
+    tool = factory.synth_class(decl, f"data/api_tools/{decl['name']}.yaml")()
+    ok = await asyncio.to_thread(registry.load_tool, tool)
+    if ok:
+        request.app.state.orchestrator.refresh_tools_declaration()
+        return {"status": True, "effect": "registered"}
+    return {"status": True, "effect": "unavailable",
+            "detail": "已保存但探活未过（密钥缺失？），补齐后 rescan 可上架"}
+
+
+@router.post("/api/v1/api-tools/test")
+async def test_api_tool(request: Request, body: ApiToolTestRequest):
+    """试调一次（不落盘）：按提交的声明真实调用并回显响应。secret 随行不保存。"""
+    factory = _atf()
+    decl = body.to_decl()
+    problem = factory._validate(decl)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+    tool = factory.synth_class(decl, "test")()
+    if body.secret is not None:
+        tool._secret_override = body.secret
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(tool.execute, **(body.arguments or {})), timeout=60)
+    except asyncio.TimeoutError:
+        return {"status": True, "result": "试调超时（60s 未响应）"}
+    return {"status": True, "result": str(result)[:4000]}
+
+
+@router.delete("/api/v1/api-tools/{name}")
+async def delete_api_tool(name: str, request: Request):
+    """删除一份 UI 声明（仓库手写声明不可经 UI 删）。已注册的实例仍在内存
+    （只增不删），重启后端才真正下架——effect 如实回传。"""
+    factory = _atf()
+    if not factory._NAME_RE.match(name):
+        raise HTTPException(status_code=400, detail="非法工具名")
+    path = factory.user_decl_dir() / f"{name}.yaml"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="声明不存在（仓库手写声明请直接改文件）")
+    path.unlink()
+    registered = name in request.app.state.mcp_registry.tool_names()
+    return {"status": True,
+            "effect": "restart_required" if registered else "deleted"}
 
 
 @router.get("/api/v1/tasks", response_model=TaskListResponse)
