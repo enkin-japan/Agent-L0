@@ -81,7 +81,13 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
     // MARK: - CLLocationManagerDelegate（manager 建在主线程，回调落主线程）
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let status = manager.authorizationStatus
         Task { @MainActor in
+            // CoreLocation 在 delegate 刚挂上时会立刻回调一次（此刻弹窗才出、状态仍
+            // .notDetermined）——这次不算数，否则会拿着未决状态判"拒绝"提前应答
+            //（实测 57：首查弹窗与"定位不可用"同屏）。只有用户点掉弹窗后的
+            // 决定性回调才唤醒等待。
+            guard status != .notDetermined else { return }
             self.authContinuation?.resume()
             self.authContinuation = nil
         }

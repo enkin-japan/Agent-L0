@@ -1770,8 +1770,12 @@ prompt，走工具按需查。
 - 与既有面的对称性：日期被动注入+get_current_time 按需 ↔ 时区被动注入+get_location
   按需——同一分类法的两次套用，架构自我解释。
 - 金测试 430（+12：client_query 通道 9 + 环境行 3）；双端 Debug 编译过；
-  macOS 57 装机、iOS 57 上传 TestFlight。**实机联调（首调弹窗→授权→回填）待用户
-  在新 app 上真跑一轮验证。**
+  macOS 57 装机、iOS 57 上传 TestFlight → VALID。
+- **〔坑·实测 57〕首查弹窗与「定位不可用」同屏**：CoreLocation 在 delegate 刚挂上时
+  会**立刻**回调一次 `locationManagerDidChangeAuthorization`（状态仍 .notDetermined，
+  弹窗才出）——等授权的 continuation 对任何回调都唤醒，拿着未决状态判「拒绝」提前
+  应答。修：`.notDetermined` 的回调不算数，只有用户点掉弹窗后的决定性回调才唤醒
+  （58 修复重发双端）。教训：**CL 授权等待必须过滤初始回调**，"回调来了"≠"用户决了"。
 
 ---
 
