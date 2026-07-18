@@ -170,3 +170,50 @@ def test_review_stamps_missing_or_corrupt_is_empty(store):
     assert dream.read_review_stamps(store) == {}
     dream.stamp_reviewed(store, [])             # 空名单不动盘
     assert not (store.notes_dir / dream.REVIEW_FILE).read_text().startswith("{\"")
+
+
+# ---------- 巡检轮转（P2b）----------
+
+def _set_stamps(store, stamps: dict):
+    store.notes_dir.mkdir(parents=True, exist_ok=True)
+    (store.notes_dir / dream.REVIEW_FILE).write_text(json.dumps(stamps))
+
+
+def test_window_prefers_changed_then_never_reviewed(store, monkeypatch):
+    monkeypatch.setattr(dream, "REVIEW_WINDOW", 2)
+    for n in ("n1", "n2", "n3"):
+        store.write(n, "d", "user", "b")
+    now = time.time()
+    # n1 巡检于写入之后（未变动）；n2 巡检远早于 mtime（变动）；n3 从未巡检
+    _set_stamps(store, {"n1": now + 60, "n2": 100.0})
+    assert dream.select_review_window(store) == ["n3", "n2"]
+
+
+def test_window_rotates_after_stamping(store, monkeypatch):
+    import os
+    monkeypatch.setattr(dream, "REVIEW_WINDOW", 2)
+    now = time.time()
+    for n in ("n1", "n2", "n3", "n4"):
+        store.write(n, "d", "user", "b")
+        os.utime(store.get(n).source, (now - 1000, now - 1000))   # 回拨 mtime=旧笔记
+    # 全部已巡检且未变动（戳 > mtime），戳 n1 最旧 → 首轮窗口 [n1, n2]
+    _set_stamps(store, {n: now - 900 + i for i, n in enumerate(("n1", "n2", "n3", "n4"))})
+    assert dream.select_review_window(store) == ["n1", "n2"]
+    dream.stamp_reviewed(store, ["n1", "n2"])                     # 重盖=now，变最新
+    assert dream.select_review_window(store) == ["n3", "n4"]   # 轮转前进，尾部总会轮到
+
+
+def test_maybe_dream_stamps_window_on_clean(store):
+    store.write("solo-note", "d", "user", "b")
+    _stamp(store, hours_ago=48)
+    eng = _Engine("CLEAN")
+    asyncio.run(dream.maybe_dream(eng, {"min_hours": 24, "min_new_notes": 1}))
+    assert "solo-note" in dream.read_review_stamps(store)
+
+
+def test_maybe_dream_empty_output_stamps_nothing(store):
+    store.write("solo-note", "d", "user", "b")
+    _stamp(store, hours_ago=48)
+    eng = _Engine("")
+    asyncio.run(dream.maybe_dream(eng, {"min_hours": 24, "min_new_notes": 1}))
+    assert dream.read_review_stamps(store) == {}   # 没看成不装看过

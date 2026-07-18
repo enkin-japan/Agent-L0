@@ -126,11 +126,36 @@ def stamp_reviewed(store, names: List[str]) -> None:
 
 # ---------- 输入装配 / 输出解析 / 应用 ----------
 
-def _render_notes(store) -> str:
-    """把笔记本铺成模型可读清单；超预算时优先保「自动抢救+改动嫌疑」的条目。"""
+REVIEW_WINDOW = 12   # 每梦巡检名额：窗口有界，靠盖戳轮转保证每条笔记总会轮到
+
+
+def _note_mtime(store, name: str) -> float:
+    try:
+        note = store.get(name)
+        if note is not None and note.source:
+            return note.source.stat().st_mtime
+    except OSError:
+        pass
+    return 0.0
+
+
+def select_review_window(store) -> List[str]:
+    """巡检窗口（P2b）：①改动过（mtime > 巡检戳，含从未巡检）优先；②余下名额给
+    巡检戳最旧的——旧版「通读全本 + 8k 截断」让尾部笔记永远轮不到，轮转修掉它。"""
+    stamps = read_review_stamps(store)
+    names = list(store.names())
+    changed = [n for n in names if _note_mtime(store, n) > stamps.get(n, 0.0)]
+    changed.sort(key=lambda n: stamps.get(n, 0.0))
+    rest = sorted((n for n in names if n not in set(changed)),
+                  key=lambda n: stamps.get(n, 0.0))
+    return (changed + rest)[:REVIEW_WINDOW]
+
+
+def _render_notes(store, window: List[str]) -> str:
+    """把巡检窗口铺成模型可读清单；超预算时优先保「自动抢救」条目（截断兜底）。"""
     blocks: List[str] = []
     rescued_first = sorted(
-        store.names(),
+        window,
         key=lambda n: 0 if RESCUE_MARK in (store.get(n).body or "") else 1)
     for name in rescued_first:
         note = store.get(name)
@@ -218,8 +243,9 @@ async def maybe_dream(engine, cfg: Dict) -> int:
     ok, why = check_gates(store, cfg)
     if not ok:
         return 0
-    print(f"[Dream] 闸门放行（{why}），开始整理笔记本")
-    content = _render_notes(store)
+    window = select_review_window(store)
+    print(f"[Dream] 闸门放行（{why}），巡检窗口 {len(window)} 条")
+    content = _render_notes(store, window)
     if not content.strip():
         _write_stamp(store.notes_dir, 0)
         return 0
@@ -232,6 +258,7 @@ async def maybe_dream(engine, cfg: Dict) -> int:
     if not (out or "").strip():
         return 0  # 空输出（被抢占/异常）：不盖时间戳，下次再试
     applied = apply_ops(store, parse_ops(out))
+    stamp_reviewed(store, window)            # 窗口内的笔记「看过了」，轮转前进
     _write_stamp(store.notes_dir, applied)   # CLEAN / 无操作也盖：看过了就消耗配额
-    print(f"[Dream] 整理完成：应用 {applied} 项操作")
+    print(f"[Dream] 整理完成：巡检 {len(window)} 条，应用 {applied} 项操作")
     return applied
