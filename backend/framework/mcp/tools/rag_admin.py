@@ -274,6 +274,42 @@ class RAGDeleteDocumentTool(BaseTool):
         return _request("DELETE", RAG_DOC_DELETE_URL, json={"source_path": source_path})
 
 
+class RAGMarkStaleTool(BaseTool):
+    """给文档打/清过时标记（只写 metadata，不动内容——标记权而非改写权）"""
+    name = "rag_mark_stale"
+    description = (
+        "Mark a document in the RAG knowledge base as OUTDATED without modifying its content, "
+        "or clear such a mark. Use this when the user tells you that stored information is "
+        "outdated or wrong (e.g. corrects an answer you gave from the knowledge base). Future "
+        "search results for this document will carry a 'STALE: <reason>' warning so answers can "
+        "be qualified, and the user sees a stale badge in the knowledge-base panel. Identify the "
+        "document by its source_path ('Path: ...' in rag_search results). Pass an empty reason "
+        "to clear an existing mark. To actually UPDATE the content, re-insert the new version "
+        "with rag_insert_document (same title, same category)."
+    )
+    requires_approval = False   # 可逆、不动内容：无须审批门
+    parameters = {
+        "properties": {
+            "source_path": {
+                "type": "string",
+                "description": "The document's backup path from search-result metadata ('Path: ...'). Must be an exact match."
+            },
+            "reason": {
+                "type": "string",
+                "description": "Short reason why it is outdated (e.g. 'user says the 2025 price list was replaced'). Empty string clears the mark."
+            }
+        },
+        "required": ["source_path", "reason"]
+    }
+
+    def is_available(self) -> bool:
+        return _RAG_ALIVE
+
+    def execute(self, source_path: str, reason: str) -> str:
+        return _request("POST", f"{RAG_BASE_URL}/api/v1/document/stale",
+                        json={"source_path": source_path, "reason": reason})
+
+
 class RAGReclassifyTool(BaseTool):
     """触发未分类文档的后台重分拣"""
     name = "rag_reclassify_unclassified"

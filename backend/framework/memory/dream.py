@@ -29,22 +29,29 @@ STAMP_FILE = ".dream_stamp.json"
 REVIEW_FILE = ".review_stamps.json"   # 每条笔记的 last_reviewed_at（P2a；P2b 巡检轮转用）
 BACKUP_DIR = ".dream_backup"
 RESCUE_MARK = "自动抢救"      # 与 compactor._flush_rescued_notes 的出处标记同一字面
+STALE_MARK = "[待确认]"       # P2c：巡检发现证据冲突时的机械标记（只标不改内容）
 MAX_OPS = 6
 _BODY_SNIPPET = 400
+_EVIDENCE_SNIPPET = 240
 _CONTENT_CAP = 8000
 
 DREAM_INSTRUCTION = (
     "You are tidying your own long-term notebook. Below are your notes "
-    "(NAME / TYPE / DESCRIPTION / BODY). Identify ONLY clear problems: an "
+    "(NAME / TYPE / DESCRIPTION / BODY, some with EVIDENCE recalled from your "
+    "conversation archive). Identify ONLY clear problems: an "
     "auto-rescued note (body contains '自动抢救') whose fact is already covered "
     "by another note; two notes stating the same fact; a note whose wording is "
-    "vague or uses relative dates. Output one operation per line, at most "
-    f"{MAX_OPS}, chosen from exactly these two forms:\n"
+    "vague or uses relative dates; a note whose EVIDENCE clearly contradicts or "
+    "supersedes it. Output one operation per line, at most "
+    f"{MAX_OPS}, chosen from exactly these three forms:\n"
     "DROP: name | why it is redundant\n"
     "REWRITE: name | user|feedback|project|reference | one-line description | "
     "single-line body with absolute dates\n"
-    "Never invent new note names. If the notebook is already clean, output "
-    "exactly: CLEAN\nOutput nothing else."
+    "STALE: name | which EVIDENCE contradicts it\n"
+    "Use STALE ONLY when the attached EVIDENCE contradicts the note — it flags "
+    "the note for the user to confirm; NEVER rewrite a fact's content without "
+    "evidence. Never invent new note names. If the notebook is already clean, "
+    "output exactly: CLEAN\nOutput nothing else."
 )
 
 
@@ -151,9 +158,10 @@ def select_review_window(store) -> List[str]:
     return (changed + rest)[:REVIEW_WINDOW]
 
 
-def _render_notes(store, window: List[str]) -> str:
+def _render_notes(store, window: List[str], evidence: Dict[str, str] = None) -> str:
     """把巡检窗口铺成模型可读清单；超预算时优先保「自动抢救」条目（截断兜底）。"""
     blocks: List[str] = []
+    evidence = evidence or {}
     rescued_first = sorted(
         window,
         key=lambda n: 0 if RESCUE_MARK in (store.get(n).body or "") else 1)
@@ -162,12 +170,29 @@ def _render_notes(store, window: List[str]) -> str:
         body = (note.body or "").strip()
         if len(body) > _BODY_SNIPPET:
             body = body[:_BODY_SNIPPET] + "…"
-        blocks.append(f"NAME: {note.name}\nTYPE: {note.type}\n"
-                      f"DESCRIPTION: {note.description}\nBODY: {body}")
+        block = (f"NAME: {note.name}\nTYPE: {note.type}\n"
+                 f"DESCRIPTION: {note.description}\nBODY: {body}")
+        if evidence.get(name):
+            block += f"\nEVIDENCE: {evidence[name]}"
+        blocks.append(block)
         if sum(len(b) + 2 for b in blocks) > _CONTENT_CAP:
             blocks.append("(…notebook truncated for length; tidy what you see)")
             break
     return "\n\n".join(blocks)
+
+
+def _gather_evidence(store, window: List[str]) -> Dict[str, str]:
+    """机械层为窗口内笔记召回对话记录证据（P2c）。fail-open：召回不到 = 无证据。"""
+    out: Dict[str, str] = {}
+    for name in window:
+        note = store.get(name)
+        if note is None:
+            continue
+        frags = rag_sink.recall_memory(
+            f"{note.description} {(note.body or '')[:160]}")
+        if frags:
+            out[name] = " / ".join(f[:_EVIDENCE_SNIPPET] for f in frags)
+    return out
 
 
 def parse_ops(text: str) -> List[Tuple[str, List[str]]]:
@@ -183,6 +208,10 @@ def parse_ops(text: str) -> List[Tuple[str, List[str]]]:
             parts = [p.strip() for p in ln[8:].split("|", 3)]
             if len(parts) == 4 and all(parts):
                 ops.append(("rewrite", parts))
+        elif ln.upper().startswith("STALE:"):
+            parts = [p.strip() for p in ln[6:].split("|", 1)]
+            if len(parts) == 2 and all(parts):
+                ops.append(("stale", parts))
         if len(ops) >= MAX_OPS:
             break
     return ops
@@ -205,6 +234,18 @@ def apply_ops(store, ops: List[Tuple[str, List[str]]]) -> int:
             _backup(note, backup_dir)
             if store.delete(name):
                 applied += 1
+        elif kind == "stale":
+            # 只标不改（P2c 红线：无证据不许改事实，有证据也只到「请用户确认」为止）：
+            # 机械前缀打在 description 上——笔记索引注入提示词，agent 下轮对话自然看见
+            if (note.description or "").startswith(STALE_MARK):
+                continue  # 已标过，幂等
+            _backup(note, backup_dir)
+            try:
+                store.write(name, f"{STALE_MARK} {note.description}",
+                            note.type, note.body or "")
+                applied += 1
+            except Exception as e:
+                print(f"[Dream] 标记 {name!r} 失败（跳过）: {e}")
         else:  # rewrite
             _, type_, desc, body = parts
             if type_ not in NOTE_TYPES:
@@ -245,7 +286,8 @@ async def maybe_dream(engine, cfg: Dict) -> int:
         return 0
     window = select_review_window(store)
     print(f"[Dream] 闸门放行（{why}），巡检窗口 {len(window)} 条")
-    content = _render_notes(store, window)
+    evidence = _gather_evidence(store, window)
+    content = _render_notes(store, window, evidence)
     if not content.strip():
         _write_stamp(store.notes_dir, 0)
         return 0

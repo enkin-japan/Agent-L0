@@ -907,6 +907,42 @@ async def delete_document_by_path(source_path: str = Body(embed=True)):
         ), "deleted_chunks": 0}
     return {"msg": f"全库扫描清理完毕，共删除 {deleted_chunks} 个切片", "deleted_chunks": deleted_chunks}
 
+class StaleRequest(BaseModel):
+    source_path: str
+    reason: str = ""   # 空 = 取消标记
+
+
+@app.post("/api/v1/document/stale", tags=["数据治理"])
+async def mark_document_stale(req: StaleRequest):
+    """过时标记（U3）：只写 metadata 不动内容——agent 对数据只有标记权没有改写权。
+
+    检索结果与管理面板据此带出警示；reason 传空串即取消标记。恒写 stale 键
+    （空串=无标记），不依赖「update 能否删键」的 Chroma 版本行为。
+    """
+    client = get_chroma_client()
+    stale_val = req.reason.strip()
+    stale_at = time.strftime("%Y-%m-%d") if stale_val else ""
+    updated = 0
+    for col_info in client.list_collections():
+        col = client.get_collection(col_info.name)
+        try:
+            matched = col.get(where={"source_path": req.source_path})
+            ids = matched["ids"]
+            if not ids:
+                continue
+            metas = [{**dict(m or {}), "stale": stale_val, "stale_at": stale_at}
+                     for m in matched["metadatas"]]
+            col.update(ids=ids, metadatas=metas)
+            updated += len(ids)
+        except Exception as e:
+            logger.error(f"标记库 {col_info.name} 时出错: {e}")
+    if updated == 0:
+        return {"msg": ("未找到匹配该 source_path 的任何切片。请先用检索接口确认"
+                        "元数据中 'Path: ...' 的精确值后重试。"), "updated_chunks": 0}
+    verb = "已标记过时" if stale_val else "已取消过时标记"
+    return {"msg": f"{verb}（{updated} 个切片）", "updated_chunks": updated}
+
+
 @app.post("/api/v1/governance/reclassify", tags=["数据治理"])
 async def trigger_reclassification(background_tasks: BackgroundTasks):
     COMPUTE.ensure_ready()   # 重分拣要算向量：计算面不可达时当场 503

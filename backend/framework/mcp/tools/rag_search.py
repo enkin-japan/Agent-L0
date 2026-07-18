@@ -33,10 +33,12 @@ def format_results(query: str, category: str, docs: list) -> tuple:
         source_path = metadata.get("source_path") or "Unknown"
         created = str(metadata.get("created_at") or "")[:10]   # 日期粒度足够判时效
         ingested = f", Ingested: {created}" if created else ""
+        stale = str(metadata.get("stale") or "")               # U3：非空 = 已被标记过时
+        stale_tag = f", STALE: {stale}" if stale else ""
 
         formatted_context += (
             f"--- Result {i+1} (Match Score: {score:.2f}, Source: {source}"
-            f"{ingested}, Path: {source_path}) ---\n"
+            f"{ingested}{stale_tag}, Path: {source_path}) ---\n"
             f"{doc_text}\n\n"
         )
         cite = {
@@ -48,6 +50,8 @@ def format_results(query: str, category: str, docs: list) -> tuple:
         }
         if created:
             cite["created_at"] = created
+        if stale:
+            cite["stale"] = stale
         citations.append(cite)
     return formatted_context.strip(), citations
 

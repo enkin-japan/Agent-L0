@@ -21,6 +21,7 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "get_note_store", lambda: st)
     import framework.memory.rag_sink as sink
     monkeypatch.setattr(sink, "sediment_note", lambda *a, **k: False)
+    monkeypatch.setattr(sink, "recall_memory", lambda *a, **k: [])
     return st
 
 
@@ -217,3 +218,43 @@ def test_maybe_dream_empty_output_stamps_nothing(store):
     eng = _Engine("")
     asyncio.run(dream.maybe_dream(eng, {"min_hours": 24, "min_new_notes": 1}))
     assert dream.read_review_stamps(store) == {}   # 没看成不装看过
+
+
+# ---------- 证据对照 + STALE（P2c）----------
+
+def test_parse_stale_op():
+    ops = dream.parse_ops("STALE: a-note | 2026-07 对话说项目已改名\nSTALE: bad |")
+    assert ops == [("stale", ["a-note", "2026-07 对话说项目已改名"])]
+
+
+def test_stale_marks_description_only_and_is_idempotent(store):
+    store.write("fact", "项目叫 X", "project", "项目名为 X（手写）")
+    applied = dream.apply_ops(store, [("stale", ["fact", "对话记录冲突"])])
+    note = store.get("fact")
+    assert applied == 1
+    assert note.description.startswith(dream.STALE_MARK)     # 标在描述上，下轮提示词可见
+    assert note.body == "项目名为 X（手写）"                  # 内容一个字不动
+    backups = list((store.notes_dir / dream.BACKUP_DIR).glob("*/fact*"))
+    assert backups, "标记前未备份"
+    # 再标一次：幂等跳过，不叠前缀
+    assert dream.apply_ops(store, [("stale", [ "fact", "again"])]) == 0
+    assert store.get("fact").description.count(dream.STALE_MARK) == 1
+
+
+def test_render_attaches_evidence_line(store):
+    store.write("fact", "d", "project", "b")
+    out = dream._render_notes(store, ["fact"], {"fact": "对话片段：项目已改名 Y"})
+    assert "EVIDENCE: 对话片段：项目已改名 Y" in out
+    out2 = dream._render_notes(store, ["fact"], {})
+    assert "EVIDENCE" not in out2                            # 无证据不留空行头
+
+
+def test_maybe_dream_gathers_evidence_into_prompt(store, monkeypatch):
+    import framework.memory.rag_sink as sink
+    store.write("fact", "项目名", "project", "项目名为 X")
+    _stamp(store, hours_ago=48)
+    monkeypatch.setattr(sink, "recall_memory", lambda *a, **k: ["记录：项目改名为 Y"])
+    eng = _Engine("STALE: fact | evidence contradicts")
+    applied = asyncio.run(dream.maybe_dream(eng, {"min_hours": 24, "min_new_notes": 1}))
+    assert applied == 1
+    assert store.get("fact").description.startswith(dream.STALE_MARK)

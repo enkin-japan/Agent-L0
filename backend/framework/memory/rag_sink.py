@@ -12,6 +12,8 @@
 - 类目 agent_memory 幂等 upsert：首次沉淀或启动时确保存在；应在 MCPRegistry 初始化前
   于启动阶段 ensure 一次，好让 rag_search 在启动探测类目时就能把它列入可选召回类目。
 """
+from typing import List
+
 import requests
 
 from ..utils.config_loader import load_section, rag_auth_headers
@@ -91,6 +93,31 @@ def sediment_note(name: str, description: str, type_: str, body: str) -> bool:
     except Exception as e:
         print(f"[Notes] 笔记入 RAG 失败（文件已落盘，不影响记忆本身）: {e}")
         return False
+
+
+def recall_memory(query_text: str, top_k: int = 2) -> List[str]:
+    """从 agent_memory 类目召回相关对话记录片段（P2c：dream 巡检的证据对照）。
+
+    红线：dream 的证据只许来自 agent 自己的记忆——软路由可能把用户知识库也
+    捞进候选，按 db 字段硬过滤。fail-open 返回 []（没证据就不标 STALE，宁漏勿假）。
+    """
+    q = (query_text or "").strip()
+    if not q:
+        return []
+    try:
+        resp = requests.post(
+            f"{_BASE_URL}/api/v1/document/query",
+            json={"query": q[:300],
+                  "category": "agent memory of past conversations",
+                  "optimized_query": q[:120],
+                  "rerank_top_k": top_k},
+            headers=rag_auth_headers(), timeout=20)
+        resp.raise_for_status()
+        return [str(item.get("document") or "")[:240]
+                for item in resp.json().get("results", [])
+                if item.get("db") == MEMORY_CATEGORY][:top_k]
+    except Exception:
+        return []
 
 
 def sediment(text: str, title: str) -> bool:

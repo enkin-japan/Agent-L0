@@ -34,3 +34,11 @@ def test_mixed_batch_keeps_order_and_score_format():
     assert text.index("Result 1") < text.index("Result 2")
     assert "Match Score: 0.91" in text and "Match Score: 0.35" in text
     assert len(cites) == 2 and cites[1].get("created_at") is None
+
+
+def test_stale_mark_surfaces_in_header_and_citation():
+    text, cites = format_results("q", "c", [_doc(stale="2026-07 用户指出价目表已换版")])
+    assert "STALE: 2026-07 用户指出价目表已换版" in text
+    assert cites[0]["stale"] == "2026-07 用户指出价目表已换版"
+    clean_text, clean_cites = format_results("q", "c", [_doc()])
+    assert "STALE" not in clean_text and "stale" not in clean_cites[0]
