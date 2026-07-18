@@ -354,6 +354,12 @@ agent:
     min_hours: 24             # 距上次整理至少这么久才再触发
     min_new_notes: 4          # 且新增/变动笔记数达到这么多（两闸同过才整理）
 
+  drift_patrol:               # 依赖时效巡检（phase 1 只报不修）：对抗外部活服务的依赖
+    enabled: true             # （yt-dlp/SearXNG/curl_cffi/playwright）canary 探针轮巡，
+    min_hours: 72             # 失效写告警笔记（经记忆索引抵达对话）。单项两测最小间隔（时）
+    fail_threshold: 2         # 连续失败达此数才告警（防单次网络抖动误报）
+    canary_timeout: 90        # 单次探针熔断（秒）
+
   thinking_mode: "dynamic"    # 思考位置策略（前端开关的语义翻译，orchestrator 生效；沙箱/摘要不受影响）：
                               # dynamic=关思考→首轮自动思考+后续关闭；开思考→全程常开（前端语义重定义，零前端改动）
                               # first_only=关→全不思考；开→仅首轮思考

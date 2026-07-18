@@ -1664,8 +1664,39 @@ T2→T1→T6 六 commit（`078159e`…`82b0a8c`），金测试 352→386，T3/T2
 隔离实例冒烟（14170 + scratch 数据根 + 复用在线计算面，用完即收）。冒烟坑一枚备忘：
 **带状态的 scratch 库跨轮复用会被上一轮失败残留骗过**（wait 条件被旧文档立即满足→
 标记打在旧文档上→U1 替换把带标记切片删掉，症状酷似「update 不生效」）——失败重跑
-先换全新数据根。App 面板（P1 Swift 层）已入库待打包：**build 55 待用户点头**（打包会
-重启正在实测的 app，不擅自动）。
+先换全新数据根。App 面板（P1 Swift 层）已入库待打包：~~build 55 待用户点头~~ ✅
+用户点头后已打包安装（`d7fc204`，CFBundleVersion=55 实机验证）。
+
+### 依赖时效巡检波：drift patrol phase 1（2026-07-18 用户拍板「采纳建议，第二阶段记一笔」）
+
+**核心区分**：「过时=缺陷」只发生在**对抗活的外部服务**的依赖上（A 类 adversarial：
+yt-dlp/SearXNG/curl_cffi/playwright+系统Chrome——版本不动世界一变就坏，且多为静默失效）；
+生态快跑但无外部漂移的 C 类（mlx/torch/chromadb/fastapi…）**过时无害、升级才是风险源**，
+永不纳入追新。方案哲学沿记忆治理波：**只报不修**——巡检有标记权（写告警笔记）没有
+改写权（永不自动升级），动环境的决定留给用户。phase 2（白名单受限自愈）已记
+`DEFERRED.md §3`，等 phase 1 跑出真实失效样本再评估。
+
+**落地形态**（单 commit）：
+- `mcp/base.py`：三声明协议 `drift_class`（adversarial/api/frozen，默认 frozen）+
+  `drift_fix`（给用户的一句修复指引）+ `canary()`（真实功能探针，未覆写=不入巡检）。
+  **声明即纳入**——新工具带声明自动入巡，无人工清单，规模化不靠人。
+- `framework/maintenance/drift_patrol.py`（新包）：空闲维护回合（app.py 与 dream 同挂载点，
+  全系统安静时）每回合最多探**一项**（canary 是真实外网 IO），单项两测间隔 ≥72h，
+  连续失败 ≥2 次才写 `drift-*` 告警笔记（防网络抖动误报；恢复即清、只碰自己前缀）——
+  笔记索引每轮注入提示词 = 现成的抵达用户路径，agent 下次对话自然告知+给修复指引。
+  状态账本 `DATA_DIR/maintenance/drift_patrol.json`，全路径 fail-open。
+- 探针三枚：media_download（probe 恒存视频「Me at the zoo」元数据）；web_research
+  （直打 SearXNG 原始 JSON 数**响应引擎数+失联名单**）；web_read（T1 curl_cffi chrome
+  指纹实抓 Cloudflare 前置页 + T2 真启系统 Chrome 渲染）。
+- 旋钮 `agent.drift_patrol`（enabled/min_hours/fail_threshold/canary_timeout）。
+
+**〔波内小结〕**金测试 408→418；三探针实机全过（yt-dlp 提取器活、chrome 指纹未被识破、
+playwright 兼容 Chrome 150）。冒烟当场抓到两件事：①**SearXNG 探针必须在原始层数引擎**——
+web_search() 的信誉重排会让 top-N 合法地由单引擎霸榜（实测 SearXNG 侧 3 引擎响应、
+重排后 top-8 全来自其一），在重排层数引擎是自造误报，探针已改直打原始 JSON；
+②实况顺带曝光 brave 引擎被上游限流（Suspended: too many requests）——这正是巡检要的
+可见化。另：冒烟时发现本机 SearXNG 未在跑（backend 编队如启动于此状态，web_research
+不会注册），临时拉起验证后已按「用完即收」停回。
 
 ---
 

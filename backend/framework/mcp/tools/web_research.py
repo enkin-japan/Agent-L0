@@ -55,6 +55,35 @@ class WebResearchTool(BaseTool):
         "required": ["query"],
     }
 
+    # 漂移巡检：SearXNG 对抗各上游搜索引擎的 HTML/反爬变化，引擎逐个**静默**失效
+    # （探活只测服务在不在，测不出结果慢性变差）——最需要显式探针的一类
+    drift_class = "adversarial"
+    drift_fix = ("cd searxng/searxng-src && git pull 后实测搜索；确认可用再把 "
+                 "scripts/lib_edge.sh 的 SEARX_COMMIT 更新为新提交（单一真相）")
+
+    def canary(self):
+        """真实功能探针：常青查询直打 SearXNG 原始 JSON，数**响应引擎数**与失联名单。
+        必须在原始层数——web_search() 的信誉重排会让 top-N 合法地由单引擎霸榜
+        （实测 2026-07-18：SearXNG 侧 2 引擎在响应，重排后 top-8 全来自其一），
+        在重排层数引擎是自造误报。"""
+        import requests
+        base = str(_CFG.get("searxng_url", "http://127.0.0.1:8080")).rstrip("/")
+        r = requests.get(f"{base}/search",
+                         params={"q": "python programming language", "format": "json"},
+                         timeout=int(_CFG.get("timeout", 15)))
+        r.raise_for_status()
+        data = r.json()
+        engines = {e for item in data.get("results", []) for e in [item.get("engine")] if e}
+        dead = ["{}（{}）".format(*x[:2]) if isinstance(x, (list, tuple)) else str(x)
+                for x in (data.get("unresponsive_engines") or [])]
+        detail = (f"{len(data.get('results', []))} 结果 / {len(engines)} 引擎响应"
+                  + (f"；失联：{'，'.join(dead[:4])}" if dead else ""))
+        if not engines:
+            return False, f"0 引擎出结果（上游引擎群疑似全体失效）——{detail}"
+        if len(engines) == 1 and dead:
+            return False, f"仅剩单引擎在撑、其余失联——{detail}"
+        return True, detail
+
     def is_available(self) -> bool:
         """SearXNG 在线且清洗依赖可用才注册；否则主体压根看不到本工具（优雅降级）。"""
         try:

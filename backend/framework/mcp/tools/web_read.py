@@ -49,6 +49,48 @@ class WebReadTool(BaseTool):
         "required": ["urls"],
     }
 
+    # 漂移巡检：抓取升级梯的两个外部对抗点挂在本工具名下——
+    # T1 curl_cffi 的 chrome TLS 指纹会被 Cloudflare 检测升级识破；
+    # T2 playwright 钉旧版本而系统 Chrome 自动更新，CDP 兼容窗有限（版本一半不受控）
+    drift_class = "adversarial"
+    drift_fix = ("backend/.venv/bin/pip install -U curl_cffi playwright"
+                 "（升级后重启 backend；T2 复用系统 Chrome，无需 playwright install）")
+
+    def canary(self):
+        """真实功能探针：T1 用 chrome 指纹抓一个 Cloudflare 前置的稳定页；
+        T2 真启动系统 Chrome 渲染空白页。任一档失效即报——阶梯降级救得了单次调用，
+        救不了覆盖率。"""
+        from ...agents import web_tools
+        parts = []
+        sess = web_tools._cffi_session()
+        if sess is None:
+            parts.append("T1 失败：curl_cffi 不可导入")
+        else:
+            try:
+                r = sess.get("https://www.cloudflare.com/", impersonate="chrome",
+                             timeout=20, allow_redirects=True)
+                if r.status_code < 400:
+                    parts.append(f"T1 ok（HTTP {r.status_code}）")
+                else:
+                    parts.append(f"T1 失败：HTTP {r.status_code}（chrome 指纹疑似被识破）")
+            except Exception as e:
+                parts.append(f"T1 失败：{type(e).__name__}: {e}")
+        try:
+            from playwright.sync_api import sync_playwright
+            pw = sync_playwright().start()
+            try:
+                browser = pw.chromium.launch(channel="chrome", headless=True)
+                ver = browser.version
+                browser.close()
+                parts.append(f"T2 ok（Chrome {ver}）")
+            finally:
+                pw.stop()
+        except Exception as e:
+            parts.append(f"T2 失败：{type(e).__name__}: {str(e)[:160]}"
+                         "（playwright 与系统 Chrome 版本疑似脱节）")
+        detail = "；".join(parts)
+        return ("失败" not in detail), detail
+
     def is_available(self) -> bool:
         """正文抽取是硬依赖；不探活 SearXNG——本工具不搜索，离线搜索层时仍可用。"""
         try:

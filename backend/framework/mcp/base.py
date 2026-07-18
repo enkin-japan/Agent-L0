@@ -56,6 +56,13 @@ class BaseTool(ABC):
     # 决定"怎么画"（铁律 4）。工具直接返回 UI 组件在本项目物理不可能——后端 Python、
     # web TS、原生 Swift 三种语言。
     render_hint: str = None
+    # 依赖漂移巡检（drift patrol，phase 1 只报不修）。对抗**活的外部服务**的工具
+    # （yt-dlp 之于视频站、SearXNG 之于搜索引擎）会因外部变化而在版本不动的情况下失效，
+    # 这类工具声明 drift_class="adversarial" 并覆写 canary()，空闲维护回合逐项轮巡；
+    # 世界不动就不坏的依赖（mlx/chromadb 等）保持默认 frozen，永不入巡检。
+    # drift_fix：canary 失败时给用户的一句修复指引（写进告警笔记正文）。
+    drift_class: str = "frozen"    # adversarial | api | frozen
+    drift_fix: str = ""
 
     def needs_approval(self, arguments: Dict[str, Any]) -> bool:
         """
@@ -72,6 +79,13 @@ class BaseTool(ABC):
         不会注册进会话（LLM 也不会看到它的 Schema）。
         """
         return True
+
+    def canary(self):
+        """真实功能探针（漂移巡检用，可选覆写）：做一次最小的**真实功能**验证
+        （is_available 只测「在不在」，canary 测「还灵不灵」——yt-dlp 装着但提取器
+        失效时前者过后者不过）。返回 (ok: bool, detail: str)；未覆写 = 不入巡检。
+        允许阻塞网络 IO（巡检方在线程里跑并带熔断）；异常按失败计，不必自兜。"""
+        return None
 
     def get_schema(self) -> Dict[str, Any]:
         """

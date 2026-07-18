@@ -148,3 +148,28 @@
 ### 承重代码指针
 `core/orchestrator.py` `_structural_reminder`（all_done 分支，目标对齐提醒）+ 写后验证门控
 （`:606-626`）+ 提前收尾门控（`:588-604`，防偷懒）。
+
+## 3. 依赖漂移巡检的受限自愈（phase 2，2026-07-18 用户拍板「第二阶段记一笔」）
+
+### 轻量版（已交付，phase 1「只报不修」）
+- `framework/maintenance/drift_patrol.py`：空闲维护回合逐项轮巡声明了 `canary()` 的工具
+  （`mcp/base.py` 的 `drift_class`/`drift_fix`/`canary` 三声明），连续失败达阈值写
+  `drift-*` 告警笔记——记忆索引每轮注入提示词，agent 下次对话自然告知用户并给修复指引。
+- 已声明探针：media_download（yt-dlp probe 恒存视频）、web_research（SearXNG 原始层
+  数响应引擎+失联名单）、web_read（T1 curl_cffi 指纹实抓 + T2 真启系统 Chrome）。
+- 旋钮 `agent.drift_patrol`（config.yaml）；金测试 `tests/test_drift_patrol.py`。
+
+### 完整版（未做）——白名单受限自愈
+- canary 失败 → 仅对 A 类（adversarial）白名单自动升级（`pip install -U yt-dlp` /
+  searxng git pull 到新 pin）→ 复跑 canary + 相关金测试子集 → 过则记账并更新 pin，
+  不过则回滚旧版本并告警。frozen 类永不自动碰（升级本身是它们唯一的风险源）。
+- 需要先解决：升级的原子回滚路径（pip 装回旧版）、金测试子集的选取契约、
+  bundle 形态下的 venv 写权限（app 的签名树内不可写，须升级在数据根侧的运行时）。
+
+### 为什么先轻量
+自动升级本身可能引入新断裂（yt-dlp 偶有 breaking release）；先让 phase 1 跑出真实失效
+样本，看告警频率与误报率，再评估自愈的 ROI。零越权也符合记忆治理波「标记权不改写权」哲学。
+
+### 重启触发条件
+1. phase 1 告警实际发生且用户手动修复步骤被证明机械可复制（≥2 次同样的修复）；
+2. 或告警频率高到手动跟进成为负担。

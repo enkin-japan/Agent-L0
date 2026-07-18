@@ -24,6 +24,7 @@ from framework.utils.file_handler import FileHandler
 from framework.utils.path_resolver import resolve_model_path, resolve_tokenizer_only_path
 from framework.memory.compactor import maybe_summarize_context
 from framework.memory import dream as notes_dream
+from framework.maintenance import drift_patrol
 from framework.api.routes import router, _maybe_summarize_active
 from framework.api.auth import verify_api_key
 
@@ -103,6 +104,12 @@ async def _idle_maintenance_loop(session_manager, scheduler, orchestrator, inter
                     orchestrator.engine, orchestrator.notes_dream_cfg)
                 if applied:
                     print(f"[Maintenance] dream 笔记整理：应用 {applied} 项操作")
+                # 依赖时效巡检（只报不修）：每回合最多探一项，节流/告警全在模块内。
+                # 不占生成位（纯网络 IO），但同样只在全系统安静时做——canary 打外网
+                # 不该与用户轮次抢带宽
+                await drift_patrol.maybe_patrol(
+                    orchestrator.registry, orchestrator.drift_patrol_cfg,
+                    DATA_DIR / "maintenance")
         except asyncio.CancelledError:
             break
         except Exception as e:

@@ -27,6 +27,10 @@ from ...agents import runtime
 # + 站点视频 id 保唯一；ext 由后处理器决定
 _OUTTMPL = "media-%(title).60B-%(id)s.%(ext)s"
 
+# 漂移巡检探针目标：YouTube 现存最老的视频（2005 "Me at the zoo"），元数据取不回
+# 基本可断定提取器被站点改坏而非视频消失
+_CANARY_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
+
 
 def build_ydl_opts(mode: str, dest_dir: Path, max_height: int = 1080,
                    max_filesize_mb: int = 2048) -> Dict[str, Any]:
@@ -111,6 +115,11 @@ class MediaDownloadTool(BaseTool):
         "required": ["url"],
     }
 
+    # 漂移巡检：yt-dlp 对抗上千视频站的提取器军备竞赛，官方近乎月更；版本不动
+    # 站点一改就坏，是全仓漂移最快的依赖
+    drift_class = "adversarial"
+    drift_fix = "backend/.venv/bin/pip install -U yt-dlp（升级后重启 backend 生效）"
+
     def is_available(self) -> bool:
         try:
             import yt_dlp  # noqa: F401
@@ -121,6 +130,17 @@ class MediaDownloadTool(BaseTool):
             print("[MCP-media_download] ⚠️ 系统缺 ffmpeg（合流/抽音轨必需），工具不注册。")
             return False
         return True
+
+    def canary(self):
+        """真实功能探针：probe 一个恒存视频的元数据（不下载）。"""
+        import yt_dlp
+        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "noplaylist": True,
+                               "socket_timeout": 30}) as ydl:
+            info = ydl.extract_info(_CANARY_URL, download=False)
+        title = (info or {}).get("title") or ""
+        if not title:
+            return False, "探针视频元数据为空（YouTube 提取器疑似被站点改坏）"
+        return True, f"probe ok: {title[:40]}"
 
     def execute(self, url: str, mode: str = "probe", max_height: int = 1080) -> str:
         import yt_dlp
