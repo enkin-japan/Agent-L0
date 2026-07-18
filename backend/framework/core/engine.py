@@ -228,6 +228,38 @@ class AgentEngine:
         print(f"[Engine] 基座前缀缓存就绪（{time.time() - t0:.1f}s，key {key[:8]}）")
         return True
 
+    async def prewarm_session_cache(self, session: ChatSession,
+                                    tools: Optional[List[Dict[str, Any]]] = None) -> bool:
+        """T1：空闲时把会话当前上下文（压缩改写后的 [system]+[摘要]+[尾部]）预填进
+        其缓存——生成 1 token 弃产出，纯为热 KV。与 generate_once 同 builder 同入参，
+        下一真实轮的前缀匹配可命中到新用户消息之前的全部内容。成功清 context_dirty。"""
+        if session.brain_memory_state is None:
+            return False
+        prompt = self.dialect.build_prompt(
+            messages=session.history, tools=tools,
+            include_env=getattr(session, "inject_env_context", False),
+            env_extra=self._notes_index(),
+        )
+        cache = session.brain_memory_state
+        loop = asyncio.get_running_loop()
+
+        def _consume():
+            for _ in self.backend.stream_generate(
+                    prompt, cache=cache,
+                    sampling={"max_tokens": 1, "temperature": 0.0},
+                    features={}):
+                pass
+
+        t0 = time.time()
+        async with self._inference_lock:
+            # 拿到锁后复检：等待期间若有用户轮进来把上下文又改了/会话冻结了，放弃本次
+            if getattr(session, "is_cold", False) or session.brain_memory_state is not cache:
+                return False
+            await loop.run_in_executor(self._inference_executor, _consume)
+        session.context_dirty = False
+        print(f"[Engine] 会话 {session.session_id} 空闲预热完成（{time.time() - t0:.1f}s）")
+        return True
+
     async def generate_once(self,
                             session: ChatSession,
                             tools: Optional[List[Dict[str, Any]]] = None,

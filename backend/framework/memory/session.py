@@ -143,6 +143,8 @@ class ChatSession:
         self.memory_file = self.session_dir / "memory.json"  # 摘要式压缩旁挂（方案A）
         # T2 冻结落盘：KV 缓存的持久化位置（会话目录内——随会话删除自然清理）
         self.kv_persist_path = self.session_dir / "kv_cache.safetensors"
+        # T1 压缩后预热：上下文被压缩改写后置 True，空闲回合预填新前缀后清掉
+        self.context_dirty = False
 
         # 摘要式压缩状态（方案A）：rolling_summary 为已折叠旧轮次的滚动摘要，
         # summarized_turns 为已并入摘要的「前导日志行数」水位线。全量日志 history.jsonl

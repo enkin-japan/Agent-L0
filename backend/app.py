@@ -67,6 +67,27 @@ async def _idle_maintenance_loop(session_manager, scheduler, orchestrator, inter
 
             # dream 式笔记整理（评估采纳）：全系统安静时才做（任何会话在忙/在调度即让路——
             # 整理梦占一次生成，不能顶到用户轮次前面）。闸门（时限+变动数）在 dream 内部。
+            # T1 压缩后空闲预热：上下文被改写（context_dirty）的热会话，趁闲把
+            # [system]+[摘要]+[尾部] 预填回缓存——把 2-4s 重预填挪出用户等待路径。
+            # 纪律与空闲摘要一致：锁+调度器低优先级，拿锁后复检
+            for sid, session in list(session_manager._all_sessions.items()):
+                if session.is_cold or not getattr(session, "context_dirty", False):
+                    continue
+                if scheduler.is_active(sid) or session.lock.locked():
+                    continue
+                async with session.lock:
+                    if session.is_cold or scheduler.is_active(sid) \
+                            or not session.context_dirty:
+                        continue
+                    await scheduler.acquire(sid, kind="prewarm", priority=-1)
+                    try:
+                        await orchestrator.prewarm_session_cache(session)
+                    except Exception as e:
+                        print(f"[Maintenance] 空闲预热失败（下一轮冷路兜底）: {e}")
+                    finally:
+                        session.cancel_requested = False
+                        await scheduler.release(sid)
+
             busy = any(
                 s.lock.locked() or scheduler.is_active(sid_)
                 for sid_, s in list(session_manager._all_sessions.items()))

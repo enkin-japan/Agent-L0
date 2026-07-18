@@ -274,4 +274,7 @@ async def maybe_summarize_context(session, engine, *, threshold_tokens: int,
     # 重建 model-facing 上下文为 [system]+[摘要]+[尾部]；旧 KV 由下次推理前缀匹配自动对齐
     # （系统前缀命中复用，摘要块起始处发散、其后重新预填充——即"只保 system 前缀复用"）。
     session.rebuild_from_log()
+    # T1：标脏——上下文已被改写，摘要块之后的重预填（M2 实测 2-4s）本会落在用户
+    # 下一轮的等待路径上；空闲维护回合看到此标志会趁闲把新前缀预填回缓存
+    session.context_dirty = True
     return fold_until - old_watermark

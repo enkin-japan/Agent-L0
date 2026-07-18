@@ -296,6 +296,10 @@ class Orchestrator:
         from ..memory.session import DEFAULT_SYSTEM_PROMPT
         return await self.engine.prewarm_base_cache(DEFAULT_SYSTEM_PROMPT, self._tools_decl)
 
+    async def prewarm_session_cache(self, session) -> bool:
+        """T1：压缩改写上下文后的空闲预热（真实轮次同款工具声明）。"""
+        return await self.engine.prewarm_session_cache(session, self._tools_decl)
+
     # ---------- 思考位置策略 ----------
     def _thinking_for_iteration(self, requested: bool, iteration: int) -> bool:
         """把前端二值思考开关翻译成本次迭代的实际思考态（策略详见 __init__ 注释）。"""
