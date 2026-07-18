@@ -45,6 +45,9 @@ rsync -a --delete --exclude='__pycache__' "$ROOT/skills/" "$RES/skills/"
 # （EDGE_RAG_DATA_DIR，SidecarManager 注入），代码目录保持只读。
 mkdir -p "$RES/rag"
 cp "$ROOT/rag/rag_server.py" "$RES/rag/rag_server.py"
+# 数据面的零重依赖伴生模块（检索增强抽层）：rag_server.py import 它，漏拷 = 包内
+# 数据面启动即 ModuleNotFoundError（build 54 组装时实测抓到，S.11）
+cp "$ROOT/rag/retrieval_extras.py" "$RES/rag/retrieval_extras.py"
 # 运行时（已按 hardened runtime 逐 Mach-O 签名，ditto 保留符号链接与权限）
 rm -rf "$RES/python"
 ditto "$RUNTIME" "$RES/python"

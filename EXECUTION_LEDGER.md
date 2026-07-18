@@ -1620,6 +1620,10 @@ T2→T1→T6 六 commit（`078159e`…`82b0a8c`），金测试 352→386，T3/T2
 冒烟闭环（新会话首字 60×、落盘恢复即时、OpenAI 三端点通）。细节与坑记
 `HETERO_COMPUTE.md` §9.1R/§9.5；遗留待决 Q9（远程 KV 落盘 vs 隐私边界）。
 
+**〔再续〕Q9 用户拍板折中（a+开关）当天落地**（`0dee631`，金测试 389，HTTP 全链
+冒烟通过）；**build 54 已打包安装**（含本两波全部 backend/rag 改动 + kv_persist 配置；
+组装时抓到 retrieval_extras.py 漏拷即 S.11，已修入 bundle-macos.sh）。
+
 | | 风险 | 缓解 |
 |---|---|---|
 | **1** | 「AI 写代码所以工作量不是问题」——**在新增上成立，在承重代码上不成立**。护栏参数「全是实测调的」（`CHARTER.md:42`），瓶颈是实测不是打字 | §D.4 一次只开一项；每项验收要人在回路 |
@@ -1761,6 +1765,16 @@ chart-report 二调畸形全是它的下游症状，伪装成三个不相干的�
 测消费方实例化后的认账结果（`YoutubeDL(opts).params.get("restrictfilenames")`）。
 kwargs/TypedDict 有拼写保护，字符串键字典没有——凡「配置以 dict 交给第三方」的
 守护项都该这么钉。同型风险：ffmpeg 参数、requests kwargs、playwright options。
+
+### S.11 · bundle 的单文件拷贝不会自动带上新依赖（2026-07-18）
+
+`bundle-macos.sh` 对 rag 数据面是**逐文件 cp**（只支持拆分模式、torch 不进包的刻意
+设计）。上波给 `rag_server.py` 抽了零依赖伴生模块 `retrieval_extras.py`，打 build 54
+时包里没有它——**包内数据面启动即 ModuleNotFoundError，而组装/签名/安装全程无警告**
+（S.5「打包后的失败是静默的」的又一变体）。当场在安装验证一步抓到（用包内 python
+实际 import），已补拷贝并重装。**教训**：给单文件拷贝的入口添加伴生模块时，打包脚本
+是必须同步的第三处（代码 + 金测试 + 打包清单）；bundle 验收永远要用包内解释器实测
+import/启动，不能只看装上了。
 
 ### S.2 · `git add -A` 会扫进不属于本次改动的东西（2026-07-15）
 
