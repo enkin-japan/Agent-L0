@@ -71,6 +71,13 @@ async def _idle_maintenance_loop(session_manager, scheduler, orchestrator, inter
                 s.lock.locked() or scheduler.is_active(sid_)
                 for sid_, s in list(session_manager._all_sessions.items()))
             if not busy:
+                # T3 基座前缀缓存：幂等重建（工具集 rescan 变化后 key 变才真跑，
+                # 平时是纯哈希比较的 no-op）
+                try:
+                    if await orchestrator.prewarm_base_cache():
+                        print("[Maintenance] 基座前缀缓存已重建（工具集/提示词变化）")
+                except Exception as e:
+                    print(f"[Maintenance] 基座前缀预填失败（冷路兜底）: {e}")
                 applied = await notes_dream.maybe_dream(
                     orchestrator.engine, orchestrator.notes_dream_cfg)
                 if applied:
@@ -366,6 +373,16 @@ async def lifespan(app: FastAPI):
         _idle_maintenance_loop(session_manager, scheduler, orchestrator)
     )
     app.state.maintenance_task = maintenance_task
+
+    # 6b. T3 基座前缀缓存：启动即后台预填（~16s，M5 实测 9424 token）。用户若抢先
+    # 开聊，其首轮在推理锁上排队——但排的正是同一段前缀的预填工作，总时长不变；
+    # 预填先完成则此后每个新会话省下整段冷预填。失败只损失优化，冷路兜底。
+    async def _startup_prewarm():
+        try:
+            await orchestrator.prewarm_base_cache()
+        except Exception as e:
+            print(f"[App] 基座前缀预填失败（冷路兜底）: {e}")
+    app.state.base_prewarm_task = asyncio.create_task(_startup_prewarm())
 
     # 6.1 清理层：确定性磁盘回收的后台清扫（默认自动过期、pin 才长留；见 config.session_cleanup）。
     #     依赖 session_manager.scheduler（已于上方注入），故置于其后；recover_inflight_turns 已先行。

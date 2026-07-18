@@ -1,5 +1,7 @@
 import asyncio
+import hashlib
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Optional, Callable
 
@@ -99,6 +101,12 @@ class AgentEngine:
         self._inference_executor = _executor or ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="inference")
 
+        # T3 基座前缀缓存：system+tools 稳定前缀（M5 实测 9424 token，冷预填 ~16s，
+        # 克隆 ~10ms）的共享预填缓存。app 启动与空闲回合经 prewarm_base_cache 装配
+        # （key 未变即 no-op），主编排会话的处女缓存在 generate_once 改为克隆它起步。
+        self._base_cache = None
+        self._base_cache_key: Optional[str] = None
+
     # 装配便利面（app.py 依赖注入用）：模型与处理器由后端持有
     @property
     def model(self):
@@ -123,6 +131,78 @@ class AgentEngine:
             # 记忆索引取不到只是"这轮想不起来"，绝不能因此让生成失败
             print(f"[Engine] ⚠️ 取长期记忆索引失败（本轮不注入）: {e}")
             return None
+
+    # ---------- T3 基座前缀缓存 ----------
+
+    @staticmethod
+    def _cache_is_virgin(handle) -> bool:
+        """缓存从未被预填过（新建会话或解冻后的首轮）。MLX 句柄看 state.cache，
+        远程句柄看懒注册的 cache_id；未知形状一律按非处女处理（绝不动别人的缓存）。"""
+        st = getattr(handle, "state", None)
+        if st is not None:
+            return getattr(st, "cache", None) is None
+        if hasattr(handle, "cache_id"):
+            return handle.cache_id is None
+        return False
+
+    def _adopt_base_cache(self, session: ChatSession) -> None:
+        """处女缓存换成基座克隆起步：9.4k token 的 system+tools 预填直接命中。
+        克隆走后端 clone_cache（与会话分支同一前例，session.py clone_brain_memory_from）；
+        失败/不支持一律静默回退冷启动，正确性不受影响。"""
+        if self._base_cache is None or session.brain_memory_state is None:
+            return
+        if not self._cache_is_virgin(session.brain_memory_state):
+            return
+        try:
+            cloned = self.backend.clone_cache(self._base_cache)
+        except Exception as e:
+            print(f"[Engine] 基座缓存克隆失败（本轮冷启动）: {e}")
+            return
+        if cloned is None:
+            return
+        old = session.brain_memory_state
+        session.brain_memory_state = cloned
+        try:
+            self.backend.release_cache(old)
+        except Exception:
+            pass
+        print(f"[Engine] 会话 {getattr(session, 'session_id', '?')} 起步于基座前缀缓存")
+
+    async def prewarm_base_cache(self, system_prompt: str,
+                                 tools: Optional[List[Dict[str, Any]]] = None) -> bool:
+        """预填基座前缀（system+tools，与真实轮次同一 builder 同一入参）。
+
+        幂等：key（prompt 内容哈希）未变时 no-op，空闲回合可放心反复调；工具集变化
+        （rescan 增减工具）时自动重建并释放旧基座。预填多出的尾部小段（日期块+生成头
+        +1 token）由自动前缀匹配在真实轮次首用时裁掉，无需专门的 prefix-only 构建。
+        返回是否真正做了预填。"""
+        prompt = self.dialect.build_prompt(
+            messages=[{"role": "system", "content": system_prompt}],
+            tools=tools, include_env=False)
+        key = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        if key == self._base_cache_key and self._base_cache is not None:
+            return False
+        cache = self.backend.new_cache()
+        loop = asyncio.get_running_loop()
+
+        def _consume():
+            for _ in self.backend.stream_generate(
+                    prompt, cache=cache,
+                    sampling={"max_tokens": 1, "temperature": 0.0},
+                    features={}):
+                pass
+
+        t0 = time.time()
+        async with self._inference_lock:
+            await loop.run_in_executor(self._inference_executor, _consume)
+        old, self._base_cache, self._base_cache_key = self._base_cache, cache, key
+        if old is not None:
+            try:
+                self.backend.release_cache(old)
+            except Exception:
+                pass
+        print(f"[Engine] 基座前缀缓存就绪（{time.time() - t0:.1f}s，key {key[:8]}）")
+        return True
 
     async def generate_once(self,
                             session: ChatSession,
@@ -152,6 +232,11 @@ class AgentEngine:
           name 字段的瞬间调用一次——执行前就知道要调什么。
           三个回调均在主事件循环线程被调（推理线程经 call_soon_threadsafe 跳转）。
         """
+        # T3：主编排会话的处女缓存改为克隆基座起步（沙箱替身系统提示不同，不采用——
+        # 克隆了也只会在前缀匹配处几乎全裁掉，白付一次拷贝）
+        if getattr(session, "inject_env_context", False):
+            self._adopt_base_cache(session)
+
         formatted_prompt = self.dialect.build_prompt(
             messages=session.history,
             tools=tools,

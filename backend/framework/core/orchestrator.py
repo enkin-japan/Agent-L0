@@ -287,6 +287,15 @@ class Orchestrator:
         # full 模式：全部工具完整 schema 常驻（当前工具规模下更省 token 且缓存更稳）
         return list(self.registry.get_all_schemas()) + [UPDATE_PLAN_SCHEMA, COMPLETE_STEP_SCHEMA, REMEMBER_SCHEMA]
 
+    async def prewarm_base_cache(self) -> bool:
+        """T3：以真实轮次同款入参（默认系统提示 + 当前工具声明）预填基座前缀缓存。
+
+        幂等（engine 按内容 key 判断），app 启动与空闲回合都可调；工具集经 rescan
+        变化后 key 变，下次调用自动重建。自定义系统提示的会话不匹配基座——前缀匹配
+        自然回退，只是享受不到，无正确性问题。"""
+        from ..memory.session import DEFAULT_SYSTEM_PROMPT
+        return await self.engine.prewarm_base_cache(DEFAULT_SYSTEM_PROMPT, self._tools_decl)
+
     # ---------- 思考位置策略 ----------
     def _thinking_for_iteration(self, requested: bool, iteration: int) -> bool:
         """把前端二值思考开关翻译成本次迭代的实际思考态（策略详见 __init__ 注释）。"""
