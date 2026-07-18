@@ -1712,6 +1712,7 @@ web_search() 的信誉重排会让 top-N 合法地由单引擎霸榜（实测 Se
 macOS 专属刻意不发；**55 的知识库面板是共享 Sources 且菜单入口无平台守卫，iOS 可达
 ——需发 TestFlight 55**。iOS 模拟器 Debug 编译验证通过；release-ios.sh 因签名钥匙串+
 对外上传被会话权限拦截，留用户手跑（管线本身 48/49/52 三次验证过，无人值守）。
+用户当轮手跑：Upload succeeded → wait-testflight 轮询 **VALID**，TestFlight 55 已发 ✅。
 
 ---
 
