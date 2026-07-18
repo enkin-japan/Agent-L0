@@ -700,6 +700,13 @@ class SessionManager:
             self.scheduler.discard(session_id)  # 清理调度句柄，防止状态表泄漏
 
         session_dir = self.sessions_dir / session_id
+        # Q9-a：远程后端的 KV 落盘产物在服务端 kvstore/，不随本地目录删除——
+        # best-effort 通知清理（失败无害：服务端文件本可随时清空）
+        if self.backend is not None and hasattr(self.backend, "drop_persisted"):
+            try:
+                self.backend.drop_persisted(str(session_dir / "kv_cache.safetensors"))
+            except Exception:
+                pass
         if session_dir.exists():
             try:
                 shutil.rmtree(session_dir)

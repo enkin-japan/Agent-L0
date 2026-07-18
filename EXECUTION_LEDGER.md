@@ -1638,7 +1638,7 @@ T2→T1→T6 六 commit（`078159e`…`82b0a8c`），金测试 352→386，T3/T2
 | ~~**Q6**~~ | **已定 → D.14**：整条音频路移 A（原问法有误：torch 是被 silero-vad 钉住的，不是 whisper——去掉 whisper 几乎不省空间） | ~~R5-2~~ ✅ |
 | ~~**Q7**~~ | **已定 → D.16**：`AGENT_DATA_DIR` 旋钮，dev 默认仓库内、app 注入 App Support | ~~R5-4~~ ✅ |
 | **Q8** | ✅ **已闭环（2026-07-16）**：Developer ID Application (G2) 证书由用户在门户签发（API 建不了——Account Holder 专属，见 S.4）；951M 运行时公证 **Accepted**（submission `1e13bf2a`）。签名→公证链路全通，真实 .app 的公证 + staple 留到分发动作 | R5-9 验收形态 |
-| **Q9** | **远程模式 KV 落盘要不要做**（T2 现仅进程内后端）：inference-server 隐私边界声明"不持久化任何会话数据"，KV 缓存是对话派生物，真两机拓扑下落盘=会话残片留在设备 A。选 a) 远程也落（改边界声明+config 开关+server 端点）或 b) 维持现状（分离模式解冻走基座克隆兜底，已够快） | T2 在分离编队的完整收益 |
+| ~~**Q9**~~ | ✅ **已定（2026-07-18）：折中方案 a+开关**——`inference.kv_persist` 默认 true、用户可关（真两机拓扑介意残片即 false，退基座克隆）。server 三端点+RemoteBackend 三方法+删除清理已落，实机 HTTP 全链冒烟通过，详见 `HETERO_COMPUTE.md` §9.5 | ~~T2 分离编队收益~~ ✅ |
 
 ---
 

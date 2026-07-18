@@ -155,6 +155,9 @@ class MLXBackend:
         # 与未配置时行为完全一致；设为小数（如 3.5）则底层 generate_step 启用 TurboQuant。
         # 模型身份（T2 落盘产物的归属校验：换模型后旧 KV 文件必须被拒收）
         self.model_key = str(cfg.get("model_path", ""))
+        # KV 落盘开关（Q9-a 用户拍板：由用户决定）：false = 不写盘也不读盘，
+        # 冻结/解冻退回释放+基座克隆的现状路径（隐私优先形态）
+        self.kv_persist_enabled = bool(cfg.get("kv_persist", True))
         self.kv_bits = cfg.get("kv_bits", None)
         self.kv_quant_scheme = cfg.get("kv_quant_scheme", "turboquant")
         self.quantized_kv_start = int(cfg.get("quantized_kv_start", 0))
@@ -195,6 +198,8 @@ class MLXBackend:
         格式：L{i}_{j} 扁平张量 + metadata（version/model/layers/token_ids）。层对象经
         state/meta_state 协议原样往返（KVCache/RotatingKVCache 均实测续写一致）；state
         含非张量元素的层型（如量化缓存的嵌套结构）不支持——整体放弃，不出半份文件。"""
+        if not self.kv_persist_enabled:
+            return False
         state = getattr(h, "state", None)
         if state is None or not state.cache:
             return False
@@ -237,6 +242,8 @@ class MLXBackend:
 
     def restore_cache(self, src: str) -> Optional[MLXCacheHandle]:
         """从 persist_cache 产物重建句柄。文件缺失/版本不符/模型不符/任何异常 → None。"""
+        if not self.kv_persist_enabled:
+            return None
         p = Path(src)
         if not p.is_file():
             return None

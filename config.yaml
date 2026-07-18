@@ -18,6 +18,10 @@ inference:
     host: "100.72.11.119"       # inference-server 地址（设备 A 拿它当绑定地址、设备 B 拿它当
     port: 14161                 #   拨号地址——同一个键身兼两职。D7 端口约定 :14161）
     cache_ttl_minutes: 45       # 服务端缓存注册表空闲回收（略长于 backend 30min 冻结，只兜底）
+  # KV 冻结落盘（T2/Q9-a）：会话冻结时把 KV 缓存序列化到承载端本地盘，解冻热恢复
+  # （实测省 3-13s/次）。KV 是对话派生物——真两机拓扑下它落在算力机的盘上；介意
+  # 会话残片留在设备 A 就设 false（解冻退基座克隆，只慢在摘要+尾部重预填）。
+  kv_persist: true
   model: "mlx-community/gemma-4-e4b-it-4bit"
   # 钉死 HF 仓库 commit：上游 2026-07-06 重传（475b9088，裁掉共享 KV 权重）与 mlx-vlm 0.5.0
   # 不兼容，加载报 Missing 54 parameters。deb1db71 = 重传前最后一版（已在两台机器实证可用）。

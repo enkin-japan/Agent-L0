@@ -34,6 +34,7 @@ from ...core.backend_protocol import GenChunk
 _CONNECT_TIMEOUT = 5.0
 _STREAM_READ_TIMEOUT = 300.0
 _CONTROL_TIMEOUT = 15.0     # 缓存控制面（clone 含服务端深拷贝，稍宽）
+_PERSIST_TIMEOUT = 30.0     # KV 落盘/恢复（服务端序列化百 MB 级文件，再宽一档）
 _RELEASE_TIMEOUT = 5.0      # 释放走事件循环线程（freeze 是同步路径），必须短；TTL 兜底
 
 
@@ -112,6 +113,48 @@ class RemoteBackend:
         except Exception as e:
             print(f"[RemoteBackend] 缓存克隆失败，分支将冷启动: {e}")
             return None
+
+    # ---- KV 冻结落盘（T2/Q9-a：config inference.kv_persist 总开关在服务端后端生效）----
+    # dest 是边端会话本地路径（sessions/<sid>/kv_cache.safetensors）；远端存储键取其
+    # 父目录名（= session_id，会话目录命名约定）——服务端按键落 kvstore/<sid>.safetensors。
+
+    @staticmethod
+    def _persist_hint(dest: str) -> str:
+        return Path(dest).resolve().parent.name
+
+    def persist_cache(self, h, dest: str) -> bool:
+        cid = getattr(h, "cache_id", None)
+        if not cid:
+            return False    # 从未在服务端生成过：无物可落
+        try:
+            r = self._session.post(f"{self.base_url}/v1/cache/{cid}/persist",
+                                   json={"hint": self._persist_hint(dest)},
+                                   timeout=_PERSIST_TIMEOUT)
+            return r.status_code == 200 and bool(r.json().get("persisted"))
+        except Exception as e:
+            print(f"[RemoteBackend] KV 落盘失败（解冻走冷路）: {e}")
+            return False
+
+    def restore_cache(self, dest: str):
+        try:
+            r = self._session.post(f"{self.base_url}/v1/cache/restore",
+                                   json={"hint": self._persist_hint(dest)},
+                                   timeout=_PERSIST_TIMEOUT)
+            if r.status_code != 200:
+                return None   # 404=无产物/开关关 → 基座/冷路（既有语义）
+            cid = r.json().get("cache_id")
+            return RemoteCacheHandle(cid) if cid else None
+        except Exception as e:
+            print(f"[RemoteBackend] KV 热恢复失败（退基座/冷路）: {e}")
+            return None
+
+    def drop_persisted(self, dest: str) -> None:
+        try:
+            self._session.delete(
+                f"{self.base_url}/v1/cache/persisted/{self._persist_hint(dest)}",
+                timeout=_CONTROL_TIMEOUT)
+        except Exception:
+            pass              # 服务端文件可随时清空，清理失败无害
 
     def release_cache(self, h) -> None:
         cid = getattr(h, "cache_id", None)

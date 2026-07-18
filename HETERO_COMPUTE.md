@@ -832,10 +832,14 @@ MLX 通常吃到 70-85%（30-36 tps）；实测 23 tps = ~55% 利用率——落
 | T1 压缩后空闲预热 | ✅ `1c4975a` | compactor 标脏 → 空闲回合（锁+低优先级+锁后复检）1-token 预填；2-4s 重预填挪出用户等待路径 |
 | T6 OpenAI 门面 | ✅ `82b0a8c` | 实机三端点全通（/v1/models、chat 一次性含 usage、流式 chunk+[DONE]）；方言频道标记过滤，Bearer 同钥 |
 
-**待决（Q9，见 EXECUTION_LEDGER §5）**：远程模式的 KV 落盘。inference-server 的隐私
-边界白纸黑字"不持久化任何会话数据"，而 KV 缓存是对话派生物——B2c 真两机拓扑下落
-在设备 A 等于会话残片出机。需用户拍板：a) 远程也落（改边界声明+加开关）；b) 只落
-工作端（inprocess 模式享受，分离模式解冻走基座克隆兜底——现状）。
+**Q9 已定（2026-07-18 用户拍板"折中这个可以，由用户决定"）→ 方案 a+开关已落地**：
+`inference.kv_persist`（默认 true）一个旋钮统管两种模式（后端 cfg 同源）；false =
+不写盘也不读盘，冻结/解冻退回基座克隆现状。远程面：server `/v1/cache/{id}/persist`、
+`/v1/cache/restore`、`DELETE /v1/cache/persisted/{hint}`（hint 消毒防穿越；序列化持
+生成锁在推理线程内做，与 clone 同纪律；产物落 `inference/kvstore/`，与 media/ 同隐私
+档位）；RemoteBackend 三方法（存储键=会话目录名）；会话删除 best-effort 通知远端清理。
+**部署纪律**：真两机拓扑下 KV 产物留在算力机磁盘——介意即设 `kv_persist: false`。
+实机冒烟：HTTP 全链 generate→persist→restore→续轮命中 139/178→drop 全通。
 坑记：mx.save_safetensors 会给非 .safetensors 后缀自动追加后缀（.tmp 临时名踩过）；
 KVCache 空串 meta_state 回设非空会炸（"no meta_state but a meta_state was set"）。
 

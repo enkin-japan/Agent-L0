@@ -67,6 +67,10 @@ import openai_facade as oai  # 同目录纯逻辑层（T6 门面）
 
 MEDIA_DIR = Path(__file__).resolve().parent / "media"
 _MEDIA_ID_RE = re.compile(r"^[0-9a-f]{64}(\.[A-Za-z0-9]{1,8})?$")  # 内容寻址名，防路径穿越
+# KV 冻结落盘（Q9-a）：会话 KV 的服务端存放处。与 media/ 同一隐私档位——本机磁盘、
+# 可随时清空、config inference.kv_persist=false 即整面关闭（写读全停）
+KV_DIR = Path(__file__).resolve().parent / "kvstore"
+_KV_HINT_RE = re.compile(r"^[A-Za-z0-9._\-]{1,128}$")  # 会话 id 形状，防路径穿越
 
 config = load_config()
 INFERENCE_CFG = config.get("inference") or {}
@@ -278,6 +282,52 @@ async def cache_clone(cache_id: str):
 @app.delete("/v1/cache/{cache_id}", dependencies=[Depends(verify_api_key)])
 async def cache_release(cache_id: str):
     return {"released": S.registry.release(cache_id)}
+
+
+def _kv_path(hint: str) -> Path:
+    if not _KV_HINT_RE.match(hint):
+        raise HTTPException(status_code=400, detail="非法 hint（限 [A-Za-z0-9._-]）")
+    return KV_DIR / f"{hint}.safetensors"
+
+
+@app.post("/v1/cache/{cache_id}/persist", dependencies=[Depends(verify_api_key)])
+async def cache_persist(cache_id: str, request: Request):
+    """KV 落盘（Q9-a）：把注册表里的缓存序列化到服务端本地盘。开关关闭时后端
+    返回 False（{persisted: false}，边端按冷路处理）。序列化在推理执行器线程内做
+    且持生成锁——与 clone 同一纪律（张量归属线程 + 不落写到一半的缓存）。"""
+    body = await request.json()
+    path = _kv_path(str(body.get("hint", "")))
+    handle = S.registry.get(cache_id)
+    if handle is None:
+        raise HTTPException(status_code=404, detail="缓存不存在或已被 TTL 回收")
+    loop = asyncio.get_running_loop()
+    async with S.gen_lock:
+        ok = await loop.run_in_executor(
+            S.executor, lambda: S.backend.persist_cache(handle, str(path)))
+    return {"persisted": bool(ok)}
+
+
+@app.post("/v1/cache/restore", dependencies=[Depends(verify_api_key)])
+async def cache_restore(request: Request):
+    """KV 热恢复：盘上产物 → 新缓存句柄入注册表。无产物/开关关/校验不过 → 404（边端退基座/冷路）。"""
+    body = await request.json()
+    path = _kv_path(str(body.get("hint", "")))
+    loop = asyncio.get_running_loop()
+    async with S.gen_lock:
+        handle = await loop.run_in_executor(
+            S.executor, lambda: S.backend.restore_cache(str(path)))
+    if handle is None:
+        raise HTTPException(status_code=404, detail="无可恢复的 KV 产物")
+    return {"cache_id": S.registry.adopt(handle)}
+
+
+@app.delete("/v1/cache/persisted/{hint}", dependencies=[Depends(verify_api_key)])
+async def cache_persisted_drop(hint: str):
+    """会话删除时的服务端清理（边端 best-effort 调用；文件本可随时清空，失败无害）。"""
+    path = _kv_path(hint)
+    existed = path.exists()
+    path.unlink(missing_ok=True)
+    return {"dropped": existed}
 
 
 @app.post("/v1/transcribe", dependencies=[Depends(verify_api_key)])

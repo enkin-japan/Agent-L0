@@ -82,6 +82,78 @@ def test_version_mismatch_rejected(tmp_path, monkeypatch):
     assert be.restore_cache(str(dest)) is None
 
 
+# ---------- kv_persist 用户开关（Q9-a：由用户决定） ----------
+
+def test_kv_persist_switch_off_blocks_both_directions(tmp_path):
+    dest = tmp_path / "kv.safetensors"
+    on = MLXBackend(None, None, {"model_path": "m", "kv_persist": True})
+    assert on.persist_cache(_filled_handle(), str(dest)) is True
+
+    off = MLXBackend(None, None, {"model_path": "m", "kv_persist": False})
+    assert off.persist_cache(_filled_handle(), str(dest / "x")) is False   # 不写
+    assert off.restore_cache(str(dest)) is None                            # 已有文件也不读
+    assert on.restore_cache(str(dest)) is not None                         # 开着的照常
+
+
+# ---------- RemoteBackend 远端三方法（Q9-a） ----------
+
+class _FakeResp:
+    def __init__(self, status_code=200, payload=None):
+        self.status_code = status_code
+        self._payload = payload or {}
+
+    def json(self):
+        return self._payload
+
+
+class _FakeHttp:
+    def __init__(self, resp):
+        self.resp = resp
+        self.calls = []
+
+    def post(self, url, **kw):
+        self.calls.append(("post", url, kw))
+        return self.resp
+
+    def delete(self, url, **kw):
+        self.calls.append(("delete", url, kw))
+        return _FakeResp()
+
+
+def _remote(resp):
+    from framework.backends.remote.backend import RemoteBackend
+    rb = RemoteBackend.__new__(RemoteBackend)
+    rb.base_url = "http://a:1"
+    rb._session = _FakeHttp(resp)
+    return rb
+
+
+def test_remote_hint_is_session_dir_name():
+    from framework.backends.remote.backend import RemoteBackend
+    assert RemoteBackend._persist_hint("/x/sessions/sid-42/kv_cache.safetensors") == "sid-42"
+
+
+def test_remote_persist_restore_drop():
+    rb = _remote(_FakeResp(200, {"persisted": True}))
+    h = SimpleNamespace(cache_id="c1")
+    assert rb.persist_cache(h, "/s/sess-1/kv_cache.safetensors") is True
+    assert "/v1/cache/c1/persist" in rb._session.calls[0][1]
+    assert rb._session.calls[0][2]["json"] == {"hint": "sess-1"}
+    assert rb.persist_cache(SimpleNamespace(cache_id=None), "/s/x/kv.safetensors") is False
+
+    rb = _remote(_FakeResp(200, {"cache_id": "c9"}))
+    restored = rb.restore_cache("/s/sess-1/kv_cache.safetensors")
+    assert restored is not None and restored.cache_id == "c9"
+
+    rb = _remote(_FakeResp(404))
+    assert rb.restore_cache("/s/sess-1/kv_cache.safetensors") is None      # 无产物 → 冷路
+
+    rb = _remote(_FakeResp())
+    rb.drop_persisted("/s/sess-1/kv_cache.safetensors")
+    assert rb._session.calls[-1][0] == "delete"
+    assert rb._session.calls[-1][1].endswith("/v1/cache/persisted/sess-1")
+
+
 # ---------- 编排语义（Fake 后端） ----------
 
 class _FakeTok:
