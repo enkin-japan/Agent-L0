@@ -516,8 +516,16 @@ def auto_classify_and_insert(raw_document: str, doc_title: str, forced_category:
     all_embeddings = get_embeddings(chunks)
 
     # 【核心：Metadata 注入原始文件路径】(Chroma metadata 仅支持标量，路径需转 str)
+    # created_at（记忆治理波 P2a）：入库时刻，ISO 串可按字典序排序、可直接进提示词。
+    # 重索引（existing_source_path）取原文件 mtime——reembed 只是重建派生物，不许刷新年龄。
+    try:
+        created_ts = backup_path.stat().st_mtime if existing_source_path else time.time()
+    except OSError:
+        created_ts = time.time()
+    created_at = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(created_ts))
     ids = [str(uuid.uuid4()) for _ in chunks]
-    metadatas = [{"source_path": str(backup_path), "title": doc_title} for _ in chunks]
+    metadatas = [{"source_path": str(backup_path), "title": doc_title,
+                  "created_at": created_at} for _ in chunks]
 
     try:
         target_db.add(embeddings=all_embeddings, documents=chunks, ids=ids, metadatas=metadatas)

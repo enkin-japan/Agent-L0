@@ -26,6 +26,7 @@ from . import rag_sink
 from .notes import NOTE_TYPES
 
 STAMP_FILE = ".dream_stamp.json"
+REVIEW_FILE = ".review_stamps.json"   # 每条笔记的 last_reviewed_at（P2a；P2b 巡检轮转用）
 BACKUP_DIR = ".dream_backup"
 RESCUE_MARK = "自动抢救"      # 与 compactor._flush_rescued_notes 的出处标记同一字面
 MAX_OPS = 6
@@ -90,6 +91,37 @@ def check_gates(store, cfg: Dict) -> Tuple[bool, str]:
     if changed < min_new:
         return False, f"too-few-changes({changed}/{min_new})"
     return True, f"open({changed} changed)"
+
+
+# ---------- 巡检戳（P2a）----------
+# 为什么不写进笔记 frontmatter：闸门用文件 mtime 判「变动」，往笔记文件里盖戳会把
+# 「看过了」伪装成「改过了」，喂假信号给自己的闸门。旁车 JSON 与 .dream_stamp 同哲学。
+
+def read_review_stamps(store) -> Dict[str, float]:
+    """读全部笔记的 last_reviewed_at（name → epoch）。缺档/坏档 = 全部视为从未巡检。"""
+    try:
+        raw = json.loads((store.notes_dir / REVIEW_FILE).read_text(encoding="utf-8"))
+        return {str(k): float(v) for k, v in raw.items()}
+    except Exception:
+        return {}
+
+
+def stamp_reviewed(store, names: List[str]) -> None:
+    """给 names 盖巡检戳（=now）；顺带清掉已删除笔记的孤儿戳。fail-open。"""
+    if not names:
+        return
+    stamps = read_review_stamps(store)
+    now = time.time()
+    for n in names:
+        stamps[n] = now
+    alive = set(store.names())
+    stamps = {k: v for k, v in stamps.items() if k in alive}
+    try:
+        store.notes_dir.mkdir(parents=True, exist_ok=True)
+        (store.notes_dir / REVIEW_FILE).write_text(
+            json.dumps(stamps, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        print(f"[Dream] 巡检戳写入失败（下次重巡，不致命）: {e}")
 
 
 # ---------- 输入装配 / 输出解析 / 应用 ----------

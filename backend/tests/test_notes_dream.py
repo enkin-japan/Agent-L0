@@ -146,3 +146,27 @@ def test_maybe_dream_gate_closed_no_generation(store):
     eng = _Engine("CLEAN")
     applied = asyncio.run(dream.maybe_dream(eng, {"enabled": False}))
     assert applied == 0 and eng.called == 0
+
+
+# ---------- 巡检戳（P2a）----------
+
+def test_review_stamps_roundtrip_and_orphan_prune(store):
+    store.write("kept", "d", "user", "b")
+    store.write("doomed", "d", "user", "b")
+    dream.stamp_reviewed(store, ["kept", "doomed"])
+    stamps = dream.read_review_stamps(store)
+    assert set(stamps) == {"kept", "doomed"}
+    assert all(time.time() - v < 5 for v in stamps.values())
+
+    store.delete("doomed")
+    dream.stamp_reviewed(store, ["kept"])       # 再盖戳时孤儿被清
+    assert set(dream.read_review_stamps(store)) == {"kept"}
+
+
+def test_review_stamps_missing_or_corrupt_is_empty(store):
+    assert dream.read_review_stamps(store) == {}
+    store.notes_dir.mkdir(parents=True, exist_ok=True)
+    (store.notes_dir / dream.REVIEW_FILE).write_text("not json{")
+    assert dream.read_review_stamps(store) == {}
+    dream.stamp_reviewed(store, [])             # 空名单不动盘
+    assert not (store.notes_dir / dream.REVIEW_FILE).read_text().startswith("{\"")
