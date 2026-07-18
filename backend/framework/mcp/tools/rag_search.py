@@ -12,6 +12,45 @@ RAG_HEALTH_URL = f"http://{RAG_HOST}:{RAG_PORT}/health"
 RAG_SEARCH_URL = f"http://{RAG_HOST}:{RAG_PORT}/api/v1/document/query"
 RAG_CATEGORY_URL = f"http://{RAG_HOST}:{RAG_PORT}/api/v1/category"
 
+
+def format_results(query: str, category: str, docs: list) -> tuple:
+    """把检索结果排成 (模型可读文本, 引文卡片载荷)。
+
+    时效可见化（记忆治理波 U2）：片段头带入库日期（metadata.created_at，P2a 起注入），
+    模型对照当天日期自判时效——「答错」降级为「带保留地答」。存量旧切片无此字段，
+    整段省略不猜。
+    """
+    formatted_context = (f"[Search results for '{query}' in category '{category}': "
+                         f"{len(docs)} highly relevant results found]\n\n")
+    citations = []
+    for i, item in enumerate(docs):
+        score = item.get("rerank_score", 0)
+        doc_text = item.get("document", "")
+        # rag 服务将来源信息放在 metadata 中（title / source_path / created_at）；
+        # Path 供 rag_delete_document 等管理工具精确引用文档
+        metadata = item.get("metadata") or {}
+        source = metadata.get("title") or "Unknown"
+        source_path = metadata.get("source_path") or "Unknown"
+        created = str(metadata.get("created_at") or "")[:10]   # 日期粒度足够判时效
+        ingested = f", Ingested: {created}" if created else ""
+
+        formatted_context += (
+            f"--- Result {i+1} (Match Score: {score:.2f}, Source: {source}"
+            f"{ingested}, Path: {source_path}) ---\n"
+            f"{doc_text}\n\n"
+        )
+        cite = {
+            "source": source,
+            "path": source_path,
+            "score": round(float(score), 4),
+            # 卡片只摆摘要，全文照旧在 response 文本里给模型读
+            "snippet": doc_text[:280],
+        }
+        if created:
+            cite["created_at"] = created
+        citations.append(cite)
+    return formatted_context.strip(), citations
+
 class RAGSearchTool(BaseTool):
     """
     RAG 知识库检索插件。
@@ -102,33 +141,10 @@ class RAGSearchTool(BaseTool):
             if not docs:
                 return f"No results were found in the database for '{query}' in category '{category}'."
             
-            # 格式化检索结果供大模型阅读
-            formatted_context = f"[Search results for '{query}' in category '{category}': {len(docs)} highly relevant results found]\n\n"
-            # 渲染格载荷（R3）：与下面的格式化同源同循环——结构在这里还活着，
-            # 交给客户端排引文卡片，不必让谁再从格式化文本里解析回来。
-            citations = []
-            for i, item in enumerate(docs):
-                score = item.get("rerank_score", 0)
-                doc_text = item.get("document", "")
-                # rag 服务将来源信息放在 metadata 中（title / source_path）；
-                # Path 供 rag_delete_document 等管理工具精确引用文档
-                metadata = item.get("metadata") or {}
-                source = metadata.get("title") or "Unknown"
-                source_path = metadata.get("source_path") or "Unknown"
-
-                formatted_context += (
-                    f"--- Result {i+1} (Match Score: {score:.2f}, Source: {source}, Path: {source_path}) ---\n"
-                    f"{doc_text}\n\n"
-                )
-                citations.append({
-                    "source": source,
-                    "path": source_path,
-                    "score": round(float(score), 4),
-                    # 卡片只摆摘要，全文照旧在 response 文本里给模型读
-                    "snippet": doc_text[:280],
-                })
-
-            return ToolOutput(formatted_context.strip(),
+            # 格式化检索结果供大模型阅读；渲染格载荷（R3）与格式化同源同循环——
+            # 结构交给客户端排引文卡片，不必让谁再从格式化文本里解析回来。
+            formatted_context, citations = format_results(query, category, docs)
+            return ToolOutput(formatted_context,
                               {"query": query, "category": category, "items": citations})
 
         except requests.ConnectionError as e:
