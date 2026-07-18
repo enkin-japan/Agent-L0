@@ -431,6 +431,11 @@ vLLM 的决定性理由——几个月调出来的四项智能层优化全有原
 - [ ] **开工 spike**：核实当前模型（config 的 model registry 所选档位）在 vLLM
       的支持状态（含音频多模态）。不支持 → 在 registry 加同方言替代档位条目，
       记录进 §S.3，再继续
+- [ ] **依赖按平台拆分**（2026-07-18 核实补录）：`backend/requirements.txt` 钉着
+      mlx/mlx-metal 等 macOS 专属包，Linux 上 pip install 第一步即死。拆
+      requirements-cuda.txt 或用环境标记（`; sys_platform == "darwin"`），CI/文档同步
+- [ ] **Windows 形态定调**（2026-07-18 讨论）：vLLM 无原生 Windows——走 WSL2
+      （=Linux 路，推荐）；原生 Windows=另开 llama.cpp 后端线，不在路线图内
 - [ ] `backends/cuda/engine_backend.py`：load / new_cache（会话 id 占位）/
       clone_cache（返回 None，走冷启动回退）/ stream_generate（AsyncEngine
       streaming 适配成同步迭代器，喂给既有执行器线程模型）
