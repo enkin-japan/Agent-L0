@@ -585,8 +585,35 @@ final class AgentStore: ObservableObject {
             isSuspended = true
         case "turn_ended":
             onTurnEnded(env, sessionId: sessionId)
+        case "location_request":
+            // 客户端反查(get_location 工具):本端即"用户正在用的设备",取一次定位回 POST。
+            // 首次触发系统授权弹窗;拒绝/失败也要应答——后端工具在阻塞等待,静默会白等 25s。
+            respondLocation(requestId: env.str("request_id"), sessionId: sessionId)
         default:
             break  // 未知事件类型:忽略(向前兼容)
+        }
+    }
+
+    private func respondLocation(requestId: String, sessionId: String) {
+        guard let client, !requestId.isEmpty else { return }
+        Task {
+            let body: AgentClient.LocationReportBody
+            do {
+                let fix = try await LocationProvider.shared.currentFix()
+                body = .init(request_id: requestId, status: "ok",
+                             latitude: fix.latitude, longitude: fix.longitude,
+                             place: fix.place, accuracy_m: fix.accuracyM, error: nil)
+            } catch LocationProvider.Failure.noFix(let reason) {
+                body = .init(request_id: requestId, status: "error",
+                             latitude: nil, longitude: nil, place: nil,
+                             accuracy_m: nil, error: reason)
+            } catch {
+                body = .init(request_id: requestId, status: "denied",
+                             latitude: nil, longitude: nil, place: nil,
+                             accuracy_m: nil, error: L("用户未授权定位"))
+            }
+            // 409(迟到/他端已答)在 client 层已吞;其余网络错误静默——通道 fail-open
+            try? await client.reportLocation(sessionId: sessionId, body: body)
         }
     }
 

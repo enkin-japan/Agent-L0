@@ -16,6 +16,7 @@ from .schemas import (
     BranchRequest,
     BranchResponse,
     LiveActivityTokenRequest,
+    LocationReport,
     MemoryStatusResponse,
     PinRequest,
     PinResponse,
@@ -671,6 +672,20 @@ async def submit_approval(session_id: str, request: Request, body: ApprovalReque
         return JSONResponse(status_code=409, content={"status": False, "reason": e.reason})
     runner.spawn(session_id, runner.run_approval(session, session_id, body.approve))
     return JSONResponse(status_code=202, content={"status": True, "turn_id": turn_id})
+
+
+@router.post("/api/v1/chat/{session_id}/location")
+async def report_location(session_id: str, request: Request, body: LocationReport):
+    """客户端定位应答（client_query 通道回程）：get_location 工具发出 location_request
+    事件后在工作线程阻塞等待，本端点把附着客户端的应答落位并唤醒它。
+    无等待中的对应请求（已超时/重复应答/串轮）时 409，客户端静默忽略即可。"""
+    from ..core import client_query
+    session = request.app.state.session_manager._all_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="会话不存在或未活跃。")
+    if client_query.resolve(session, body.request_id, body.model_dump(exclude_none=True)):
+        return {"status": True}
+    return JSONResponse(status_code=409, content={"status": False, "reason": "no_pending_request"})
 
 
 @router.post("/api/v1/chat/{session_id}/turns/resume")

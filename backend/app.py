@@ -294,6 +294,9 @@ async def lifespan(app: FastAPI):
     # 2.1 联网调查沙箱运行时：把引擎与主事件循环登记给 web_research（受限沙箱工具经
     #     run_coroutine_threadsafe 投回本循环复用主模型生成，见 framework/agents）。
     research_runtime.set_runtime(engine, asyncio.get_running_loop())
+    #     客户端反查通道（get_location 等）：工具线程经此 loop 往会话事件流发请求事件
+    from framework.core import client_query
+    client_query.set_loop(asyncio.get_running_loop())
 
     # 2.2 工具注册表热重扫（D 阶段工程票）：依赖后装（LibreOffice 案）不再要求重启
     #     执行层。编排与启动时的两段装配同构：重探工具 → 重建剧本表（requires 要看

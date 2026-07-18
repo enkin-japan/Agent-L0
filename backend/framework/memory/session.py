@@ -88,6 +88,10 @@ class ChatSession:
         # 环境上下文注入开关（想法1）：仅主编排会话为 True。沙箱一次性会话替身不设此属性
         # （getattr 默认 False），故机器/个人环境事实绝不进沙箱子生成上下文——隐私边界 opt-in。
         self.inject_env_context = True
+        # 客户端反查挂起表（client_query 通道，仅存内存）：request_id →
+        # (threading.Event, 结果槽)。get_location 等「值在用户设备上」的工具经此
+        # 等待附着客户端的 POST 应答。沙箱替身无此属性 → 通道对子生成天然关闭。
+        self.client_queries: Dict[str, Any] = {}
         
         # 生命周期控制
         self.last_access_time: float = time.time()

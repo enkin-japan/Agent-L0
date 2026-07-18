@@ -133,6 +133,21 @@ class ApprovalRequest(BaseModel):
     expected_turn_id: Optional[str] = None
 
 
+class LocationReport(BaseModel):
+    """
+    客户端定位应答（get_location 工具的回程）：附着客户端收到 location_request
+    事件后回报。status=ok 时带坐标；denied/error 时带 error 说明。
+    坐标由客户端截到粗粒度（约百米级）后再上报——精确轨迹不进后端。
+    """
+    request_id: str
+    status: str  # ok | denied | error
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    place: Optional[str] = None       # 反地理编码的地名（如 "東京都渋谷区"）
+    accuracy_m: Optional[float] = None
+    error: Optional[str] = None
+
+
 class PushRegisterRequest(BaseModel):
     """
     推送设备注册/更新（upsert）：device_id 是 app 生成并持久化的稳定标识；

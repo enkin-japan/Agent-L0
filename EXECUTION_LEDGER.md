@@ -1738,6 +1738,41 @@ macOS 专属刻意不发；**55 的知识库面板是共享 Sources 且菜单入
   的打包发布权限」）后分类器放行——macOS 56 装机（CFBundleVersion 验证）、
   iOS 56 上传 → wait-testflight **VALID** ✅，双端同版对齐。
 
+### 环境事实补全波：时区/locale 被动注入 + get_location 按需定位（2026-07-18/19，用户「可以开工」）
+
+个人信息三机制（先查后问波）之外的第三类信息——**机器自己就知道的环境事实**，
+用户点出「位置/系统信息这些随手能加上的」。分类标准（准入三条同时满足）：
+机器可自动获取、稳定不变（KV 友好）、高频有用；易变事实（电量/网络/精确时间）不进
+prompt，走工具按需查。
+
+- **时区被动注入**（`inject_timezone: true` 默认开）：`_iana_timezone()` 读
+  `/etc/localtime` 符号链接（实测 `Time zone: Asia/Tokyo (UTC+09:00 JST)`）。
+  一石二鸟：相对时间锚点 + 国家级粗位置。启动算一次（时区变动极低频，重启即刷新）。
+- **locale 兜底**（`inject_locale: true`）：`language` 未填时注入系统区域标识
+  （macOS 后端进程常无 LANG，走 `defaults read -g AppleLocale`；实测
+  `zh-Hans_JP`——比手填还准）。language 已填则让位（两行说同一件事稀释注意力）。
+- **get_location 工具**（用户对「手填 location」的异议成立并拍板：位置=半易变事实，
+  手填定死必偏差；TCC 一次性授权开销小）。**关键架构决策：定位源=发消息的那台设备，
+  不是后端主机**（人在外面拿 iPhone 时，Mac mini 的位置就是错的）。链路：
+  工具线程 `client_query.request()` → call_soon_threadsafe 主循环 `journal.emit
+  ("location_request")`（SSE 推附着客户端，非里程碑不落盘、环内重连可补收）→
+  threading.Event 阻塞 25s → 客户端 CLLocationManager 取位（首调系统弹窗）+
+  反地理编码 → `POST /chat/{sid}/location` 落位唤醒。全链 fail-open：无 loop
+  （金测试）/沙箱替身（无 client_queries 属性，与 include_env 隐私门同向）/超时/
+  拒绝，都明确降级并提示模型退时区粗推断或直接问。坐标客户端侧截 3 位小数
+  （约百米）——精确轨迹不出设备。多客户端附着首答生效，迟到者 409 静默。
+- 新文件：backend `core/client_query.py`、`mcp/tools/user_location.py`、
+  app `Sources/Location/LocationProvider.swift`（WavRecorder 同模式：权限归 app、
+  数据走既有通道；15s 客户端兜底超时防 continuation 悬挂）。改动：session 挂
+  `client_queries` 表、app.py 登记主循环、routes/schemas 回程端点、AgentStore
+  `location_request` 分发、AgentClient 回程（409 视为了结）、project.yml 双端
+  定位权限文案、config.yaml 两开关 + location 注释改「通常留空」。
+- 与既有面的对称性：日期被动注入+get_current_time 按需 ↔ 时区被动注入+get_location
+  按需——同一分类法的两次套用，架构自我解释。
+- 金测试 430（+12：client_query 通道 9 + 环境行 3）；双端 Debug 编译过；
+  macOS 57 装机、iOS 57 上传 TestFlight。**实机联调（首调弹窗→授权→回填）待用户
+  在新 app 上真跑一轮验证。**
+
 ---
 
 ## §5 待决（开工前需拍板）

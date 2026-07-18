@@ -18,6 +18,10 @@ def _pb(env):
     return PromptBuilder(_FakeProcessor(), env=env)
 
 
+# 只留手填个人事实、关掉全部自动探测项的基准 env（测试聚焦各自开关时复用）
+_AUTO_OFF = {"inject_machine": False, "inject_timezone": False, "inject_locale": False}
+
+
 def test_machine_fact_injected_by_default():
     assert any("Operating system:" in l for l in _pb({}).static_env_lines)
 
@@ -27,20 +31,42 @@ def test_machine_fact_suppressible():
                    for l in _pb({"inject_machine": False}).static_env_lines)
 
 
+def test_timezone_injected_by_default():
+    lines = _pb({"inject_machine": False, "inject_locale": False}).static_env_lines
+    assert any(l.startswith("Time zone:") for l in lines)
+
+
+def test_timezone_suppressible():
+    assert not any("Time zone:" in l
+                   for l in _pb({**_AUTO_OFF}).static_env_lines)
+
+
+def test_locale_fallback_only_without_language():
+    # language 未填：locale 兜底行可注入（内容依宿主系统，只验行首）
+    without = _pb({"inject_machine": False, "inject_timezone": False}).static_env_lines
+    # language 已填：locale 行必须让位——两行说同一件事只稀释注意力
+    with_lang = _pb({"inject_machine": False, "inject_timezone": False,
+                     "language": "中文"}).static_env_lines
+    assert not any("system locale" in l for l in with_lang)
+    assert any("preferred reply language" in l for l in with_lang)
+    for l in without:
+        assert "preferred reply language" not in l
+
+
 def test_personal_facts_optin():
-    lines = _pb({"inject_machine": False, "language": "中文",
+    lines = _pb({**_AUTO_OFF, "language": "中文",
                  "location": "东京", "about": "工程背景"}).static_env_lines
     joined = "\n".join(lines)
     assert "中文" in joined and "东京" in joined and "工程背景" in joined
 
 
 def test_null_personal_facts_absent():
-    assert _pb({"inject_machine": False, "language": None,
+    assert _pb({**_AUTO_OFF, "language": None,
                 "location": None, "about": None}).static_env_lines == []
 
 
 def test_build_gates_personal_env_on_include_flag():
-    pb = _pb({"inject_machine": False, "location": "东京"})
+    pb = _pb({**_AUTO_OFF, "location": "东京"})
     with_env = pb.build(messages=[], include_env=True)
     without_env = pb.build(messages=[], include_env=False)
     assert "东京" in with_env           # 主编排轮:注入

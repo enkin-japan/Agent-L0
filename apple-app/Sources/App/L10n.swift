@@ -97,6 +97,7 @@ enum L10n {
         "数据": ("データ", "Data"),
         "加载中…": ("読み込み中…", "Loading…"),
         "确认删除所选文档？": ("選択したドキュメントを削除しますか？", "Delete selected documents?"),
+        "用户未授权定位": ("ユーザーが位置情報を許可していません", "User has not granted location permission"),
         "知识库为空": ("ナレッジベースは空です", "Knowledge base is empty"),
         "RAG 服务离线": ("RAG サービスがオフライン", "RAG service offline"),
         "我的知识": ("マイナレッジ", "My Knowledge"),

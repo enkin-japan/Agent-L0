@@ -372,8 +372,10 @@ agent:
   # 物理隔离方向一致）。注意"最小相关集"——弱模型上下文越多注意力越稀释，勿堆砌。
   environment:
     inject_machine: true   # 自动注入操作系统+架构（桌面级 shell/路径任务有用）；false=不注入机器信息
+    inject_timezone: true  # 自动注入系统时区（IANA 名+UTC 偏移）：相对时间锚点+国家级粗位置；精确位置走 get_location 工具按需查
+    inject_locale: true    # language 未填时自动注入系统区域标识（如 ja_JP）作兜底；language 已填则不注入
     language: null         # 偏好应答语言，如 "中文"/"日本語"；null=不注入（模型按用户消息语种自适应）
-    location: null         # 大致所在地（城市级即可，如 "东京"），供天气/本地检索类任务；null=不注入
+    location: null         # 大致所在地（城市级即可，如 "东京"）；时区已给国家级粗位置、精确位置有 get_location 工具，通常留空即可
     about: null            # 一句话用户画像/偏好，如 "工程背景，偏好简洁中文"；null=不注入
 
   # 单 worker 调度（ClassPolicy：确定性两级规则，无启发式）。

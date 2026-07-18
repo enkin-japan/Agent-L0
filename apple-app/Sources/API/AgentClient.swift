@@ -139,6 +139,28 @@ final class AgentClient {
         return try await acceptedOrConflict(req)
     }
 
+    /// 定位应答体(get_location 工具回程)。字段名对齐后端 LocationReport(snake_case)。
+    struct LocationReportBody: Encodable {
+        let request_id: String
+        let status: String        // ok | denied | error
+        let latitude: Double?
+        let longitude: Double?
+        let place: String?
+        let accuracy_m: Double?
+        let error: String?
+    }
+
+    /// 上报定位应答:200=落位;409=请求已超时或已被别的客户端应答——都算了结,不抛错。
+    func reportLocation(sessionId: String, body: LocationReportBody) async throws {
+        let req = try request("POST", "/api/v1/chat/\(sessionId)/location", json: body)
+        let (data, response) = try await session.data(for: req)
+        if let http = response as? HTTPURLResponse,
+           http.statusCode != 200, http.statusCode != 409 {
+            let detail = String(data: data.prefix(300), encoding: .utf8) ?? ""
+            throw AgentError.http(http.statusCode, detail)
+        }
+    }
+
     /// 恢复挂起轮次(202 受理即返):续跑过程经事件流观察。
     func submitResume(sessionId: String) async throws -> TurnAccepted {
         let req = try request("POST", "/api/v1/chat/\(sessionId)/turns/resume")

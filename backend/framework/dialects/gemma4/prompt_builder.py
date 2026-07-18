@@ -1,8 +1,37 @@
 import json
+import os
 import platform
+import subprocess
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from transformers.processing_utils import ProcessorMixin
+
+
+def _iana_timezone() -> str:
+    """IANA 时区名（如 Asia/Tokyo）：读 /etc/localtime 符号链接（macOS/Linux 通行）。
+    读不到返回空串，由调用方退时区缩写。"""
+    try:
+        link = os.readlink("/etc/localtime")
+        if "zoneinfo/" in link:
+            return link.split("zoneinfo/", 1)[1]
+    except OSError:
+        pass
+    return ""
+
+
+def _system_locale() -> str:
+    """系统区域标识（如 ja_JP / zh_CN）。macOS 下后端进程（launchd/app 拉起）常无 LANG
+    环境变量，优先问系统偏好；失败退 LANG。启动时算一次，不在热路径。"""
+    if platform.system() == "Darwin":
+        try:
+            out = subprocess.run(["defaults", "read", "-g", "AppleLocale"],
+                                 capture_output=True, text=True, timeout=3)
+            val = out.stdout.strip()
+            if val:
+                return val
+        except Exception:
+            pass
+    return os.environ.get("LANG", "").split(".")[0]
 
 class PromptBuilder:
     """
@@ -59,8 +88,25 @@ class PromptBuilder:
             else:
                 os_str = "unknown OS"
             lines.append(f"Operating system: {os_str} ({platform.machine() or 'unknown arch'})")
+        if env.get("inject_timezone", True):
+            # 时区 = 免权限的稳定事实，一石二鸟：相对时间锚点（"明天/晚上"换算）+
+            # 国家级粗位置（天气/本地检索兜底）。精确位置另有 get_location 工具按需查
+            # （半易变事实不进静态块）。启动时算一次——时区变动极低频，重启即刷新。
+            now = datetime.now().astimezone()
+            off = now.strftime("%z")
+            off_str = f"UTC{off[:3]}:{off[3:]}" if len(off) == 5 else ""
+            name = _iana_timezone() or now.strftime("%Z")
+            if name or off_str:
+                detail = " ".join(x for x in (off_str, now.strftime("%Z")) if x)
+                lines.append(f"Time zone: {name}" + (f" ({detail})" if detail else ""))
         if env.get("language"):
             lines.append(f"User's preferred reply language: {env['language']}")
+        elif env.get("inject_locale", True):
+            # language 未填时的自动兜底：系统区域标识（数字/日期格式、粗粒度语言偏好线索）。
+            # 显式填了 language 就不再注入——两行说同一件事只稀释注意力。
+            loc = _system_locale()
+            if loc:
+                lines.append(f"User's system locale: {loc}")
         if env.get("location"):
             lines.append(f"User's approximate location: {env['location']}")
         if env.get("about"):
