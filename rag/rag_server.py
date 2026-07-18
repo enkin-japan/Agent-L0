@@ -424,6 +424,50 @@ def _collection_of_raw_file(path: Path) -> str:
     return "unclassified_db" if path.parent == UNCLASSIFIED_DIR else path.parent.name
 
 
+VERSIONS_DIR = ".versions"   # 旧版原文归档子目录（记忆治理波 U1）；点开头+子目录双保险，
+                             # reembed 的 glob("*.txt") 与 reclassify 的点前缀过滤都扫不进它
+
+
+def _replace_previous_versions(category: str, doc_title: str) -> None:
+    """替换式导入（U1）：同分类+同标题 = 新版本。
+
+    旧切片清出向量库（不再被检索命中），旧原文移入同目录 .versions/ 归档——
+    「过时」≠「没用」（旧版合同类内容仍可手工找回），归档先行与 dream 备份同哲学。
+    fail-open：清不掉就照常入库，最坏退回 U1 之前的「新旧并存」，不阻断入库主流程。
+    """
+    try:
+        col = get_chroma_collection(category)
+        matched = col.get(where={"title": doc_title})
+    except Exception as e:
+        logger.warning(f"⚠️ 替换式导入查旧版失败（跳过替换，照常入库）: {e}")
+        return
+    ids = matched.get("ids") or []
+    if not ids:
+        return
+    old_paths = {m.get("source_path") for m in (matched.get("metadatas") or [])
+                 if m and m.get("source_path")}
+    try:
+        col.delete(ids=ids)
+    except Exception as e:
+        logger.warning(f"⚠️ 替换式导入清旧切片失败（跳过替换，照常入库）: {e}")
+        return
+    stamp = time.strftime("%Y%m%d%H%M%S")
+    archived = 0
+    for sp in old_paths:
+        p = Path(sp)
+        try:
+            # 与 delete 端点同一守卫：只动 STORAGE_BASE 之内的文件
+            if p.is_file() and p.resolve().is_relative_to(STORAGE_BASE.resolve()):
+                dest_dir = p.parent / VERSIONS_DIR
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                p.rename(dest_dir / f"{stamp}_{p.name}")
+                archived += 1
+        except Exception as e:
+            logger.warning(f"⚠️ 旧版原文归档失败（切片已清，文件留在原处）: {sp}: {e}")
+    logger.info(f"♻️ 替换式导入: [{doc_title}] 在 '{category}' 的旧版已让位"
+                f"（清 {len(ids)} 切片，归档 {archived} 文件）")
+
+
 def auto_classify_and_insert(raw_document: str, doc_title: str, forced_category: Optional[str] = None,
                              existing_source_path: Optional[str] = None):
     """入库流水线。existing_source_path 非空 = 原文备份**已在盘上**（reembed 重建场景）：
@@ -464,6 +508,11 @@ def auto_classify_and_insert(raw_document: str, doc_title: str, forced_category:
     if total_chunks == 0:
         logger.warning(f"⚠️ 文档 [{doc_title}] 内容为空，跳过入库（不写备份）。")
         return
+
+    # 3.5 替换式导入（U1）：同分类+同标题的旧版让位（清旧切片+原文归档 .versions/）。
+    #     仅新入库触发——reembed（existing_source_path）是重建派生物，另有同路径清理（步骤 5）。
+    if not existing_source_path:
+        _replace_previous_versions(target_category, doc_title)
 
     # 4. 备份原始文件
     #    不变量：raw_files 是原文的**唯一真相**，向量库是它的派生物（reembed 据此重建）。

@@ -121,7 +121,10 @@ class RAGInsertDocumentTool(BaseTool):
         "first create one with rag_upsert_category (write a precise routing description); "
         "3) call this tool with that category. "
         "Calls with a non-existent category are REJECTED and the current catalog is returned — "
-        "pick from it or create the category, then retry."
+        "pick from it or create the category, then retry. "
+        "To UPDATE an outdated document, simply re-insert the new content with the SAME title "
+        "into the SAME category: the old version is replaced (its chunks removed from search, "
+        "raw file archived) — no need to delete first."
     )
     requires_approval = False
     parameters = {
