@@ -92,9 +92,11 @@ enum L10n {
         "任务推进中": ("タスク進行中", "Task in progress"),
         "思考过程": ("思考プロセス", "Reasoning"),
         "会话记忆…": ("チャットメモリ…", "Chat Memory…"),
-        // 知识库管理面板（P1）
-        "知识库…": ("ナレッジベース…", "Knowledge Base…"),
+        // 知识库管理面板（P1；入口在设置——全局数据实体归设置，不占会话菜单）
         "知识库": ("ナレッジベース", "Knowledge Base"),
+        "数据": ("データ", "Data"),
+        "加载中…": ("読み込み中…", "Loading…"),
+        "确认删除所选文档？": ("選択したドキュメントを削除しますか？", "Delete selected documents?"),
         "知识库为空": ("ナレッジベースは空です", "Knowledge base is empty"),
         "RAG 服务离线": ("RAG サービスがオフライン", "RAG service offline"),
         "我的知识": ("マイナレッジ", "My Knowledge"),

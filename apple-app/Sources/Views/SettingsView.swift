@@ -31,6 +31,11 @@ struct SettingsView: View {
                 Form { notificationSection }
                     .formStyle(.grouped)
                     .tabItem { Label(L("通知"), systemImage: "bell") }
+                // 知识库是全局数据实体（跨会话），归设置而非会话菜单（会话菜单里
+                // 其余条目全是会话作用域——语义分层：会话的记忆看会话菜单，全局的
+                // 知识看设置）。embedded：复用本页外层 NavigationStack 推入文档页。
+                KnowledgePanelView(embedded: true)
+                    .tabItem { Label(L("知识库"), systemImage: "books.vertical") }
                 Form { sidecarSection; versionSection }
                     .formStyle(.grouped)
                     .tabItem { Label(L("执行层"), systemImage: "gearshape.2") }
@@ -52,6 +57,14 @@ struct SettingsView: View {
             Form {
                 connectionSections
                 notificationSection
+                // 知识库入口（全局数据实体归设置；NavigationLink 推入外层栈）
+                Section(L("数据")) {
+                    NavigationLink {
+                        KnowledgePanelView(embedded: true)
+                    } label: {
+                        Label(L("知识库"), systemImage: "books.vertical")
+                    }
+                }
                 appearanceSection
                 versionSection
             }

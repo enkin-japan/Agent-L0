@@ -7,7 +7,6 @@ import UIKit
 struct ChatView: View {
     @EnvironmentObject var store: AgentStore
     @State private var showMemory = false
-    @State private var showKnowledge = false
     @State private var showDeck = false
     @State private var exportDocument: MarkdownFileDocument?
     @State private var showExporter = false
@@ -105,11 +104,6 @@ struct ChatView: View {
                         Label(L("会话记忆…"), systemImage: "memorychip")
                     }
                     Button {
-                        showKnowledge = true
-                    } label: {
-                        Label(L("知识库…"), systemImage: "books.vertical")
-                    }
-                    Button {
                         exportDocument = MarkdownFileDocument(
                             text: ConversationExport.markdown(title: exportTitle,
                                                               messages: store.messages))
@@ -131,9 +125,6 @@ struct ChatView: View {
         }
         .sheet(isPresented: $showMemory) {
             MemoryPanelView()
-        }
-        .sheet(isPresented: $showKnowledge) {
-            KnowledgePanelView()
         }
         .sheet(isPresented: $showDeck) {
             if let deck = store.deck, let sid = store.selectedSessionId {
