@@ -178,6 +178,12 @@ class ShellExecTool(BaseTool):
             )
         except subprocess.TimeoutExpired:
             return f"System Error: command timed out after {timeout}s (partial output discarded)."
+        except UnicodeDecodeError:
+            # cat/head 二进制文件（PDF/图片/音频）的典型死路——给可行动出路而不是
+            # 裸抛解码错误（实机事故：file_extract 失败后模型退化 cat PDF，两头碰壁）
+            return ("System Error: command output is not text (binary file?). "
+                    "For PDF/document/audio files use the file_extract tool with the file path "
+                    "instead of cat/head.")
         except Exception as e:
             return f"System Error: failed to run command: {str(e)}"
 

@@ -163,3 +163,17 @@ def test_truncated_keeps_continue_hint_not_tip(pdf30):
     out = extract_pdf_pages(str(pdf30), page="1-30", max_chars=1000)
     header = out.splitlines()[0]
     assert "continue with page=" in header and "tip:" not in header
+
+
+def test_execute_expands_tilde(tmp_path, monkeypatch):
+    """实测(会话 app-2ac41befe7d3):list_dir 展开 ~ 而 file_extract 不展开——模型把
+    list_dir 参数里的 ~ 原样带过来即 not found,随后退化 cat 二进制死路。
+    路径处理必须全工具面均匀(与 file_nav/file_edit/desktop 同纪律)。"""
+    from framework.mcp.tools.file_extract import FileExtractTool
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    (fake_home / "note.txt").write_text("hello tilde\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(fake_home))
+    out = FileExtractTool().execute(path="~/note.txt")
+    assert "hello tilde" in out
+    assert "System Error" not in out

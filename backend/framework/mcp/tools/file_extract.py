@@ -26,9 +26,10 @@ _PDF_MAX_CHARS = 3400
 class FileExtractTool(BaseTool):
     name = "file_extract"
     description = (
-        "Re-parse a previously ingested file by its path to get precise/full content that the "
-        "inline ingestion summary omitted. Find the path in context provenance markers like "
-        "'[原文件：/abs/path]' or '[原音频：/abs/path]'. Modes by file type: "
+        "Parse a file on disk by its path: previously ingested files (find the path in context "
+        "provenance markers like '[原文件：/abs/path]' or '[原音频：/abs/path]') AND any readable "
+        "file discovered via list_dir/search_files (e.g. a PDF found in a folder). "
+        "Modes by file type: "
         "PDF -> pass page='N' or 'N-M' to extract those pages' text (output is paginated; "
         "its header names the remaining pages to fetch next); "
         "audio -> pass start/end (seconds) to transcribe a time range; "
@@ -52,7 +53,10 @@ class FileExtractTool(BaseTool):
     def execute(self, path: str, page: Optional[str] = None,
                 start: Optional[float] = None, end: Optional[float] = None,
                 max_chars: int = 12000) -> str:
-        p = Path(path)
+        # expanduser 与 file_nav/file_edit/desktop 同纪律：模型会把 list_dir 参数里的
+        # ~ 原样带过来（实机事故：list_dir 成功 → file_extract 同路径 not found →
+        # 模型退化 cat 二进制死路）。路径处理必须全工具面均匀。
+        p = Path(path).expanduser()
         if not p.exists():
             return f"System Error: file not found: {path}"
         suf = p.suffix.lower()

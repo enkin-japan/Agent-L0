@@ -1911,6 +1911,22 @@ subAgent 层刻意无注册接口（沙箱=安全边界，dispatch 语义在代�
 
 金测试 474 → 489（+15：护栏强度规则 + config_loader 覆盖 + keygen shell 实跑）。双端 63 发布。
 
+### 会话复盘修：file_extract 不展开 ~（PDF"没有主动工具"的真相）+ 两处同类补齐（2026-07-19）
+
+用户复盘实机会话（app-2ac41befe7d3）观感是"PDF 只有被动解析没有主动工具"。轨迹还原后
+真相相反：**工具存在（file_extract 按页回源），模型也选对了**——败在架构均匀性缺陷：
+`list_dir` 展开 `~` 而 `file_extract` 不展开，模型把 list_dir 参数里的 `~/Desktop/web/x.pdf`
+原样带过来即 not found，随后退化 `cat` 二进制走进死路，最终告诉用户读不了。三处修：
+① file_extract 补 expanduser（全工具面唯一漏网；带回归测试，HOME monkeypatch）；
+② excel_research 同类补齐（file_path 同样不展开，抢在事故前）；③ shell_exec 对
+UnicodeDecodeError 单列出路提示（"二进制请用 file_extract"，不再裸抛解码错误）。
+另把 file_extract 的 description 从"previously ingested"放宽为"盘上任意可读文件
+（含 list_dir/search_files 发现的）"——按需解析的语义本就该覆盖发现型文件。
+**教训：跨工具的参数处理（路径展开/编码/截断）必须均匀——模型把 A 工具的输出喂给
+B 工具是常规动作，任何一处不一致都是模型无法自愈的暗坑。**（rag 两工具的 source_path
+是内部精确匹配键，不展开是正确的，已核不改。）模型后段的低效爬行（逐页 10 call 计划）
+属智力侧，按 D1 搁置。金测试 489 → 490（+1）。双端 64 发布。
+
 ---
 
 ## §5 待决（开工前需拍板）

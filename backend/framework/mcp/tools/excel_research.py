@@ -105,7 +105,8 @@ class ExcelResearchTool(BaseTool):
                     "a chat turn.")
 
         if file_path:
-            p = Path(file_path)
+            # expanduser 与 file_nav/file_extract 同纪律：路径处理全工具面均匀
+            p = Path(file_path).expanduser()
             if not p.is_file():
                 return (f"System Error: input file not found: {file_path}. Pass the absolute "
                         "path from the provenance marker, or omit file_path to create a new "
