@@ -17,6 +17,13 @@ struct SettingsView: View {
     @State private var copyResetTask: Task<Void, Never>?
     private enum RegenPhase { case idle, restarting, done }
     @State private var regenPhase: RegenPhase = .idle
+    // Tab 选中态必须显式绑定：store/push 是高频发布源（连接状态、流式事件），
+    // 每次 body 重算时无绑定的 TabView 会重置回第一页——实机症状即"点击不切页/
+    // 切过去又弹回第一页"。@State 存活于重渲染，选中页才稳得住。
+    private enum SettingsTab: Hashable {
+        case connection, notification, knowledge, apiTools, skills, sidecar, appearance
+    }
+    @State private var tab: SettingsTab = .connection
     #endif
 
     var body: some View {
@@ -24,30 +31,37 @@ struct SettingsView: View {
             // macOS 分 Tab（系统设置窗的惯例；单页 Form 七个 Section 已实证拥挤——
             // 实机查验时用户在里面找不到新增项）；iOS 保持单列滚动（sheet 的惯例）。
             #if os(macOS)
-            TabView {
+            TabView(selection: $tab) {
                 Form { connectionSections }
                     .formStyle(.grouped)
                     .tabItem { Label(L("连接"), systemImage: "network") }
+                    .tag(SettingsTab.connection)
                 Form { notificationSection }
                     .formStyle(.grouped)
                     .tabItem { Label(L("通知"), systemImage: "bell") }
+                    .tag(SettingsTab.notification)
                 // 知识库是全局数据实体（跨会话），归设置而非会话菜单（会话菜单里
                 // 其余条目全是会话作用域——语义分层：会话的记忆看会话菜单，全局的
                 // 知识看设置）。embedded：复用本页外层 NavigationStack 推入文档页。
                 KnowledgePanelView(embedded: true)
                     .tabItem { Label(L("知识库"), systemImage: "books.vertical") }
+                    .tag(SettingsTab.knowledge)
                 // 私人 API 工具（声明式工具工厂表单面）：同为全局数据实体，归设置
                 ApiToolsPanelView(embedded: true)
                     .tabItem { Label(L("API 工具"), systemImage: "wrench.and.screwdriver") }
+                    .tag(SettingsTab.apiTools)
                 // 剧本（用户以 /名字 点名的流程提示词）：同为全局数据实体，归设置
                 SkillsPanelView(embedded: true)
                     .tabItem { Label(L("剧本"), systemImage: "book.closed") }
+                    .tag(SettingsTab.skills)
                 Form { sidecarSection; versionSection }
                     .formStyle(.grouped)
                     .tabItem { Label(L("执行层"), systemImage: "gearshape.2") }
+                    .tag(SettingsTab.sidecar)
                 Form { appearanceSection }
                     .formStyle(.grouped)
                     .tabItem { Label(L("外观"), systemImage: "paintpalette") }
+                    .tag(SettingsTab.appearance)
             }
             .padding(.top, Theme.s2)
             .navigationTitle(L("设置"))

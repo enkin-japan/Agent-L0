@@ -1867,6 +1867,17 @@ subAgent 层刻意无注册接口（沙箱=安全边界，dispatch 语义在代�
   `project.yml`）。
 - 金测试 460 → 474（+14）。双端 61 发布。
 
+### 设置页 Tab 实机修：TabView 无 selection 绑定被高频重渲染打回第一页（2026-07-19）
+
+61 实机反馈：设置页点标签有时不切页、有时切过去又弹回第一个。病根：macOS 分支的
+`TabView` 没有 selection 绑定——`store`/`push` 两个 EnvironmentObject 是高频发布源
+（连接状态、流式事件），任一发布触发 `SettingsView` body 重算，无绑定的 TabView 在
+重算中重置回默认第一页；"点击被吞"与"弹回第一页"同根。修法：`@State tab` + 七个
+`.tag()`，选中态存活于重渲染。**教训：嵌在高频发布环境里的 TabView/Picker 一类
+选择容器，选中态必须显式提升为 @State，不能依赖容器内部状态。**顺带把
+`inference/kvstore/`（推理端会话 KV 缓存快照，1.4G 运行时数据）补进 `.gitignore`
+——`inference/media/` 同类漏网。金测试 474 不变，双端 62 发布。
+
 ---
 
 ## §5 待决（开工前需拍板）

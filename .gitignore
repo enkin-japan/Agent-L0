@@ -32,6 +32,7 @@ backend/sessions/
 # 长期记忆笔记（R4）：agent 写下的用户个人事实。绝不入库——本仓库托管在 GitHub。
 backend/notes/
 inference/media/
+inference/kvstore/
 backend/schedules/
 backend/push/
 backend/ui_state.json
