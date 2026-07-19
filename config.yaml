@@ -15,7 +15,7 @@ inference:
   mode: "remote"                # inprocess | remote
   backend: "mlx"                # mlx | cuda(A1 后)：进程内所用/服务端内包的后端
   remote:
-    host: "100.72.11.119"       # inference-server 地址（设备 A 拿它当绑定地址、设备 B 拿它当
+    host: "100.80.230.19"       # inference-server 地址（设备 A 拿它当绑定地址、设备 B 拿它当
     port: 14161                 #   拨号地址——同一个键身兼两职。D7 端口约定 :14161）
     cache_ttl_minutes: 45       # 服务端缓存注册表空闲回收（略长于 backend 30min 冻结，只兜底）
   # KV 冻结落盘（T2/Q9-a）：会话冻结时把 KV 缓存序列化到承载端本地盘，解冻热恢复
@@ -154,7 +154,7 @@ rag:
   #   空 key = 拒启）。拓扑切换步骤：数据目录（chroma_data/ + storage/）先从算力端
   #   迁到工作端，再改本段 + rag.host，最后算力端改跑 `start --profile gpu`。
   compute:
-    host: "100.72.11.119"
+    host: "100.80.230.19"
     port: 14162
 
   # ── RAG 档位注册表（镜像 inference.model_registry 的选择制，HETERO_COMPUTE B2a）──
