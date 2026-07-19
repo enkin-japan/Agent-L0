@@ -779,6 +779,7 @@ async def _prepare_turn(request: Request, session_id: str, system: str, files):
         "audios": ingested.get("audios", []),
         "ingested_text": ingested.get("ingested_text", ""),
         "attachments": ingested.get("attachments", []),
+        "voice_transcripts": ingested.get("voice_transcripts", []),
     }
 
 
@@ -806,7 +807,8 @@ async def chat_endpoint(
     try:
         ctx = await runner.accept_turn(
             session, session_id, prompt=prompt, images=io["images"], audios=io["audios"],
-            ingested_text=io["ingested_text"], attachments=io["attachments"], gen=gen)
+            ingested_text=io["ingested_text"], attachments=io["attachments"], gen=gen,
+            voice_transcripts=io["voice_transcripts"])
     except TurnConflict as e:
         return {
             "status": "fail",
@@ -843,7 +845,8 @@ async def submit_turn(
     try:
         ctx = await runner.accept_turn(
             session, session_id, prompt=prompt, images=io["images"], audios=io["audios"],
-            ingested_text=io["ingested_text"], attachments=io["attachments"], gen=gen)
+            ingested_text=io["ingested_text"], attachments=io["attachments"], gen=gen,
+            voice_transcripts=io["voice_transcripts"])
     except TurnConflict as e:
         return JSONResponse(status_code=409, content={"status": False, "reason": e.reason})
     runner.spawn(session_id, runner.run_accepted(session, session_id, ctx))

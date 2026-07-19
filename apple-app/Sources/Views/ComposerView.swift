@@ -374,7 +374,12 @@ struct ComposerView: View {
     private func send() {
         guard canSend, !store.isGenerating else { return }
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        store.send(prompt: prompt.isEmpty ? L("（见附件）") : prompt, uploads: uploads, thinking: thinking)
+        // 纯语音发送时发空 prompt：后端摄入期会把 ASR 转写升格为本轮用户文本
+        // （任务 goal/全文搜索/斜杠点名随之全通）。占位符只留给非音频附件——
+        // 文档内容不是"用户的话"，不该被升格。
+        let audioOnly = !uploads.isEmpty && uploads.allSatisfy { $0.mime.hasPrefix("audio/") }
+        let effective = prompt.isEmpty ? (audioOnly ? "" : L("（见附件）")) : prompt
+        store.send(prompt: effective, uploads: uploads, thinking: thinking)
         draft = ""
         uploads = []
     }

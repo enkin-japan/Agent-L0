@@ -95,13 +95,18 @@ class Ingestion:
     # ---------- 主入口 ----------
     async def ingest(self, files, image_dir: Path, audio_dir: Path, attach_dir: Path) -> Dict[str, Any]:
         """
-        返回 {"images": [路径], "audios": [路径], "ingested_text": str, "attachments": [{path,type,name}]}。
+        返回 {"images": [路径], "audios": [路径], "ingested_text": str, "attachments": [{path,type,name}],
+              "voice_transcripts": [{path, transcript, block, marker_line}]}。
         - images：原生图像 + 渲染出的 PDF 页（→ session.images，喂模型）
         - audios：仅原生音频能力开启时非空（→ session.audios，原生直喂）
         - ingested_text：所有解析/转写文本（带 provenance 标记），作为一个文本块注入用户消息
         - attachments：原始非原生文件登记（供分支重挂 / 媒体清理 / 前端）
+        - voice_transcripts：仅非 native_audio 的 audio 分支产生（其余为空）——每项带
+          纯转写 transcript 与两种拼法（block=完整转写块 / marker_line=仅 provenance 一行），
+          供 turn_runner 决定是否把语音升格为本轮用户文本（升格时块降为仅标记行去重）。
         """
-        result: Dict[str, Any] = {"images": [], "audios": [], "ingested_text": "", "attachments": []}
+        result: Dict[str, Any] = {"images": [], "audios": [], "ingested_text": "",
+                                  "attachments": [], "voice_transcripts": []}
         if not files:
             return result
 
@@ -132,11 +137,20 @@ class Ingestion:
                             asr.transcribe_audio, str(p), model=self.asr_model,
                             language=self.asr_language, provider=self.asr_provider
                         )
-                        text_parts.append(
-                            f"[Audio transcript · {fname}]\n{transcript}\n"
-                            f"[Original audio: {p}; to re-listen to a time range use "
-                            f"file_extract(path, start=seconds, end=seconds)]"
-                        )
+                        # provenance 一行是 file_extract 的重听 handle；升格语音时块降到
+                        # 仅这一行（转写正文已成用户文本，不再在摄入块里重复占预算）。
+                        marker_line = (f"[Original audio: {p}; to re-listen to a time range use "
+                                       f"file_extract(path, start=seconds, end=seconds)]")
+                        block = f"[Audio transcript · {fname}]\n{transcript}\n{marker_line}"
+                        text_parts.append(block)
+                        # ASR fail-open 标记（静音/服务不可达/解码失败）不是"用户的话"，
+                        # 不进升格通道——块保持完整留在摄入文本里，模型仍能看到失败原因
+                        if not transcript.startswith(("[Empty transcript",
+                                                      "[Audio transcription")):
+                            result["voice_transcripts"].append({
+                                "path": str(p), "transcript": transcript,
+                                "block": block, "marker_line": marker_line,
+                            })
                         result["attachments"].append({"path": str(p), "type": "audio", "name": fname})
 
                 elif route == "pdf":

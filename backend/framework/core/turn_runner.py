@@ -73,10 +73,16 @@ class TurnRunner:
     async def accept_turn(self, session, sid: str, *, prompt: str,
                           images: List[str], audios: List[str],
                           ingested_text: str, attachments: List[Any],
-                          gen: Dict[str, Any], origin: str = "chat") -> Dict[str, Any]:
+                          gen: Dict[str, Any], origin: str = "chat",
+                          voice_transcripts: Optional[List[Dict[str, Any]]] = None
+                          ) -> Dict[str, Any]:
         """
         受理一个新轮次(短临界区):放弃暂停态旧轮 → 提交用户消息 → inflight 预写 →
         账本 turn_queued。返回执行上下文 ctx(交给 run_accepted);受理冲突抛 TurnConflict。
+
+        voice_transcripts(方案 B,来自 ingestion.ingest):非 native_audio 的 audio 分支
+        转写清单。纯音频消息 prompt 为空时,把转写升格为本轮用户文本(见下),既有调用方
+        不传即维持现状。
         """
         journal = session.journal
         # 锁外快路径:运行中的轮次持 session.lock 长达数分钟,受理冲突必须即时拒绝
@@ -89,6 +95,22 @@ class TurnRunner:
                 raise TurnConflict("turn_active")
 
             await self._abandon_paused_turn(session, sid)
+
+            # 语音升格（方案 B）：纯音频消息客户端发空 prompt，把 ASR 转写升格为本轮
+            # 用户文本——否则任务 goal / 会话搜索 / 斜杠分发全拿不到语音内容。落在斜杠
+            # 分发**之前**：语音说「/剧本名 …」也能触发确定性分发。升格后把 ingested_text
+            # 里对应音频的完整转写块降到仅 provenance 标记行（转写正文不在用户文本与摄入
+            # 块里各存一份，省 8K 上下文预算）；用 router 交回的精确 block 串做定点替换,
+            # 不解析 ingested_text 结构。空/全空白转写（静音）不升格,走现状。
+            if not prompt.strip() and voice_transcripts:
+                texts = [t for t in (str(vt.get("transcript") or "").strip()
+                                     for vt in voice_transcripts) if t]
+                if texts:
+                    prompt = "\n".join(texts)
+                    for vt in voice_transcripts:
+                        block, marker = vt.get("block"), vt.get("marker_line")
+                        if block and marker and block in ingested_text:
+                            ingested_text = ingested_text.replace(block, marker, 1)
 
             # 斜杠点名剧本 → 确定性注入（D1/D.17：点名是机械可判的，不靠模型悟）。
             # 点名的是被舍弃剧本时先热重扫再分发：依赖可能装好了没生效（LibreOffice
