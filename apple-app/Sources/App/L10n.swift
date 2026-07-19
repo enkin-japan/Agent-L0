@@ -56,6 +56,12 @@ enum L10n {
             ("キーは即座にキーチェーンへ保存されます。実行中の実行レイヤーには下の再起動で反映されます。",
              "Keys are saved to Keychain immediately; restart below to apply to a running execution layer."),
         "重启执行层": ("実行レイヤーを再起動", "Restart execution layer"),
+        "算力端地址（留空 = 按内置配置）":
+            ("計算ノードのアドレス（空欄＝内蔵設定を使用）",
+             "Compute host address (empty = use built-in config)"),
+        "填算力机的 Tailscale IP。改后点下方\"重启执行层\"生效。":
+            ("計算マシンの Tailscale IP を入力。変更後は下の「実行レイヤーを再起動」で反映されます。",
+             "Enter the compute machine's Tailscale IP. After changing, tap \"Restart execution layer\" below to apply."),
         "已存长度": ("保存済みの長さ", "Stored length"),
         "选择或新建一个会话": ("チャットを選択または新規作成", "Select or create a chat"),
         "左上角 ✎ 开始新对话": ("左上の ✎ から新規チャット", "Tap ✎ to start a new chat"),

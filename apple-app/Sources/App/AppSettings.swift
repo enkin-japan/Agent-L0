@@ -106,6 +106,13 @@ final class AppSettings: ObservableObject {
     @Published var ragApiKey: String {
         didSet { Keychain.save("rag-api-key", ragApiKey) }
     }
+    /// 算力端地址（非密钥，UserDefaults）：填算力机的 Tailscale IP，注入 backend 子进程
+    /// 环境覆盖包内 config.yaml 里的计算面 host——换算力机零重打包。空 = 按内置配置。
+    /// 一键两职：非空时同时覆盖 INFER_REMOTE_HOST 与 RAG_COMPUTE_HOST（两个服务在同一台
+    /// 算力机，一个字段覆盖两个变量——用户无需理解两个变量名，照抄密钥项的哲学）。
+    @Published var computeHost: String {
+        didSet { UserDefaults.standard.set(computeHost, forKey: "sidecar.computeHost") }
+    }
 
     init() {
         baseURLString = UserDefaults.standard.string(forKey: "agent.baseURL") ?? "http://127.0.0.1:14159"
@@ -122,6 +129,7 @@ final class AppSettings: ObservableObject {
         sidecarRepoRoot = ud.string(forKey: "sidecar.repoRoot") ?? ""
         inferApiKey = Keychain.load("infer-api-key")
         ragApiKey = Keychain.load("rag-api-key")
+        computeHost = ud.string(forKey: "sidecar.computeHost") ?? ""
         L10n.current = AppLanguage(rawValue: language) ?? .system
     }
 

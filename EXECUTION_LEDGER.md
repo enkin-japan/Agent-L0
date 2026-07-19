@@ -1878,6 +1878,39 @@ subAgent 层刻意无注册接口（沙箱=安全边界，dispatch 语义在代�
 `inference/kvstore/`（推理端会话 KV 缓存快照，1.4G 运行时数据）补进 `.gitignore`
 ——`inference/media/` 同类漏网。金测试 474 不变，双端 62 发布。
 
+### 部署可配化：算力端地址运行时覆盖 + 密钥强度护栏 + keygen（2026-07-19，用户分离部署实测引发）
+
+用户把算力端迁到新设备（liyue-macbook-air）实测分离部署，暴露两个问题——①算力端地址烘死在
+`config.yaml`，app 形态改拓扑必须重打包；②用户误把算力端端口/反代地址填进 app「后端地址」
+（app 连的永远是工作端 backend :14159，与算力端无直连——D2 边界，这个误会值得记档）。讨论中
+用户提议「默认绑 0.0.0.0 + 长随机 key + 限频拉黑防公网」，经论证修正为：**uuid4 级 key 防得住
+猜 key，防不住 pre-auth 解析面暴露/key 泄露单点失效/分布式资源耗尽；且 cloudflared 是本机主动
+外连，连 Cloudflare 场景都不需要 0.0.0.0**——纵深防御两道闸都保留。
+
+落地四件：
+
+- **env 覆盖**：`INFER_REMOTE_HOST`/`RAG_COMPUTE_HOST` 非空即赢，覆盖 config 两个 host（一键
+  两职语义不变）。五个落点：backend 侧集中在 `config_loader.load_config`（grep 实证无绕过读
+  点）、`rag_server` 拨号、`compute_server` 绑定、`inference/server` 绑定、
+  `lib_edge._read_cfg_hosts`。
+- **护栏升级**：四处拒启点从「非回环+空 key」升为「非回环+key 缺失或长度 <16」（`"test"`
+  占位一律拒），报错文案给出 keygen 指引。回环+空 key 放行不变（dev 形态）。
+- **`devctl keygen`**：新子命令 + `setup` 末尾自动调用；对四把 Bearer 钥匙的空/弱值生成
+  `secrets.token_hex(24)` 强随机、upsert 保留其余行、`chmod 600`、幂等；打印四键生效值 +
+  部署指引（两侧同值/app 填 INFER+RAG 两把/后端地址是工作端自己的 :14159）。
+  `DEVCTL_ENV_FILE` 可覆盖目标路径（测试逃生口）。
+- **app 设置页「执行层」新增算力端地址字段**（macOS 专有——iOS 无 sidecar）：`computeHost`
+  （UserDefaults）非空时 SidecarManager 同时注入两个 env（照 RAG 密钥一键两职的先例），空=
+  回落包内 config；换算力机零重打包达成。
+
+`.env.example`：`INFER_API_KEY` 的 `"test"` 预填清空，补注释掉的两个 host 覆盖示例。
+`config.yaml` 注释补 env 覆盖与护栏语义（0.0.0.0 是显式 opt-in，入站面仍收在 tailnet/隧道内）。
+拓扑事实：`config.yaml` 两 host 已切 `100.80.230.19`（liyue-macbook-air 上任设备 A，mac-mini
+转纯工作端，commit `ae372cb`）。协作：继续按 `CLAUDE.md` 路由——前后端两 implementer 并行，
+主会话定契约/复核/亲改 `config.yaml` 与 `project.yml`。
+
+金测试 474 → 489（+15：护栏强度规则 + config_loader 覆盖 + keygen shell 实跑）。双端 63 发布。
+
 ---
 
 ## §5 待决（开工前需拍板）

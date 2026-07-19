@@ -181,20 +181,25 @@ def is_loopback_bind(host: str) -> bool:
     return str(host).strip() in ("127.0.0.1", "localhost", "::1", "127.0.0.0/8")
 
 
+MIN_KEY_LEN = 16  # 非回环绑定的密钥最短长度：空或过短（含 "test" 弱值）一律拒启
+
+
 def enforce_bind_guardrail(host: str, key: str, *, service: str, key_env: str) -> None:
-    """部署铁则（§8 / §7 预留 2）：非回环绑定 + 空密钥 = 拒启。
+    """部署铁则（§8 / §7 预留 2）：非回环绑定 + 密钥缺失或过弱（长度 < 16）= 拒启。
 
     此前这条只是文档里的散文，而"绑到 Tailscale 地址"与"设了密钥"是两个独立动作——
     先改 host 后忘了 key，服务就对整个 tailnet 裸奔且**只打印一行告警**（谁看启动日志？）。
     edge/gpu profile 让非回环绑定成为常规操作，这条必须由代码强制。
+    密钥过短/过弱（如占位 "test"）同样拒绝——弱钥等于没钥。
     回环绑定时空密钥仍放行（dev 现状不变）。
     """
-    if is_loopback_bind(host) or key:
+    if is_loopback_bind(host) or len(key or "") >= MIN_KEY_LEN:
         return
     raise SystemExit(
-        f"❌ [{service}] 拒绝启动：绑定到非回环地址 {host!r} 但未设置 {key_env}——"
-        f"服务会对整个可达网络裸奔。\n"
-        f"   请在 .env.local 设置 {key_env}=<强随机串>（两侧同值），或把绑定地址改回 127.0.0.1。\n"
+        f"❌ [{service}] 拒绝启动：绑定到非回环地址 {host!r} 但 {key_env} 缺失或过弱"
+        f"（长度 {len(key or '')} < {MIN_KEY_LEN}）——服务会对整个可达网络裸奔。\n"
+        f"   密钥过短/过弱同样拒绝。请 `./devctl.sh keygen` 生成强随机值（两侧同值，"
+        f"app 形态填进设置页），或把绑定地址改回 127.0.0.1。\n"
         f"   （部署铁则 §8：非回环绑定只允许出现在受信内网 + 必须带 Bearer。）"
     )
 

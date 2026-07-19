@@ -66,7 +66,8 @@ RAG_PORT = RAG_CFG["port"]
 
 # 计算面分派：compute.host 空 = 融合（就地加载模型）；非空 = 拆分（HTTP 拨号算力端）
 COMPUTE_CFG = RAG_CFG.get("compute") or {}
-COMPUTE_HOST = (COMPUTE_CFG.get("host") or "").strip()
+# env 覆盖=运行时改拓扑不必重打包/改 config：非空即赢，覆盖 config 里烘死的算力端拨号地址
+COMPUTE_HOST = os.environ.get("RAG_COMPUTE_HOST", "").strip() or (COMPUTE_CFG.get("host") or "").strip()
 COMPUTE_PORT = int(COMPUTE_CFG.get("port") or 14162)
 SPLIT_MODE = bool(COMPUTE_HOST)
 
@@ -1079,13 +1080,13 @@ def _enforce_bind_guardrail() -> None:
     只绑回环（工作端本机），护栏保留：谁把它绑出去谁就必须带钥匙。
     回环绑定时空密钥仍放行（dev 现状不变）。与 backend/app.py、inference/server.py 同一条纪律。
     """
-    if str(RAG_HOST).strip() in ("127.0.0.1", "localhost", "::1") or RAG_API_KEY:
+    if str(RAG_HOST).strip() in ("127.0.0.1", "localhost", "::1") or len(RAG_API_KEY) >= 16:
         return
     raise SystemExit(
-        f"❌ [rag] 拒绝启动：绑定到非回环地址 {RAG_HOST!r} 但未设置 RAG_API_KEY——"
-        f"知识库会对整个可达网络裸奔。\n"
-        f"   请在 .env.local 设置 RAG_API_KEY=<强随机串>（与设备 B 同值），"
-        f"或把 rag.host 改回 127.0.0.1。\n"
+        f"❌ [rag] 拒绝启动：绑定到非回环地址 {RAG_HOST!r} 但 RAG_API_KEY 缺失或过弱"
+        f"（长度 {len(RAG_API_KEY)} < 16）——知识库会对整个可达网络裸奔。\n"
+        f"   密钥过短/过弱同样拒绝。请 `./devctl.sh keygen` 生成强随机值（与设备 B 同值，"
+        f"app 形态填进设置页），或把 rag.host 改回 127.0.0.1。\n"
         f"   （部署铁则 §8：非回环绑定只允许出现在受信内网 + 必须带 Bearer。）"
     )
 

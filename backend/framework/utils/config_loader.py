@@ -34,11 +34,39 @@ def data_dir() -> Path:
     return Path(raw).expanduser() if raw else BACKEND_DIR
 
 
+def _apply_host_overrides(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """env 覆盖=运行时改拓扑不必重打包/改 config：算力端地址由环境变量夺权。
+
+    `INFER_REMOTE_HOST` → inference.remote.host；`RAG_COMPUTE_HOST` → rag.compute.host。
+    非空即赢（覆盖 config 里烘死的值）。集中在此=覆盖 backend 侧全部读点（remote/backend.py、
+    remote/asr.py 等都经 load_config 取 remote/compute host，无绕过直读 yaml 的读点）。
+    """
+    def _branch(root: str, child: str) -> Dict[str, Any]:
+        sect = cfg.get(root)
+        if not isinstance(sect, dict):
+            sect = {}
+            cfg[root] = sect
+        sub = sect.get(child)
+        if not isinstance(sub, dict):
+            sub = {}
+            sect[child] = sub
+        return sub
+
+    infer_host = os.environ.get("INFER_REMOTE_HOST", "").strip()
+    if infer_host:
+        _branch("inference", "remote")["host"] = infer_host
+    ragc_host = os.environ.get("RAG_COMPUTE_HOST", "").strip()
+    if ragc_host:
+        _branch("rag", "compute")["host"] = ragc_host
+    return cfg
+
+
 @lru_cache(maxsize=1)
 def load_config() -> Dict[str, Any]:
     """读取仓库根 config.yaml（缓存单份）。文件缺失/损坏时抛出，由启动方尽早失败。"""
     with CONFIG_PATH.open(encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+        cfg = yaml.safe_load(f) or {}
+    return _apply_host_overrides(cfg)
 
 
 def load_section(name: str) -> Dict[str, Any]:

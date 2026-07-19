@@ -256,6 +256,14 @@ struct SettingsView: View {
                         Text(L("密钥即改即存入钥匙串；对正在运行的执行层，点下方重启后生效。"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        // 算力端地址（非密钥）：一个字段覆盖 INFER_REMOTE_HOST /
+                        // RAG_COMPUTE_HOST 两个变量（两服务同机）——换算力机零重打包。
+                        TextField(L("算力端地址（留空 = 按内置配置）"),
+                                  text: computeHostBinding, prompt: Text("100.x.x.x"))
+                            .autocorrectionDisabled()
+                        Text(L("填算力机的 Tailscale IP。改后点下方\"重启执行层\"生效。"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         // 语义分工（用户拍板 2026-07-18）：这枚 = 纯重启（故障自救/
                         // 应用改过的密钥），**不动任何 key**；换 AGENT_API_KEY 走
                         // 连接页的「重新生成」。旧标签「（应用新密钥）」读起来像会
@@ -302,6 +310,12 @@ struct SettingsView: View {
     private var sidecarRepoRootBinding: Binding<String> {
         Binding(get: { store.settings.sidecarRepoRoot },
                 set: { store.settings.sidecarRepoRoot = $0 })
+    }
+
+    /// 算力端地址即改即存（UserDefaults didSet），注入 spawn env 需重启执行层生效。
+    private var computeHostBinding: Binding<String> {
+        Binding(get: { store.settings.computeHost },
+                set: { store.settings.computeHost = $0 })
     }
 
     /// 设备 A 服务密钥即改即存（Keychain didSet），运行中的执行层重启后生效。

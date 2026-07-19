@@ -192,7 +192,72 @@ do_setup() {
         info "前端依赖部署完毕 ✅"
     fi
     [ -f "$ROOT/.env.local" ] || warn "未发现 .env.local——如需启用后端鉴权，请: cp .env.example .env.local 并填写 AGENT_API_KEY"
+    do_keygen
     info "setup 完成。启动: ./devctl.sh start"
+}
+
+# ---- 密钥生成（keygen）----
+# 四把 Bearer 钥匙（AGENT/INFER/RAG/RAG_COMPUTE）的空值/弱值（长度<16，含占位 "test"）
+# 一键换成强随机串——护栏规则「非回环绑定 + 密钥缺失或过弱 = 拒启」的配套逃生口。
+# 目标文件默认仓库根 .env.local，可用 DEVCTL_ENV_FILE 覆盖（测试指临时文件，绝不碰真身）。
+# upsert：只改这四个键、保留文件其余行原样；已是强值则原样保留（幂等）。chmod 600。
+do_keygen() {
+    local target="${DEVCTL_ENV_FILE:-$ROOT/.env.local}"
+    if [ ! -f "$target" ]; then
+        if [ -f "$ROOT/.env.example" ]; then
+            cp "$ROOT/.env.example" "$target"
+            info "已从 .env.example 创建 ${target}"
+        else
+            : > "$target"
+            info "已创建空 ${target}"
+        fi
+    fi
+    chmod 600 "$target" 2>/dev/null || true
+
+    local key
+    for key in AGENT_API_KEY INFER_API_KEY RAG_API_KEY RAG_COMPUTE_API_KEY; do
+        _keygen_upsert "$target" "$key"
+    done
+    chmod 600 "$target" 2>/dev/null || true
+
+    # 指引块：四键当前生效值 + 两条部署提示。
+    echo ""
+    info "密钥就绪（${target}，权限 600）。当前生效值："
+    for key in AGENT_API_KEY INFER_API_KEY RAG_API_KEY RAG_COMPUTE_API_KEY; do
+        printf '    %-20s = %s\n' "$key" "$(_keygen_read "$target" "$key")"
+    done
+    echo "  部署提示："
+    echo "    • 算力端与工作端两侧 .env.local 四键必须同值（Bearer 两端对齐才能互认）。"
+    echo "    • macOS/iOS app 在设置页填 INFER / RAG 两把密钥；后端地址始终是工作端自己的"
+    echo "      http://127.0.0.1:14159（不是算力端端口）。"
+}
+
+# 读单键当前值（去掉两侧引号；无则空）。仅取该键最后一次赋值。
+_keygen_read() {  # $1: 文件  $2: 键名
+    local v
+    v="$(grep -E "^${2}=" "$1" 2>/dev/null | tail -n1)"
+    v="${v#*=}"
+    v="${v%\"}"; v="${v#\"}"
+    v="${v%\'}"; v="${v#\'}"
+    printf '%s' "$v"
+}
+
+# 空值/长度<16 → 生成强随机替换（upsert，保留其余行）；已达强度则原样保留。
+_keygen_upsert() {  # $1: 文件  $2: 键名
+    local file="$1" key="$2" cur
+    cur="$(_keygen_read "$file" "$key")"
+    if [ "${#cur}" -ge 16 ]; then
+        return 0   # 已是强值，原样保留（幂等）
+    fi
+    local val
+    val="$(python3 -c 'import secrets;print(secrets.token_hex(24))')" || { fail "生成随机密钥失败（缺 python3？）"; return 1; }
+    if grep -qE "^${key}=" "$file" 2>/dev/null; then
+        # 就地替换该键行（值含 / 也安全：用 | 作分隔且值是 hex，无特殊字符）
+        /usr/bin/perl -i -pe "s|^${key}=.*|${key}=\"${val}\"|" "$file"
+    else
+        printf '%s="%s"\n' "$key" "$val" >> "$file"
+    fi
+    info "已为 ${key} 生成强随机值（原值空或长度<16）"
 }
 
 # ---- 启动 ----
@@ -447,6 +512,7 @@ esac
 
 case "$CMD" in
     setup) do_setup ;;
+    keygen) do_keygen ;;
     model) do_model ;;
     rag-model) do_rag_model ;;
     start)
@@ -535,7 +601,8 @@ case "$CMD" in
     status) do_status ;;
     logs)   do_logs "$TARGET" ;;
     *)
-        echo "用法: $0 setup                                   # 首次部署（venv/依赖/node_modules）"
+        echo "用法: $0 setup                                   # 首次部署（venv/依赖/node_modules，末尾自动 keygen）"
+        echo "      $0 keygen                                  # 生成/补全四把强随机 Bearer 密钥（写 .env.local，600）"
         echo "      $0 model                                   # 从注册表选择启动模型（钉死 revision）"
         echo "      $0 rag-model                                # 从 rag.tiers 选择 RAG 档位（写 .rag-tier-selection）"
         echo "      $0 start|stop|restart [rag|rag-compute|searx|infer|backend|front|all]"

@@ -24,7 +24,8 @@ logger = logging.getLogger("RAG_Compute_Server")
 COMPUTE_CFG = core.RAG_CFG.get("compute") or {}
 # host 一键两职（同 inference.remote.host / rag.host）：算力端拿它当绑定地址、
 # 工作端数据面拿它当拨号地址。空 = 回环（单机双进程联调形态）。
-BIND_HOST = (COMPUTE_CFG.get("host") or "").strip() or "127.0.0.1"
+# env 覆盖=运行时改拓扑不必重打包/改 config：非空即赢，覆盖 config 里烘死的绑定地址
+BIND_HOST = os.environ.get("RAG_COMPUTE_HOST", "").strip() or (COMPUTE_CFG.get("host") or "").strip() or "127.0.0.1"
 PORT = int(COMPUTE_CFG.get("port") or 14162)
 
 COMPUTE_API_KEY = os.environ.get("RAG_COMPUTE_API_KEY", "")
@@ -100,12 +101,13 @@ def _enforce_bind_guardrail() -> None:
     与 backend/inference/rag 同一条纪律。计算面虽无状态，但入库/查询文本都会流经此处，
     裸奔等于把语料在途明文开放给整个可达网络。
     """
-    if BIND_HOST in ("127.0.0.1", "localhost", "::1") or COMPUTE_API_KEY:
+    if BIND_HOST in ("127.0.0.1", "localhost", "::1") or len(COMPUTE_API_KEY) >= 16:
         return
     raise SystemExit(
-        f"❌ [rag-compute] 拒绝启动：绑定到非回环地址 {BIND_HOST!r} 但未设置 RAG_COMPUTE_API_KEY。\n"
-        f"   请在 .env.local 设置 RAG_COMPUTE_API_KEY=<强随机串>（与工作端同值），"
-        f"或把 rag.compute.host 改回回环/留空。\n"
+        f"❌ [rag-compute] 拒绝启动：绑定到非回环地址 {BIND_HOST!r} 但 RAG_COMPUTE_API_KEY "
+        f"缺失或过弱（长度 {len(COMPUTE_API_KEY)} < 16）。\n"
+        f"   密钥过短/过弱同样拒绝。请 `./devctl.sh keygen` 生成强随机值（与工作端同值，"
+        f"app 形态填进设置页），或把 rag.compute.host 改回回环/留空。\n"
         f"   （部署铁则 §8：非回环绑定只允许出现在受信内网 + 必须带 Bearer。）"
     )
 

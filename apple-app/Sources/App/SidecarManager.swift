@@ -231,6 +231,14 @@ final class SidecarManager: ObservableObject {
             //（过渡=整 RAG 在算力端走 RAG_API_KEY / 拆分=计算面走 RAG_COMPUTE_API_KEY）
             // 各用其一，闲置的一侧被忽略——用户无需理解两个变量名。
             if !rag.isEmpty { env["RAG_COMPUTE_API_KEY"] = rag }
+            // 算力端地址一键两职：inference-server 与 RAG 计算面在同一台算力机，一个
+            // 设置项覆盖两个 host 变量（后端已支持这两个 env 覆盖 config）——用户无需
+            // 理解两个变量名。空 = 不注入，回落包内 config.yaml 的值（换算力机零重打包）。
+            let host = (settings?.computeHost ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !host.isEmpty {
+                env["INFER_REMOTE_HOST"] = host
+                env["RAG_COMPUTE_HOST"] = host
+            }
             return Layout(libEdge: res.appendingPathComponent("scripts/lib_edge.sh"),
                           env: env, logDir: logDir, isBundle: true)
         }

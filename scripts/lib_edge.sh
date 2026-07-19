@@ -88,17 +88,20 @@ _read_cfg_hosts() {
     [ -x "$py" ] || py="${RAG_DIR:-}/.venv/bin/python"
     [ -x "$py" ] || return 1
     "$py" - "$EDGE_CONFIG" <<'PY' 2>/dev/null
-import sys, yaml
+import os, sys, yaml
 c = yaml.safe_load(open(sys.argv[1], encoding="utf-8")) or {}
 inf = c.get("inference") or {}
 rem = inf.get("remote") or {}
 rag = c.get("rag") or {}
 ragc = rag.get("compute") or {}
+# env 覆盖=运行时改拓扑不必重打包/改 config：非空即赢（第2行 INFER_HOST、第5行 RAGC_HOST）
+infer_host = os.environ.get("INFER_REMOTE_HOST", "").strip() or rem.get("host", "127.0.0.1")
+ragc_host = os.environ.get("RAG_COMPUTE_HOST", "").strip() or (ragc.get("host") or "").strip()
 print(inf.get("host", "127.0.0.1"))
-print(rem.get("host", "127.0.0.1"))
+print(infer_host)
 print(rag.get("host", "127.0.0.1"))
 print(inf.get("mode", "inprocess"))
-print((ragc.get("host") or "").strip())
+print(ragc_host)
 print(ragc.get("port") or 14162)
 PY
 }

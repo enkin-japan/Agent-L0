@@ -75,7 +75,8 @@ _KV_HINT_RE = re.compile(r"^[A-Za-z0-9._\-]{1,128}$")  # 会话 id 形状，防�
 config = load_config()
 INFERENCE_CFG = config.get("inference") or {}
 REMOTE_CFG = INFERENCE_CFG.get("remote") or {}
-HOST = str(REMOTE_CFG.get("host", "127.0.0.1"))
+# env 覆盖=运行时改拓扑不必重打包/改 config：非空即赢，覆盖 config 里烘死的绑定地址
+HOST = os.environ.get("INFER_REMOTE_HOST", "").strip() or str(REMOTE_CFG.get("host", "127.0.0.1"))
 PORT = int(REMOTE_CFG.get("port", 14161))
 CACHE_TTL_SECONDS = float(REMOTE_CFG.get("cache_ttl_minutes", 45)) * 60.0
 API_KEY = os.environ.get("INFER_API_KEY", "")
@@ -656,13 +657,13 @@ def _enforce_bind_guardrail() -> None:
     会让推理服务对整个 tailnet 裸奔，只靠启动告警拦不住。回环绑定时空密钥仍放行（dev 不变）。
     与 backend/app.py、rag/rag_server.py 同一条纪律（三服务各自独立 venv，就地实现不共享代码）。
     """
-    if str(HOST).strip() in ("127.0.0.1", "localhost", "::1") or API_KEY:
+    if str(HOST).strip() in ("127.0.0.1", "localhost", "::1") or len(API_KEY) >= 16:
         return
     raise SystemExit(
-        f"❌ [inference-server] 拒绝启动：绑定到非回环地址 {HOST!r} 但未设置 INFER_API_KEY——"
-        f"服务会对整个可达网络裸奔。\n"
-        f"   请在 .env.local 设置 INFER_API_KEY=<强随机串>（与设备 B 同值），"
-        f"或把 inference.remote.host 改回 127.0.0.1。\n"
+        f"❌ [inference-server] 拒绝启动：绑定到非回环地址 {HOST!r} 但 INFER_API_KEY "
+        f"缺失或过弱（长度 {len(API_KEY)} < 16）——服务会对整个可达网络裸奔。\n"
+        f"   密钥过短/过弱同样拒绝。请 `./devctl.sh keygen` 生成强随机值（与设备 B 同值，"
+        f"app 形态填进设置页），或把 inference.remote.host 改回 127.0.0.1。\n"
         f"   （部署铁则 §8：非回环绑定只允许出现在受信内网 + 必须带 Bearer。）"
     )
 
