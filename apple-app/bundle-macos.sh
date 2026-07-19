@@ -36,10 +36,11 @@ rsync -a --delete \
   --exclude='.venv' --exclude='__pycache__' --exclude='.pytest_cache' \
   --exclude='tests' --exclude='benchmarks' --exclude='docs' \
   --exclude='models' --exclude='sessions' --exclude='schedules' --exclude='notes' \
-  --exclude='*.jsonl' --exclude='logs' --exclude='api_tools' \
+  --exclude='*.jsonl' --exclude='logs' --exclude='api_tools' --exclude='skills' \
   "$ROOT/backend/" "$RES/backend/"
 # ⚠️ backend/api_tools 是 dev 形态的数据目录（UI 添加的声明 + .secrets.env 密钥文件），
 #    绝不进包——密钥红线；app 形态由 DATA_DIR（App Support）承接同名目录。
+#    backend/skills 同理（UI 添加的用户剧本，dev 数据目录）——开发机私有内容不进交付包。
 # 剧本内容（app.py: SKILLS_DIR = backend 的父目录/skills → Resources/skills）
 rsync -a --delete --exclude='__pycache__' "$ROOT/skills/" "$RES/skills/"
 # 手写 API 工具声明（api_tool_factory: DECL_DIR = 仓库根/api_tools → Resources/api_tools，

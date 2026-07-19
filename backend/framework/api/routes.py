@@ -33,6 +33,7 @@ from .schemas import (
     TaskListResponse,
     TaskStatusResponse,
     SessionFilesResponse,
+    SkillSaveRequest,
     SkillsResponse,
     ToolsResponse,
 )
@@ -101,6 +102,81 @@ async def list_skills(request: Request):
     from framework.agents import runtime as _runtime
     reg = _runtime.get_skill_registry()
     return {"status": True, "skills": reg.listing() if reg is not None else []}
+
+
+# 剧本名规则：与 skill_registry._SLASH_RE 的名字部分一致（小写字母数字开头，其余含连字符）。
+_SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def _skills_user_dir():
+    """用户剧本目录（数据根 skills/）。每次现读 data_dir()（进程内 env 不变，
+    测试可各自注入）——照 api_tool_factory.user_decl_dir 的惰性寻址。"""
+    from ..utils.config_loader import data_dir
+    return data_dir() / "skills"
+
+
+@router.post("/api/v1/skills")
+async def save_skill(request: Request, body: SkillSaveRequest):
+    """保存（upsert）一份用户剧本并尽力即时上架。写入数据根 skills/{name}.md
+    （内置 skills/ 只读，代码树在签名 bundle 里不可写）。effect：
+    registered=已注册可用｜saved_unavailable=已保存但依赖工具缺失（探活未过）。
+    与内置剧本重名 → 409（内置不可经 API 覆盖）；同名用户剧本 = 编辑覆盖，允许。"""
+    import yaml as _yaml
+    name = str(body.name or "").strip()
+    description = str(body.description or "").strip()
+    skill_body = body.body or ""
+    if not _SKILL_NAME_RE.match(name):
+        raise HTTPException(status_code=400,
+                            detail="剧本名非法：仅允许小写字母/数字开头，其余含小写字母/数字/连字符")
+    if not description or not skill_body.strip():
+        raise HTTPException(status_code=400, detail="description 与正文 body 均不可为空")
+    # 与内置（repo 来源，含被探活舍弃者）重名 → 409：内置剧本随仓库发货，不可经 API 覆盖
+    from framework.agents import runtime as _runtime
+    reg = _runtime.get_skill_registry()
+    if reg is not None and reg.origin_of(name) == "repo":
+        raise HTTPException(status_code=409, detail="与内置剧本重名")
+
+    # name/description 走 safe_dump（unicode/引号交给它）；requires 手写成内联 [a, b]——
+    # frontmatter.py 是 minimal 解析器（只认 key: value 与内联 [a,b]），读不了块状列表，
+    # 也读不了 safe_dump 对纯标量映射产出的 {…} flow 形态。requires 为空则不写该键。
+    front = _yaml.safe_dump({"name": name, "description": description},
+                            allow_unicode=True, sort_keys=False)
+    if body.requires:
+        front += "requires: [" + ", ".join(str(t) for t in body.requires) + "]\n"
+    user_dir = _skills_user_dir()
+    user_dir.mkdir(parents=True, exist_ok=True)
+    (user_dir / f"{name}.md").write_text(
+        f"---\n{front}---\n\n{skill_body}", encoding="utf-8")
+
+    rebuild = getattr(request.app.state, "rebuild_skills", None)
+    if rebuild is None:
+        return {"status": True, "effect": "saved_norebuild"}
+    new_reg = await asyncio.to_thread(rebuild)
+    if name in new_reg.names():
+        return {"status": True, "effect": "registered"}
+    missing = new_reg.unavailable_reason(name)
+    if missing is not None:
+        return {"status": True, "effect": "saved_unavailable",
+                "detail": "缺工具 " + ", ".join(missing)}
+    return {"status": True, "effect": "saved"}
+
+
+@router.delete("/api/v1/skills/{name}")
+async def delete_skill(name: str, request: Request):
+    """删除一份用户剧本（数据根 skills/{name}.md）。内置剧本不可经 API 删除（404）。
+    重扫式注册表：删文件后重建即时生效，无需重启。"""
+    if not _SKILL_NAME_RE.match(name):
+        raise HTTPException(status_code=400,
+                            detail="剧本名非法：仅允许小写字母/数字开头，其余含小写字母/数字/连字符")
+    path = _skills_user_dir() / f"{name}.md"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="用户剧本不存在（内置剧本不可经 API 删除）")
+    path.unlink()
+    rebuild = getattr(request.app.state, "rebuild_skills", None)
+    if rebuild is None:
+        return {"status": True, "effect": "removed_norebuild"}
+    await asyncio.to_thread(rebuild)
+    return {"status": True, "effect": "removed"}
 
 
 @router.post("/api/v1/tools/rescan")

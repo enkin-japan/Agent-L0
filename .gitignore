@@ -38,6 +38,8 @@ backend/ui_state.json
 backend/guardrail_events.jsonl
 # UI 添加的私人 API 声明 + 密钥文件（dev 模式 data_dir=backend/；仓库根 api_tools/ 是手写声明，照常入库）
 backend/api_tools/
+# UI 添加的用户剧本（dev 模式 data_dir=backend/；仓库根 skills/ 是内置剧本，照常入库）
+backend/skills/
 rag/chroma_data/
 rag/storage/
 

@@ -114,6 +114,16 @@ class SkillsResponse(BaseModel):
     status: bool
     skills: List[Dict[str, Any]]  # 每项含 name / description / available / missing
 
+class SkillSaveRequest(BaseModel):
+    """剧本保存（UI 设置页面）：name（小写字母数字与连字符）+ description + 正文 body，
+    可选 requires（依赖工具名清单，探活用）。写入数据根 skills/{name}.md（用户目录，
+    与内置 skills/ 分家；app 模式代码树在签名 bundle 里不可写）。"""
+    name: str
+    description: str
+    body: str
+    requires: Optional[List[str]] = None
+
+
 class SessionFilesResponse(BaseModel):
     """
     会话产物文件清单响应体（检查器「文件」页签的数据源）。

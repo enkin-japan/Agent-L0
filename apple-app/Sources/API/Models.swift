@@ -240,21 +240,38 @@ struct ToolsResponse: Codable {
     let tools: [ToolInfo]
 }
 
-/// 剧本条目（GET /api/v1/skills，斜杠候选提示用）。
+/// 剧本条目（GET /api/v1/skills，斜杠候选提示用 + 设置里的剧本管理面板）。
 /// available=false = 缺依赖被探活舍弃（missing 列缺什么），候选里灰显——
 /// 点名它仍会发出：后端会前置自动重扫，依赖刚装好就即时可用。
+/// source/file 是新增字段（旧后端无 → nil，按 repo/只读处理）：
+/// repo=仓库内置（只读）| user=UI 手写（可编辑/删除）。
 struct SkillItem: Codable, Identifiable {
     let name: String
     let description: String
     let available: Bool?
     let missing: [String]?
+    let source: String?
+    let file: String?
+    // 仅 user 来源的可用条目携带（编辑器预填用）；内置/舍弃条目为 nil
+    let body: String?
+    let requires: [String]?
 
     var id: String { name }
+    var isUserOwned: Bool { source == "user" }
 }
 
 struct SkillsResponse: Codable {
     let status: Bool
     let skills: [SkillItem]
+}
+
+/// 剧本增删响应（POST/DELETE /api/v1/skills*）。effect 语义随端点：
+/// 保存 = registered（即时生效）/ saved_unavailable（缺依赖）/ saved_norebuild（重启生效）；
+/// 删除 = removed（即时下架）/ removed_norebuild（重启下架）。
+struct SkillActionResponse: Codable {
+    let status: Bool?
+    let effect: String
+    let detail: String?
 }
 
 /// 会话产物文件（GET /api/v1/files/{sid}，检查器「文件」页签）。

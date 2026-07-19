@@ -506,6 +506,26 @@ final class AgentClient {
         return res.skills
     }
 
+    // MARK: - 剧本管理（用户以 /名字 点名的流程提示词；校验/落盘/注册在后端）
+
+    struct SkillSaveBody: Encodable {
+        let name: String
+        let description: String
+        let body: String
+        let requires: [String]?          // 依赖工具名；空数组发 nil
+    }
+
+    @discardableResult
+    func saveSkill(_ body: SkillSaveBody) async throws -> SkillActionResponse {
+        try await send(try request("POST", "/api/v1/skills", json: body))
+    }
+
+    @discardableResult
+    func deleteSkill(name: String) async throws -> SkillActionResponse {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        return try await send(try request("DELETE", "/api/v1/skills/\(encoded)"))
+    }
+
     func systemPrompt(sessionId: String) async throws -> SystemPromptResponse {
         try await send(try request("GET", "/api/v1/chat/\(sessionId)/system"))
     }

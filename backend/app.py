@@ -264,7 +264,8 @@ async def lifespan(app: FastAPI):
     # 1b. 剧本层（R2a）：skill = 主轮次的提示词剧本，工具沿用主循环 → 审批闸门照常生效。
     #     两段装配是因为两表互为前置：剧本的 requires 探活要看工具表（故必在 MCPRegistry
     #     之后），而 skill_invoke 的探活要看剧本表（故上一步的目录扫描必然跳过它，此处补注册）。
-    skill_registry = SkillRegistry(SKILLS_DIR, tool_names=mcp_registry.tool_names())
+    skill_registry = SkillRegistry(SKILLS_DIR, tool_names=mcp_registry.tool_names(),
+                                   user_dir=data_dir() / "skills")
     research_runtime.set_skill_registry(skill_registry)
     mcp_registry.load_tool(SkillInvokeTool())
     
@@ -302,10 +303,17 @@ async def lifespan(app: FastAPI):
     #     执行层。编排与启动时的两段装配同构：重探工具 → 重建剧本表（requires 要看
     #     新工具面）→ 二次重探（skill_invoke 的探活要看新剧本表）→ 刷新工具声明与
     #     摘要阈值锚点。只增不删（删除与进行中轮次竞态；服务死亡由执行期报错兜底）。
+    def _rebuild_skills() -> "SkillRegistry":
+        """重建剧本表（含用户目录）并登记到 runtime，返回新表。热重扫与剧本
+        保存/删除端点共用——重扫式注册表，改动即时生效。"""
+        new_skills = SkillRegistry(SKILLS_DIR, tool_names=mcp_registry.tool_names(),
+                                   user_dir=data_dir() / "skills")
+        research_runtime.set_skill_registry(new_skills)
+        return new_skills
+
     def _rescan_tools() -> dict:
         newly = mcp_registry.rescan_unavailable()
-        new_skills = SkillRegistry(SKILLS_DIR, tool_names=mcp_registry.tool_names())
-        research_runtime.set_skill_registry(new_skills)
+        new_skills = _rebuild_skills()
         newly += mcp_registry.rescan_unavailable()
         if newly:
             orchestrator.refresh_tools_declaration()
@@ -313,6 +321,8 @@ async def lifespan(app: FastAPI):
         return {"newly_available_tools": newly,
                 "skills_available": new_skills.names()}
     research_runtime.set_rescan_hook(_rescan_tools)
+    # 剧本保存/删除端点（POST/DELETE /api/v1/skills）经此即时重建剧本表（照 app.state.feed 形状）
+    app.state.rebuild_skills = _rebuild_skills
 
 
     # 3. 记忆层：初始化弹性冷热会话管理 (默认闲置 30 分钟冻结)。

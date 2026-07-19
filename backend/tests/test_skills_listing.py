@@ -36,7 +36,8 @@ def test_listing_includes_unavailable_with_desc_and_missing(tmp_path):
     listing = reg.listing()
     by_name = {s["name"]: s for s in listing}
     assert by_name["demo"] == {"name": "demo", "description": "一份示范剧本",
-                               "available": True, "missing": []}
+                               "available": True, "missing": [],
+                               "source": "repo", "file": "demo.md"}
     assert by_name["needy"]["available"] is False
     assert by_name["needy"]["missing"] == ["deck_export_pdf"]
     # 描述留档：灰显行也得让用户知道这剧本是干嘛的

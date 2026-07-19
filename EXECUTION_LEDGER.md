@@ -1837,6 +1837,36 @@ subAgent 层刻意无注册接口（沙箱=安全边界，dispatch 语义在代�
   会被 backend rsync 整目录打进包——加 exclude，**密钥红线**。包内实证：
   Resources/api_tools/ 有 example.yaml，backend/api_tools 不存在。双端 60 发布。
 
+### 剧本管理面：skills 用户目录 + 设置页 UI（2026-07-19 用户提出——API 工具已有入口，skill 该同等对待）
+
+用户指出 API 工具的设置页入口已经上线，而 skill 同样是"按规则新增文件即生效"的声明式
+实体，理应对称地给一个入口；顺带确立一项 `DEFERRED.md` 决策——**Agent 代办注册**（工具/
+剧本的对话式添加，等生产设备后启动，详见 `DEFERRED.md`）。
+
+- **后端**：`SkillRegistry`（`core/skill_registry.py`）改双目录（构造参新增
+  `user_dir=data_dir()/skills`；repo 目录优先、user 目录兜底，跨目录重名 **fail-open**——
+  打警告跳过冲突项，不拖垮整个目录的加载）。listing 每项带 `source`/`file`（含探活舍弃
+  项——用户目录里的坏依赖剧本，UI 上要能删掉它）；user 来源的可用条目额外带
+  `body`/`requires` 供编辑器预填（不带 `requires` 的话，编辑保存会静默丢掉依赖声明）。
+  新端点 `POST/DELETE /api/v1/skills`：写数据根 `skills/{name}.md` +
+  `app.state.rebuild_skills` 即时重建剧本表——重扫式注册表，保存/删除即时生效，**无
+  `restart_required`**（与 API 工具的"rescan 只增不删"形成对照，原因值得记一句：剧本表
+  没有实例状态、整表重建不存在竞态；API 工具的合成类要挂进运行时命名空间，才需要分场景
+  处理）。与内置重名 409；内置剧本不可删（404）。
+- **实现坑**：`utils/frontmatter.py` 是刻意 minimal 的解析器（只认 `key: value` 与内联
+  `[a, b]`）——`yaml.safe_dump` 写出的块状列表、纯标量 flow 映射它读不回；`requires`
+  必须手写内联 `requires: [a, b]` 落盘，round-trip 回归测试守着这条。
+- **前端**：`SkillsPanelView` 照抄 `ApiToolsPanelView` 骨架（添加按钮=列表首行，沿用
+  build 59 踩过的 sheet toolbar 坑结论）；内置只读、手写可编辑/删除；编辑器预填
+  `body`/`requires`；L10n 三语补齐，顺手把共用键"手写"的英文 `file` 改成 `custom`。
+- **数据纪律**：`backend/skills/`（dev 形态数据目录）入 `.gitignore` +
+  `bundle-macos.sh` backend rsync 排除——照 `backend/api_tools` 先例，开发机私有内容
+  不进交付包。
+- **协作方式**：本波首次按 `CLAUDE.md` 的模型路由规则运转——前后端两个 implementer
+  并行实现，主会话定契约、复核 diff、亲自改关键路径（`bundle-macos.sh`/`.gitignore`/
+  `project.yml`）。
+- 金测试 460 → 474（+14）。双端 61 发布。
+
 ---
 
 ## §5 待决（开工前需拍板）

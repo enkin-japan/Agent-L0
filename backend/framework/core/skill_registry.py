@@ -78,12 +78,16 @@ class Skill:
     """一份剧本：frontmatter 元数据 + md 正文（正文即注入主轮次的提示词）。"""
 
     def __init__(self, name: str, description: str, body: str,
-                 requires: Optional[List[str]] = None, source: Optional[Path] = None):
+                 requires: Optional[List[str]] = None, source: Optional[Path] = None,
+                 origin: str = "repo"):
         self.name = name
         self.description = description
         self.body = body
         self.requires: List[str] = list(requires or [])
         self.source = source
+        # 来源标记：repo=随仓库发货的内置剧本（只读），user=UI 写入数据根的用户剧本
+        # （可经 API 保存/删除）。UI 据此区分内置与自建、决定删除按钮是否可用。
+        self.origin = origin
 
     def is_available(self, tool_names: set) -> bool:
         """探活：requires 点名的工具必须全部在注册表里（照 BaseTool.is_available 的位置）。"""
@@ -93,8 +97,12 @@ class Skill:
 class SkillRegistry:
     """Skill 注册中心：扫描 skills_dir 下的 *.md，探活后按名索引。"""
 
-    def __init__(self, skills_dir: Path, tool_names: Optional[set] = None):
+    def __init__(self, skills_dir: Path, tool_names: Optional[set] = None,
+                 user_dir: Optional[Path] = None):
         self.skills_dir = skills_dir
+        # 用户目录（数据根 skills/，UI 保存的剧本）：app 模式下代码树在签名 bundle 里，
+        # 用户剧本只能写数据根（照 api_tool_factory 的双目录纪律）。repo 优先、user 兜底。
+        self.user_dir = user_dir
         self._skills: Dict[str, Skill] = {}
         # 被探活舍弃的剧本 → 缺失工具清单。用户点名它们时要**如实告知**而不是静默
         # 放行（D1 实机：/chart-report 在 LibreOffice 缺失时无声穿透，模型瞎打）。
@@ -102,14 +110,30 @@ class SkillRegistry:
         # 被舍弃剧本的描述留档：斜杠候选提示里它们要灰显 + 注明缺什么，
         # 而不是凭空消失（用户装完依赖后点名会触发前置自动重扫，见 turn_runner）
         self._unavailable_desc: Dict[str, str] = {}
+        # 名字 → 来源/文件名（含被探活舍弃者）：listing 要带 source/file，
+        # 用户目录里缺依赖的坏剧本 UI 里也要能定位并删除。
+        self._origin: Dict[str, str] = {}
+        self._file: Dict[str, str] = {}
         self._load_all(tool_names or set())
 
     def _load_all(self, tool_names: set) -> None:
         self._skills.clear()
-        if not self.skills_dir.exists():
-            print(f"[Skill] 剧本目录 {self.skills_dir} 不存在，跳过加载。")
+        self._unavailable.clear()
+        self._unavailable_desc.clear()
+        self._origin.clear()
+        self._file.clear()
+        # 先扫仓库目录（内置剧本），再扫用户目录：跨目录重名 repo 优先（reserved 拦截）。
+        self._load_dir(self.skills_dir, "repo", tool_names, set())
+        if self.user_dir is not None:
+            reserved = set(self._origin)   # repo 已占用的名字（含被舍弃者）
+            self._load_dir(self.user_dir, "user", tool_names, reserved)
+
+    def _load_dir(self, skills_dir: Path, origin: str, tool_names: set,
+                  reserved: set) -> None:
+        if not skills_dir.exists():
+            print(f"[Skill] 剧本目录 {skills_dir} 不存在，跳过加载。")
             return
-        for file in sorted(self.skills_dir.glob("*.md")):
+        for file in sorted(skills_dir.glob("*.md")):
             try:
                 meta, body = parse_frontmatter(file.read_text(encoding="utf-8"), file)
                 name = str(meta.get("name") or "").strip()
@@ -118,10 +142,17 @@ class SkillRegistry:
                     raise ValueError(f"{file.name}: frontmatter 必须含 name 与 description")
                 if not body:
                     raise ValueError(f"{file.name}: 正文为空（剧本正文就是它的全部价值）")
-                if name in self._skills:
+                if name in reserved:
+                    # 跨目录重名：内置剧本优先，用户侧同名文件打印警告跳过（不 raise，
+                    # 与坏剧本 fail-open 一致——一份用户剧本撞名不该拖垮整个用户目录）
+                    print(f"[Skill] ⚠️ 用户剧本 {file.name} 与内置剧本 {name!r} 重名，跳过。")
+                    continue
+                if name in self._origin:
                     raise ValueError(f"{file.name}: 剧本名 {name!r} 与 "
-                                     f"{self._skills[name].source} 重名")
-                skill = Skill(name, description, body, meta.get("requires"), file)
+                                     f"{self._file.get(name)} 重名")
+                skill = Skill(name, description, body, meta.get("requires"), file, origin)
+                self._origin[name] = origin
+                self._file[name] = file.name
                 # 探活：依赖的工具不在注册表时舍弃，避免把注定跑不通的剧本交给模型
                 if not skill.is_available(tool_names):
                     missing = [t for t in skill.requires if t not in tool_names]
@@ -141,6 +172,11 @@ class SkillRegistry:
         """剧本存在但被探活舍弃时，返回缺失工具清单；否则 None。"""
         return self._unavailable.get(name)
 
+    def origin_of(self, name: str) -> Optional[str]:
+        """剧本来源（repo/user），含被探活舍弃者；未加载则 None。
+        保存端点据此判「与内置剧本重名」（repo 来源不可经 API 覆盖）。"""
+        return self._origin.get(name)
+
     def names(self) -> List[str]:
         return sorted(self._skills)
 
@@ -154,12 +190,21 @@ class SkillRegistry:
         """全量清单（含被探活舍弃者）：GET /api/v1/skills 的数据源，斜杠候选提示用。
         缺依赖的剧本也要出现——前端灰显 + 注明缺什么，比凭空消失可解释；
         用户点名它们时 turn_runner 会前置自动重扫，依赖已装好就即时可用。"""
-        out: List[Dict[str, Any]] = [
-            {"name": s.name, "description": s.description,
-             "available": True, "missing": []}
-            for s in (self._skills[n] for n in self.names())
-        ]
+        out: List[Dict[str, Any]] = []
+        for s in (self._skills[n] for n in self.names()):
+            item: Dict[str, Any] = {
+                "name": s.name, "description": s.description,
+                "available": True, "missing": [],
+                "source": s.origin, "file": self._file.get(s.name)}
+            # 用户剧本额外带正文与依赖清单供前端编辑器预填；内置与舍弃条目不带——
+            # 它们无需编辑，而 listing 还被斜杠候选提示用，不该被正文膨胀载荷。
+            # requires 不带的话，编辑保存会静默丢掉依赖声明（探活即失守）。
+            if s.origin == "user":
+                item["body"] = s.body
+                item["requires"] = list(s.requires)
+            out.append(item)
         out += [{"name": n, "description": self._unavailable_desc.get(n, ""),
-                 "available": False, "missing": list(self._unavailable[n])}
+                 "available": False, "missing": list(self._unavailable[n]),
+                 "source": self._origin.get(n, "repo"), "file": self._file.get(n)}
                 for n in sorted(self._unavailable)]
         return out

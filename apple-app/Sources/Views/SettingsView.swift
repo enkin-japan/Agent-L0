@@ -39,6 +39,9 @@ struct SettingsView: View {
                 // 私人 API 工具（声明式工具工厂表单面）：同为全局数据实体，归设置
                 ApiToolsPanelView(embedded: true)
                     .tabItem { Label(L("API 工具"), systemImage: "wrench.and.screwdriver") }
+                // 剧本（用户以 /名字 点名的流程提示词）：同为全局数据实体，归设置
+                SkillsPanelView(embedded: true)
+                    .tabItem { Label(L("剧本"), systemImage: "book.closed") }
                 Form { sidecarSection; versionSection }
                     .formStyle(.grouped)
                     .tabItem { Label(L("执行层"), systemImage: "gearshape.2") }
@@ -71,6 +74,11 @@ struct SettingsView: View {
                         ApiToolsPanelView(embedded: true)
                     } label: {
                         Label(L("API 工具"), systemImage: "wrench.and.screwdriver")
+                    }
+                    NavigationLink {
+                        SkillsPanelView(embedded: true)
+                    } label: {
+                        Label(L("剧本"), systemImage: "book.closed")
                     }
                 }
                 appearanceSection
