@@ -20,8 +20,31 @@ struct SettingsView: View {
     // Tab 选中态必须显式绑定：store/push 是高频发布源（连接状态、流式事件），
     // 每次 body 重算时无绑定的 TabView 会重置回第一页——实机症状即"点击不切页/
     // 切过去又弹回第一页"。@State 存活于重渲染，选中页才稳得住。
-    private enum SettingsTab: Hashable {
+    private enum SettingsTab: Hashable, CaseIterable, Identifiable {
         case connection, notification, knowledge, apiTools, skills, sidecar, appearance
+        var id: Self { self }
+        var title: String {
+            switch self {
+            case .connection:   return L("连接")
+            case .notification: return L("通知")
+            case .knowledge:    return L("知识库")
+            case .apiTools:     return L("API 工具")
+            case .skills:       return L("剧本")
+            case .sidecar:      return L("执行层")
+            case .appearance:   return L("外观")
+            }
+        }
+        var icon: String {
+            switch self {
+            case .connection:   return "network"
+            case .notification: return "bell"
+            case .knowledge:    return "books.vertical"
+            case .apiTools:     return "wrench.and.screwdriver"
+            case .skills:       return "book.closed"
+            case .sidecar:      return "gearshape.2"
+            case .appearance:   return "paintpalette"
+            }
+        }
     }
     @State private var tab: SettingsTab = .connection
     #endif
@@ -31,39 +54,17 @@ struct SettingsView: View {
             // macOS 分 Tab（系统设置窗的惯例；单页 Form 七个 Section 已实证拥挤——
             // 实机查验时用户在里面找不到新增项）；iOS 保持单列滚动（sheet 的惯例）。
             #if os(macOS)
-            TabView(selection: $tab) {
-                Form { connectionSections }
-                    .formStyle(.grouped)
-                    .tabItem { Label(L("连接"), systemImage: "network") }
-                    .tag(SettingsTab.connection)
-                Form { notificationSection }
-                    .formStyle(.grouped)
-                    .tabItem { Label(L("通知"), systemImage: "bell") }
-                    .tag(SettingsTab.notification)
-                // 知识库是全局数据实体（跨会话），归设置而非会话菜单（会话菜单里
-                // 其余条目全是会话作用域——语义分层：会话的记忆看会话菜单，全局的
-                // 知识看设置）。embedded：复用本页外层 NavigationStack 推入文档页。
-                KnowledgePanelView(embedded: true)
-                    .tabItem { Label(L("知识库"), systemImage: "books.vertical") }
-                    .tag(SettingsTab.knowledge)
-                // 私人 API 工具（声明式工具工厂表单面）：同为全局数据实体，归设置
-                ApiToolsPanelView(embedded: true)
-                    .tabItem { Label(L("API 工具"), systemImage: "wrench.and.screwdriver") }
-                    .tag(SettingsTab.apiTools)
-                // 剧本（用户以 /名字 点名的流程提示词）：同为全局数据实体，归设置
-                SkillsPanelView(embedded: true)
-                    .tabItem { Label(L("剧本"), systemImage: "book.closed") }
-                    .tag(SettingsTab.skills)
-                Form { sidecarSection; versionSection }
-                    .formStyle(.grouped)
-                    .tabItem { Label(L("执行层"), systemImage: "gearshape.2") }
-                    .tag(SettingsTab.sidecar)
-                Form { appearanceSection }
-                    .formStyle(.grouped)
-                    .tabItem { Label(L("外观"), systemImage: "paintpalette") }
-                    .tag(SettingsTab.appearance)
+            // 自定义顶部标签条替代系统 TabView（C 项）：系统 macOS TabView 的 tabItem
+            // 标题在其分段格内靠右贴边、且对齐不可控（无 API 干预 Label 在 tab cell
+            // 里的对齐）。改为等宽居中的标签条——每格 VStack(图标/标题) 在 maxWidth
+            // 撑满格内自然居中。选中态仍由 @State tab 驱动（保留此前修过的「切页弹回
+            // 第一页」修复，机制不退化）；内容随 tab 切换，全部仍在外层 NavigationStack
+            // 内（知识库的 NavigationLink 推页不受影响）。
+            VStack(spacing: 0) {
+                settingsTabBar
+                Divider()
+                settingsTabContent
             }
-            .padding(.top, Theme.s2)
             .navigationTitle(L("设置"))
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -118,6 +119,54 @@ struct SettingsView: View {
         .frame(minWidth: 520, minHeight: 420)
         #endif
     }
+
+    #if os(macOS)
+    /// 顶部标签条：等宽格，格内图标+标题居中（C 项对齐修复的落点）。
+    private var settingsTabBar: some View {
+        HStack(spacing: 0) {
+            ForEach(SettingsTab.allCases) { t in
+                Button { tab = t } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: t.icon).font(.system(size: 15))
+                        Text(t.title).font(.caption)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Theme.s1)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(tab == t ? Theme.accent : Color.secondary)
+            }
+        }
+        .padding(.horizontal, Theme.s2)
+        .padding(.top, Theme.s2)
+    }
+
+    /// 当前标签内容：与原 TabView 各 tag 一一对应，全部仍在外层 NavigationStack 内。
+    @ViewBuilder
+    private var settingsTabContent: some View {
+        switch tab {
+        case .connection:
+            Form { connectionSections }.formStyle(.grouped)
+        case .notification:
+            Form { notificationSection }.formStyle(.grouped)
+        // 知识库是全局数据实体（跨会话），归设置而非会话菜单。embedded：复用本页
+        // 外层 NavigationStack 推入文档页。
+        case .knowledge:
+            KnowledgePanelView(embedded: true)
+        // 私人 API 工具（声明式工具工厂表单面）：同为全局数据实体，归设置
+        case .apiTools:
+            ApiToolsPanelView(embedded: true)
+        // 剧本（用户以 /名字 点名的流程提示词）：同为全局数据实体，归设置
+        case .skills:
+            SkillsPanelView(embedded: true)
+        case .sidecar:
+            Form { sidecarSection; versionSection }.formStyle(.grouped)
+        case .appearance:
+            Form { appearanceSection }.formStyle(.grouped)
+        }
+    }
+    #endif
 
     // MARK: - 分区（macOS 各归各 Tab；iOS 顺序铺开）
 

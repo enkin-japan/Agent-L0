@@ -114,6 +114,13 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(computeHost, forKey: "sidecar.computeHost") }
     }
 
+    /// 首启强制引导是否完成：false = 根视图只显示 OnboardingView，执行层与连接一律后置
+    /// （新装 app 在填完密钥/地址前不空转尝试，省去「填完手动重启 1-2 次」）。
+    /// 完成后既有设置页维持原状，作为重置入口。
+    @Published var setupCompleted: Bool {
+        didSet { UserDefaults.standard.set(setupCompleted, forKey: "setup.completed") }
+    }
+
     init() {
         baseURLString = UserDefaults.standard.string(forKey: "agent.baseURL") ?? "http://127.0.0.1:14159"
         apiKey = Keychain.loadAPIKey()
@@ -130,6 +137,24 @@ final class AppSettings: ObservableObject {
         inferApiKey = Keychain.load("infer-api-key")
         ragApiKey = Keychain.load("rag-api-key")
         computeHost = ud.string(forKey: "sidecar.computeHost") ?? ""
+        // 老用户迁移（关键：升级用户绝不看到引导）：无 setup.completed 记录但已有配置痕迹
+        // → 视为已完成并落盘。init 里对存储属性的首次赋值不触发 didSet，须显式 set。
+        if let done = ud.object(forKey: "setup.completed") as? Bool {
+            setupCompleted = done
+        } else {
+            #if os(macOS)
+            // macOS 痕迹：开过内建执行层，或钥匙串已有 AGENT key
+            let hasTraces = (ud.object(forKey: "sidecar.enabled") as? Bool ?? false)
+                || !Keychain.loadAPIKey().isEmpty
+            #else
+            // iOS 痕迹：钥匙串已有 AGENT key，或后端地址非默认值
+            let defaultURL = "http://127.0.0.1:14159"
+            let hasTraces = !Keychain.loadAPIKey().isEmpty
+                || (ud.string(forKey: "agent.baseURL") ?? defaultURL) != defaultURL
+            #endif
+            setupCompleted = hasTraces
+            ud.set(hasTraces, forKey: "setup.completed")
+        }
         L10n.current = AppLanguage(rawValue: language) ?? .system
     }
 

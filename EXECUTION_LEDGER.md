@@ -1972,6 +1972,38 @@ mock）。主会话审 diff 两轮、复跑全套；实施走 implementer 两波
 macOS 66 已 bundle 安装（携空模板 config + 拒启指引，Developer ID 签名）；iOS 纯客户端
 无涉，本波不发 TestFlight。
 
+### 首启引导波（app 生命周期语义统一 + 首启强制引导 + 设置标签居中）（2026-07-20，实机反馈触发）
+
+实机反馈三点：①关主窗后进程常驻本是设计意图，但重开窗口会把执行层重启两次——根因是
+`autostart` 挂在窗口 `.task` 上、随重开重入且无幂等守卫，bundle 布局下的孤儿回收 reap 把
+本代健在的服务当孤儿杀掉→探活失败→`up()` 重启，kqueue 监护又见孩子死亡补一刀；②新装 app
+要用户主动去设置页填密钥/地址，填之前执行层已在空转尝试，填完还要手动重启 1-2 次；③设置页
+标签标题在系统 TabView 的分段格内靠右，观感不齐。落地三修：
+
+- **修 1 生命周期语义统一**（用户定）：执行层随 app 进程、与窗口无关。`autostart(force:)`
+  加幂等守卫（running/starting/external 直接返回，reap 只在冷启动/失败重试路径跑）；触发点
+  挪到 `applicationDidFinishLaunching` 一次性调用；`restart()` 用 `force` 穿守卫（`down()`
+  不改 state，非 force 会把重启变成空动作——这是审 diff 时确认的关键点）。退出路径（菜单栏/
+  程序坞退出→`willTerminate`→`shutdownSync`）现状已对，未动。
+- **修 2 首启强制引导**（双端）：新增 `AppSettings.setupCompleted`（UserDefaults
+  `setup.completed`）；根视图按其分叉——未完成时整窗只显示 `OnboardingView`。老用户迁移：
+  无该记录但有配置痕迹（macOS 曾开过执行层，或 Keychain 已有 AGENT key；iOS 已有 key，或
+  后端地址非默认）即自动置真落盘，升级用户绝不会看到引导。macOS 主路径填算力端地址 +
+  INFER/RAG 双钥（可留空，弱提示"分离部署需填"）+ 次路径「外部后端/稍后配置」；iOS 填后端
+  地址 + AGENT key。连接同样后置：`AgentStore.init` 的 `startGlobalMonitor`/
+  `startConnectionMonitor` 按 `setupCompleted` 门控，`push.bootstrap` 挪到主界面分支；
+  完成回调 `applySettings()` 统一启动。关键时序修正：macOS 完成路径**同步预生成 AGENT
+  key**（复用 `SidecarManager.randomKey`，spawn 见非空即复用）——否则 key 原本在 autostart
+  异步生成、晚于建客户端，引导完成即 401，正是要消掉的"手动重启"痛点。
+- **修 3 设置标签居中**：系统 macOS `TabView` 的 `tabItem` 标题在分段格内靠右且无对齐 API →
+  换等宽自定义顶部标签条（每格 `VStack` 图标/标题 `maxWidth` 撑满、自然居中）；选中态仍由
+  `@State tab` 驱动（保住此前「切页弹回第一页」实机修的结论，机制不退化）；内容仍在外层
+  `NavigationStack` 内（知识库推页不受影响）。代价：切页会重建前一页的瞬态视图状态，设置窗
+  场景可接受。
+
+金测试 514 全绿（backend 无涉照跑，铁律 1）；双端 Debug 编译过 + reducer 夹具 7 全过
+（implementer 实施），主会话审 diff 后双端 67 发布（macOS bundle + iOS TestFlight）。
+
 ---
 
 ## §5 待决（开工前需拍板）

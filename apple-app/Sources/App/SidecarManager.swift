@@ -54,8 +54,20 @@ final class SidecarManager: ObservableObject {
 
     // MARK: - 生命周期
 
-    func autostart() async {
+    /// 生命周期随 **app 进程**，与窗口无关（R5-4 修）：启动时触发一次即可，窗口重开
+    /// 不得重入——重入会让 reap 把本代健在的服务当孤儿杀掉（探活失败→重启），
+    /// kqueue 又看到孩子死亡补一次崩溃重启，凭空两次重启。
+    /// 幂等守卫：已在管（running/starting）或外部在跑（external）直接返回，reap 与探活
+    /// 只在真正冷启动（disabled）/失败重试（failed）路径跑。
+    /// `force`：restart() 在 down() 之后要强穿守卫重拉（down 不改 state，守卫会误挡）。
+    func autostart(force: Bool = false) async {
         guard settings?.sidecarEnabled == true else { state = .disabled; return }
+        if !force {
+            switch state {
+            case .running, .starting, .external: return
+            case .disabled, .failed: break
+            }
+        }
         guard let layout = resolveLayout() else {
             state = .failed("找不到执行层布局：bundle 无 Resources/backend，设置里也未填仓库路径")
             return
@@ -92,9 +104,11 @@ final class SidecarManager: ObservableObject {
         switch state {
         case .running, .starting:
             await down()
-            await autostart()
+            // down() 不改 state（仍是 running/starting），非 force 会被新守卫误挡在门外，
+            // 导致「重启」变成空动作——force 强穿守卫，reap 后探活见 down 已真杀→重拉。
+            await autostart(force: true)
         case .failed:
-            await autostart()
+            await autostart()   // failed 本就穿守卫，无需 force
         case .disabled, .external:
             break
         }

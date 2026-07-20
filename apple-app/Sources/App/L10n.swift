@@ -270,6 +270,26 @@ enum L10n {
             ("❌ 解決はできるが接続不可：tailscale serve とバックエンドの稼働を確認",
              "❌ Resolves but can't connect — check tailscale serve / backend process"),
         "App 版本": ("Appバージョン", "App Version"),
+        // 首启强制引导（OnboardingView）
+        "欢迎使用 MacAgent": ("MacAgent へようこそ", "Welcome to MacAgent"),
+        "开始之前，先完成一次初始设置。": ("始める前に、初期設定を一度完了してください。", "Complete a one-time setup before you begin."),
+        "内建执行层": ("内蔵実行レイヤー", "Built-in execution layer"),
+        "由 app 在本机拉起并监护后端；首次启动会自动生成 AGENT 密钥并存入钥匙串。":
+            ("app が本機でバックエンドを起動・監視します。初回起動時に AGENT キーを自動生成しキーチェーンへ保存します。",
+             "The app launches and supervises the backend locally; on first launch it auto-generates the AGENT key into your Keychain."),
+        "算力端地址": ("計算ノードのアドレス", "Compute host address"),
+        "与算力端 .env.local 同值（keygen 会打印）。":
+            ("計算ノードの .env.local と同じ値（keygen が出力）。",
+             "Same values as the compute host's .env.local (printed by keygen)."),
+        "分离部署需填写，可稍后在设置中补":
+            ("分離構成では入力が必要（後で設定からでも可）",
+             "Required for split deployment; you can fill it in later in Settings"),
+        "使用外部后端（devctl）/ 稍后配置":
+            ("外部バックエンド（devctl）を使う / 後で設定",
+             "Use external backend (devctl) / configure later"),
+        "填入你 Mac 上运行的后端地址与 AGENT 密钥。":
+            ("Mac で稼働中のバックエンドのアドレスと AGENT キーを入力。",
+             "Enter the address and AGENT key of the backend running on your Mac."),
         "外观": ("外観", "Appearance"),
         "语言": ("言語", "Language"),
         "跟随系统": ("システムに従う", "System"),

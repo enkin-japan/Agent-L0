@@ -110,8 +110,13 @@ final class AgentStore: ObservableObject {
         self.settings = settings
         self.client = settings.makeClient()
         restoreSessionsSnapshot()
-        startGlobalMonitor()
-        startConnectionMonitor()
+        // 连接后置（首启引导）：引导未完成前不发起任何探活/附着——新装 app 在填完
+        // 地址/密钥前空转尝试没有意义。引导完成时 OnboardingView 调 applySettings()
+        // 重启这两个监听（applySettings 无条件启动，那时 setupCompleted 已为 true）。
+        if settings.setupCompleted {
+            startGlobalMonitor()
+            startConnectionMonitor()
+        }
     }
 
     /// 设置变更后重建客户端并重新对账（选中会话重新附着）。

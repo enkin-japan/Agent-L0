@@ -6,6 +6,14 @@ import SwiftUI
 final class MacAppDelegate: NSObject, NSApplicationDelegate {
     static weak var sidecar: SidecarManager?
 
+    /// 执行层生命周期随 **app 进程**（R5-4 修）：启动时触发一次，与窗口无关——
+    /// 挂在窗口 `.task` 上会随窗口重开重入，reap 误杀本代健在服务→凭空重启。
+    /// autostart 自守卫 sidecarEnabled：新用户引导未完成时它仍为 false（引导完成的
+    /// 回调里才置 true 并触发），老用户迁移后按其原开关值决定启不启——此处一律安全。
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        Task { @MainActor in await Self.sidecar?.autostart() }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         // willTerminate 在主线程回调；shutdownSync 是 @MainActor，直接借道
         MainActor.assumeIsolated { Self.sidecar?.shutdownSync() }
@@ -65,7 +73,19 @@ struct MacAgentApp: App {
 
     var body: some Scene {
         WindowGroup(id: "main") {
-            RootView()
+            // 首启强制引导（双端）：未完成初始设置前整窗只显示 OnboardingView，
+            // 完成后（setupCompleted 翻真）切到主界面。执行层随 app 进程启动（见
+            // MacAppDelegate），连接由 AgentStore 按 setupCompleted 后置——引导页
+            // 里一律不空转。push.bootstrap（iOS APNs 注册 + 后端设备登记）同样后置
+            // 到主界面出现时才跑，避免引导阶段就向后端注册。
+            Group {
+                if settings.setupCompleted {
+                    RootView()
+                        .task { push.bootstrap() }
+                } else {
+                    OnboardingView()
+                }
+            }
                 .environmentObject(store)
                 .environmentObject(settings)
                 .environmentObject(push)
@@ -76,10 +96,6 @@ struct MacAgentApp: App {
                 .tint(Theme.accent)   // 全局主色·青瓷（R5-7 色彩设计）：系统控件一并跟随
                 // 语言切换：整树重建让 L() 全部重查表（切换是低频操作，代价可接受）
                 .id(settings.language)
-                .task { push.bootstrap() }
-                #if os(macOS)
-                .task { await sidecar.autostart() }
-                #endif
                 // 灵动岛"查看详情"的 widgetURL 深链：macagent://session/{id}
                 .onOpenURL { url in
                     guard url.scheme == "macagent", url.host() == "session" else { return }
