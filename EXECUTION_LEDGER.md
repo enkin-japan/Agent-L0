@@ -1941,6 +1941,35 @@ turn_runner.accept_turn 在**斜杠分发之前**升格（语音说 "/剧本名"
 剧本解锁。**备忘：将来 modalities 加 audio（原生直喂，31B）时转写不存在，升格自动不触
 发、goal 回到空——届时需重审该场景的 goal 来源。**金测试 490 → 498（+8）。双端 65 发布。
 
+### 部署自诊断波：地址预检 + 日志代际隔离 + 通用 config 模板（2026-07-20，实机事故触发）
+
+事故触发：mini 起算力端，devctl 失败 tail 把上一代进程遗留的旧拒启（`key=test` 长度 4）混进
+本次输出，误导诊断两轮；真实错因是 config 里的 host 仍是 Air 的 IP，uvicorn 报的
+`[Errno 49] can't assign requested address` 晦涩到认不出。落地三件：
+
+- **本机地址预检**：`preflight_bind_addr` 就地小副本落四个绑定点（`backend/app.py` 通用可测版
+  + `inference/server.py`、`rag/rag_server.py`、`rag/compute_server.py`）——临时 socket 试绑
+  端口 0，仅 `EADDRNOTAVAIL` 拒启并给指引（本机 IP 查法/去正确设备上启动）；回环/通配/空值不
+  检，`gaierror` 等其它错误静默放行、留给真实 bind 兜底。拒启次序恒定：配置完整性 → 密钥护栏
+  → 地址预检。
+- **日志代际隔离**：`lib_edge.sh` 新 `rotate_log`（非空则轮转为 `.log.prev`，覆盖旧
+  `.prev`），各 `start_*` 在本次尝试起点显式调用（devctl 三处 + lib_edge 三处齐上）。刻意不塞
+  进 `spawn_daemon`——backend 的密钥盘点行写在 spawn 之前、必须留在本代日志里。
+- **通用 config 模板**（用户决策）：`config.yaml` 的 `inference.remote.host` / `rag.compute.host`
+  清空，不再钉死任何机器 IP；机器专属地址落各机 `.env.local`（`INFER_REMOTE_HOST` /
+  `RAG_COMPUTE_HOST`）或 app 设置注入。空值语义分服务：inference 空 + `mode=remote` = 配置缺
+  失、拒启（backend `require_remote_inference_host`、inference-server `_require_bind_host`、
+  devctl/lib_edge `require_host` 三层拦，最早一层挡在 `fetch_model` 之前、省下贵操作）；
+  `rag.compute` 空 = 合法的融合（本地）模式，只有融合依赖缺失的环境（bundle 无 torch）才友好
+  拒启、指向拆分部署。`inference` 的 HOST 与 `lib_edge._read_cfg_hosts` 不再回落
+  `127.0.0.1`（空就是空，不再暗中兜底）；gpu profile 空 `RAGC_HOST` 由静默跳过升级为响亮
+  warn。keygen 的部署指引与 `.env.example` 同步补了算力端必填本机 IP 的说明。口径修正一处：
+  单机模式的取值是 `inprocess`（不是 "local"）。
+
+金测试 498 → 514（+7 预检/轮转、+9 空值拒启/`require_host`；shell 测试实跑真函数，非
+mock）。主会话审 diff 两轮、复跑全套；实施走 implementer 两波续同一 agent（琐碎抛光由主会话
+直改）。
+
 ---
 
 ## §5 待决（开工前需拍板）

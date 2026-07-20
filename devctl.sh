@@ -230,6 +230,8 @@ do_keygen() {
     echo "    • 算力端与工作端两侧 .env.local 四键必须同值（Bearer 两端对齐才能互认）。"
     echo "    • macOS/iOS app 在设置页填 INFER / RAG 两把密钥；后端地址始终是工作端自己的"
     echo "      http://127.0.0.1:14159（不是算力端端口）。"
+    echo "    • 算力端 .env.local 还需填 INFER_REMOTE_HOST / RAG_COMPUTE_HOST=本机 tailnet IP"
+    echo "      （config 两个 host 缺省为空，通用模板不钉机器；分离部署必填）。"
 }
 
 # 读单键当前值（去掉两侧引号；无则空）。仅取该键最后一次赋值。
@@ -277,6 +279,7 @@ start_rag_compute() {
     case $? in 1) return 1 ;; 2) return 0 ;; esac
     [ -x "$RAG_DIR/.venv/bin/python" ] || { fail "缺少 rag/.venv，请先运行: ./devctl.sh setup"; return 1; }
     info "启动 RAG 计算面 (port $RAGC_PORT) → $LOG_DIR/rag-compute.log"
+    rotate_log "$LOG_DIR/rag-compute.log"   # 本代日志起点：隔绝上一代进程日志混入诊断
     spawn_daemon "$RAG_DIR" "$LOG_DIR/rag-compute.log" "$LOG_DIR/rag-compute.pid" \
         .venv/bin/python compute_server.py || return 1
     wait_ready "RAG计算面" "$RAGC_READY_URL" "$RAG_TIMEOUT" \
@@ -292,6 +295,7 @@ start_front() {
     command -v npm >/dev/null || { fail "找不到 npm（PATH=${PATH}）"; return 1; }
     [ -d "$FRONT_DIR/node_modules" ] || { fail "缺少 frontend/node_modules，请先运行: ./devctl.sh setup"; return 1; }
     info "启动前端 (port $FRONT_PORT) → $LOG_DIR/front.log"
+    rotate_log "$LOG_DIR/front.log"   # 本代日志起点：隔绝上一代进程日志混入诊断
     spawn_daemon "$FRONT_DIR" "$LOG_DIR/front.log" "$LOG_DIR/front.pid" npm run dev || return 1
     wait_ready "前端" "$FRONT_READY_URL" "$FRONT_TIMEOUT" "$(cat "$LOG_DIR/front.pid")" "$LOG_DIR/front.log"
 }
@@ -311,11 +315,16 @@ start_infer() {
         info "inference-server 已在运行，跳过"; return 0
     fi
     [ -x "$BACKEND_DIR/.venv/bin/python" ] || { fail "缺少 backend/.venv，请先运行: ./devctl.sh setup"; return 1; }
+    # 空 INFER_HOST → 拒启（早于模型预取，fetch_model 很贵）：config 缺省为空，分离部署必填
+    require_host "$INFER_HOST" "算力端（inference-server）" \
+        ".env.local 写 INFER_REMOTE_HOST=<本机 tailnet IP>，或单机部署改 inference.mode: inprocess 并去掉 --profile gpu" \
+        || return 1
     # 权重预取走与 backend 相同的前台下载器（进度条直显），gpu 侧要的是全量权重
     info "检查模型（未下载时将前台下载并显示进度）…"
     ( cd "$BACKEND_DIR" && .venv/bin/python scripts/fetch_model.py ) \
         || { fail "模型未就绪，中止 inference-server 启动"; return 1; }
     info "启动 inference-server (port $INFER_PORT) → $LOG_DIR/infer.log"
+    rotate_log "$LOG_DIR/infer.log"   # 本代日志起点：隔绝上一代进程日志混入诊断
     spawn_daemon "$BACKEND_DIR" "$LOG_DIR/infer.log" "$LOG_DIR/infer.pid" \
         .venv/bin/python ../inference/server.py || return 1
     wait_ready "inference-server" "$INFER_READY_URL" "$INFER_TIMEOUT" \
@@ -540,6 +549,7 @@ case "$CMD" in
                     info "profile=gpu（设备 A：inference-server + RAG 计算面；知识库数据在工作端）"
                     start_rag_compute && start_infer
                 else
+                    warn "rag.compute.host/RAG_COMPUTE_HOST 为空——本机不启 RAG 计算面（融合模式在工作端）。拆分部署请在 .env.local 填 RAG_COMPUTE_HOST=<本机 tailnet IP>"
                     info "profile=gpu（设备 A：inference-server + RAG）"
                     start_rag && start_infer
                 fi

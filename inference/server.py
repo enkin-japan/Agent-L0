@@ -75,8 +75,10 @@ _KV_HINT_RE = re.compile(r"^[A-Za-z0-9._\-]{1,128}$")  # 会话 id 形状，防�
 config = load_config()
 INFERENCE_CFG = config.get("inference") or {}
 REMOTE_CFG = INFERENCE_CFG.get("remote") or {}
-# env 覆盖=运行时改拓扑不必重打包/改 config：非空即赢，覆盖 config 里烘死的绑定地址
-HOST = os.environ.get("INFER_REMOTE_HOST", "").strip() or str(REMOTE_CFG.get("host", "127.0.0.1"))
+# env 覆盖=运行时改拓扑不必重打包/改 config：非空即赢，覆盖 config 里的值。
+# 语义：env 非空 > config 非空 > 空（拒启，见 _require_bind_host）——config 缺省为空，
+# **不再回落 127.0.0.1**（单机部署走 inference.mode: inprocess，根本不起本服务）。
+HOST = os.environ.get("INFER_REMOTE_HOST", "").strip() or str(REMOTE_CFG.get("host") or "").strip()
 PORT = int(REMOTE_CFG.get("port", 14161))
 CACHE_TTL_SECONDS = float(REMOTE_CFG.get("cache_ttl_minutes", 45)) * 60.0
 API_KEY = os.environ.get("INFER_API_KEY", "")
@@ -668,6 +670,55 @@ def _enforce_bind_guardrail() -> None:
     )
 
 
+def _preflight_bind_addr() -> None:
+    """启动前本机绑定地址预检：HOST 非本机任何网卡地址（EADDRNOTAVAIL）立即拒启。
+
+    实机事故（2026-07-19）：算力端在别的设备上启动而 config 的 host 还填着另一台设备的
+    IP → uvicorn 报晦涩的 `[Errno 49] can't assign requested address`。就地小副本，与
+    backend/app.py 的 preflight_bind_addr 同语义（三服务各自独立 venv，不共享代码）。
+    域名解析失败（gaierror）等其余错误静默放行，留给真实 bind 报错。
+    """
+    import errno
+    import socket
+    h = str(HOST or "").strip()
+    if h in ("", "127.0.0.1", "localhost", "::1", "0.0.0.0", "::"):
+        return
+    fam = socket.AF_INET6 if ":" in h else socket.AF_INET
+    s = socket.socket(fam, socket.SOCK_STREAM)
+    try:
+        s.bind((h, 0))
+    except OSError as e:
+        if getattr(e, "errno", None) == errno.EADDRNOTAVAIL:
+            raise SystemExit(
+                f"❌ [inference-server] 拒绝启动：绑定地址 '{h}' 不是本机任何网卡的地址（EADDRNOTAVAIL）。\n"
+                f"   config 的 inference.remote.host（或环境变量 INFER_REMOTE_HOST）应填**本机**"
+                f"（对外提供服务的这台设备自己）的 IP。\n"
+                f"   查看本机地址：`tailscale ip -4` 或 `ifconfig | grep 'inet '`；\n"
+                f"   若该地址属于另一台设备，请到那台设备上启动本服务。"
+            )
+    finally:
+        s.close()
+
+
+def _require_bind_host() -> None:
+    """配置完整性：绑定地址为空（config 与 env 均未配置）= 拒启，不再回落 127.0.0.1。
+
+    config.yaml 的 inference.remote.host 缺省为空（通用模板不钉机器 IP）；算力端专属地址
+    落本机 .env.local（INFER_REMOTE_HOST）或 app 设置。空地址 = 没告诉本服务绑哪，与其让
+    uvicorn 拿空串拼出晦涩失败不如启动即拒。先于密钥/地址检查（配置完整性最优先）。
+    """
+    if str(HOST or "").strip():
+        return
+    raise SystemExit(
+        "❌ [inference-server] 拒绝启动：绑定地址为空（config 的 inference.remote.host 与环境变量\n"
+        "   INFER_REMOTE_HOST 均未配置）。\n"
+        "   请在本机（算力端）.env.local 写 INFER_REMOTE_HOST=<本机 tailnet IP>；\n"
+        "   单机部署请改 inference.mode: inprocess（不再需要本服务）。"
+    )
+
+
 if __name__ == "__main__":
+    _require_bind_host()        # 配置完整性先于密钥/地址检查：空绑定地址立即拒启
     _enforce_bind_guardrail()   # 先于加载权重：省掉几十秒才发现配置错
+    _preflight_bind_addr()      # 密钥护栏之后：绑定地址不属本机立即拒启
     uvicorn.run(app, host=HOST, port=PORT)

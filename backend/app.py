@@ -203,6 +203,59 @@ def enforce_bind_guardrail(host: str, key: str, *, service: str, key_env: str) -
         f"   （部署铁则 §8：非回环绑定只允许出现在受信内网 + 必须带 Bearer。）"
     )
 
+
+def preflight_bind_addr(host: str, *, service: str, cfg_key: str) -> None:
+    """启动前本机绑定地址预检：host 若非本机任何网卡地址（EADDRNOTAVAIL）立即拒启。
+
+    实机事故（2026-07-19）：算力端在 mini 上启动而 config 的 host 还填着另一台设备
+    （Air）的 IP → uvicorn 报晦涩的 `[Errno 49] can't assign requested address`。
+    这里先用一个临时 socket 试绑（端口 0）把「地址不属本机」提前成一条明确指引。
+    回环/通配/空值不必检；域名解析失败（gaierror）等其余错误静默放行，留给真实 bind 报错。
+    """
+    import errno
+    import socket
+    h = str(host or "").strip()
+    if h in ("", "127.0.0.1", "localhost", "::1", "0.0.0.0", "::"):
+        return
+    fam = socket.AF_INET6 if ":" in h else socket.AF_INET
+    s = socket.socket(fam, socket.SOCK_STREAM)
+    try:
+        s.bind((h, 0))
+    except OSError as e:
+        if getattr(e, "errno", None) == errno.EADDRNOTAVAIL:
+            raise SystemExit(
+                f"❌ [{service}] 拒绝启动：绑定地址 '{h}' 不是本机任何网卡的地址（EADDRNOTAVAIL）。\n"
+                f"   {cfg_key} 应填**本机**（对外提供服务的这台设备自己）的 IP。\n"
+                f"   查看本机地址：`tailscale ip -4` 或 `ifconfig | grep 'inet '`；\n"
+                f"   若该地址属于另一台设备，请到那台设备上启动本服务。"
+            )
+        # 其余错误（含 socket.gaierror 域名解析失败）静默放行，留给真实 bind 报错
+    finally:
+        s.close()
+
+
+def require_remote_inference_host(cfg) -> None:
+    """配置完整性：inference.mode=remote 但算力端地址为空 = 配置缺失，拒启。
+
+    config.yaml 的 inference.remote.host 缺省为空（通用模板不钉任何机器 IP），机器专属
+    地址落各机 .env.local（INFER_REMOTE_HOST）或 app 设置注入——两者经 load_config 的
+    env 覆盖已在 cfg 里生效，故此处只看 cfg、不自己读 env。remote 模式下地址仍空 =
+    没人告诉本进程去哪拨号，与其让 RemoteBackend 拨空地址晦涩失败不如启动即拒。
+    分段缺失（inference/remote 键不存在或为 None）按空处理，不 AttributeError。
+    """
+    inf = cfg.get("inference") or {}
+    if str(inf.get("mode", "inprocess")) != "remote":
+        return
+    host = str((inf.get("remote") or {}).get("host") or "").strip()
+    if host:
+        return
+    raise SystemExit(
+        "❌ [backend] 拒绝启动：inference.mode=remote 但算力端地址为空。\n"
+        "   请填写算力端地址——app 形态：设置 → 执行层 → 算力端地址；dev 形态：.env.local 写\n"
+        "   INFER_REMOTE_HOST=<算力端 tailnet IP>（或 config 的 inference.remote.host）；\n"
+        "   或将 inference.mode 改为 inprocess（单机部署，本进程加载模型）。"
+    )
+
 # ==========================================
 # 2. 生命周期与依赖装配 (IoC Container)
 # ==========================================
@@ -582,8 +635,12 @@ app.include_router(router, dependencies=[Depends(verify_api_key)])
 # ==========================================
 if __name__ == "__main__":
     import uvicorn
+    # 配置完整性先于密钥/地址检查：mode=remote 但算力端地址为空 = 配置缺失，立即拒启
+    require_remote_inference_host(config)
     # 绑定护栏先于加载模型：非回环 + 空密钥立即拒启，不浪费几十秒权重加载才发现
     enforce_bind_guardrail(AGENT_HOST, API_KEY, service="backend", key_env="AGENT_API_KEY")
+    # 密钥护栏之后再验地址（先密钥后地址，护栏输出顺序稳定）：绑定地址不属本机立即拒启
+    preflight_bind_addr(AGENT_HOST, service="backend", cfg_key="config 的 inference.host")
     # 建议不要在此处使用 reload=True，MLX 模型反复重载会导致严重内存泄漏
     # timeout_graceful_shutdown：默认 None = 无限等连接排空——挂着 SSE 长连时
     # SIGTERM 形同虚设（实机 2026-07-17：孤儿 backend 无视 TERM 20s 被 -9），

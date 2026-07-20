@@ -134,11 +134,15 @@ class _LocalCompute:
         try:
             import compute_core as core   # 仅融合模式 import（拆分模式的数据面不背 torch）
         except ImportError as e:
-            # bundle 形态只随 rag_server.py（torch 不进包）：融合模式在该布局天然不可用
+            # ModuleNotFoundError 是 ImportError 子类，一并捕获。bundle 形态只随
+            # rag_server.py（torch 不进包）：rag.compute.host 空即融合（本地）模式，
+            # 在该布局天然缺依赖——换成友好拒启，指向拆分部署。
             raise SystemExit(
-                f"❌ [rag] 融合模式需要模型依赖（compute_core/torch），本布局未随包：{e}\n"
-                f"   请在 config.yaml 设置 rag.compute.host 指向算力端（拆分模式），"
-                f"或在完整仓库布局下运行融合模式。")
+                "❌ [rag] 拒绝启动：rag.compute.host 为空即融合（本地）模式，但本机缺少计算面依赖\n"
+                "   （torch/compute_core——bundle 形态只支持拆分部署）。\n"
+                "   请填写算力端地址：app 形态在设置 → 执行层 → 算力端地址；dev 形态 .env.local 写\n"
+                "   RAG_COMPUTE_HOST=<算力端 tailnet IP>。\n"
+                f"   （底层导入错误：{e}）")
         self.core = core
         core.load_models()
         self.identity = core.identity()
@@ -1091,7 +1095,37 @@ def _enforce_bind_guardrail() -> None:
     )
 
 
+def _preflight_bind_addr() -> None:
+    """启动前本机绑定地址预检：RAG_HOST 非本机任何网卡地址（EADDRNOTAVAIL）立即拒启。
+
+    实机事故（2026-07-19）：服务在别的设备上启动而 config 的 host 还填着另一台设备的
+    IP → uvicorn 报晦涩的 `[Errno 49] can't assign requested address`。就地小副本，与
+    backend/app.py 的 preflight_bind_addr 同语义（三服务各自独立 venv，不共享代码）。
+    域名解析失败（gaierror）等其余错误静默放行，留给真实 bind 报错。
+    """
+    import errno
+    import socket
+    h = str(RAG_HOST or "").strip()
+    if h in ("", "127.0.0.1", "localhost", "::1", "0.0.0.0", "::"):
+        return
+    fam = socket.AF_INET6 if ":" in h else socket.AF_INET
+    s = socket.socket(fam, socket.SOCK_STREAM)
+    try:
+        s.bind((h, 0))
+    except OSError as e:
+        if getattr(e, "errno", None) == errno.EADDRNOTAVAIL:
+            raise SystemExit(
+                f"❌ [rag] 拒绝启动：绑定地址 '{h}' 不是本机任何网卡的地址（EADDRNOTAVAIL）。\n"
+                f"   config 的 rag.host 应填**本机**（对外提供服务的这台设备自己）的 IP。\n"
+                f"   查看本机地址：`tailscale ip -4` 或 `ifconfig | grep 'inet '`；\n"
+                f"   若该地址属于另一台设备，请到那台设备上启动本服务。"
+            )
+    finally:
+        s.close()
+
+
 if __name__ == "__main__":
     import uvicorn
     _enforce_bind_guardrail()   # 先于加载模型：省掉几十秒权重加载才发现配置错
+    _preflight_bind_addr()      # 密钥护栏之后：绑定地址不属本机立即拒启
     uvicorn.run(app, host=RAG_HOST, port=RAG_PORT, reload=False)

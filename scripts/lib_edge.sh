@@ -94,8 +94,9 @@ inf = c.get("inference") or {}
 rem = inf.get("remote") or {}
 rag = c.get("rag") or {}
 ragc = rag.get("compute") or {}
-# env 覆盖=运行时改拓扑不必重打包/改 config：非空即赢（第2行 INFER_HOST、第5行 RAGC_HOST）
-infer_host = os.environ.get("INFER_REMOTE_HOST", "").strip() or rem.get("host", "127.0.0.1")
+# env 覆盖=运行时改拓扑不必重打包/改 config：非空即赢（第2行 INFER_HOST、第5行 RAGC_HOST）。
+# host 缺省为空即空（不回落 127.0.0.1）——空由 require_host 在 mode=remote 分支拦下。
+infer_host = os.environ.get("INFER_REMOTE_HOST", "").strip() or (rem.get("host") or "").strip()
 ragc_host = os.environ.get("RAG_COMPUTE_HOST", "").strip() or (ragc.get("host") or "").strip()
 print(inf.get("host", "127.0.0.1"))
 print(infer_host)
@@ -206,6 +207,23 @@ spawn_daemon() {  # $1: 工作目录  $2: 日志  $3: pid 文件  $4...: 命令
     echo $! >"$pidfile"
     disown 2>/dev/null || true
     cd "$OLDPWD" || return 1
+}
+
+# 日志代际隔离：本次启动尝试的起点调用，把上一代进程的日志轮转为 $1.prev（覆盖旧 .prev）。
+# 刻意**不放进 spawn_daemon 内部**——backend 的密钥盘点行在 spawn 之前就写入本代日志
+# （第一现场证据，必须留在本代）。轮转点由各 start_* 在首次向日志写入/spawn 之前显式调用，
+# 免得 devctl 失败时 tail 把上一代的旧拒启信息混进来误导诊断。
+rotate_log() {  # $1: 日志路径——非空则轮转为 $1.prev（覆盖旧 .prev）
+    [ -s "$1" ] && mv -f "$1" "$1.prev" || true
+}
+
+# 地址非空断言：config 的 host 缺省为空（通用模板不钉机器 IP），分离部署必填。
+# 空 host 会拼出 `http://:14161` 的晦涩探活失败——提前拦成一条明确指引。
+require_host() {  # $1: 值  $2: 名称  $3: 指引 → 值非空返 0；空则 fail 指引返 1
+    local v; v="$(printf '%s' "$1" | tr -d '[:space:]')"
+    [ -n "$v" ] && return 0
+    fail "$2 地址为空——$3"
+    return 1
 }
 
 # 轮询就绪探针；期间守护进程若已退出则立即失败并展示日志尾部
@@ -375,6 +393,7 @@ start_searx() {
     [ -x "$EDGE_SEARX_PY" ] || { warn "缺少 SearXNG 解释器（${EDGE_SEARX_PY}，可选层），跳过 SearXNG${EDGE_SETUP_HINT:+；如需联网搜索$EDGE_SETUP_HINT}"; return 1; }
     ensure_searx_settings
     info "启动 SearXNG (port $SEARX_PORT) → $EDGE_LOG_DIR/searx.log"
+    rotate_log "$EDGE_LOG_DIR/searx.log"   # 本代日志起点：隔绝上一代进程日志混入诊断
     # bind_address/port 由 settings.yml 决定（127.0.0.1:8080，仅本机回环）
     spawn_daemon "$EDGE_SEARX_DIR" "$EDGE_LOG_DIR/searx.log" "$EDGE_LOG_DIR/searx.pid" \
         env SEARXNG_SETTINGS_PATH="$EDGE_SEARX_SETTINGS" "$EDGE_SEARX_PY" -m searx.webapp || return 1
@@ -408,6 +427,7 @@ start_rag_local() {
     [ -n "${EDGE_RAG_PY:-}" ] || { fail "本布局未注入 RAG 承载（EDGE_RAG_PY）而 rag.host 指向本机"; return 1; }
     [ -x "$EDGE_RAG_PY" ] || { fail "缺少 RAG 解释器（${EDGE_RAG_PY}）${EDGE_SETUP_HINT:+，$EDGE_SETUP_HINT}"; return 1; }
     info "启动 RAG (port $RAG_PORT) → $EDGE_LOG_DIR/rag.log"
+    rotate_log "$EDGE_LOG_DIR/rag.log"   # 本代日志起点：隔绝上一代进程日志混入诊断
     # RAG_CONFIG/RAG_DATA_DIR 布局注入：bundle 的代码目录只读，数据必须落数据根；
     # 仓库布局 EDGE_RAG_DATA_DIR 为空 → rag_server 缺省用 rag/ 本目录（现状）
     spawn_daemon "$EDGE_RAG_DIR" "$EDGE_LOG_DIR/rag.log" "$EDGE_LOG_DIR/rag.pid" \
@@ -428,6 +448,9 @@ start_backend() {
         "$BACKEND_READY_URL" "$BACKEND_TIMEOUT" "$EDGE_LOG_DIR/backend.log"
     case $? in 1) return 1 ;; 2) return 0 ;; esac
     [ -x "$EDGE_BACKEND_PY" ] || { fail "缺少 backend 解释器（${EDGE_BACKEND_PY}）${EDGE_SETUP_HINT:+，$EDGE_SETUP_HINT}"; return 1; }
+    # 本代日志起点：轮转旧 backend.log 为 .prev，隔绝上一代进程的旧拒启信息混进诊断。
+    # 紧随其后的密钥盘点行即写入本代 backend.log（属于本代，是本次 spawn 的第一现场证据）。
+    rotate_log "$EDGE_LOG_DIR/backend.log"
     # 密钥盘点（只记有无+长度，不记内容）：401 类故障的第一现场证据。必须在
     # 一切门（可达性/鉴权）**之前**记——门一拦，事后就没有「注入了什么」的证据
     #（实机查验第三轮实证：鉴权门拦停后 backend.log 里空空如也）。
@@ -448,6 +471,10 @@ start_backend() {
     # mode=remote：推理在设备 A，本机只需分词器（§S.3 B1）——按 config 的 mode 判，而非 profile 旗标，
     # 因为"要不要权重"取决于承载模式本身（同机 remote 双进程也一样不必在 backend 侧再拉一份）。
     if [ "$INFER_MODE" = "remote" ]; then
+        # 空 INFER_HOST 会拼出 http://:14161 的晦涩探活失败——先拦成明确指引（探活之前）
+        require_host "$INFER_HOST" "算力端（inference-server）" \
+            "app 形态：设置 → 执行层 → 算力端地址；dev 形态：.env.local 写 INFER_REMOTE_HOST=<算力端 IP>；单机部署请改 inference.mode: inprocess" \
+            || return 1
         info "检查分词器（inference.mode=remote：推理在远端，本机不拉权重）…"
         ( cd "$EDGE_BACKEND_DIR" && "$EDGE_BACKEND_PY" scripts/fetch_model.py --tokenizer-only ) \
             || { fail "分词器未就绪，中止 backend 启动"; return 1; }

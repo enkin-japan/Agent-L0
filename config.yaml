@@ -9,20 +9,21 @@ inference:
   # remote=经 backends/remote 连下面 remote 段所指的 inference-server（inference/server.py，
   # 服务端进程读同一份 config 的 backend 键决定它内包哪个后端）。
   # 远程模式密钥：两侧 .env.local 设同一 INFER_API_KEY（服务端校验、客户端携带）。
-  # ⚠️ 本仓库已入库算力分离拓扑（B3 实证形态，私仓 + tailnet）：mode=remote 且下面
-  #    remote.host / rag.host 钉的是设备 A 的 Tailscale 地址，两台机器直接 pull 即同步。
-  #    要退回单机 all-in-one：mode 改 inprocess、两个 host 改回 127.0.0.1（三处一起改）。
-  # 运行时覆盖（换算力机零重打包）：环境变量 INFER_REMOTE_HOST / RAG_COMPUTE_HOST 非空
-  #    即覆盖本文件的两个 host（一键两职语义不变）。dev 写 .env.local；app 形态在设置页
-  #    "执行层"填算力端地址，SidecarManager 注入。本文件的值退化为缺省。
+  # ⚠️ 本文件是**通用模板**：remote.host / rag.compute.host 缺省为空，不钉任何机器的
+  #    地址。机器专属值落各机 .env.local（INFER_REMOTE_HOST / RAG_COMPUTE_HOST，devctl
+  #    启动自动装载）；app 形态在设置页"执行层"填算力端地址，SidecarManager 注入。
+  #    mode=remote 而地址为空 = 启动拒启并指引（填写地址，或 mode 改 inprocess 单机部署）。
+  # 运行时覆盖优先级：环境变量非空即覆盖本文件的两个 host（一键两职语义不变）。
   # 密钥强度护栏：非回环绑定要求密钥 ≥16 字符（"test" 一类弱值拒启）——`./devctl.sh keygen`
   #    生成强随机值并打印部署指引。0.0.0.0 绑定是显式 opt-in（如本机 cloudflared 之外的
   #    转发面需要），护栏同样生效；入站面仍应收在 tailnet/隧道内（§8）。
   mode: "remote"                # inprocess | remote
   backend: "mlx"                # mlx | cuda(A1 后)：进程内所用/服务端内包的后端
   remote:
-    host: "100.80.230.19"       # inference-server 地址（设备 A 拿它当绑定地址、设备 B 拿它当
+    host: ""                    # inference-server 地址（算力端拿它当绑定地址、工作端拿它当
     port: 14161                 #   拨号地址——同一个键身兼两职。D7 端口约定 :14161）
+                                #   缺省空 = 未配置：mode=remote 时启动拒启。各机 .env.local
+                                #   填 INFER_REMOTE_HOST=本机(算力端)/对端(工作端)的 tailnet IP
     cache_ttl_minutes: 45       # 服务端缓存注册表空闲回收（略长于 backend 30min 冻结，只兜底）
   # KV 冻结落盘（T2/Q9-a）：会话冻结时把 KV 缓存序列化到承载端本地盘，解冻热恢复
   # （实测省 3-13s/次）。KV 是对话派生物——真两机拓扑下它落在算力机的盘上；介意
@@ -160,8 +161,8 @@ rag:
   #   空 key = 拒启）。拓扑切换步骤：数据目录（chroma_data/ + storage/）先从算力端
   #   迁到工作端，再改本段 + rag.host，最后算力端改跑 `start --profile gpu`。
   compute:
-    host: "100.80.230.19"
-    port: 14162
+    host: ""                    # 缺省空 = 融合（本地）模式。拆分部署不改本文件：各机
+    port: 14162                 #   .env.local 填 RAG_COMPUTE_HOST（同上一键两职）
 
   # ── RAG 档位注册表（镜像 inference.model_registry 的选择制，HETERO_COMPUTE B2a）──
   # 一个"档位" = 一对 {嵌入模型, 重排模型}（同尺寸同家族）。调试期换档走**选择**而非手填：
