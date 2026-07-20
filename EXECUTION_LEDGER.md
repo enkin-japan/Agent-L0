@@ -1969,6 +1969,8 @@ turn_runner.accept_turn 在**斜杠分发之前**升格（语音说 "/剧本名"
 金测试 498 → 514（+7 预检/轮转、+9 空值拒启/`require_host`；shell 测试实跑真函数，非
 mock）。主会话审 diff 两轮、复跑全套；实施走 implementer 两波续同一 agent（琐碎抛光由主会话
 直改）。
+macOS 66 已 bundle 安装（携空模板 config + 拒启指引，Developer ID 签名）；iOS 纯客户端
+无涉，本波不发 TestFlight。
 
 ---
 
