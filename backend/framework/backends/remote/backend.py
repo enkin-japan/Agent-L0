@@ -72,6 +72,13 @@ class RemoteBackend:
         port = int(remote.get("port", 14161))
         processor = _ProcessorShim(AutoTokenizer.from_pretrained(str(model_path)))
         backend = cls(processor, base_url=f"http://{host}:{port}")
+        # 多端点表（接口准备③）：主端点沿用上面 cfg 推导（零回归），追加端点来自
+        # config inference.endpoints（resolve_endpoints 已在 app 装配期校验过，这里
+        # 出错说明装配序被破坏——照样响亮抛，不兜）。生成路径仍走 main；专科调用
+        # （多模型协作）将来经 base_url_for(name) 取址。
+        from framework.utils.model_selection import resolve_endpoints
+        for ep in resolve_endpoints()[1:]:
+            backend._endpoint_urls[ep["name"]] = f"http://{ep['host']}:{ep['port']}"
         # 就绪探活：装配期即暴露"服务端不可达"（否则要到首轮生成才炸，定位更绕）
         try:
             r = backend._session.get(f"{backend.base_url}/health", timeout=_CONNECT_TIMEOUT)
@@ -88,12 +95,27 @@ class RemoteBackend:
         self.model = None          # 远程模式设备 B 不持有权重（装配面 app.state.model 为 None）
         self.processor = processor
         self.base_url = base_url.rstrip("/")
+        # 端点名 → 拨号地址（load 时按 config inference.endpoints 追加；直接构造=单端点）
+        self._endpoint_urls = {"main": self.base_url}
         # 密钥与 backend 侧惯例一致走环境变量（.env.local 注入，不进仓库）
         self._api_key = os.environ.get("INFER_API_KEY", "")
         self._session = requests.Session()
         if self._api_key:
             self._session.headers["Authorization"] = f"Bearer {self._api_key}"
         self._uploaded_media: set = set()   # 本进程已确认上传的 media_id（sha256 内容寻址）
+
+    def base_url_for(self, endpoint: str = "main") -> str:
+        """按端点名取拨号地址（多模型协作的专科调用消费面，接口准备③）。
+
+        未声明的名字响亮 KeyError 并列出现有端点——拼错端点名是配置/调用方错误，
+        不得静默回落 main（回落=把视觉请求发给无视觉的主模型，症状比报错难查十倍）。
+        """
+        try:
+            return self._endpoint_urls[endpoint]
+        except KeyError:
+            raise KeyError(
+                f"未声明的推理端点 {endpoint!r}（config inference.endpoints 里声明；"
+                f"现有：{sorted(self._endpoint_urls)}）") from None
 
     # ---- 缓存生命周期 ----
     def new_cache(self) -> RemoteCacheHandle:

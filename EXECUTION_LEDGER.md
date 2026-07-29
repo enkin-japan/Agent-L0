@@ -2120,6 +2120,22 @@ e4b=text/vision/audio，26b/31b=text/vision。消费面 `model_capabilities(repo
 永远是非空受控集合。金测试 524 → **528**（+4：声明合法性、audio=e4b-only 事实钉、
 访问器两侧）。
 
+**阶段 3 · 多端点 config 形态 + 端点选择（完成）**：设计修正一处——Q10 时说
+"port 写死 registry 条目"，落地时纠正粒度：**registry 是候选档位表（9 个 gemma
+变体共用一个部署槽），端口属于部署事实**，落新配置段 `inference.endpoints`
+（条目 {name, repo, port}；host 一律共享 remote.host=Q10 统一 host；repo 必须先在
+注册表注册——方言/revision/capabilities 单一真相）。四件落地：
+① `resolve_endpoints(inference_cfg=None)`（`utils/model_selection.py`）：[0] 恒为
+main（remote 现状合成，endpoints 未声明=单端点，与改动前逐字节等价零回归）；校验
+即 ValueError（name 重复/占用 main、repo 表外、port 非整/冲突），装配期响亮拒启。
+② `RemoteBackend`：`_endpoint_urls` 表 + `base_url_for(name)` 消费面——未知端点名
+响亮 KeyError 列出现有端点，**不静默回落 main**（回落=视觉请求发给无视觉主模型，
+症状比报错难查十倍）。生成路径仍走 main，行为不变。
+③ backend 装配期（app.py remote 分支）调 resolve_endpoints 校验并打印追加端点。
+④ 算力端多实例最小旋钮：`INFER_PORT` + `INFER_MODEL_REPO`（inference/server.py，
+表外 repo 拒启）——同机第二实例 = 两 env + 再起一份 server，为两实例并存冒烟铺路。
+金测试 528 → **537**（+9：合成/校验/真 config 缺省路径/访问器）。
+
 ---
 
 ## §5 待决（开工前需拍板）

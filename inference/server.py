@@ -79,7 +79,8 @@ REMOTE_CFG = INFERENCE_CFG.get("remote") or {}
 # 语义：env 非空 > config 非空 > 空（拒启，见 _require_bind_host）——config 缺省为空，
 # **不再回落 127.0.0.1**（单机部署走 inference.mode: inprocess，根本不起本服务）。
 HOST = os.environ.get("INFER_REMOTE_HOST", "").strip() or str(REMOTE_CFG.get("host") or "").strip()
-PORT = int(REMOTE_CFG.get("port", 14161))
+# INFER_PORT：多实例第二档的端口覆盖（与 INFER_MODEL_REPO 配对；Q10 固定端口 14163 起顺延）
+PORT = int(os.environ.get("INFER_PORT") or REMOTE_CFG.get("port", 14161))
 CACHE_TTL_SECONDS = float(REMOTE_CFG.get("cache_ttl_minutes", 45)) * 60.0
 API_KEY = os.environ.get("INFER_API_KEY", "")
 
@@ -205,6 +206,16 @@ def _media_paths(ids, kind: str):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     model, revision, source = resolve_selected_model()
+    # 多实例第二档（Q10 多 port）：INFER_MODEL_REPO 覆盖本实例所服务的模型——
+    # 同机再起一份 server 时与 INFER_PORT 配对使用（每模型一实例一端口）。
+    # 只认注册表内条目（方言/revision 以注册表为单一真相），表外响亮拒启。
+    _override = os.environ.get("INFER_MODEL_REPO", "").strip()
+    if _override:
+        _entry = model_options(_override)
+        if not _entry:
+            raise SystemExit(f"❌ [Server] INFER_MODEL_REPO 不在 config.yaml model_registry: "
+                             f"{_override!r}——先注册（含 dialect/revision）再引用")
+        model, revision, source = _override, _entry.get("revision"), "env INFER_MODEL_REPO"
     model_path = resolve_model_path(model, revision=revision)
     backend_name = str(INFERENCE_CFG.get("backend") or "")
     print(f"🚀 [Server] loading model: {model} (backend={backend_name or 'default'})")

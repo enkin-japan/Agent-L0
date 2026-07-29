@@ -25,6 +25,16 @@ inference:
                                 #   缺省空 = 未配置：mode=remote 时启动拒启。各机 .env.local
                                 #   填 INFER_REMOTE_HOST=本机(算力端)/对端(工作端)的 tailnet IP
     cache_ttl_minutes: 45       # 服务端缓存注册表空闲回收（略长于 backend 30min 冻结，只兜底）
+  # ── 多模型常驻的追加端点（接口准备③/Q10；缺省注释掉 = 单端点现状，零回归）──
+  # 每模型一实例一端口（多 port + 固定端口：14163 起顺延，14162 归 RAG 计算面），
+  # host 一律共享 remote.host（统一 host，Q10）。repo 必须先在 model_registry 注册
+  # （方言/revision/capabilities 以注册表为单一真相）。算力端起第二实例：
+  #   INFER_PORT=<port> INFER_MODEL_REPO=<repo> python inference/server.py
+  # 工作端 backend 装配期校验本段并注入 RemoteBackend（base_url_for(name) 取址）。
+  # endpoints:
+  #   - name: "vision"          # 端点名（将来专科调用按名引用；main 为保留名）
+  #     repo: "mlx-community/Qwen3.5-9B-4bit"
+  #     port: 14163
   # KV 冻结落盘（T2/Q9-a）：会话冻结时把 KV 缓存序列化到承载端本地盘，解冻热恢复
   # （实测省 3-13s/次）。KV 是对话派生物——真两机拓扑下它落在算力机的盘上；介意
   # 会话残片留在设备 A 就设 false（解冻退基座克隆，只慢在摘要+尾部重预填）。

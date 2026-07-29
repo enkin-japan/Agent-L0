@@ -338,6 +338,13 @@ async def lifespan(app: FastAPI):
         _r = _inference_cfg.get("remote") or {}
         print(f"🔌 [System] 推理模式 remote：连接 inference-server "
               f"{_r.get('host', '127.0.0.1')}:{_r.get('port', 14161)}（本进程不加载权重）")
+        # 多端点声明校验（接口准备③）：inference.endpoints 配置错误在装配期响亮拒启
+        # （resolve_endpoints 抛 ValueError 说清哪条错），不留到专科调用时才炸
+        from framework.utils.model_selection import resolve_endpoints
+        _eps = resolve_endpoints()
+        if len(_eps) > 1:
+            print("🔌 [System] 追加推理端点：" + ", ".join(
+                f"{e['name']}={e['repo'].split('/')[-1]}:{e['port']}" for e in _eps[1:]))
     engine = await AgentEngine.create(
         model_path, kv_config=_inference_cfg,
         # 注册表条目整条透传（R0）：方言名与全部模型级开关（suppress_ghost_thinking 等）
