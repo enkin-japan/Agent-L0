@@ -74,6 +74,50 @@ def resolve_tokenizer_only_path(model_id_or_path: str, revision: Optional[str] =
     return str(model_path)
 
 
+def _apply_local_config_fixups(repo_id: str, model_dir: Path) -> None:
+    """按注册表 `local_config_fixups` 修正落盘 config.json（声明式、幂等、响亮）。
+
+    动机（Ornith 案，2026-07-29）：上游转换器代际差异会在 config.json 里写进本机
+    推理库不认识的枚举值（vision_config.model_type "qwen3_5_vision"，mlx-vlm 0.5.0
+    只认 "qwen3_5"）——权重与架构本身兼容（骨架 1260 参数名全对齐实测），只差一个
+    字符串。修正**声明在 config.yaml 注册表条目**：跨机自动复现，不靠人手改模型文件
+    （手改=静默本地分歧，重下即丢）。键为点分路径，值为替换后的字面量；已是目标值
+    时零写盘（幂等，每次启动都会走到这里）。
+    """
+    from .model_selection import model_options
+    fixups = model_options(repo_id).get("local_config_fixups") or {}
+    if not fixups:
+        return
+    cfg_path = model_dir / "config.json"
+    if not cfg_path.exists():
+        return
+    try:
+        data = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"⚠️ local_config_fixups 读取 {cfg_path} 失败，跳过: {e}")
+        return
+    changed = []
+    for dotted, value in fixups.items():
+        node = data
+        parts = str(dotted).split(".")
+        for p in parts[:-1]:
+            nxt = node.get(p) if isinstance(node, dict) else None
+            if not isinstance(nxt, dict):
+                node = None
+                break
+            node = nxt
+        if node is None:
+            print(f"⚠️ local_config_fixups 路径不存在，跳过: {dotted}")
+            continue
+        if node.get(parts[-1]) != value:
+            node[parts[-1]] = value
+            changed.append(f"{dotted} → {value!r}")
+    if changed:
+        cfg_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+                            encoding="utf-8")
+        print(f"🔧 已按注册表修正 {model_dir.name}/config.json: " + "; ".join(changed))
+
+
 def resolve_model_path(model_id_or_path: str, revision: Optional[str] = None) -> str:
     """
     内部辅助函数：解析模型路径，支持本地绝对/相对路径以及 HuggingFace Repo ID。
@@ -107,6 +151,7 @@ def resolve_model_path(model_id_or_path: str, revision: Optional[str] = None) ->
                 print(f"ℹ️ Local model {model_path.name} predates revision pinning and cannot be "
                       f"verified against {revision[:8]}. If loading fails, delete the directory "
                       f"and restart to re-download the pinned revision.")
+            _apply_local_config_fixups(model_id_or_path, model_path)
             return str(model_path)
         print(f"♻️ Local model {model_path.name} is revision {str(recorded)[:8]}, "
               f"but {revision[:8]} is pinned. Re-syncing…")
@@ -129,6 +174,7 @@ def resolve_model_path(model_id_or_path: str, revision: Optional[str] = None) ->
             print(f"⚠️ Could not verify local model against Hugging Face Hub ({e}). "
                   f"Using existing files as-is: {model_path} — if loading fails, "
                   f"reconnect and restart to resume the download.")
+            _apply_local_config_fixups(model_id_or_path, model_path)
             return str(model_path)
         raise ValueError(f"❌ Unable to find the local path, and unable to download the model from HF. Error message: {e}")
 
@@ -137,6 +183,7 @@ def resolve_model_path(model_id_or_path: str, revision: Optional[str] = None) ->
         "revision": revision,
         "completed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }, ensure_ascii=False) + "\n", encoding="utf-8")
+    _apply_local_config_fixups(model_id_or_path, model_path)
     return str(model_path)
 
 if __name__ == "__main__":

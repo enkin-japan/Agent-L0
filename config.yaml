@@ -119,6 +119,27 @@ inference:
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
       note: "18.4GB | 静态校验 ✓ | 稠密，建议 ≥32GB 统一内存"
+    # ── Qwen3.5 家族（多模型协作测试档，2026-07-29 用户指定）────────────────
+    # 两模型同为 Qwen3_5ForConditionalGeneration 架构、共用 qwen35 方言
+    # （chat template 仅差思考回放范围，方言取恒回放口径）。
+    - repo: "mlx-community/Qwen3.5-9B-4bit"
+      revision: "8b2b98c00a6b4d291155e4890773ca8f769aee53"
+      dialect: "qwen35"
+      capabilities: ["text", "vision"]
+      note: "6.0GB | 实机联调 ✓（2026-07-29：引擎两轮工具闭环 + 14163 双实例并存冒烟）| 视觉专科候选"
+    - repo: "mlx-community/Ornith-1.0-9B-4bit"
+      revision: "1e980b9742a9e554a4d57e90b4c597811fb2fc4e"
+      dialect: "qwen35"
+      # 架构含视觉塔（vision_config 存在），但按用户口径视觉质量近乎不可用——
+      # capabilities 是路由用的**可用能力**声明，故不含 vision；生产机实测后复核
+      capabilities: ["text"]
+      # 上游 06-28 转换把 vision_config.model_type 写成 "qwen3_5_vision"（新代转换器
+      # 命名），mlx-vlm 0.5.0 只认 "qwen3_5"。骨架实测（2026-07-29）：改此一键后
+      # 1260 参数名全对齐（与 Qwen3.5-9B 同构）。local_config_fixups 由
+      # path_resolver 在模型落盘后声明式应用（幂等、响亮日志、可跨机复现）。
+      local_config_fixups:
+        "vision_config.model_type": "qwen3_5"
+      note: "6.0GB | 实机联调 ✓（2026-07-29：fixup 后 0.5.0 加载，两轮工具闭环）| 长链推理专科候选"
 
   audio_max_length: 29
 

@@ -2136,6 +2136,41 @@ main（remote 现状合成，endpoints 未声明=单端点，与改动前逐字�
 表外 repo 拒启）——同机第二实例 = 两 env + 再起一份 server，为两实例并存冒烟铺路。
 金测试 528 → **537**（+9：合成/校验/真 config 缺省路径/访问器）。
 
+**阶段 4+5 · qwen35 方言 + 双模型实机联调（完成；R0 悬空验证收官）**：
+- **重大发现**：Ornith-1.0-9B 架构上就是 Qwen3_5ForConditionalGeneration（Qwen3.5
+  的长链推理特化衍生），chat template 与 Qwen3.5 逐行 diff 仅一处——思考回放范围
+  （Ornith 恒回放全部 `<think>`，Qwen3.5 只回放末问后的）。**一个 qwen35 方言覆盖
+  双模型**，且方言取"恒回放"口径（Ornith 官方口径 = 本仓 KV 前缀稳定所需，对
+  Qwen3.5 是良性超集）。
+- **dialects/qwen35/**（ChatML + XML 式调用体 `<function=…><parameter=…>`）：
+  prompt_builder 按前缀分层布局镜像官方模板（工具声明进稳定前缀、教学文案压缩、
+  尾部 system 块承载 task_block/尾注/环境锚点、关思考恒预填空 `<think>` 块）；
+  response_parser 镜像 gemma4 全部残缺形态防御（有头无尾/有尾无头/畸形内体转
+  error 走纠错闭环、未闭合 think 进 thoughts、控制标记不入正文）、参数值 JSON
+  字面量对称还原（多行字符串保原文——该格式的全部意义）；`tool_call_schema` 抛
+  NotImplementedError = **方言事实**（XML 非 JSON），engine._tool_guard fail-open
+  一次性禁用，实测打印如设计。markers 四个家族字面量实测全单 token（约束/流过滤/
+  预算锚点协议满足）。环境事实行提取为 `dialects/env_facts.py` 共用（gemma4 委托，
+  输出逐字节不变）。
+- **Ornith 加载障碍与声明式修复**：上游 06-28 转换把 `vision_config.model_type`
+  写成 `qwen3_5_vision`（新代转换器命名），mlx-vlm 0.5.0 只认 `qwen3_5`；骨架实测
+  改此一键后 1260 参数名全对齐（与 Qwen3.5-9B 完全同构）。落地为注册表条目
+  `local_config_fixups`（点分路径→值）+ `path_resolver._apply_local_config_fixups`
+  （模型落盘后声明式应用：幂等、响亮日志、跨机自动复现——不静默手改模型文件）。
+- **实机联调（16GB 开发机，两模型各 6GB 4bit）**：引擎级探针
+  （scratchpad/probe_qwen35.py）两模型各自完整闭环——加载 ✓ / 约束 fail-open ✓ /
+  思考频道分离 ✓ / XML 工具调用发起与解析还原 ✓（含 int 参数类型还原）/ KV 前缀
+  二轮命中（215/445）✓ / 工具结果回喂后终答 ✓；~20 tps。**双实例并存冒烟**：
+  gemma-e4b@14161 + Qwen3.5@14163（INFER_PORT/INFER_MODEL_REPO 旋钮）同时健康，
+  用完即收（CHARTER 部署纪律）。
+- 注册表新增两条（capabilities：Qwen=text/vision；Ornith=text——架构含视觉塔但按
+  用户口径视觉不可用，capabilities 是路由用**可用能力**声明，生产机实测后复核）。
+  模型文件收敛 `backend/models/`（用户授权下载，测后保留）。
+- **专科调用字段约定（接口准备④，只约定不实现）**：落 `HETERO_COMPUTE.md` §10
+  ——`SandboxSpec`/工具声明将来可选 `endpoint` 字段引用 endpoints 名；执行语义四条
+  （响亮不回落 / 沙箱替身隐私门控不放宽 / 跨模型不共享 KV 任务粒度整进整出 /
+  确定性路由），实现随生产机 A1/vLLM 波。
+
 ---
 
 ## §5 待决（开工前需拍板）

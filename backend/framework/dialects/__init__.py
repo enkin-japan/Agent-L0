@@ -18,4 +18,7 @@ def get_dialect_class(name: str = ""):
     if name == "gemma4":
         from .gemma4.dialect import Gemma4Dialect
         return Gemma4Dialect
-    raise ValueError(f"未知模型方言: {name!r}（可用: gemma4）")
+    if name == "qwen35":
+        from .qwen35.dialect import Qwen35Dialect
+        return Qwen35Dialect
+    raise ValueError(f"未知模型方言: {name!r}（可用: gemma4 | qwen35）")

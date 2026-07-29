@@ -851,3 +851,38 @@ KVCache 空串 meta_state 回设非空会炸（"no meta_state but a meta_state w
 | 混合缓存类型序列化格式一旦定错要迁移 | 格式带版本号；先只支持稠密+量化两型，Rotating 不落盘（重预填回退） |
 | T1/T4 动提示装配主链路 | 铁律 1 金测试全绿 + 协议夹具回放；T4 审计先行（M6），修正分批 |
 | 量级估计当实测用 | 9.1 全表跑完前不排 T 票顺序的最终版 |
+
+## 10. 多模型常驻与专科调用（2026-07-29 接口准备波；serving 侧待生产机 A1/vLLM 波）
+
+**方案与决策全文见 EXECUTION_LEDGER「多模型协作方案记录」与 Q10。** 本节只钉接口约定。
+
+### 10.1 已落地的接口（开发机可用）
+
+- **端点声明**：config `inference.endpoints`（{name, repo, port}；host 共享
+  `remote.host`=统一 host；repo 须先在 `model_registry` 注册）。未声明 = 单端点现状。
+- **端口约定（Q10）**：14161 主推理档；追加模型 14163 起顺延（14162 归 RAG 计算面）；
+  固定端口 + `${VAR:-default}` env 逃生口，不做动态分配/服务发现。
+- **算力端多实例**：`INFER_PORT=<port> INFER_MODEL_REPO=<repo> python inference/server.py`
+  每模型一实例一端口（表外 repo 拒启）。双实例并存已在开发机冒烟（gemma@14161 +
+  Qwen3.5@14163 同时健康，2026-07-29，临时拉起用完即收）。
+- **工作端取址**：`RemoteBackend.base_url_for(name)`；未知端点名响亮 KeyError
+  **不回落 main**（视觉请求静默落到无视觉主模型的症状比报错难查十倍）。
+- **能力元数据**：注册表条目 `capabilities`（text/vision/audio，按各仓 config.json
+  实测填写），经 `model_capabilities(repo)` 读取，供确定性路由。
+- **方言**：`dialects/qwen35/`（ChatML + XML 调用体）覆盖 Qwen3.5 与 Ornith——
+  R0 悬空验证收官（两个非 gemma 家族模型经方言层跑通，引擎承重代码零改动）。
+  注意：qwen35 无 JSON 约束采样（XML 调用体按设计 fail-open），解析纠错闭环兜底。
+
+### 10.2 专科调用字段约定（**只约定不实现**——实现随生产机多模型波）
+
+- **工具/沙箱声明侧**：`SandboxSpec` 与工具声明将来新增**可选**字段
+  `endpoint: "<name>"`——引用 `inference.endpoints` 的端点名，缺省 `main`。
+  含义：该沙箱/工具的子生成改在指定端点的模型上跑（如视觉识别 → `vision` 端点）。
+- **执行侧语义**（届时按此实现，不得走样）：
+  ① 端点名解析经 `RemoteBackend.base_url_for`，未声明即响亮失败（同 10.1 口径，
+  不静默回落）；② 专科子生成一律**一次性会话替身**（R1 沙箱形态），个人环境事实
+  `include_env=False` 的隐私门控原样适用——换端点绝不放宽隐私边界；③ 跨模型不共享
+  KV（分词器不同），专科调用以任务粒度整进整出，不做主循环中途换模；④ 路由判定是
+  **确定性代码**（如"输入含图 → 含 vision 能力的端点"），不做模型自选。
+- **调度侧**：多实例的能力声明/并发语义随 T7 并发票在生产机 A1/vLLM 波一并落，
+  开发机不预建。
