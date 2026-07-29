@@ -2033,6 +2033,34 @@ macOS 66 已 bundle 安装（携空模板 config + 拒启指引，Developer ID �
 两处 host 本地填值（100.72.11.119，⑥ 验证痕迹）**刻意不入库**——通用模板决策不变，
 机器专属值应走 `.env.local`。
 
+### devctl 部署参数波：`-p` 短参 + `-h/--host` 一次落盘（2026-07-29，用户提议并确认口径）
+
+用户提议：`--profile` 加短参；分离式启动缺 host 直接拦截并提示用法。经确认采纳
+"一次输入、永久落盘"口径（用户原话确认："将host也持久化到.env.local中，一次输入，
+永久落盘，省去再启动时的重复输入"）：
+
+- **`-p`** = `--profile`（含 `-p=` 形式）。
+- **`-h/--host <地址>`**（仅 start|restart + 必须带 profile）：写盘
+  `.env.local` 两键 `INFER_REMOTE_HOST`/`RAG_COMPUTE_HOST`（keygen 同形态：无则建
+  +600，已有键就地替换、无则追加，`persist_host_env`），同时 export + 重算
+  `edge_resolve_urls` 本次立即生效。语义与 app 设置"算力端地址一键注入两 env"统一
+  （gpu=本机绑定地址，edge=算力端拨号地址）；混合拓扑/gpu 融合形态不走它（手工分别
+  维护两键）。`-h` 取 host 义有 mysql/psql 先例，devctl 本无 `-h` help。
+- **参数期拦截**：edge（mode=remote）与 gpu 分支顶部 `require_host`——三层
+  （`-h`/.env.local/config）都空即当场拒启并给完整指引（含 `-h` 用法、单机改
+  inprocess 出路），不再等 start_infer/start_backend 内层门（那两层保留，app 形态走
+  内层）。护栏另有：无 profile 传 `-h` 拒（单机无跨机地址）、非 start|restart 拒、
+  值以 `-` 开头/含白名单外字符拒（白名单也令 perl 替换免注入）。
+- **restart 免透传**：`-h` 参数期已落盘，子调用 source `.env.local` 自然拾取
+  （落盘即透传——与当年 `--profile` 必须透传的坑形成对照，机制上免疫）。
+- 用法段/keygen 部署指引/`.env.example` 同步提及 `-h` 捷径。
+
+金测试 517 → **524**（+7，`test_devctl_host_flag.py`：脚手架隔离实跑真脚本——
+拷 devctl+lib_edge 进 tmp ROOT、最小空 host config、软链真 venv python 供解析、
+刻意不建 rag/searx venv 令越过拦截的路径撞"缺 venv"墙而非真拉起服务；覆盖拦截、
+落盘+权限 600+二次免传、upsert 保旁键、无 profile 拒、stop 拒、缺值拒、非法值拒）。
+devctl 主会话直改，测试走 chore-worker。
+
 ---
 
 ## §5 待决（开工前需拍板）

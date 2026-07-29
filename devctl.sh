@@ -17,6 +17,7 @@
 #   ./devctl.sh model                                # 从注册表选择启动模型（写 .model-selection）
 #   ./devctl.sh rag-model                            # 从 rag.tiers 选择 RAG 档位（写 .rag-tier-selection）
 #   ./devctl.sh start|stop|restart [rag|searx|backend|front|all]   # 缺省 all
+#   ./devctl.sh start -p edge|gpu [-h <算力端IP/本机IP>]  # 分离部署（-h 一次落盘 .env.local 免重复输入）
 #   ./devctl.sh status
 #   ./devctl.sh logs [rag|searx|backend|front]       # tail 对应日志
 #
@@ -231,7 +232,8 @@ do_keygen() {
     echo "    • macOS/iOS app 在设置页填 INFER / RAG 两把密钥；后端地址始终是工作端自己的"
     echo "      http://127.0.0.1:14159（不是算力端端口）。"
     echo "    • 算力端 .env.local 还需填 INFER_REMOTE_HOST / RAG_COMPUTE_HOST=本机 tailnet IP"
-    echo "      （config 两个 host 缺省为空，通用模板不钉机器；分离部署必填）。"
+    echo "      （config 两个 host 缺省为空，通用模板不钉机器；分离部署必填。"
+    echo "        也可启动时 start -p gpu -h <本机IP> 一次落盘，免手工编辑）。"
 }
 
 # 读单键当前值（去掉两侧引号；无则空）。仅取该键最后一次赋值。
@@ -260,6 +262,22 @@ _keygen_upsert() {  # $1: 文件  $2: 键名
         printf '%s="%s"\n' "$key" "$val" >> "$file"
     fi
     info "已为 ${key} 生成强随机值（原值空或长度<16）"
+}
+
+# -h/--host 的落盘（与 keygen 同形态）：两键 upsert 进 .env.local（600），一次录入永久生效。
+# 值已在参数期过白名单（[A-Za-z0-9_.:-]），perl 替换里作字面量安全。
+persist_host_env() {  # $1: 地址
+    local target="${DEVCTL_ENV_FILE:-$ROOT/.env.local}" key
+    [ -f "$target" ] || : > "$target"
+    chmod 600 "$target" 2>/dev/null || true
+    for key in INFER_REMOTE_HOST RAG_COMPUTE_HOST; do
+        if grep -qE "^${key}=" "$target" 2>/dev/null; then
+            /usr/bin/perl -i -pe "s|^${key}=.*|${key}=\"${1}\"|" "$target" || { fail "写入 ${target} 失败"; return 1; }
+        else
+            printf '%s="%s"\n' "$key" "$1" >> "$target" || { fail "写入 ${target} 失败"; return 1; }
+        fi
+    done
+    info "算力端地址已落盘：INFER_REMOTE_HOST / RAG_COMPUTE_HOST = ${1}（${target}，后续启动免传）"
 }
 
 # ---- 启动 ----
@@ -500,11 +518,17 @@ shift 2>/dev/null || true
 #   edge = 设备 B（用户 Mac）：backend + 前端；推理/RAG 在设备 A（config 的 host 指过去）。
 #   gpu  = 设备 A（算力机）：inference-server + RAG (+ SearXNG)；不起前端、不起编排。
 PROFILE=""
+HOST_ARG=""
 _args=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        --profile) PROFILE="${2:-}"; shift 2 || true ;;
+        -p|--profile) PROFILE="${2:-}"; shift 2 || true ;;
         --profile=*) PROFILE="${1#--profile=}"; shift ;;
+        -p=*)        PROFILE="${1#-p=}"; shift ;;
+        # -h 表 host 不表 help（mysql/psql 先例；本脚本的帮助本就是「未知命令打用法」）
+        -h|--host)   HOST_ARG="${2:-}"; shift 2 || true ;;
+        --host=*)    HOST_ARG="${1#--host=}"; shift ;;
+        -h=*)        HOST_ARG="${1#-h=}"; shift ;;
         *) _args="$_args $1"; shift ;;
     esac
 done
@@ -518,6 +542,29 @@ case "$PROFILE" in
     ""|edge|gpu) ;;
     *) fail "未知 profile: ${PROFILE}（可选 edge|gpu；不传 = all-in-one 现状）"; exit 1 ;;
 esac
+
+# -h/--host：算力端地址一次录入、永久落盘（.env.local，与 keygen 同形态），本次启动
+# 立即生效——后续启动免传。语义与 app 设置「算力端地址」一致：同一值灌
+# INFER_REMOTE_HOST + RAG_COMPUTE_HOST 两键（gpu = 本机绑定地址，edge = 算力端拨号
+# 地址）。混合拓扑（两服务各在一机）或 gpu 融合形态（RAG 整体留算力端，
+# RAG_COMPUTE_HOST 须留空）不走本参数——那两种形态直接在 .env.local 分别维护两键。
+if [ -n "$HOST_ARG" ]; then
+    case "$CMD" in
+        start|restart) ;;
+        *) fail "-h/--host 只对 start|restart 有意义（当前命令：${CMD:-空}）"; exit 1 ;;
+    esac
+    if [ -z "$PROFILE" ]; then
+        fail "单机形态不需要 -h/--host（inprocess + 融合 RAG 无跨机地址）；分离部署请配合 -p edge|gpu 使用"
+        exit 1
+    fi
+    case "$HOST_ARG" in
+        -*) fail "-h/--host 缺少地址值（用法：-h 100.x.y.z）"; exit 1 ;;
+        *[!A-Za-z0-9_.:-]*) fail "非法地址值：${HOST_ARG}（期望 IP/主机名）"; exit 1 ;;
+    esac
+    persist_host_env "$HOST_ARG" || exit 1
+    export INFER_REMOTE_HOST="$HOST_ARG" RAG_COMPUTE_HOST="$HOST_ARG"
+    edge_resolve_urls   # .env.local 在参数解析前已加载；覆盖后重算 HOST/URL 全套
+fi
 
 case "$CMD" in
     setup) do_setup ;;
@@ -537,6 +584,13 @@ case "$CMD" in
                 # macOS app 执行的是同一个函数，此处不得另写一份编队。
                 info "profile=edge（设备 B：SearXNG + backend + 前端；推理/RAG 在远端）"
                 [ "$INFER_MODE" = "remote" ] || warn "inference.mode=${INFER_MODE}——edge 通常配 remote，否则推理仍在本机跑。"
+                # 分离启动缺地址：参数期就拦（-h/.env.local/config 三层都空），不进编队半途才炸。
+                # start_backend 内的 require_host 保留为第二层（app 形态走的是那条）。
+                if [ "$INFER_MODE" = "remote" ]; then
+                    require_host "$INFER_HOST" "算力端（inference-server 拨号地址）" \
+                        "启动时传 -h <算力端 tailnet IP>（一次落盘 .env.local，后续免传），或 .env.local 写 INFER_REMOTE_HOST=<算力端 IP>；单机部署改 inference.mode: inprocess" \
+                        || exit 1
+                fi
                 edge_up && start_front
                 exit $?
                 ;;
@@ -545,6 +599,11 @@ case "$CMD" in
                 # 不含 SearXNG——见上方 edge 分支的归属说明。
                 # B2c 拆分（rag.compute.host 非空）：A 只跑无状态计算面，知识库数据在工作端；
                 # 融合（host 空）：过渡拓扑，整个 RAG 仍在 A（拆分前现状）。按 config 分派。
+                # 分离启动缺地址：参数期就拦（-h/.env.local/config 三层都空），
+                # 别等 start_infer 里的同名门——那时 rag 面可能已经起了一半。
+                require_host "$INFER_HOST" "算力端（inference-server 绑定地址）" \
+                    "启动时传 -h <本机 tailnet IP>（一次落盘 .env.local，后续免传），或 .env.local 写 INFER_REMOTE_HOST / RAG_COMPUTE_HOST=<本机 tailnet IP>；单机部署改 inference.mode: inprocess 并去掉 -p gpu" \
+                    || exit 1
                 if [ -n "${RAGC_HOST:-}" ]; then
                     info "profile=gpu（设备 A：inference-server + RAG 计算面；知识库数据在工作端）"
                     start_rag_compute && start_infer
@@ -591,7 +650,8 @@ case "$CMD" in
         esac
         ;;
     restart)
-        # profile 必须透传，否则 restart --profile edge 会退化成 all-in-one 重启
+        # profile 必须透传，否则 restart --profile edge 会退化成 all-in-one 重启。
+        # -h 不必透传：参数期已落盘 .env.local，子调用 source 时自然拾取（落盘即透传）。
         if [ -n "$PROFILE" ]; then
             "$0" stop --profile "$PROFILE" && "$0" start --profile "$PROFILE"
         else
@@ -616,8 +676,9 @@ case "$CMD" in
         echo "      $0 model                                   # 从注册表选择启动模型（钉死 revision）"
         echo "      $0 rag-model                                # 从 rag.tiers 选择 RAG 档位（写 .rag-tier-selection）"
         echo "      $0 start|stop|restart [rag|rag-compute|searx|infer|backend|front|all]"
-        echo "      $0 start|stop|restart --profile edge   # 工作端：RAG 数据面(若本机)+backend+前端"
-        echo "      $0 start|stop|restart --profile gpu    # 算力端：inference-server + RAG 计算面/融合RAG"
+        echo "      $0 start|stop|restart -p edge [-h <算力端IP>]   # 工作端：RAG 数据面(若本机)+backend+前端"
+        echo "      $0 start|stop|restart -p gpu  [-h <本机IP>]     # 算力端：inference-server + RAG 计算面/融合RAG"
+        echo "      （-p = --profile；-h/--host 一次落盘 .env.local 两键 INFER_REMOTE_HOST/RAG_COMPUTE_HOST，后续免传）"
         echo "      $0 status"
         echo "      $0 logs [rag|rag-compute|searx|infer|backend|front]"
         echo "      $0 bundle-print                            # 构建 deck 打印包进 backend（前端不跑也能导 PDF）"
