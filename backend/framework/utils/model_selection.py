@@ -35,6 +35,23 @@ def resolve_selected_model() -> Tuple[str, Optional[str], str]:
     return default
 
 
+#: capabilities 值域（config.yaml model_registry 各条目按 HF config.json 实测声明）
+KNOWN_CAPABILITIES = ("text", "vision", "audio")
+
+
+def model_capabilities(repo: Optional[str]) -> set:
+    """按 repo 取注册表声明的模态能力集合；表外/未声明回落 {"text"}（最保守）。
+
+    多模型协作的确定性路由消费面（接口准备②）：如「输入含图像 → 只在含 vision 的
+    档位里选」。值域钉死 KNOWN_CAPABILITIES（金测试校验 config 声明合法），表外值
+    静默滤除、"text" 恒在——路由代码永远拿到非空且词汇受控的集合。
+    """
+    caps = model_options(repo).get("capabilities") or []
+    if not isinstance(caps, (list, tuple)):
+        caps = []
+    return {c for c in caps if c in KNOWN_CAPABILITIES} | {"text"}
+
+
 def model_options(repo: Optional[str]) -> dict:
     """按 repo 取注册表条目（含 suppress_ghost_thinking 等模型级行为开关）。
 

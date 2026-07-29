@@ -2108,6 +2108,17 @@ gemma-4 系列顺便做一次版本对齐。执行口径：16GB 下三模型不�
 共享 KV 权重，本机 mlx-vlm 0.5.0 加载即 missing 54 → **pin 刻意停在 2026-05-19 旧版**
 （config 注释注明），对齐前提是升级 mlx-vlm 并复验 `backends/mlx/patch/` 全套
 （铁律 1 手术，须单独成波、用户另行拍板）。金测试 524 全绿。
+〔注释修正〕注册表头旧注释"07-05/06 之后勿改指 main"是当年从 e4b 失败的过度泛化，
+已改写为分档口径（e4b 独有共享 KV 架构才是不兼容根源）。
+
+**阶段 2 · 注册表能力元数据（完成）**：`model_registry` 九条全部声明
+`capabilities`——值按各仓 config.json 实测填（**e4b 有音频编码器
+audio_config=gemma4_audio，26b/31b 为 null**：audio 是 e4b 独有，不按家族猜）；
+e4b=text/vision/audio，26b/31b=text/vision。消费面 `model_capabilities(repo)`
+（`utils/model_selection.py`）：表内返回声明集合，表外/None/畸形回落 {"text"}，
+表外词汇静默滤除——将来确定性路由（如"输入含图 → 只在含 vision 档里选"）拿到的
+永远是非空受控集合。金测试 524 → **528**（+4：声明合法性、audio=e4b-only 事实钉、
+访问器两侧）。
 
 ---
 
