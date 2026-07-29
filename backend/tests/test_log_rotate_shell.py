@@ -1,7 +1,14 @@
-"""rotate_log 日志代际隔离金测试（shell 侧，实跑真函数）。
+"""rotate_log 日志代际隔离 + managed_or_report 占用者分类金测试（shell 侧，实跑真函数）。
 
 守 lib_edge.sh 的 rotate_log：本次启动尝试的起点把上一代进程日志轮转为 $1.prev，
 免得 devctl 失败时 tail 把上一代的旧拒启信息混进来误导诊断（实机事故 2026-07-19）。
+
+另守 managed_or_report 对端口占用者的措辞分叉：占用者若是 app 内嵌解释器
+（路径含 `.app/Contents/Resources/`，R5-3 PBS 运行时）= 本 app 上一代执行层残留
+（强杀/崩溃未走清理留下的），标"可安全回收"；否则维持"该端口的监听者不是本次
+启动器拉起的服务"的原措辞——别把自家旧代当成外来程序吓唬用户，也别把真正的
+外来占用者说成"自家残留"误导用户直接回收。
+
 按 test_keygen_shell.py 的既有模式（source + 子进程实跑），不 grep 文本当测试。
 bash 缺席时跳过（CI 最小镜像兜底）。
 """
@@ -108,3 +115,39 @@ def test_second_rotate_overwrites_old_prev(tmp_path):
     assert _call_rotate(str(log)).returncode == 0
     assert not log.exists()
     assert prev.read_text(encoding="utf-8") == "G2\n"
+
+
+def _call_managed_or_report(ps_output: str) -> subprocess.CompletedProcess:
+    """source lib_edge.sh 后用假 listen_pids/ps 顶替真实系统调用，实跑
+    managed_or_report。listen_pids 固定吐一个假 pid（占用者存在）；pid 文件给
+    不存在的路径（无记录，走硬失败报告分支）；ps 按 $FAKE_PS_OUTPUT 回放调用方
+    指定的 comm 路径，驱动 own_stray 判据的两条岔路。"""
+    script = (
+        'source "$1"; '
+        'listen_pids() { echo 99999; }; '
+        'ps() { echo "$FAKE_PS_OUTPUT"; }; '
+        'managed_or_report backend 14159 /nonexistent/pid stop-backend'
+    )
+    env = dict(_STUB_ENV, FAKE_PS_OUTPUT=ps_output)
+    return subprocess.run(["bash", "-c", script, "_", _LIB_EDGE],
+                          capture_output=True, text=True, env=env)
+
+
+@pytest.mark.skipif(not shutil.which("bash"), reason="需要 bash")
+def test_managed_or_report_app_bundle_stray_labeled_recyclable():
+    # 占用者是 app 内嵌解释器路径 → 识别为本 app 上一代执行层残留，标"可安全回收"
+    r = _call_managed_or_report(
+        "/Applications/MacAgent.app/Contents/Resources/python/bin/python3.13")
+    assert r.returncode == 1
+    assert "上一代执行层残留" in r.stderr
+    assert "可安全回收" in r.stderr
+    assert "不是本次启动器拉起的服务" not in r.stderr
+
+
+@pytest.mark.skipif(not shutil.which("bash"), reason="需要 bash")
+def test_managed_or_report_foreign_process_keeps_original_wording():
+    # 占用者是无关程序 → 维持原措辞，不得被误标为"残留"
+    r = _call_managed_or_report("/usr/local/bin/some-other-daemon")
+    assert r.returncode == 1
+    assert "不是本次启动器拉起的服务" in r.stderr
+    assert "残留" not in r.stderr

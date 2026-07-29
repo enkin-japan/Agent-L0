@@ -26,7 +26,10 @@ class MCPRegistry:
             print(f"[MCP] 工具目录 {self.tools_dir} 不存在，已自动创建。")
             return
 
-        for file in self.tools_dir.iterdir():
+        # 排序钉死注册顺序：schema 列表原样进提示词稳定前缀（orchestrator 不再排），
+        # 而 iterdir 的目录项顺序随文件系统/同步方式（git checkout、rsync、bundle 组装）
+        # 漂移——顺序一变，稳定前缀整段失效、算力端全量重 prefill（KV 缓存白攒）。
+        for file in sorted(self.tools_dir.iterdir()):
             if file.name.endswith(".py") and not file.name.startswith("__"):
                 module_name = file.name[:-3]
 

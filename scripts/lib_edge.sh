@@ -164,15 +164,31 @@ managed_or_report() {  # $1: 名称  $2: 端口  $3: pid 文件  $4: stop 目标
         [ -n "$recorded" ] && kill -0 "$recorded" 2>/dev/null && return 0
     fi
     fail "$name 端口 ${port} 被本脚本管不着的进程占用（${pidfile} 无记录或记录已失效）："
+    # 占用者若是 app 布局的内嵌解释器（.app/Contents/Resources/ 下，R5-3 PBS 运行时），
+    # 那就是本 app 上一代的执行层残留——强杀 app（SIGKILL 不走 willTerminate）或崩溃
+    # 会留下它。识别出来就别拿「别的程序」吓唬用户：它是自家旧代，可安全回收。
+    local own_stray=0 cmd
     for p in $owners; do
-        echo "      pid $p  $(ps -o comm= -p "$p" 2>/dev/null || echo '?')" >&2
+        cmd="$(ps -o comm= -p "$p" 2>/dev/null || echo '?')"
+        case "$cmd" in
+            *".app/Contents/Resources/"*)
+                own_stray=1
+                echo "      pid $p  $cmd   ← 本 app 上一代执行层残留" >&2 ;;
+            *)
+                echo "      pid $p  $cmd" >&2 ;;
+        esac
     done
     # ${} 必须显式界定：紧跟其后的全角句号是多字节字符，$EDGE_LOG_DIR。 会被 bash 连着
     # 首字节当成变量名（set -u 下直接 unbound variable 报错）。
     # 措辞对两条进入路径都成立：探活通（像我们的服务但没记录）与探活不通（占用者
     # 对 /health 回 404/拒答）都会走到这里
-    warn "  该端口的监听者不是本次启动器拉起的服务，其日志也不在 ${EDGE_LOG_DIR}。"
-    warn "  确认可回收则先停： ${EDGE_STOP_CMD:-stop} ${target}"
+    if [ "$own_stray" = 1 ]; then
+        warn "  识别为 app 内建执行层的上代残留进程（多因强制退出/崩溃未走清理），可安全回收："
+        warn "  ${EDGE_STOP_CMD:-stop} ${target}"
+    else
+        warn "  该端口的监听者不是本次启动器拉起的服务，其日志也不在 ${EDGE_LOG_DIR}。"
+        warn "  确认可回收则先停： ${EDGE_STOP_CMD:-stop} ${target}"
+    fi
     return 1
 }
 
