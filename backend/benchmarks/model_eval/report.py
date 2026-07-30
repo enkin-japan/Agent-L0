@@ -47,7 +47,7 @@ ROWS = [
     ("通过率（含步数/收尾）", ("dimensions", "longchain", "pass_rate")),
     ("步数合计", ("dimensions", "longchain", "steps_total")),
     ("复读调用合计", ("dimensions", "longchain", "redundant_calls_total")),
-    ("错误恢复率", ("dimensions", "longchain", "recovered_rate")),
+    ("错误恢复成功率(出错轨迹)", ("dimensions", "longchain", "recovery_success_rate")),
     ("— 视觉 —", None),
     ("视觉正确率", ("dimensions", "vision", "pass_rate")),
     ("— 思维链纯净度 —", None),

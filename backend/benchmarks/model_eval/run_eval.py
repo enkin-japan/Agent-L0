@@ -57,11 +57,15 @@ def summarize_scores(records: list) -> dict:
                 agg[f"{k}_rate"] = round(sum(vals) / len(vals), 3)
             elif all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in vals):
                 agg[f"{k}_total"] = sum(vals)
-        # 纠错成功率的分母是"出过解析错误的轨迹"，单列（corrected_rate 的分母是全体，会稀释）
+        # 纠错/恢复成功率的分母是"出过错的轨迹"，单列（*_rate 的分母是全体，会稀释）
         err_trajs = [s for s in scores if (s.get("parse_errors") or 0) > 0]
         if err_trajs:
             agg["correction_success_rate"] = round(
                 sum(1 for s in err_trajs if s.get("corrected")) / len(err_trajs), 3)
+        env_err_trajs = [s for s in scores if (s.get("env_errors") or 0) > 0]
+        if env_err_trajs:
+            agg["recovery_success_rate"] = round(
+                sum(1 for s in env_err_trajs if s.get("recovered")) / len(env_err_trajs), 3)
         out[dim] = agg
     return out
 
