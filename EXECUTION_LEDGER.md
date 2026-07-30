@@ -2331,6 +2331,7 @@ FTS5，零重依赖）——CJK bigram 预分词（入索引与查询同一变�
 | **Q8** | ✅ **已闭环（2026-07-16）**：Developer ID Application (G2) 证书由用户在门户签发（API 建不了——Account Holder 专属，见 S.4）；951M 运行时公证 **Accepted**（submission `1e13bf2a`）。签名→公证链路全通，真实 .app 的公证 + staple 留到分发动作 | R5-9 验收形态 |
 | ~~**Q9**~~ | ✅ **已定（2026-07-18）：折中方案 a+开关**——`inference.kv_persist` 默认 true、用户可关（真两机拓扑介意残片即 false，退基座克隆）。server 三端点+RemoteBackend 三方法+删除清理已落，实机 HTTP 全链冒烟通过，详见 `HETERO_COMPUTE.md` §9.5 | ~~T2 分离编队收益~~ ✅ |
 | ~~**Q10**~~ | ✅ **已定（2026-07-29）**：**多 port + 固定端口**。每模型实例一端口；单口网关否决（新单点 + 自维护成本 + SSE 经代理坑，且内部照样多 port）；"全动态端口"是伪选项（拨号侧总需固定会合点）。端口约定：14161 主推理档（D7），追加模型 14163 起顺延（14162 归 RAG 计算面），写死 `model_registry` 条目 `port` 字段=单一真相（host 同款"一键两职"）；`${VAR:-default}` env 逃生口对付罕见外来占用（141xx 不在 ephemeral 范围，OS 不会随机占）；将来需单一入口时可在多 port 上叠可选薄门面（T6 形态），基础形态不变 | ~~多端点 config 形态~~ ✅ |
+| **Q11** | **实体链接层（entities/mentions/facts）与跨文档矛盾裁决**：数据架构采纳波（2026-07-30）明确**不预建**——设计文档自己的反模式第一条（开工把 schema 设计完）。开工条件：真实使用中出现聚合/算术/时间序列查询的 badcase 积累（检索评估集的 negative/multidoc 形态会先暴露），届时按 badcase 定表。同批延后：向量迁 sqlite-vec 单库重构（同库 JOIN 在链接层存在前无消费方） | 数据层 L5（无阻塞，等 badcase） |
 
 ---
 
