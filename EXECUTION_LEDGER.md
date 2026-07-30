@@ -2259,6 +2259,30 @@ gemma-4-e4b **12/12**（约束采样兜格式，30 tps，峰值 5.9GB）；Qwen3
 Ornith 视觉塔实测复核 capabilities、按画像填 HETERO_COMPUTE §10 路由表。
 金测试最终 **597**。
 
+### 数据架构采纳波（2026-07-30 用户提供设计文档并拍板，检索侧三件小改）
+
+用户提供《个人/家庭 Agent 的数据架构思想》（repo 根 personal-agent-data-architecture.md）
+征询借鉴意义。对照结论（用户认可）：主轴与项目既有纪律同频（原文唯一真相/离线算力/
+评估文化项目已独立走到）；**采纳三件缺失拼图**——①检索质量评估集 ②FTS 真关键词腿
+③时间双轴+凭证指针；**明确不抄**——实体/mentions/facts 链接层（等真实 badcase，
+反模式"开工把 schema 设计完"）、向量迁 sqlite-vec 单库重构（同库 JOIN 在链接层
+存在前无消费方）；照片 VLM 描述管道记生产机波素材。
+
+**R1 · 检索质量评估集（完成）**：`rag/evals/`——夹具语料 15 篇（合成个人语料，
+标识符/人名/中英混排/新旧地址干扰对；分类名必须 ASCII=Chroma 命名约束）+ 固定题集
+32 条（七类形态：semantic/identifier/name/crosslingual/multidoc/temporal/negative，
+含 stale_not_top1 时效探针与"库外问题不该硬凑"负例）+ 跑批器（隔离数据根拉起融合
+模式真实 rag_server，部署同款 HTTP 面与参数，判分锚点=命中文档 title，产物对比
+BASELINE.json 打增减）。金测试 4 项守题库引用完整性（引用不存在的 title=该题永远
+失败且原因隐蔽）。
+〔首跑即抓到数据面真 bug〕并发入库背景任务撞 HF fast tokenizer 线程安全 →
+`RuntimeError: Already borrowed`（生产 Agent 单发入库从未暴露；面板+Agent 并发
+同样会撞）。修：compute_core 三处 MPS_LOCK 锁面扩大到 tokenizer 调用（MPS 前向
+本就串行，零吞吐损失）。
+**基线（text-0.6b 档）**：32 题 pass 93.8% / MRR 0.933；两道失败
+（rq-name-003 中文人名"周师傅"、rq-multi-001 多文档金额聚合，均空结果）正是设计
+文档预言的结构性短板，作为 R2 的前后对照锚点。
+
 ---
 
 ## §5 待决（开工前需拍板）

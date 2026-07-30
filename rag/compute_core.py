@@ -273,11 +273,13 @@ def _embed_batch(texts: List[str]) -> List[List[float]]:
     tokenizer = GLOBAL_OBJECTS["embed_tokenizer"]
     model = GLOBAL_OBJECTS["embed_model"]
 
-    batch_dict = tokenizer(
-        texts, padding=True, truncation=True, max_length=MAX_LENGTH, return_tensors="pt"
-    ).to(DEVICE)
-
+    # tokenizer 也在锁内：HF fast tokenizer（Rust）并发 encode 会抛
+    # "RuntimeError: Already borrowed"（2026-07-30 检索评估集并发入库实测）。
+    # MPS 前向本就被锁串行，扩大锁面无吞吐损失。
     with MPS_LOCK:
+        batch_dict = tokenizer(
+            texts, padding=True, truncation=True, max_length=MAX_LENGTH, return_tensors="pt"
+        ).to(DEVICE)
         with torch.no_grad():
             outputs = model(**batch_dict)
             embeddings = last_token_pool(outputs.last_hidden_state, batch_dict['attention_mask'])
@@ -302,7 +304,8 @@ def token_counts(texts: List[str], model_type: str = "embedding") -> List[int]:
     tokenizer = GLOBAL_OBJECTS["embed_tokenizer"] if model_type == "embedding" else GLOBAL_OBJECTS["rerank_tokenizer"]
     if not texts:
         return []
-    encoded = tokenizer(texts, add_special_tokens=False)["input_ids"]
+    with MPS_LOCK:   # fast tokenizer 非线程安全（Already borrowed），与前向共锁
+        encoded = tokenizer(texts, add_special_tokens=False)["input_ids"]
     return [len(ids) for ids in encoded]
 
 
@@ -316,17 +319,17 @@ def rerank_scores(query: str, documents: List[str], instruct: Optional[str] = No
     rerank_tokenizer = GLOBAL_OBJECTS["rerank_tokenizer"]
     rerank_model = GLOBAL_OBJECTS["rerank_model"]
 
-    inputs = rerank_tokenizer(
-        pairs, padding=False, truncation='longest_first',
-        return_attention_mask=False,
-        max_length=MAX_LENGTH - len(GLOBAL_OBJECTS["rerank_prefix_tokens"]) - len(GLOBAL_OBJECTS["rerank_suffix_tokens"])
-    )
-    for i, ele in enumerate(inputs['input_ids']):
-        inputs['input_ids'][i] = GLOBAL_OBJECTS["rerank_prefix_tokens"] + ele + GLOBAL_OBJECTS["rerank_suffix_tokens"]
+    with MPS_LOCK:   # encode/pad 一并入锁：fast tokenizer 非线程安全（Already borrowed）
+        inputs = rerank_tokenizer(
+            pairs, padding=False, truncation='longest_first',
+            return_attention_mask=False,
+            max_length=MAX_LENGTH - len(GLOBAL_OBJECTS["rerank_prefix_tokens"]) - len(GLOBAL_OBJECTS["rerank_suffix_tokens"])
+        )
+        for i, ele in enumerate(inputs['input_ids']):
+            inputs['input_ids'][i] = GLOBAL_OBJECTS["rerank_prefix_tokens"] + ele + GLOBAL_OBJECTS["rerank_suffix_tokens"]
 
-    inputs = rerank_tokenizer.pad(inputs, padding=True, return_tensors="pt").to(DEVICE)
+        inputs = rerank_tokenizer.pad(inputs, padding=True, return_tensors="pt").to(DEVICE)
 
-    with MPS_LOCK:
         with torch.no_grad():
             batch_scores = rerank_model(**inputs).logits[:, -1, :]
             true_vector = batch_scores[:, GLOBAL_OBJECTS["token_true_id"]]

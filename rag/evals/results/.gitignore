@@ -1,0 +1,3 @@
+# 跑批产物不入库；基线走 BASELINE.json
+*
+!.gitignore

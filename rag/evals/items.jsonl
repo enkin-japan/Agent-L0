@@ -1,0 +1,37 @@
+# 检索质量固定题集（数据架构采纳波 R1）。判分锚点 = 命中文档 title（与 corpus.jsonl 一致）。
+# kind: semantic 语义改写 | identifier 精确标识符 | name 人名/称呼 | crosslingual 跨语 |
+#       multidoc 多文档覆盖 | temporal 时效裁决 | negative 库外问题（不该硬凑）
+# expect: hit_any 至少一命中 / hit_all 全须命中 / empty_ok 允许空结果（negative 专用，
+#         且命中列表里的文档视为失败）
+{"id": "rq-sem-001", "kind": "semantic", "query": "咖啡机水垢怎么清来着，比例是多少", "category": "家庭维护", "optimized_query": "咖啡机 除垢 柠檬酸 比例", "expect": {"hit_any": ["咖啡机除垢操作"]}}
+{"id": "rq-sem-002", "kind": "semantic", "query": "面包面团太湿塌掉是不是水放多了", "category": "烘焙", "optimized_query": "面包 面团 含水量 水粉比 整形", "expect": {"hit_any": ["天然酵母面包配方"]}}
+{"id": "rq-sem-003", "kind": "semantic", "query": "家里网络一到晚上就断是怎么解决的", "category": "网络设备故障", "optimized_query": "路由器 晚上 断网 固件 解决", "expect": {"hit_any": ["路由器断网维修记录"]}}
+{"id": "rq-sem-004", "kind": "semantic", "query": "去京都住的那家温泉旅馆叫什么", "category": "旅行", "optimized_query": "京都 岚山 温泉旅馆 名字", "expect": {"hit_any": ["京都旅行订房信息"]}}
+{"id": "rq-sem-005", "kind": "semantic", "query": "爸爸的血压最近怎么样，什么情况要去医院", "category": "健康记录", "optimized_query": "父亲 血压 记录 复诊 标准", "expect": {"hit_any": ["血压晨测记录摘要"]}}
+{"id": "rq-sem-006", "kind": "semantic", "query": "刹车片还能撑多久", "category": "车辆保养", "optimized_query": "刹车片 厚度 更换 保养", "expect": {"hit_any": ["车辆保养记录"]}}
+{"id": "rq-sem-007", "kind": "semantic", "query": "亲戚来家里要用打印机怎么给他开权限", "category": "家庭网络", "optimized_query": "访客 打印机 主网 白名单", "expect": {"hit_any": ["访客网络说明"]}}
+{"id": "rq-ident-001", "kind": "identifier", "query": "ERR_5023 这个错误码当时是什么问题", "category": "设备故障", "optimized_query": "ERR_5023 错误码 路由器", "expect": {"hit_any": ["路由器断网维修记录"]}}
+{"id": "rq-ident-002", "kind": "identifier", "query": "保单号 PICC-88213-X 的保险保什么", "category": "保险", "optimized_query": "PICC-88213-X 保单 承保范围", "expect": {"hit_any": ["家庭保险单摘要"]}}
+{"id": "rq-ident-003", "kind": "identifier", "query": "订单 BK-99182 是哪一单", "category": "旅行订单", "optimized_query": "BK-99182 订单", "expect": {"hit_any": ["京都旅行订房信息"]}}
+{"id": "rq-ident-004", "kind": "identifier", "query": "0W-20 的机油是给什么用的", "category": "车辆保养", "optimized_query": "0W-20 机油", "expect": {"hit_any": ["车辆保养记录"]}}
+{"id": "rq-ident-005", "kind": "identifier", "query": "192.168.50.23 是哪台机器", "category": "网络配置", "optimized_query": "192.168.50.23 内网地址 设备", "expect": {"hit_any": ["开发机网络配置"]}}
+{"id": "rq-ident-006", "kind": "identifier", "query": "TL-WDR7660 的固件要用哪个版本", "category": "设备固件", "optimized_query": "TL-WDR7660 固件 版本", "expect": {"hit_any": ["路由器断网维修记录"]}}
+{"id": "rq-name-001", "kind": "name", "query": "王秀兰是谁来着", "category": "家庭事务", "optimized_query": "王秀兰", "expect": {"hit_any": ["房租合同要点"]}}
+{"id": "rq-name-002", "kind": "name", "query": "林老师带的是哪个班", "category": "孩子教育", "optimized_query": "林老师 班级 幼儿园", "expect": {"hit_any": ["幼儿园接送安排"]}}
+{"id": "rq-name-003", "kind": "name", "query": "周师傅的电话在哪条记录里", "category": "联系人", "optimized_query": "周师傅 电话 保养店", "expect": {"hit_any": ["车辆保养记录"]}}
+{"id": "rq-xling-001", "kind": "crosslingual", "query": "how do I descale the espresso machine", "category": "home maintenance", "optimized_query": "espresso machine descaling citric acid ratio", "expect": {"hit_any": ["咖啡机除垢操作"]}}
+{"id": "rq-xling-002", "kind": "crosslingual", "query": "what's the cron schedule for the NAS backup", "category": "backup", "optimized_query": "NAS backup cron schedule rsync", "expect": {"hit_any": ["NAS 备份策略"]}}
+{"id": "rq-xling-003", "kind": "crosslingual", "query": "which port is SSH on for the dev machine", "category": "network", "optimized_query": "SSH port dev machine Mac mini", "expect": {"hit_any": ["开发机网络配置"]}}
+{"id": "rq-multi-001", "kind": "multidoc", "query": "这个月固定要交的房租和保险分别是多少钱", "category": "家庭开销", "optimized_query": "房租 月租 保险 保费 金额", "expect": {"hit_all": ["房租合同要点", "家庭保险单摘要"], "top_k": 5}}
+{"id": "rq-multi-002", "kind": "multidoc", "query": "家里跟路由器有关的设置都有哪些记录", "category": "家庭网络", "optimized_query": "路由器 配置 固件 访客网络 白名单", "expect": {"hit_all": ["路由器断网维修记录", "访客网络说明"], "top_k": 5}}
+{"id": "rq-temp-001", "kind": "temporal", "query": "我们现在住在哪里，快递该发哪", "category": "家庭事务", "optimized_query": "现住址 快递地址", "expect": {"hit_any": ["现住址与快递偏好"], "stale_not_top1": ["旧住址档案"]}}
+{"id": "rq-temp-002", "kind": "temporal", "query": "以前梧桐巷的房子是什么时候退租的", "category": "家庭事务", "optimized_query": "梧桐巷 旧住址 退租 时间", "expect": {"hit_any": ["旧住址档案"]}}
+{"id": "rq-neg-001", "kind": "negative", "query": "我持有的特斯拉股票买入价是多少", "category": "投资", "optimized_query": "特斯拉 股票 买入价", "expect": {"empty_ok": true, "miss_all": ["车辆保养记录", "开发机网络配置"]}}
+{"id": "rq-neg-002", "kind": "negative", "query": "钢琴调音师上次来是什么时候", "category": "家庭事务", "optimized_query": "钢琴 调音 记录", "expect": {"empty_ok": true, "miss_all": ["咖啡机除垢操作", "幼儿园接送安排"]}}
+{"id": "rq-sem-008", "kind": "semantic", "query": "合同到期前想搬走要提前多久说", "category": "租房合同", "optimized_query": "退租 提前 通知 天数", "expect": {"hit_any": ["房租合同要点"]}}
+{"id": "rq-sem-009", "kind": "semantic", "query": "周三接孩子是几点来着", "category": "孩子教育", "optimized_query": "周三 放学 接送 时间 兴趣班", "expect": {"hit_any": ["幼儿园接送安排"]}}
+{"id": "rq-sem-010", "kind": "semantic", "query": "备份的移动硬盘多久换一次放哪里", "category": "数据备份", "optimized_query": "移动硬盘 轮换 存放", "expect": {"hit_any": ["NAS 备份策略"]}}
+{"id": "rq-ident-007", "kind": "identifier", "query": "git lg 这个别名是干嘛的", "category": "开发习惯", "optimized_query": "git lg alias", "expect": {"hit_any": ["Git 工作流个人约定"]}}
+{"id": "rq-ident-008", "kind": "identifier", "query": "95518 打过去是办什么的", "category": "保险", "optimized_query": "95518 理赔 电话", "expect": {"hit_any": ["家庭保险单摘要"]}}
+{"id": "rq-sem-011", "kind": "semantic", "query": "危险的 git 操作之前该做什么保护", "category": "开发习惯", "optimized_query": "git 危险操作 备份 tag", "expect": {"hit_any": ["Git 工作流个人约定"]}}
+{"id": "rq-sem-012", "kind": "semantic", "query": "旅馆的家族汤要怎么预约", "category": "旅行", "optimized_query": "温泉 家族汤 预约", "expect": {"hit_any": ["京都旅行订房信息"]}}

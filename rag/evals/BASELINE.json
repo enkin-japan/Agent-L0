@@ -1,0 +1,202 @@
+{
+  "stamp": "20260730-233402",
+  "summary": {
+    "overall": {
+      "n": 32,
+      "pass_rate": 0.938,
+      "mrr": 0.933
+    },
+    "by_kind": {
+      "crosslingual": {
+        "n": 3,
+        "pass_rate": 1.0
+      },
+      "identifier": {
+        "n": 8,
+        "pass_rate": 1.0
+      },
+      "multidoc": {
+        "n": 2,
+        "pass_rate": 0.5
+      },
+      "name": {
+        "n": 3,
+        "pass_rate": 0.667
+      },
+      "negative": {
+        "n": 2,
+        "pass_rate": 1.0
+      },
+      "semantic": {
+        "n": 12,
+        "pass_rate": 1.0
+      },
+      "temporal": {
+        "n": 2,
+        "pass_rate": 1.0
+      }
+    }
+  },
+  "rows": [
+    {
+      "id": "rq-sem-001",
+      "kind": "semantic",
+      "pass": true
+    },
+    {
+      "id": "rq-sem-002",
+      "kind": "semantic",
+      "pass": true
+    },
+    {
+      "id": "rq-sem-003",
+      "kind": "semantic",
+      "pass": true
+    },
+    {
+      "id": "rq-sem-004",
+      "kind": "semantic",
+      "pass": true
+    },
+    {
+      "id": "rq-sem-005",
+      "kind": "semantic",
+      "pass": true
+    },
+    {
+      "id": "rq-sem-006",
+      "kind": "semantic",
+      "pass": true
+    },
+    {
+      "id": "rq-sem-007",
+      "kind": "semantic",
+      "pass": true
+    },
+    {
+      "id": "rq-ident-001",
+      "kind": "identifier",
+      "pass": true
+    },
+    {
+      "id": "rq-ident-002",
+      "kind": "identifier",
+      "pass": true
+    },
+    {
+      "id": "rq-ident-003",
+      "kind": "identifier",
+      "pass": true
+    },
+    {
+      "id": "rq-ident-004",
+      "kind": "identifier",
+      "pass": true
+    },
+    {
+      "id": "rq-ident-005",
+      "kind": "identifier",
+      "pass": true
+    },
+    {
+      "id": "rq-ident-006",
+      "kind": "identifier",
+      "pass": true
+    },
+    {
+      "id": "rq-name-001",
+      "kind": "name",
+      "pass": true
+    },
+    {
+      "id": "rq-name-002",
+      "kind": "name",
+      "pass": true
+    },
+    {
+      "id": "rq-name-003",
+      "kind": "name",
+      "pass": false
+    },
+    {
+      "id": "rq-xling-001",
+      "kind": "crosslingual",
+      "pass": true
+    },
+    {
+      "id": "rq-xling-002",
+      "kind": "crosslingual",
+      "pass": true
+    },
+    {
+      "id": "rq-xling-003",
+      "kind": "crosslingual",
+      "pass": true
+    },
+    {
+      "id": "rq-multi-001",
+      "kind": "multidoc",
+      "pass": false
+    },
+    {
+      "id": "rq-multi-002",
+      "kind": "multidoc",
+      "pass": true
+    },
+    {
+      "id": "rq-temp-001",
+      "kind": "temporal",
+      "pass": true
+    },
+    {
+      "id": "rq-temp-002",
+      "kind": "temporal",
+      "pass": true
+    },
+    {
+      "id": "rq-neg-001",
+      "kind": "negative",
+      "pass": true
+    },
+    {
+      "id": "rq-neg-002",
+      "kind": "negative",
+      "pass": true
+    },
+    {
+      "id": "rq-sem-008",
+      "kind": "semantic",
+      "pass": true
+    },
+    {
+      "id": "rq-sem-009",
+      "kind": "semantic",
+      "pass": true
+    },
+    {
+      "id": "rq-sem-010",
+      "kind": "semantic",
+      "pass": true
+    },
+    {
+      "id": "rq-ident-007",
+      "kind": "identifier",
+      "pass": true
+    },
+    {
+      "id": "rq-ident-008",
+      "kind": "identifier",
+      "pass": true
+    },
+    {
+      "id": "rq-sem-011",
+      "kind": "semantic",
+      "pass": true
+    },
+    {
+      "id": "rq-sem-012",
+      "kind": "semantic",
+      "pass": true
+    }
+  ]
+}
