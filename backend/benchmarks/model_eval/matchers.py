@@ -12,7 +12,9 @@
   {"optional": true, ...}   参数缺席即通过；出席则按其余条件判
 
 文本断言 spec（match_text）：
-  {"must_all": [...], "must_any": [...], "must_not": [...]}
+  {"must_all": [...], "must_any": [...], "must_not": [...], "regex_any": [...]}
+  regex_any：任一正则 re.search 命中即过——短数字答案用词边界（r"\b3\b"）防
+  子串误判（"3" 落进 "13"），大小写不敏感自带 (?i)。
 """
 import re
 from typing import Any, Dict, List, Tuple
@@ -87,8 +89,8 @@ def match_args(spec: Dict[str, Dict[str, Any]], args: Dict[str, Any],
 
 
 def match_text(spec: Dict[str, List[str]], text: str) -> Tuple[bool, List[str]]:
-    """文本断言：must_all 全含 / must_any 至少一含 / must_not 全不含。"""
-    unknown = set(spec) - {"must_all", "must_any", "must_not"}
+    """文本断言：must_all 全含 / must_any 至少一含 / must_not 全不含 / regex_any 任一中。"""
+    unknown = set(spec) - {"must_all", "must_any", "must_not", "regex_any"}
     if unknown:
         raise ValueError(f"文本断言不认识的键: {sorted(unknown)}")
     fails: List[str] = []
@@ -98,6 +100,9 @@ def match_text(spec: Dict[str, List[str]], text: str) -> Tuple[bool, List[str]]:
     any_list = spec.get("must_any", [])
     if any_list and not any(n in text for n in any_list):
         fails.append(f"must_any 全缺: {any_list!r}")
+    rx_list = spec.get("regex_any", [])
+    if rx_list and not any(re.search(rx, text) for rx in rx_list):
+        fails.append(f"regex_any 全不中: {rx_list!r}")
     for needle in spec.get("must_not", []):
         if needle in text:
             fails.append(f"must_not 出现 {needle!r}")

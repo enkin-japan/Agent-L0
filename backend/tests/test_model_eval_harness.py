@@ -364,3 +364,36 @@ def test_vision_seed_bank_loads_and_assets_exist():
     for it in items:
         for img in it["task"].get("images") or []:
             assert (Path(it["_src_dir"]) / img).exists(), f"{it['id']} 图片资产缺失: {img}"
+
+
+def test_match_text_regex_any_word_boundary():
+    """短数字答案词边界：\\b3\\b 不落进 13（子串误判是社区借题的判分暗坑）。"""
+    assert match_text({"regex_any": [r"\b3\b", "(?i)three"]}, "There are 3 bars.")[0]
+    assert not match_text({"regex_any": [r"\b3\b"]}, "There are 13 bars.")[0]
+    assert match_text({"regex_any": ["(?i)gr[ae]y"]}, "The grey one.")[0]
+
+
+def test_emit_only_item_not_marked_aborted():
+    """纯发射题（无回喂表，单轮观测）末轮发出调用 = 预期终态，不得误标 aborted。
+    2026-07-30 全量批实测：BFCL 批 13 题全被「回合上限耗尽」误杀，why 为空。"""
+    import asyncio
+    from benchmarks.model_eval.executor import run_item
+
+    class _FakeBackend:
+        pass
+
+    class _FakeEngine:
+        backend = None
+        dialect = None
+
+        async def generate_once(self, session, **kw):
+            return {"thoughts": "", "text": "",
+                    "tool_calls": [{"type": "function", "name": "t1",
+                                    "arguments": {"q": "x"}}],
+                    "metrics": {}}
+
+    item = _item()          # 无 tool_responses / 无 env
+    traj = asyncio.run(run_item(_FakeEngine(), item))
+    assert traj["aborted_reason"] == ""
+    s = get_scorer("tool_call")(traj, _tc_item(final=None))
+    assert not s["aborted"]

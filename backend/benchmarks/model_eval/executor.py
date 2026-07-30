@@ -125,7 +125,10 @@ async def run_item(engine, item: Dict[str, Any], repeat_idx: int = 0,
             turns[-1]["feed"] = feed     # 回喂入轨迹：错误恢复行为是长链测量面
             session.history.append({"role": "tool", "tool_responses": feed})
         else:
-            aborted_reason = f"回合上限 {max_turns} 耗尽仍在发调用"
+            # 纯发射题（无脚本回喂/无 mock 环境，max_turns=1）：末轮发出调用就是
+            # 预期终态，不算耗尽——闭环题（有回喂面）耗尽回合仍在发调用才是事故
+            if env is not None or tool_responses:
+                aborted_reason = f"回合上限 {max_turns} 耗尽仍在发调用"
 
     traj = {"item_id": item["id"], "repeat": repeat_idx, "turns": turns,
             "wall_s": round(time.monotonic() - t0, 2),
