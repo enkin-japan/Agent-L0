@@ -2171,6 +2171,66 @@ main（remote 现状合成，endpoints 未声明=单端点，与改动前逐字�
   （响亮不回落 / 沙箱替身隐私门控不放宽 / 跨模型不共享 KV 任务粒度整进整出 /
   确定性路由），实现随生产机 A1/vLLM 波。
 
+〔后记 2026-07-30〕gemma-4 e4b 对齐（mlx-vlm 升级 + patch 复验）用户拍板：**留生产机
+一起做**；模型脾气（主观特质）评估用户另有计划。
+
+### 评测框架波：model_eval 量身定制评测 + 三处架构缺陷实战修（2026-07-30 用户开工令）
+
+用户需求：生产机多模型协作部署前，按项目目的量身评测量化模型（维度含推理速度/思维链
+纯净度/工具调用格式准确率/图片识别/长链推理）。方案拍板：**执行框架自建（评的是
+「模型×方言层×agent 循环」组合，社区框架绕过方言层测不到）+ 题料混采（社区题严格
+鉴定后改写入库，公开榜兼作健全性锚点）**；两条补充口径——①借题必须逐题鉴定是否贴合
+项目目的；②求全面准确，时间放宽（单模型数天可接受）。
+
+**落位与形态**：`backend/benchmarks/model_eval/`（attention 基准兄弟目录，bundle 已排
+除）。引擎直连执行器（AgentEngine + generate_once，部署同款参数：kv_config=inference
+整段、温度 0.2、约束开——gemma4 吃约束/qwen35 按设计 fail-open）；判分全规则化零主观；
+纠错回喂复用编排层同款信封。产物 results/<模型>/<时间戳>/（transcripts.jsonl 增量落盘
++ summary.json），raw 不入库。
+
+**鉴定纪律 = 装载期硬校验**：source.fit 缺失/敷衍（<8 字符）→ itemlib 响亮拒载，
+未鉴定的题进不了执行器；借题批次配 VETTING.md（拒绝日志与采纳同权重）。
+
+**维度与题库（36 题，金测试守装载）**：
+- tool_call 25 = 种子 12（zh/en、类型还原、多工具选择、无工具陷阱、多行保真、必填
+  纪律）+ **BFCL v3 改写 13**（候选 75 严格筛，期望从 possible_answer 编译为匹配器
+  eq/in/optional，type dict→object；拒绝 8 类记 VETTING.md：纯数学空转/表达式参数/
+  嵌套 dict 判分脆/对抗烂命名/verbatim 自由文本等）；
+- longchain 6（mock_envs：vfs/todo 确定性状态机 + 终态断言「执行≠成功」+ 步数/复读/
+  错误恢复过程计量，attention 基准同思路引擎级版）；
+- vision 5（自造合成图：OCR/色块/图表/终端截图/计数，gen_assets.py 确定性重建；
+  MMMU/ChartQA 抽样留生产机全量批）；
+- speed / cot_purity 不设专用题**顺带采集**：前者白捡 engine metrics（双 tps/峰值内存/
+  KV 前缀命中率），后者规则化定义（控制标记泄漏/复读度 16-gram/正文转述率 12-gram/
+  文字系统构成 other 桶=思考跑飞症状/空思考），随任何开思考轨迹产出。
+
+**框架首日抓到三处真缺陷（全部架构侧，D1 合规，已修+金测试钉）**：
+1. **纠错文案接缝（E0）**：编排层解析纠错反馈硬编码 gemma4 JSON 教学——qwen35 模型
+   发错 XML 会被文案往 JSON 带偏（越纠越错）。修法：协议加 `parse_error_retry_hint()`
+   （方言事实，与各自 prompt 教学锚定一致），编排层信封保留、教学段取自方言（getattr
+   兜底中立文案）；gemma4 文案逐字搬迁零变化。
+2. **投机回滚崩溃（qwen3_5 SSM 状态）**：lookup 补丁给 `rollback_speculative_cache`
+   传 None——gemma4 纯 KV 裁缓存够用，Qwen3.5 线性注意力层（gated deltanet）回滚需
+   验证 forward 捕获的逐层状态元组，部分拒绝分支直接 TypeError。**此前实机联调两轮
+   恰好未触发**，评测第 1 题即复现。修法：`needs_gdn` 探测（layers.is_linear）→ 验证
+   forward 传 `capture_layer_ids=[]` 触发 gdn_sink 捕获 → 三处回滚点传真实状态；全块
+   作废不走 n=0 重放（零长核未定义），从捕获元组直接恢复 SSM 状态与 conv 尾窗。
+   e4b 全程回归跑通（needs_gdn=False 路径字节等价）。
+3. **布尔参数字面量（qwen35 _coerce）**：Qwen3.5 与 Ornith **都**惯性发射 Python 风格
+   `'True'`（家族性习惯非偶发），_coerce 只认 JSON 小写 → 布尔参数以字符串抵达工具层。
+   修法：整值精确等于 True/False/None 才还原原语（多行字符串内含 True 一词不受影响）；
+   修后两模型该题实测翻盘。
+   〔画像事实，不修〕Ornith 对 send_message 类任务稳定拒绝调用（tc-seed-011 复现）
+   ——长链推理特化档的工具派发短板，按 D1 记入路由画像。
+
+**三模型 tool_call 12 题首轮画像（修复后布尔题已翻盘，未含 BFCL 批）**：
+gemma-4-e4b **12/12**（约束采样兜格式，30 tps，峰值 5.9GB）；Qwen3.5 11/12→修后 12/12
+（19.4 tps，6.7GB）；Ornith 10/12→修后 11/12（19.7 tps，剩余 1 失败即上述画像事实）。
+视觉冒烟双方言 5/5 全过——**qwen35 的 VISION_PLACEHOLDER→processor 通路首次实机验证**。
+
+金测试 559 → **594**（+35：评测框架 31 + 纠错接缝 5 - 1 重排；harness 纯函数零模型
+依赖）。E7（报告生成器 + 三模型全维度全量跑 + 能力画像）继续中。
+
 ---
 
 ## §5 待决（开工前需拍板）

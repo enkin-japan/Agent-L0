@@ -231,6 +231,12 @@ def lookup_generate_step(
         if guard is not None:
             guard.consume(tok)
 
+    # SSM/GDN 混合模型（Qwen3.5 系：线性注意力层的 ArraysCache 不可裁）拒绝回滚
+    # 需要验证 forward 时逐层捕获的状态元组（rollback_speculative_cache 从 init_state
+    # 重放已接受前缀）；传 None 直接崩（2026-07-30 评测框架首跑抓到，此前两轮实机
+    # 联调恰好未触发部分拒绝分支）。纯 KV 模型（gemma4）裁缓存即回滚，无需捕获。
+    needs_gdn = any(getattr(l, "is_linear", False) for l in getattr(lm, "layers", []))
+
     def _launch(blk: List[int], draft: List[int]):
         """异步发起一次验证 forward，并把「惩罚+采样」预折叠进同一异步图。
 
@@ -241,7 +247,10 @@ def lookup_generate_step(
         的预折叠结果作废、同样转逐位（logits_all 原始行仍在，可带 mask 重采样）。
         """
         with mx.stream(generation_stream):
-            out = lm(mx.array([blk], dtype=token_dtype), cache=prompt_cache)
+            # capture_layer_ids=[] 只为触发 gdn_sink 创建（空列表不捕获 hidden）
+            out = lm(mx.array([blk], dtype=token_dtype), cache=prompt_cache,
+                     **({"capture_layer_ids": []} if needs_gdn else {}))
+            gdn = out.gdn_states if needs_gdn else None
             logits_all = out.logits
             pre = None
             if guard is None or not guard.active:
@@ -255,14 +264,28 @@ def lookup_generate_step(
                     rows.append(sampler(row - mx.logsumexp(row)))
                 pre = mx.concatenate(rows)
         mx.async_eval(pre if pre is not None else logits_all)
-        return logits_all, pre
+        return logits_all, pre, gdn
 
-    def _discard_block(n: int) -> None:
+    def _discard_block(n: int, gdn=None) -> None:
         """整块作废：缓存回退 n 条（强制收束打断已预发的下一轮时用）。"""
-        if n > 0:
-            with mx.stream(generation_stream):
+        if n <= 0:
+            return
+        with mx.stream(generation_stream):
+            if not needs_gdn:
                 # accepted=-1 → trim = block_size，即整块裁掉
                 lm.rollback_speculative_cache(prompt_cache, None, -1, n)
+                return
+            # SSM 模型不走 accepted=-1（n=0 的零长重放核未定义）：可裁层照裁，
+            # 线性层直接从捕获元组恢复 forward 前的状态与 conv 尾窗
+            ssm = [c for c in prompt_cache if c is not None and not c.is_trimmable()]
+            for c in prompt_cache:
+                if c is not None and c.is_trimmable():
+                    c.trim(n)
+            for j, c in enumerate(ssm):
+                (_q, _k, _v, _a, _b, _al, _dt, init_state,
+                 _mask, conv_input, K) = gdn[j]
+                c[1] = init_state
+                c[0] = conv_input[:, : K - 1]
 
     def _next_draft() -> List[int]:
         nonlocal cooldown
@@ -281,7 +304,7 @@ def lookup_generate_step(
         # 语义对齐上游 apply_forced_token：丢弃采样、改发强制 token（缓存仍需推进 b）。
         if tb is not None and getattr(tb, "forced_token_id", None) is not None:
             if pending is not None:
-                _discard_block(len(pending[0]))
+                _discard_block(len(pending[0]), pending[4])
                 pending = None
             forced = tb.forced_token_id
             tb.forced_token_id = None
@@ -295,12 +318,12 @@ def lookup_generate_step(
             continue
 
         if pending is not None:
-            block, draft, logits_all, pre = pending
+            block, draft, logits_all, pre, gdn = pending
             pending = None
         else:
             draft = _next_draft()
             block = [b] + draft
-            logits_all, pre = _launch(block, draft)
+            logits_all, pre, gdn = _launch(block, draft)
 
         # ---- 走查：预折叠行直接取值；guard 激活（含中途激活）后转逐位带 mask ----
         vals = pre.tolist() if pre is not None else None
@@ -341,7 +364,7 @@ def lookup_generate_step(
         rejected = len(block) - (accepted + 1)
         if rejected > 0:
             with mx.stream(generation_stream):
-                lm.rollback_speculative_cache(prompt_cache, None, accepted, len(block))
+                lm.rollback_speculative_cache(prompt_cache, gdn, accepted, len(block))
         with mx.stream(generation_stream):
             quantize_cache_fn(prompt_cache)
 
@@ -351,8 +374,8 @@ def lookup_generate_step(
         if emitted + len(new_tokens) < max_tokens:
             nd = _next_draft()
             nb = [b] + nd
-            nl, npre = _launch(nb, nd)
-            pending = (nb, nd, nl, npre)
+            nl, npre, ngdn = _launch(nb, nd)
+            pending = (nb, nd, nl, npre, ngdn)
 
         for j, tok in enumerate(new_tokens):
             emitted += 1
@@ -362,7 +385,7 @@ def lookup_generate_step(
             # 外层在 yield 间隙可能触发 thinking 强制收束
             if tb is not None and getattr(tb, "forced_token_id", None) is not None:
                 if pending is not None:
-                    _discard_block(len(pending[0]))  # 预发轮作废（其起点采样将被强制替代）
+                    _discard_block(len(pending[0]), pending[4])  # 预发轮作废（其起点采样将被强制替代）
                     pending = None
                 if j < len(new_tokens) - 1:
                     # 块中截断：未产出的已接受部分从缓存裁掉（保留 block 前 j+1 条）
@@ -370,7 +393,7 @@ def lookup_generate_step(
                     if extra_trim > 0:
                         with mx.stream(generation_stream):
                             lm.rollback_speculative_cache(
-                                prompt_cache, None, j, accepted + 1)
+                                prompt_cache, gdn, j, accepted + 1)
                     # 作废的产出从惩罚历史/语料收回（guard 无法收回，fail-open 语义可容忍：
                     # 强制收束只在 thinking 段发生，guard 在该段本就不激活）
                     n_cut = len(new_tokens) - 1 - j

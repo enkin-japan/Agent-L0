@@ -40,10 +40,18 @@ def _coerce(value: str) -> Any:
 
     只在整个值**看起来就是** JSON 字面量时才尝试（首字符判别），避免把普通文本
     （如以数字开头的句子）误交给 json.loads 截头解析。
+
+    Python 风格字面量（True/False/None）同样还原：2026-07-30 评测框架实测
+    Qwen3.5 与 Ornith **都**惯性发射 'True'（家族性习惯，非偶发）——不还原则布尔
+    参数永远以字符串抵达工具层、被 schema 校验打回。整值精确等于这三个词才转
+    （正文里出现 True 一词的多行字符串不受影响）。
     """
     v = value.strip()
     if not v:
         return value
+    _PY_LITERALS = {"True": True, "False": False, "None": None}
+    if v in _PY_LITERALS:
+        return _PY_LITERALS[v]
     if v[0] in "{[" or v in ("true", "false", "null") \
             or re.fullmatch(r"-?\d+(\.\d+)?([eE][+-]?\d+)?", v):
         try:

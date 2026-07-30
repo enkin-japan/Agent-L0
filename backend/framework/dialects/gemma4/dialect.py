@@ -71,3 +71,12 @@ class Gemma4Dialect:
 
     def tool_call_schema(self, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
         return build_tool_call_schema(tools)
+
+    def parse_error_retry_hint(self) -> str:
+        # 原编排层硬编码文案逐字搬入（行为零变化）：本方言调用体是 JSON
+        return (
+            "A tool call must be VALID JSON with double quotes — the exact same format as "
+            "the tool calls you already made successfully. For example, to update the plan:\n"
+            '{"name": "update_plan", "arguments": {"op": "replace", "steps": ["step one", "step two"]}}\n'
+            "Do NOT use single quotes, a 'call:' prefix, or bare braces. Retry with correct JSON."
+        )

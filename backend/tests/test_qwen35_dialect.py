@@ -197,3 +197,14 @@ def test_env_facts_matches_gemma4_delegate():
            "language": "中文", "location": "东京", "about": "工程背景"}
     gemma4_pb = Gemma4PromptBuilder(_FakeProcessor(), env=env)
     assert gemma4_pb._compute_static_env_lines() == compute_static_env_lines(env)
+
+
+def test_param_python_literals_coerced():
+    """Python 风格 True/False/None 还原为原语（2026-07-30 评测实测两模型都发
+    'True'——家族性习惯）；作为多行字符串**内容一部分**的 True 一词不受影响。"""
+    from framework.dialects.qwen35.response_parser import _coerce
+    assert _coerce("True") is True and _coerce("False") is False
+    assert _coerce("None") is None
+    assert _coerce("true") is True          # JSON 小写路径不回退
+    assert _coerce("The flag is True") == "The flag is True"
+    assert _coerce("True\n但这是段落") == "True\n但这是段落"

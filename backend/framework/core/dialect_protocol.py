@@ -106,3 +106,14 @@ class ModelDialect(Protocol):
         logits mask，schema 与回放格式一旦漂移，模型会被约束成自己历史里没见过的形状。
         """
         ...
+
+    def parse_error_retry_hint(self) -> str:
+        """解析纠错反馈里的**格式教学段**（方言事实）。
+
+        编排层的容错闭环把无法解析的调用回喂给模型时，信封（System Error 前缀 +
+        raw_input/错误原文回显）是编排策略，但"正确格式长什么样"只有方言知道——
+        gemma4 教 JSON 调用体，qwen35 教 XML 调用体。硬编码任何一种都会把另一家族
+        的模型往错误格式带偏（2026-07-30 评测框架波发现的接缝遗漏）。
+        返回文本须与本方言 build_prompt 的工具教学**锚定一致**。
+        """
+        ...

@@ -63,3 +63,14 @@ class Qwen35Dialect:
         raise NotImplementedError(
             "qwen35 方言使用原生 XML 调用体（<function=…><parameter=…>），按设计不启用 "
             "JSON 约束采样——engine 将 fail-open 到自由采样 + 解析纠错闭环。")
+
+    def parse_error_retry_hint(self) -> str:
+        # 与 prompt_builder._TOOL_FORMAT_GUIDE 的教学格式锚定一致：本方言调用体是 XML 非 JSON
+        return (
+            "A tool call must be EXACTLY the XML form you were taught — one complete block:\n"
+            "<tool_call>\n<function=example_function_name>\n"
+            "<parameter=example_parameter_1>\nvalue_1\n</parameter>\n"
+            "</function>\n</tool_call>\n"
+            "Do NOT use JSON, do NOT nest a call inside your thinking, and do NOT omit the "
+            "closing tags. Retry with ONE complete, correctly-formatted call."
+        )

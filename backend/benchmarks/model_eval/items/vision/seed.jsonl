@@ -1,0 +1,8 @@
+# vision 种子批次（自造合成图，2026-07-30，assets/gen_assets.py 确定性重建）：
+# 文字识别/色块辨识/图表读取/终端截图 OCR/计数——全部映射自家 App 拍照与截图场景。
+# 社区图抽样（MMMU/ChartQA）在 E6 鉴定波接入。
+{"id": "vi-seed-001", "dimension": "vision", "lang": "en", "source": {"origin": "self", "fit": "大字号单词+数字识别：拍照转文字的最低门槛题，读不出则视觉塔基本失能，作视觉通路冒烟锚点"}, "task": {"user": "What word and what number appear in this image?", "images": ["assets/word_number.png"]}, "expect": {"type": "text", "final": {"must_all": ["42"], "must_any": ["MANGO", "Mango", "mango"]}}}
+{"id": "vi-seed-002", "dimension": "vision", "lang": "zh", "source": {"origin": "self", "fit": "色块相对面积+颜色辨识：UI 截图理解的基本功（哪个区域是主体）；三色对照防蒙对"}, "task": {"user": "图里最大的色块是什么颜色？", "images": ["assets/color_blocks.png"]}, "expect": {"type": "text", "final": {"must_any": ["红", "red", "Red"]}}}
+{"id": "vi-seed-003", "dimension": "vision", "lang": "zh", "source": {"origin": "self", "fit": "柱状图比较读取：自家 render_chart 产物回读场景；要求答字母，判分收敛到单选"}, "task": {"user": "这张柱状图里哪根柱子最高？回答对应的字母即可。", "images": ["assets/bar_chart.png"]}, "expect": {"type": "text", "final": {"must_any": ["B"], "must_not": ["A 最高", "C 最高"]}}}
+{"id": "vi-seed-004", "dimension": "vision", "lang": "en", "source": {"origin": "self", "fit": "深色终端截图里的 ERROR 行 OCR：部署自诊断的真实使用面（用户拍报错截图求助）；答案锚定 disk full 唯一可辨"}, "task": {"user": "What does the ERROR line in this terminal screenshot say?", "images": ["assets/log_screenshot.png"]}, "expect": {"type": "text", "final": {"must_all": ["disk full"]}}}
+{"id": "vi-seed-005", "dimension": "vision", "lang": "zh", "source": {"origin": "self", "fit": "散布圆形计数（5 个，无遮挡）：物体计数是 9B 级视觉塔的已知弱面，画像需要这条下限数据"}, "task": {"user": "图里一共有几个圆形？", "images": ["assets/count_circles.png"]}, "expect": {"type": "text", "final": {"must_any": ["5", "五", "5个", "五个"]}}}

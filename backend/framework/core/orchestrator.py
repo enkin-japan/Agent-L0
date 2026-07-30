@@ -32,6 +32,33 @@ from ..mcp.registry import MCPRegistry
 # 会话资产的 markdown 链接（图表图片 ![..](/api/v1/files/..)、导出 PDF [..](/api/v1/files/..)）
 _ASSET_LINK_RE = re.compile(r"!?\[[^\]\n]*\]\((/api/v1/files/[^)\s]+)\)")
 
+# 方言未提供 parse_error_retry_hint 时的兜底教学段（正常路径永远取方言——真实引擎的
+# 方言全部实现该方法；这里只兜 FakeEngine 之类无方言场景，故取格式中立的措辞）
+_PARSE_HINT_FALLBACK = (
+    "Re-issue the call in the EXACT tool-call format you were taught in the system "
+    "prompt — one complete, well-formed block."
+)
+
+
+def parse_error_feedback(call: Dict[str, Any], n: int, format_hint: str) -> str:
+    """容错闭环的回喂文案。信封（System Error 前缀 + 原文回显 + 复读升级）是编排策略；
+    「正确格式长什么样」是方言事实，由 format_hint（dialect.parse_error_retry_hint()）
+    提供——gemma4 教 JSON、qwen35 教 XML，硬编码任何一种都会把另一家族带偏。
+    模块级函数：评测框架（benchmarks/model_eval）复刻纠错闭环时复用同一形态。"""
+    if n == 1:
+        return (
+            "System Error: your tool call could not be parsed.\n"
+            f"Your invalid output: {call.get('raw_input')}\n"
+            f"Parser error: {call.get('error_msg')}\n"
+            + format_hint
+        )
+    return (
+        f"System Error: you emitted the exact same invalid tool call {n} times. STOP repeating it.\n"
+        "Planning is optional — do NOT retry that call. Instead, either complete the task "
+        "directly with a correctly-formatted tool call (the same format that worked "
+        "for you before), or briefly tell the user what you were trying to do and why you're stuck."
+    )
+
 
 def _append_missing_asset_links(text: str, turn_messages: List[Dict[str, Any]]) -> str:
     """收尾兜底：本轮工具产出的用户资产链接若没被模型转贴进最终答复，原样补挂到末尾。
@@ -953,24 +980,11 @@ class Orchestrator:
                 n = parse_errors[raw]
                 events.emit("parse_error", session=session.session_id,
                             n=n, error=call.get("error_msg"), raw_head=raw[:120])
-                if n == 1:
-                    feedback = (
-                        "System Error: your tool call could not be parsed.\n"
-                        f"Your invalid output: {call.get('raw_input')}\n"
-                        f"Parser error: {call.get('error_msg')}\n"
-                        "A tool call must be VALID JSON with double quotes — the exact same format as "
-                        "the tool calls you already made successfully. For example, to update the plan:\n"
-                        '{"name": "update_plan", "arguments": {"op": "replace", "steps": ["step one", "step two"]}}\n'
-                        "Do NOT use single quotes, a 'call:' prefix, or bare braces. Retry with correct JSON."
-                    )
-                else:
-                    feedback = (
-                        f"System Error: you emitted the exact same invalid tool call {n} times. STOP repeating it.\n"
-                        "Planning is optional — do NOT retry that call. Instead, either complete the task "
-                        "directly with a correctly-formatted tool call (the same JSON format that worked "
-                        "for you before), or briefly tell the user what you were trying to do and why you're stuck."
-                    )
-                by_idx[idx] = {"name": "system", "response": feedback}
+                hint_fn = getattr(getattr(self.engine, "dialect", None),
+                                  "parse_error_retry_hint", None)
+                hint = hint_fn() if callable(hint_fn) else _PARSE_HINT_FALLBACK
+                by_idx[idx] = {"name": "system",
+                               "response": parse_error_feedback(call, n, hint)}
                 continue
 
             name = call.get("name")
