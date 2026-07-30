@@ -59,8 +59,10 @@ def feed_for_calls(calls: List[Dict[str, Any]],
 def _default_max_turns(task: Dict[str, Any]) -> int:
     if task.get("env"):
         return 8            # 长链：多步工具链 + 容错回合
-    # 有脚本回喂表 = 期望闭环（调用→回喂→终答），留出一次纠错回合；否则单轮观测
-    return 3 if task.get("tool_responses") else 1
+    # 有脚本回喂表 = 期望闭环（调用→回喂→终答），留出一次纠错回合；
+    # 纯发射题也给 2 轮：合法调用即断（见 run_item 循环），但解析错误必须像部署
+    # 一样得到一次纠错回喂——否则纠错成功率在发射题上永远无数据（e4b 掉头调用案）
+    return 3 if task.get("tool_responses") else 2
 
 
 async def run_item(engine, item: Dict[str, Any], repeat_idx: int = 0,
@@ -116,6 +118,9 @@ async def run_item(engine, item: Dict[str, Any], repeat_idx: int = 0,
             calls = r.get("tool_calls") or []
             if not calls:
                 break
+            if env is None and not tool_responses \
+                    and not any(c.get("type") == "error" for c in calls):
+                break       # 纯发射题：合法调用即测量终态（不回喂 unknown-tool 噪声）
             session.history.append({"role": "assistant",
                                     "thoughts": r.get("thoughts") or "",
                                     "content": r.get("text") or "",

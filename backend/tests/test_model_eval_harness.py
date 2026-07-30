@@ -397,3 +397,34 @@ def test_emit_only_item_not_marked_aborted():
     assert traj["aborted_reason"] == ""
     s = get_scorer("tool_call")(traj, _tc_item(final=None))
     assert not s["aborted"]
+
+
+def test_emit_only_item_gets_one_correction_round():
+    """纯发射题的解析错误必须像部署一样吃到一次纠错回喂（合法调用则即断，
+    不喂 unknown-tool 噪声）。e4b 掉头调用案：单轮即停会让纠错成功率无数据。"""
+    import asyncio
+    from benchmarks.model_eval.executor import run_item
+
+    class _FakeEngine:
+        backend = None
+        dialect = None
+
+        def __init__(self):
+            self.n = 0
+
+        async def generate_once(self, session, **kw):
+            self.n += 1
+            if self.n == 1:
+                return {"thoughts": "", "text": "", "metrics": {},
+                        "tool_calls": [{"type": "error", "raw_input": "{broken",
+                                        "error_msg": "Unterminated"}]}
+            return {"thoughts": "", "text": "", "metrics": {},
+                    "tool_calls": [{"type": "function", "name": "t1",
+                                    "arguments": {"q": "x"}}]}
+
+    eng = _FakeEngine()
+    traj = asyncio.run(run_item(eng, _item()))
+    assert eng.n == 2 and len(traj["turns"]) == 2       # 纠错回合发生了
+    assert traj["turns"][0]["feed"][0]["name"] == "system"
+    s = get_scorer("tool_call")(traj, _tc_item(final=None))
+    assert s["pass"] and s["corrected"] and s["parse_errors"] == 1
