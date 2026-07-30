@@ -10,7 +10,7 @@ from pathlib import Path
 
 EVALS = Path(__file__).resolve().parents[2] / "rag" / "evals"
 
-_KINDS = {"semantic", "identifier", "name", "crosslingual", "multidoc", "temporal", "negative"}
+_KINDS = {"semantic", "identifier", "name", "crosslingual", "multidoc", "temporal", "negative", "misroute"}
 
 
 def _load_jsonl(name):
@@ -59,7 +59,9 @@ def test_items_reference_existing_titles():
 
 
 def test_kind_coverage_and_bilingual():
-    """形态覆盖纪律：七类形态齐 + 跨语题存在（检索面是中英双语的）。"""
+    """形态覆盖纪律：八类形态齐 + 跨语题存在（检索面是中英双语的）。
+    misroute（意图分类给错）是 FTS 跨库兜底的**判别性探针**——向量与标识符预取都
+    只搜软路由选中的库，路由漏路时只有关键词腿能救。"""
     items = _load_jsonl("items.jsonl")
     assert {it["kind"] for it in items} == _KINDS
     assert sum(1 for it in items if it["kind"] == "negative") >= 2

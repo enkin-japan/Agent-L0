@@ -1,10 +1,10 @@
 {
-  "stamp": "20260730-233402",
+  "stamp": "20260730-234952",
   "summary": {
     "overall": {
-      "n": 32,
-      "pass_rate": 0.938,
-      "mrr": 0.933
+      "n": 34,
+      "pass_rate": 0.941,
+      "mrr": 0.938
     },
     "by_kind": {
       "crosslingual": {
@@ -13,6 +13,10 @@
       },
       "identifier": {
         "n": 8,
+        "pass_rate": 1.0
+      },
+      "misroute": {
+        "n": 2,
         "pass_rate": 1.0
       },
       "multidoc": {
@@ -196,6 +200,16 @@
     {
       "id": "rq-sem-012",
       "kind": "semantic",
+      "pass": true
+    },
+    {
+      "id": "rq-route-001",
+      "kind": "misroute",
+      "pass": true
+    },
+    {
+      "id": "rq-route-002",
+      "kind": "misroute",
       "pass": true
     }
   ]

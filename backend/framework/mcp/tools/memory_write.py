@@ -55,6 +55,12 @@ class MemoryWriteTool(BaseTool):
                                     "matters and how to apply it. Convert relative dates to "
                                     "absolute ('2026-07-18', not 'today'/'yesterday') — notes "
                                     "are read months later, when relative words have rotted."},
+            "valid_until": {"type": "string",
+                            "description": "OPTIONAL, ISO date (YYYY-MM-DD). Set ONLY when the "
+                                           "fact has a known expiry (contract end, policy period, "
+                                           "password rotation). After this date the note is "
+                                           "flagged EXPIRED in your index instead of silently "
+                                           "going stale. Omit for durable facts."},
         },
         "required": ["name", "description", "type", "body"],
     }
@@ -65,12 +71,13 @@ class MemoryWriteTool(BaseTool):
             return False
         return True
 
-    def execute(self, name: str, description: str, type: str, body: str) -> str:
+    def execute(self, name: str, description: str, type: str, body: str,
+                valid_until: str = "") -> str:
         store = runtime.get_note_store()
         if store is None:
             return "System Error: note store unavailable."
         try:
-            path = store.write(name, description, type, body)
+            path = store.write(name, description, type, body, valid_until=valid_until)
         except ValueError as e:
             # 校验不过是模型手滑，就地说清楚让它重发（不是系统故障）
             return f"Note rejected: {e}"

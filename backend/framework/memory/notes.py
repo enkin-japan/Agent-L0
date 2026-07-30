@@ -43,15 +43,26 @@ MAX_INDEX_CHARS = 4000
 
 
 class Note:
-    """一条笔记 = 一个事实。"""
+    """一条笔记 = 一个事实。
+
+    valid_until（数据架构采纳波 R3，时间维度最小形态）：**事实生效终点**（ISO 日期），
+    区别于 frontmatter `updated`（记录时间）——这就是双时间轴，只是不为它建表。
+    只有明确带失效日的事实才填（合同到期/保单期间/密码轮换）；耐久事实留空。
+    过期后索引行显式标注 [EXPIRED]——模型看到的是"已过期"，而非自信引用旧事实
+    （个人记忆系统最高频事故：三年前的旧地址答得斩钉截铁）。
+    """
 
     def __init__(self, name: str, description: str, type_: str, body: str,
-                 source: Optional[Path] = None):
+                 source: Optional[Path] = None, valid_until: str = ""):
         self.name = name
         self.description = description
         self.type = type_
         self.body = body
         self.source = source
+        self.valid_until = valid_until
+
+    def expired(self) -> bool:
+        return bool(self.valid_until) and self.valid_until < date.today().isoformat()
 
 
 def _slug_ok(name: str) -> bool:
@@ -97,7 +108,9 @@ class NoteStore:
                     raise ValueError(f"type 必须是 {NOTE_TYPES} 之一，得到 {type_!r}")
                 if not body:
                     raise ValueError("正文为空（笔记正文就是它的全部价值）")
-                self._notes[name] = Note(name, description, type_, body, file)
+                valid_until = str(meta.get("valid_until") or "").strip()
+                self._notes[name] = Note(name, description, type_, body, file,
+                                         valid_until=valid_until)
             except Exception as e:
                 # 一条写坏了不连累其他（照 MCPRegistry / SkillRegistry 的先例）
                 print(f"[Notes] ⚠️ 加载笔记 {file.name} 失败: {e}")
@@ -116,8 +129,16 @@ class NoteStore:
         """
         if not self._notes:
             return []
-        rows = [f"- {n.name} ({n.type}): {n.description}"
-                for n in (self._notes[k] for k in self.names())]
+
+        def _row(n: Note) -> str:
+            if n.expired():
+                # 过期标注放行首级别显眼处：比默默照常列出诚实，比直接隐藏可核
+                return (f"- {n.name} ({n.type}) [EXPIRED {n.valid_until} — verify before "
+                        f"relying on it]: {n.description}")
+            tail = f" (valid until {n.valid_until})" if n.valid_until else ""
+            return f"- {n.name} ({n.type}){tail}: {n.description}"
+
+        rows = [_row(n) for n in (self._notes[k] for k in self.names())]
         dropped = 0
         if len(rows) > MAX_INDEX_LINES:
             dropped = len(rows) - MAX_INDEX_LINES
@@ -134,8 +155,13 @@ class NoteStore:
 
     # ---------- 写 ----------
 
-    def write(self, name: str, description: str, type_: str, body: str) -> Path:
-        """写入/覆盖一条笔记并重建索引。校验不过就抛 ValueError（由工具层翻成给模型的话）。"""
+    def write(self, name: str, description: str, type_: str, body: str,
+              valid_until: str = "") -> Path:
+        """写入/覆盖一条笔记并重建索引。校验不过就抛 ValueError（由工具层翻成给模型的话）。
+
+        valid_until：事实生效终点（可选，ISO 日期）。与 frontmatter `updated`（记录时间）
+        构成双时间轴；格式非法就地拒绝——错日期比没日期更毒（会在错的日子打上 EXPIRED）。
+        """
         name = (name or "").strip()
         if not _slug_ok(name):
             raise ValueError(f"name {name!r} 非法：只接受小写 kebab-case"
@@ -148,14 +174,23 @@ class NoteStore:
             raise ValueError("description 不能为空（它就是索引里那一行，模型靠它决定要不要细读）")
         if not body:
             raise ValueError("正文不能为空")
+        valid_until = (valid_until or "").strip()
+        if valid_until:
+            try:
+                date.fromisoformat(valid_until)
+            except ValueError:
+                raise ValueError(f"valid_until 必须是 ISO 日期（YYYY-MM-DD），得到 {valid_until!r}；"
+                                 "耐久事实请直接省略该字段")
 
         self.notes_dir.mkdir(parents=True, exist_ok=True)
         path = self.notes_dir / f"{name}.md"
+        vu_line = f"valid_until: {valid_until}\n" if valid_until else ""
         path.write_text(
             f"---\nname: {name}\ndescription: {description}\ntype: {type_}\n"
-            f"updated: {date.today().isoformat()}\n---\n\n{body}\n",
+            f"updated: {date.today().isoformat()}\n{vu_line}---\n\n{body}\n",
             encoding="utf-8")
-        self._notes[name] = Note(name, description, type_, body, path)
+        self._notes[name] = Note(name, description, type_, body, path,
+                                 valid_until=valid_until)
         self._write_index()
         return path
 
@@ -181,6 +216,11 @@ class NoteStore:
             if not group:
                 continue
             lines.append(f"## {t}")
-            lines.extend(f"- [{n.name}]({n.name}.md) — {n.description}" for n in group)
+            lines.extend(
+                f"- [{n.name}]({n.name}.md) — "
+                + (f"⚠️已过期 {n.valid_until}｜" if n.expired() else
+                   (f"有效至 {n.valid_until}｜" if n.valid_until else ""))
+                + n.description
+                for n in group)
             lines.append("")
         (self.notes_dir / "MEMORY.md").write_text("\n".join(lines), encoding="utf-8")

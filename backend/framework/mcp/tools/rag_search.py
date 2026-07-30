@@ -35,10 +35,13 @@ def format_results(query: str, category: str, docs: list) -> tuple:
         ingested = f", Ingested: {created}" if created else ""
         stale = str(metadata.get("stale") or "")               # U3：非空 = 已被标记过时
         stale_tag = f", STALE: {stale}" if stale else ""
+        # 凭证指针（R3）：块序号供 rag_get_context 取相邻块；存量旧切片无此字段则省略
+        seq = metadata.get("seq")
+        chunk_tag = f", Chunk: {seq}" if seq is not None else ""
 
         formatted_context += (
             f"--- Result {i+1} (Match Score: {score:.2f}, Source: {source}"
-            f"{ingested}{stale_tag}, Path: {source_path}) ---\n"
+            f"{ingested}{stale_tag}{chunk_tag}, Path: {source_path}) ---\n"
             f"{doc_text}\n\n"
         )
         cite = {
@@ -156,3 +159,60 @@ class RAGSearchTool(BaseTool):
         except Exception as e:
             import traceback
             return f"System Error: Tool execution exception occurred: {str(e)}\n{traceback.format_exc()}"
+
+
+class RagGetContextTool(BaseTool):
+    """取相邻块（数据架构采纳波 R3）：检索命中后按凭证指针补前后文。
+
+    「先搜索定位，再翻开细读」的第二步——比整篇重读省 token，比只凭单块作答可靠。
+    """
+    name = "rag_get_context"
+    description = (
+        "Fetch the chunks surrounding one rag_search result, to read more context around a "
+        "hit without re-reading the whole document. Use the exact 'Path' and 'Chunk' values "
+        "from a rag_search result header. Results that show no 'Chunk' field are legacy "
+        "entries without positions — this tool won't work for those."
+    )
+    requires_approval = False
+    is_concurrency_safe = True   # 纯只读数据操作
+
+    parameters = {
+        "properties": {
+            "source_path": {"type": "string",
+                            "description": "The exact 'Path: ...' value from a rag_search result."},
+            "seq": {"type": "integer",
+                    "description": "The 'Chunk: N' value from that result."},
+            "n": {"type": "integer",
+                  "description": "How many neighbors on each side (default 1, max 5)."},
+        },
+        "required": ["source_path", "seq"],
+    }
+
+    def is_available(self) -> bool:
+        try:
+            requests.get(RAG_HEALTH_URL, timeout=3)
+            return True
+        except Exception:
+            return False
+
+    def execute(self, source_path: str, seq: int, n: int = 1) -> str:
+        try:
+            r = requests.get(f"http://{RAG_HOST}:{RAG_PORT}/api/v1/document/context",
+                             params={"source_path": source_path, "seq": seq, "n": n},
+                             headers=rag_auth_headers(), timeout=15)
+            r.raise_for_status()
+            data = r.json()
+        except requests.ConnectionError:
+            return (f"System Error: unable to connect to the RAG server "
+                    f"({RAG_HOST}:{RAG_PORT}).")
+        except Exception as e:
+            return f"System Error: rag_get_context failed: {e}"
+        chunks = data.get("chunks") or []
+        if not chunks:
+            return data.get("msg") or "No chunks found for that path."
+        head = (f"[Context around chunk {seq} of '{data.get('title', '')}' "
+                f"({data.get('total_chunks')} chunks total)]\n")
+        body = "\n".join(f"--- Chunk {c['seq']}"
+                         + (" (the hit)" if c["seq"] == seq else "")
+                         + f" ---\n{c['text'].strip()}" for c in chunks)
+        return head + body

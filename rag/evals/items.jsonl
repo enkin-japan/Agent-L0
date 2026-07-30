@@ -35,3 +35,5 @@
 {"id": "rq-ident-008", "kind": "identifier", "query": "95518 打过去是办什么的", "category": "保险", "optimized_query": "95518 理赔 电话", "expect": {"hit_any": ["家庭保险单摘要"]}}
 {"id": "rq-sem-011", "kind": "semantic", "query": "危险的 git 操作之前该做什么保护", "category": "开发习惯", "optimized_query": "git 危险操作 备份 tag", "expect": {"hit_any": ["Git 工作流个人约定"]}}
 {"id": "rq-sem-012", "kind": "semantic", "query": "旅馆的家族汤要怎么预约", "category": "旅行", "optimized_query": "温泉 家族汤 预约", "expect": {"hit_any": ["京都旅行订房信息"]}}
+{"id": "rq-route-001", "kind": "misroute", "query": "PICC-88213-X 是什么来着", "category": "设备固件版本", "optimized_query": "PICC-88213-X", "expect": {"hit_any": ["家庭保险单摘要"]}}
+{"id": "rq-route-002", "kind": "misroute", "query": "王秀兰的联系方式记在哪", "category": "健康记录", "optimized_query": "王秀兰 联系方式", "expect": {"hit_any": ["房租合同要点"]}}

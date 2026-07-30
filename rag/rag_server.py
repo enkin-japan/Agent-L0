@@ -37,6 +37,7 @@ import requests
 import yaml
 
 from retrieval_extras import extract_identifiers, mmr_select
+from fts_index import FtsIndex
 
 # ==========================================
 # 全局配置与数据根
@@ -101,6 +102,11 @@ CHUNK_OVERLAP_TOKENS = tuning.get("chunk_overlap_tokens", 128)
 RAG_API_KEY = os.environ.get("RAG_API_KEY", "")
 
 CHROMA_DB_PATH = DATA_ROOT / "chroma_data"
+# FTS 关键词腿（R2）：与 Chroma 并置的派生索引（可删可重建：删文件 + reembed 全量重灌）。
+# 一切操作 fail-open——FTS 故障绝不阻断入库/检索，Chroma 恒为唯一真相。
+FTS = FtsIndex(DATA_ROOT / "fts_index.sqlite3")
+if os.environ.get("RAG_DISABLE_FTS", "").strip():
+    FTS.available = False   # 评估 A/B 旋钮：关键词腿单独关断（evals 腿级对照用）
 # 换档护栏：建库时给存储盖戳（嵌入模型身份+维度），换档维度不符即快速失败提示先重建
 TIER_STAMP_FILE = CHROMA_DB_PATH / ".tier_stamp.json"
 
@@ -361,61 +367,68 @@ def split_text_to_chunks(text: str, max_tokens: int = None, overlap_tokens: int 
         overlap_tokens = CHUNK_OVERLAP_TOKENS
 
     logger.info("正在分行计算入库数据的token数")
-    lines = [t for t in text.splitlines(keepends=True) if t.strip()]
+    # 行与原文字符偏移一起收集（凭证指针 R3：chunk 必须能回答"我来自原文哪个位置"；
+    # 空白行照旧不参与切块，但偏移按原文计——指针指向的是 storage/ 原文备份）
+    lines, offsets, pos = [], [], 0
+    for raw_line in text.splitlines(keepends=True):
+        if raw_line.strip():
+            lines.append(raw_line)
+            offsets.append(pos)
+        pos += len(raw_line)
     if not lines:
         return []
     # 批量 tokenize：一次调用算完全部行（此前逐行 encode，大文档是 O(行数) 次调用，慢一个量级；
     # 拆分模式下这同时是「一次 HTTP 往返」而非每行一次）
-    doc = list(zip(lines, COMPUTE.token_counts(lines)))
+    doc = list(zip(lines, COMPUTE.token_counts(lines), offsets))
     logger.info("token数计算完成")
 
-    chunks = []
+    chunks = []          # 元素 (chunk_text, char_start)
     current_chunk_text = ""
     current_chunk_tc = 0
 
-    # 用一个队列来暂存当前 Chunk 中的行，方便用于计算下一块的 Overlap
+    # 用一个队列来暂存当前 Chunk 中的行（含偏移），方便用于计算下一块的 Overlap
     current_lines = []
 
-    for line, tc in doc:
+    for line, tc, off in doc:
         # 【Bug修复 1】安全带：如果单行直接超标，强行切断或单独成块
         if tc >= max_tokens:
             logger.warning(f"⚠️ 发现超长单行 (Token: {tc})，将其独立成块，可能需要二次切片。")
             if current_chunk_text:
-                chunks.append(current_chunk_text)
-            chunks.append(line)
+                chunks.append((current_chunk_text, current_lines[0][2]))
+            chunks.append((line, off))
             # 清空当前状态
             current_chunk_text, current_chunk_tc, current_lines = "", 0, []
             continue
 
         # 如果当前块加上这行会超标，说明当前块“满了”
         if current_chunk_tc + tc > max_tokens:
-            chunks.append(current_chunk_text)
+            chunks.append((current_chunk_text, current_lines[0][2]))
 
             # 【核心逻辑重构】：生成 Overlap 块
             # 回溯 current_lines，保留末尾的行，直到凑够约 overlap_tokens 的容量
             overlap_lines = []
             overlap_tc = 0
-            for prev_line, prev_tc in reversed(current_lines):
+            for prev_line, prev_tc, prev_off in reversed(current_lines):
                 if overlap_tc + prev_tc <= overlap_tokens:
-                    overlap_lines.insert(0, (prev_line, prev_tc))
+                    overlap_lines.insert(0, (prev_line, prev_tc, prev_off))
                     overlap_tc += prev_tc
                 else:
                     break
 
             # 开启新的一块，把 overlap 的内容作为前置上下文带入
-            current_lines = overlap_lines + [(line, tc)]
-            current_chunk_text = "".join(l for l, _ in current_lines)
+            current_lines = overlap_lines + [(line, tc, off)]
+            current_chunk_text = "".join(l for l, _, _ in current_lines)
             current_chunk_tc = overlap_tc + tc
 
         else:
             # 还能装下，继续装
             current_chunk_text += line
             current_chunk_tc += tc
-            current_lines.append((line, tc))
+            current_lines.append((line, tc, off))
 
     # 收尾：把最后没满的一块也加进去
     if current_chunk_text:
-        chunks.append(current_chunk_text)
+        chunks.append((current_chunk_text, current_lines[0][2]))
 
     # 【Bug修复 2】无需关心 1000 的上限，chunks 列表自动扩容
     return chunks
@@ -453,6 +466,7 @@ def _replace_previous_versions(category: str, doc_title: str) -> None:
                  if m and m.get("source_path")}
     try:
         col.delete(ids=ids)
+        FTS.delete_ids(ids)
     except Exception as e:
         logger.warning(f"⚠️ 替换式导入清旧切片失败（跳过替换，照常入库）: {e}")
         return
@@ -508,7 +522,8 @@ def auto_classify_and_insert(raw_document: str, doc_title: str, forced_category:
             logger.error(f"分类查询失败，默认进入待分类库。原因: {e}")
 
     # 3. 文本切片（先于备份：空文档直接返回，不在磁盘留下无切片指向的孤儿备份文件）
-    chunks = split_text_to_chunks(raw_document)
+    chunk_pairs = split_text_to_chunks(raw_document)
+    chunks = [c for c, _ in chunk_pairs]
     total_chunks = len(chunks)
     if total_chunks == 0:
         logger.warning(f"⚠️ 文档 [{doc_title}] 内容为空，跳过入库（不写备份）。")
@@ -563,6 +578,7 @@ def auto_classify_and_insert(raw_document: str, doc_title: str, forced_category:
                         (target_category, str(backup_path))}:
             try:
                 get_chroma_collection(cat).delete(where={"source_path": sp})
+                FTS.delete_where_source(sp)
             except Exception as e:
                 logger.warning(f"⚠️ 重索引前清理旧切片失败（库 {cat}，可能本就没有）: {e}")
 
@@ -578,8 +594,11 @@ def auto_classify_and_insert(raw_document: str, doc_title: str, forced_category:
         created_ts = time.time()
     created_at = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(created_ts))
     ids = [str(uuid.uuid4()) for _ in chunks]
+    # seq/char_start（凭证指针 R3）：seq 供取相邻块（/document/context），char_start 指向
+    # storage/ 原文备份内的字符偏移（溯源核对）。存量旧切片无此二字段，消费方须 fail-soft。
     metadatas = [{"source_path": str(backup_path), "title": doc_title,
-                  "created_at": created_at} for _ in chunks]
+                  "created_at": created_at, "seq": i, "char_start": off}
+                 for i, (_, off) in enumerate(chunk_pairs)]
 
     try:
         target_db.add(embeddings=all_embeddings, documents=chunks, ids=ids, metadatas=metadatas)
@@ -592,6 +611,7 @@ def auto_classify_and_insert(raw_document: str, doc_title: str, forced_category:
                 f"'{ident.get('tier')}'(dim={ident.get('embed_dim')}) 冲突——换档后未重建。"
                 f"请跑  python rag/scripts/reembed.py  全量重建，或改回原档位。原始错误: {e}")
         raise
+    FTS.add_chunks(target_category, ids, chunks, str(backup_path))
     logger.info(f"✅ 入库完成: [{doc_title}] -> {target_category} ({total_chunks} 个片段)")
 
 def reclassify_background_task():
@@ -615,6 +635,7 @@ def reclassify_background_task():
             unclass_db.delete(where={"source_path": str(file)})
         except Exception:
             pass
+        FTS.delete_where_source(str(file))
 
         # 重新走自动化入库流程
         auto_classify_and_insert(content, title)
@@ -820,6 +841,7 @@ async def purge_category(db_name: str):
         get_chroma_collection("meta_classification_db").delete(ids=[db_name])
     except Exception:
         pass
+    FTS.drop_db(db_name)
     logger.info(f"🗑️ 分类 '{db_name}' 已真删（collection={dropped}, 原文归档={archived}）")
     return {"msg": f"分类 {db_name} 已删除（原文已移入回收目录，可手工找回）",
             "collection_dropped": dropped, "raw_archived": archived}
@@ -893,6 +915,8 @@ async def delete_document_by_path(source_path: str = Body(embed=True)):
                 deleted_chunks += len(matched["ids"])
         except Exception as e:
             logger.error(f"清理库 {col_info.name} 时出错: {e}")
+
+    FTS.delete_where_source(source_path)
 
     # 原始备份文件移入回收目录（归档先行红线：不 rm，可手工找回）
     backup_file = Path(source_path)
@@ -1035,9 +1059,9 @@ def advanced_query_rag(req: QueryRequest):
     # 3b. 标识符子串预取（mem0 评估采纳）：纯向量把文件名/hash/键名摊平成语义噪声，
     #     对查询里的标识符 token 做 contains 预取并入重排池——重排当裁判，无关命中
     #     会被 rerank_min_score 筛掉，这一路只扩池不定序。
+    seen_ids = {c["id"] for c in all_retrieved_chunks}
     idents = extract_identifiers(req.query, req.optimized_query)
     if idents:
-        seen_ids = {c["id"] for c in all_retrieved_chunks}
         extra = 0
         for db_name in target_dbs:
             for c in _contains_prefetch(db_name, idents):
@@ -1047,6 +1071,29 @@ def advanced_query_rag(req: QueryRequest):
                     extra += 1
         if extra:
             logger.info(f"🔩 标识符预取 {idents} 补入 {extra} 条候选")
+
+    # 3c. FTS 关键词腿（R2）：bigram 全文命中并入重排池。跨全库不受软路由约束——
+    #     关键词命中是强信号，正是路由漏路时的兜底；不做分数融合，重排是终局裁判。
+    fts_by_db: Dict[str, List[str]] = {}
+    for h in FTS.search(req.query, req.optimized_query, limit=10):
+        if h["chunk_id"] not in seen_ids and h["db"] != "meta_classification_db":
+            fts_by_db.setdefault(h["db"], []).append(h["chunk_id"])
+    fts_added = 0
+    for db_name, id_list in fts_by_db.items():
+        try:
+            got = get_chroma_collection(db_name).get(
+                ids=id_list, include=["documents", "metadatas"])
+            for doc, meta, cid in zip(got.get("documents") or [],
+                                      got.get("metadatas") or [],
+                                      got.get("ids") or []):
+                all_retrieved_chunks.append({"db": db_name, "id": cid,
+                                             "document": doc, "metadata": meta})
+                seen_ids.add(cid)
+                fts_added += 1
+        except Exception as e:
+            logger.warning(f"⚠️ FTS 候选回取失败（库 {db_name}，跳过该路）: {e}")
+    if fts_added:
+        logger.info(f"🔤 FTS 关键词腿补入 {fts_added} 条候选")
 
     if not all_retrieved_chunks:
         return {"original_query": req.query, "scanned_dbs": target_dbs, "total_chunks_retrieved": 0, "results": []}
@@ -1075,6 +1122,44 @@ def advanced_query_rag(req: QueryRequest):
         "total_chunks_retrieved": len(all_retrieved_chunks),
         "results": final_results
     }
+
+@app.get("/api/v1/document/context", tags=["核心检索"])
+async def document_context(source_path: str, seq: int, n: int = 1):
+    """取相邻块（数据架构采纳波 R3）：按凭证指针 (source_path, seq) 取 [seq-n, seq+n]。
+
+    「先搜索定位，再翻开细读」的第二步——检索命中一个块后补前后文，不必整篇重读。
+    纯数据操作（无嵌入/重排），计算面离线也可用。存量旧切片无 seq 字段：明说旧格式
+    并指向 reembed，不静默返回空。
+    """
+    n = max(0, min(int(n), 5))
+    category = _collection_of_raw_file(Path(source_path))
+    try:
+        col = get_chroma_collection(category)
+        got = col.get(where={"source_path": source_path}, include=["documents", "metadatas"])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"取块失败（库 {category}）: {e}")
+    rows = []
+    legacy = 0
+    for doc, meta in zip(got.get("documents") or [], got.get("metadatas") or []):
+        meta = meta or {}
+        if "seq" not in meta:
+            legacy += 1
+            continue
+        rows.append({"seq": int(meta["seq"]), "text": doc,
+                     "char_start": meta.get("char_start"),
+                     "title": meta.get("title", "")})
+    if not rows:
+        if legacy:
+            return {"source_path": source_path, "chunks": [],
+                    "msg": ("该文档为旧格式入库（切片无 seq 序号），取相邻块不可用。"
+                            "跑 python rag/scripts/reembed.py 全量重建后即可用。")}
+        return {"source_path": source_path, "chunks": [],
+                "msg": "未找到该 source_path 的任何切片（路径可能不精确，先用检索确认 Path）。"}
+    rows.sort(key=lambda r: r["seq"])
+    window = [r for r in rows if seq - n <= r["seq"] <= seq + n]
+    return {"source_path": source_path, "title": rows[0]["title"],
+            "total_chunks": len(rows), "requested_seq": seq, "chunks": window}
+
 
 def _enforce_bind_guardrail() -> None:
     """部署铁则（§8 / §7 预留 2）：非回环绑定 + 空 RAG_API_KEY = 拒启。

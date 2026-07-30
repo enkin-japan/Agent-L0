@@ -114,12 +114,21 @@ def seed(corpus: list) -> None:
     # 时效探针：旧住址标过时（U3 部署同款操作）
     r = requests.get(f"{BASE}/api/v1/document/list",
                      params={"category": "household"}, timeout=30).json()
-    for d in r.get("documents", []):
+    docs_listed = r.get("documents", [])
+    for d in docs_listed:
         if d["title"] == "旧住址档案":
             requests.post(f"{BASE}/api/v1/document/stale",
                           json={"source_path": d["source_path"],
                                 "reason": "2025-08 已搬离，现住址见「现住址与快递偏好」"},
                           timeout=30).raise_for_status()
+
+    # 凭证指针链路冒烟（R3）：随手取一篇的 chunk 0 相邻块，端点断了当场炸而非静默
+    if docs_listed:
+        ctx = requests.get(f"{BASE}/api/v1/document/context",
+                           params={"source_path": docs_listed[0]["source_path"],
+                                   "seq": 0, "n": 1}, timeout=30).json()
+        assert ctx.get("chunks"), f"取邻块冒烟失败: {ctx}"
+        print(f"== 指针冒烟 ✓ {docs_listed[0]['title']} 共 {ctx.get('total_chunks')} 块")
 
 
 def run_item(item: dict) -> dict:
