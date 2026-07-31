@@ -43,6 +43,8 @@ def test_luhn_guard_spares_order_numbers():
     assert "CARD" not in r["counts"]                   # 非 Luhn 16 位不误杀
     r2 = eg.mask_rules("大陆手机 13812345678 要遮。")
     assert r2["counts"] == {"PHONE": 1}
+    r3 = eg.mask_rules("分隔写法 138-1234-5678 也要遮。")  # l0_eval 首跑抓出的真漏洞
+    assert r3["counts"] == {"PHONE": 1}
 
 
 # ---- ② 抗注入承重墙 ----

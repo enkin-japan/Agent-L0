@@ -29,9 +29,11 @@ _RE_EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _RE_IP = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 # 卡号候选：13-19 位数字（容许空格/连字符分隔），命中后过 Luhn 才算（防订单号误杀）
 _RE_CARD = re.compile(r"(?<![\d-])(?:\d[ -]?){12,18}\d(?![\d-])")
-# 电话：+国际前缀 或 分隔式（03-1234-5678 类）或 大陆手机 11 位
+# 电话：+国际前缀 / 分隔式（03-1234-5678 类）/ 大陆手机 11 位（连写或 3-4-4 分隔——
+# 分隔写法曾漏（l0_eval 首跑抓出），单列一支）
 _RE_PHONE = re.compile(r"(?<![\d-])(?:\+\d{1,3}[- ]?\d{1,4}[- ]?\d{2,4}[- ]?\d{3,4}"
                        r"|0\d{1,3}[- ]\d{2,4}[- ]\d{3,4}"
+                       r"|1[3-9]\d[- ]\d{4}[- ]\d{4}"
                        r"|1[3-9]\d{9})(?![\d-])")
 
 
@@ -96,7 +98,7 @@ _L0_SYSTEM = (
     "names (cities/countries), product or technology names, or spans already masked "
     "like [EMAIL_1].\n"
     'Output ONLY a JSON array of the exact spans copied verbatim from the payload, '
-    'e.g. ["王秀兰", "4-2-1 Ginza"]. Output [] if nothing qualifies. No other text.'
+    'e.g. ["李桂芳", "1-2-8 Umeda"]. Output [] if nothing qualifies. No other text.'
 )
 
 _PLACEHOLDER_RE = re.compile(r"^\[[A-Z]+_\d+\]$")
@@ -131,6 +133,9 @@ async def detect_sensitive_spans(engine, payload: str, max_tokens: int = 512) ->
     from ..agents.sandbox_runtime import EphemeralSession
     sess = EphemeralSession(engine.backend, _L0_SYSTEM,
                             f"<<<PAYLOAD\n{payload}\nPAYLOAD>>>")
+    # 刻意不开思考：qwen35 在一次性替身上 enable_thinking=True 会双频道全空
+    # （2026-07-31 实测，账本观察清单——方言/引擎接缝问题，另波查），且 L0 召回
+    # 短板是 9B 档能力问题（D1：模型智力优化等生产机），不靠思考预算硬补。
     r = await engine.generate_once(sess, tools=None, temperature=0.1,
                                    max_tokens=max_tokens)
     return _parse_spans((r.get("text") or ""), payload)
