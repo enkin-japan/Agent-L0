@@ -203,7 +203,7 @@
         │ 方言   dialects/（R0）         prompt 模板 / 输出反序列化 / 标记 / schema │
         │ 承载   backends/（P0/B1）      mlx（进程内）/ remote（inference-server） │
         │ 记忆   memory/                 冷热会话 / 三层压缩 / inflight 防丢       │
-        │ 工具   mcp/（26 文件 54 类）+ agents/（3 沙箱，物理隔离）               │
+        │ 工具   mcp/（27 文件 55 类）+ agents/（3 沙箱，物理隔离）               │
         │ 剧本   skills/*.md（主轮次提示词，经 skill_invoke 取用）              │
         └──────────────────────────────────────────────────────────────────────┘
               │ rag_search        │ web_research（受限沙箱）   │ deck PDF 导出

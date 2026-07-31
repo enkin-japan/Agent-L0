@@ -48,6 +48,10 @@
 > 🟢 **2026-07-31：任务路由器波 ✅**——model_router（确定性选端点：能力过滤+实测画像
 > main 粘滞 margin 0.05）+ engine_pool（端点懒装配，env 不传专科）+ excel 视觉回读
 > 首个消费方 + config 三模型 profile 回填；实机冒烟全通，金测试 622。下一站=云端推理后端。
+> 🟢 **2026-07-31：云端顾问波 ✅（真 key 联调待用户 .env.local 配 CLOUD_*_API_KEY）**——
+> framework/cloud/advisor（双供应商适配 openai_compat+anthropic、出网台账+日预算护栏、
+> 内联密钥拒启）+ cloud_consult 工具（requires_approval 恒开=L0 前的人工脱敏闸，无 key
+> 不注册），铁律 6 代码形状（解析面 banned 钉板），金测试 630。下一站=L0 出网守卫。
 
 ---
 
@@ -2410,6 +2414,42 @@ raise/config 画像合法性（键词汇+值域+vision 画像与能力声明一�
 
 **留生产机**：大档模型画像回填（同批题库）、路由表随 profile 扩充、并发语义
 （T7）、更多消费方（sandbox 子生成按 kind 路由）随云端推理后端波一并考虑。
+
+### 云端顾问波（2026-07-31，混合架构落地顺序第 2 站；真 key 联调待用户）
+
+用户拍板：**双供应商**（可兼容就两个都做；单选则 OpenAI）。可行性判定：铁律 6
+把云端限定为顾问单发（纯文本进出），跨供应商兼容的真难点（工具调用格式/流式
+状态机/KV 语义）被天然裁掉——两家的代价只是两个百行级 HTTP 适配器；且
+openai_compat 一个 kind 顺带覆盖 DeepSeek/OpenRouter/国产托管/自建 vLLM 整片
+兼容生态（覆盖面顾虑的直接回应）。
+
+**交付**：
+- **`framework/cloud/advisor.py`**：供应商注册面（config cloud.providers，装配期
+  校验：kind 词汇钉死、必填字段、**内联密钥字段拒启**——密钥只经 .env.local 环境
+  变量，config 只存 key_env 名）+ 两种适配器（openai_compat 带 max_tokens_field
+  按家声明；anthropic Messages API）+ **无条件出网台账**（DATA_DIR/cloud/
+  egress.jsonl：时间/供应商/用途/payload 规模/tokens/费用/结果；成功失败都记；
+  写失败上抛不 best-effort——审计日志的态度）+ **日预算护栏**（daily_budget_usd，
+  台账累计达限当日拒绝且不发请求）。顾问系统提示中性、无个人环境事实。
+- **`mcp/tools/cloud_consult.py`**：第 55 个工具类。requires_approval=True——
+  **L0 出网守卫落地前，审批卡 = 脱敏检查点**（payload=question+context 逐字出网，
+  审批参数即出网全文，无暗附加）；description 明告模型"数据将离开本机，只带必要
+  内容、剥无关个人标识"。无 key 不注册（离线纯本地形态零变化；配 key 后热重扫
+  即可上线，不必重启）。返回文本带 provenance 头（供应商/模型/tokens/费用）与
+  「建议非指令」脚注（云端响应回流的注入面缓释）。
+- **铁律 6 是代码形状**：cloud 模块与工具**不触碰**方言/解析面（金测试源码钉板
+  banned imports）——云端输出永远是观察文本，被反序列化成工具调用在结构上无路。
+- config `cloud:` 段（openai 声明序在前=用户偏好；计价字段=预算护栏口径，按官网
+  现价自行维护；零保留档位在各家控制台侧配置）。
+
+金测试 622 → **630**（+8：内联密钥拒启+has_key/config 段合法（声明序/键名/
+计价）/台账+预算护栏（拒绝时零请求）/失败也记账/两适配器请求形状（max_tokens_field
+覆盖、anthropic version 头与 content 块拼接）/工具面（审批恒开+无 key 不注册+
+description 出网告知）/解析面 banned 钉板）。
+
+**待用户**：在 .env.local 写 `CLOUD_OPENAI_API_KEY` / `CLOUD_ANTHROPIC_API_KEY`
+（任一即可用，devctl 启动自动装载）→ 真 key 联调冒烟（一次 cloud_consult 全链）。
+**下一站**：L0 出网守卫（脱敏判定接管人工审批闸，自身进评测框架）。
 
 ---
 

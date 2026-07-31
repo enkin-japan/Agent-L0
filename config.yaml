@@ -471,6 +471,39 @@ agent:
   sediment_to_rag: true         # 关闭则只压缩不沉淀（被折叠内容仅留摘要，不可召回细节）
 
 
+# 云端顾问（混合架构第 2 站；CHARTER 铁律 6：云端只顾问不执行）。cloud_consult 工具把
+# question+context **逐字**发给所选供应商、取回纯文本建议；落地动作永远由本地模型走
+# 既有审批闸门。出网前须用户审批（L0 出网守卫落地前，审批卡=脱敏检查点）；每次出网
+# 无条件记 DATA_DIR/cloud/egress.jsonl 台账（铁律 6 出网日志雏形 + 费用累计）。
+# 密钥一律 .env.local 环境变量（本文件只存 key_env 变量名，内联密钥字段会被拒启）。
+# providers 为空或全部无 key = 工具不注册（离线纯本地形态零变化）。kind 只有两种：
+#   openai_compat  OpenAI 及一切兼容面（DeepSeek/OpenRouter/国产托管/自建 vLLM——换
+#                  base_url+model 即插即用）；max_tokens_field 按各家要求（OpenAI 新模型
+#                  要 max_completion_tokens，多数兼容面用 max_tokens）
+#   anthropic      Claude Messages API
+# input/output_usd_per_m 是**预算护栏的计价**（按官网现价自行维护；价格变了护栏口径
+# 跟着变，不影响调用本身）。零保留/数据不训练档位在各家控制台侧配置（CHARTER §3）。
+cloud:
+  daily_budget_usd: 2.0        # 出网日预算（美元）：台账累计达此值当日拒绝出网；0=不设限
+  max_tokens: 2048             # 单次顾问回复上限
+  timeout: 120                 # 单次调用 HTTP 超时（秒）；须 < agent.tool_timeout_seconds
+  providers:                   # 声明序 = 缺省选择序（第一个配了 key 的当默认）
+    - name: "openai"
+      kind: "openai_compat"
+      base_url: "https://api.openai.com/v1"
+      model: "gpt-5"                       # 按需换档（官网现役型号）
+      max_tokens_field: "max_completion_tokens"
+      key_env: "CLOUD_OPENAI_API_KEY"
+      input_usd_per_m: 1.25
+      output_usd_per_m: 10.0
+    - name: "anthropic"
+      kind: "anthropic"
+      base_url: "https://api.anthropic.com"
+      model: "claude-opus-4-8"             # 省成本可换 claude-sonnet-4-6（3/15）
+      key_env: "CLOUD_ANTHROPIC_API_KEY"
+      input_usd_per_m: 5.0
+      output_usd_per_m: 25.0
+
 # 定时任务（schedule）：落盘一等实体，模型经 schedule_* 工具管理（创建/修改需审批），
 # 到点在专属会话（schedule_{id}）无人值守执行；被交互任务 suspend 抢占、审批自动拒绝。
 schedules:
