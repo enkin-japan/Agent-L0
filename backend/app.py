@@ -360,6 +360,12 @@ async def lifespan(app: FastAPI):
     # 2.1 联网调查沙箱运行时：把引擎与主事件循环登记给 web_research（受限沙箱工具经
     #     run_coroutine_threadsafe 投回本循环复用主模型生成，见 framework/agents）。
     research_runtime.set_runtime(engine, asyncio.get_running_loop())
+    #     任务路由执行面（混合架构第一波）：端点引擎池——无状态单发生成经
+    #     core/model_router 按实测画像选端点、由池懒装配专科引擎（仅 remote 模式
+    #     真的会建；inprocess 恒只有 main）。主循环轮次不经此层（铁律 6 方向）。
+    from framework.core.engine_pool import EnginePool
+    engine_pool = EnginePool(engine)
+    research_runtime.set_engine_pool(engine_pool)
     #     客户端反查通道（get_location 等）：工具线程经此 loop 往会话事件流发请求事件
     from framework.core import client_query
     client_query.set_loop(asyncio.get_running_loop())
@@ -466,6 +472,7 @@ async def lifespan(app: FastAPI):
     app.state.processor = processor
     app.state.vad_model = vad_model
     app.state.engine = engine
+    app.state.engine_pool = engine_pool
     app.state.orchestrator = orchestrator
     app.state.mcp_registry = mcp_registry
     app.state.session_manager = session_manager
@@ -582,6 +589,10 @@ async def lifespan(app: FastAPI):
         del app.state.session_manager
         del app.state.file_handler
 
+        # 追加端点引擎先收（懒建的专科引擎；main 由下一行收）
+        if getattr(app.state, "engine_pool", None) is not None:
+            app.state.engine_pool.shutdown_extras()
+            del app.state.engine_pool
         # 释放推理后端持有的全局资源（MLX 下即强制释放苹果芯片的显存/内存）
         engine.backend.shutdown()
         print("✅ [System] Resources have been safely released. Goodbye!")

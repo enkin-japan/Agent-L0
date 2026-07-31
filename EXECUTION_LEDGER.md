@@ -45,6 +45,9 @@
 > 独立性（反算法绑架）"，新增铁律 6（云端只顾问不执行 / 出网决策与执行分权）；
 > **仓库已迁 `enkin-japan/Agent-L0`（origin），原仓库归档（archive，封存点 11d8cd8）**。
 > 混合架构落地顺序见 CHARTER §7 分期纪律：任务路由器 → 云端推理后端 → L0 出网守卫。
+> 🟢 **2026-07-31：任务路由器波 ✅**——model_router（确定性选端点：能力过滤+实测画像
+> main 粘滞 margin 0.05）+ engine_pool（端点懒装配，env 不传专科）+ excel 视觉回读
+> 首个消费方 + config 三模型 profile 回填；实机冒烟全通，金测试 622。下一站=云端推理后端。
 
 ---
 
@@ -2363,6 +2366,50 @@ FTS5，零重依赖）——CJK bigram 预分词（入索引与查询同一变�
 约定入 `.gitignore` 留本地不入库。
 
 纯文档波，零代码改动；金测试跑通作无污染证明。
+
+### 任务路由器波（2026-07-31，混合架构落地顺序第 1 站）
+
+CHARTER §7 分期纪律「任务路由器 → 云端推理后端 → L0 出网守卫」的第一件。
+吃的全是存量：接口准备②③（model_capabilities / resolve_endpoints / base_url_for，
+2026-07-29 预埋至今无消费方）+ PROFILES.md 三模型实测画像（评测框架波产出）。
+
+**交付**：
+- **画像入配置**：model_registry 三个已评测条目回填 `profile` 字段（口径=通过率
+  （含纠错与终答整合）+ 生成 tps 中位，逐条标注来源 run id；Ornith 条目就地记
+  先验反转注释）。设计文档纪律的代码化：路由阈值由实测校准，值是测出来的不是
+  配出来的；未评测的 6 个 gemma 大杯条目**无 profile**=路由永不优先选中。
+- **`core/model_router.py`**：确定性选端点。能力过滤（needs ⊆ capabilities，
+  capabilities_of 从 model_capabilities 抽出条目级形态共用实现）→ 画像指标排序
+  （**main 粘滞**：专科须超出 margin 0.05 才切换——切换有真实成本；未画像不做
+  无依据切换；实测分平手看 tps 再看声明序）→ 无解抛 RoutingUnsatisfiable
+  （消费方自行降级，路由器不静默回落——回落=视觉请求落到无视觉模型，症状比
+  报错难查十倍）。词汇表 ROUTE_KINDS（vision_qa/tool_use/longchain/chat/summary）
+  与 PROFILE_METRICS 钉死，kind 拼错响亮 ValueError。**只路由无状态单发**；
+  主循环轮次恒走 main（KV 前缀连续性+审批闸门锚定，铁律 6 方向：云端将来只以
+  顾问单发形态经此进入）。
+- **`core/engine_pool.py`**：端点名 → AgentEngine 懒装配池。RemoteBackend 的
+  base_url 经 kv_config.remote 覆盖注入（后端/引擎签名零改动）+ 注册表条目方言；
+  仅 remote 模式可建追加端点（inprocess 单机单模型=16GB 物理约束响亮拒绝）；
+  **env 个人环境事实恒不传专科引擎**（与沙箱隔离不变量同方向）；装配失败不缓存
+  响亮上抛。app 装配登记 runtime.set_engine_pool，lifespan 收尾 shutdown_extras。
+- **首个消费方**：excel `_visual_qa` 视觉回读（无状态单发的标准形态）——经路由
+  选端点，选路/装配失败 fail-soft 回传入引擎并响亮留痕（回读是增强不是门禁）。
+  当前默认部署（e4b main 有 vision、无追加端点）行为零变化。
+- **HETERO_COMPUTE §10 同步**：10.2 执行侧语义四条由"只约定"转"已实现"；
+  原「声明侧 endpoint: 字段」约定**撤销**——路由由 needs+profile 派生，手声明
+  端点名是第二真相源。
+
+**实机冒烟 ✓**（临时 Qwen3.5@14163 回环实例，用完即收）：模拟 Ornith 当 main
+（text-only）场景，vision_qa 路由离开 main → 池懒装配（qwen35 方言绑定正确、
+base_url 覆盖生效）→ 真图单发答案正确（color_blocks 三色块全对）。冒烟顺带
+验证空 host 拒启护栏（部署自诊断波成果，忘设 INFER_REMOTE_HOST 被正确拦下）。
+
+金测试 612 → **622**（+10：词汇钉死/main 粘滞与 margin/未画像保守/不可满足
+raise/config 画像合法性（键词汇+值域+vision 画像与能力声明一致性）/visual_qa
+接线钉板/池三守卫/runtime 句柄）。
+
+**留生产机**：大档模型画像回填（同批题库）、路由表随 profile 扩充、并发语义
+（T7）、更多消费方（sandbox 子生成按 kind 路由）随云端推理后端波一并考虑。
 
 ---
 

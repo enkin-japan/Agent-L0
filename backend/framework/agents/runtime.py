@@ -81,6 +81,22 @@ def is_ready() -> bool:
     return _ENGINE is not None and _LOOP is not None
 
 
+# ---------- 端点引擎池（混合架构第一波：任务路由执行面） ----------
+# 同一惯例：app 装配阶段登记，沙箱/工具按需取用。None = 未装配（测试/脚本直跑
+# 沙箱），消费方回落已持有的主引擎——路由是增强，不是沙箱可用性的前置条件。
+_ENGINE_POOL = None       # framework.core.engine_pool.EnginePool
+
+
+def set_engine_pool(pool) -> None:
+    """启动时登记端点引擎池（lifespan 内调用，紧随 set_runtime）。"""
+    global _ENGINE_POOL
+    _ENGINE_POOL = pool
+
+
+def get_engine_pool():
+    return _ENGINE_POOL
+
+
 # ---------- Skill 剧本注册表（R2a） ----------
 # 与 _ENGINE/_LOOP 同一惯例：装配阶段登记，工具线程内取用。skill_invoke 是无状态工具，
 # 拿不到 app.state，故经此取剧本。

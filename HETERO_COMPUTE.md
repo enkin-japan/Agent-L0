@@ -872,17 +872,32 @@ KVCache 空串 meta_state 回设非空会炸（"no meta_state but a meta_state w
 - **方言**：`dialects/qwen35/`（ChatML + XML 调用体）覆盖 Qwen3.5 与 Ornith——
   R0 悬空验证收官（两个非 gemma 家族模型经方言层跑通，引擎承重代码零改动）。
   注意：qwen35 无 JSON 约束采样（XML 调用体按设计 fail-open），解析纠错闭环兜底。
+- **任务路由器（2026-07-31 任务路由器波，混合架构第一波）**：
+  `core/model_router.py` 确定性选端点——能力过滤（needs ⊆ capabilities）→ 实测
+  画像排序（注册表条目 `profile` 字段，model_eval 回填，main 粘滞 + margin 0.05
+  显著优势才切换，未画像绝不被优先选中）→ 不可满足抛 RoutingUnsatisfiable
+  （消费方自行降级，路由器不静默回落）。词汇表 ROUTE_KINDS/PROFILE_METRICS
+  金测试钉死。
+- **引擎池**：`core/engine_pool.py` 端点名 → AgentEngine 懒装配（RemoteBackend
+  base_url 经 kv_config.remote 覆盖注入 + 注册表方言，后端/引擎签名零改动；
+  仅 remote 模式可建追加端点，env 个人事实不传专科引擎）。app 装配登记
+  `runtime.set_engine_pool`，lifespan 收尾 `shutdown_extras`。
+  首个消费方：excel `_visual_qa`（无状态视觉单发；选路失败 fail-soft 回 main）。
+  实机冒烟 ✓（2026-07-31：Qwen3.5@14163 临时实例，路由选择→懒装配→真图单发
+  答案正确，用完即收）。
 
-### 10.2 专科调用字段约定（**只约定不实现**——实现随生产机多模型波）
+### 10.2 专科调用语义（原"只约定"，2026-07-31 任务路由器波**已实现**执行侧）
 
-- **工具/沙箱声明侧**：`SandboxSpec` 与工具声明将来新增**可选**字段
-  `endpoint: "<name>"`——引用 `inference.endpoints` 的端点名，缺省 `main`。
-  含义：该沙箱/工具的子生成改在指定端点的模型上跑（如视觉识别 → `vision` 端点）。
-- **执行侧语义**（届时按此实现，不得走样）：
-  ① 端点名解析经 `RemoteBackend.base_url_for`，未声明即响亮失败（同 10.1 口径，
-  不静默回落）；② 专科子生成一律**一次性会话替身**（R1 沙箱形态），个人环境事实
-  `include_env=False` 的隐私门控原样适用——换端点绝不放宽隐私边界；③ 跨模型不共享
-  KV（分词器不同），专科调用以任务粒度整进整出，不做主循环中途换模；④ 路由判定是
-  **确定性代码**（如"输入含图 → 含 vision 能力的端点"），不做模型自选。
+- **执行侧语义四条已按约定落地**（`model_router` + `EnginePool` + `_visual_qa`）：
+  ① 未声明端点响亮失败不回落（pool KeyError / 路由 RoutingUnsatisfiable）；
+  ② 专科子生成一律一次性会话替身（EphemeralSession），个人环境事实不进专科引擎
+  （EnginePool 装配恒 env=None）——换端点绝不放宽隐私边界；③ 跨模型不共享 KV，
+  专科调用以任务粒度整进整出，**主循环轮次恒走 main**（KV 前缀连续性 + 审批闸门
+  锚定；铁律 6 方向：将来云端只以顾问单发形态经此进入）；④ 路由判定是确定性代码
+  （能力 + 实测画像），不做模型自选。
+- **原「声明侧 `endpoint:` 字段」约定撤销**：路由结果由 needs + profile **派生**，
+  手声明端点名会成为第二真相源（模型换了/画像更新了，散落各处的字段名不会跟着改）。
+  消费方只声明任务特征（kind + needs），不点名模型。
 - **调度侧**：多实例的能力声明/并发语义随 T7 并发票在生产机 A1/vLLM 波一并落，
-  开发机不预建。
+  开发机不预建。大档模型画像 + 路由表扩充同波（§10 路由表=注册表 profile 字段，
+  单一真相在 config）。

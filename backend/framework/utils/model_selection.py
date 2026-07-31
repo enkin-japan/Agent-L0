@@ -86,17 +86,25 @@ def resolve_endpoints(inference_cfg: Optional[dict] = None) -> list:
     return endpoints
 
 
+def capabilities_of(entry: Optional[dict]) -> set:
+    """注册表**条目** → 受控能力集合（model_capabilities 的条目级形态）。
+
+    路由器（core/model_router）拿着条目直接调这里——测试注入 cfg 时不经全局
+    config 读取。表外值静默滤除、"text" 恒在：消费方永远拿到非空且词汇受控的集合。
+    """
+    caps = (entry or {}).get("capabilities") or []
+    if not isinstance(caps, (list, tuple)):
+        caps = []
+    return {c for c in caps if c in KNOWN_CAPABILITIES} | {"text"}
+
+
 def model_capabilities(repo: Optional[str]) -> set:
     """按 repo 取注册表声明的模态能力集合；表外/未声明回落 {"text"}（最保守）。
 
     多模型协作的确定性路由消费面（接口准备②）：如「输入含图像 → 只在含 vision 的
-    档位里选」。值域钉死 KNOWN_CAPABILITIES（金测试校验 config 声明合法），表外值
-    静默滤除、"text" 恒在——路由代码永远拿到非空且词汇受控的集合。
+    档位里选」。值域钉死 KNOWN_CAPABILITIES（金测试校验 config 声明合法）。
     """
-    caps = model_options(repo).get("capabilities") or []
-    if not isinstance(caps, (list, tuple)):
-        caps = []
-    return {c for c in caps if c in KNOWN_CAPABILITIES} | {"text"}
+    return capabilities_of(model_options(repo))
 
 
 def model_options(repo: Optional[str]) -> dict:

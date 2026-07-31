@@ -247,14 +247,31 @@ def _trim_report(report: dict) -> dict:
 
 
 async def _visual_qa(engine, pages: List[str], max_pages: int = 2) -> str:
-    """一次性单发视觉回读：每页一个全新 mini 会话（不污染主沙箱 KV）。"""
+    """一次性单发视觉回读：每页一个全新 mini 会话（不污染主沙箱 KV）。
+
+    视觉回读是**无状态单发**——经 model_router 按实测画像路由（主模型无 vision
+    或专科显著更优时改走专科端点引擎）；选路/装配任何失败都 fail-soft 回传入
+    引擎并响亮留痕（回读是增强不是门禁，caller 已兜 unavailable）。
+    """
+    qa_engine = engine
+    try:
+        from ..core.model_router import select_endpoint
+        from .runtime import get_engine_pool
+        pool = get_engine_pool()
+        if pool is not None:
+            name = select_endpoint("vision_qa", needs=("vision",))
+            if name != "main":
+                qa_engine = await pool.engine_for(name)
+                print(f"🔀 [excel] 视觉回读路由 → 专科端点 {name!r}")
+    except Exception as e:
+        print(f"⚠️ [excel] 视觉回读路由失败，回落主引擎: {e}")
     findings = []
     for i, png in enumerate(pages[:max_pages]):
         qa = EphemeralSession(
-            engine.backend, _VISUAL_QA_SYSTEM,
+            qa_engine.backend, _VISUAL_QA_SYSTEM,
             f"Rendered page {i + 1} of the workbook you produced. Inspect it.",
             images=[png])
-        r = await engine.generate_once(qa, tools=None, temperature=0.1, max_tokens=300)
+        r = await qa_engine.generate_once(qa, tools=None, temperature=0.1, max_tokens=300)
         text = (r.get("text") or "").strip()
         if text and text.upper() != "PASS":
             findings.append(f"page {i + 1}: {text}")

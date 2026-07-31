@@ -67,11 +67,16 @@ inference:
     # capabilities：模态能力清单（值域 text/vision/audio，按各仓 config.json 的
     # vision_config/audio_config 实测填写，不按家族猜——e4b 有音频编码器、26b/31b 无）。
     # 供确定性路由（多模型协作接口准备②）经 model_capabilities() 读取；text 必含。
+    # profile：model_eval 实测画像（benchmarks/model_eval/PROFILES.md 回填；口径 =
+    # 通过率（含纠错与终答整合）与生成 tps 中位）。core/model_router 消费：main 粘滞，
+    # 专科指标须显著超出（margin 0.05）才切换；**未画像条目绝不被优先选中**。
+    # 勿手改——重跑 model_eval 后按新 run 回填（值是测出来的，不是配出来的）。
     # e4b 新版对齐的前提：升级 mlx-vlm 并复验 backends/mlx/patch/（铁律 1 手术，单独成波）。
     - repo: "mlx-community/gemma-4-e4b-it-4bit"
       revision: "deb1db712068b1c9f83fb1c97f08c1204b9459a1"
       dialect: "gemma4"
       capabilities: ["text", "vision", "audio"]
+      profile: { tool_call: 0.88, longchain: 0.83, vision: 1.00, tps: 30.8 }  # run 20260730-192308
       note: "5.2GB | 实机验证 ✓（默认）"
     - repo: "mlx-community/gemma-4-e4b-it-8bit"
       revision: "d8a1725bb38924b597ed9a3b9f29b4e582187e81"
@@ -126,6 +131,7 @@ inference:
       revision: "8b2b98c00a6b4d291155e4890773ca8f769aee53"
       dialect: "qwen35"
       capabilities: ["text", "vision"]
+      profile: { tool_call: 1.00, longchain: 1.00, vision: 1.00, tps: 20.1 }  # run 20260730-183929
       note: "6.0GB | 实机联调 ✓（2026-07-29：引擎两轮工具闭环 + 14163 双实例并存冒烟）| 视觉专科候选"
     - repo: "mlx-community/Ornith-1.0-9B-4bit"
       revision: "1e980b9742a9e554a4d57e90b4c597811fb2fc4e"
@@ -139,6 +145,9 @@ inference:
       # path_resolver 在模型落盘后声明式应用（幂等、响亮日志、可跨机复现）。
       local_config_fixups:
         "vision_config.model_type": "qwen3_5"
+      # 画像先验反转（model_eval 2026-07-30）："长链强"指长链**思考**不指工具编排
+      # （longchain 0.67 且复读 26 次）——路由不应把多步工具任务派给它
+      profile: { tool_call: 0.84, longchain: 0.67, tps: 20.8 }  # run 20260730-190443；无 vision
       note: "6.0GB | 实机联调 ✓（2026-07-29：fixup 后 0.5.0 加载，两轮工具闭环）| 长链推理专科候选"
 
   audio_max_length: 29
