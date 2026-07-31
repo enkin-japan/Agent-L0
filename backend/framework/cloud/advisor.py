@@ -152,11 +152,13 @@ def _call_anthropic(p: dict, payload_text: str, max_tokens: int, timeout: float,
 
 def consult(question: str, context: str = "", provider: Optional[str] = None,
             purpose: str = "consult", cfg: Optional[dict] = None,
-            transport=None) -> dict:
+            transport=None, sanitize_summary: Optional[dict] = None) -> dict:
     """一次云端顾问单发。返回 {text, provider, model, in_tokens, out_tokens, cost_usd}。
 
-    出网的 payload 恰为 question(+context) 逐字拼接——审批卡上看到什么，出去的就是
-    什么，没有暗附加。预算护栏：今日累计费用达 daily_budget_usd 即拒绝（先查后发）。
+    出网的 payload 恰为 question(+context) 逐字拼接，无暗附加——脱敏发生在调用方
+    （cloud_consult 经 egress_guard），本函数只发不改；sanitize_summary 是调用方
+    交来的脱敏报告，无条件随台账落账（铁律 6 出网日志：出了什么、遮了什么，同行
+    可查）。预算护栏：今日累计费用达 daily_budget_usd 即拒绝（先查后发）。
     """
     cloud = cfg if cfg is not None else load_section("cloud")
     p = pick_provider(provider, cfg=cloud)
@@ -173,17 +175,16 @@ def consult(question: str, context: str = "", provider: Optional[str] = None,
         import requests as transport  # noqa: PLC0415 —— 生产走 requests，测试注入假体
     call = _call_anthropic if p["kind"] == "anthropic" else _call_openai_compat
     ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+    base = {"ts": ts, "provider": p["name"], "model": p["model"], "purpose": purpose,
+            "payload_chars": len(payload_text),
+            **({"sanitize": sanitize_summary} if sanitize_summary else {})}
     try:
         out = call(p, payload_text, max_tokens, timeout, transport)
     except Exception as e:
-        record_egress({"ts": ts, "provider": p["name"], "model": p["model"],
-                       "purpose": purpose, "payload_chars": len(payload_text),
-                       "ok": False, "error": str(e)[:300], "cost_usd": 0.0})
+        record_egress({**base, "ok": False, "error": str(e)[:300], "cost_usd": 0.0})
         raise
     cost = _cost(p, out["in_tokens"], out["out_tokens"])
-    record_egress({"ts": ts, "provider": p["name"], "model": p["model"],
-                   "purpose": purpose, "payload_chars": len(payload_text),
-                   "in_tokens": out["in_tokens"], "out_tokens": out["out_tokens"],
+    record_egress({**base, "in_tokens": out["in_tokens"], "out_tokens": out["out_tokens"],
                    "cost_usd": round(cost, 6), "ok": True})
     return {"text": out["text"], "provider": p["name"], "model": p["model"],
             "in_tokens": out["in_tokens"], "out_tokens": out["out_tokens"],

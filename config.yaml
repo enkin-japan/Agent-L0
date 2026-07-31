@@ -471,10 +471,10 @@ agent:
   sediment_to_rag: true         # 关闭则只压缩不沉淀（被折叠内容仅留摘要，不可召回细节）
 
 
-# 云端顾问（混合架构第 2 站；CHARTER 铁律 6：云端只顾问不执行）。cloud_consult 工具把
-# question+context **逐字**发给所选供应商、取回纯文本建议；落地动作永远由本地模型走
-# 既有审批闸门。出网前须用户审批（L0 出网守卫落地前，审批卡=脱敏检查点）；每次出网
-# 无条件记 DATA_DIR/cloud/egress.jsonl 台账（铁律 6 出网日志雏形 + 费用累计）。
+# 云端顾问（混合架构第 2/3 站；CHARTER 铁律 6：云端只顾问不执行）。cloud_consult 工具把
+# question+context 经 **L0 出网守卫脱敏后**发给所选供应商、取回纯文本建议并本地回填
+# 占位符；落地动作永远由本地模型走既有审批闸门。出网前人工审批按 require_approval 旋钮；
+# 每次出网无条件记 DATA_DIR/cloud/egress.jsonl 台账（铁律 6 出网日志 + 脱敏报告 + 费用）。
 # 密钥一律 .env.local 环境变量（本文件只存 key_env 变量名，内联密钥字段会被拒启）。
 # providers 为空或全部无 key = 工具不注册（离线纯本地形态零变化）。kind 只有两种：
 #   openai_compat  OpenAI 及一切兼容面（DeepSeek/OpenRouter/国产托管/自建 vLLM——换
@@ -487,6 +487,13 @@ cloud:
   daily_budget_usd: 2.0        # 出网日预算（美元）：台账累计达此值当日拒绝出网；0=不设限
   max_tokens: 2048             # 单次顾问回复上限
   timeout: 120                 # 单次调用 HTTP 超时（秒）；须 < agent.tool_timeout_seconds
+  # ── L0 出网守卫（铁律 6 第 2 条）：payload 出网前脱敏，建议返回后本地回填 ──
+  # 规则腿（email/电话/IP/密钥/卡号 Luhn）**无条件恒开**；模型腿抓语境标识（人名/
+  # 住址/雇主），独立上下文单发、失败降级为规则腿结果并在台账显式标注。
+  require_approval: true       # 出网前人工审批（审批卡=脱敏前原文）。L0 试运行期恒
+                               # true；信任建立后可关——关的是人工闸，脱敏与台账仍恒开
+  sanitize_model: true         # L0 模型腿开关（false=纯规则脱敏，语境标识靠人工审批把关）
+  sanitize_timeout: 45         # 模型腿单发熔断（秒）：超时=规则腿结果 + unavailable 标注
   providers:                   # 声明序 = 缺省选择序（第一个配了 key 的当默认）
     - name: "openai"
       kind: "openai_compat"
