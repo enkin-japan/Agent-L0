@@ -76,3 +76,5 @@ backend/static/
 
 /.keys/
 MacAgent.docx
+personal-agent-data-architecture.md
+local_agent_architecture.md
