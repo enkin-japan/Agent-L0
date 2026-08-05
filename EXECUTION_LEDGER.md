@@ -56,6 +56,10 @@
 > 上下文，抗注入=只认逐字在场串，本地回填）+ 审批旋钮 + l0_eval 评测集三模型基线
 > （e4b 0.60 最佳/零过遮/9B 档不足以放宽人工闸——诚实结论，require_approval 恒 true），
 > 金测试 643。**混合架构三站全落地**；真 key 联调+场景标定+L0 大档重测=生产机清单。
+> 🟢 **2026-08-05：OfficeCLI·Word 生成波 ✅（三波之 1）**——第三方 OfficeCLI（brew 钉版
+> 1.0.143，禁更新/禁常驻）填 docx 生成空白：md→batch 纯函数 + 三重门禁（batch 原子/
+> validate/markitdown 独立读回交叉校验）+ write_document 工具（模型面只见 markdown）。
+> 9B 真管线实测一发命中，架构侧零回滚项，金测试 655。下一波=deck→pptx。
 
 ---
 
@@ -2500,6 +2504,47 @@ e4b 是最好的脱敏器（专科能力必须实测，Ornith 教训同款）。
 提交信息误记 643，此处为准）。
 **留生产机**：L0 大档重测 / NER 特化小模型备选 / 占位符语义保持度维度（真 key
 后按云端建议实际质量补）/ 题库随出网台账真实 badcase 扩充。
+
+---
+
+### OfficeCLI 集成 · Word 生成波（2026-08-05，三波之 1）
+
+**背景**：用户评估第三方开源 OfficeCLI（iOfficeAI，非微软；Apache 2.0，.NET 单二进制，
+brew 钉版 1.0.143）能否代替/优化 Office 文件生成。评估结论：架构资产（沙箱门禁/
+槽位规格）不可代替，底盘可优化+两个空白可填。用户拍板：三波全做全实测，坏结果按
+"模型 vs 架构"归因——架构问题回滚，模型智力问题记生产机清单（D1）。
+
+**装机纪律**：brew 装 1.0.143 后立即 `config autoUpdate false`；包装层子进程环境
+恒钉 `OFFICECLI_SKIP_UPDATE=1`（出网红线纵深）+ `OFFICECLI_NO_AUTO_RESIDENT=1`
+（禁常驻：一次调用一进程、退出即落盘——"其他工具读到旧文件"结构性不存在；构建走
+batch 单趟，常驻性能收益本就用不上）。装机冒烟三格式 create/公式即算/screenshot/
+validate/close 全过；确认未静默注入 skill 文件。
+
+**Word 生成 = 纯空白填补**（此前 docx 只有摄入读取、零生成路径）：
+- `framework/office/officecli.py`：二进制包装（PATH→brew 前缀查找，soffice 同教训；
+  batch 走临时文件免 argv/转义面；结构化错误上抛）。
+- `framework/office/md_docx.py`：markdown 子集→batch 指令纯函数（标题→Heading1..4
+  样式、嵌套列表→listStyle+numLevel、GFM 表→逐格 set+表头底色、行内混排→run 序列、
+  围栏代码等宽保缩进、引用/分隔线/本地图片；缺图降级可见占位+warning 不炸整文档）
+  + write_docx 三重门禁：officecli batch 原子（任一条失败整文件回滚，绝无半成品）→
+  OpenXML validate → **markitdown 独立读回交叉校验**（写用 officecli、读用摄入侧
+  独立实现，防同引擎自证；归一化两侧同规则剥 markdown 记号——首跑即被门禁拦下的
+  真教训：markitdown 忠实还原 `**粗**`/`[链接](url)` 记号，83%<90% 阈值，修比对器
+  而非放宽阈值）。任一门禁失败删产物再抛错。
+- `mcp/tools/doc_write.py`：write_document 第 56 个工具类（模型面只见 markdown——
+  deck 槽位同哲学，小模型不摆版式；产物 asset_filename slug 化走 assets 白名单出货；
+  二进制缺失 is_available=False 不注册、rescan 热补；免审批=只写会话目录不出网）。
+
+**实测（真管线剧本）**：临时拉起 gpu+rag+backend，POST /chat 让 9B 主模型做《周例会
+纪要》——**一发命中**：自主选用 write_document、表格呈现行动项、分级标题/列表/表头
+底色全生效、门禁通过、链接如实转发。渲染目检排版专业。唯一瑕疵：表格两格蹦英文
+（This Friday/Next Monday）=模型措辞习惯，模型侧非事故，不阻塞。归因判定：**架构侧
+全绿，无回滚项**。
+
+金测试 642 → **655**（+13：转换确定性/诚实降级/门禁形状/落盘纪律/工具面/live 全链，
+live 用例二进制缺失自动 skip）。
+**边界如实**：markdown 子集外的语法按普通段落处理不丢字；图片仅本地文件（不取网络）；
+docx 无 TOC/页眉脚/多栏（要用再扩）。下一波=deck→pptx 可编辑交付。
 
 ---
 
