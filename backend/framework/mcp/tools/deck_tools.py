@@ -193,6 +193,48 @@ class DeckExportPdfTool(BaseTool):
                 f"download it:\n[deck PDF]({url})")
 
 
+class DeckExportPptxTool(BaseTool):
+    name = "deck_export_pptx"
+    description = (
+        "Export the session deck as an EDITABLE PowerPoint file (.pptx) the user can open and "
+        "modify in PowerPoint/Keynote. Layout is a close approximation of the preview (minor "
+        "styling differences are expected — the PDF export matches the preview exactly; this "
+        "one is for editing). Returns a markdown link — include it in your reply. Requires the "
+        "deck to have at least one slide."
+    )
+    requires_approval = False   # 只读 deck + 写本会话 assets；无外发、无系统副作用
+    is_concurrency_safe = False  # 与 deck 写操作串行
+    parameters = {"properties": {}, "required": []}
+
+    def is_available(self) -> bool:
+        from ...office.officecli import find_officecli
+        if find_officecli() is None:
+            print("[MCP-deck_export_pptx] ℹ️ officecli 未安装，工具不注册；装上后热重扫自动补上。")
+            return False
+        return True
+
+    def execute(self) -> str:
+        from ...ppt import pptx_export
+        session, err = _session_or_error()
+        if err:
+            return err
+        ok, result, stats = pptx_export.export_pptx(session.session_id, session.session_dir)
+        if not ok:
+            return f"System Error: {result}"
+        url = f"/api/v1/files/{session.session_id}/assets/{result}"
+        note = ""
+        if stats and (stats["placeholders"] or stats["warnings"]):
+            bits = []
+            if stats["placeholders"]:
+                bits.append(f"{stats['placeholders']} visual(s) exported as styled placeholders "
+                            "(images render on the production setup)")
+            bits.extend(stats["warnings"])
+            note = "\nNote (tell the user honestly): " + "; ".join(bits)
+        return (f"Editable PowerPoint exported ({stats['slides']} slides, validated). Include "
+                f"this markdown link in your reply so the user can download it:\n"
+                f"[deck PPTX]({url}){note}")
+
+
 class DeckStatusTool(BaseTool):
     name = "deck_status"
     description = (

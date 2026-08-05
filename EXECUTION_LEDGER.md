@@ -60,6 +60,10 @@
 > 1.0.143，禁更新/禁常驻）填 docx 生成空白：md→batch 纯函数 + 三重门禁（batch 原子/
 > validate/markitdown 独立读回交叉校验）+ write_document 工具（模型面只见 markdown）。
 > 9B 真管线实测一发命中，架构侧零回滚项，金测试 655。下一波=deck→pptx。
+> 🟢 **2026-08-05：OfficeCLI·deck→pptx 交付波 ✅（三波之 2）**——pptx_export 第二投影
+> （栅格→英寸/tokens 派生字风/chart 嵌真 PNG/占位诚实/icon 如实跳过），分工定死：
+> PDF=预览真身、pptx=可编辑近似（写进工具描述）；9B 实测三页全对自主导出，
+> 金测试 664。下一波=Excel 底盘基准。
 
 ---
 
@@ -2545,6 +2549,34 @@ validate/close 全过；确认未静默注入 skill 文件。
 live 用例二进制缺失自动 skip）。
 **边界如实**：markdown 子集外的语法按普通段落处理不丢字；图片仅本地文件（不取网络）；
 docx 无 TOC/页眉脚/多栏（要用再扩）。下一波=deck→pptx 可编辑交付。
+
+---
+
+### OfficeCLI 集成 · deck→pptx 交付波（2026-08-05，三波之 2）
+
+**空白填补**：deck 此前唯一交付格式是 PDF（无头 Chrome 打前端 SlideCanvas，
+预览即所得），用户拿不到可继续编辑的真 PPT。本波补上：`framework/ppt/
+pptx_export.py`（deck.json → officecli batch → .pptx）。
+
+**投影分工（架构张力的正面处置）**：既有原则"渲染器全程只有一份"——pptx 是 deck
+spec 的**第二投影**，与前端排版引擎不同、细节必有漂移。分工定死并写进工具描述：
+**PDF=预览即所得真身，pptx=可编辑近似交付**；占位/缺资产必须进回执 Note，绝不
+谎称与预览一致。两投影读同一份 deck.json 单一真相，未动前端渲染器分毫。
+
+**确定性展开**：12×12 栅格→16:9 英寸绝对坐标；角色字号/颜色/字体族由 THEMES
+tokens 派生（warm 的 Georgia 标题等）；bullets→逐段 list=bullet（字号颜色显式钉，
+不吃默认值）；chart 块嵌 visual_router 已渲染 PNG；image/缺资产→风格化占位（与
+前端同语义）；icon（lucide 前端原生渲染无位图）如实跳过入 stats；notes 随页。
+门禁同 Word 波：batch 原子 + validate，失败删产物。首版目检修一处：body/bullets
+默认垂直居中 → 钉 valign=top（金测试锚定）。
+
+**实测（真管线剧本）**：9B 主模型三页《新员工入职指南》——layout 三选全对
+（title/bullets/quote）、自主调 deck_export_pptx、validate 过、链接交付、渲染
+目检三页全正确。瑕疵：落款被塞进 quote 正文而非 attribution 槽（模型措辞习惯，
+页面仍正确）=模型侧，不阻塞。归因判定：**架构侧全绿，无回滚项**。
+
+金测试 655 → **664**（+9：投影确定性/主题派生/占位诚实/门禁/工具面/live 全链）。
+下一波=Excel 底盘实测（基准先行，不动 LibreOffice 门禁）。
 
 ---
 
