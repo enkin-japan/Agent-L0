@@ -2618,6 +2618,28 @@ gpu/rag/backend 已收（用完即收），测试会话已清。
 
 ---
 
+### Colab CUDA 兼容波 · 布置阶段（2026-08-06，进行中）
+
+**用户拍板的路线**：生产机到位前，先用 Colab A100 80GB 完善推理端 CUDA 兼容并
+打通整套 Agent 流程，生产机上只剩验证与 debug。形态=Colab 当"设备 A"（backend/
+RAG 留本机，remote 分离部署拨 Colab 的 tailnet 地址）；Drive 当跨会话持久层
+（代码 tar/bundle + bf16 模型原件 + pip 缓存），tailscale userspace + ephemeral
+key 打洞供直接操作。可行性评估已交（Drive FUSE 小文件坑→tar 中转、Colab ToS
+风险已明示、量化口径=A100 无原生 FP8 但 vLLM Marlin weight-only 可在线量化故
+存 bf16 原件无悔）。
+
+**已落地**：`colab/stage_to_drive.sh`（一次性布置：4 主模型 + 10 向量/重排 bf16
+原件 ~350GB + 可选代码 bundle 入 Drive；逐模型 .complete 断点续传、本地盘中转
+绕 FUSE 慢写与符号链接坑、本地盘余量守卫、gated/私库缺凭据跳过不炸、密钥只经
+Drive env 文件）+ `colab/README.md`（Drive 布局/前置动作/量化口径）。
+
+**待做**：①用户侧：HF 接受 gemma 许可 + colab.env（HF_TOKEN、可选 GIT_TOKEN、
+后续 TS_AUTHKEY）+ 首跑 stage 脚本；②bootstrap.sh（tailscale 入网→解包→依赖→
+拉起→契约测试，目标冷启 <10min）；③CUDA 推理端本体（vLLM 包壳出 inference/
+server.py 同协议）；④契约测试扩充；⑤sync_to_colab.sh 本地同步脚本。
+
+---
+
 ## §5 待决（开工前需拍板）
 
 | | 问题 | 阻塞谁 |
