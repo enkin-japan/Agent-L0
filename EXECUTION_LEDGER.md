@@ -2665,6 +2665,18 @@ server.py 同协议）；④契约测试扩充；⑤sync_to_colab.sh 本地同�
 金测试 666 → **674**（+8：导入安全/协议形状/记账语义/适配器纯逻辑×2/配置面/
 env 覆盖锚点）。剩余=用户跑 stage/配 colab.env，然后 A100 会话实测联调。
 
+**布置收官（2026-08-06 第三段）：14/14 模型 325G 全部入 Drive**。过程踩坑全记：
+①Tailscale 打通后远程操作 Colab 成为常态（用户免费档入网点授权，其余全远程）；
+②「本地中转+rsync」在 Colab 是 2× 本地盘占用（DriveFS 写缓存也落本地盘），
+108G 免费档盘对 62G 大件必死——stage 脚本已改直下+排空闸门（64848b0）；
+③HF Xet 高性能通道是内存杀手：Colab 免费档（13GB）下 16G 模型被 OOM 杀，
+开发机 16GB 下 35B 档把 swap 顶到 24GB 全红——禁 Xet（HF_HUB_DISABLE_XET=1）
+立愈，两侧实证；④大件改走本地家宽（3-4Gbps）下载 + rclone 上传（~60MB/s），
+比 Colab FUSE 直下快数倍；⑤本地灌大权重必挂 .noindex 后缀防 Spotlight 索引
+风暴（mds_stores 160% CPU 案）；⑥pkill -f 自匹配三连击（命令串含目标名先杀
+自己）——远程杀进程一律 pidfile 或 pgrep -qf '模式[断]字'。
+下一步=Pro/Pro+ 订阅后 A100 首跑 bootstrap（联调正式开工）。
+
 ---
 
 ## §5 待决（开工前需拍板）
