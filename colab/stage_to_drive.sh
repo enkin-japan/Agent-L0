@@ -12,9 +12,12 @@
 # 设计：
 #  · 可重入/断点续传——每个模型完成后在 Drive 打 .complete 标记，重跑自动跳过；
 #    会话中断（Colab 时限）后下次接着跑即可。
-#  · 中转走 Colab 本地盘 /content（快、支持符号链接），逐模型 rsync 进 Drive 后
-#    即删中转——绕开 Drive FUSE 直写慢与 HF 缓存符号链接两个坑。
-#  · 逐模型下载前检查本地盘余量（最大单模型 ~70GB，Colab 盘 ~200GB 够用）。
+#  · 模型一律**直下 Drive 路径**（hf --local-dir 指向 Drive）。2026-08-06 实测教训：
+#    「本地中转 + rsync 进 Drive」在 Colab 上是 2× 本地盘占用——DriveFS 的**写缓存
+#    也落在本地盘**，62GB 大件 = 62G 中转 + 62G 缓存，108G 免费档盘必死（31B 首跑
+#    即 rsync 中途盘满，当时误判为 Drive 配额）。直下=只占缓存一份（1×）。
+#  · 逐模型前置**缓存排空闸门**：DriveFS 上传排空前本地盘持续被占，大件等
+#    ≥80G、小件等 ≥20G 可用再动手（上限 2h，超时跳过该件如实上报）。
 #  · 密钥只经 Drive env 文件，绝不出现在本脚本/仓库/对话里。
 set -uo pipefail
 
@@ -59,7 +62,7 @@ fi
 
 note "安装 huggingface_hub（含 hf_transfer 加速）"
 pip -q install -U "huggingface_hub[cli,hf_transfer]" >/dev/null
-export HF_HUB_ENABLE_HF_TRANSFER=1
+export HF_XET_HIGH_PERFORMANCE=1   # hf_transfer 已废弃，Xet 高速通道是现名
 HF=hf; command -v hf >/dev/null 2>&1 || HF=huggingface-cli
 
 # ---- 代码入库（仓库现为公开=匿名拉取；GIT_TOKEN 有则用，转回私库时无缝） ----
@@ -90,42 +93,33 @@ fi
 stage_model() {
   local repo="$1" tag="$2"
   local safe="${repo//\//__}"
-  local dst="$ROOT/models/$safe" tmp="$WORK/$safe"
+  local dst="$ROOT/models/$safe"
   if [ -f "$dst/.complete" ]; then
     echo "⏭  $repo 已在库（$(du -sh "$dst" 2>/dev/null | cut -f1)）"
     return 0
   fi
-  # 免费档本地盘仅 ~100GB：安全线 75GB；不够则清中转再试；仍不够走 Drive 直下兜底
-  local avail_gb
-  avail_gb=$(df --output=avail -BG /content | tail -1 | tr -dc '0-9')
-  if [ "${avail_gb:-0}" -lt 75 ]; then
-    warn "$repo 前本地盘仅剩 ${avail_gb}GB（<75GB 安全线）——清理中转重测"
-    rm -rf "$WORK"/*; avail_gb=$(df --output=avail -BG /content | tail -1 | tr -dc '0-9')
-  fi
-  if [ "${avail_gb:-0}" -lt 75 ]; then
-    note "本地盘不足，$repo 直下 Drive（慢路兜底，FUSE 直写）"
-    if $HF download "$repo" --local-dir "$dst" --quiet; then
-      rm -rf "$dst/.cache"; touch "$dst/.complete"
-      echo "✅ $repo（直下，$(du -sh "$dst" | cut -f1)）"
-    else
-      warn "$repo 直下失败——跳过继续"; fail=1; return 1
+  # 缓存排空闸门：DriveFS 写缓存占本地盘，排空前动手会把盘挤死（2026-08-06 案）。
+  # 大件（main 档 bf16 50-70G）等 ≥80G，小件等 ≥20G；上限 2h，超时跳过如实上报。
+  local need=20 avail_gb waited=0
+  [ "$tag" = "main" ] && need=80
+  while :; do
+    avail_gb=$(df --output=avail -BG /content | tail -1 | tr -dc '0-9')
+    [ "${avail_gb:-0}" -ge "$need" ] && break
+    if [ "$waited" -ge 7200 ]; then
+      warn "$repo 等 DriveFS 缓存排空超 2h（仅 ${avail_gb}G，需 ${need}G）——跳过"
+      fail=1; return 1
     fi
-    return 0
-  fi
-  note "下载 $repo（$tag）→ 本地中转"
-  if ! $HF download "$repo" --local-dir "$tmp" --quiet; then
-    # 保留中转不删：同会话内重跑可续传已下载分片（会话死亡本地盘自清）
-    warn "$repo 下载失败（gated 未接受许可？仓库名有误？网络抖动？）——跳过继续"
-    fail=1; return 1
-  fi
-  note "转存 $repo → Drive"
-  mkdir -p "$dst"
-  if rsync -a --info=progress2 --exclude='.cache' "$tmp/" "$dst/"; then
-    touch "$dst/.complete"
+    [ "$waited" -eq 0 ] && echo "⏳ $repo 等缓存排空（${avail_gb}G/${need}G）…"
+    sleep 30; waited=$((waited + 30))
+  done
+  note "直下 $repo（$tag）→ Drive"
+  if $HF download "$repo" --local-dir "$dst" --quiet; then
+    rm -rf "$dst/.cache"; touch "$dst/.complete"
     echo "✅ $repo（$(du -sh "$dst" | cut -f1)）"
-    rm -rf "$tmp"
   else
-    warn "$repo 转存 Drive 失败（Drive 配额满？）——中转保留，重跑续传"; fail=1
+    # 半成品留在 dst：hf --local-dir 自身可断点续传，重跑本脚本即续
+    warn "$repo 下载失败（gated 未接受许可？网络抖动？重跑即续传）——跳过继续"
+    fail=1; return 1
   fi
 }
 
