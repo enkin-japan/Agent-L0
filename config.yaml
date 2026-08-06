@@ -162,23 +162,28 @@ inference:
       profile: { tool_call: 0.84, longchain: 0.67, tps: 20.8 }  # run 20260730-190443；无 vision
       note: "6.0GB | 实机联调 ✓（2026-07-29：fixup 后 0.5.0 加载，两轮工具闭环）| 长链推理专科候选"
     # ── CUDA 档（bf16 原件，backend: cuda / Colab A100 联调；2026-08-06 用户指定）──
-    # revision 未钉死：Colab 首拉实测后回填（凡常驻均应钉死的纪律不变）。
+    # revision 已钉死（2026-08-06 HF API 主干 SHA；四仓 lastModified 均早于入库日，
+    # 与 Drive 权重一致——凡常驻均应钉死的纪律）。
     # capabilities 按 mlx 同家族口径预填；Qwen3.6 方言按 qwen35 预注册（ChatML 同系，
     # 联调首项即验证模板/标记兼容，不兼容则新增 dialects/<name>/ 再改此声明）。
     # 无 profile = 路由绝不优先选中（未画像纪律）。
     - repo: "google/gemma-4-31B-it"
+      revision: "842da3794eaa0b77d5f08bae87a17459d91ff475"
       dialect: "gemma4"
       capabilities: ["text", "vision"]
-      note: "bf16 ~62GB | CUDA 档主模型候选 | Colab 联调待验"
+      note: "bf16 ~62GB | CUDA 档主模型候选 | A100 联调 ✓（2026-08-06：契约 19/19，fp8 gen_tps 41.9 / VRAM 76G）"
     - repo: "google/gemma-4-26B-A4B-it"
+      revision: "4d7ae4984b7db7de8f8457170b3f1a419ee76d52"
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       note: "bf16 ~52GB MoE | CUDA 档 | Colab 联调待验"
     - repo: "Qwen/Qwen3.6-35B-A3B"
+      revision: "995ad96eacd98c81ed38be0c5b274b04031597b0"
       dialect: "qwen35"
       capabilities: ["text"]
       note: "bf16 ~70GB MoE | CUDA 档 | 方言兼容性=联调首验项"
     - repo: "ornith-ai/Ornith-1.0-35B"
+      revision: "5df2ed3f675c7beaa490328cc70bb573b65fb660"
       dialect: "qwen35"
       capabilities: ["text"]
       note: "bf16 ~70GB | CUDA 档 | 9B 档画像先验（长链思考强/编排弱）大档待重测"

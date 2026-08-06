@@ -120,7 +120,18 @@ du -sh "$DST"
 
 # ── ⑤ 拉起推理服务 → 探活 → 契约测试 ──
 note "⑤ inference-server (backend=cuda, :$PORT)"
-pkill -f "inference/server.py" 2>/dev/null; sleep 1
+# 换代必须把整棵进程树清干净：vLLM EngineCore 是独立子进程（cmdline 不含
+# server.py 模式），只杀父进程会留下抱着全部显存的孤儿——26B 起测时 free 仅
+# 4.65G 即此案。杀完等 nvidia-smi 计算进程清零，残留者 -9 兜底。
+pkill -f "inference/server.py" 2>/dev/null
+pkill -f "VLLM::EngineCore" 2>/dev/null
+for i in $(seq 1 30); do
+  busy=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -c '[0-9]')
+  [ "${busy:-0}" -eq 0 ] && break
+  sleep 2
+done
+nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | xargs -r kill -9 2>/dev/null
+sleep 2
 cd "$APP/backend"
 # 绑回环：userspace tailscale 会把 tailnet 入站转发到本机端口，护栏口径最稳
 INFER_REMOTE_HOST=127.0.0.1 INFER_PORT="$PORT" INFER_MODEL_REPO="$MODEL_REPO" \

@@ -2698,6 +2698,27 @@ INFER_API_KEY 经管道从本机 .env.local 同步 colab.env（不经对话）�
 "迁移安装+复跑契约与金剧本，约半天到两天"。省点数纪律：0.6-4B 档评测走免费
 T4，本地能做的不上 A100。
 
+**CUDA 联调波·第 2 站 ✅（2026-08-06/07）：四模型契约全过 + revision 钉死 +
+qwen35 方言转正**——逐个起测全部 19/19：31B fp8（672/41.9，76.0G）、26B-A4B
+fp8 MoE（392/**149.5**，75.2G）、Qwen3.6-35B-A3B fp8（202/**138.7**，73.8G）、
+Ornith-1.0-35B fp8（200/**141.4**，73.8G）（prompt_tps/gen_tps，VRAM；128tok 探针）。
+判明：**Ornith 实为 qwen3_5_moe（256 专家激活 8）非稠密**——四模型仅 31B 稠密，
+三 MoE 生成全在 138-150 档、稠密 41.9，MoE 速度红利 ~3.4×。qwen35 方言预注册
+转正（facade chat/completions + 中日文问答内容正确，ChatML 模板/解析链成立）；
+vLLM 直接接受 Ornith config.json（MLX 侧 qwen3_5_vision fixup 案在 CUDA 侧无需
+重演）。revision 四仓钉死进 config（HF API 主干 SHA，lastModified 均早于入库日；
+`.download_complete` revision:null 走"任一未指定即命中"不冲突）。
+本站新坑（累计自匹配案升至 5）：①看门狗退勤条件 `pgrep -f bootstrap.sh` 自匹配
+→ 永判存活（第 4 案，方括号模式修）；②**换代杀进程树不完整**——pkill 只杀 server
+父进程，vLLM EngineCore 独立子进程孤儿化抱 76G 显存致 26B 拒启（free 4.65G）→
+bootstrap 改为父+EngineCore 双杀+等 nvidia-smi 清零+残留 -9 兜底；③方括号技巧
+边界：同一 bash -c 里 pgrep 模式与 nohup 明文并存时明文仍被匹配（第 5 案，pidfile
+分独立 ssh 写）；④**Colab 判闲回收实证**：qwen35 rsync 纯 IO 阶段（26B server 常驻
+但 GPU 零计算）运行时被回收，全新 VM /content 全失、Drive 无损、全量 bootstrap
+重跑续命——常驻≠防判闲。用户新规：闲时挂 `colab/gpu_keepalive.py`（30s 一次 16MB
+matmul 心跳，pidfile 管理），重活前停（已入持久记忆）。
+下一站=工具段约束实测（TorchGuardAdapter 真机）+ edge 拨号整套剧本。
+
 ---
 
 ## §5 待决（开工前需拍板）
