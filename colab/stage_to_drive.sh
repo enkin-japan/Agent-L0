@@ -62,11 +62,16 @@ pip -q install -U "huggingface_hub[cli,hf_transfer]" >/dev/null
 export HF_HUB_ENABLE_HF_TRANSFER=1
 HF=hf; command -v hf >/dev/null 2>&1 || HF=huggingface-cli
 
-# ---- 代码入库（可选：有 GIT_TOKEN 才做；否则走本地 rsync→Drive 路） ----
+# ---- 代码入库（仓库现为公开=匿名拉取；GIT_TOKEN 有则用，转回私库时无缝） ----
 note "项目代码"
 if [ -n "${GIT_TOKEN:-}" ]; then
+  CLONE_URL="https://x-access-token:${GIT_TOKEN}@${REPO_URL_BASE}"
+else
+  CLONE_URL="https://${REPO_URL_BASE}"
+fi
+{
   rm -rf "$WORK/repo.git"
-  if git clone --quiet --mirror "https://x-access-token:${GIT_TOKEN}@${REPO_URL_BASE}" "$WORK/repo.git"; then
+  if git clone --quiet --mirror "$CLONE_URL" "$WORK/repo.git"; then
     git -C "$WORK/repo.git" bundle create "$WORK/Agent-L0.bundle" --all
     mv -f "$WORK/Agent-L0.bundle" "$ROOT/code/Agent-L0.bundle"
     # 顺手出一份 HEAD 工作树 tar（Colab 引导时解包更快，也不依赖 git 版本）
@@ -77,11 +82,9 @@ if [ -n "${GIT_TOKEN:-}" ]; then
     rm -rf "$WORK/repo.git"
     echo "✅ code/Agent-L0.bundle + Agent-L0-src.tar.gz（HEAD: $(cat "$ROOT/code/HEAD.txt" 2>/dev/null)）"
   else
-    warn "clone 失败（token 权限？）——跳过代码，模型照常。"; fail=1
+    warn "clone 失败（私库无 token？网络？）——跳过代码，模型照常。"; fail=1
   fi
-else
-  warn "无 GIT_TOKEN，跳过代码入库（按原计划：本地改完 rsync 到 Drive）。"
-fi
+}
 
 # ---- 模型入库：逐个 下载→转存→打标→清中转 ----
 stage_model() {
@@ -92,27 +95,38 @@ stage_model() {
     echo "⏭  $repo 已在库（$(du -sh "$dst" 2>/dev/null | cut -f1)）"
     return 0
   fi
+  # 免费档本地盘仅 ~100GB：安全线 75GB；不够则清中转再试；仍不够走 Drive 直下兜底
   local avail_gb
   avail_gb=$(df --output=avail -BG /content | tail -1 | tr -dc '0-9')
-  if [ "${avail_gb:-0}" -lt 90 ]; then
-    warn "$repo 前本地盘仅剩 ${avail_gb}GB（<90GB 安全线）——清理中转后重试"
+  if [ "${avail_gb:-0}" -lt 75 ]; then
+    warn "$repo 前本地盘仅剩 ${avail_gb}GB（<75GB 安全线）——清理中转重测"
     rm -rf "$WORK"/*; avail_gb=$(df --output=avail -BG /content | tail -1 | tr -dc '0-9')
-    [ "${avail_gb:-0}" -lt 90 ] && { warn "空间仍不足，跳过 $repo"; fail=1; return 1; }
+  fi
+  if [ "${avail_gb:-0}" -lt 75 ]; then
+    note "本地盘不足，$repo 直下 Drive（慢路兜底，FUSE 直写）"
+    if $HF download "$repo" --local-dir "$dst" --quiet; then
+      rm -rf "$dst/.cache"; touch "$dst/.complete"
+      echo "✅ $repo（直下，$(du -sh "$dst" | cut -f1)）"
+    else
+      warn "$repo 直下失败——跳过继续"; fail=1; return 1
+    fi
+    return 0
   fi
   note "下载 $repo（$tag）→ 本地中转"
   if ! $HF download "$repo" --local-dir "$tmp" --quiet; then
-    warn "$repo 下载失败（gated 未接受许可？仓库名有误？）——跳过继续"
-    rm -rf "$tmp"; fail=1; return 1
+    # 保留中转不删：同会话内重跑可续传已下载分片（会话死亡本地盘自清）
+    warn "$repo 下载失败（gated 未接受许可？仓库名有误？网络抖动？）——跳过继续"
+    fail=1; return 1
   fi
   note "转存 $repo → Drive"
   mkdir -p "$dst"
   if rsync -a --info=progress2 --exclude='.cache' "$tmp/" "$dst/"; then
     touch "$dst/.complete"
     echo "✅ $repo（$(du -sh "$dst" | cut -f1)）"
+    rm -rf "$tmp"
   else
-    warn "$repo 转存 Drive 失败（Drive 配额满？）"; fail=1
+    warn "$repo 转存 Drive 失败（Drive 配额满？）——中转保留，重跑续传"; fail=1
   fi
-  rm -rf "$tmp"
 }
 
 note "主模型 ×${#MAIN_MODELS[@]}"

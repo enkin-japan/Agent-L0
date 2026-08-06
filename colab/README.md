@@ -18,7 +18,7 @@ AgentColab/
 
 ```
 HF_TOKEN=hf_xxx           # gemma 系 gated 仓库必需（先在 HF 网页接受许可）
-GIT_TOKEN=github_pat_xxx  # 可选：只读 fine-grained PAT；缺省则代码走本地 rsync
+GIT_TOKEN=github_pat_xxx  # 可选：仓库公开期匿名拉取即可；转回私库时补只读 PAT
 ```
 
 ## 一次性布置（stage_to_drive.sh）
@@ -37,6 +37,8 @@ drive.mount('/content/drive')
 
 体量约 350GB（主模型 bf16 ~254GB + 向量/重排 ~90GB），Drive 需 2TB 档；
 首跑 2–5 小时。**可重入**：会话中断后重跑同一 cell 即断点续传（.complete 跳过）。
+免费档（CPU 机型即可，无需 GPU）本地盘仅 ~100GB：脚本安全线 75GB，不够时自动
+走 Drive 直下兜底（慢路）；同会话内下载失败保留中转续传。
 
 ## 量化口径（为什么存 bf16 原件）
 
