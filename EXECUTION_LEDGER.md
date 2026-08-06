@@ -2758,8 +2758,13 @@ edge 模型口径经 .model-selection 切 26B（分词器 tokenizer-only 拉取�
 恢复单机双角色 + .model-selection 清除。**CUDA 联调波四站全毕**：协议契约、
 四模型、约束采样、整套 Agent 全绿——"生产机=迁移安装+复跑"的承诺基座齐了。
 下一波=大档评测波（model_eval 4 模型画像回填 → L0 大档重测 → RAG 10 模型选型
-（小档免费 T4）→ 视觉加难/MoE 并发/T7/分层/24h 长稳）。colab-a100 现驻 26B
-server + keepalive 心跳，续用。
+（小档免费 T4）→ 视觉加难/MoE 并发/T7/分层/24h 长稳）。
+
+〔2026-08-07 休会〕Colab 会话由用户手动停止（当日累计 ~40/600 units）。次日重开
+= 新 VM：挂 Drive → 手工 tailscale 入网 → `bash /content/drive/MyDrive/AgentColab/
+bootstrap.sh <模型repo>` 一键到位（代码包 7a719ae，权重自动落 NVMe scratch）。
+本地 191G staging（colab-models-staging.noindex）已删——三大模型 Colab 装载验证
+完毕、Drive 真身 14/14 在库，删除条件闭合。
 
 ---
 
