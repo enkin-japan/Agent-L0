@@ -2719,6 +2719,30 @@ bootstrap 改为父+EngineCore 双杀+等 nvidia-smi 清零+残留 -9 兜底；�
 matmul 心跳，pidfile 管理），重活前停（已入持久记忆）。
 下一站=工具段约束实测（TorchGuardAdapter 真机）+ edge 拨号整套剧本。
 
+**CUDA 联调波·第 3 站 ✅（2026-08-07）：工具段约束 structural-tag 迁移落地实测
+全绿**——实测判死旧路：vLLM 0.26 SamplingParams 拒收 per-request logits_processors
+（Unexpected keyword argument，响亮降级如设计触发）→ 按预案迁移 vLLM 原生
+structural-tag（begin/schema/end+triggers，触发前自由/段内按 schema 掩码/收尾
+恢复自由——与方言 stc/etc 锚定语义同构）。架构：server 在 features 附**声明式
+约束规格** tool_constraint（schema=方言 tool_call_schema + markers.stc/etc；
+guard 构建成功才附，qwen35 XML 方言在 fail-open 内走不到）；cuda 后端首选
+structural-tag、_TorchGuardAdapter 降为旧版后备；仪表由后端尾声按 stc/etc 清点
+约束段 token 回填 guard.masked_positions（同进程直改，server done 口径不变）。
+26B 实测：模型自发 stc → 段内 JSON 合法 + name const 命中 + required(city) 强制
+补齐 + etc 强制闭合，constrained_steps=31，零降级打印；换代码后契约 19/19 复验
+零回归。金测试 674→676（structural_tag_json 形状 + 约束段清点仪表，纯函数无
+vLLM 依赖本地可测）。**probe 两连坑（含金量在教训）**：①chunk.text 是增量段
+（协议 backend_protocol:22 白纸黑字"全程累加"），按 MLX 误记的累积语义读=空文
+虚惊一场；②工具声明生产形状是 parameters{properties,required}（registry:193），
+探针手写 input_schema（Anthropic API 习惯）→ schema 空属性+additionalProperties
+:false=强制空 arguments——**表象酷似"约束坏了"，实为喂错声明**。
+thinking 预算勘定不接：vLLM 原生位需引擎级 reasoning_config + 强制 V1 runner
+（V2 不支持），为兜底功能降级全局 runner 不划算，接线路径已注释留生产机。
+额外基建（用户发现+指示）：**权重根迁 NVMe scratch**（/mnt/local-scratch 369G
+全空盘，backend/models 符号链接指过去，四主模型 241G 可共存免删拉循环，写速
+410MB/s）+ 盘面自清兜底（<80G 清非目标模型，33G 剩量惊险案）+ gpu_keepalive
+防判闲纪律执行中。下一站=edge 拨号整套 Agent 剧本实测。
+
 ---
 
 ## §5 待决（开工前需拍板）

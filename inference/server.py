@@ -436,9 +436,19 @@ async def generate(request: Request):
         cache_id = S.registry.create()
         cache = S.registry.get(cache_id)
 
-    guard = _tool_guard(features.pop("tool_specs", None))
+    tool_specs = features.pop("tool_specs", None)
+    guard = _tool_guard(tool_specs)
     if guard is not None:
         features["tool_guard"] = guard
+        # 声明式约束规格（引擎原生结构化输出的后端吃这个，如 cuda/vLLM structural-tag
+        # ——per-request logits_processors 已被 vLLM 0.26 拒收，2026-08-07 实测）。
+        # guard 构建成功即隐含 schema builder 可用（qwen35 XML 方言在 _tool_guard
+        # 内已 fail-open，走不到这里）；MLX 等逐 token 后端忽略此键，语义各自单一来源。
+        features["tool_constraint"] = {
+            "schema": S.dialect.tool_call_schema(tool_specs),
+            "begin": S.dialect.markers.stc,
+            "end": S.dialect.markers.etc,
+        }
 
     images = _media_paths(body.get("images"), "image")
     audios = _media_paths(body.get("audios"), "audio")

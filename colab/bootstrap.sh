@@ -105,7 +105,32 @@ SRC="$ROOT/models/$SAFE"
 MODELS_ROOT="$APP/backend/models"
 DST="$MODELS_ROOT/$(basename "$MODEL_REPO")"
 [ -f "$SRC/.complete" ] || die "Drive 里没有 $MODEL_REPO（先跑 stage_to_drive.sh）"
-mkdir -p "$MODELS_ROOT"
+# 权重根优先落独立 NVMe scratch（A100 档实测 /mnt/local-scratch 369G 全空，
+# 2026-08-07 用户发现）：backend/models 改为指向 scratch 的符号链接——四主模型
+# 241G 可共存，连测换模型免删免重拉；overlay 主盘只留代码与缓存。既有权重搬家
+# 后原目录让位（scratch 与 /content 同属会话生命周期，回收即失，Drive 仍是真身）。
+NVME_SCRATCH=/mnt/local-scratch
+if [ -d "$NVME_SCRATCH" ] && [ -w "$NVME_SCRATCH" ] && [ ! -L "$MODELS_ROOT" ]; then
+  mkdir -p "$NVME_SCRATCH/agent-models"
+  if [ -d "$MODELS_ROOT" ]; then
+    for d in "$MODELS_ROOT"/*/; do
+      [ -d "$d" ] && { echo "权重搬家 → scratch: $(basename "$d")"; mv "$d" "$NVME_SCRATCH/agent-models/"; }
+    done
+    rm -rf "$MODELS_ROOT"
+  fi
+  ln -sfn "$NVME_SCRATCH/agent-models" "$MODELS_ROOT"
+fi
+mkdir -p "$MODELS_ROOT/"
+# 盘面自清兜底：权重根所在盘不足 80G 时清掉非目标模型目录（Drive 真身随删随取；
+# 已装载引擎的权重在显存，不需要盘上文件）。scratch 在位时正常不会触发；无 scratch
+# 的机型（如免费 T4）沿用 2026-08-07 33G 剩量惊险案的教训。
+avail_gb=$(df --output=avail -BG "$MODELS_ROOT/" | tail -1 | tr -dc '0-9')
+if [ "${avail_gb:-0}" -lt 80 ]; then
+  for d in "$MODELS_ROOT"/*/; do
+    [ "${d%/}" = "$DST" ] && continue
+    echo "盘面自清：删 ${d}（免费仅 ${avail_gb}G）"; rm -rf "${d}"
+  done
+fi
 if [ ! -f "$DST/.download_complete" ]; then
   rsync -a --info=progress2 --exclude='.complete' "$SRC/" "$DST/"
   python - "$DST" <<'PY'

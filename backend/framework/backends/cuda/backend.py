@@ -8,11 +8,15 @@
 - **stream_generate 同步迭代器**：后端自持一条私有事件循环线程跑 AsyncLLMEngine，
   经有界队列桥接成同步生成器（协议要求在推理执行器线程内同步消费）；消费方
   弃置迭代器时 finally 向引擎 abort（段粒度取消对齐）。
-- **tool_guard**：纯逻辑 ToolCallGuard 适配 vLLM per-request logits processor
-  （torch 掩码版 _GuardAdapter）。若所装 vLLM 版本不支持 per-request
-  logits_processors（v1 引擎一度移除），响亮降级为无约束生成（上游解析器仍在，
-  最坏=劣质 JSON 走既有纠错回环）——迁移到 structural-tag 方案记 Colab 联调清单。
-- **诚实边界（Colab 联调清单，均响亮不静默）**：thinking 预算裁决未实现；
+- **工具段约束**：首选 features.tool_constraint（server 附的声明式规格）→ vLLM
+  原生 structural-tag（触发标记前自由、标记内按 schema、收尾恢复自由——与方言
+  stc/etc 锚定语义同构；2026-08-07 A100 实测 per-request logits_processors 已被
+  vLLM 0.26 拒收，_TorchGuardAdapter 降级路留作旧版后备）。仪表：生成尾声按
+  stc/etc token 数出约束段 token 数回填 guard.masked_positions（同进程对象）。
+- **诚实边界（均响亮不静默）**：thinking 预算裁决未接——vLLM 0.26 原生位
+  SamplingParams.thinking_token_budget 需引擎级 reasoning_config（思考起止 token
+  序列）且强制 VLLM_USE_V2_MODEL_RUNNER=0（2026-08-07 源码勘定）；为上限兜底功能
+  降级全局 runner 不划算，等 vLLM V2 支持后按此路径接线（max_tokens 仍封顶）。
   repetition_context_size 无对应物（vLLM 惩罚窗=全上下文）；vision/audio 多模态
   载荷按 vLLM multi_modal_data 形状透传但未实测；投机采样未接。
 
@@ -90,6 +94,54 @@ class _TorchGuardAdapter:
                                   device=logits.device)
                 keep = torch.cat([keep, pad])
         return logits.masked_fill(~keep, _NEG_INF)
+
+
+def structural_tag_json(constraint: Dict[str, Any]) -> str:
+    """声明式工具约束（server 附的 features.tool_constraint）→ vLLM structural_tag
+    规格 JSON。纯函数：无 vLLM/torch 依赖，金测试本地可锚形状。
+
+    形态对齐 vLLM 0.26 xgrammar 后端的 legacy structural tag（begin/schema/end +
+    triggers）——触发标记出现前自由生成，标记内按 JSON schema 掩码，收尾恢复自由，
+    与方言 stc/etc 锚定的 ToolCallGuard 语义同构。"""
+    import json
+    return json.dumps({
+        "structures": [{
+            "begin": constraint["begin"],
+            "schema": constraint["schema"],
+            "end": constraint["end"],
+        }],
+        "triggers": [constraint["begin"]],
+    }, ensure_ascii=False)
+
+
+def _count_constrained_tokens(token_ids: List[int], tokenizer,
+                              constraint: Dict[str, Any]) -> int:
+    """仪表：数出 stc..etc 约束段内的 token 数（不含标记本身）。
+
+    structural-tag 由引擎掩码，guard 收不到逐 token 事件，事后按标记 token 清点
+    ——口径与 masked_positions（被约束的采样步数）对齐：段内每 token 都是被
+    掩码采样出的一步；收尾 etc 由引擎强制，也算约束步（+1 在 etc 分支）。
+    标记若非单 token（防御：server 侧已拒），返回 0 而非猜测。"""
+    try:
+        beg = tokenizer.encode(constraint["begin"], add_special_tokens=False)
+        end = tokenizer.encode(constraint["end"], add_special_tokens=False)
+        if len(beg) != 1 or len(end) != 1:
+            return 0
+        n = 0
+        active = False
+        for t in token_ids:
+            if not active and t == beg[0]:
+                active = True
+                continue
+            if active and t == end[0]:
+                active = False
+                n += 1                      # 强制闭合的 etc 本身是一次约束步
+                continue
+            if active:
+                n += 1
+        return n
+    except Exception:
+        return 0
 
 
 class CudaVLLMBackend:
@@ -245,17 +297,30 @@ class CudaVLLMBackend:
                 spaces_between_special_tokens=False,
             )
             guard = features.get("tool_guard")
-            if guard is not None and self._per_request_lp_ok:
+            constraint = features.get("tool_constraint")
+            sp = None
+            st_used = False
+            if constraint:
+                # 首选：vLLM 原生 structural-tag（触发前自由、标记内按 schema）。
+                # 构建被拒（老版无此参数/形态变更）则响亮落到 logits processor 后备。
+                try:
+                    from vllm.sampling_params import StructuredOutputsParams
+                    sp = SamplingParams(**sp_kwargs,
+                                        structured_outputs=StructuredOutputsParams(
+                                            structural_tag=structural_tag_json(constraint)))
+                    st_used = True
+                except Exception as e:
+                    print(f"[CUDA] ⚠ structural-tag 约束构建被拒（{e}）——"
+                          f"尝试 per-request logits processor 后备路")
+            if sp is None and guard is not None and self._per_request_lp_ok:
                 try:
                     sp = SamplingParams(**sp_kwargs,
                                         logits_processors=[_TorchGuardAdapter(guard)])
                 except Exception as e:
                     self._per_request_lp_ok = False
                     print(f"[CUDA] ⚠ 本 vLLM 版本不支持 per-request logits_processors"
-                          f"（{e}）——工具段约束降级为无约束+上游解析（structural-tag "
-                          f"迁移记联调清单）")
-                    sp = SamplingParams(**sp_kwargs)
-            else:
+                          f"（{e}）——工具段约束降级为无约束+上游解析")
+            if sp is None:
                 sp = SamplingParams(**sp_kwargs)
 
             gen_input: Any = {"prompt_token_ids": ids}
@@ -304,6 +369,12 @@ class CudaVLLMBackend:
             # token_ids 记账：prompt + 已生成（APC 复用与上层裁剪判断的依据）
             if isinstance(cache, CudaCacheHandle) and last_out is not None:
                 cache.token_ids = list(ids) + list(last_out.outputs[0].token_ids)
+            # 仪表回填：structural-tag 由引擎掩码，guard 收不到逐 token 事件——
+            # 尾声按 stc/etc 数出约束段 token 数写回 masked_positions（server done
+            # 事件的 constrained_steps 口径；同进程对象直改）。
+            if st_used and guard is not None and last_out is not None:
+                guard.masked_positions = _count_constrained_tokens(
+                    list(last_out.outputs[0].token_ids), self._tokenizer, constraint)
             q.put(None)
         except BaseException as e:
             q.put(e)

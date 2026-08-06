@@ -126,3 +126,38 @@ def test_config_cuda_knobs_and_registry_entries():
 def test_server_supports_infer_backend_env_override():
     src = (REPO_ROOT / "inference" / "server.py").read_text(encoding="utf-8")
     assert 'os.environ.get("INFER_BACKEND"' in src
+
+
+# ---- ⑥ structural-tag 迁移（2026-08-07：vLLM 0.26 拒收 per-request logits_processors）----
+
+def test_structural_tag_json_shape():
+    """声明式约束 → vLLM structural_tag 规格：begin/schema/end + triggers 锚形状。"""
+    import json
+    from framework.backends.cuda.backend import structural_tag_json
+    spec = {"begin": "<|tool_call>", "end": "<tool_call|>",
+            "schema": {"type": "object", "properties": {"name": {"type": "string"}}}}
+    tag = json.loads(structural_tag_json(spec))
+    assert tag["triggers"] == ["<|tool_call>"]
+    assert tag["structures"][0]["begin"] == "<|tool_call>"
+    assert tag["structures"][0]["end"] == "<tool_call|>"
+    assert tag["structures"][0]["schema"]["type"] == "object"
+
+
+class _FakeTok:
+    """encode 返回单 token id 的极简分词器替身（标记→固定 id）。"""
+    _map = {"<|tool_call>": 7, "<tool_call|>": 9}
+
+    def encode(self, s, add_special_tokens=False):
+        return [self._map[s]] if s in self._map else [1, 2]
+
+
+def test_count_constrained_tokens_instrument():
+    from framework.backends.cuda.backend import _count_constrained_tokens
+    spec = {"begin": "<|tool_call>", "end": "<tool_call|>", "schema": {}}
+    # 自由 2 tok → stc → 段内 3 tok → etc（算1步）→ 自由 1 tok = 4 约束步
+    ids = [11, 12, 7, 21, 22, 23, 9, 13]
+    assert _count_constrained_tokens(ids, _FakeTok(), spec) == 4
+    # 无调用段 → 0；标记非单 token（schema begin 未注册）→ 0 不猜测
+    assert _count_constrained_tokens([11, 12], _FakeTok(), spec) == 0
+    bad = {"begin": "nope", "end": "<tool_call|>", "schema": {}}
+    assert _count_constrained_tokens(ids, _FakeTok(), bad) == 0
