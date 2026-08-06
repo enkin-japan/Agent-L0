@@ -89,6 +89,12 @@ mkdir -p "$PIP_CACHE_DIR"
 pip -q install -U vllm "huggingface_hub[hf_transfer]" transformers \
     fastapi uvicorn pyyaml requests llguidance pillow soundfile \
   || die "pip 安装失败"
+# vLLM 新轮子的原生扩展可能链更高大版的 CUDA 运行时（实测 cu13）而 Colab 自带
+# torch 是 cu12x——pip 的 nvidia/* 库目录全部前置进 LD 路径，两代 cudart soname
+# 不同可共存（A100 首会话实测修法）
+for d in /usr/local/lib/python3*/dist-packages/nvidia/*/lib; do
+  [ -d "$d" ] && export LD_LIBRARY_PATH="$d:$LD_LIBRARY_PATH"
+done
 python -c "import vllm, torch; print(f'vllm {vllm.__version__} | torch {torch.__version__} | cuda {torch.cuda.is_available()}')" \
   || die "vllm/torch 导入失败"
 
