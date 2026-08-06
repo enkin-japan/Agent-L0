@@ -21,6 +21,11 @@
 # 收尾（edge 侧）：./devctl.sh start -p edge -h <本节点 MagicDNS 名或 100.x IP>
 set -uo pipefail
 
+# Colab 的 GPU 库路径只注入 notebook 壳；tailscale SSH 进来的裸环境必须自补，
+# 否则 nvidia-smi/torch 全部找不到 libnvidia-ml（A100 首会话实测案）
+export LD_LIBRARY_PATH="/usr/lib64-nvidia:${LD_LIBRARY_PATH:-}"
+export PATH="/opt/bin:$PATH"
+
 MODEL_REPO="${1:-google/gemma-4-31B-it}"
 DRIVE="${DRIVE:-/content/drive/MyDrive}"
 ROOT="$DRIVE/AgentColab"
@@ -35,26 +40,34 @@ die()  { printf '\033[1;31m❌ %s\033[0m\n' "$*"; exit 1; }
 [ -d "$DRIVE" ] || die "Drive 未挂载：先 drive.mount('/content/drive')"
 [ -f "$ENV_FILE" ] || die "缺 $ENV_FILE（TS_AUTHKEY / INFER_API_KEY / HF_TOKEN）"
 set -a; . "$ENV_FILE"; set +a
-[ -n "${TS_AUTHKEY:-}" ] || die "colab.env 缺 TS_AUTHKEY"
 [ -n "${INFER_API_KEY:-}" ] || die "colab.env 缺 INFER_API_KEY（≥16 位，护栏拒短钥）"
 [ "${#INFER_API_KEY}" -ge 16 ] || die "INFER_API_KEY 太短（<16，非回环护栏口径）"
 
-# ── ① Tailscale（userspace：无 TUN 也能入网；入站转发到 localhost 同端口）──
+# ── ① Tailscale：已入网（用户手工 cell 打通）则直接复用，否则 authkey 自入 ──
 note "① Tailscale 入网"
-if ! command -v tailscale >/dev/null 2>&1; then
-  curl -fsSL https://tailscale.com/install.sh | sh >/dev/null 2>&1 || die "tailscale 安装失败"
+TS=""
+for sock in /var/run/tailscale/tailscaled.sock /content/ts.sock /content/tailscaled.sock; do
+  if tailscale --socket="$sock" status >/dev/null 2>&1; then
+    TS="tailscale --socket=$sock"; break
+  fi
+done
+if [ -z "$TS" ]; then
+  [ -n "${TS_AUTHKEY:-}" ] || die "未入网且 colab.env 缺 TS_AUTHKEY（或先在 notebook 手工入网）"
+  if ! command -v tailscale >/dev/null 2>&1; then
+    curl -fsSL https://tailscale.com/install.sh | sh >/dev/null 2>&1 || die "tailscale 安装失败"
+  fi
+  if ! pgrep -x tailscaled >/dev/null 2>&1; then
+    nohup tailscaled --tun=userspace-networking \
+        --state=/content/tailscaled.state \
+        --socket=/content/tailscaled.sock >/content/tailscaled.log 2>&1 &
+    sleep 3
+  fi
+  TS="tailscale --socket=/content/tailscaled.sock"
+  $TS up --authkey="$TS_AUTHKEY" --hostname="$HOSTNAME_TS" --ssh --accept-dns=false \
+    || die "tailscale up 失败（authkey 过期/用尽？）"
 fi
-if ! pgrep -x tailscaled >/dev/null 2>&1; then
-  nohup tailscaled --tun=userspace-networking \
-      --state=/content/tailscaled.state \
-      --socket=/content/tailscaled.sock >/content/tailscaled.log 2>&1 &
-  sleep 3
-fi
-TS="tailscale --socket=/content/tailscaled.sock"
-$TS up --authkey="$TS_AUTHKEY" --hostname="$HOSTNAME_TS" --ssh --accept-dns=false \
-  || die "tailscale up 失败（authkey 过期/用尽？）"
 TS_IP=$($TS ip -4 2>/dev/null | head -1)
-note "tailnet 就绪: $HOSTNAME_TS ($TS_IP)"
+note "tailnet 就绪: $TS_IP"
 
 # ── ② 代码 ──
 note "② 代码解包"
