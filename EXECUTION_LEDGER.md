@@ -2677,6 +2677,18 @@ env 覆盖锚点）。剩余=用户跑 stage/配 colab.env，然后 A100 会话�
 自己）——远程杀进程一律 pidfile 或 pgrep -qf '模式[断]字'。
 下一步=Pro/Pro+ 订阅后 A100 首跑 bootstrap（联调正式开工）。
 
+**CUDA 联调波·第 1 站 ✅（2026-08-06 A100 首会话）：bootstrap 首跑 + 契约 19/19
+一次全过**——盲写的 CudaVLLMBackend 首次真机装配即通过全部协议断言（health/鉴权/
+缓存三态+clone 新 id/SSE 形状/token 单调/缓存续用/取消收场/门面），"换后端 server
+一行不动"兑现。gemma-4-31B-it fp8 在线量化：VRAM 76.0/80GB（0.92 预算含 APC
+预分配），prompt_tps 672 / **gen_tps 41.9**（128 tok 壁钟 3.1s）。首会话修掉三坑
+（全部固化回 bootstrap，f5cef59/最新）：①SSH 裸环境缺 GPU 库路径（LD_LIBRARY_PATH
+=/usr/lib64-nvidia）②tailscale 手工入网场景免 authkey 复用 ③vLLM 0.26 原生扩展
+链 cu13 × Colab torch cu128 混装——pip nvidia/*/lib 全量前置 LD 路径即愈。
+INFER_API_KEY 经管道从本机 .env.local 同步 colab.env（不经对话）。运维纪律新立：
+等计费 GPU 长任务必挂看门狗（停滞 10min/超时报警，记忆持久化）。
+下一站=其余 3 模型逐个起测钉版 + 工具约束实测。
+
 〔2026-08-06 用户拍板·算力预算口径〕Pro+ 总 600 units，A100 80GB 7.52u/h ≈ 80h，
 **按 70h 预算规划**（需求估 25-42h，余量近倍）。据此原"留生产机"的 GPU 项全部
 搬进 Colab：视觉加难批/ChartQA 全量、MoE 并发衰减、T7 并发、L0/L1/L2 多模型
