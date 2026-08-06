@@ -2743,6 +2743,24 @@ thinking 预算勘定不接：vLLM 原生位需引擎级 reasoning_config + 强�
 410MB/s）+ 盘面自清兜底（<80G 清非目标模型，33G 剩量惊险案）+ gpu_keepalive
 防判闲纪律执行中。下一站=edge 拨号整套 Agent 剧本实测。
 
+**CUDA 联调波·第 4 站 ✅（2026-08-07）：edge 拨号整套 Agent 剧本 4/4 全通，
+联调波收官**——本机 edge 编队（RAG 融合本机 + SearXNG + backend + 前端，混合
+拓扑手维 .env.local 两键：INFER_REMOTE_HOST=colab、RAG_COMPUTE_HOST 置空）拨号
+colab-a100 26B。剧本：①时间工具（get_current_time 闭环+答复）②联网搜索
+（web_research 5 次进度事件+摘要回喂+77 token 总结——研究子模块内部多次生成
+同样走 colab）③shell（echo 执行 exit 0 原样转述）④thinking 数学题（先思考后
+tool 验算 1/(1/3+1/6)=2.0，答案正确，**控制标记零泄漏**进正文=CUDA 段语义×
+VisibleTextStreamer 全栈成立）。全部 turn_ended: success。
+edge 模型口径经 .model-selection 切 26B（分词器 tokenizer-only 拉取）。途中修
+一坑：`.hf_token_tmp` 被行内中文注释污染（121B 非 ascii）→ httpx 头 ascii 编码
+炸——colab.env 的 HF_TOKEN 行内注释 shell source 会截断而 awk 全吞，重取时按
+首个空白截断（37B 纯 ascii ✓）。收场按部署纪律：devctl stop 全停 + .env.local
+恢复单机双角色 + .model-selection 清除。**CUDA 联调波四站全毕**：协议契约、
+四模型、约束采样、整套 Agent 全绿——"生产机=迁移安装+复跑"的承诺基座齐了。
+下一波=大档评测波（model_eval 4 模型画像回填 → L0 大档重测 → RAG 10 模型选型
+（小档免费 T4）→ 视觉加难/MoE 并发/T7/分层/24h 长稳）。colab-a100 现驻 26B
+server + keepalive 心跳，续用。
+
 ---
 
 ## §5 待决（开工前需拍板）
