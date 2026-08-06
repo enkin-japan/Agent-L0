@@ -2638,6 +2638,33 @@ Drive env 文件）+ `colab/README.md`（Drive 布局/前置动作/量化口径�
 拉起→契约测试，目标冷启 <10min）；③CUDA 推理端本体（vLLM 包壳出 inference/
 server.py 同协议）；④契约测试扩充；⑤sync_to_colab.sh 本地同步脚本。
 
+**前置布置全落地（2026-08-06 第二段，上面待做②③④⑤清零）**：
+- **CUDA 后端本体** `backends/cuda/`（vLLM 实现 InferenceBackend 协议，server
+  一行不动）：缓存=记账语义（物理复用交引擎 APC；clone 独立记账/persist 恒
+  False→server 冷路兜底）；生成=私有事件循环线程跑 AsyncLLMEngine，经有界队列
+  桥接成协议要求的同步迭代器，弃置即 abort（段粒度取消对齐）；tool_guard 经
+  _TorchGuardAdapter 挂 per-request logits processor（vLLM 二参约定只喂已生成
+  序列——无 prompt 边界簿记，allow=None 路径零 torch 依赖故本地可金测试；
+  版本拒绝时响亮降级为上游解析兜底）；skip_special_tokens=False（规范文本含
+  频道/工具标记的协议口径）；add_special_tokens=False 分词自理防双 BOS。
+  诚实边界（代码内响亮告警）：thinking 预算未实现/repetition_context_size 无
+  对应物/多模态透传未实测/Qwen3.6 方言按 qwen35 预注册待首验。
+- **server INFER_BACKEND 环境覆盖**（与 INFER_REMOTE_HOST/PORT/MODEL_REPO 同
+  惯例）；config.yaml：inference.cuda 旋钮（fp8/0.92/32768/APC）+ CUDA 档 4
+  模型注册（gemma4×2、qwen35×2，无 profile=路由绝不优先选中，revision 待
+  Colab 首拉回填）。
+- **契约测试** scripts/check_infer_contract.py：18 项黑盒协议断言（探活/401×2/
+  缓存三态/SSE meta→chunk→done 形状/字段齐全/token 单调/缓存续用同 id/取消
+  收场+无 error/OpenAI 门面×2）——**已对本机 MLX 服务实测 18/18 全过**（临时
+  拉起 14164 用完即收），测试自身可信，Colab 上即 CUDA 端验收门禁。
+- **colab/bootstrap.sh**（五步幂等：tailscale userspace 入网→解包→pip（Drive
+  缓存；不用 requirements.txt——那是 MLX 家的）→权重落本地盘+补
+  .download_complete 标记→拉起+契约；绑回环=userspace 入站自动转发，护栏零
+  触碰）+ **agent_colab.ipynb**（挂载/引导/保活心跳三 cell）+
+  **sync_to_colab.sh**（本地 HEAD 工作树 tar→Drive，日常免 GitHub 通道）。
+金测试 666 → **674**（+8：导入安全/协议形状/记账语义/适配器纯逻辑×2/配置面/
+env 覆盖锚点）。剩余=用户跑 stage/配 colab.env，然后 A100 会话实测联调。
+
 ---
 
 ## §5 待决（开工前需拍板）

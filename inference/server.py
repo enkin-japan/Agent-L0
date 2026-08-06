@@ -217,7 +217,10 @@ async def lifespan(app: FastAPI):
                              f"{_override!r}——先注册（含 dialect/revision）再引用")
         model, revision, source = _override, _entry.get("revision"), "env INFER_MODEL_REPO"
     model_path = resolve_model_path(model, revision=revision)
-    backend_name = str(INFERENCE_CFG.get("backend") or "")
+    # INFER_BACKEND：后端环境覆盖（与 INFER_REMOTE_HOST/INFER_PORT/INFER_MODEL_REPO
+    # 同惯例：env 非空即赢）。Colab/生产 GPU 档据此起 cuda，不必改 config。
+    backend_name = (os.environ.get("INFER_BACKEND", "").strip()
+                    or str(INFERENCE_CFG.get("backend") or ""))
     print(f"🚀 [Server] loading model: {model} (backend={backend_name or 'default'})")
 
     S.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="inference")

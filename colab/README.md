@@ -47,7 +47,31 @@ A100 是 Ampere（sm_80），无原生 FP8 张量核；vLLM 在 Ampere 上经 Ma
 显存约砍半（31B→~31GB）。故存原件即无悔——若某型号在线路径不支持，再补
 AWQ/GPTQ/FP8 预量化版（从原件亦可自转）。
 
-## 后续（bootstrap 波，未落地）
+## 会话引导（bootstrap.sh + agent_colab.ipynb）
 
-`bootstrap.sh`：tailscale userspace 入网（ephemeral key）→ 解包代码 → 装依赖
-（Drive pip 缓存）→ 拉起 CUDA 推理服务 → 契约测试。目标冷启动 <10 分钟。
+A100 会话（`agent_colab.ipynb` 三个 cell）：挂 Drive → `bootstrap.sh <模型repo>` →
+保活心跳。引导五步（幂等可重跑）：tailscale userspace 入网（ephemeral key，入站
+自动转发到本机端口→服务绑回环即可、护栏不触碰）→ 解包代码 → pip 依赖（Drive
+缓存，**不用 backend/requirements.txt——那是 MLX 家的**）→ 权重 Drive→本地盘
+（补 `.download_complete` 标记喂 path_resolver）→ 拉起 `INFER_BACKEND=cuda` 的
+inference-server + **契约测试**（`backend/scripts/check_infer_contract.py`，18 项
+协议断言，已在本地对 MLX 服务全过——它就是"换后端服务一行不动"的背书）。
+
+colab.env 需三行：`HF_TOKEN` / `TS_AUTHKEY`（ephemeral+reusable）/
+`INFER_API_KEY`（≥16 位，edge 侧 .env.local 同值）。
+
+edge 侧收尾：`./devctl.sh start -p edge -h colab-a100`（MagicDNS 名或 100.x IP）。
+
+## 日常代码同步（sync_to_colab.sh，本地跑）
+
+本地改完 → `./colab/sync_to_colab.sh` → 打 HEAD 工作树 tar 进 Drive 同步文件夹
+（自动探测桌面版挂载点；含未提交改动，排除 .venv/models/sessions 等重资产）。
+Colab 侧取新包：`rm -rf /content/agent` 后重跑 bootstrap（幂等）。
+
+## CUDA 后端（backend/framework/backends/cuda/）
+
+vLLM 实现 InferenceBackend 协议（server 一行不动，`INFER_BACKEND=cuda` 起）。
+诚实边界（联调清单，代码内均响亮告警）：thinking 预算裁决未实现；
+repetition_context_size 无对应物；vision/audio 载荷透传未实测；per-request
+logits_processors 若被所装 vLLM 版本拒绝→约束降级为上游解析兜底（structural-tag
+迁移候补）；Qwen3.6 方言按 qwen35 预注册，模板兼容性=联调首验项。
