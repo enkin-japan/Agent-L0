@@ -2817,6 +2817,29 @@ KV 块分配失败拒启——权重+激活已 ~38G，需 ≥0.56；教训②（
 装载 + B 常驻并存时**整机失联**，疑似双引擎宿主内存峰值挤爆 VM——恢复后改
 **顺序装载**验证。26B@0.40 单档曾就绪（14163 健康），双档齐验中断于节点崩溃。
 
+〔第 3 站收官 ✅ 2026-08-08〕**分层常驻双档齐验**（80G hm VM，顺序装载纪律）：
+A=31B@0.56 + B=26B@0.40 并存，**双端契约各 19/19**；同时 4×4 互扰：A 每路
+41.6→29.0（-28%）、B 128→47.5（-63%，SM 争抢主要打 MoE 侧），TTFT ≤0.21s，
+合计 300 tok/s——分层形态成立、代价已定量。宿主 RAM 全程 ≥155G 可用，
+**OOM 假说正式证伪；三连崩真凶=用户侧 25min 判零看门 cell**（新形态：while
+True 保活 cell + 阶段汇报手动停机）。
+本站坑账（自匹配已 8 案）：⑥⑦⑧=ssh 命令串内 pkill 模式与明文并存的三个变体
+（修法=杀进程独立 ssh + 方括号 + 绝不与明文同串）；**env 变量不在 cmdline，
+pkill -f "INFER_PORT=x" 恒打空**——误启 B 的壳被杀本体存活，orphan EngineCore
+抱 33G 且**用污染权重**（rsync 与 HF snapshot_download 同目标目录互踩产出假
+.download_complete——dry-run 差 12 文件实锤；修法=杀后 nvidia-smi 按 pid 清点
++ 标记只信落盘链路自写）。
+〔Colab CLI 采用记录 2026-08-08〕官方 google-colab-cli 实测：oauth 认证/exec
+持久 kernel/upload/stop 全通（依赖钉 jupyter-kernel-client==0.15.0）；TS_AUTHKEY
+headless 入网生产首用 ✅（colab.env 引号修复无副作用，INFER_API_KEY 两侧同值）。
+**格局=混合双轨**：CLI `--gpu A100` 只给 40G s 档（无 scratch，~5.3u/h；H100 无
+容量）→ 80G 活走浏览器三 cell（挂 Drive/后台 bootstrap/while True 保活）+
+tailscale；≤40G 活走 CLI 全自动。CLI 坑：会话丢句柄（404）后服务端 VM 不随清
+=孤儿继续计费，CLI 停不了（status/stop 均 not found）——须浏览器"管理会话"手杀
+（已实锤一次 ~5u 学费）；rclone 拉 Drive 替代 drivemount（interactive-only）。
+下一目=RAG 五档选型（同 VM 接力）→ FP4(NF4 代理) 能力偏移三连（31B/26B/Ornith，
+Qwen3.6 被 Ornith 全维压制弃测）→ 26B 24h 长稳（CLI 40G 档即可）。
+
 ---
 
 ## §5 待决（开工前需拍板）

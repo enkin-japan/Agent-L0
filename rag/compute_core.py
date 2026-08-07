@@ -89,7 +89,9 @@ _DTYPE_MAP = {
 TIER_DTYPE = _DTYPE_MAP.get(str(ACTIVE_TIER.get("dtype", "fp16")).lower(), torch.float16)
 TIER_EMBED_DIM_HINT = ACTIVE_TIER.get("embed_dim")   # config 声明值（护栏以运行时探测为准）
 
-DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
+# 设备优先级：cuda（Colab/生产 GPU 档，2026-08-08 RAG 选型波补）> mps（开发 Mac）> cpu
+DEVICE = ("cuda" if torch.cuda.is_available()
+          else "mps" if torch.backends.mps.is_available() else "cpu")
 
 GLOBAL_OBJECTS = {}
 MPS_LOCK = threading.Lock()
