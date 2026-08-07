@@ -2866,6 +2866,26 @@ longchain 1.0（反超 fp8 0.833）、vision 合并 0.904（fp8 0.885，+1 题�
 产物 Drive eval_results/{26B,31B}_nf4/。下一目=26B 24h 长稳（时点待用户拍板：
 24h×~5.3-6.8u≈27-35u，CLI 40G 档即可承载）。
 
+〔账本复盘补测清单落账 2026-08-08，用户令"先复盘再开工"产出〕遗漏项全数入列：
+① **Gemma-4 官方 MTP assistant 草稿**（用户记忆正确、我首查主模型 config 误判无
+——官方独立草稿檔 google/gemma-4-{26B-A4B,31B}-it-assistant，共享嵌入+复用目标
+KV，宣称至 3×；vLLM v0.22 起支持，写法 {"model":"…-assistant",
+"num_speculative_tokens":N} 无 method 键）——头牌；② FP8 KV cache 漂移；
+③ qwen 系 in-weights MTP（method=mtp）；④ M8 约束税 CUDA A/B；⑤ facade
+streaming；⑥ ASR /v1/transcribe CUDA；⑦ 多模型路由 E2E（80G 站）。
+**显存账拆批**：31B fp8 需 ~45G（0.56×80 实测底线）、Ornith-35B fp8 ~35G+KV
+——均超 40G s 档 → ①之 31B 与③挪 80G 浏览器站；其余 26B/NVFP4 件走 CLI 40G。
+
+**RAG vl-2b 换档本机落地 ✅（2026-08-08）**：钉档重验（指针显式 vl-2b）
+pass 0.941 / **MRR 0.969 与 A100 完全一致**（name 3/3 满分、multidoc 归零同 A100
+形态）——本机身份验真；此前一次 0.941/0.938"零回归"实为 **0.6b 误跑**（指针缺席
++config 未落盘时段，逐位等于旧基线即同档指纹——第 4 站教训本机复现第一案）。
+生产库按 reembed.py 七步走完：dump 2 分类 → wipe → vl-2b 空库盖戳
+（tier=vl-2b dim=2048 fused/mps）→ 重灌 6 篇 → 检索实测命中 ✓。
+顺手修：.env.local 拆分实验残留 RAG_COMPUTE_HOST（指已回收 VM）注释掉，
+本机回融合模式。云端顾问 key 首验 ✅（/v1/models 200，luna 在列；密钥体检
+经静默指纹不过对话通道）。
+
 ---
 
 ## §5 待决（开工前需拍板）
