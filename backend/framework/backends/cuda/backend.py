@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import queue as _queue
 import threading
@@ -202,6 +203,13 @@ class CudaVLLMBackend:
             enable_prefix_caching=bool(self._cfg.get("enable_prefix_caching", True)),
             enforce_eager=bool(self._cfg.get("enforce_eager", False)),
             trust_remote_code=trust,
+            # INFER_SPEC_CONFIG：投机解码 env 覆盖（MTP/assistant 草稿评测用，
+            # 2026-08-08）——整段 JSON 直传 vLLM，如
+            # '{"model":"google/gemma-4-26B-A4B-it-assistant","num_speculative_tokens":2}'
+            speculative_config=(lambda s: json.loads(s) if s else None)(
+                os.environ.get("INFER_SPEC_CONFIG", "").strip()),
+            # INFER_KV_DTYPE：KV 缓存精度 env 覆盖（FP8 KV 漂移评测用）；空=auto
+            kv_cache_dtype=(os.environ.get("INFER_KV_DTYPE", "").strip() or "auto"),
         )
         # 引擎与其所有 await 都发生在私有循环线程（同步协议桥接的宇宙边界）
         self._loop = asyncio.new_event_loop()

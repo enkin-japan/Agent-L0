@@ -196,6 +196,18 @@ inference:
       # 稳定性，缓存友好性待查（架构侧观察项）
       profile: { tool_call: 0.88, longchain: 1.0, tps: 143.4 }
       note: "bf16 ~70GB MoE | A100 联调 ✓ 契约 19/19 | 评测画像已回填（2026-08-08）"
+    # ── FP4 量化件（MoE 档 FP4 偏移评测专用，2026-08-08 用户指示；A100 经 Marlin
+    # 仿真只验能力不代表生产速度。无 profile=路由绝不选中；评完留档作生产 nvfp4 参照）──
+    - repo: "RedHatAI/gemma-4-26B-A4B-it-NVFP4"
+      revision: "8c951c2b2abd5b813af61f87025cdee643b1dae3"
+      dialect: "gemma4"
+      capabilities: ["text", "vision"]
+      note: "~15GB NVFP4 | FP4 偏移评测件（Red Hat 官方量化组）| 非生产候选"
+    - repo: "sakamakismile/Ornith-1.0-35B-NVFP4"
+      revision: "b6c70b1b77fbd1822dbe01011d8ae5a6f5dd6101"
+      dialect: "qwen35"
+      capabilities: ["text"]
+      note: "~20GB NVFP4 | FP4 偏移评测件（社区高采用量化）| 非生产候选"
     - repo: "ornith-ai/Ornith-1.0-35B"
       revision: "5df2ed3f675c7beaa490328cc70bb573b65fb660"
       dialect: "qwen35"
@@ -291,7 +303,11 @@ rag:
   #   dtype 加载精度（fp16 现状 / bf16 开发机
   #   单拉 RAG 实测 VL / 8bit 量化归设备 A）；thresholds 该档余弦空间三阈值（分布随尺寸变，
   #   0.6B 为实测标定值，其余为占位继承、标注"待设备 A 标定"，真跑该档时用召回回归集重定）。
-  active_tier: "text-0.6b"      # 当前档位 id（被 .rag-tier-selection 指针覆盖）
+  # 2026-08-08 定档 vl-2b（用户拍板，A100 五档选型）：文本检索与 0.6b 并列榜首
+  # 零回归（0.941）且 MRR 全场最高（0.969），多模态升级路白拿；尺寸无红利
+  # （4b/8b 反降）故 vl-8b 塌方与 qwen35 系观察项一并销案不归因。
+  # ⚠ 换档=embed_dim 1024→2048：既有库首启会被护栏拦下，须先 rag/scripts/reembed.py
+  active_tier: "vl-2b"          # 当前档位 id（被 .rag-tier-selection 指针覆盖）
   tiers:
     - id: "text-0.6b"
       modality: "text"
@@ -554,11 +570,13 @@ cloud:
     - name: "openai"
       kind: "openai_compat"
       base_url: "https://api.openai.com/v1"
-      model: "gpt-5"                       # 按需换档（官网现役型号）
+      # 2026-08-08 用户拍板：先试 GPT-5.6-luna（0.20/1.20 断崖低价，顾问单发场景
+      # 大概率够用）；实测能力不足再升 terra/sol 或切 anthropic
+      model: "gpt-5.6-luna"
       max_tokens_field: "max_completion_tokens"
       key_env: "CLOUD_OPENAI_API_KEY"
-      input_usd_per_m: 1.25
-      output_usd_per_m: 10.0
+      input_usd_per_m: 0.20
+      output_usd_per_m: 1.20
     - name: "anthropic"
       kind: "anthropic"
       base_url: "https://api.anthropic.com"
