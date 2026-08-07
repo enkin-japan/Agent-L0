@@ -71,6 +71,13 @@ def start_server(tmp: Path) -> subprocess.Popen:
     cfg["rag"]["compute"] = {**(cfg["rag"].get("compute") or {}), "host": ""}
     cfg_path = tmp / "eval_config.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg, allow_unicode=True), encoding="utf-8")
+    # 档位指针随行：compute_core 按 CONFIG_PATH.parent 找 .rag-tier-selection，
+    # RAG_CONFIG 指到 tmp 后指针必须复制过来——否则永远落回 active_tier 默认，
+    # "五档连评"实为同一档跑五遍（2026-08-08 五档全同分案，8B 装载时长露馅）
+    sel = REPO_ROOT / ".rag-tier-selection"
+    if sel.exists():
+        (tmp / ".rag-tier-selection").write_text(sel.read_text(encoding="utf-8"),
+                                                 encoding="utf-8")
 
     env = {**os.environ,
            "RAG_CONFIG": str(cfg_path),
@@ -205,8 +212,20 @@ def main() -> int:
         print(f"== 跑题 {len(items)} 条 …")
         rows = [run_item(it) for it in items]
     finally:
+        # 收尾必须稳健：真实推理后服务端（双模型 CUDA 上下文 + chroma 持久化）在
+        # SIGTERM 下可能 >30s 才退——旧版 proc.wait(timeout=30) 直接抛
+        # TimeoutExpired，把已算完的 rows 连同 summarize/落盘一起带走（2026-08-08
+        # RAG 五档连评全失败之真相：评测其实跑完了，死在收尾）。SIGTERM→短等→
+        # SIGKILL 兜底，收尾异常一律吞掉不影响结果保存。
         proc.send_signal(signal.SIGTERM)
-        proc.wait(timeout=30)
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                proc.wait(timeout=10)
+            except Exception:
+                pass
         if not args.keep:
             import shutil
             shutil.rmtree(tmp, ignore_errors=True)
