@@ -54,7 +54,7 @@ async def amain(args: argparse.Namespace) -> int:
 
     from framework.core.engine import AgentEngine
     engine = await AgentEngine.create(model_path, kv_config=load_section("inference"),
-                                      model_options=opts, env={}, backend="mlx")
+                                      model_options=opts, env={}, backend=args.backend)
     print(f"== L0 评测 {repo}（方言 {opts.get('dialect') or 'gemma4'}）：{len(items)} 题")
 
     rows = []
@@ -107,6 +107,8 @@ async def amain(args: argparse.Namespace) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, help="注册表 repo 或短名")
+    ap.add_argument("--backend", default="mlx",
+                    help="推理后端 mlx|cuda（引擎直连进程内；A100 大档重测传 cuda）")
     ap.add_argument("--timeout", default=90, type=float, help="模型腿单发熔断（秒）")
     return asyncio.run(amain(ap.parse_args()))
 
