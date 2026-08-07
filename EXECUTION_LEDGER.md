@@ -2957,6 +2957,12 @@ MTP 存在——mlx-community 已有 26B/31B/E4B assistant bf16 转换件，**ml
 load_drafter(kind="mtp")**（12B @ M3 Ultra 实测至 1.72×），mlx-lm（纯文本）支持
 缺口仍开、ollama PR 在途 → Mac 上 gemma 系投机红利可期（幅度待实机测，验证算
 占比高于 CUDA，预期低于 3.12×）。
+〔CLI 孤儿案破解 2026-08-08，用户令"先查 docs 再实证"〕CPU 会话零成本复刻：孤儿
+成因=exec 404 时 CLI **自动清理本地状态**（官方 Recovery 文档明载），而 stop 鉴权
+靠 sessions.json 里的 per-session JWT——token 被自清即孤儿（sessions 列 `[?]` 可见
+但按名/按 ID stop 均 not found）。**自救=new 后即备份 sessions.json，孤儿时还原再
+stop**（实证闭环 ✓）；备份缺席才需用户浏览器手杀。旧结论"必须手动"作废，纪律入
+记忆（colab-cli-orphan-rescue）。12h 长稳（用户已拍板缩时版，~64u）可全程免人值守。
 
 ---
 
