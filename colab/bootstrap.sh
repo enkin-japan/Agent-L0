@@ -76,7 +76,11 @@ if [ ! -d "$APP/backend" ]; then
   if [ -f "$ROOT/code/Agent-L0-src.tar.gz" ]; then
     tar -C "$APP" -xzf "$ROOT/code/Agent-L0-src.tar.gz"
   else
-    git clone --depth 1 https://github.com/enkin-japan/Agent-L0.git "$APP" \
+    # 仓库为私密（2026-08-08 可见性已复归 PRIVATE）：匿名 https 必挂，须带
+    # colab.env 的 GIT_TOKEN；无 token 时仍试匿名（万一临时公开）
+    CLONE_URL="https://github.com/enkin-japan/Agent-L0.git"
+    [ -n "${GIT_TOKEN:-}" ] && CLONE_URL="https://x-access-token:${GIT_TOKEN}@github.com/enkin-japan/Agent-L0.git"
+    git clone --depth 1 "$CLONE_URL" "$APP" \
       || die "无 Drive 代码包且 clone 失败"
   fi
 fi

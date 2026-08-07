@@ -314,6 +314,10 @@ class CudaVLLMBackend:
                 skip_special_tokens=False,          # 规范文本须含频道/工具标记
                 spaces_between_special_tokens=False,
             )
+            # vLLM 0.26 投机解码硬拒 min_p/logit_bias（请求期 ValueError）——
+            # 投机评测档（INFER_SPEC_CONFIG 在位）弃用 min_p，采样漂移由评分兜底
+            if os.environ.get("INFER_SPEC_CONFIG", "").strip():
+                sp_kwargs.pop("min_p")
             guard = features.get("tool_guard")
             constraint = features.get("tool_constraint")
             sp = None

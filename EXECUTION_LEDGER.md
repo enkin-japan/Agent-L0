@@ -2886,6 +2886,37 @@ pass 0.941 / **MRR 0.969 与 A100 完全一致**（name 3/3 满分、multidoc �
 本机回融合模式。云端顾问 key 首验 ✅（/v1/models 200，luna 在列；密钥体检
 经静默指纹不过对话通道）。
 
+**大档评测波·第 6 站 ✅（2026-08-08）：CLI 40G 补测批（batch6，~1.65h≈8.7u）**——
+**头牌 · Gemma-4 官方 MTP assistant（26B）成立**：k=2 +62%、**k=4 1.92×**
+（139.8→269.0 gen_tps），tool_call 0.92 逐项同分/解析错 0/first_shot 0.913 不动
+——质量零漂移，且全程 structural-tag 约束在位=**投机 × 约束共存实证**；KV 跨模型
+共享接线日志实锤（草稿 4 层→目标 28/29 层）。排障三层洋葱（各自入坑账）：
+①speculative_config 须 `method:"mtp"`（无 method 落通用 draft 路径维度崩；网上
+PR 摘要误导，源码才是真相）；②vLLM 0.26 **嵌入共享维度护栏回归**误杀 gemma4
+（目标 2816≠草稿 1024 即弃共享，可 pre_projection 期待 2×2816——新 worker 栈无
+条件共享、活跃旧栈误加护栏；VM 热补丁三行豁免通过，**值得上游 issue**）；
+③投机硬拒 min_p/logit_bias→cuda backend 增 INFER_SPEC_CONFIG 在位弃 min_p 分支。
+观察项：longchain k=2 单题翻面（n=6 噪声带）；k>1 同 MTP 层复跑官方警告（k=4
+仍比 k=2 快 19%，净赚）。
+**NVFP4 双件**：26B（RedHatAI 官方件）tool_call **0.96**(+1)/longchain 0.833(-1)/
+vision 0.827（52 题混合，fp8 折算≈0.865，-2）——**带内且提速 25%**（174.8 tps，
+Marlin 仿真下犹快，生产原生核只好不坏）→ MoE 档 FP4 判断补全：**够用信号成立**；
+Ornith-35B（社区件）tool_call 0.84（fp8 0.92）+**解析错 0→3**/first_shot 0.783=
+**实劣化**，采用前须换件或自量化复验；qwen35 系 KV 前缀命中 0.0 又复现（三证）。
+**FP8 KV 40G 卡双拒**：gemma4 强制 Triton 后端要 SM89+（A100=SM80 响亮拒）；
+Ornith 替测被 Mamba 页对齐断言拦（block 2096>batched 2048，可解未追）→ 归等
+生产机清单。**server 形态四连**：契约 19/19 **投机在位零破坏**；门面流式 OpenAI
+chunk 形状逐段增量 ✓；ASR /v1/transcribe **CUDA 端缺 provider**（钉死 mlx-whisper
+→ 需后端无关 provider，架构侧 TODO 下波实现）；M8 约束税 A/B **首探作废**（探针
+未走方言构造致输出退化、A/B 条件不对等〔APC 前缀复用抹平 B 的 prompt 账〕、片计
+≠token 计——重做并入 80G 站，与 guard_probe 合并设计）。
+运维坑账：**仓库可见性复归 PRIVATE**（好事）→ 匿名 clone 静默失败而引导未设致命
+——bootstrap fallback 已改 GIT_TOKEN 认证 + clone 失败即死；colab exec 无位置参数
+（只吃 -f/stdin，首"点火"实为未执行）；会话 stop 干净无孤儿（sessions 复核零残留）。
+产物 Drive eval_results/batch6/。**下一目=80G 浏览器站**（31B MTP assistant +
+Ornith fp8 in-weights MTP + 多模型路由 E2E + M8 重做 + gemma ngram 可选）；
+26B 24h 长稳时点仍待用户拍板。
+
 ---
 
 ## §5 待决（开工前需拍板）
