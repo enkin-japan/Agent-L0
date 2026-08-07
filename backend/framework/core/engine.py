@@ -358,6 +358,16 @@ class AgentEngine:
             # 声明、由服务端约束引擎重建 guard 并把 constrained_steps 回填本地仪表；
             # 进程内后端忽略此键（直接驱动 tool_guard），语义单一来源
             features["tool_specs"] = tools
+            # 声明式约束规格：引擎原生结构化输出的后端（cuda/vLLM structural-tag）
+            # 吃这个——**进程内路径也必须带**（2026-08-08 26B 评测案：只有 server 附
+            # 此键，引擎直连评测全场无约束，bfcl-multiple 成批裸格式调用，架构缺口
+            # 非模型智力）。guard 已建成 = schema builder 可用；XML 方言（qwen35）
+            # 在 _tool_guard 内已 fail-open，走不到这里。MLX 逐 token 后端忽略此键。
+            features["tool_constraint"] = {
+                "schema": self.dialect.tool_call_schema(tools),
+                "begin": self.dialect.markers.stc,
+                "end": self.dialect.markers.etc,
+            }
 
         # 整段生成搬进专用推理线程（事件循环全程自由:API/心跳/事件流不再被计算饿死）。
         # 推理锁按单次生成粒度持有（工具调用等 I/O 期间由上层让出,供其他会话推理）;

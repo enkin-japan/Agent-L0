@@ -101,10 +101,10 @@ async def amain(args: argparse.Namespace) -> int:
     if not items:
         raise SystemExit("❌ 过滤后题目为空")
 
-    from framework.core.engine import AgentEngine   # 惰性：装载 mlx 前先把参数错误挡完
+    from framework.core.engine import AgentEngine   # 惰性：装载后端前先把参数错误挡完
     inference_cfg = load_section("inference")
     engine = await AgentEngine.create(model_path, kv_config=inference_cfg,
-                                      model_options=opts, env={}, backend="mlx")
+                                      model_options=opts, env={}, backend=args.backend)
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     outdir = args.out or (HERE / "results" / Path(repo).name / stamp)
@@ -150,6 +150,8 @@ async def amain(args: argparse.Namespace) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description="模型能力评测（引擎直连，部署同款参数）")
     ap.add_argument("--model", required=True, help="注册表 repo 全名或末段短名")
+    ap.add_argument("--backend", default="mlx",
+                    help="推理后端 mlx|cuda（引擎直连进程内装载；A100 评测传 cuda）")
     ap.add_argument("--dims", default="tool_call", help=f"逗号分隔，可用: {DIMENSIONS}")
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 题（冒烟用）")
