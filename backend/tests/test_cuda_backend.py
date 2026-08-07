@@ -118,7 +118,13 @@ def test_config_cuda_knobs_and_registry_entries():
                           ("ornith-ai/Ornith-1.0-35B", "qwen35")):
         assert repo in reg, f"CUDA 档 {repo} 未注册（表外拒启）"
         assert reg[repo]["dialect"] == dialect
-        assert "profile" not in reg[repo], "未画像条目不得带 profile（路由纪律）"
+        # 画像回填后（model_eval 2026-08-08）：条目必须携真实画像且钉死 revision
+        # ——profile 缺失=路由绝不优先选中，回填即解锁；数值来自 A100 实测非拍脑袋
+        prof = reg[repo].get("profile")
+        assert isinstance(prof, dict), f"{repo} 画像缺失（评测已回填，不应回退）"
+        for k in ("tool_call", "longchain", "tps"):
+            assert isinstance(prof.get(k), (int, float)), f"{repo} 画像缺 {k}"
+        assert reg[repo].get("revision"), f"{repo} revision 未钉死（常驻纪律）"
 
 
 # ---- ⑤ server 环境覆盖锚点 ----
