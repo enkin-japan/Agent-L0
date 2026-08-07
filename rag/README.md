@@ -2,7 +2,7 @@
 
 > [Agent](../README.md) monorepo 的检索服务。
 
-为 AI Agent 提供的本地化 RAG（检索增强生成）后端服务，用于存储和检索知识、记忆等信息。基于 **FastAPI + ChromaDB + Qwen3 双模型**（Embedding + Reranker）构建，全程本地运行，在 Apple Silicon 上使用 MPS 加速。
+为 AI Agent 提供的本地化 RAG（检索增强生成）后端服务，用于存储和检索知识、记忆等信息。基于 **FastAPI + ChromaDB + Qwen3 / Qwen3-VL 双模型**（Embedding + Reranker）构建，全程本地运行；计算面设备优先级 `cuda`（Colab/生产 GPU 档）> `mps`（Apple Silicon 开发机）> `cpu`（`compute_core.py:92-94`）。
 
 ## 数据/计算拆分（B2c）
 
@@ -26,7 +26,7 @@
 - **自动分类入库**：文档插入时根据向量相似度自动路由到对应的分类库，无法匹配的流入未分类库兜底
 - **多库并发检索**：查询时按意图分类软路由到最相关的若干分类库，线程池并发查询
 - **三路候选并集检索**：向量召回 + 标识符 contains 预取 + **FTS5 关键词腿**（CJK bigram 预分词，`fts_index.py`）——三路只扩池不定序，Reranker（yes/no 概率打分）终局裁决，低置信度结果自动过滤。FTS 跨全库不受软路由约束（路由漏路兜底），一切操作 fail-open，索引可删可重建（删 `fts_index.sqlite3` + reembed）
-- **检索质量评估集**：`evals/`（夹具语料 + 32 条固定题集，七类形态）——任何检索侧改动先跑 `evals/run_retrieval_eval.py` 对比 `BASELINE.json` 防负优化
+- **检索质量评估集**：`evals/`（夹具语料 + 34 条固定题集，八类形态，含误路由 misroute）——任何检索侧改动先跑 `evals/run_retrieval_eval.py` 对比 `BASELINE.json` 防负优化
 - **Token 感知切块**：按行累积切块，块间保留 token 级重叠（overlap），保证上下文连续性
 - **原始文件备份**：每篇入库文档在 `storage/` 下保留原文备份，支持按路径整篇删除；也是换档全量重建的数据源
 - **离线数据治理**：新增分类后可触发重分拣，将未分类库中的文档重新归位
@@ -51,13 +51,13 @@
 - **向量模型**：`Qwen3-Embedding-*`（last-token pooling + L2 归一化）
 - **重排模型**：`Qwen3-Reranker-*`（判别式 yes/no logits → softmax 概率）
 - **距离度量**：所有集合统一使用**余弦距离**（0~2，越小越相似），与配置阈值一致
-- 具体尺寸由当前档位决定（默认 `text-0.6b`）；模型优先从本地 `models/` 目录加载，缺失时自动从 Hugging Face Hub 下载
+- 具体尺寸由当前档位决定（默认 `vl-2b`）；模型优先从本地 `models/` 目录加载，缺失时自动从 Hugging Face Hub 下载
 
 ## 快速开始
 
 ### 环境要求
 
-- macOS（Apple Silicon 推荐，自动启用 MPS；无 MPS 时回退 CPU）
+- macOS（Apple Silicon 推荐，自动启用 MPS）或 Linux + CUDA（生产 GPU 档）；均无则回退 CPU
 - Python 3.11 ~ 3.13
 
 ### 启动
@@ -92,10 +92,10 @@ app sidecar 启动），计算面跑在算力端（`../devctl.sh start --profile
 
 | 档位 | 模态 | 维度 | 状态 |
 |---|---|---|---|
-| `text-0.6b` | text | 1024 | 默认，阈值实测标定 ✓ |
+| `text-0.6b` | text | 1024 | 阈值实测标定 ✓（历史默认，已换档） |
 | `text-4b` | text | 2560 | 阈值待标定 |
 | `text-8b` | text | 4096 | 生产档，需设备 A（≥40GB 或双卡分置） |
-| `vl-2b` | vl | 2048 | 加载契约已实测 ✓，阈值待标定 |
+| `vl-2b` | vl | 2048 | **默认**，加载契约已实测 ✓，阈值待标定 |
 | `vl-8b` | vl | 4096 | 多模态生产档，需设备 A |
 
 > `modality: vl` 档位当前仅「加载 + 文本 I/O」——**图像真入库是另一期（L2）**，尚未实施。
@@ -128,6 +128,10 @@ python scripts/reembed.py rebuild               # 6) 重建分类 + 全量重灌
 - **计算面** `/api/v1/*`：`RAG_COMPUTE_API_KEY`（数据面作为客户端读同一变量携带；
   两台机器的 `.env.local` 填同一个值）
 
+计算面对外只暴露三条无状态计算原语（`compute_server.py:82-93`，拆分模式下跑在算力端）：
+`POST /api/v1/embed`（向量化）、`POST /api/v1/tokenize`（token 计数）、`POST /api/v1/rerank`
+（重排打分）——不落任何用户数据，数据面作为唯一客户端调用。
+
 通则（部署铁则 §8，四个服务同一条纪律）：
 
 - 密钥留空 = 未启用（启动告警后放行），仅限开发 / 回环
@@ -148,7 +152,7 @@ rag:
   compute:
     host: ""                        # 空=融合模式；非空=算力端 Tailscale 地址（拆分模式）
     port: 14162
-  active_tier: "text-0.6b"          # 当前档位 id（被 .rag-tier-selection 指针覆盖）
+  active_tier: "vl-2b"              # 当前档位 id（被 .rag-tier-selection 指针覆盖）
   tiers:                            # 档位注册表（字段见 config.yaml 内注释）
     - id: "text-0.6b"
       modality: "text"              # text 纯文本 / vl 视觉多模态
@@ -196,14 +200,17 @@ tuning:
 | GET | `/api/v1/category` | 列出所有分类及描述 |
 | POST | `/api/v1/category` | 创建/更新分类（`db_name` + `description`，描述用于路由匹配，写得越具体路由越准） |
 | DELETE | `/api/v1/category/{db_name}` | 删除分类路由（该分类库中的数据保留） |
+| DELETE | `/api/v1/category/{db_name}/purge` | 真删分类：向量 collection 整库丢弃 + 原文目录移入 `.trash` 回收 + 路由条目删除（与上一行「只删路由」分工不同，这是「删库」） |
 
 ### 数据入库与治理
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| GET | `/api/v1/document/list` | 管理面板数据源：不带 `category` 返回分类总览（文档数/切片数），带则返回该分类的文档清单 |
 | POST | `/api/v1/document/insert` | 插入文档（后台异步处理：分类→备份→切块→向量化→入库）。可选 `category` 显式指定目标分类：不存在则 400 拒绝并附现有目录（不静默兜底）；缺省走向量自动路由 |
 | GET | `/api/v1/document/context` | 取相邻块（R3 凭证指针）：按 `source_path`+`seq` 返回 [seq-n, seq+n] 窗口；纯数据操作，计算面离线可用；旧格式切片（无 seq）明说并指向 reembed |
 | DELETE | `/api/v1/document/delete` | 按 `source_path`（元数据中的备份路径）跨库整篇删除，含磁盘备份；零命中时返回引导提示与 `deleted_chunks: 0` |
+| POST | `/api/v1/document/stale` | 标记/取消标记文档为过时（只写元数据不动内容），检索结果与管理面板据此带出提示 |
 | POST | `/api/v1/governance/reclassify` | 触发未分类文档重分拣（后台异步） |
 
 > `insert` 另有可选 `source_path` 字段：**供 `reembed.py` 重灌时复用已有原文备份**，避免
@@ -271,8 +278,13 @@ rag/
 ├── rag_server.py          # 数据面（切块、路由、检索编排、治理、换档护栏；融合模式内含计算）
 ├── compute_core.py        # 计算核（档位解析、模型下载/加载、嵌入、重排、token 计数）
 ├── compute_server.py      # 计算面 HTTP 服务（:14162，无状态；拆分模式跑在算力端）
+├── fts_index.py           # FTS 关键词腿：与 Chroma 并置的 SQLite FTS5 索引（CJK bigram 预分词）
+├── retrieval_extras.py    # 检索侧纯函数增强：extract_identifiers（标识符预取）+ mmr_select（多样性去重）
+├── fts_index.sqlite3      # FTS5 索引文件（gitignored 运行期产物，可删可重建：删了 + reembed 即恢复）
 ├── scripts/
-│   └── reembed.py         # 换档/升级用的全量重建（dump-categories / wipe / rebuild）
+│   ├── reembed.py                # 换档/升级用的全量重建（dump-categories / wipe / rebuild）
+│   └── migrate_source_paths.py   # 数据根搬迁后 source_path 前缀一次性修正（B2c 拓扑切换用）
+├── evals/                 # 检索质量评估集：夹具语料 + 34 条固定题集（八类形态）+ run_retrieval_eval.py + BASELINE.json
 ├── requirements.txt       # Python 依赖（配置见仓库根 config.yaml，部署/启动走根 devctl.sh）
 ├── models/                # 本地模型权重（首次运行按档位自动下载）
 │   ├── Qwen3-Embedding-0.6B/  Qwen3-Reranker-0.6B/
@@ -291,4 +303,5 @@ rag/
 - **分类描述决定路由质量**：`meta_classification_db` 中存的是分类描述的向量，描述写得越具体、越贴近该类文档的实际内容，自动分类越准
 - **删除分类 ≠ 删除数据**：`DELETE /api/v1/category/{db_name}` 只移除路由，该分类库中的向量数据仍在
 - **换档必重建**：库维度与档位绑定，靠 `.tier_stamp.json` + 运行时探测把关，不符即拒绝服务而非静默混库
-- **MPS 显存**：两个模型按档位 dtype 常驻（0.6B fp16 ≈ 2.4GB），推理通过全局锁串行化，避免 MPS 并发冲突；大档位（4B/8B）在 16GB 开发机上跑不动，需设备 A
+- **MPS 显存**：两个模型按档位 dtype 常驻（当前默认 `vl-2b`：bf16 2B × 2 ≈ 8GB），推理通过全局锁串行化，避免 MPS 并发冲突；大档位（4B/8B）在 16GB 开发机上跑不动，需设备 A
+- **换档须重灌**：`text-0.6b`(1024 维) → `vl-2b`(2048 维) 这类跨维度换档须先跑 `rag/scripts/reembed.py` 全量重建——库维度不符时护栏会拒启，不是静默混库

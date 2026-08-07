@@ -1,5 +1,12 @@
 # 推理加速优化计划：投机采样 + 约束采样
 
+> ⚠️ 状态（2026-08-08 修订）：**Phase 4 的"e2b 通用草稿"路线已被官方 MTP assistant
+> 取代**——A100 实测 gemma-4 官方 assistant 草稿件（vLLM `method:"mtp"`）26B k=4
+> **1.92×**、31B k=4 **3.12×**，质量零漂移且与约束采样共存（EXECUTION_LEDGER
+> 大档评测波第 6/7 站）；k 值不定死、按设备实测取值（已拍板）。Mac 侧 mlx-vlm 有
+> `load_drafter(kind="mtp")` 对应路径。本文 §6~§9 的 e2b 执行手册**不再执行**；
+> Phase 0~3 的仪表/约束采样/prompt_lookup（MLX 后端现行）仍在服役。
+>
 > 状态（2026-07-07 更新）：**Phase 0~3 已在开发机（e4b）完成并验证，代码在分支
 > `feat/inference-speedup`（3 个 commit，已推送 origin）。**
 > 剩余 Phase 4（e2b 草稿模型）与 Phase 5（组合调优+全量回归）需生产机执行，

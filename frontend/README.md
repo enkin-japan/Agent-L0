@@ -16,26 +16,24 @@ Agent 的 Web 前端：一个对接本地大模型推理服务的聊天界面，
 | 功能 | 说明 |
 |---|---|
 | 多会话 | 会话 ID 由前端生成（UUID），即后端 `session_id`；首次发消息时后端自动建会话 |
-| 发送消息（真流式） | 默认走 `POST /api/v1/chat/{session_id}/stream`（SSE）：可见正文逐 token 流出、思考块/工具卡片/任务进度结构化推送，`turn_end` 携权威终态对账（流为预览、终态为真）；非流式 `POST /chat` 保留为回退路径 |
+| 发送消息（受理 + 事件附着流） | 默认走 `POST /api/v1/chat/{session_id}/turns`：摄入完成即受理返回（202），执行在背景进行；过程与终态经 `GET /api/v1/chat/{session_id}/events` 事件附着流观察（可见正文逐段/思考块/工具卡片/任务进度结构化推送，`turn_end` 携权威终态对账，流为预览、终态为真）；非流式 `POST /chat` 保留为回退路径 |
 | 深度思考 | 侧边栏 Control Center 的 Deep Thinking 开关，对应接口 `enable_thinking` 字段；思维链在消息内折叠展示 |
 | 工具调用 | Agent 的 `tool_calls` / `tool_responses` 渲染为独立卡片（工具名 + 参数 JSON + 执行结果） |
-| 敏感操作审批 | Agent 请求执行不可逆操作（如删除知识库数据）时返回 `pending_approval`，输入框上方弹出确认卡片，用户「允许执行 / 拒绝」后调用 `POST /approval` 恢复对话；确认前禁止发送新消息（多步任务中途挂起后按计划继续） |
+| 敏感操作审批 | Agent 请求执行不可逆操作（如删除知识库数据）时事件流报 `awaiting_approval`，输入框上方弹出确认卡片，用户「允许执行 / 拒绝」后调用 `POST /turns/approval` 恢复对话；确认前禁止发送新消息（多步任务中途挂起后按计划继续） |
 | 任务进度面板 | 生成期间经 SSE `task_progress` 事件实时推送计划步骤推进（✔完成 / 执行中 / ✗失败 / ⊘跳过）；轮末以 `GET /task` 一次性对账，任务跨轮存续（模型中途提问）时也保持展示 |
 | 实时步骤流 | 同一推送里的 `activity`：「当前在做什么（思考中 / 调用某工具）+ 最近完成的动作」，把黑盒转圈变成看得见的执行流 |
-| 挂起 / 恢复 | 长任务可在安全点挂起让出（`POST /task/suspend`），会话出现「可恢复」横幅；`POST /task/resume` 从挂起处续跑，发新消息 = 放弃挂起任务。刷新后经 `GET /tasks` 与后端调度器对账恢复入口 |
+| 挂起 / 恢复 | 长任务可在安全点挂起让出（`POST /task/suspend`），会话出现「可恢复」横幅；`POST /turns/resume` 从挂起处续跑，发新消息 = 放弃挂起任务。刷新后经 `GET /tasks` 与后端调度器对账恢复入口 |
 | 真取消 | 停止按钮调用 `POST /task/cancel`：后端在最近检查点停止生成并整轮回滚（该轮不进模型记忆），返回 `cancelled` 状态；后端不可达时退回本地中断等待 |
 | 附件 | 图片 / 音频 / PDF / 办公文档 / 代码及任意文件——后端摄入层按模态分路（图片原生、音频转写、文档解析、代码懒登记）；图片缩略图 / 音频试听本地预览，刷新后历史附件只显示文件名 |
 | 定时任务 | 侧栏 Schedules 条 + 详情弹窗：启停 / 立即运行 / 中止本次 / 删除 / 运行历史（可跳转专属会话看全文）；创建与修改走对话（模型的 `schedule_*` 工具 + 审批卡片） |
 | Deck / PPT 预览 | 检视面板 Deck 页签实时投影 `deck.json`（模型每 `deck_set_slide` 一页即时可见）；`/print/deck` 打印路由供后端无头 Chrome 导出 PDF（渲染器只有一份，预览即所得） |
 | 记忆面板 | 展示会话上下文压缩状态（`GET /memory`）：上下文规模 vs 折叠阈值、滚动摘要水位线、被折叠原文是否已沉淀 RAG 可召回 |
-| UI 状态云同步 | 工作区/会话元数据除 localStorage 外同步到后端 `PUT /ui-state`（防抖 + last-write-wins），换设备打开即恢复 |
 | 多语言 / 主题 | 中 / 日 / 英三语（`lib/i18n.ts`），浅色 / 深色 / 跟随系统 |
 | 实时录音 | 麦克风按钮直接录音（MediaRecorder），录完在浏览器内统一转码为 16-bit PCM WAV 再作为附件，兼容 Safari（`audio/mp4`）与 Chrome/Firefox（`webm/ogg`）的原生录制格式；需要安全上下文（localhost 或 HTTPS），否则按钮会提示改用文件上传 |
-| 历史恢复 | 会话元数据存 localStorage，消息内容刷新后从 `GET /history` 懒加载恢复 |
+| 历史恢复 | 会话元数据存 localStorage 缓存，启动即以 `GET /api/v1/sessions` 对账恢复（剔除已被后台清扫回收的幽灵会话、补入孤儿会话、同步标题/pin）；消息内容刷新后从 `GET /history` 懒加载恢复。另有 `PATCH /pin`（置顶保留，不被后台自动清扫回收）与 `PATCH /meta`（改名，web/原生 app 双端同源可见）两能力 |
 | 会话分支 | 鼠标悬停任意模型回复出现 Branch 按钮，从该历史节点派生新会话（`POST /branch`，尽量复用 KV Cache） |
 | 编辑/删除最后一轮 | 悬停最后一次用户发言出现「编辑 / 删除」按钮：编辑为内联改写后删除该轮并按新内容重新生成；删除（有确认框）调 `DELETE /turns/last`，后端同步回退模型记忆、KV Cache 与落盘日志 |
 | 删除会话 | 同步删除后端该会话的全部落盘数据（有确认框，不可恢复） |
-| Workspace | 纯前端的会话分组，支持搜索、重命名、移动 |
 | 上下文面板 | 聊天页头部右侧按钮开合的右侧面板，展示当前会话的系统提示词（`GET /system`）与模型可用工具清单（`GET /tools`，含「需审批」标记与参数说明）；桌面端内嵌、移动端为带遮罩浮层 |
 
 ## 快速开始
@@ -81,12 +79,17 @@ VITE_AGENT_API_BASE=http://<host>:14159
 ```bash
 npm run build      # 类型检查 + 生产构建（输出 dist/）
 npm run lint       # ESLint
+npm run test       # vitest（单测，含 turn-reducer 等纯函数）
 npm run preview    # 预览生产构建
 ```
 
 ## 局域网 / Tailscale 访问
 
 Vite 已配置监听 `0.0.0.0`，同网段或 Tailscale 设备可直接用本机 IP 访问（如 `http://100.x.x.x:5173`）。
+
+另支持 cloudflared 通道（`vite.config.ts` 的 `server.allowedHosts` 放行 `test.enkin.dev`）：
+鉴权在 Cloudflare Access 边缘完成，到达本机的流量已过验证，且边缘 HTTPS 终止使剪贴板等
+仅限安全上下文的 Web API 也可用（不同于直接 IP 访问）。
 
 > 注意：通过 IP 的 http 访问属于浏览器的**不安全上下文**，部分 Web API 不可用：
 > - `crypto.randomUUID` — 已做降级处理（见 `src/lib/agent-data.ts` 的 `newSessionId()`）
@@ -99,26 +102,33 @@ Vite 已配置监听 `0.0.0.0`，同网段或 Tailscale 设备可直接用本机
 ```
 src/
 ├── api/
-│   ├── agent.ts              # 后端接口封装（chat/stream/approval/task/schedules/ui-state…）
+│   ├── agent.ts              # 后端接口封装（turns/events/approval/resume/task/schedules/sessions…）
 │   └── sse.ts                # SSE over fetch 解析器（EventSource 不支持 POST/自定义头）
-├── types/agent-api.ts        # 接口请求/响应类型
+├── types/
+│   ├── agent-api.ts          # 接口请求/响应类型
+│   ├── protocol.ts           # 事件账本协议类型（协议 v1，见根 PROTOCOL.md）
+│   └── deck.ts                # Deck Spec 类型
 ├── store/
-│   ├── useChatStore.ts       # 会话/消息/审批/挂起/流式对账主状态机 + UI 状态云同步
+│   ├── useChatStore.ts       # 会话/消息/审批/挂起/事件流对账主状态机
 │   └── useUiStore.ts         # 语言/主题 + /tasks、/schedules 轮询对账
 ├── lib/
 │   ├── agent-data.ts         # 前端消息模型 + 后端响应 → 消息的映射
+│   ├── turn-reducer.ts        # 事件流 → 前端轮次状态的纯函数 reducer（+ turn-reducer.test.ts 单测）
+│   ├── export.ts              # 会话/消息导出（Markdown 等）
+│   ├── utils.ts                # 通用小工具（cn 等）
 │   └── i18n.ts               # 中/日/英三语字典
 ├── components/
 │   ├── dashboard/
-│   │   ├── agent-sidebar.tsx # 侧边栏：会话列表、Workspace、Deep Thinking 开关、设置
+│   │   ├── agent-sidebar.tsx # 侧边栏：会话列表、Deep Thinking 开关、设置
 │   │   ├── chat-area.tsx     # 聊天主区域：头部、消息流、打字指示、错误横幅
 │   │   ├── chat-message.tsx  # 消息渲染：思维链、工具调用/结果卡片、附件、错误态
 │   │   ├── chat-input.tsx    # 输入框：附件选择、录音、发送/停止按钮
 │   │   ├── chat-navigator.tsx# 右侧消息定位条
+│   │   ├── markdown-content.tsx # Markdown 渲染（消息正文/文档预览共用）
 │   │   ├── inspector-panel.tsx # 检视面板：系统提示词/工具清单/任务/记忆/Deck 页签
 │   │   ├── scheduler-strip.tsx # Worker 状态条（/tasks 快照 + 任务停止按钮）
 │   │   └── schedule-strip.tsx  # 定时任务条 + 详情弹窗
-│   ├── deck/                 # SlideRenderer（Deck 唯一渲染器）、预览与 /print/deck 打印路由
+│   ├── deck/                 # deck-preview.tsx（检视面板预览）+ deck-print.tsx（/print/deck 打印路由）+ slide-renderer.tsx（唯一渲染器，两者共用）
 │   └── ui/                   # shadcn/ui 组件
 └── App.tsx                   # 组装 store 与各组件
 ```

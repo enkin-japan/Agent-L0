@@ -18,8 +18,22 @@ AgentColab/
 
 ```
 HF_TOKEN=hf_xxx           # gemma 系 gated 仓库必需（先在 HF 网页接受许可）
-GIT_TOKEN=github_pat_xxx  # 可选：仓库公开期匿名拉取即可；转回私库时补只读 PAT
+GIT_TOKEN=github_pat_xxx  # 必需（仓库为私密仓，2026-08-08 起）：只读 PAT，匿名 clone 必挂
+TS_AUTHKEY=tskey-auth-xxx # Tailscale ephemeral+reusable auth key（headless 入网）
+INFER_API_KEY=<≥16位>     # 推理服务鉴权钥（与本机 .env.local 同值，经管道同步不经对话）
 ```
+
+## 运维纪律（实测沉淀，详见 EXECUTION_LEDGER 大档评测波）
+
+- **权重获取优先序（A100 会话）**：HF+Xet 直下（实测 281-357MB/s）> Drive 中转
+  （FUSE rsync ~45MB/s）。Xet 只在大内存 VM（83G+）解禁且挂 30s 内存哨兵；
+  小内存环境（免费 T4 13G）一律 `HF_HUB_DISABLE_XET=1`（内存气球实锤）。
+- **CLI 会话（google-colab-cli）**：`colab new -s <名> --gpu A100` 后**立即备份**
+  `~/.config/colab-cli/sessions.json`——exec 404 时 CLI 自清本地状态会弄丢 stop 所需
+  的 per-session JWT，VM 变成停不掉的孤儿；还原备份再 `colab stop` 即自救。
+  `colab exec` 只吃 `-f 文件`/stdin，无位置参数。
+- **多实例分层一律顺序装载**（前一实例 /health 就绪才起下一个）；重活前 `free -g`。
+- **等 GPU 长任务必挂看门狗**（停滞+超时双报警）；测试性质的临时拉起用完即收。
 
 ## 一次性布置（stage_to_drive.sh）
 

@@ -12,7 +12,7 @@
 - **任务挂起 / 恢复（单核多任务轮换）**：`POST /task/suspend` 在迭代边界安全让出 worker（KV 留内存待恢复），`POST /task/resume` 从 `task_state` + 已提交历史续跑，像单核 CPU 那样在任务间协作式轮换
 - **上下文压缩（有界记忆）**：机械层做**预算感知 + 取代感知**的微压缩（借鉴大厂 microcompaction）——同一只读工具对同一目标的重复读取，较旧那条被后续读取取代（无夹写才取代，GUI「读树→点击→再读树」的两次树都保留）；全部观察越预算才在旧区按体量驱逐（大者先压、小者即使旧也留），未越则旧观察保持原文。再上一层：上下文越阈值把旧轮折叠进滚动摘要（方案A：`[system]+[摘要]+[尾部]`，全量日志始终保留），双阈值触发——活跃期高阈值兜底 + 空闲/冻结前低阈值优化，摘要任务走调度器低优先级不扰活跃任务
 - **长期记忆沉淀**：被折叠掉的对话原文沉淀进 RAG `agent_memory` 类目（压缩的无损承重网，fail-open），日后经 `rag_search` 召回早前交互
-- **联网调查（受限沙箱知识扩充）**：主体只调 `web_research` 一个工具、只拿回交叉验证过的事实摘要；搜索/抓取/原始网页全封在受限沙箱内（复用主模型权重、KV 隔离，仅有 `web_search`/`open_pages` 两个脏工具，物理上不进主体上下文）——注入即便劫持沙箱也够不到任何危险工具（无行为劫持），最坏只能返回被污染文本，故摘要仍以「不可信资料」边界交回主体。反投毒落到代码：删隐藏元素/脚本/零宽字符、标记祈使注入、域名信誉分交叉质证、SSRF 硬拒内网/环回/云元数据。搜索层用本机 SearXNG（数据不出门），离线则该工具自动不注册
+- **联网调查（受限沙箱知识扩充）**：主体只调 `web_research` 一个工具、只拿回交叉验证过的事实摘要；搜索/抓取/原始网页全封在受限沙箱内（复用主模型权重、KV 隔离，仅有 `web_search`/`open_pages` 两个脏工具，物理上不进主体上下文）——注入即便劫持沙箱也够不到任何危险工具（无行为劫持），最坏只能返回被污染文本，故摘要仍以「不可信资料」边界交回主体。反投毒落到代码：删隐藏元素/脚本/零宽字符、标记祈使注入、域名信誉分交叉质证、SSRF 硬拒内网/环回/云元数据。搜索层用本机 SearXNG（数据不出门），离线则该工具自动不注册。另有独立工具 `web_read`：只读给定 URL 并如实摘要（不能搜索），任务超出该页再改用 `web_research`
 - **进度可视与真取消**：`GET /task` 轮询计划推进进度；`POST /task/cancel` 在 token 级检查点停止生成并整轮回滚（非仅中断等待）
 - **事件账本（协议 v1，根 `PROTOCOL.md`）**：轮次是可寻址资源——`POST /turns` 受理即返（202），编排过程"先记账后分发"（`core/journal.py`：活跃轮内存环 + journal.jsonl 里程碑落盘），`GET /events?after=seq` 断线任意重连、重放后续播，`GET /turn` 即查进行中轮次的完整可恢复状态（含待审批工具）；轮次生命周期唯一属主为 `core/turn_runner.py`，旧 SSE/阻塞对话端点全部退化为其薄适配器（旧事件契约兼容至 Phase 4，蓝图见根 `REARCHITECTURE.md`）
 - **MCP 工具插件**：扫描 `framework/mcp/tools/` 自动注册 `BaseTool` 子类；注册前探活，依赖服务不可用的工具自动舍弃
@@ -53,12 +53,22 @@
 inference:
   host: "127.0.0.1"         # 仅本机回环，外部访问统一走前端的 /api 代理
   port: 14159
-  mode: "inprocess"         # inprocess=本进程加载 backend 所指后端（默认）；remote=连 inference-server
-  backend: "mlx"            # mlx | cuda(A1 后)：进程内所用/服务端内包的后端
+  mode: "remote"             # inprocess=本进程加载 backend 所指后端；remote=连 inference-server
+                              # （模板默认 inprocess，本机现为 remote；remote.host 留空时地址走
+                              #   .env.local 的 INFER_REMOTE_HOST，mode=remote 且无地址会拒启）
+  backend: "mlx"             # mlx | cuda：进程内所用/服务端内包的后端（cuda 已落地，vLLM 承载，
+                              #   见 backend/framework/backends/cuda/backend.py）
   remote:                   # 仅 mode=remote 时用（密钥走 INFER_API_KEY，两侧同值）
     host: "127.0.0.1"       # inference-server 地址；跨机部署改为算力机的 Tailscale 地址
     port: 14161
     cache_ttl_minutes: 45   # 服务端缓存注册表空闲回收（略长于本侧 30min 冻结，只兜底）
+  kv_persist: true          # 会话冻结时把 KV 缓存序列化落盘，解冻热恢复（省数秒重预填）
+  cuda:                     # backend: "cuda" 时生效：量化档 / 显存占比 / 投机解码等 vLLM 旋钮
+    quantization: "fp8"     # 置空/null = 不量化
+  # endpoints:               # 多模型常驻的追加端点（缺省注释掉=单端点现状）：每模型一实例一端口，
+  #   - name: "moe-fast"      #   host 共享 remote.host，repo 须先在 model_registry 注册
+  #     repo: "..."
+  #     port: 14163
   model: "mlx-community/gemma-4-e4b-it-4bit"
   model_revision: "deb1db71…"    # 钉死 HF commit：上游重传与 mlx-vlm 0.5.0 不兼容，勿改指 main
   model_registry: [...]     # `devctl model` 的候选集（各项钉死 revision + 显存/验证等级备注）
@@ -123,6 +133,15 @@ agent:                      # 编排循环护栏（多步任务）
   # 长期记忆沉淀：折叠旧轮时把其原文沉淀进 RAG agent_memory 类目（无损承重网，可经 rag_search 召回）
   sediment_to_rag: true          # 关闭则只压缩不沉淀
 
+  goal_verify: true           # 收尾目标校验：计划≥3步全部完成后，用一次独立小生成审计
+                               # 「最终答复是否兑现原始目标」，FAIL 推回自纠一次（防虚报完成）
+  thinking_mode: "dynamic"    # 思考位置策略（前端开关的语义翻译）：dynamic=关思考→首轮自动
+                               # 思考+后续关闭；开思考→全程常开；另有 first_only / manual 两档
+  drift_patrol:                # 依赖时效巡检（phase 1 只报不修）：canary 探针轮巡外部活服务
+    enabled: true              #   依赖（yt-dlp/SearXNG/curl_cffi/playwright），失效写告警笔记
+  environment:                  # 环境上下文注入：机器事实（OS+架构）/时区/语种自动探测，
+    inject_machine: true        #   预注入 system 尾部锚点块帮小模型少猜；个人事实默认全空、opt-in
+
 schedules:                  # 定时任务：落盘一等实体，模型经 schedule_* 工具管理（创建/修改需审批）
   tick_seconds: 30          # 触发扫描周期（秒）
   run_history_keep: 50      # 每任务运行历史保留条数
@@ -132,6 +151,31 @@ schedules:                  # 定时任务：落盘一等实体，模型经 sche
 > 以上仅列常用段。完整配置还包括推理加速（`inference.kv_bits` KV 量化 /
 > `constrained_tool_calls` 工具段约束采样 / `speculative` prompt-lookup 投机采样）、
 > 数学攻坚沙箱（`math_research`）、PPT 制作（`ppt`）等，各项含义见 `config.yaml` 内注释。
+
+### CUDA 后端 env 钩
+
+`backend: "cuda"` 时（`backend/framework/backends/cuda/backend.py`，vLLM 承载），以下环境
+变量覆盖 config（与 `INFER_API_KEY` 同批、`.env.local` 设置，评测/临时覆盖用）：
+
+| 变量 | 覆盖对象 | 说明 |
+|---|---|---|
+| `INFER_GPU_FRAC` | `cuda.gpu_memory_utilization` | 单实例显存占比覆盖（多档模型同卡分层常驻时各分一块） |
+| `INFER_QUANT` | `cuda.quantization` | 量化档覆盖（`none` 显式关闭量化） |
+| `INFER_SPEC_CONFIG` | 投机解码 | 整段 JSON 直传 vLLM（MTP/assistant 草稿评测）；在位时自动弃用 `min_p`（vLLM 0.26 投机解码硬拒该参数） |
+| `INFER_KV_DTYPE` | `kv_cache_dtype` | KV 缓存精度覆盖（FP8 KV 评测），空则 `auto` |
+
+见 `cuda/backend.py:194-212`。
+
+### 云端顾问（cloud）
+
+铁律 6——**云端只顾问不执行**：`cloud_consult` 把问题逐字发给配置的云端供应商，只把返回
+的**文本**作为工具观察带回本地循环，云端没有工具、不能执行任何操作，一切落地动作仍走本地
+工具与既有审批闸门（`framework/cloud/advisor.py`）。出网前经 **L0 出网守卫**脱敏
+（`egress_guard.py`：规则腿 email/电话/IP/密钥/卡号 Luhn 恒开 + 模型腿抓语境标识如人名/住址，
+失败降级为规则腿结果），建议返回后本地回填——云端只见占位符。`cloud_consult` 默认
+**恒审批**（审批卡即将出网的完整 payload），信任建立后可经 `cloud.require_approval: false`
+关闭人工闸（脱敏与出网台账仍恒开）。配置见 `config.yaml` 的 `cloud:` 段（预算/供应商/超时），
+密钥经 `CLOUD_OPENAI_API_KEY`（或对应供应商变量）环境变量注入，无 key 则该工具不注册。
 
 ## API
 
@@ -158,13 +202,22 @@ curl -X POST http://localhost:14159/api/v1/chat/my_session \
   -F 'files=@photo.png'
 ```
 
-### 真流式对话 `POST /api/v1/chat/{session_id}/stream`
+### 事件账本（协议 v1）`POST /api/v1/chat/{session_id}/turns` + `GET /api/v1/events` / `GET /api/v1/chat/{session_id}/events`
 
-参数与非流式对话完全一致，响应为 **SSE 事件流**：`turn_start` → `token`（可见正文逐段）/
-`thinking`（思考整块）/ `tool_started` / `tool_result` / `task_progress` → `turn_end`
-（权威终态，含完整 response）。契约：token 只是临时预览，**前端一律以 `turn_end` 对账**
-（终态可能是 success/warning/cancelled/fail/pending_approval/suspended）。客户端中途断开
-不丢工作——轮次在后台照常跑完并落盘。前端默认走本接口，非流式接口为回退路径。
+参数与非流式对话完全一致，但语义是**受理即返**：`POST .../turns` 摄入完成立即 202 返回
+`{turn_id, seq}`，执行在背景进行，会话已有排队/运行中的轮次时 409（`routes.py:826`）。
+过程与终态经**事件附着流**观察，而非阻塞在这次请求上：
+
+- `GET /api/v1/events`：全局任务 feed（SSE），跨会话聚合生命周期事件（`turn_queued` /
+  `started` / `awaiting_approval` / `suspended` / `resumed` / `turn_ended`…），任务中心/
+  后台通知的推送源（`routes.py:927`）
+- `GET /api/v1/chat/{session_id}/events`：单会话事件附着流（SSE），首帧 `stream_attached`
+  报当前游标，随后重放 `seq > after` 的可重放事件（journal 里程碑 + 活跃轮内存环全量）再转
+  实时续播；断开带上已消费的最大 seq 任意重连即可，长连贯穿多个轮次不因轮次完结闭流
+  （`routes.py:970`）
+
+前端默认走本接口；旧的阻塞式 `POST /api/v1/chat/{session_id}` 仍保留为一次性问答的便捷入口
+（阻塞到整轮完成一次性返回，内部走同一 TurnRunner 闭环）。
 
 ### 记忆状态 `GET /api/v1/chat/{session_id}/memory`
 
@@ -184,10 +237,17 @@ curl -X POST http://localhost:14159/api/v1/chat/my_session \
 出货 `render_chart` 生成的图表 PNG、`deck_export_pdf` 导出的 PDF（`assets/`，长缓存），
 以及会话的 Deck Spec（`deck.json`，前端 SlideRenderer 的数据源）。路径双重白名单校验。
 
-### UI 状态 `GET/PUT /api/v1/ui-state`
+### 会话索引 `GET /api/v1/sessions` + `PATCH .../pin` / `PATCH .../meta`
 
-前端工作区/会话元数据的服务端化存储（不透明 JSON blob，last-write-wins，原子落盘），
-换设备打开即恢复工作区结构。
+会话元数据服务端化为真相源（原「UI 状态」端点已退役）：
+
+- `GET /api/v1/sessions`：扫描 sessions 目录返回全部会话的后端真相元数据
+  （session_id / 标题 / 轮数 / 时间 / pin / 活跃 / 血缘），供前端反向映射与对账、剔除
+  localStorage 里的幽灵条目（只读，不拉起会话；`routes.py:652`）
+- `PATCH /api/v1/chat/{session_id}/pin`：置/撤会话 pin（落盘 `meta.json`）——pin 的会话
+  不被后台自动清扫回收，手动「保留」语义（`routes.py:664`）
+- `PATCH /api/v1/chat/{session_id}/meta`：会话元数据服务端一等落盘（改名 / pinned），
+  web 与原生 app 的改名从此一致可见（`routes.py:679`）
 
 ### 任务进度 `GET /api/v1/chat/{session_id}/task`
 
@@ -209,14 +269,17 @@ curl -X POST http://localhost:14159/api/v1/chat/my_session \
 计数、`tasks[]` 每项含 `session_id` / `status`（running/queued/suspended）/ `kind` / 等待或运行时长。
 供前端"任务切换器"与后续自动调度观测使用。
 
-### 挂起 / 恢复任务 `POST /api/v1/chat/{session_id}/task/{suspend|resume}`
+### 挂起任务 `POST /api/v1/chat/{session_id}/task/suspend`
 
-- `task/suspend`：挂起**正在占用 worker** 的任务（区别于取消）。编排循环在当前步骤完成后的
-  安全点让出 worker，KV 与 `task_state` 依设计**常驻内存**，其余排队任务上位；仅对运行中任务有效。
-- `task/resume`：恢复一个已挂起的任务，重新排队申请 worker 后从挂起处续跑（`run_turn` 可重入）。
-  响应仅含本次续跑新增的消息；续跑再次挂起 / 触发审批则相应转入挂起 / 审批暂存。
-
+挂起**正在占用 worker** 的任务（区别于取消）。编排循环在当前步骤完成后的
+安全点让出 worker，KV 与 `task_state` 依设计**常驻内存**，其余排队任务上位；仅对运行中任务有效。
 挂起期间用户直接发新消息 = 改变方向、放弃该挂起任务（局部产出留在历史，以 `warning` 收尾落盘）。
+
+### 恢复挂起轮次（协议 v1）`POST /api/v1/chat/{session_id}/turns/resume`
+
+受理即返（202 `{turn_id}`）：重新排队申请 worker 后从挂起处续跑（`run_turn` 可重入），
+过程与终态经 `GET .../events` 观察；无挂起轮次时 409（`routes.py:886`）。
+续跑再次挂起 / 触发审批则相应转入挂起 / 审批暂存。
 
 ### 工具清单 `GET /api/v1/tools`
 
@@ -258,20 +321,21 @@ curl -X POST http://localhost:14159/api/v1/chat/my_session/branch \
 - 父会话处于热态时克隆其 KV Cache（响应中 `kv_cache_reused: true`），分支首轮推理经前缀匹配自动对齐分支点；冷态则回退为冷启动预填充，正确性不受影响
 - 分支自成目录并记录血缘（`meta.json`），删除父会话不影响分支
 
-### 敏感操作审批 `POST /api/v1/chat/{session_id}/approval`
+### 敏感操作审批（协议 v1）`POST /api/v1/chat/{session_id}/turns/approval`
 
-当模型调用了 `requires_approval=True` 的敏感工具（如删除知识库文档），对话接口会以
-`status: "pending_approval"` 返回并挂起该轮（`pending_tools` 列出待授权的调用）。
-前端经用户确认后调用本接口作出决议：
+当模型调用了 `requires_approval=True` 的敏感工具（如删除知识库文档），轮次会挂起等待
+审批（事件流报 `awaiting_approval`，`pending_tools` 列出待授权的调用）。前端经用户确认后
+调用本接口作出决议，受理即返（202 `{turn_id}`），过程与终态经 `GET .../events` 观察；
+无等待审批的轮次时 409（`routes.py:857`）：
 
 ```bash
-curl -X POST http://localhost:14159/api/v1/chat/my_session/approval \
+curl -X POST http://localhost:14159/api/v1/chat/my_session/turns/approval \
   -H 'Content-Type: application/json' \
   -d '{"approve": true}'
 ```
 
 - `approve: true` 执行挂起的工具调用并继续推理收尾；`false` 则工具不执行，由模型向用户解释
-- 响应格式与对话接口一致，`response` 仅含决议后新增的消息
+- 可选 `expected_turn_id`（推送按钮的远程决议带上）：目标轮已换时 409 防错批
 - 挂起期间用户直接发新消息视为放弃，该轮以 `warning` 收尾落盘；会话冻结/服务关闭时以 `fail` 作废
 
 ### 销毁会话 `DELETE /api/v1/chat/{session_id}`
@@ -288,38 +352,52 @@ framework/
 │   ├── schemas.py
 │   └── auth.py               # Bearer 校验面（唯一比对点：共享密钥 + 多设备票据，常量时间）
 ├── core/                     # 领域层：编排循环 + 推理引擎 + 任务调度 + 事件账本
-│   ├── backend_protocol.py   # ★ InferenceBackend 协议：推理面的唯一契约（MLX/远端/日后 CUDA 各自实现）
+│   ├── backend_protocol.py   # ★ InferenceBackend 协议：推理面的唯一契约（MLX/远端/CUDA 各自实现）
+│   ├── dialect_protocol.py   # ★ ModelDialect 协议：prompt 组装/输出反序列化/频道分段（模型家族事实，与 backends/ 同构）
 │   ├── orchestrator.py       # 外层编排循环：计划推进、失败路由、预算护栏、结构性提醒/完成门控/截断恢复、只读并发调度、元工具拦截、挂起检查点、上下文压缩钩子
-│   ├── turn_runner.py        # 轮次生命周期的唯一属主（旧 SSE/阻塞端点退化为其薄适配器）
+│   ├── turn_runner.py        # 轮次生命周期的唯一属主（旧阻塞端点退化为其薄适配器）
 │   ├── journal.py            # 事件账本：活跃轮内存环 + journal.jsonl 里程碑落盘
 │   ├── feed.py               # 事件分发：订阅者扇出 + 断线重连的 after=seq 重放
 │   ├── events.py             # 事件类型定义（协议 v1，见根 PROTOCOL.md）
 │   ├── scheduler.py          # 单 worker 任务调度器：任务级门闸、挂起/恢复、可插拔调度策略（自动调度插口）
 │   ├── task_state.py         # 任务状态对象：计划(数据)、结构化操作校验、序列化
 │   ├── engine.py             # 推理引擎：单次生成、取消检查点、推理互斥锁、上下文摘要器
-│   ├── constrained.py        # 工具段约束采样
-│   ├── stream_filter.py      # 流式输出过滤（思考/正文/工具段分流）
-│   ├── prompt_builder.py     # Prompt 组装（前缀分层：稳定前缀→追加历史→可变任务块）
-│   └── response_parser.py    # 模型输出解析（思考 / 文本 / 工具调用）
-├── backends/                 # 推理后端实现（协议的两个实现，编排层不认识其中任何一个）
+│   ├── engine_pool.py        # 追加端点（config `inference.endpoints`）的懒装配与复用池
+│   ├── model_router.py       # 多端点确定性路由：按任务 kind+模态从已声明端点选承载模型（`select_endpoint`）
+│   ├── client_query.py       # 会话事件流问客户端要值的桥接（如 get_location：后端拿不到，设备侧才知道）
+│   ├── skill_registry.py     # Skill（流程知识 playbook）注册与检索，供 skill_invoke 按名加载
+│   ├── constrained.py        # 工具段约束采样（框架/方言无关的状态机，由方言喂参数）
+│   └── stream_filter.py      # 流式输出过滤（思考/正文/工具段分流）
+├── dialects/                 # 模型方言层：prompt 组装 + 输出解析 + 调用体 schema（与 backends/ 同构）
+│   ├── env_facts.py          # 环境事实行（机器/时区/语言）：部署事实非方言事实，各方言 builder 共用
+│   ├── gemma4/                # gemma-4 方言（原 core/prompt_builder.py、core/response_parser.py 原样搬入）
+│   │   ├── dialect.py         # ModelDialect 实现装配
+│   │   ├── prompt_builder.py  # Prompt 组装（前缀分层：稳定前缀→追加历史→可变任务块）
+│   │   ├── response_parser.py # 模型输出解析（思考 / 文本 / 工具调用）
+│   │   └── tool_schema.py     # 约束采样的调用体 schema（方言事实：调用体 JSON 形状）
+│   └── qwen35/                 # qwen3.5 方言（同构三件：dialect.py / prompt_builder.py / response_parser.py）
+├── backends/                 # 推理后端实现（协议的三个实现，编排层不认识其中任何一个）
 │   ├── mlx/                  # 进程内 MLX 后端
 │   │   ├── backend.py        # 协议实现：生成、缓存句柄、取消
 │   │   ├── asr.py            # mlx-whisper 转写
 │   │   └── patch/            # 防腐层：隔离 MLX 底层补丁（gemma4 流式生成 + KV 前缀复用）
-│   └── remote/backend.py     # 远端后端：连 inference-server（SSE 生成、媒体上传、缓存克隆）
+│   ├── remote/backend.py     # 远端后端：连 inference-server（SSE 生成、媒体上传、缓存克隆）
+│   └── cuda/backend.py       # CUDA 后端：vLLM 承载（量化/投机解码/FP8 KV，见「CUDA 后端 env 钩」）
 ├── mcp/                      # 插件层：MCP 风格工具系统
 │   ├── base.py               # BaseTool 基类（含 is_available 探活契约、is_concurrency_safe 并发标志）
 │   ├── registry.py           # 扫描、探活、注册与分发
-│   └── tools/
+│   └── tools/                 # 内置工具实现（节选，完整清单见「内置工具」章）
 │       ├── shell_exec.py     # 终端命令执行（动态审批：只读放行/变更弹窗）
 │       ├── apple_script.py   # AppleScript/JXA 应用级自动化（恒审批）
 │       ├── accessibility.py  # Accessibility GUI 工具（列应用/读UI树/点击/键入/快捷键）
 │       ├── rag_search.py     # RAG 知识库检索工具
 │       ├── rag_admin.py      # RAG 入库/分类治理/删除工具
 │       ├── file_extract.py   # 逃生舱：按 path 回源重解析已摄入文件（PDF页/音频时段/代码行区间）
+│       ├── cloud_consult.py  # 云端顾问工具（恒审批，出网见 framework/cloud/）
 │       └── web_research.py    # 联网调查包壳（主体唯一可见的联网工具，内部跑受限沙箱、只回摘要）
 ├── agents/                   # 受限子沙箱（方案 b：物理隔离，脏工具/子工具不进插件目录）
 │   ├── runtime.py            # 进程级引擎/事件循环句柄（供各沙箱复用主模型生成）
+│   ├── sandbox_runtime.py    # 一次性会话（EphemeralSession）与隔离不变量的唯一实现（收编此前 5 份近乎逐字重复的拷贝）
 │   ├── web_tools.py          # 脏工具：SearXNG 检索 + 抓取 + scrub/反投毒 + SSRF + 信任边界
 │   ├── research_sandbox.py   # 受限 ReAct 循环（仅 web_search/open_pages，KV 隔离），折成事实摘要
 │   ├── math_sandbox.py       # 数学攻坚沙箱（离线 Python/SymPy，多步写码-执行-验证）
@@ -337,15 +415,21 @@ framework/
 ├── memory/                   # 记忆层：会话管理 + 上下文压缩 + 长期记忆
 │   ├── session.py            # 冷热切换、KV Cache 状态、分支派生、挂起暂存、摘要旁挂与"摘要+尾部"重建
 │   ├── compactor.py          # 上下文压缩：机械式（预算驱逐 + 取代去重）+ 摘要式二次压缩（方案A）
-│   └── rag_sink.py           # 长期记忆沉淀汇：折叠内容原文写入 RAG agent_memory 类目（fail-open）
+│   ├── rag_sink.py           # 长期记忆沉淀汇：折叠内容原文写入 RAG agent_memory 类目（fail-open）
+│   ├── notes.py              # 文件记忆层：跨会话长期笔记（memory_write 落点），补会话记忆之外的一层
+│   └── dream.py              # 空闲维护回合的笔记整理（低频触发，机械层校验后落盘，治「只增不理」）
 ├── ppt/                      # Deck（PPT）：Spec 模型、增删改、视觉路由、无头 Chrome 导出 PDF
 ├── excel/                    # 表格：重算、渲染、校验、工作簿 diff / inspect
+├── office/                   # 通用办公文档：md_docx.py（Markdown→docx 确定性展开）+ officecli.py（一次调用一进程、batch 原子）
 ├── schedule/                 # 定时任务：落盘存储（store）+ 触发扫描与无人值守执行（runner）
 ├── push/                     # 推送（§7 预留 #3，已实现）：ES256 JWT 直发 APNs + 设备注册 + 分发
+├── cloud/                    # 云端顾问通道：advisor.py（供应商适配+出网台账）+ egress_guard.py（L0 出网脱敏）
+├── maintenance/              # drift_patrol.py：依赖时效巡检（canary 探针轮巡外部活服务，失效写告警笔记）
 └── utils/                    # 基础设施层
     ├── file_handler.py       # 图像落盘、原生音频 VAD 切片（供摄入层复用）
     ├── config_loader.py      # 仓库根 config.yaml 寻址与加载
     ├── model_selection.py    # .model-selection 指针解析（devctl model 的落点）
+    ├── frontmatter.py        # 最小子集 frontmatter 解析（不引 YAML 库；解析歧义响亮报错不猜）
     └── path_resolver.py      # 模型路径解析 / HF 下载（含 remote 模式的 tokenizer-only 拉取）
 ```
 
@@ -393,6 +477,11 @@ sessions/my_session/
 | `set_ui_element_value` | 按 `[编号]` 给文本框等元素设值 | - |
 | `type_text` | 向当前聚焦元素键入文本（Unicode 键盘合成） | - |
 | `press_keys` | 发送组合键（`cmd+s`、`cmd+shift+t`、`return`…） | - |
+| `open_path` | 用默认应用打开文件/文件夹/网页 URL（Finder/浏览器/预览…），配合 `find_files`/`list_dir` 定位后调用；文档/文件夹/http(s) URL 直开，可执行文件/安装包按调用弹窗 | 动态 |
+| `system_status` | 查看电量/剩余磁盘/内存大小/运行时长 | - |
+| `clipboard_read` | 读取剪贴板当前文本内容 | - |
+| `clipboard_write` | 把文本写入剪贴板供用户粘贴 | - |
+| `notify_user` | 弹出 macOS 通知横幅（用于长任务/定时任务完成播报） | - |
 
 工具优先级（也写入系统提示词）：**能终端就终端 → 应用有脚本接口就 AppleScript → 图形界面（AX）兜底**。
 GUI 感知以 AX 树的文本序列化为主（原生 App 足够）；截图作为验证手段属后置项，需多模态注入管线，暂未接入。
@@ -418,6 +507,16 @@ GUI 感知以 AX 树的文本序列化为主（原生 App 足够）；截图作�
 > 把「改文件」从 shell heredoc 通道里解放出来：长内容经 JSON + shell 双层转义必崩，
 > 且两者一律走审批闸门——定时任务无人值守时被自动拒绝，不新增免审批写盘面。
 
+### 文件管理工具
+
+| 工具 | 功能 | 审批 |
+|------|------|------|
+| `list_dir` | 列出文件夹内容（先文件夹后文件，含大小/修改时间），浏览定位用 | - |
+| `find_files` | 用 Spotlight 按文件名/内容查找文件，最多返回 30 条，按最新排序 | - |
+| `copy_file` | 复制文件到指定位置（写盘） | ✅ 恒审批 |
+| `move_file` | 移动 / 重命名文件，改变用户文件布局 | ✅ 恒审批 |
+| `trash_file` | 把文件移入废纸篓（移出用户可见位置，可恢复） | ✅ 恒审批 |
+
 ### 数学 / 图表 / PPT 工具
 
 | 工具 | 功能 | 审批 |
@@ -428,6 +527,7 @@ GUI 感知以 AX 树的文本序列化为主（原生 App 足够）；截图作�
 | `render_chart` | 用真实数据渲染图表 PNG（核心代码绘图，模型不写绘图代码），落盘 `sessions/{id}/assets/`，回执含前端可显示的 markdown 图片行 | - |
 | `deck_init` / `deck_set_slide` / `deck_remove_slide` / `deck_status` | PPT 制作：Deck Spec 落 `sessions/{id}/deck/deck.json`（单一真相），前端检视面板实时投影、逐页看着长出来 | - |
 | `deck_export_pdf` | 无头 Chrome 打印前端 `/print/deck` 路由导出 PDF（渲染器只有前端一份，预览即所得；依赖前端服务在跑） | - |
+| `deck_export_pptx` | 导出可编辑的 PowerPoint（.pptx），布局是预览的近似还原（细节样式与 PDF 导出略有差异，编辑用选这个） | - |
 
 ### 定时任务工具
 
@@ -469,16 +569,43 @@ GUI 感知以 AX 树的文本序列化为主（原生 App 足够）；截图作�
 | 工具 | 功能 | 需用户审批 |
 |------|------|:---:|
 | `rag_search` | 向量检索知识库（结果含 `Path:` 供删除引用） | - |
+| `rag_get_context` | 取某条 `rag_search` 命中的相邻块（按 `Path`+`Chunk`），读更多上下文而不用重读整篇文档 | - |
 | `rag_insert_document` | 指定分类入库文档：分类必须已存在（工具前置校验 + 服务端双闸门），不存在时拒绝并返回现有目录与指引，逼出「查目录→选类/建类→入库」的正确工具链 | - |
 | `rag_list_categories` | 列出全部分类及路由描述 | - |
 | `rag_upsert_category` | 创建/更新分类 | - |
 | `rag_reclassify_unclassified` | 触发未分类文档重分拣 | - |
 | `rag_delete_category` | 删除分类路由 | ✅ |
 | `rag_delete_document` | 跨库整篇删除文档（含磁盘备份，不可逆） | ✅ |
+| `rag_mark_stale` | 标记/取消标记某文档为过时（只写元数据不动内容），检索结果与管理面板据此带出提示 | - |
 
 > 启动时会自动确保一个系统类目 `agent_memory`（长期记忆沉淀汇）存在——上下文压缩折叠掉的
 > 对话原文沉淀于此，模型经 `rag_search` 检索该类目召回早前交互（见「上下文压缩与长期记忆」）。
 > 可用 `sediment_to_rag: false` 关闭沉淀。
+
+### 生产力工具
+
+| 工具 | 功能 | 审批 |
+|------|------|------|
+| `write_document` | 从 Markdown 生成排版好的可编辑 Word 文档（.docx）并给出下载链接（用户要「文件」交付物而非聊天正文时用） | - |
+| `calendar_list` | 只读列出 macOS 日历某天/未来几天的事件 | - |
+| `calendar_add` | 在 macOS 日历创建事件（同步到用户设备） | ✅ 恒审批 |
+| `reminder_add` | 在 macOS 提醒事项创建待办（同步到用户设备） | ✅ 恒审批 |
+| `code_explore` | 语义代码智能（codegraph 符号图）：查询「某函数怎么实现/被谁调用/改动影响面」；查询只读，首次建索引按调用动态升审批 | 动态 |
+| `media_download` | 抓取用户指名 URL 的在线视频/音频（yt-dlp，支持 1000+ 站点），产物落会话 assets 并给下载链接 | - |
+| `memory_write` | 写一条长期笔记（跨会话记住的稳定事实），同名覆写即更新 | - |
+| `skill_invoke` | 加载用户明确点名的技能 playbook 文本，后续按其指引调用常规工具 | - |
+| `get_location` | 取用户当前设备（非服务器）的粗粒度物理位置，用于天气/附近推荐等场景；同意与否由设备端系统定位授权弹窗承担 | - |
+
+> 另有 `api_tool_factory`：从仓库根 `api_tools/*.yaml` 声明动态合成私人 API 工具（一份声明
+> = 一个工具，零改动即插即用），审批默认按 HTTP 方法（GET/HEAD 免审批、变更方法弹审批，声明可显式覆写）。
+
+### 云端顾问工具
+
+| 工具 | 功能 | 审批 |
+|------|------|------|
+| `cloud_consult` | 任务超出本地能力（深度推理/长文起草/专业知识）时咨询云端模型，只回文本建议、不能执行任何操作，本地读完自行决策 | ✅ 恒审批 |
+
+> `cloud_consult` 是唯一出网的工具，见前文「云端顾问（cloud）」小节。
 
 ## 开发工具插件
 

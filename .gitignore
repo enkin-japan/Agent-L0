@@ -29,6 +29,10 @@ rag/models/
 
 # ═══════════ 运行时数据（用户会话 / 知识库 / 任务实体）═══════════
 backend/sessions/
+# 漂移巡检状态（framework/maintenance/drift_patrol.py 运行期写入）
+backend/maintenance/
+# FTS 关键词索引（rag/fts_index.py 运行期建，随向量库重建可再生）
+rag/fts_index.sqlite3*
 # 长期记忆笔记（R4）：agent 写下的用户个人事实。绝不入库——本仓库托管在 GitHub。
 backend/notes/
 inference/media/

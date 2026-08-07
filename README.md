@@ -4,8 +4,9 @@
 数据不出门。单仓（monorepo）组织，四个服务 + 一个可选搜索层。
 
 可单机跑全套（all-in-one），也可把重型计算（模型推理 / RAG 嵌入重排）拆到另一台机器上，
-执行层与会话数据留在用户机。**本仓库入库的 `config.yaml` 是算力分离形态**（B3 实证拓扑：
-`inference.mode: remote` + 指向设备 A 的两个 host），两台机器 pull 即同步，无需逐台改配置——
+执行层与会话数据留在用户机。**入库的 `config.yaml` 是空模板形态**（`inference.mode: remote`
+但两个 host 留空 = 融合/本机模式）：机器差异全部走库外——算力端地址与密钥填在各机的
+`.env.local`（macOS app 则在应用设置里填），配置文件本身两机 pull 即同步。
 退回单机见下文「部署形态」。
 
 ```
@@ -27,6 +28,10 @@ Agent/
 ├── rag/                 # RAG 知识库：数据面（:14160，ChromaDB+原文+路由，归工作端）
 │                        #   + 计算面（:14162，嵌入/重排，PyTorch MPS，归算力端；可融合单进程）
 ├── frontend/            # Web 前端（React 19 + Vite, :5173）：聊天 / 审批 / 任务 / Deck / 定时任务
+├── apple-app/           # macOS / iOS 原生客户端（SwiftUI；macOS 端内嵌执行层打包，R5）
+├── api_tools/           # 手写 API 工具声明（UI 里添加的私人声明在 backend/api_tools/，不入库）
+├── skills/              # 内置剧本（用户自建剧本在 backend/skills/，不入库）
+├── colab/               # Colab 算力端引导（bootstrap / 保活 / Drive 中转脚本）
 ├── searxng/             # SearXNG 原生部署目录（settings.yml + 源码 + venv, :8080, 可选联网搜索层）
 └── logs/                # 各服务运行日志与 pid（devctl 管理，不入库）
 ```
@@ -56,12 +61,14 @@ Agent/
 
 | 形态 | 命令 | 说明 |
 |---|---|---|
-| 算力分离 · 算力端（入库形态） | `./devctl.sh start --profile gpu` | inference-server + RAG 计算面：**完全无状态**，只出算力，不落任何用户数据 |
-| 算力分离 · 工作端（入库形态） | `./devctl.sh start --profile edge` | RAG 数据面 + SearXNG + backend + 前端：编排 / 工具 / 记忆 / 会话与知识库落盘 |
-| all-in-one | `./devctl.sh start` | 单机跑全部；需把 `inference.mode` 改回 `inprocess`、`inference.remote.host` 与 `rag.compute.host` 改回环/留空 |
+| 算力分离 · 算力端 | `./devctl.sh start --profile gpu` | inference-server + RAG 计算面：**完全无状态**，只出算力，不落任何用户数据 |
+| 算力分离 · 工作端 | `./devctl.sh start --profile edge -h <算力端地址>` | RAG 数据面 + SearXNG + backend + 前端：编排 / 工具 / 记忆 / 会话与知识库落盘 |
+| all-in-one（入库缺省） | `./devctl.sh start` | 单机跑全部；host 留空即融合/本机模式，`inference.mode` 改回 `inprocess` 走进程内推理 |
 
 `inference.remote.host` 与 `rag.compute.host` 各自身兼两职：算力端拿它当绑定地址，
-工作端拿它当拨号地址（填算力端的 Tailscale 地址）。两机共用入库的这份 `config.yaml`，pull 即同步。
+工作端拿它当拨号地址（填算力端的 Tailscale 地址）。入库的 `config.yaml` 两处 host 留空
+（空模板形态），实际地址由各机库外供给：`.env.local` 的 `INFER_REMOTE_HOST` /
+`RAG_COMPUTE_HOST`（`devctl.sh start -h <host>` 会代写），macOS app 则在应用设置里填。
 密钥不入库：两侧 `.env.local` 的 `INFER_API_KEY` / `RAG_COMPUTE_API_KEY` 须手工填成一致。
 用户数据——会话（`history.jsonl` / `memory.json` / deck 等）与**整个知识库**（Chroma 向量库 +
 原文备份，B2c 拆分后随数据面归工作端）——**全部留在工作端**，算力端只见 prompt
