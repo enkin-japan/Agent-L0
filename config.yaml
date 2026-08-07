@@ -31,9 +31,12 @@ inference:
   # （方言/revision/capabilities 以注册表为单一真相）。算力端起第二实例：
   #   INFER_PORT=<port> INFER_MODEL_REPO=<repo> python inference/server.py
   # 工作端 backend 装配期校验本段并注入 RemoteBackend（base_url_for(name) 取址）。
+  # 2026-08-08 路由 E2E 已实测通过（80G 站：main=31B:14161 + moe-fast=26B:14163，
+  # 注册/选址/tailnet 双端点承载全通；chat/summary 恒 main 粘滞、质量 kind 走
+  # 0.05 边际挑战逻辑均按设计）。测后回归注释态；生产常开待实机拓扑定型时拍板。
   # endpoints:
-  #   - name: "vision"          # 端点名（将来专科调用按名引用；main 为保留名）
-  #     repo: "mlx-community/Qwen3.5-9B-4bit"
+  #   - name: "moe-fast"        # 端点名（将来专科调用按名引用；main 为保留名）
+  #     repo: "google/gemma-4-26B-A4B-it"
   #     port: 14163
   # KV 冻结落盘（T2/Q9-a）：会话冻结时把 KV 缓存序列化到承载端本地盘，解冻热恢复
   # （实测省 3-13s/次）。KV 是对话派生物——真两机拓扑下它落在算力机的盘上；介意

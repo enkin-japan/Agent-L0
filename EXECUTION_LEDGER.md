@@ -2921,6 +2921,36 @@ chunk 形状逐段增量 ✓；ASR /v1/transcribe **CUDA 端缺 provider**（钉
 Ornith fp8 in-weights MTP + 多模型路由 E2E + M8 重做 + gemma ngram 可选）；
 26B 24h 长稳时点仍待用户拍板。
 
+**大档评测波·第 7 站 ✅（2026-08-08）：80G 收官批（~3h≈20u）**——
+**① 31B MTP assistant：3.12×**（42.6→132.7 gen_tps，基线与画像 43 吻合），
+tool_call 0.96 逐项同分/解析错 0/longchain 0.833 持平——质量零漂移；稠密档吃满
+官方"至 3×"宣称（MoE 26B 1.92× 对照：稠密带宽占比高+接受率高）。**31B 从
+"质量王但 43tps"翻身 133tps 可用速度，生产分层格局改写**。
+**② Ornith in-weights MTP：0.50× 负收益弃用**（143.8→72.3，且解析错 0→1）——
+SSM 混合架构投机回滚成本反噬；**投机红利只属 gemma 系**。Ornith 基线 tool_call
+本轮 0.96（画像 0.92 的 +1 题带内）。
+**③ 路由 E2E 全通**：双档常驻复现（31B@0.56+26B@0.40，79.9/81.9G）→ edge 拨号
+双端点注册（`追加推理端点：moe-fast`）→ 真轮次 tailnet 流式完成 → 26B 端点真实
+承载；`select_endpoint` 活体五 kind 全按设计（31B 全维领先→0.05 边际挑战不成立
+→恒 main；chat/summary 设计粘滞）。测后 config 回归注释态（生产常开待实机拓扑
+拍板）；devctl -h 一键两职带写 RAG_COMPUTE_HOST 残留已复原（同型坑第二案）。
+**④ M8 约束税定案：稳态零税**（153.1→153.2 tps，-0.1%；掩码步 71 真实发生），
+成本全在**首次 schema 语法编译 ~9.5s**（一次性，缓存后 TTFT 0.03s；生产可预热）
+——首探"10×"确系编译期误判税率。
+**⑤ H 固定开销诊断（用户令，代码层）**：纯引擎稳态 154.8 tps/6.46ms 步（评测环
+另垫 0.7ms）；eager 对照 85.8ms 步=**CUDA graphs 已省 79ms/步（13×），是最大
+杠杆且默认已启用**；FULL_DECODE_ONLY/FULL_AND_PIECEWISE/async_scheduling/
+FLASH_ATTN 覆盖全部试尽**零增益**——引擎参数层无剩余杠杆，余下 ~3.9ms/步在
+kernel 内部（Marlin fp8 反量化+MoE 分发+Triton 强制注意力），属上游/生产原生核
+范畴。结论：单流提速的现实路径=MTP（已入账）与生产机原生核，非调参。
+**⑥ 权重通道革命（用户实测触发）**：大内存 VM 解禁 Xet——Ornith 65G/182s=
+**357MB/s**、26B 52G/185s=281MB/s，较 Drive FUSE rsync（45MB/s）**6-8×**；
+纪律修订入记忆（小内存环境仍禁 Xet；A100 会话权重获取 HF+Xet 直下 > Drive）。
+坑账：h_diag v1 的 `| tail -2` 吞了结果 JSON（S.6"为好看丢线索"变体，重跑修正）。
+产物 Drive eval_results/station7_80g/。**MTP 采用建议待拍板**：26B/31B 生产形态
+默认挂 assistant 草稿（k=4）——质量零漂移+契约 19/19 投机在位已验，唯 min_p 与
+投机互斥需取舍（弃 min_p 或等上游）。
+
 ---
 
 ## §5 待决（开工前需拍板）
