@@ -150,7 +150,9 @@ class ServerState:
     model_name: str = ""                          # /v1/models 报告用
     facade_cache = None                           # T6 门面专用缓存（不入注册表、不 TTL；
                                                   # 聊天客户端全量重发历史 → 前缀匹配白拿增量预填）
-    gen_lock: Optional[asyncio.Lock] = None       # 生成互斥：底层共享单例不可并发
+    gen_sem: Optional[asyncio.Semaphore] = None   # 生成并发闸（T7 参数化：MLX=1 即旧
+                                                  # 互斥语义；vLLM=cuda.max_concurrency，
+                                                  # 引擎连续批处理白拿并发）
     gens: Dict[str, Dict[str, Any]] = {}          # gen_id → {"cancel": bool}（进行中的生成）
     constraint_engine = None                      # 懒建（LLTokenizer ~1s）
     constraint_disabled = _llg is None
@@ -223,7 +225,12 @@ async def lifespan(app: FastAPI):
                     or str(INFERENCE_CFG.get("backend") or ""))
     print(f"🚀 [Server] loading model: {model} (backend={backend_name or 'default'})")
 
-    S.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="inference")
+    # T7 并发参数化：锁与执行器按后端能力开闸——MLX 共享单例不可并发（=1，旧语义
+    # 逐字保留）；vLLM 引擎自带连续批处理，服务面放 N 路并发进去即白拿吞吐。
+    n_concurrency = 1
+    if backend_name == "cuda":
+        n_concurrency = max(1, int((INFERENCE_CFG.get("cuda") or {}).get("max_concurrency") or 8))
+    S.executor = ThreadPoolExecutor(max_workers=n_concurrency, thread_name_prefix="inference")
     S.backend = await get_backend_class(backend_name).load(
         model_path, executor=S.executor, **INFERENCE_CFG)
     # 方言跟着所选模型的注册表条目走（与 engine.py 同一条路）；server 只消费 markers
@@ -231,7 +238,9 @@ async def lifespan(app: FastAPI):
     S.dialect = get_dialect_class(str(_opts.get("dialect") or "")).create(
         S.backend.processor, options=_opts)
     S.registry = CacheRegistry(S.backend, CACHE_TTL_SECONDS)
-    S.gen_lock = asyncio.Lock()
+    S.gen_sem = asyncio.Semaphore(n_concurrency)
+    if n_concurrency > 1:
+        print(f"[Server] 生成并发闸开到 {n_concurrency} 路（vLLM 连续批处理）")
     S.model_name = str(model)
     MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -288,7 +297,7 @@ async def cache_clone(cache_id: str):
     if src is None:
         raise HTTPException(status_code=404, detail="缓存不存在或已被 TTL 回收")
     # 深拷贝在推理执行器线程内做（张量归属线程），并持生成锁防克隆到写一半的缓存
-    async with S.gen_lock:
+    async with S.gen_sem:
         loop = asyncio.get_running_loop()
         cloned = await loop.run_in_executor(S.executor, S.backend.clone_cache, src)
     if cloned is None:
@@ -318,7 +327,7 @@ async def cache_persist(cache_id: str, request: Request):
     if handle is None:
         raise HTTPException(status_code=404, detail="缓存不存在或已被 TTL 回收")
     loop = asyncio.get_running_loop()
-    async with S.gen_lock:
+    async with S.gen_sem:
         ok = await loop.run_in_executor(
             S.executor, lambda: S.backend.persist_cache(handle, str(path)))
     return {"persisted": bool(ok)}
@@ -330,7 +339,7 @@ async def cache_restore(request: Request):
     body = await request.json()
     path = _kv_path(str(body.get("hint", "")))
     loop = asyncio.get_running_loop()
-    async with S.gen_lock:
+    async with S.gen_sem:
         handle = await loop.run_in_executor(
             S.executor, lambda: S.backend.restore_cache(str(path)))
     if handle is None:
@@ -499,7 +508,7 @@ async def generate(request: Request):
     async def _sse():
         # 生成互斥：底层共享单例不可并发。acquire 被取消（排队中客户端断连）时
         # 锁未持有、finally 不会走——语义正确
-        await S.gen_lock.acquire()
+        await S.gen_sem.acquire()
         task = None
         try:
             S.gens[gen_id] = gen_state
@@ -536,7 +545,7 @@ async def generate(request: Request):
 
             def _finish(_fut=None):
                 S.gens.pop(gen_id, None)
-                S.gen_lock.release()
+                S.gen_sem.release()
 
             if task is None:
                 _finish()
@@ -595,7 +604,7 @@ async def oai_chat_completions(request: Request):
                 parts.append(tail)
             return "".join(parts), last
 
-        async with S.gen_lock:
+        async with S.gen_sem:
             text, last = await loop.run_in_executor(S.executor, _run)
         pt = last.prompt_tokens if last else 0
         gt = last.generation_tokens if last else 0
@@ -637,7 +646,7 @@ async def oai_chat_completions(request: Request):
             return last
 
     async def _sse():
-        await S.gen_lock.acquire()
+        await S.gen_sem.acquire()
         task = None
         try:
             yield oai.stream_line(S.model_name, cid, role="assistant")
@@ -666,7 +675,7 @@ async def oai_chat_completions(request: Request):
             stop["flag"] = True
 
             def _finish(_f=None):
-                S.gen_lock.release()
+                S.gen_sem.release()
 
             if task is None:
                 _finish()

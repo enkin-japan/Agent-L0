@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import queue as _queue
 import threading
 import time
@@ -186,7 +187,12 @@ class CudaVLLMBackend:
         args = AsyncEngineArgs(
             model=model_path,
             quantization=self._cfg.get("quantization") or None,   # fp8=Marlin 在线（Ampere）
-            gpu_memory_utilization=float(self._cfg.get("gpu_memory_utilization", 0.92)),
+            # INFER_GPU_FRAC：多实例分层常驻的每实例显存占比覆盖（env 非空即赢，
+            # 与 INFER_PORT/INFER_MODEL_REPO 同惯例）——单卡跑两档模型时各分一块，
+            # config 单值只描述独占形态
+            gpu_memory_utilization=float(
+                os.environ.get("INFER_GPU_FRAC", "").strip()
+                or self._cfg.get("gpu_memory_utilization", 0.92)),
             max_model_len=int(self._cfg.get("max_model_len", 32768)),
             tensor_parallel_size=int(self._cfg.get("tensor_parallel", 1)),
             enable_prefix_caching=bool(self._cfg.get("enable_prefix_caching", True)),

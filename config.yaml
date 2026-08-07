@@ -46,6 +46,8 @@ inference:
   cuda:
     quantization: "fp8"
     gpu_memory_utilization: 0.92
+    max_concurrency: 8            # T7：服务面生成并发闸（vLLM 连续批处理承载；
+                                  # MLX 后端忽略此键恒为 1=旧互斥语义）
     max_model_len: 32768
     tensor_parallel: 1
     enable_prefix_caching: true   # 引擎内自动前缀缓存 = 本后端 clone/复用的物理承载
