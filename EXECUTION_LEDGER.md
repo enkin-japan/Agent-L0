@@ -2854,6 +2854,18 @@ env 的 ssh 起 → venv torch 缺 libcuda **静默落 CPU**（显存恒零案�
 收尾吞结果）都要显式指纹**——VRAM 阶梯与装载时长就是最好的换档指纹。
 产物 Drive eval_results/rag_tiers/。下一目=FP4 偏移三连 → 26B 24h 长稳。
 
+**大档评测波·第 5 站 ✅（2026-08-08）：FP4 能力偏移（NF4 代理，用户新增）**——
+INFER_QUANT env 钩实测可用（vLLM 自动配 load_format=bitsandbytes）。
+**31B 稠密 NF4：能力零偏移**——tool_call 0.92（fp8 0.96，±1 题噪声带）、
+longchain 1.0（反超 fp8 0.833）、vision 合并 0.904（fp8 0.885，+1 题）、cot 零
+泄漏零复读；代价唯速度 gen_tps 34.4 vs 43（-20%，BnB 内核锅——nvfp4 生产核
+另当别论）。**结论：FP4 对稠密 31B 够用信号强烈。**
+**MoE 档（26B/Ornith）NF4 不可行**：vLLM 0.26 BnB 装载器明确拒绝 MoE padded
+专家布局（Parameter shape (991232,1) != checkpoint (2816,704)）——FP4 判断
+对 MoE 双档只能等生产机 nvfp4 原生核。Qwen3.6 弃测（Ornith 全维压制）如前。
+产物 Drive eval_results/{26B,31B}_nf4/。下一目=26B 24h 长稳（时点待用户拍板：
+24h×~5.3-6.8u≈27-35u，CLI 40G 档即可承载）。
+
 ---
 
 ## §5 待决（开工前需拍板）
