@@ -2947,9 +2947,16 @@ kernel 内部（Marlin fp8 反量化+MoE 分发+Triton 强制注意力），属�
 **357MB/s**、26B 52G/185s=281MB/s，较 Drive FUSE rsync（45MB/s）**6-8×**；
 纪律修订入记忆（小内存环境仍禁 Xet；A100 会话权重获取 HF+Xet 直下 > Drive）。
 坑账：h_diag v1 的 `| tail -2` 吞了结果 JSON（S.6"为好看丢线索"变体，重跑修正）。
-产物 Drive eval_results/station7_80g/。**MTP 采用建议待拍板**：26B/31B 生产形态
-默认挂 assistant 草稿（k=4）——质量零漂移+契约 19/19 投机在位已验，唯 min_p 与
-投机互斥需取舍（弃 min_p 或等上游）。
+产物 Drive eval_results/station7_80g/。**MTP 采用已拍板（2026-08-08）：k 不定死，
+按设备取测试最佳**——Colab 期以实测最佳为准（A100：26B/31B 均 k=4），生产机重测；
+同设备测过即记录，复见同设备直接取值。
+〔第 7 站补记〕M5 预估修正两笔（用户指正）：① Ornith 误按稠密算——config 实锤
+Qwen3.5-MoE 系（256 专家/激活 8+shared，hidden 2048，40 层，线性注意力 3:1 混合，
+激活 ~3B）→ M5 4bit 解码与 26B 同档（~140-200 tps 级），非 21-24；② MLX 侧
+MTP 存在——mlx-community 已有 26B/31B/E4B assistant bf16 转换件，**mlx-vlm 有
+load_drafter(kind="mtp")**（12B @ M3 Ultra 实测至 1.72×），mlx-lm（纯文本）支持
+缺口仍开、ollama PR 在途 → Mac 上 gemma 系投机红利可期（幅度待实机测，验证算
+占比高于 CUDA，预期低于 3.12×）。
 
 ---
 
