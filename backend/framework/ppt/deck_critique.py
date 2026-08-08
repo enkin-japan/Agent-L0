@@ -67,7 +67,7 @@ async def _route_vision(engine):
         from ..agents.runtime import get_engine_pool
         pool = get_engine_pool()
         if pool is not None:
-            name = select_endpoint("deck_critique", needs=("vision",))
+            name = select_endpoint("vision_qa", needs=("vision",))
             if name != "main":
                 qa_engine = await pool.engine_for(name)
                 print(f"🔀 [critique] 视觉回读路由 → 专科端点 {name!r}")

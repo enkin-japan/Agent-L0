@@ -141,6 +141,21 @@
 > Colab 推理 + 系统 Chrome 截图，验真机识别"标题截断/太挤/对比差"并正确回写）+ ChartQA
 > 视觉扩容（yes/no 大样本 + 加难批余 ~186 候选续采，双模型共同失败作坏题探测器）。
 
+> 🟡 **2026-08-09：站 C Phase 2a（评审回炉本机验证，e4b inprocess，零 unit）——机制验通+修 1 bug，
+> 质量档卡本机内存**。用户授权后本机起 dev 栈（临时 config.mode=inprocess，验完还原）
+> 用默认 e4b（MLX 缓存、有 vision）端到端验证：造缺陷 deck（超长标题+10 挤 bullets）→
+> chat 触发 e4b 调 deck_critique → **管线全通**：Playwright+系统 Chrome 截 `.deck-print-page`
+> 出 1280×720 真图（page_1 84KB 挤页/page_2 15KB 净页）、工具执行、print 路由供数、digest
+> 良构、fail-soft 生效。**真机抓到 1 个单测抓不到的 bug**（测试 mock 了 _route_vision）：
+> `_route_vision` 用了不存在的路由 kind `'deck_critique'`（词汇表仅 chat/longchain/summary/
+> tool_use/**vision_qa**）→ 已修为 `vision_qa`（excel 同款）。e4b 对明显缺陷页判 pass=视觉
+> 太弱抓不到（正是当初推迟到 31b 的原因，非管线 bug）。**质量档验证受阻**：本机切
+> 26b-a4b-4bit MLX 触发 **Metal OOM**（需 14.6GB > GPU 推荐上限 12GB，vision 生成时爆）——
+> 这台 Mac 只装得下 e4b/e2b，26b/31b 强模型 vision 质量验证需**更大内存机器或 Colab-hetero**
+> （Mac edge 前端+backend 走 remote 连 Colab 40G 26B 推理）。运维发现：本机 `.model-selection`
+> 钉着 `google/gemma-4-31B-it`（CUDA bf16 模型）——本机 inprocess MLX 跑不了且触发 62GB 下载
+> hang，已按原样还原但需用户注意（清掉或换 MLX 档）。金测试 713 保持。
+
 ---
 
 ## §D 已定决策（不再重议）
