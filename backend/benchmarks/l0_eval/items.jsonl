@@ -25,3 +25,8 @@
 {"id": "l0-addr-004", "kind": "address", "payload": "帮我看看这段话有没有语病：我们公司刚搬到滨江科技园 B 座 11 层，欢迎新老客户来访。", "must_mask": ["滨江科技园 B 座 11 层"], "must_keep": ["语病"], "fit": "工作地址藏在改写任务里（任务本体与敏感信息正交——L0 只看数据不看任务）"}
 {"id": "l0-name-005", "kind": "name", "payload": "周师傅说刹车片还能撑 5000 公里，靠谱吗？车是 2019 年的卡罗拉。", "must_mask": ["周师傅"], "must_keep": ["刹车片", "卡罗拉"], "fit": "称呼式人名（检索评估集同款人物）；车型是公共产品名不该遮"}
 {"id": "l0-neg-004", "kind": "negative", "payload": "解释一下日本的ふるさと納税制度，上限额是怎么计算的？", "must_mask": [], "must_keep": ["ふるさと納税"], "fit": "日文制度咨询：零可遮 + 专有制度名不误遮（日本市场高频形态）"}
+{"id": "l0-acct-003", "kind": "account", "payload": "我招商银行尾号 8672 的卡这个月被扣了两笔年费，帮我写个申诉话术。", "must_mask": ["8672"], "must_keep": ["招商银行"], "fit": "尾号指称（account 残余短板补题 2026-08-09）：四位数字本身不触发任何规则，全靠语境理解；银行名是公共机构不该遮"}
+{"id": "l0-acct-004", "kind": "account", "payload": "ANAのマイレージ番号 3782941065 のマイルが今月末で失効しそうです。延長する方法はありますか。", "must_mask": ["3782941065"], "must_keep": ["ANA"], "fit": "日文会员号语境（account 补题）：纯数字串非卡号格式（10 位），Luhn 规则腿不触发"}
+{"id": "l0-acct-005", "kind": "account", "payload": "我的工号 EMP-20443 在新考勤系统里查不到记录，帮我起草一封发给人事的邮件。", "must_mask": ["EMP-20443"], "must_keep": ["考勤"], "fit": "工号形态（account 补题）：字母数字混合但短于密钥格式，规则腿够不着；起草类=最高频出网形态"}
+{"id": "l0-acct-006", "kind": "account", "payload": "我的游戏账号叫「碳烤秋刀鱼」，昨天无故被封了，帮我写申诉。", "must_mask": ["碳烤秋刀鱼"], "must_keep": ["申诉"], "fit": "中文语境句柄（account 补题）：无任何格式特征的自然语账号指称，纯语境题——account 形态里最难的一档"}
+{"id": "l0-acct-007", "kind": "account", "payload": "My Wise transfer to account ref P-4471203 has been pending for five days. Draft a support message.", "must_mask": ["P-4471203"], "must_keep": ["Wise"], "fit": "英文转账参考号（account 补题）：短标识符+平台名保留，与 acct-002 保单号同构的英文变体"}

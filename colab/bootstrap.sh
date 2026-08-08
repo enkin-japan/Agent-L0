@@ -90,8 +90,10 @@ echo "代码就绪: $APP（$(cat "$ROOT/code/HEAD.txt" 2>/dev/null || echo 'HEAD
 note "③ pip 依赖（vLLM 等，首跑 ~5 分钟）"
 export PIP_CACHE_DIR="$ROOT/cache/pip"
 mkdir -p "$PIP_CACHE_DIR"
+# faster-whisper = ASR 的 CUDA 腿（CTranslate2；A3）——/v1/transcribe 在这台机器上
+# 靠它才不 503（mlx-whisper 是 mac 专属件，装不上也用不了）。pip -U 天然幂等。
 pip -q install -U vllm "huggingface_hub[hf_transfer]" transformers \
-    fastapi uvicorn pyyaml requests llguidance pillow soundfile \
+    fastapi uvicorn pyyaml requests llguidance pillow soundfile faster-whisper \
   || die "pip 安装失败"
 # vLLM 新轮子的原生扩展可能链更高大版的 CUDA 运行时（实测 cu13）而 Colab 自带
 # torch 是 cu12x——pip 的 nvidia/* 库目录全部前置进 LD 路径，两代 cudart soname

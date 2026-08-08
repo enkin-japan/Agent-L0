@@ -45,7 +45,7 @@ pandas/magika/onnxruntime 等连带体积在 edge 瘦身账里都记过账），
 
 ## 3. 裁决细节
 
-### 3.1 名实不符的扩展名表 ★ 建议顺手修（本评估唯一的真发现）
+### 3.1 名实不符的扩展名表 ★ ~~建议顺手修~~ **已修（7fd3d20，2026-07-18）**：.xls 转正（xls extra）+ 6 个假支持格式改带指引懒登记；2026-08-09 复核补 xlrd 显式钉版
 
 `ingestion/router.py` 与 `file_extract.py` 的办公文档扩展名表声明了
 `.doc .ppt .xls .odt .odp .ods .rtf`，但 markitdown **没有这些格式的本地转换器**

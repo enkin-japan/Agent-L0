@@ -16,32 +16,34 @@ even though it would work in desktop Excel. Stay inside the safe set.
 - Date/time: `DATE YEAR MONTH DAY EOMONTH EDATE TODAY NOW WEEKDAY NETWORKDAYS DATEDIF`
 - Financial: `NPV IRR PMT PV FV RATE NPER`
 
-## Banned — dynamic-array / spill functions
+## Modern functions — allowed WITH the file-format prefix
 
-`XLOOKUP FILTER UNIQUE SORT SORTBY SEQUENCE RANDARRAY TEXTSPLIT TOCOL TOROW
-LET LAMBDA BYROW BYCOL MAP SCAN`
+Functions newer than Excel 2007 must be written with the `_xlfn.` prefix for the file
+format; without it both real Excel and the gate show `#NAME?`. Gate-verified working
+set (2026-08-09, values checked against LibreOffice recalc):
 
-Two independent reasons:
-1. openpyxl writes no spill metadata (`cm`/`vm` attributes), so even in real Excel the
-   result may occupy only the anchor cell instead of spilling.
-2. The verification engine may not compute them; you get a lowercased formula or
-   `#NAME?` in the shadow and an L1 failure.
+- Plain `_xlfn.` family: `=_xlfn.XLOOKUP(a,col1,col2)`, `=_xlfn.XMATCH(...)`,
+  `=_xlfn.IFS(...)`, `=_xlfn.TEXTJOIN(",",TRUE,A1:A9)`, `=_xlfn.MAXIFS(...)`,
+  `=_xlfn.MINIFS(...)`, `=_xlfn.CONCAT(...)`, `=_xlfn.SWITCH(...)`,
+  `=_xlfn.UNIQUE(...)`, `=_xlfn.SEQUENCE(...)`
+- `LET` uses `_xlpm.` for its variable names: `=_xlfn.LET(_xlpm.x,5,_xlpm.x*2)`
+- Spill lookup/sort/filter need the longer worksheet prefix:
+  `=_xlfn._xlws.SORT(...)`, `=_xlfn._xlws.FILTER(range,cond)`
 
-Replacement patterns:
+Spill caveat: openpyxl writes no spill metadata (`cm`/`vm`), so a spill result may
+occupy only the anchor cell in desktop Excel. **Wrap spill functions in an
+aggregator** — `=SUM(_xlfn._xlws.FILTER(...))`, `=INDEX(_xlfn._xlws.SORT(...),1)`,
+`=SUMPRODUCT(_xlfn.UNIQUE(...))` — or write the expanded values from Python.
+
+## Still banned — the gate cannot evaluate them
+
+`LAMBDA BYROW BYCOL MAP SCAN RANDARRAY TEXTSPLIT TOCOL TOROW SORTBY`
+(inline `_xlfn.LAMBDA(...)(...)` recalcs to `#VALUE!` — verified). Classic
+replacement patterns when you'd rather stay conservative:
 - `XLOOKUP(a, col1, col2)`      → `INDEX(col2, MATCH(a, col1, 0))`
 - `FILTER` / `UNIQUE` / `SORT`  → do it in Python (pandas) and write plain values,
   or use classic `SUMIFS`/`COUNTIFS` when the goal is aggregation.
 - `SEQUENCE`                    → write the series from Python.
-
-## Sometimes-needed `_xlfn.` prefix
-
-Functions newer than Excel 2007 must be written with the `_xlfn.` prefix for the file
-format, e.g. `=_xlfn.IFS(...)`, `=_xlfn.TEXTJOIN(",",TRUE,A1:A9)`, `=_xlfn.MAXIFS(...)`,
-`=_xlfn.MINIFS(...)`, `=_xlfn.CONCAT(...)`, `=_xlfn.SWITCH(...)`.
-Excel shows them normally. Without the prefix Excel displays `#NAME?`.
-If unsure, avoid the function: every `_xlfn.` function above has a classic equivalent
-(`IFS`→nested `IF`, `TEXTJOIN`→`&` chain or Python, `MAXIFS`→`MAX(IF(...))` avoided —
-use SUMPRODUCT tricks or Python).
 
 ## General rules
 

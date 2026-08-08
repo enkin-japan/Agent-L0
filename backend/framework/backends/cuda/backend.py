@@ -13,12 +13,15 @@
   stc/etc 锚定语义同构；2026-08-07 A100 实测 per-request logits_processors 已被
   vLLM 0.26 拒收，_TorchGuardAdapter 降级路留作旧版后备）。仪表：生成尾声按
   stc/etc token 数出约束段 token 数回填 guard.masked_positions（同进程对象）。
-- **诚实边界（均响亮不静默）**：thinking 预算裁决未接——vLLM 0.26 原生位
-  SamplingParams.thinking_token_budget 需引擎级 reasoning_config（思考起止 token
-  序列）且强制 VLLM_USE_V2_MODEL_RUNNER=0（2026-08-07 源码勘定）；为上限兜底功能
-  降级全局 runner 不划算，等 vLLM V2 支持后按此路径接线（max_tokens 仍封顶）。
-  repetition_context_size 无对应物（vLLM 惩罚窗=全上下文）；vision/audio 多模态
-  载荷按 vLLM multi_modal_data 形状透传但未实测；投机采样未接。
+- **thinking 预算裁决**：两段式（A1 方案，2026-08-09 落地）——enable_thinking 时
+  方言 prompt 以思考开符收尾（生成从思考频道内起步），段一 stop=思考闭符 +
+  max_tokens=预算封顶；停因 length（超限）即强插「\n<闭符>」段二续跑，APC 使段二
+  prefill 近零成本。不用 vLLM 原生 thinking_token_budget：它需引擎级
+  reasoning_config 且强制 V1 runner（2026-08-07 源码勘定，为上限兜底降级全局
+  runner 不划算）。
+- **诚实边界（均响亮不静默）**：repetition_context_size 无对应物（vLLM 惩罚窗=
+  全上下文）；audio 多模态载荷按 vLLM multi_modal_data 形状透传但未实测（vision
+  已由 model_eval 26B 20/20 实测走通）。
 
 文本口径：SamplingParams(skip_special_tokens=False)——GenChunk.text 必须含频道/
 工具标记（协议注释"全程累加即为完整原始文本"），可见性过滤是上游 stream_filter
@@ -167,6 +170,8 @@ class CudaVLLMBackend:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._per_request_lp_ok = True   # 首次被拒后降级并只告警一次
+        # 两段式思考预算：外部取消只知外层 request_id，段二真实 rid 经此表间接寻址
+        self._rid_map: Dict[str, str] = {}
 
     # ---- 装配（阻塞，跑在 load 的线程池里） ----
 
@@ -266,8 +271,6 @@ class CudaVLLMBackend:
             raise RuntimeError("CUDA 后端未装配（load 未完成或已 shutdown）")
         sampling = sampling or {}
         features = features or {}
-        if features.get("thinking_budget") is not None:
-            print("[CUDA] ⚠ thinking 预算裁决未实现（Colab 联调清单）——本轮不限预算")
 
         q: _queue.Queue = _queue.Queue(maxsize=256)
         request_id = uuid.uuid4().hex
@@ -294,7 +297,8 @@ class CudaVLLMBackend:
 
     async def _abort(self, request_id: str):
         try:
-            await self._engine.abort(request_id)
+            # 两段式在飞时真实 rid 可能是 "<request_id>-p2"（映射表间接寻址）
+            await self._engine.abort(self._rid_map.get(request_id, request_id))
         except Exception:
             pass
 
@@ -320,32 +324,37 @@ class CudaVLLMBackend:
                 sp_kwargs.pop("min_p")
             guard = features.get("tool_guard")
             constraint = features.get("tool_constraint")
-            sp = None
             st_used = False
-            if constraint:
-                # 首选：vLLM 原生 structural-tag（触发前自由、标记内按 schema）。
-                # 构建被拒（老版无此参数/形态变更）则响亮落到 logits processor 后备。
-                try:
-                    from vllm.sampling_params import StructuredOutputsParams
-                    sp = SamplingParams(**sp_kwargs,
-                                        structured_outputs=StructuredOutputsParams(
-                                            structural_tag=structural_tag_json(constraint)))
-                    st_used = True
-                except Exception as e:
-                    print(f"[CUDA] ⚠ structural-tag 约束构建被拒（{e}）——"
-                          f"尝试 per-request logits processor 后备路")
-            if sp is None and guard is not None and self._per_request_lp_ok:
-                try:
-                    sp = SamplingParams(**sp_kwargs,
-                                        logits_processors=[_TorchGuardAdapter(guard)])
-                except Exception as e:
-                    self._per_request_lp_ok = False
-                    print(f"[CUDA] ⚠ 本 vLLM 版本不支持 per-request logits_processors"
-                          f"（{e}）——工具段约束降级为无约束+上游解析")
-            if sp is None:
-                sp = SamplingParams(**sp_kwargs)
 
-            gen_input: Any = {"prompt_token_ids": ids}
+            def _build_sp(**overrides):
+                """按相同的约束优先级构建 SamplingParams（两段式思考预算须逐段重建：
+                max_tokens/stop 每段不同，约束语义两段一致）。"""
+                nonlocal st_used
+                kw = dict(sp_kwargs)
+                kw.update(overrides)
+                if constraint:
+                    # 首选：vLLM 原生 structural-tag（触发前自由、标记内按 schema）。
+                    # 构建被拒（老版无此参数/形态变更）则响亮落到 logits processor 后备。
+                    try:
+                        from vllm.sampling_params import StructuredOutputsParams
+                        sp_ = SamplingParams(**kw,
+                                             structured_outputs=StructuredOutputsParams(
+                                                 structural_tag=structural_tag_json(constraint)))
+                        st_used = True
+                        return sp_
+                    except Exception as e:
+                        print(f"[CUDA] ⚠ structural-tag 约束构建被拒（{e}）——"
+                              f"尝试 per-request logits processor 后备路")
+                if guard is not None and self._per_request_lp_ok:
+                    try:
+                        return SamplingParams(**kw,
+                                              logits_processors=[_TorchGuardAdapter(guard)])
+                    except Exception as e:
+                        self._per_request_lp_ok = False
+                        print(f"[CUDA] ⚠ 本 vLLM 版本不支持 per-request logits_processors"
+                              f"（{e}）——工具段约束降级为无约束+上游解析")
+                return SamplingParams(**kw)
+
             mm: Dict[str, Any] = {}
             if images:
                 from PIL import Image
@@ -353,53 +362,115 @@ class CudaVLLMBackend:
             if audios:
                 import soundfile as sf
                 mm["audio"] = [sf.read(p) for p in audios]
-            if mm:
-                gen_input["multi_modal_data"] = mm
 
             t0 = time.time()
             t_first: Optional[float] = None
-            prev_text = ""
             n_prompt = len(ids)
-            last_out = None
-            async for out in self._engine.generate(gen_input, sp, request_id):
-                last_out = out
-                comp = out.outputs[0]
-                if t_first is None and comp.token_ids:
-                    t_first = time.time()
-                seg = comp.text[len(prev_text):]
-                prev_text = comp.text
-                if not seg and not comp.finish_reason:
-                    continue
-                n_gen = len(comp.token_ids)
-                now = time.time()
-                prompt_tps = n_prompt / max(t_first - t0, 1e-6) if t_first else 0.0
-                gen_tps = (n_gen / max(now - t_first, 1e-6)) if t_first else 0.0
-                extra: Dict[str, Any] = {}
-                cached = getattr(out, "num_cached_tokens", None)
-                if cached is not None:
-                    extra["reused_prefix"] = int(cached)   # T4R 仪表：0 也回吐
-                q.put(GenChunk(
-                    text=seg,
-                    delta=seg if features.get("want_delta") else None,
-                    prompt_tokens=n_prompt,
-                    generation_tokens=n_gen,
-                    prompt_tps=round(prompt_tps, 1),
-                    generation_tps=round(gen_tps, 1),
-                    peak_memory=self._peak_gb(),
-                    extra=extra,
-                ))
+            base_tokens = 0            # 前序段已计入的生成 token 数（两段式跨段累计）
+
+            async def _run_phase(p_ids: List[int], sp_, rid: str):
+                """跑一段生成、逐 chunk 入队；返回最后一个 completion（含全段
+                token_ids/finish_reason）。计数口径对上层保持单段假象：
+                generation_tokens = base_tokens + 本段。"""
+                nonlocal t_first
+                self._rid_map[request_id] = rid
+                gi: Any = {"prompt_token_ids": p_ids}
+                if mm:
+                    gi["multi_modal_data"] = mm
+                prev_text = ""
+                comp = None
+                async for out in self._engine.generate(gi, sp_, rid):
+                    comp = out.outputs[0]
+                    if t_first is None and comp.token_ids:
+                        t_first = time.time()
+                    seg = comp.text[len(prev_text):]
+                    prev_text = comp.text
+                    if not seg and not comp.finish_reason:
+                        continue
+                    n_gen = base_tokens + len(comp.token_ids)
+                    now = time.time()
+                    prompt_tps = n_prompt / max(t_first - t0, 1e-6) if t_first else 0.0
+                    gen_tps = (n_gen / max(now - t_first, 1e-6)) if t_first else 0.0
+                    extra: Dict[str, Any] = {}
+                    cached = getattr(out, "num_cached_tokens", None)
+                    if cached is not None:
+                        extra["reused_prefix"] = int(cached)   # T4R 仪表：0 也回吐
+                    q.put(GenChunk(
+                        text=seg,
+                        delta=seg if features.get("want_delta") else None,
+                        prompt_tokens=n_prompt,
+                        generation_tokens=n_gen,
+                        prompt_tps=round(prompt_tps, 1),
+                        generation_tps=round(gen_tps, 1),
+                        peak_memory=self._peak_gb(),
+                        extra=extra,
+                    ))
+                return comp
+
+            # ---- thinking 预算裁决（A1 两段式）----
+            # enable_thinking=True 时方言 prompt 以「<soc>thought\n」收尾=生成从思考
+            # 频道内起步：段一 stop=思考闭符 + max_tokens=预算封顶；停因=stop 即自然
+            # 收束，停因=length 即超限强插「\n<闭符>」（与 MLX ThinkingBudgetCriteria
+            # 同语义）；段二从段一末续跑（APC 使段二 prefill 近零成本）。
+            # enable_thinking=False 时频道已被 builder 预开即闭，预算无的放矢，单段照旧。
+            # 边界（注释即契约）：只裁决起步思考段——正文中模型自发重开思考不再设限
+            # （gemma4 方言不出现该形态；MLX 侧 criteria 同样只按首段计数）。
+            end_tok = features.get("thinking_end_token")
+            think_budget = features.get("thinking_budget")
+            two_phase = (think_budget is not None and end_tok
+                         and features.get("enable_thinking"))
+            all_gen_ids: List[int] = []
+            if two_phase:
+                budget = max(1, min(int(think_budget), sp_kwargs["max_tokens"]))
+                sp1 = _build_sp(max_tokens=budget, stop=[end_tok],
+                                include_stop_str_in_output=True)
+                comp1 = await _run_phase(ids, sp1, request_id)
+                if comp1 is not None:
+                    all_gen_ids = list(comp1.token_ids)
+                    base_tokens = len(all_gen_ids)
+                    if end_tok not in comp1.text:
+                        # 预算耗尽：强闭思考频道，闭符进规范文本（parser 见到成对标记）
+                        forced = "\n" + end_tok
+                        forced_ids = self._tokenizer.encode(
+                            forced, add_special_tokens=False)
+                        all_gen_ids += forced_ids
+                        base_tokens = len(all_gen_ids)
+                        q.put(GenChunk(
+                            text=forced,
+                            delta=forced if features.get("want_delta") else None,
+                            prompt_tokens=n_prompt,
+                            generation_tokens=base_tokens,
+                            prompt_tps=0.0, generation_tps=0.0,
+                            peak_memory=self._peak_gb(),
+                            extra={"thinking_budget_forced_close": True},
+                        ))
+                    remaining = int(sp_kwargs["max_tokens"]) - base_tokens
+                    if remaining > 0:
+                        sp2 = _build_sp(max_tokens=remaining)
+                        comp2 = await _run_phase(ids + all_gen_ids, sp2,
+                                                 f"{request_id}-p2")
+                        if comp2 is not None:
+                            all_gen_ids += list(comp2.token_ids)
+            else:
+                sp = _build_sp()
+                comp = await _run_phase(ids, sp, request_id)
+                if comp is not None:
+                    all_gen_ids = list(comp.token_ids)
+
             # token_ids 记账：prompt + 已生成（APC 复用与上层裁剪判断的依据）
-            if isinstance(cache, CudaCacheHandle) and last_out is not None:
-                cache.token_ids = list(ids) + list(last_out.outputs[0].token_ids)
+            if isinstance(cache, CudaCacheHandle) and all_gen_ids:
+                cache.token_ids = list(ids) + all_gen_ids
             # 仪表回填：structural-tag 由引擎掩码，guard 收不到逐 token 事件——
             # 尾声按 stc/etc 数出约束段 token 数写回 masked_positions（server done
             # 事件的 constrained_steps 口径；同进程对象直改）。
-            if st_used and guard is not None and last_out is not None:
+            if st_used and guard is not None and all_gen_ids:
                 guard.masked_positions = _count_constrained_tokens(
-                    list(last_out.outputs[0].token_ids), self._tokenizer, constraint)
+                    all_gen_ids, self._tokenizer, constraint)
             q.put(None)
         except BaseException as e:
             q.put(e)
+        finally:
+            self._rid_map.pop(request_id, None)
 
     @staticmethod
     def _peak_gb() -> float:

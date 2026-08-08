@@ -168,7 +168,10 @@
 
 ## 8. 遗留项（非阻塞，择机做）
 
-- 沙箱 `research_sandbox` 的 web_search/open_pages 尚未接约束采样（主 Agent 已接）。
+- ~~沙箱 `research_sandbox` 的 web_search/open_pages 尚未接约束采样（主 Agent 已接）~~
+  **已销案（2026-08-09 核查）**：guard/约束附着后来通用化进了 `engine.generate_once`
+  （engine.py `_tool_guard(tools)` 对全部调用方生效，沙箱经 `tools=_TOOLS` 同路）——
+  本条写于通用化之前，属陈账。
 - 自由散文下自研循环仍有 ~3-5ms/token 固定开销（31B 上占比 ~6-9%）；若在意，
   方向是把 lm forward 的 python 构图也挪进重叠区（收益有限，优先级低）。
 - `speculative.mode=off` + `constrained_tool_calls: false` 即完全回退到改动前路径，

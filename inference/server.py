@@ -60,7 +60,7 @@ from framework.utils.path_resolver import resolve_model_path
 from framework.dialects import get_dialect_class
 from framework.core.constrained import ToolConstraintEngine, ToolCallGuard, llguidance as _llg
 from framework.backends import (AsrProviderUnavailable, get_asr_provider,
-                                get_backend_class)
+                                get_backend_class, resolve_local_asr_provider)
 from framework.core.stream_filter import VisibleTextStreamer
 
 import openai_facade as oai  # 同目录纯逻辑层（T6 门面）
@@ -383,9 +383,11 @@ async def transcribe(request: Request):
     # 区间切片也在 A 做（edge 不留 librosa，见 backends/remote/asr.py）
     start = body.get("start")
     end = body.get("end")
-    # A 侧就是本地实现——直接点名 mlx_whisper，不走 auto（auto 读的是 config 的
-    # inference.mode，而这份 config 与设备 B 共用一份；A 上 auto 会解析成 remote 打回自己）
-    fn = get_asr_provider("mlx_whisper")
+    # A 侧就是本地实现——点名本机腿，不走 auto（auto 读的是 config 的 inference.mode，
+    # 而这份 config 与设备 B 共用一份；A 上 auto 会解析成 remote 打回自己）。
+    # 具体是哪条本机腿按物理承载定（mac=mlx_whisper / CUDA=faster_whisper，A3）：
+    # 原先这里钉死 mlx_whisper，A 换成 CUDA 机后整个 /v1/transcribe 必 503。
+    fn = get_asr_provider(resolve_local_asr_provider())
     loop = asyncio.get_running_loop()
     try:
         text = await loop.run_in_executor(

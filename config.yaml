@@ -378,10 +378,12 @@ tuning:
 # 靠 file_extract/shell 按需取）。解析发生在推理 worker 之外，结果烘进历史日志、重放不重解析。
 ingestion:
   # 转写实现（backends 注册面）。"auto" = 跟随 inference.mode：mode=remote（推理在设备 A）
-  # → 转写也在 A（R5-2/D.14：edge 不留 whisper/torch/librosa）；mode=inprocess → 本机 mlx_whisper。
+  # → 转写也在 A（R5-2/D.14：edge 不留 whisper/torch/librosa）；mode=inprocess → 本机腿
+  # 按平台挑（darwin=mlx_whisper / 其余=faster_whisper〔CTranslate2/CUDA，A3〕）。
   # 刻意默认 auto 而非某个具体实现：两个旋钮各说各话时症状很隐蔽——mode=remote 却把 asr
   # 留在 mlx_whisper，edge 就得为一个用不上的转写实现继续背 torch 全家，且没有任何报错。
-  # 可显式覆盖为 mlx_whisper / remote。
+  # 可显式覆盖为 mlx_whisper / faster_whisper / remote。asr_model 是 mlx 腿命名，
+  # faster_whisper 腿会把 mlx-community/ 件翻译成自家默认（cuda/asr.py _resolve_model_name）。
   asr_provider: "auto"
   asr_model: "mlx-community/whisper-large-v3-turbo"  # ASR 模型（懒加载、进程内复用）
   asr_language: null            # null=自动检测语种；也可固定如 "ja"/"zh"/"en"
