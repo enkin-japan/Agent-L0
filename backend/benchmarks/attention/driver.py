@@ -8,6 +8,8 @@
 
 用法：
   python3 driver.py --work /path/to/workroot --out results.jsonl [--reps 3] [--tasks A,B,...]
+  需 backend 正在运行（devctl 起栈）；鉴权密钥取环境变量 BENCH_KEY，缺省自动从
+  仓库根 .env.local 解析 AGENT_API_KEY。
 
 对同一套件在 main 与特性分支各跑一遍，对比 results 两份 jsonl 即为收益数据。
 """
@@ -27,6 +29,21 @@ SESSIONS = os.environ.get(
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 MAX_APPROVAL_ROUNDS = 15
 HTTP_TIMEOUT = 1800
+
+ENV_LOCAL = "/Volumes/enkin/project/Agent/.env.local"
+BENCH_KEY = os.environ.get("BENCH_KEY", "")
+if not BENCH_KEY:
+    # devctl 经 shell source 注入密钥，本脚本常脱离该环境直起，故自行解析一次
+    try:
+        with open(ENV_LOCAL, encoding="utf-8") as f:
+            for line in f:
+                if line.strip().startswith("AGENT_API_KEY="):
+                    BENCH_KEY = line.strip().split("=", 1)[1].strip().strip("\"'")
+                    break
+    except OSError:
+        pass
+# 空 key 时不加头：与服务端「未配置密钥即放行」对称（本地栈免配）
+AUTH = {"Authorization": f"Bearer {BENCH_KEY}"} if BENCH_KEY else {}
 
 # ---------------------------------------------------------------- 任务定义
 
@@ -250,6 +267,75 @@ def scrape_events(sid):
     return out
 
 
+# ---------------------------------------------------------------- 事件账本
+
+def iter_sse(resp):
+    """把 SSE 字节流拆成事件信封 dict（协议 v1：data 即完整信封，含 seq/type/data）。
+
+    帧类型以信封内的 `type` 键为准，`event:` 行只作冗余；以 `:` 开头的注释行
+    （服务端心跳 `: ping`）绝不能当帧解析。坏 JSON 帧跳过而非中断整条流。
+    """
+    buf = []
+    for line in resp.iter_lines(decode_unicode=True):
+        if line is None:
+            continue
+        if line == "":                      # 空行 = 帧结束
+            if buf:
+                try:
+                    yield json.loads("\n".join(buf))
+                except ValueError:
+                    pass
+                buf = []
+            continue
+        if line.startswith(":"):            # 注释行（心跳）
+            continue
+        if line.startswith("data:"):
+            buf.append(line[5:].lstrip())   # 规范允许同帧多条 data 行，以 \n 连接
+
+
+def run_turn(sid, prompt):
+    """提交一轮并全程附着事件流直到终态，返回 (status, approvals)。
+
+    协议 v1：/turns 与 /turns/approval 都是 202 受理即返，真正的过程与终态只在
+    /events 里。SSE 断连即带 after 游标重连续播（游标跨重连必须保持，否则重放漏事件）。
+    """
+    r = requests.post(f"{BASE}/api/v1/chat/{sid}/turns",
+                      data={"prompt": prompt, "enable_thinking": "true"},
+                      headers=AUTH, timeout=60)
+    r.raise_for_status()
+
+    approvals = 0
+    after = 0
+    deadline = time.time() + HTTP_TIMEOUT
+    while time.time() < deadline:
+        try:
+            resp = requests.get(f"{BASE}/api/v1/chat/{sid}/events",
+                                params={"after": after}, headers=AUTH,
+                                stream=True, timeout=(10, 120))
+            resp.raise_for_status()
+            for env in iter_sse(resp):
+                after = max(after, env.get("seq") or 0)
+                etype = env.get("type")
+                if etype == "awaiting_approval":
+                    approve = approvals < MAX_APPROVAL_ROUNDS
+                    if approve:
+                        approvals += 1
+                    # 超预算也必须显式拒批：轮次悬在 awaiting_approval 会泄漏会话
+                    try:
+                        requests.post(f"{BASE}/api/v1/chat/{sid}/turns/approval",
+                                      json={"approve": approve}, headers=AUTH,
+                                      timeout=60)
+                    except requests.exceptions.RequestException:
+                        pass                # 409（无待审批轮）与瞬时故障都靠事件流兜底
+                elif etype == "turn_ended":
+                    return (env.get("data") or {}).get("status"), approvals
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.ReadTimeout,
+                requests.exceptions.ChunkedEncodingError):
+            continue                        # 断连重连，after 续播
+    return "driver_timeout", approvals
+
+
 # ---------------------------------------------------------------- 执行
 
 def run_one(task_name, spec, rep, workroot):
@@ -265,18 +351,7 @@ def run_one(task_name, spec, rep, workroot):
     approvals = 0
     status = "driver_error"
     try:
-        r = requests.post(f"{BASE}/api/v1/chat/{sid}",
-                          data={"prompt": prompt, "enable_thinking": "true"},
-                          timeout=HTTP_TIMEOUT)
-        r.raise_for_status()
-        data = r.json()
-        while data.get("status") == "pending_approval" and approvals < MAX_APPROVAL_ROUNDS:
-            approvals += 1
-            r = requests.post(f"{BASE}/api/v1/chat/{sid}/approval",
-                              json={"approve": True}, timeout=HTTP_TIMEOUT)
-            r.raise_for_status()
-            data = r.json()
-        status = data.get("status")
+        status, approvals = run_turn(sid, prompt)
     except Exception as e:
         status = f"driver_error: {type(e).__name__}: {e}"
     wall = round(time.time() - t0, 1)

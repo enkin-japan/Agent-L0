@@ -184,6 +184,17 @@
 > 全程仅 ~8min（gen 95tps 均值，297 题）。GPU 即停即清（会话 03c1c0 全程 ~45min）。
 > 站 C 三阶段合计：评审回炉 feature+质量档验证收官+视觉扩容 26B 侧，金测试 716。
 
+> 🟢 **2026-08-09：#76 attention/driver 现代化 ✅（免 GPU，本机 e4b）——31B 编排层
+> 验收解锁**。站 B 发现的 harness 漂移清偿：审批环从已移除的同步 `/approval` 迁至
+> 协议 v1 事件账本制（POST /turns 202 → SSE /events 附着观察 → awaiting_approval
+> 即决 → turn_ended 收轮）。要点：after 游标跨重连保持（重连首帧 stream_attached
+> seq=0，用 max 防游标回卷死循环）、心跳注释行不当帧、超预算显式拒批防轮次悬挂
+> 泄漏会话、鉴权 BENCH_KEY/.env.local 自动解析（空 key 不加头与服务端放行语义对称）。
+> 主会话定案设计→implementer 实施→主会话审 diff 通过→E2E 真机验收（inprocess e4b
+> 临时切换已还原）：A_small_edit **双审批打穿**、turn_ended status=success、断言与
+> 痕迹抓取照常。痕迹/断言逻辑未动，历史数据可比。金测试 716。#77 的 80G 场现可
+> 加跑 31B 编排层 attention 验收（6 任务 × n≥10）。
+
 ## §D 已定决策（不再重议）
 
 | | 决策 | 定于 | 依据 |

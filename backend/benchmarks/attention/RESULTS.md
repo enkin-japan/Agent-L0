@@ -49,3 +49,9 @@ main 基线 commit：e7a0eba ｜ 分支：attention-guardrails（护栏事件回
 python3 benchmarks/attention/driver.py --work /tmp/bench_work --out results.jsonl --reps 3
 # 按会话聚合护栏事件：guardrail_events.jsonl 的 session 字段 == 驱动打印的 sid
 ```
+
+> 2026-08-09 driver 现代化：审批环从已移除的同步 `/approval` 端点迁至协议 v1
+> 事件账本制（POST /turns 202 → SSE /events 观察 → awaiting_approval 即决 →
+> turn_ended 收轮；断连带 after 游标续播）。鉴权经 BENCH_KEY 或 .env.local 自动
+> 解析。E2E 已验（e4b inprocess，A_small_edit 双审批打穿全通）。历史数据可比性
+> 不受影响——痕迹抓取与断言逻辑未动。
