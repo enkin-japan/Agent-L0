@@ -327,7 +327,7 @@ rag:
       embed_dim: 2560
       dtype: "bf16"
       thresholds: { insert_routing_max_distance: 0.8, query_routing_max_distance: 0.85, rerank_min_score: 0.5 }
-      note: "~16GB fp16 | 阈值待标定 | 开发机可单模型/8bit 试载，双模型 bf16 偏紧"
+      note: "~16GB fp16 | 2026-08-08 A100 选型否决（检索 0.882 反低于 0.6b，尺寸无红利）不采用 | 阈值故不标定"
     - id: "text-8b"
       modality: "text"
       embed_repo: "Qwen/Qwen3-Embedding-8B"
@@ -335,15 +335,22 @@ rag:
       embed_dim: 4096
       dtype: "bf16"
       thresholds: { insert_routing_max_distance: 0.8, query_routing_max_distance: 0.85, rerank_min_score: 0.5 }
-      note: "~30GB fp16 | 生产档 | 需设备 A（≥40GB 或双卡分置）"
+      note: "~30GB fp16 | 2026-08-08 A100 选型否决（检索 0.912 仍低于 0.6b/vl-2b 的 0.941）不采用 | 阈值故不标定"
     - id: "vl-2b"
       modality: "vl"
       embed_repo: "Qwen/Qwen3-VL-Embedding-2B"
       rerank_repo: "Qwen/Qwen3-VL-Reranker-2B"
       embed_dim: 2048            # 实测回填（B2b：开发机 M4 bf16 单拉 RAG，与官方 1_Pooling 一致）
       dtype: "bf16"
-      thresholds: { insert_routing_max_distance: 0.8, query_routing_max_distance: 0.85, rerank_min_score: 0.5 }
-      note: "多模态最小档 | 加载契约已实测 ✓（阈值仍待标定）| 图像入库=L2 另一期"
+      # 2026-08-09 A100 实测标定（rag/evals/threshold_sweep.py，34 题 8 形态）：rerank_min_score
+      # 0.5→0.3 是关键——0.5 是从 text-0.6b 分布继承的占位值，对 vl-2b 的 reranker 打分分布
+      # 偏高，把合法命中（尤其 multidoc 的第 2/3 篇，得分落 0.3-0.5 带）一并滤掉。降到 0.3：
+      # 全集 0.941→1.0、MRR 0.969→1.0，且 multidoc 由 0.0→1.0（归零悬案破解，纯 rerank 地板
+      # 所致，与 query_max_dbs/chunks 无关，五种召回参数实测均不动它）；negative/misroute 在
+      # 0.3 仍全过=精度无损。insert/query 两阈值全网格 0.75-0.9 皆稳，保持 0.8/0.85。
+      # 权衡（诚实）：0.3 是允许更宽的 rerank 地板，评测集仅 34 题；若真实使用出现假阳性再上调。
+      thresholds: { insert_routing_max_distance: 0.8, query_routing_max_distance: 0.85, rerank_min_score: 0.3 }
+      note: "多模态最小档 | 加载契约已实测 ✓ | 阈值 2026-08-09 A100 标定（rr 0.3，multidoc 归零一并修）| 图像入库=L2 另一期"
     - id: "vl-8b"
       modality: "vl"
       embed_repo: "Qwen/Qwen3-VL-Embedding-8B"
@@ -351,7 +358,7 @@ rag:
       embed_dim: 4096            # 官方模型表声明值，**未实测**（需设备 A）；启动仍以运行时探测为准
       dtype: "bf16"
       thresholds: { insert_routing_max_distance: 0.8, query_routing_max_distance: 0.85, rerank_min_score: 0.5 }
-      note: "多模态生产档 | 需设备 A"
+      note: "多模态生产档 | 2026-08-08 A100 实验态检索塌方 0.588（跨语 0.33/name 归零，异常排除待查）不采用 | 阈值故不标定"
 
   # 兜底（无 tiers / active_tier 未命中时回退的旧路径；被选中档位覆盖）：
   embed_path: "Qwen/Qwen3-Embedding-0.6B"    # 本地路径或 HF Repo ID（优先 rag/models/）

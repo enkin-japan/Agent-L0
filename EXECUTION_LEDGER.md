@@ -87,6 +87,16 @@
 > 核查修缮、剔一份已被 PROTOCOL 取代的草案；12h 长稳二跑满程 12.2h **313 请求
 > 零错误零泄漏零漂移**（一跑 1h40m 遭 Colab runtime 回收，三重加固后二跑通关；
 > 详见 §3 站记录），26B 生产形态获长时常驻资格。金测试 676。
+> 🟢 **2026-08-09：余量榨汁波 · 本机批 + 站 A ✅**——文档全量清点（Explore 代理，
+> 20 条 A100 可解锁项菜单）后开工。**本机批**（金测试 676→706）：CUDA thinking
+> 预算两段式落地（A1 最难点）+ ASR faster-whisper CUDA 腿（A3 收官）+ OfficeCLI
+> `_xlfn` 前缀解锁 + L0 account 补题 ×5 + RAG 阈值扫参工具。**站 A（生产债，40G
+> CLI）四项**：① thinking 预算真机验收——超预算强闭+段二 APC 续跑 ✓、约束×预算
+> 共存 ✓；② **RAG vl-2b 三阈值标定**——rerank 0.5→0.3（继承自 0.6b 的占位值对
+> vl-2b 太狠），全集 0.941→1.0/MRR→1.0，**且 multidoc 归零悬案一并破解**（纯 rerank
+> 地板所致）；③ ASR faster-whisper 真机转写准确 ✓；④ L0 account 补题重测——26B
+> 仅 2/7，坐实 account 是 L0 残余短板、放宽人工闸不成立。运维：kernel 第三次猝死
+> （exec 404）经 ssh nohup 续跑+还原备份 stop 化解，"kernel 死≠VM 死"三度验证。
 
 ---
 
