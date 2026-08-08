@@ -121,6 +121,24 @@ def _current_spec_text(slide: Dict) -> Tuple[str, bool]:
     return f"(layout={slide.get('layout')}) {slide_summary(slide, 0)}", False
 
 
+def _parse_text_review(text: str) -> Optional[dict]:
+    """正文兜底解析：一次性沙箱会话没有主循环的工具调用惯性，模型（26B 实测）常把
+    submit_review 的 JSON 直接当正文/```json 围栏输出——约束采样只管进块后的格式，
+    管不了"进不进块"（excel _visual_qa 因此干脆用自由文本）。这里从正文提取首个
+    JSON 对象并校验 verdict；解析不出返回 None（维持"无意见不强改"语义）。"""
+    import re
+    m = re.search(r"\{.*\}", text or "", re.S)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(0))
+    except (ValueError, TypeError):
+        return None
+    if isinstance(obj, dict) and obj.get("verdict") in ("pass", "revise"):
+        return obj
+    return None
+
+
 async def _review_page(qa_engine, spec_text: str, pos: int, png: Path, cfg: dict) -> Optional[dict]:
     """单页视觉回读：一次性会话喂截图 + 当前规格 → 一次 submit_review。返回 arguments 或 None。"""
     opening = (f"This is rendered slide {pos} of the deck. Its current authoring spec is:\n"
@@ -131,7 +149,11 @@ async def _review_page(qa_engine, spec_text: str, pos: int, png: Path, cfg: dict
     for c in r.get("tool_calls", []) or []:
         if c.get("type") != "error" and c.get("name") == "submit_review":
             return c.get("arguments", {}) or {}
-    return None  # 没给合法 tool call → 视为无意见（不强改）
+    fallback = _parse_text_review(r.get("text") or "")
+    if fallback is not None:
+        print(f"[critique] 第 {pos} 页评审经正文 JSON 兜底解析（模型未走 tool_call 块）")
+        return fallback
+    return None  # 两路都无合法判决 → 视为无意见（不强改）
 
 
 def _format_digest(revised: List[Tuple[int, List[str]]], passed: List[int],

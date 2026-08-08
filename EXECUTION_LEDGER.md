@@ -156,7 +156,21 @@
 > 钉着 `google/gemma-4-31B-it`（CUDA bf16 模型）——本机 inprocess MLX 跑不了且触发 62GB 下载
 > hang，已按原样还原但需用户注意（清掉或换 MLX 档）。金测试 713 保持。
 
----
+> 🟢 **2026-08-09：站 C Phase 2b（评审回炉质量档验证收官，Colab-hetero 全流程首证）✅**——
+> Mac edge（devctl 全栈，config 零改动：mode=remote 默认 + `.env.local` 拨 colab-a100）
+> 连 CLI 40G 26B 生产形态（fp8+MTP k=4，全链引导→拉取→起服→契约 19/19 仅 ~14min）。
+> 缺陷 deck 三页（超长标题+10 挤 bullets / 干净对照 / 缺陷+锁定）验收全过：26B 判
+> revise（overcrowding+imbalance）、修订槽位回写保真（id 稳定、锁页/对照页字节原样）、
+> **revise→复查 pass 单轮收敛**（修订页渲染实证：标题删括号长尾两行放齐、bullets 10→4
+> 无裁切）。**真机揪出第 2 个单测抓不到的架构 bug**：一次性沙箱会话没有主循环的工具
+> 调用惯性，26B 把 submit_review JSON 当正文/```json 围栏吐 → parse_response 无
+> tool_call → fail-soft 静默判 pass（首轮三页全 pass 假象；直问模式 26B 把截断/拥挤/
+> 底部溢出碎片逐条点名，证伪"模型锅"）。约束采样只管进块后格式、管不了"进不进块"；
+> 修复=tool_call 路径保留 + `_parse_text_review` 正文 JSON 兜底（verdict 校验，excel
+> `_visual_qa` 自由文本先例的结构化版）+ 兜底路径留痕日志，单测 +3，**金测试 716**。
+> 远程图片通路实证：`_ensure_media` 上传→服务端 media 落盘→generate 消费（media 目录
+> 哈希与本地截图字节一致；锁页正确不上传）。运维：sessions.json 开机即备份；本机
+> `.model-selection` 异常值已清（回落 config 默认 e4b）。
 
 ## §D 已定决策（不再重议）
 

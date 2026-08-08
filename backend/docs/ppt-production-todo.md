@@ -78,9 +78,17 @@ excel `_visual_qa` + model_router 路由 vision 端点 + 结构化 submit_review
 回写）、MCP 工具 `deck_critique`（异步包壳，timeout_seconds 覆盖）、config `ppt.critique`
 段、`deck_ops.set_slide` 加源槽位持久化（`slide["source"]`，评审保真重展开的地基；旧
 deck 无 source 则只报不改优雅降级）、单测 7 例（tests/test_deck_critique.py，金测试
-706→713）。**待办**：26B/31B vision 端到端实测（本机 app 起服连 Colab 推理 + Chrome
-截图，需 40G）——验证真机上"标题截断/太挤/对比差"能被识别并正确回写。下述施工提示
-即本次实现所依据，保留供验证/迭代参考。
+706→713）。
+
+**质量档验证 ✅（2026-08-09 站 C Phase 2b，Colab-hetero：Mac edge + CLI 40G 26B
+fp8+MTP）**：缺陷 deck（超长标题+10 挤 bullets / 干净对照页 / 缺陷锁定页）真机全流程
+过——26B 正确判 revise（overcrowding+imbalance；直问模式还把标题截断、底部溢出碎片
+逐条点名，视觉档达标）、修订槽位回写保真（id 稳定、chart 不涉、锁页/对照页原样）、
+**revise→复查 pass 单轮收敛**（修订页渲染实证干净）。途中修一个真机才现形的架构 bug：
+一次性沙箱会话没有主循环的工具调用惯性，26B 把 submit_review 的 JSON 当正文/```json
+围栏输出 → `parse_response` 无 tool_call → fail-soft 静默判 pass。修复=保留 tool_call
+路径 + `_parse_text_review` 正文 JSON 兜底（verdict 校验，excel `_visual_qa` 自由文本
+先例的结构化版），单测 +3（金测试 716）。下述施工提示即实现所依据，保留供迭代参考。
 
 **原现状**：完全未做（e4b 上多模态评审没有意义，测了也是测模型下限）。
 

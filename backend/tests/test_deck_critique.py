@@ -53,6 +53,28 @@ def test_format_digest_empty_lists():
     assert "Re-render" not in out
 
 
+# ---------- _parse_text_review（正文 JSON 兜底：模型不走 tool_call 块时的判决通道）----------
+
+def test_parse_text_review_fenced_json():
+    text = '```json\n{"verdict": "pass"}\n```'
+    assert deck_critique._parse_text_review(text) == {"verdict": "pass"}
+
+
+def test_parse_text_review_revise_with_slot():
+    text = ('评审如下：{"verdict": "revise", "issues": ["overcrowding"], '
+            '"slot": {"layout": "bullets", "title": "T", "bullets": ["a"]}}')
+    obj = deck_critique._parse_text_review(text)
+    assert obj is not None and obj["verdict"] == "revise"
+    assert obj["slot"]["title"] == "T"
+
+
+def test_parse_text_review_rejects_garbage():
+    assert deck_critique._parse_text_review("平平无奇的正文，没有 JSON") is None
+    assert deck_critique._parse_text_review('{"foo": 1}') is None
+    assert deck_critique._parse_text_review('{"verdict": "maybe"}') is None
+    assert deck_critique._parse_text_review("") is None
+
+
 # ---------- critique_deck ----------
 
 def _build_deck(session_dir: Path, n: int = 3):
