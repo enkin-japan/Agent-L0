@@ -179,7 +179,7 @@ inference:
       # model_eval 2026-08-08 A100 fp8：tool_call 0.96（唯一失败=multiple_21 克制
       # 未调用，26B 同款题）、longchain 0.833、vision 15/15、gen_tps 43 均值
       profile: { tool_call: 0.96, longchain: 0.833, vision: 1.0, vision_hard: 0.838, tps: 43.0 }
-      note: "bf16 ~62GB | CUDA 档主模型候选 | A100 联调 ✓ 契约 19/19 | 评测画像已回填（2026-08-08）"
+      note: "bf16 ~62GB | CUDA 档主模型候选 | A100 联调 ✓ 契约 19/19 | 评测画像已回填（2026-08-08）| 站B 9864131 复测零回归（tool 0.96/long 0.833 逐项同分）+ MTP k=4 ~2.93×（2026-08-09）"
     - repo: "google/gemma-4-26B-A4B-it"
       revision: "4d7ae4984b7db7de8f8457170b3f1a419ee76d52"
       dialect: "gemma4"

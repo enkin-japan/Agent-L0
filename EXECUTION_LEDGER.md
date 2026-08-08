@@ -98,6 +98,30 @@
 > 仅 2/7，坐实 account 是 L0 残余短板、放宽人工闸不成立。运维：kernel 第三次猝死
 > （exec 404）经 ssh nohup 续跑+还原备份 stop 化解，"kernel 死≠VM 死"三度验证。
 
+> 🟢 **2026-08-09：余量榨汁波 · 站 B（31B 智力验收，80G 浏览器）✅**——CLI 给不了
+> 80G（`--gpu A100` 只 40G-s SKU、也 attach 不了浏览器 runtime），走浏览器 cell 接
+> tailnet ssh 驱动（代码 clone 最新 9864131 覆盖 cell 解包的旧档）。**锚点**：31B
+> 生产形态 fp8+MTP k=4 装 80G（权重 32.57G，叠 bf16 加载峰值+KV 在 40G 会爆=80G
+> 硬需求实证）、契约 19/19、MTP **~2.93×**（126 vs 43 tps，第7站 3.12× 当前代码
+> 复confirm）。**回归**：model_eval 31B tool_call 0.96／longchain 0.833 与第7站逐项
+> 一致=站 A 的 cuda thinking 两段式改动在 31B 生产质量模型**零回归**（约束解码下
+> 思考立即闭合=54 turn 思考空属一贯行为非回归；顺带轻验两段式 phase1 空→phase2
+> 不损输出）。**诊断双闭**：① qwen35 KV前缀 0.0 **推翻账本原假设**——gemma4/qwen35
+> 两 build 布局代码实证逐字节同构（工具进稳定前缀、task/env 置尾），真因是架构级
+> （Qwen3.5-MoE 混合线性注意力 3:1，vLLM APC 只缓存全注意力 KV 块、线性层递归态
+> 天然不可前缀缓存），无优化杠杆、qwen35 全线非生产选型归档；② 双频道全空=raw
+> 生成本身为空（response_parser 逻辑健全），归因 ChatML thinking 头预填×L0 一次性
+> 替身停止符接缝，qwen35 非生产、复现低 ROI 归档。**harness 漂移发现**：
+> attention/driver.py 打已移除的 `/api/v1/chat/{sid}/approval`，且当前审批为异步
+> 事件制（submit_approval 返 202、终态经 GET /events），driver 同步"审批即返终态"
+> 循环**架构级不兼容**→ 31B 编排层 attention 验收（RESULTS.md 点名的模型层搁置项）
+> 阻塞于 driver 现代化，记**免-GPU 后续**（开发机可做）。运维新知：tailnet 主机名
+> `colab-a100` 跨天复用、新 VM 新 SSH host key、本地 known_hosts 钉旧钥致
+> "HOST KEY CHANGED" 拒连（隧道本通）——`ssh-keygen -R colab-a100` 清钥即通。
+> **降级记后续**：attention n≥10（阻塞于 driver 现代化）／R2b skill 自发现／DEFERRED§4
+> 对话式工具注册（需起 app 走当前 chat API 驱动）／31B vision 补 5 题（需 author
+> 过鉴定题；profile 已有 vision 15/15=1.0、hard 0.838）／Ornith NVFP4 换件（可选）。
+
 ---
 
 ## §D 已定决策（不再重议）
@@ -324,6 +348,10 @@ multiple_21 三模型同倒=题目诱导弱信号。**9B 先验"编排弱"大档
 伪像），"长链强"保持（qwen35 系 longchain 双满分）。cot 纯净度全员零泄漏零复读。
 **新观察项（架构侧）**：qwen35 方言 KV 前缀命中 0.03/0.0 vs gemma 系 0.5-0.6——
 方言 prompt 布局疑破坏前缀稳定性，缓存友好性待查（下一波候选）。
+〔站 B 闭合 2026-08-09〕**原"布局破坏前缀"假设推翻**：gemma4/qwen35 两 build 布局
+代码实证逐字节同构（工具进稳定前缀、task/env 置尾）；真因架构级=Qwen3.5-MoE 混合
+线性注意力 3:1，vLLM APC 只缓存全注意力 KV 块、线性层递归态天然不可前缀缓存 →
+命中恒 ~0.0 是该架构固有属性、无优化杠杆，qwen35 全线非生产选型故负结果归档。
 运维：pkill 自匹配第 6/7 案（ssh 命令行内模式+明文并存两变体）；四模型权重全驻
 NVMe scratch（241G）随换随用；评测产物已同步 Drive eval_results/。
 保活纪律 v2 落地（用户 2026-08-08 修订）：工作空窗 5GB 驻留+占空比心跳；
