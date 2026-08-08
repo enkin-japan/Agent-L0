@@ -82,10 +82,11 @@
 > RAG 定档 vl-2b（MRR 0.969，本机已重灌）；路由 E2E 全通；M8 约束稳态零税；
 > H 固定开销诊断收敛（CUDA graphs 已是最大杠杆，余量在 kernel 属生产原生核）；
 > Xet 大内存解禁 357MB/s；CLI 孤儿 VM 自救破解。金测试 676。详见 §3 各站记录。
-> 🟢 **2026-08-08：文档瘦身波 ✅ + 26B 12h 长稳站 🟡 启动**——账本 3141→~660 行
+> 🟢 **2026-08-08：文档瘦身波 ✅ + 26B 12h 长稳站 ✅ PASS**——账本 3141→~680 行
 > （历史逐字迁 `EXECUTION_LEDGER_ARCHIVE.md`）、六文档漂移修缮、三 README 代理
-> 核查修缮、剔一份已被 PROTOCOL 取代的草案；12h 长稳以生产形态（fp8+MTP k=4）
-> 在 CLI 40G `longrun` 会话跑动中，看门狗在位。金测试 676。
+> 核查修缮、剔一份已被 PROTOCOL 取代的草案；12h 长稳二跑满程 12.2h **313 请求
+> 零错误零泄漏零漂移**（一跑 1h40m 遭 Colab runtime 回收，三重加固后二跑通关；
+> 详见 §3 站记录），26B 生产形态获长时常驻资格。金测试 676。
 
 ---
 
@@ -490,7 +491,30 @@ load_drafter(kind="mtp")**（12B @ M3 Ultra 实测至 1.72×），mlx-lm（纯�
 stop**（实证闭环 ✓）；备份缺席才需用户浏览器手杀。旧结论"必须手动"作废，纪律入
 记忆（colab-cli-orphan-rescue）。12h 长稳（用户已拍板缩时版，~64u）可全程免人值守。
 
-### 26B 12h 长稳测试站 🟡（2026-08-08 启动，CLI 40G `longrun` 会话）
+### 26B 12h 长稳测试站 ✅ PASS（2026-08-08～09，CLI 40G，两跑合计 ~14h≈75u）
+
+**判决：通过**——二跑（`longrun2`）满程 12.2h，**313 有效请求零错误**（chat 220 /
+tool 65 / longchain 19 / cancel 9）、零健康失败（146 采样 health 9.4ms 三段平）、
+零报警。**无泄漏**：VRAM 起步一档上抬（37.6→38.8G，GPU 保活 0.5G+KV 池就位）后
+全程字节级不动；服务 RSS 2720→2750MB 即平；宿主内存平；收官 `cache_count=0`
+（TTL 回收+显式删除双路零残留）、`active_generations=0`（信号量干净）。**无漂移**：
+tool tps 三段 143→134→147、chat 时长 1.70→1.74s 持平；tool TTFT 0.38→0.06s
+（首次 schema 编译后缓存命中，复现 M8 定案）；chat TTFT 0.42→0.38→0.50 属预填
+长度方差非单调劣化。取消双路（取消端点 7 + 纯断连 2）清理全净。
+**一跑阵亡与三重加固**：一跑（`longrun`）1h40m 处 runtime 被回收——因果链=
+Jupyter kernel 死（Colab 侧，不可控）→ CLI exec 404 自清本地状态**连坐杀死本机
+keep_alive 守护**→ 会话失活被回收。二跑加固后扛满全程：① VM 侧 GPU 保活 0.5G 档
+常驻（空闲窗不归零）；② 指标每 20min ssh 回拉本地（再亡最多丢 20min）；③ **自制
+隧道保活 pinger**（复刻 CLI keep-alive 请求：`X-Colab-Tunnel: Google` 头 +
+`authuser=0`，read-timeout=成功语义，OAuth 自动续签）。运维新知：**kernel 死 ≠ VM
+死**（nohup 进程树全存活，tailscale ssh 照常）；kernel 亡后 exec 每试一次就再清一次
+sessions.json（须停用 exec 转纯 ssh）；`restart-kernel` 对死 runtime 无效（Jupyter
+面整体 404）；**还原备份的 stop 在 kernel 全程死亡的会话上实战成功**（孤儿自救
+纪律两连胜），收 VM 干净零残留。产物：req.jsonl/sys.jsonl 已回拉本地留档。
+**门禁结论：26B 生产形态（fp8+MTP k=4+约束+gen_sem）具备长时常驻资格**；
+kernel 猝死属 Colab 平台层，不计入服务本体缺陷。
+
+### 〔原启动记录〕26B 12h 长稳测试站（2026-08-08 启动，CLI 40G `longrun` 会话）
 
 **目的**：常驻服务长时稳定性门禁——显存/宿主内存慢泄漏、KV/前缀缓存增长、
 tps/TTFT 漂移、信号量/SSE 清理累积误差、挂死。**形态**：26B 生产形态
