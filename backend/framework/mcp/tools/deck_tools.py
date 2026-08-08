@@ -9,6 +9,7 @@
 """
 from ..base import BaseTool
 from ...agents import runtime
+from ...ppt.deck_tools_cfg import PPT_CFG
 
 
 def _session_or_error():
@@ -233,6 +234,57 @@ class DeckExportPptxTool(BaseTool):
         return (f"Editable PowerPoint exported ({stats['slides']} slides, validated). Include "
                 f"this markdown link in your reply so the user can download it:\n"
                 f"[deck PPTX]({url}){note}")
+
+
+class DeckCritiqueTool(BaseTool):
+    name = "deck_critique"
+    description = (
+        "Review the finished deck the way a viewer sees it: screenshot every slide, inspect each "
+        "rendered page for VISUAL defects (title/text truncation, overcrowding, poor contrast, "
+        "text colliding with a chart/image), and automatically apply a ONE-ROUND fix to the slides "
+        "that need it. Call this AFTER the deck is built, then re-export to see the result. It only "
+        "fixes concrete visual problems — never invents facts or changes chart numbers — and leaves "
+        "locked slides untouched. Requires the deck to have at least one slide."
+    )
+    requires_approval = False    # 只读 deck + 写本会话 deck/assets；无外发（同 deck_export）
+    is_concurrency_safe = False  # 独占无头 Chrome + 读改写 deck.json，串行
+    # 多页视觉回读远超全局 180s 单工具熔断：声明覆盖值（同 web/excel_research 格局）
+    timeout_seconds = int((PPT_CFG.get("critique") or {}).get("total_timeout", 240)) + 30
+
+    def is_available(self) -> bool:
+        try:
+            import playwright  # noqa: F401
+        except Exception as e:
+            print(f"[MCP-deck_critique] ⚠️ playwright 不可用（{e}），工具不注册。")
+            return False
+        return True
+
+    def execute(self) -> str:
+        import asyncio
+        import concurrent.futures
+
+        from ...ppt.deck_critique import critique_deck
+        session, err = _session_or_error()
+        if err:
+            return err
+        if not runtime.is_ready():
+            return "System Error: critique runtime not initialized (engine/event loop missing)."
+        cfg = PPT_CFG.get("critique") or {}
+        engine = runtime.get_engine()
+        loop = runtime.get_loop()
+        total_timeout = int(cfg.get("total_timeout", 240))
+        try:
+            fut = asyncio.run_coroutine_threadsafe(
+                critique_deck(engine, session.session_id, session.session_dir, cfg), loop)
+        except Exception as e:
+            return f"System Error: could not schedule deck critique: {e}"
+        try:
+            return fut.result(timeout=total_timeout)
+        except concurrent.futures.TimeoutError:
+            fut.cancel()
+            return "[deck critique timed out before completion — the deck was left unchanged]"
+        except Exception as e:
+            return f"System Error: deck critique raised an exception: {e}"
 
 
 class DeckStatusTool(BaseTool):

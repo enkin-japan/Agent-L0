@@ -478,6 +478,15 @@ excel_research:
 ppt:
   frontend_base_url: "http://localhost:5173"  # 打印路由的宿主（生产切 Nginx 地址）
   export_timeout: 40    # PDF 导出总预算（秒）；须 < agent.tool_timeout_seconds
+  # 评审回炉（渲染后多模态 critique → 单轮修订，PPT 质量杠杆；ppt-production-todo 任务 B）：
+  # 把成品当图看才能发现盲写发现不了的视觉问题（标题截断/太挤/对比差/图文失衡）。
+  # 单轮 critique→改→再渲染即止（不无限回炉）；主模型无 vision 时经 model_router 路由专科端点。
+  critique:
+    enabled: true          # 关掉则 deck_critique 工具直接返回未启用
+    max_pages: 12          # 单次最多回读页数（护栏：超大 deck 不无限烧 vision）
+    screenshot_timeout: 40  # 截图管线加载+就绪总预算（秒）；须 < total_timeout
+    max_tokens: 500        # 单页 critique 产物上限（结构化修订，短）
+    total_timeout: 240     # 整体硬熔断（秒）；包壳工具声明 timeout_seconds=此值+30 覆盖全局 180
 
 # 编排循环护栏（多步任务 Agent）
 agent:

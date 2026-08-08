@@ -77,6 +77,10 @@ def set_slide(session_dir: Path, position: int, slot: Dict) -> Tuple[bool, str]:
     except (deck_spec.DeckSpecError, ChartSpecError) as e:
         return False, f"Slide spec error (fix the arguments and retry): {e}"
 
+    # 持久化源槽位：expand_slide 只留展开块，原始 layout+内容槽在此丢失。评审回炉据此
+    # 保真重展开（改文案/布局而不失 chart 真实数字）。旧 deck 无此键 → 评审只报不改（优雅降级）。
+    slide["source"] = slot
+
     if replacing:
         slide["id"] = deck["slides"][pos - 1]["id"]  # 替换保 id 稳定（锁页/diff/评审定位依赖）
         deck["slides"][pos - 1] = slide

@@ -122,6 +122,25 @@
 > 对话式工具注册（需起 app 走当前 chat API 驱动）／31B vision 补 5 题（需 author
 > 过鉴定题；profile 已有 vision 15/15=1.0、hard 0.838）／Ornith NVFP4 换件（可选）。
 
+> 🟢 **2026-08-09：余量榨汁波 · 站 C Phase 1（评审回炉 feature，免-GPU）✅**——PPT
+> 质量杠杆落地（ppt-production-todo 任务 B，e4b 时代因多模态评审无意义而搁置，31B/大档
+> 到位后开工）。新增 `framework/ppt/deck_critique.py`：Playwright 逐页截 `.deck-print-page`
+> （复用 pdf_export 宿主选择+等信标纪律）→ 每页一次性视觉会话（仿 excel `_visual_qa`：
+> EphemeralSession 喂截图+当前规格、model_router 路由 vision 端点、fail-soft 回落主引擎）
+> → 结构化 `submit_review`（pass / revise+修订槽位）→ `deck_ops.set_slide` 重展开回写。
+> 关键地基改动：`set_slide` 持久化**源槽位** `slide["source"]`（expand_slide 只留展开块、
+> 原始 layout+内容槽丢失，评审据此保真重展开不失 chart 真实数字；旧 deck 无 source 则
+> 只报不改优雅降级）。MCP 工具 `deck_critique`（异步包壳仿 math_research 的
+> run_coroutine_threadsafe 投递 + timeout_seconds 覆盖全局 180s）、config `ppt.critique` 段。
+> 安全：只读 deck+写本会话 assets/deck 无外发（免审批同 deck_export）、锁页 set_slide
+> 拒改天然守住、EphemeralSession inject_env_context=False 隐私不进。测试 chore-worker
+> 补 7 例（tests/test_deck_critique.py：纯函数分支 + 主流程 pass/revise 回写/锁页跳过/
+> 无source 只报/无deck，真 deck_ops 读写不 mock 回写），**金测试 706→713 全绿**。主会话
+> 审 diff 通过 + 自查修 1 bug（_pick_print_host 需顶层 ppt.frontend_base_url 非 critique 子段）。
+> **Phase 2 待办（需 40G + 本机 app 集成）**：26B/31B vision 端到端实测（本机 app 起服连
+> Colab 推理 + 系统 Chrome 截图，验真机识别"标题截断/太挤/对比差"并正确回写）+ ChartQA
+> 视觉扩容（yes/no 大样本 + 加难批余 ~186 候选续采，双模型共同失败作坏题探测器）。
+
 ---
 
 ## §D 已定决策（不再重议）

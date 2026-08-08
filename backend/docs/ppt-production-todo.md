@@ -72,7 +72,17 @@ append 一条占位说明。接入方式（与 chart 分支对齐）：
 
 ## 遗留任务 B：评审回炉子 agent（渲染后 critique，质量的真正杠杆）
 
-**现状**：完全未做（e4b 上多模态评审没有意义，测了也是测模型下限）。
+**现状（2026-08-09 站 C Phase 1 已建成，待 GPU 端到端验证）**：工具层落地——
+`framework/ppt/deck_critique.py`（截图管线复用 pdf_export + 逐页一次性视觉会话仿
+excel `_visual_qa` + model_router 路由 vision 端点 + 结构化 submit_review → deck_ops
+回写）、MCP 工具 `deck_critique`（异步包壳，timeout_seconds 覆盖）、config `ppt.critique`
+段、`deck_ops.set_slide` 加源槽位持久化（`slide["source"]`，评审保真重展开的地基；旧
+deck 无 source 则只报不改优雅降级）、单测 7 例（tests/test_deck_critique.py，金测试
+706→713）。**待办**：26B/31B vision 端到端实测（本机 app 起服连 Colab 推理 + Chrome
+截图，需 40G）——验证真机上"标题截断/太挤/对比差"能被识别并正确回写。下述施工提示
+即本次实现所依据，保留供验证/迭代参考。
+
+**原现状**：完全未做（e4b 上多模态评审没有意义，测了也是测模型下限）。
 
 **为什么值得做**：设计/执行进程都是「盲写」，只有把成品当图看才能发现视觉问题
 （标题截断、太挤、对比度差、图文失衡）。PPT.md 认为这是高质量 PPT Agent 的隐藏秘诀。
