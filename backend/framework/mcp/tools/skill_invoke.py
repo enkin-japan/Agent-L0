@@ -16,11 +16,17 @@ from ...agents import runtime
 
 class SkillInvokeTool(BaseTool):
     name = "skill_invoke"
+    # 线索例句必须多语言并含斜杠形态：26B 档实测只认英文 "use the deck skill"，
+    # "/deck" 与中文「用 deck 剧本」都不触发（31B 能自行桥接）——L4 站路由调参实案
     _DESC_HEAD = (
         "Load the playbook for a skill and follow it with your normal tools. Call this "
-        "when the user names a skill (e.g. \"use the deck skill\" or \"/deck\"), OR "
-        "when the task clearly matches one of the skills listed below — invoke it BEFORE "
-        "improvising your own workflow. Skip it when no listed skill clearly fits."
+        "FIRST when the user names a skill in any language or with a slash command "
+        "(e.g. \"use the deck skill\", \"/deck\", \"用 deck 剧本\", \"用 chart-report "
+        "技能\"), OR when the task matches a skill listed below (making a presentation "
+        "→ deck; producing charts/conclusions from a data file → chart-report; web "
+        "research report → research). The playbook is the approved workflow for its "
+        "task type: even when you already know the individual tools, load the matching "
+        "playbook FIRST and follow it. Skip it only when no listed skill fits the task."
     )
     description = _DESC_HEAD  # 兜底文案；装配期在 __init__ 里追加剧本索引（R2b 全开）
 
