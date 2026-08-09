@@ -251,6 +251,18 @@
 > 措辞残留（"the user asked for"）一并清除。产物存
 > `results/l4-nvfp4/route-tests/`（gitignored）。金测试 **720**。
 
+> 🟢 **2026-08-09：#79 对话式注册建成（D.18 完整版，免 GPU）——待 L4 真机验收**。
+> 后端（44b569c，主会话亲做）：`register_api_tool`/`register_skill` 起草工具——
+> 参数面**没有密钥字段**（红线①物理执行）+ 形似密钥实值提交口拒绝（鉴权头/常见
+> 前缀模式）；声明落 `data_dir()/registrations/` 待确认区（不进生效目录不进装配=
+> 红线②），撞名不静默顶替；`/api/v1/registrations` 列表/确认/驳回三端点为唯一
+> 放行口（模型无确认工具），确认复用表单面同一条保存/上架路（save_skill/
+> save_api_tool 抽公共实现）。app 侧（e9c75f1，implementer 施工+主会话审毕+亲复
+> 构建）：设置页「待确认」标签+审批队列面板（声明全文等宽审阅/缺密钥琥珀警示/
+> effect 转述/驳回二次确认），macOS/iOS 双平台 BUILD SUCCEEDED。金测试 **732**。
+> **明日 L4 验收**：26B 起草天气工具+周报剧本→pending→app 确认→真可用全流程；
+> 起草质量与红线遵守（密钥只引变量名）实测。
+
 > 🟢 **2026-08-09：#76 attention/driver 现代化 ✅（免 GPU，本机 e4b）——31B 编排层
 > 验收解锁**。站 B 发现的 harness 漂移清偿：审批环从已移除的同步 `/approval` 迁至
 > 协议 v1 事件账本制（POST /turns 202 → SSE /events 附着观察 → awaiting_approval
