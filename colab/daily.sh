@@ -22,7 +22,9 @@ die(){ echo "❌ $*"; exit 1; }
 note(){ printf '\033[0;32m[daily]\033[0m %s\n' "$*"; }
 
 cmd="${1:-}"; tier="${2:-l4}"
-case "$tier" in l4) GPU=L4;; a100) GPU=A100;; *) die "档位只认 l4|a100";; esac
+if [ "$cmd" = "start" ]; then
+  case "$tier" in l4) GPU=L4;; a100) GPU=A100;; *) die "档位只认 l4|a100";; esac
+fi
 rate_of(){ [ "$1" = "a100" ] && echo 5.3 || echo 1.54; }
 
 session_name(){ cat "$STATE/current_session" 2>/dev/null; }
@@ -84,6 +86,14 @@ EOF
   note "隧道保活 + 哨兵上岗…"
   nohup python3 "$HERE/tunnel_keepalive.py" "$name" > "$STATE/logs/tunnel.log" 2>&1 &
   echo $! > "$STATE/tunnel.pid"
+  sentinel_start
+  note "✅ 就绪：本机 ./devctl.sh start all 即可（.env.local 已拨 colab-a100）。晚上 ./colab/daily.sh stop"
+}
+
+# 哨兵独立子命令：评测/维护要主动停服的窗口先 sentinel stop 静默，完事 sentinel start
+# 复岗，免得停服被当失联误报（VM 监理自愈与此无关，只是通知静默）。
+sentinel_start(){
+  sentinel_stop_quiet
   nohup bash -c '
     fails=0
     while true; do
@@ -102,8 +112,13 @@ EOF
       fi
     done' > /dev/null 2>&1 &
   echo $! > "$STATE/sentinel.pid"
-  note "✅ 就绪：本机 ./devctl.sh start all 即可（.env.local 已拨 colab-a100）。晚上 ./colab/daily.sh stop"
+  note "哨兵上岗（pid $(cat "$STATE/sentinel.pid")）"
 }
+sentinel_stop_quiet(){
+  [ -f "$STATE/sentinel.pid" ] && kill "$(cat "$STATE/sentinel.pid")" 2>/dev/null
+  rm -f "$STATE/sentinel.pid"
+}
+sentinel_stop(){ sentinel_stop_quiet; note "哨兵已撤（评测窗口静默）"; }
 
 stop(){
   for p in sentinel tunnel; do
@@ -156,5 +171,7 @@ case "$cmd" in
   stop) stop;;
   status) status;;
   rescue) rescue;;
+  sentinel) case "${2:-}" in start) sentinel_start;; stop) sentinel_stop;;
+            *) die "用法: sentinel start|stop";; esac;;
   *) sed -n 2,10p "$0"; exit 1;;
 esac

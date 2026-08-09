@@ -37,7 +37,8 @@ class SkillInvokeTool(BaseTool):
     parameters = {
         "properties": {
             "name": {"type": "string",
-                     "description": "Exact skill name the user asked for."},
+                     "description": "Exact name of the skill to load, from the "
+                                    "available skills list."},
         },
         "required": ["name"],
     }
