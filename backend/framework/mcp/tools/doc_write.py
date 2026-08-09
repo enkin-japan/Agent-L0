@@ -24,7 +24,10 @@ class WriteDocumentTool(BaseTool):
         "# headings (levels 1-4), **bold**, *italic*, `code`, [links](url), bullet lists "
         "(2-space indent nests), numbered lists, GFM pipe tables, ``` code blocks, > quotes, "
         "and images by LOCAL absolute path on their own line: ![caption](/abs/path.png) — "
-        "e.g. a chart you just rendered. Do NOT use for spreadsheets (use excel_research) "
+        "e.g. a chart you just rendered. Write the document in the language the USER is "
+        "conversing in (unless they ask otherwise) — source material in another language must "
+        "be translated into the deliverable, keeping proper nouns/law/product names in the "
+        "original alongside. Do NOT use for spreadsheets (use excel_research) "
         "or slide decks (use deck tools)."
     )
     requires_approval = False

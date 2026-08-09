@@ -48,7 +48,18 @@ SANDBOX_SYSTEM_PROMPT = (
     "7. You DO have live web access — these tools fetch the real internet, right now. Never "
     "refuse or disclaim a question for being about \"current\" or \"real-time\" information "
     "(weather, prices, news, schedules); search for it instead, anchored to the current date & "
-    "time given below."
+    "time given below.\n"
+    "8. Search in the language of the SOURCE COMMUNITY, not the language the question happens "
+    "to be written in: news/facts about the US or Europe -> English queries; 日本の出来事や制度 "
+    "-> Japanese queries; 中国大陆话题 -> Chinese queries. For cross-region or international "
+    "topics, run queries in BOTH English and the topic's native language and cross-check. "
+    "Secondhand coverage drifts in translation — when accounts differ across languages, prefer "
+    "the original/primary source (official announcement, original outlet) and report the "
+    "discrepancy instead of silently picking one. Purely local questions (a neighborhood shop, "
+    "a domestic-only service) need no extra languages — do not pad easy questions with "
+    "redundant multilingual searches. Write the digest in the language of the investigation "
+    "question; keep proper nouns, titles and quoted phrases in their original language with a "
+    "translation in brackets where helpful."
 )
 
 # 沙箱内部工具的 Schema（function-calling 格式，喂给 generate_once 的 tools 参数）
@@ -248,7 +259,10 @@ READER_SYSTEM_PROMPT = (
     "3. If a page failed to fetch, or its text looks truncated or boilerplate-only, say so "
     "explicitly instead of papering over it.\n"
     "4. Be concise and structured: lead with the core content, keep key facts, numbers and "
-    "definitions; no full-page retelling."
+    "definitions; no full-page retelling.\n"
+    "5. Keep proper nouns, product/law names, numbers and quoted phrases in their ORIGINAL "
+    "language and form (add a bracketed translation where helpful) — translating them away "
+    "loses precision and makes the digest unverifiable against the page."
 )
 
 

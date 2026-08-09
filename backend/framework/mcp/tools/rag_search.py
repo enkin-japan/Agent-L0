@@ -64,7 +64,18 @@ class RAGSearchTool(BaseTool):
     连接到本地高精度 RAG 向量数据库引擎获取外部上下文。
     """
     name = "rag_search"
-    description = "Search the local high-precision RAG vector database. You must use this tool when you need to access a user’s personal knowledge base, local historical documents, or answer questions that require external sources for verification."
+    # 2026-08-10 措辞纠错（#83 准则审计）：旧文案的 "questions that require external
+    # sources for verification" 把 web_research 的职权划了过来——26B 档会照字面拿
+    # 本地知识库去答新闻/时事题。RAG 只管用户自己收进来的资料。
+    description = (
+        "Search the user's LOCAL knowledge base (documents they ingested: notes, files, "
+        "papers, past material). Use it when the answer likely lives in the user's own "
+        "stored documents — 'what did that report say', their notes/manuals/records. It "
+        "knows NOTHING about the public web or current events: for news, prices, or "
+        "up-to-date public facts use web_research instead. If a first search misses, "
+        "retry ONCE with rephrased keywords (synonyms, or the language the stored "
+        "documents are written in) before concluding the knowledge base doesn't have it."
+    )
     requires_approval = False
     is_concurrency_safe = True  # 只读向量检索，可与其他只读调用并发
     # 渲染格（R3 试点）：召回结果今天是灰框里一大坨格式化文本——命中分、来源、路径全
