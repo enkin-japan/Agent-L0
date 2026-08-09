@@ -39,7 +39,8 @@ start(){
   local name="agentd-$(date +%m%d)"
   ssh-keygen -R colab-a100 >/dev/null 2>&1 || true   # 主机名跨天复用的旧钥（账本坑账）
 
-  note "开 $GPU 会话 $name（费率 ~$(rate_of "$tier")u/h）…"
+  # 注意：变量后紧跟全角字符必须 ${} 包裹，macOS bash 3.2 会把多字节字符吞进变量名
+  note "开 $GPU 会话 ${name}（费率 ~$(rate_of "$tier")u/h）…"
   colab new --gpu "$GPU" -s "$name" || die "colab new 失败（配额/档位不可用？）"
   cp "$CLI_CFG/sessions.json" "$STATE/sessions.json.bak" || die "sessions.json 备份失败"
   echo "$name" > "$STATE/current_session"
@@ -110,7 +111,7 @@ stop(){
   done
   local name; name=$(session_name)
   [ -n "$name" ] || { note "无在册会话；colab ls 核对如下"; colab ls 2>&1 | tail -3; return 0; }
-  note "停会话 $name…"
+  note "停会话 ${name}…"
   local out
   if ! out=$(colab stop -s "$name" 2>&1); then   # 管道会吃退出码，必须分开取
     echo "$out" | tail -2
@@ -131,7 +132,7 @@ rescue(){
   cp "$CLI_CFG/sessions.json" "$STATE/sessions.json.orphaned-$(date +%s)" 2>/dev/null
   cp "$STATE/sessions.json.bak" "$CLI_CFG/sessions.json"
   local name; name=$(session_name)
-  note "已还原备份，重试 stop $name…"
+  note "已还原备份，重试 stop ${name}…"
   colab stop -s "$name" 2>&1 | tail -1
   colab ls 2>&1 | tail -3
   rm -f "$STATE/current_session" "$STATE/session_start_ts"

@@ -58,7 +58,7 @@ for d in /usr/local/lib/python3*/dist-packages/nvidia/*/lib; do
   [ -d "$d" ] && export LD_LIBRARY_PATH="$d:$LD_LIBRARY_PATH"
 done
 
-echo "== ③ 内存哨兵 + 拉件（tier=$TIER）"
+echo "== ③ 内存哨兵 + 拉件（tier=${TIER}）"
 ( while true; do
     avail=$(free -g | awk '/^Mem:/{print $7}')
     [ "${avail:-99}" -lt 8 ] && echo "MEM_ALARM avail=${avail}G $(date +%T)" >> /content/logs/mem_alarm.log
