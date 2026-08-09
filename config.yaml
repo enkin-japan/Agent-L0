@@ -51,7 +51,8 @@ inference:
     gpu_memory_utilization: 0.92
     max_concurrency: 8            # T7：服务面生成并发闸（vLLM 连续批处理承载；
                                   # MLX 后端忽略此键恒为 1=旧互斥语义）
-    max_model_len: 32768
+    max_model_len: 65536          # D.19（2026-08-09）：8 页 deck 单轮 ~33k 撞 32768 顶实案；
+                                  # L4 fp8 KV 池 114,963 token / A100 档 KV 3.7GiB 均有余量
     tensor_parallel: 1
     enable_prefix_caching: true   # 引擎内自动前缀缓存 = 本后端 clone/复用的物理承载
     enforce_eager: false          # true 可跳 CUDA graph 编译省启动时间（调试用）
