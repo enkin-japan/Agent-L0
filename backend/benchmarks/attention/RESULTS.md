@@ -55,3 +55,24 @@ python3 benchmarks/attention/driver.py --work /tmp/bench_work --out results.json
 > turn_ended 收轮；断连带 after 游标续播）。鉴权经 BENCH_KEY 或 .env.local 自动
 > 解析。E2E 已验（e4b inprocess，A_small_edit 双审批打穿全通）。历史数据可比性
 > 不受影响——痕迹抓取与断言逻辑未动。
+
+## 31B 编排层验收（2026-08-09 #77，n=10×6 任务，Colab-hetero：Mac edge + 80G 31B fp8+MTP）
+
+| 任务 | success | drift_sum | clarify | avg_wall |
+|---|---|---|---|---|
+| A_small_edit | 10/10 | 0 | — | 20s |
+| B_multi_edit | 10/10 | 2 | — | 83s |
+| C_line_count | 10/10 | 0 | — | 15s |
+| D_csv_report | 10/10 | 0 | — | 21s |
+| E_ambiguous | 9/10 | 0 | 9/10 | 10s |
+| F_ini_ports | 10/10 | **336** | — | 142s |
+
+- **产物成功率 59/60**；E 的 1"失败"实为澄清措辞用冒号未用问号（判分启发式
+  `?` 检测误判，行为上 10/10 先澄清不动手）。
+- **F 复读吸引子**：6/10 轮 edit_file 重发风暴（dup 拦截 30-61 次/轮、100+ 调用、
+  turn 终态 fail），但护栏把复读全拦在门外——**文件产物 10/10 正确**。同款模式在
+  skill 口测里复现（29 连 excel_research + 41 连 render_chart）。模型层毛病记档
+  （D1 纪律），护栏收益实证：drift 全被拦截器吸收、零产物损伤。
+- 新 driver（事件账本制）全程 60 轮零 driver_error，审批 1-5 次/轮全部经
+  awaiting_approval→决议→续跑闭环。
+- 原始行级数据：`model_eval/results/attention-31b-n10.jsonl`（gitignored）。
