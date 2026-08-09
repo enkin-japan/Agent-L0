@@ -491,8 +491,10 @@ ppt:
 
 # 编排循环护栏（多步任务 Agent）
 agent:
-  max_inference_concurrency: 1 # 并发生成上限（B1）：默认 1 行为与现状全同；仅 remote 模式
-                              # 允许 >1（进程内后端共享单例不可并发，引擎强制钳制回 1）
+  max_inference_concurrency: 4 # 并发生成上限（B1，2026-08-09 并发落地拨 4）：仅 remote 模式
+                              # 生效（进程内后端共享单例不可并发，引擎强制钳制回 1）；
+                              # 服务端 gen_sem=cuda.max_concurrency(8) 承载。任务级调度器
+                              # 的 worker 数同源取此值（remote 多会话并行准入）。
   tool_schema_mode: "full"    # full=全部工具 schema 常驻（工具少时更省且缓存更稳）
                               # catalog=目录常驻 + get_tool_schema 按名取详情（工具规模大后切换）
   react_max_steps: 4          # 单步内自纠预算：一步连续多少次迭代未完成即判定失败并路由

@@ -211,6 +211,11 @@ async def critique_deck(engine, session_id: str, session_dir: Path, cfg: dict) -
     revised: List[Tuple[int, List[str]]] = []
     passed: List[int] = []
     skipped: List[str] = []
+    # 逐页视觉回读并行化（B1 并发落地）：各页会话彼此独立，gather 齐发——实际并发度
+    # 由引擎 max_inference_concurrency 信号量钳制（inprocess=1 时行为与顺序版全同）；
+    # 回写仍按页序在下方顺序执行（set_slide 是文件读改写，不并发）。
+    review_jobs: List[Tuple[int, "asyncio.Task"]] = []
+    reviewable: dict = {}
     for i in range(n):
         pos = i + 1
         slide, png = slides[i], pages[i]
@@ -221,7 +226,15 @@ async def critique_deck(engine, session_id: str, session_dir: Path, cfg: dict) -
             skipped.append(f"p{pos}(locked)")
             continue
         spec_text, has_source = _current_spec_text(slide)
-        review = await _review_page(qa_engine, spec_text, pos, png, cfg)
+        reviewable[pos] = (slide, has_source)
+        review_jobs.append((pos, asyncio.ensure_future(
+            _review_page(qa_engine, spec_text, pos, png, cfg))))
+    results = await asyncio.gather(*(t for _, t in review_jobs), return_exceptions=True)
+    for (pos, _), review in zip(review_jobs, results):
+        slide, has_source = reviewable[pos]
+        if isinstance(review, Exception):
+            skipped.append(f"p{pos}(review failed: {type(review).__name__})")
+            continue
         if not review or review.get("verdict") != "revise":
             passed.append(pos)
             continue

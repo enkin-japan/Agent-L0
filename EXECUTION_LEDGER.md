@@ -217,6 +217,19 @@
 > 回拉／30min 停滞判死／start 自清 ssh 旧钥。L4 档=NVFP4+FP8 KV（视觉关键活
 > `start a100`=26B fp8+MTP 生产形态）。386u ÷（L4 12h/天 ≈18.5u）≈ **20 天日用**。
 
+> 🟢 **2026-08-09：R2b 全开 + 并发全链落地（免 GPU，金测试 716→719）**。
+> ① **R2b 全开**（D.17）：skill_invoke 撤「只认点名」禁令，工具描述**装配期内嵌剧本
+> 索引**（name+description；两表互为前置——app.py 在剧本表就绪后 load_tool 重注册时
+> __init__ 拿到真索引），任务明确匹配即自主调用；回退开关=恢复旧描述（git 可查）。
+> ② **并发四件套**：生成并发旋钮 agent.max_inference_concurrency 1→**4**（remote 才
+> 生效，服务端 gen_sem=8 承载）；评审回炉**逐页 gather**（回写仍按页序）；excel
+> visual QA **逐页 gather**（findings 按页序稳定）；**调度器多 worker 化**——
+> TaskScheduler(max_workers) 参数化（_running 单值→集合、容量内循环准入、满员抢占
+> 受害者=后台类优先、次取 priority 最低+最晚开跑），app 装配 worker 数与 B1 旋钮
+> 同源（remote=4 / inprocess=1），默认 1 旧语义逐位保持（既有金测试零改动全绿）+
+> 新增 3 例多 worker 语义锁定测试。并发度三层钳制：调度器准入 ≤4 → 引擎信号量 ≤4
+> → 服务端 gen_sem ≤8。真机效果验证挂 L4 测试任务（并发 A/B）。
+
 > 🟢 **2026-08-09：#76 attention/driver 现代化 ✅（免 GPU，本机 e4b）——31B 编排层
 > 验收解锁**。站 B 发现的 harness 漂移清偿：审批环从已移除的同步 `/approval` 迁至
 > 协议 v1 事件账本制（POST /turns 202 → SSE /events 附着观察 → awaiting_approval
@@ -246,7 +259,7 @@
 | **D.14** | **整条音频路移设备 A**（Q6 定案，重构了原问法）：edge 不留 torch/librosa/silero/whisper，经**新增 `remote` ASR provider**（既有接缝 `backends/__init__.py:40`）+ A 侧 `/v1/transcribe`。**不选 Apple SpeechAnalyzer**——它是 Swift-only（ObjC 头只有旧的 SFSpeechRecognizer），PyObjC 够不到，会让 ASR 依赖 app 存在，与「无 app 的 dev/web-only/CUDA 线」冲突；且要先定 locale，牺牲现有的自动语言检测（`router.py:49`）。SpeechAnalyzer 日后可作同一接缝下的可选快路 | 2026-07-16 用户 | 归档 §3.5 R5-2 |
 | **D.13** | **edge 启动逻辑提成单一真相**（`scripts/lib_edge.sh` 或等价），`devctl.sh` 与 app 都调它；Swift 只做它独有的**进程监护**（崩溃重启/日志/端口冲突/随 app 收摊）。**不在 app 里重写一份**——那 799 行里的顺序与探活判据是多起事故换来的（RAG 未就绪即拒启 backend，因工具探活只在启动期发生一次）。前置：启动逻辑须对「仓库布局 vs bundle 布局」「`.env.local` vs Keychain」参数化 | 2026-07-16 用户 | 归档 §3.5 R5-4；R1 同一教训：消除拷贝，不消除差异 |
 | **D.16** | **可写数据经 `AGENT_DATA_DIR` 旋钮分家**（Q7 定案，选项 B）：dev 默认仓库内（保住「数据随手可见可删」的手感），app 注入 `~/Library/Application Support/dev.enkin.macagent/`。**不选「一律搬 App Support、dev 也用」**——dev 时数据离开仓库会让排查与清库都变绕。代价是两套路径都得测。与 D.13 要求的「启动逻辑对仓库布局 vs bundle 布局参数化」**是同一个旋钮**，不是第二个 | 2026-07-16 用户 | 归档 §3.5 R5-4 |
-| **D.17** | **R2b（skill 自主发现）开**：撤 skill_invoke「只认用户点名」禁令、注入 skill 索引，落地形态取「半开」——模型可**提议**用某剧本、用户一句话确认再 invoke（人在回路防猜错剧本污染上下文）。依据：#77 口测=31B 未点名守禁✓且手工自发复刻 chart-report 步骤（能力在、门是设计关的） | 2026-08-09 用户 | #77 口测；D.9 触发条件达成 |
+| **D.17** | **R2b（skill 自主发现）全开**（用户二次拍板改全开，非半开）：撤 skill_invoke「只认用户点名」禁令，工具描述内嵌剧本索引（装配期生成），任务明确匹配即**自主调用**、点名照常必调。依据：#77 口测=31B 未点名守禁✓且手工自发复刻 chart-report 步骤。回退开关=恢复旧描述（git 可查）；误配风险由 26B/31B 真机行为验证把关（L4 测试任务在册） | 2026-08-09 用户 | #77 口测；D.9 触发条件达成 |
 | **D.18** | **DEFERRED§4 完整版（对话式工具/剧本注册）建**。红线照旧：①密钥只引变量名（31B 起草实测已自发遵守）；②声明落「待用户确认」态、不可静默生效（待确认状态机+设置页审批队列=主要工程量） | 2026-08-09 用户 | #77 能力评估达标 |
 | **D.19** | **生产起服 `max_model_len` 调 64K**（config cuda 段 32768→65536）。依据：8 页 deck 单轮 ~33k 撞顶实案；L4 fp8 KV 池实测 114,963 token、A100 档 KV bf16 65536≈3.7GiB 均有余量 | 2026-08-09 用户 | #77 新架构发现；L4 站实测 |
 | **D.15** | **内嵌运行时选 `python-build-standalone`**（R5-3 选型，三条判据全部实测）。**否决 PyInstaller**——与本仓库「文件系统即真相源」的约定直接相冲：`mcp/registry.py:26` 扫目录找 `.py` 发现工具、`skill_registry.py:58` 与 `memory/notes.py:86` 扫 `*.md`，冻结后统统扫不到；且 `:21-23` 目录不存在时**静默建空目录后 return** → **零工具注册且不报错**。**否决「venv 拷进 bundle」**——`backend/.venv/bin/python3.13` 是指向 `/Library/Frameworks/Python.framework` 的**绝对路径符号链接**（venv 里没有解释器本体），而该 framework 的 install-name 也是绝对路径、本身搬不动，净体积 307M 且签的是 PSF 的 Developer ID | 2026-07-16 实测 | 归档 §3.5 R5-3；`scripts/build-runtime.sh` |

@@ -1,9 +1,10 @@
 """
-任务级调度器（单 worker 模型）。
+任务级调度器（worker 数参数化：默认 1=单 worker 协作式；remote 模式可多 worker 并行准入）。
 
 硬件前提：Apple Silicon 统一内存「高带宽、弱算力」，LLM decode 阶段受内存带宽约束，
 并行生成只会互相抢带宽、各自多占一份 KV 显存 —— 串行才是吞吐最优。因此整个进程
-同一时刻只让「一个任务」占用推理 worker，其余任务排队或挂起，像单核 CPU 的协作式多任务。
+同一时刻最多让 max_workers 个任务占用推理 worker（默认 1，像单核 CPU 的协作式多任务；
+remote 后端多 worker 时为多核语义），其余任务排队或挂起。
 
 与底层生成锁的分工：
 - AgentEngine._inference_lock 是「生成级」correctness 锁（MLX detokenizer/criteria 是
@@ -140,12 +141,13 @@ class ClassPolicy(SchedulingPolicy):
 
 
 class TaskScheduler:
-    """全局单 worker 任务调度器。所有对状态表的读写都在短临界区内经 self._lock 保护。"""
+    """全局任务调度器（worker 数见 max_workers）。所有对状态表的读写都在短临界区内经 self._lock 保护。"""
 
     def __init__(self, policy: Optional[SchedulingPolicy] = None,
                  on_suspend_request: Optional[Callable[[str], None]] = None,
                  on_cancel_request: Optional[Callable[[str], None]] = None,
-                 on_queue_positions: Optional[Callable[[Dict[str, int]], None]] = None):
+                 on_queue_positions: Optional[Callable[[Dict[str, int]], None]] = None,
+                 max_workers: int = 1):
         self.policy = policy or FifoPolicy()
         # 排队位次广播(Phase 3):每次调度后,位次有变化的 QUEUED 会话经此回调上报
         # {session_id: position}(0=下一个被准入)。app 层接到后写入各会话账本
@@ -159,7 +161,11 @@ class TaskScheduler:
         # （置位 session.cancel_requested，摘要生成逐 token 段响应；执行侧 finally 复位）。
         self._on_cancel_request = on_cancel_request
         self._handles: Dict[str, TaskHandle] = {}   # session_id -> 活跃句柄
-        self._running: Optional[str] = None          # 当前占用 worker 的 session_id
+        # 并发落地（2026-08-09）：worker 数参数化。默认 1=旧单 worker 语义逐位保持；
+        # remote 模式由 app 传 agent.max_inference_concurrency 同源值（多会话并行准入，
+        # 每任务的生成仍受引擎信号量与服务端 gen_sem 双重钳制）。
+        self.max_workers = max(1, int(max_workers))
+        self._running: set = set()                   # 正占用 worker 的 session_id 集合
         self._lock = asyncio.Lock()
 
     def set_policy(self, policy: SchedulingPolicy) -> None:
@@ -189,8 +195,7 @@ class TaskScheduler:
             handle = self._handles.get(session_id)
             if handle is not None and handle.status == RUNNING:
                 self._handles.pop(session_id, None)
-            if self._running == session_id:
-                self._running = None
+            self._running.discard(session_id)
             self._dispatch_locked()
 
     # ---------- 挂起 / 恢复（KV 留内存，可轮换） ----------
@@ -220,8 +225,7 @@ class TaskScheduler:
                 handle.suspend_requested = False
                 handle.preempt_requested = False
                 handle.started_at = None
-            if self._running == session_id:
-                self._running = None
+            self._running.discard(session_id)
             self._dispatch_locked()
 
     async def resume(self, session_id: str, *, priority: int = 0) -> Optional[TaskHandle]:
@@ -250,16 +254,15 @@ class TaskScheduler:
         """
         排队等待被任务取消（如客户端断连令 FastAPI 取消 handler）时的善后：
         不清理的话句柄以 QUEUED 残留，之后被调度准入成「无人在跑的幽灵任务」，
-        _running 被它永久占住 → 全局单 worker 死锁。
+        _running 名额被它永久占住 → worker 泄漏直至死锁。
         同步执行、无 await（asyncio 单线程内不可能被打断），故无需再取 self._lock——
         取消路径上再去 await 锁反而可能被二次取消打断、留下更糟的半清理状态。
         """
         if self._handles.get(session_id) is not handle:
             return  # 句柄已被他人替换/清理（如 discard），不越权动
         self._handles.pop(session_id, None)
-        # 极端竞态：清理前一刻恰好被准入（_admit 已 set、_running 已指向它）→ 按 release 语义腾出
-        if self._running == session_id:
-            self._running = None
+        # 极端竞态：清理前一刻恰好被准入（_admit 已 set、_running 已含它）→ 按 release 语义腾出
+        self._running.discard(session_id)
         self._dispatch_locked()
 
     def discard(self, session_id: str) -> None:
@@ -268,16 +271,29 @@ class TaskScheduler:
         若正占用 worker 也一并腾出。不触发调度（由调用侧的正常路径善后）。
         """
         handle = self._handles.pop(session_id, None)
-        if handle is not None and self._running == session_id:
-            self._running = None
+        if handle is not None:
+            self._running.discard(session_id)
 
     # ---------- 内部调度核心（持锁调用） ----------
     def _dispatch_locked(self) -> None:
         """在持有 self._lock 时被调用：worker 空则准入下一个；worker 忙则给策略一次抢占机会。"""
-        if self._running is not None:
+        # 先把空位填满（多 worker）：容量内逐个准入；max_workers=1 时退化为旧单 worker 语义
+        while len(self._running) < self.max_workers:
+            waiters = [h for h in self._handles.values() if h.status == QUEUED]
+            nxt = self.policy.pick_next(waiters)
+            if nxt is None:
+                break
+            nxt.status = RUNNING
+            nxt.started_at = time.time()
+            self._running.add(nxt.session_id)
+            nxt._admit.set()
+
+        # 满员且仍有排队者 → 给策略一次抢占机会。受害者=最弱在跑者（后台类优先——
+        # cancel/suspend 代价低；同类取优先级最低、最晚开跑者），单 worker 时即唯一在跑者。
+        if len(self._running) >= self.max_workers:
             waiters = [h for h in self._handles.values() if h.status == QUEUED]
             if waiters:
-                running = self._handles.get(self._running)
+                running = self._preempt_victim_locked()
                 claimant = self.policy.should_preempt(running, waiters)
                 if claimant is not None and running is not None and not running.preempt_requested:
                     running.preempt_requested = True  # 只触发一次，后续 dispatch 不再重复回调
@@ -290,19 +306,16 @@ class TaskScheduler:
                         running.suspend_requested = True  # 由编排循环在迭代边界响应
                         if self._on_suspend_request is not None:
                             self._on_suspend_request(running.session_id)
-            self._broadcast_positions()  # worker 忙:新排队者也要知道自己的位次
-            return
-
-        waiters = [h for h in self._handles.values() if h.status == QUEUED]
-        nxt = self.policy.pick_next(waiters)
-        if nxt is None:
-            self._broadcast_positions()
-            return
-        nxt.status = RUNNING
-        nxt.started_at = time.time()
-        self._running = nxt.session_id
-        nxt._admit.set()
         self._broadcast_positions()
+
+    def _preempt_victim_locked(self) -> Optional[TaskHandle]:
+        """满员抢占的受害者选择（持锁调用）：后台类优先，同类取 (priority 最低, 最晚开跑)。"""
+        running = [self._handles[sid] for sid in self._running if sid in self._handles]
+        if not running:
+            return None
+        bg = [h for h in running if h.kind in BACKGROUND_KINDS | SUSPENDABLE_BACKGROUND]
+        pool = bg or running
+        return min(pool, key=lambda h: (h.priority, -(h.started_at or 0.0)))
 
     def _broadcast_positions(self) -> None:
         """计算 QUEUED 句柄的当前位次并上报变化(与默认策略同序:优先级降序、先来先到)。"""
@@ -338,7 +351,7 @@ class TaskScheduler:
         """全局任务视图（供 /tasks 接口与前端任务切换器）。"""
         handles = [h.public() for h in self._handles.values()]
         return {
-            "running": self._running,
+            "running": sorted(self._running),
             "queued": sum(1 for h in self._handles.values() if h.status == QUEUED),
             "suspended": sum(1 for h in self._handles.values() if h.status == SUSPENDED),
             "tasks": handles,

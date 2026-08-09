@@ -4,9 +4,11 @@
 上下文，模型随后用**主循环的工具**照做。没有子会话、没有自带工具集，故审批闸门
 （`orchestrator.py:551`）照常对剧本里的每一次工具调用生效：**零新增提权面**（D.11）。
 
-**R2a = 显式调用**：剧本目录不进系统提示，本工具的描述也刻意不罗列剧本用途——只在
-用户点名时才调。让模型自行浏览挑选 = R2b，挂 `DEFERRED.md`：e4b 上剧本一多大概率
-选不准，而选错剧本的症状是「按错流程认真跑完」，比不用剧本更糟。
+**R2b 全开（D.17，2026-08-09）**：工具描述内嵌剧本索引（name+description，装配期
+从剧本表生成），模型在任务明确匹配某剧本用途时**自主调用**，用户点名时照常必调。
+e4b 时代的「只认点名」禁令撤销——31B 档口测已证：守禁能力在、手工路线自发复刻剧本
+步骤（#77）。选错剧本的历史顾虑由索引 description 质量与 31B 判断力兜底；错配症状
+（按错流程认真跑完）若在弱模型上复发，回退开关=恢复旧描述（git 可查）。
 """
 from ..base import BaseTool
 from ...agents import runtime
@@ -14,12 +16,21 @@ from ...agents import runtime
 
 class SkillInvokeTool(BaseTool):
     name = "skill_invoke"
-    description = (
-        "Load the playbook for a skill the USER explicitly named (e.g. they said "
-        "\"use the deck skill\" or \"/deck\"). Returns the playbook text; follow it "
-        "with your normal tools. Do NOT call this to browse or to guess which skill "
-        "might help — only when the user names one."
+    _DESC_HEAD = (
+        "Load the playbook for a skill and follow it with your normal tools. Call this "
+        "when the user names a skill (e.g. \"use the deck skill\" or \"/deck\"), OR "
+        "when the task clearly matches one of the skills listed below — invoke it BEFORE "
+        "improvising your own workflow. Skip it when no listed skill clearly fits."
     )
+    description = _DESC_HEAD  # 兜底文案；装配期在 __init__ 里追加剧本索引（R2b 全开）
+
+    def __init__(self):
+        # 两表互为前置：首轮目录扫描时剧本表未装配（is_available 会挡下），app.py 在
+        # 剧本表就绪后经 registry.load_tool 重注册——那一次 __init__ 能拿到真索引。
+        reg = runtime.get_skill_registry()
+        if reg is not None and reg.names():
+            index = "; ".join(f"{n}: {reg.get(n).description}" for n in reg.names())
+            self.description = f"{self._DESC_HEAD} Available skills — {index}"
     requires_approval = False
     is_concurrency_safe = True
     is_read_only = True

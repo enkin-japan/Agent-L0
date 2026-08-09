@@ -268,15 +268,23 @@ async def _visual_qa(engine, pages: List[str], max_pages: int = 2) -> str:
                 print(f"🔀 [excel] 视觉回读路由 → 专科端点 {name!r}")
     except Exception as e:
         print(f"⚠️ [excel] 视觉回读路由失败，回落主引擎: {e}")
-    findings = []
-    for i, png in enumerate(pages[:max_pages]):
+    async def _one(i: int, png: str) -> str:
         qa = EphemeralSession(
             qa_engine.backend, _VISUAL_QA_SYSTEM,
             f"Rendered page {i + 1} of the workbook you produced. Inspect it.",
             images=[png])
         r = await qa_engine.generate_once(qa, tools=None, temperature=0.1, max_tokens=300)
-        text = (r.get("text") or "").strip()
-        if text and text.upper() != "PASS":
+        return (r.get("text") or "").strip()
+
+    # 逐页并行（B1 并发落地）：页间会话独立，gather 齐发；并发度由引擎信号量钳制
+    # （inprocess=1 时与顺序版全同）。findings 按页序组装，产出稳定。
+    texts = await asyncio.gather(*(_one(i, p) for i, p in enumerate(pages[:max_pages])),
+                                 return_exceptions=True)
+    findings = []
+    for i, text in enumerate(texts):
+        if isinstance(text, Exception):
+            findings.append(f"page {i + 1}: visual QA failed ({type(text).__name__})")
+        elif text and text.upper() != "PASS":
             findings.append(f"page {i + 1}: {text}")
     return "PASS" if not findings else "; ".join(findings)
 

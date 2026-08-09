@@ -437,6 +437,12 @@ async def lifespan(app: FastAPI):
                 s.journal.emit("queue_moved", {"position": pos})
 
     sched_cfg = (config.get("agent") or {}).get("scheduler") or {}
+    # 任务级 worker 数与生成并发同源（B1 单旋钮）：remote 后端才放开多会话并行准入，
+    # 进程内后端共享单例不可并发 → 恒 1（与引擎的钳制口径一致）。
+    _n_task_workers = (
+        max(1, int((config.get("agent") or {}).get("max_inference_concurrency", 1)))
+        if _backend_name == "remote" else 1
+    )
     scheduler = TaskScheduler(
         policy=ClassPolicy(
             aging_seconds=float(sched_cfg.get("aging_seconds", 300)),
@@ -445,6 +451,7 @@ async def lifespan(app: FastAPI):
         on_suspend_request=_flag_session_suspend,
         on_cancel_request=_flag_session_cancel,
         on_queue_positions=_publish_queue_positions,
+        max_workers=_n_task_workers,
     )
     session_manager.scheduler = scheduler
     
