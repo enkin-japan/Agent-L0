@@ -89,3 +89,35 @@ vLLM 实现 InferenceBackend 协议（server 一行不动，`INFER_BACKEND=cuda`
 repetition_context_size 无对应物；vision/audio 载荷透传未实测；per-request
 logits_processors 若被所装 vLLM 版本拒绝→约束降级为上游解析兜底（structural-tag
 迁移候补）；Qwen3.6 方言按 qwen35 预注册，模板兼容性=联调首验项。
+
+## 日用一键起停（daily.sh，2026-08-09 起）
+
+白天开、晚上关的日常算力端（背景：余量 unit 榨汁，L4 1.54u/h 可支撑约 20 天日用）。
+
+```bash
+./colab/daily.sh start        # L4 档：26B NVFP4（tool 0.96/longchain 1.0；
+                              #   vision hard 档 -8pp，视觉关键活换 a100 档）
+./colab/daily.sh start a100   # A100 40G 档：26B fp8+MTP k=4 生产形态（5.3u/h）
+./colab/daily.sh status       # 会话 / 服务健康 / 时长与预估 unit
+./colab/daily.sh stop         # 停哨兵+会话；孤儿自动走还原备份自救
+```
+
+一次性前置：`mkdir -p ~/.config/agent-colab && chmod 700 ~/.config/agent-colab`，
+从 Drive `AgentColab/secrets/colab.env` 拷入该目录（chmod 600）。起服就绪后本机
+`./devctl.sh start all` 即连上（`.env.local` 已拨 colab-a100）。
+
+防崩溃措施（全部来自各站实证教训）：
+- `colab new` 后**立即备份 sessions.json**——CLI 404 自清会删掉 stop 所需凭据，
+  孤儿 VM 靠还原备份自救（`rescue` 子命令，账本 66eec21 案）；
+- VM 侧**监理循环**：server 崩了自动重启（≤5 次/天），`/content/logs/supervisor.log` 留痕；
+- **GPU 保活 0.5G**（gpu_keepalive.py pidfile 纪律）防用户侧 25min 判零看门在
+  空闲窗误杀；
+- Mac 侧**隧道保活替身**（tunnel_keepalive.py）——CLI 自带 keep_alive 被 404 连坐
+  杀死的长稳站教训；
+- Mac 侧**哨兵**：2min 健康轮询（失联 10min 弹 macOS 通知）+ 20min 指标回拉
+  （活跃信号）；
+- 起服卡死有 30min 停滞判死；`ssh-keygen -R colab-a100` 每次 start 自动清旧钥。
+
+旋钮（env 传给 start）：`SERVE_MAXLEN`（L4 显存紧时下调上下文上限）、
+`SERVE_KV_DTYPE`（L4 档缺省 fp8——KV 减半 +20% 提速、tool_call 零漂移实测；
+传 auto 退回。A100=SM80 不支持，缺省即 auto）。

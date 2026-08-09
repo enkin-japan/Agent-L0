@@ -188,7 +188,7 @@ inference:
       # =选错工具/未发起，模型侧 D1 记档）、longchain 0.833、vision 20/20（ChartQA
       # 加难批另测）、gen_tps 157 均值（KV 前缀命中 0.60 均值）
       profile: { tool_call: 0.92, longchain: 0.833, vision: 1.0, vision_hard: 0.832, tps: 157.2 }
-      note: "bf16 ~52GB MoE | A100 联调 ✓ 契约 19/19 | 评测画像已回填（2026-08-08）| ChartQA 扩容定稿（#77 2026-08-09）：vision_hard 0.832=合并批 n=197；yn 全量 0.760(n=104) 不入题库只记聚合"
+      note: "bf16 ~52GB MoE | A100 联调 ✓ 契约 19/19 | 评测画像已回填（2026-08-08）| ChartQA 扩容定稿（#77 2026-08-09）：vision_hard 0.832=合并批 n=197；yn 全量 0.760(n=104) 不入题库只记聚合 | L4 日用档=RedHatAI NVFP4 件（2026-08-09 实测：tool 0.96/long 1.0 零损、vision hard 档 -8pp、gen ~50tps、FP8 KV 缺省开=+20% 提速 tool 零漂移；视觉关键活换 a100 fp8 档）"
     - repo: "Qwen/Qwen3.6-35B-A3B"
       revision: "995ad96eacd98c81ed38be0c5b274b04031597b0"
       dialect: "qwen35"

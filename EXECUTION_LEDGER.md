@@ -202,6 +202,21 @@
 > 160 题实质覆盖，关闭；Ornith NVFP4 可选项未做（预算考虑）。GPU 已清（0 MiB，
 > 用户侧看门自动止损）。预算累计 ~307u/600。
 
+> 🟢 **2026-08-09：L4 廉价档开辟 + 日用一键起停套件入库（~1.5h ≈2.3u）**。预算
+> 台账修正：实际余 **386.56u**（用户查账为准）。**26B NVFP4（RedHatAI 件，第 6 站
+> 同件）L4 承载实测**：装载顺（32768 顶格无 OOM，16GB 件 Xet 61s 拉完）、tool_call
+> **0.96**/longchain **1.0** 零损、vision 0.764（易批 0.90/seed 1.0；**hard 档
+> -8pp**=0.756 vs fp8 0.838——扩容题库把第 6 站"-2 题"钉成精确刻度，MoE 抗量化
+> 弱的落点即 vision 多步）、gen ~50tps（每 unit 吞吐 32.3 vs A100 fp8 29.6 打平，
+> 空闲日用档碾压）。**FP8 KV 孤儿项归位**（第 6 站 A100=SM80 被拒，L4=SM89 通）：
+> tool_call 0.96 逐项同分零漂移 + gen **59.8tps（+20%）**——L4 日用档缺省开启。
+> **日用套件**（colab/daily.sh + daily_serve_chain.sh + tunnel_keepalive.py +
+> mtp_patch.py 收编入库）：start/stop/status/rescue 四命令，白天开晚上关；防线=
+> sessions.json 开机即备份孤儿自救／VM 监理循环崩溃自动重启 ≤5／GPU 保活 0.5G 防
+> 判零／隧道保活替身（长稳站 404 连坐教训）／哨兵健康轮询+macOS 通知+20min 指标
+> 回拉／30min 停滞判死／start 自清 ssh 旧钥。L4 档=NVFP4+FP8 KV（视觉关键活
+> `start a100`=26B fp8+MTP 生产形态）。386u ÷（L4 12h/天 ≈18.5u）≈ **20 天日用**。
+
 > 🟢 **2026-08-09：#76 attention/driver 现代化 ✅（免 GPU，本机 e4b）——31B 编排层
 > 验收解锁**。站 B 发现的 harness 漂移清偿：审批环从已移除的同步 `/approval` 迁至
 > 协议 v1 事件账本制（POST /turns 202 → SSE /events 附着观察 → awaiting_approval
