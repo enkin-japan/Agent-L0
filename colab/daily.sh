@@ -134,11 +134,14 @@ stop(){
     rescue; return
   fi
   echo "$out" | tail -1
+  sleep 3   # 平台侧注销有延迟，停完即查会误报「仍有会话」
   colab ls 2>&1 | grep -q "No active sessions" && note "✅ 无残留会话" \
     || { note "⚠️ 仍有会话在册："; colab ls 2>&1 | tail -3; }
-  local rate; rate=$(rate_of "$(session_tier)")
-  hours=$(awk "BEGIN{printf \"%.1f\", ($(date +%s)-$(session_start_ts))/3600}")
-  note "本次时长 ${hours}h ≈ $(awk "BEGIN{printf \"%.1f\", $hours*$rate}")u"
+  # awk 一律 -v 传参：嵌套引号内插在 macOS bash 3.2 下会被劈碎（stop 首跑实案）
+  local rate hours cost; rate=$(rate_of "$(session_tier)")
+  hours=$(awk -v a="$(date +%s)" -v b="$(session_start_ts)" 'BEGIN{printf "%.1f",(a-b)/3600}')
+  cost=$(awk -v h="$hours" -v r="$rate" 'BEGIN{printf "%.1f", h*r}')
+  note "本次时长 ${hours}h ≈ ${cost}u"
   rm -f "$STATE/current_session" "$STATE/current_tier" "$STATE/session_start_ts"
 }
 
@@ -163,7 +166,8 @@ status(){
       && echo "$p: 在岗" || echo "$p: 不在（stop 后属正常）"
   done
   local ts rate; ts=$(session_start_ts); rate=$(rate_of "$(session_tier)")
-  [ -n "$ts" ] && awk "BEGIN{h=($(date +%s)-$ts)/3600; printf \"时长: %.1fh ≈ %.1fu（$(session_tier)）\n\", h, h*$rate}"
+  [ -n "$ts" ] && awk -v n="$(date +%s)" -v t="$ts" -v r="$rate" -v g="$(session_tier)" \
+    'BEGIN{h=(n-t)/3600; printf "时长: %.1fh ≈ %.1fu（%s）\n", h, h*r, g}'
 }
 
 case "$cmd" in

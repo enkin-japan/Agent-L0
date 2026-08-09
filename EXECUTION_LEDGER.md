@@ -230,6 +230,27 @@
 > 新增 3 例多 worker 语义锁定测试。并发度三层钳制：调度器准入 ≤4 → 引擎信号量 ≤4
 > → 服务端 gen_sem ≤8。真机效果验证挂 L4 测试任务（并发 A/B）。
 
+> 🟢 **2026-08-09：L4 测试站四连 ✅（agentd-0809 ~2h ≈3u）——日用形态全维验收+
+> 路由三处调参定稿**。daily.sh 首跑即真车：bash 3.2 变量名吞多字节坑（`$name（`）
+> 修复（20f7ef0）、哨兵拆 sentinel start|stop 子命令（评测停服窗静默）。
+> ① **vision 批 fp8 KV 补跑**（n=212 单变量对照，maxlen 钉回 32768）：**0.816 vs
+> auto-KV 0.764**——零损上抖（翻转 17↑/6↓ 边界噪声，vision gen 39.3tps）；L4 档
+> NVFP4+FP8 KV **全维站住**（tool/long/vision 三线无一降档）。② **云端求助 E2E**：
+> 26B 幻觉 provider=google→无钥 anthropic 双败弃求助实案 → cloud_consult 装配期
+> 内嵌**有钥供应商枚举**（skill 索引同型）；luna 隐藏推理吃满 2048 正文空返实案 →
+> advisor **空正文响亮失败**+单测、cloud.max_tokens 8192。终态 5 连发：**求助 3/5、
+> web_research 自研 2/5**（能力边界双路皆合格零漂移，不再过度转向）；审批→L0 脱敏
+> （模型自剥合成 PII+守卫掩 1 span 分层生效）→出网台账→费用记账全链验通（$0.021）。
+> ③ **并发 A/B**：3 会话同时提交，旋钮 4=**13.8s**（三轮完全并行）vs 旋钮 1=
+> **24.2s**（串行准入）——**1.75×**（连续批处理共享吞吐，未到 3× 属预期）；测后
+> 旋钮还原 4。④ **R2b 全开行为**（#78 验收）：描述三轮调参 2/5→3/5→**5/5**——
+> v2 线索例句多语言化（26B 只认英文 "use the deck skill"，"/deck"/中文「用 deck
+> 剧本」不触发，31B 能自行桥接故 #77 口测未暴露）、v3 任务→剧本具体映射例+「会用
+> 散工具也先装剧本」次序令；终态自主调对（chart-report/deck）+不匹配零误调+点名
+> 回归全过，deck 案按剧本停下请示大纲（剧本遵循实证）。skill_invoke name 参数 R2a
+> 措辞残留（"the user asked for"）一并清除。产物存
+> `results/l4-nvfp4/route-tests/`（gitignored）。金测试 **720**。
+
 > 🟢 **2026-08-09：#76 attention/driver 现代化 ✅（免 GPU，本机 e4b）——31B 编排层
 > 验收解锁**。站 B 发现的 harness 漂移清偿：审批环从已移除的同步 `/approval` 迁至
 > 协议 v1 事件账本制（POST /turns 202 → SSE /events 附着观察 → awaiting_approval
