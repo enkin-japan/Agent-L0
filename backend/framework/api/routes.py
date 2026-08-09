@@ -115,16 +115,13 @@ def _skills_user_dir():
     return data_dir() / "skills"
 
 
-@router.post("/api/v1/skills")
-async def save_skill(request: Request, body: SkillSaveRequest):
-    """保存（upsert）一份用户剧本并尽力即时上架。写入数据根 skills/{name}.md
-    （内置 skills/ 只读，代码树在签名 bundle 里不可写）。effect：
-    registered=已注册可用｜saved_unavailable=已保存但依赖工具缺失（探活未过）。
-    与内置剧本重名 → 409（内置不可经 API 覆盖）；同名用户剧本 = 编辑覆盖，允许。"""
+async def _save_skill_impl(request: Request, name: str, description: str,
+                           skill_body: str, requires) -> dict:
+    """剧本保存的公共实现：表单面（POST /skills）与注册单确认共用一条落盘/上架路。"""
     import yaml as _yaml
-    name = str(body.name or "").strip()
-    description = str(body.description or "").strip()
-    skill_body = body.body or ""
+    name = str(name or "").strip()
+    description = str(description or "").strip()
+    skill_body = skill_body or ""
     if not _SKILL_NAME_RE.match(name):
         raise HTTPException(status_code=400,
                             detail="剧本名非法：仅允许小写字母/数字开头，其余含小写字母/数字/连字符")
@@ -141,8 +138,8 @@ async def save_skill(request: Request, body: SkillSaveRequest):
     # 也读不了 safe_dump 对纯标量映射产出的 {…} flow 形态。requires 为空则不写该键。
     front = _yaml.safe_dump({"name": name, "description": description},
                             allow_unicode=True, sort_keys=False)
-    if body.requires:
-        front += "requires: [" + ", ".join(str(t) for t in body.requires) + "]\n"
+    if requires:
+        front += "requires: [" + ", ".join(str(t) for t in requires) + "]\n"
     user_dir = _skills_user_dir()
     user_dir.mkdir(parents=True, exist_ok=True)
     (user_dir / f"{name}.md").write_text(
@@ -159,6 +156,16 @@ async def save_skill(request: Request, body: SkillSaveRequest):
         return {"status": True, "effect": "saved_unavailable",
                 "detail": "缺工具 " + ", ".join(missing)}
     return {"status": True, "effect": "saved"}
+
+
+@router.post("/api/v1/skills")
+async def save_skill(request: Request, body: SkillSaveRequest):
+    """保存（upsert）一份用户剧本并尽力即时上架。写入数据根 skills/{name}.md
+    （内置 skills/ 只读，代码树在签名 bundle 里不可写）。effect：
+    registered=已注册可用｜saved_unavailable=已保存但依赖工具缺失（探活未过）。
+    与内置剧本重名 → 409（内置不可经 API 覆盖）；同名用户剧本 = 编辑覆盖，允许。"""
+    return await _save_skill_impl(request, body.name, body.description,
+                                  body.body, body.requires)
 
 
 @router.delete("/api/v1/skills/{name}")
@@ -233,14 +240,12 @@ async def list_api_tools(request: Request):
     return {"status": True, "tools": items}
 
 
-@router.post("/api/v1/api-tools")
-async def save_api_tool(request: Request, body: ApiToolSaveRequest):
-    """保存（upsert）一份 UI 声明并尽力即时上架。effect：
-    registered=已注册可用｜unavailable=已保存但探活未过｜saved_disabled=已保存停用｜
-    restart_required=覆盖了已注册工具（rescan 只增不删，重启生效）。"""
+async def _save_api_tool_impl(request: Request, decl: dict,
+                              secret: Optional[str] = None) -> dict:
+    """API 工具声明保存的公共实现：表单面与注册单确认共用。secret 只可能来自
+    表单面（对话式注册的声明物理上带不了密钥——红线①），有值则先落 0600 文件。"""
     import yaml as _yaml
     factory = _atf()
-    decl = body.to_decl()
     problem = factory._validate(decl)
     if problem:
         raise HTTPException(status_code=400, detail=problem)
@@ -248,8 +253,8 @@ async def save_api_tool(request: Request, body: ApiToolSaveRequest):
         if isinstance(item["decl"], dict) and item["decl"].get("name") == decl["name"]:
             raise HTTPException(status_code=409,
                                 detail="仓库 api_tools/ 已有同名手写声明，UI 不覆盖")
-    if body.secret and decl.get("auth"):
-        factory.write_secret(str(decl["auth"]["env"]), body.secret)
+    if secret and decl.get("auth"):
+        factory.write_secret(str(decl["auth"]["env"]), secret)
     user_dir = factory.user_decl_dir()
     user_dir.mkdir(parents=True, exist_ok=True)
     (user_dir / f"{decl['name']}.yaml").write_text(
@@ -267,6 +272,14 @@ async def save_api_tool(request: Request, body: ApiToolSaveRequest):
         return {"status": True, "effect": "registered"}
     return {"status": True, "effect": "unavailable",
             "detail": "已保存但探活未过（密钥缺失？），补齐后 rescan 可上架"}
+
+
+@router.post("/api/v1/api-tools")
+async def save_api_tool(request: Request, body: ApiToolSaveRequest):
+    """保存（upsert）一份 UI 声明并尽力即时上架。effect：
+    registered=已注册可用｜unavailable=已保存但探活未过｜saved_disabled=已保存停用｜
+    restart_required=覆盖了已注册工具（rescan 只增不删，重启生效）。"""
+    return await _save_api_tool_impl(request, body.to_decl(), secret=body.secret)
 
 
 @router.post("/api/v1/api-tools/test")
@@ -302,6 +315,68 @@ async def delete_api_tool(name: str, request: Request):
     registered = name in request.app.state.mcp_registry.tool_names()
     return {"status": True,
             "effect": "restart_required" if registered else "deleted"}
+
+
+# ---------------- 待确认注册队列（D.18 对话式注册的人工闸；DEFERRED §4） ----------------
+# 模型经 register_api_tool / register_skill 落 pending → 本组端点是**唯一**放行口
+# （红线②：确认只在设置页，模型没有确认工具）。确认即走与表单面同一条保存/上架路。
+
+
+def _pending():
+    from ..core import pending_registrations
+    return pending_registrations
+
+
+@router.get("/api/v1/registrations")
+async def list_registrations(request: Request):
+    """待确认注册单清单（设置页审批队列数据源）。payload 全文回传供审阅；
+    api_tool 附 has_secret（auth.env 是否已录值——确认前可先去密钥框补）。"""
+    factory = _atf()
+    items = []
+    for item in _pending().list_pending():
+        payload = item.get("payload") or {}
+        auth = payload.get("auth") or {}
+        if item.get("kind") == "api_tool" and auth.get("env"):
+            item = {**item, "has_secret": bool(factory.read_secret(str(auth["env"])))}
+        items.append(item)
+    return {"status": True, "registrations": items}
+
+
+@router.post("/api/v1/registrations/{rid}/confirm")
+async def confirm_registration(rid: str, request: Request):
+    """确认一份注册单：走表单面同一条保存/上架实现，成功后销单。
+    secret 恒 None——对话式声明带不了密钥（红线①），密钥走设置页密钥框。"""
+    pending = _pending()
+    try:
+        item = pending.get(rid)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if item is None:
+        raise HTTPException(status_code=404, detail="注册单不存在（已确认/已驳回？）")
+    payload = item.get("payload") or {}
+    if item.get("kind") == "api_tool":
+        result = await _save_api_tool_impl(request, dict(payload), secret=None)
+    elif item.get("kind") == "skill":
+        result = await _save_skill_impl(request, payload.get("name"),
+                                        payload.get("description"),
+                                        payload.get("body"),
+                                        payload.get("requires"))
+    else:
+        raise HTTPException(status_code=400, detail=f"注册单 kind 非法: {item.get('kind')}")
+    pending.remove(rid)
+    return {**result, "id": rid}
+
+
+@router.delete("/api/v1/registrations/{rid}")
+async def reject_registration(rid: str, request: Request):
+    """驳回（删除）一份注册单。"""
+    try:
+        removed = _pending().remove(rid)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not removed:
+        raise HTTPException(status_code=404, detail="注册单不存在")
+    return {"status": True, "effect": "rejected", "id": rid}
 
 
 @router.get("/api/v1/tasks", response_model=TaskListResponse)
