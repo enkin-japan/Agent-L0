@@ -431,6 +431,31 @@ final class AgentClient {
         try await send(try request("DELETE", "/api/v1/api-tools/\(name)"))
     }
 
+    // MARK: - 待确认注册队列（对话式注册的人工闸）
+    // 模型起草的工具/剧本声明落在待确认区，这组端点是**唯一**放行口（后端红线：
+    // 模型没有确认工具，确认只在设置页）。确认即走与表单面同一条保存/上架实现。
+
+    func listRegistrations() async throws -> [RegistrationItem] {
+        let res: RegistrationListResponse = try await send(
+            try request("GET", "/api/v1/registrations"))
+        return res.registrations
+    }
+
+    /// 确认放行一份注册单。api_tool 的确认会当场做一次探活（可能走网络），
+    /// 给和试调同一档的宽超时。
+    @discardableResult
+    func confirmRegistration(id: String) async throws -> RegistrationActionResponse {
+        let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        return try await send(try request("POST", "/api/v1/registrations/\(encoded)/confirm",
+                                          timeout: 90))
+    }
+
+    @discardableResult
+    func rejectRegistration(id: String) async throws -> RegistrationActionResponse {
+        let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        return try await send(try request("DELETE", "/api/v1/registrations/\(encoded)"))
+    }
+
     /// 会话 Deck Spec；该会话没有 deck 时返回 nil（404 不是错误）。
     func deck(sessionId: String) async throws -> DeckSpec? {
         let req = try request("GET", "/api/v1/files/\(sessionId)/deck")

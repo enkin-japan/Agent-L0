@@ -21,28 +21,31 @@ struct SettingsView: View {
     // 每次 body 重算时无绑定的 TabView 会重置回第一页——实机症状即"点击不切页/
     // 切过去又弹回第一页"。@State 存活于重渲染，选中页才稳得住。
     private enum SettingsTab: Hashable, CaseIterable, Identifiable {
-        case connection, notification, knowledge, apiTools, skills, sidecar, appearance
+        case connection, notification, knowledge, apiTools, skills, registrations,
+             sidecar, appearance
         var id: Self { self }
         var title: String {
             switch self {
-            case .connection:   return L("连接")
-            case .notification: return L("通知")
-            case .knowledge:    return L("知识库")
-            case .apiTools:     return L("API 工具")
-            case .skills:       return L("剧本")
-            case .sidecar:      return L("执行层")
-            case .appearance:   return L("外观")
+            case .connection:    return L("连接")
+            case .notification:  return L("通知")
+            case .knowledge:     return L("知识库")
+            case .apiTools:      return L("API 工具")
+            case .skills:        return L("剧本")
+            case .registrations: return L("待确认")
+            case .sidecar:       return L("执行层")
+            case .appearance:    return L("外观")
             }
         }
         var icon: String {
             switch self {
-            case .connection:   return "network"
-            case .notification: return "bell"
-            case .knowledge:    return "books.vertical"
-            case .apiTools:     return "wrench.and.screwdriver"
-            case .skills:       return "book.closed"
-            case .sidecar:      return "gearshape.2"
-            case .appearance:   return "paintpalette"
+            case .connection:    return "network"
+            case .notification:  return "bell"
+            case .knowledge:     return "books.vertical"
+            case .apiTools:      return "wrench.and.screwdriver"
+            case .skills:        return "book.closed"
+            case .registrations: return "tray.full"
+            case .sidecar:       return "gearshape.2"
+            case .appearance:    return "paintpalette"
             }
         }
     }
@@ -94,6 +97,11 @@ struct SettingsView: View {
                         SkillsPanelView(embedded: true)
                     } label: {
                         Label(L("剧本"), systemImage: "book.closed")
+                    }
+                    NavigationLink {
+                        RegistrationsPanelView(embedded: true)
+                    } label: {
+                        Label(L("待确认"), systemImage: "tray.full")
                     }
                 }
                 appearanceSection
@@ -160,6 +168,9 @@ struct SettingsView: View {
         // 剧本（用户以 /名字 点名的流程提示词）：同为全局数据实体，归设置
         case .skills:
             SkillsPanelView(embedded: true)
+        // 待确认注册（模型起草的声明的人工闸）：确认只在设置页，模型没有确认工具
+        case .registrations:
+            RegistrationsPanelView(embedded: true)
         case .sidecar:
             Form { sidecarSection; versionSection }.formStyle(.grouped)
         case .appearance:

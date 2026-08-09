@@ -416,6 +416,86 @@ struct ApiToolTestResponse: Codable {
     let result: String
 }
 
+// ---------- 待确认注册队列（对话式注册的人工闸；backend /api/v1/registrations） ----------
+
+/// 一份待确认注册单：模型在对话里起草的声明落在待确认区，等用户在设置页放行。
+/// payload 是异构声明 dict（api_tool 一套形状、skill 另一套），照 ApiToolItem.params
+/// 的做法用 JSONValue 兜住——客户端只审阅与转述，不对形状做假设。
+struct RegistrationItem: Codable, Identifiable {
+    let id: String
+    let kind: String              // api_tool | skill
+    let name: String
+    let status: String?           // pending（坏文件为 corrupt）
+    let proposedAt: String?
+    let note: String?
+    let payload: [String: JSONValue]?
+    /// 仅 api_tool 且声明了 auth 时出现：auth.env 那个变量名是否已录过密钥实值
+    let hasSecret: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id, kind, name, status, note, payload
+        case proposedAt = "proposed_at"
+        case hasSecret = "has_secret"
+    }
+
+    var isApiTool: Bool { kind == "api_tool" }
+
+    private func str(_ key: String) -> String? {
+        if case .string(let s)? = payload?[key], !s.isEmpty { return s }
+        return nil
+    }
+
+    var summary: String? { str("description") }
+    var endpoint: String? { str("endpoint") }
+    var method: String? { str("method") }
+    /// skill 正文（点名 /名字 时注入的流程提示词）
+    var skillBody: String? { str("body") }
+
+    /// api_tool 的参数键（payload.params.properties 的键；无参数则空）
+    var paramKeys: [String] {
+        guard case .object(let params)? = payload?["params"],
+              case .object(let props)? = params["properties"] else { return [] }
+        return props.keys.sorted()
+    }
+
+    /// 鉴权变量名（auth.env）；nil = 该声明不需要密钥
+    var authEnv: String? {
+        guard case .object(let auth)? = payload?["auth"],
+              case .string(let env)? = auth["env"], !env.isEmpty else { return nil }
+        return env
+    }
+
+    /// 密钥还没录：确认前得先去 API 工具页的密钥框补 auth.env 的实值
+    /// （红线①：密钥不走对话通道，声明里物理上带不了密钥）
+    var secretMissing: Bool { isApiTool && authEnv != nil && hasSecret == false }
+
+    /// 声明全文（等宽展示用）：键序稳定，斜杠不转义（地址读得出来）
+    var payloadText: String {
+        guard let payload else { return "{}" }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(JSONValue.object(payload)),
+              let text = String(data: data, encoding: .utf8) else { return "{}" }
+        return text
+    }
+}
+
+struct RegistrationListResponse: Codable {
+    let status: Bool
+    let registrations: [RegistrationItem]
+}
+
+/// 确认/驳回响应。effect 语义随端点：
+/// 确认 = registered（即时上架）/ saved / saved_unavailable（缺依赖或探活未过）/
+/// unavailable / restart_required（重启后端后生效）/ saved_norebuild；
+/// 驳回 = rejected。detail 在 saved_unavailable / unavailable 时带原因。
+struct RegistrationActionResponse: Codable {
+    let status: Bool?
+    let effect: String
+    let detail: String?
+    let id: String?
+}
+
 struct RagDocument: Codable, Identifiable {
     let sourcePath: String
     let title: String
