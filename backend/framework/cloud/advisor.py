@@ -186,6 +186,14 @@ def consult(question: str, context: str = "", provider: Optional[str] = None,
     cost = _cost(p, out["in_tokens"], out["out_tokens"])
     record_egress({**base, "in_tokens": out["in_tokens"], "out_tokens": out["out_tokens"],
                    "cost_usd": round(cost, 6), "ok": True})
+    if not str(out["text"]).strip():
+        # 推理型供应商（如 gpt-5.6-luna）会把 max_tokens 全花在隐藏推理上、正文空返
+        # ——L4 站实测：392→2048 tok 满额零正文。空建议悄悄回填会误导本地决策，必须
+        # 响亮失败（台账已记：钱确实花了）并给出可执行的修法。
+        raise RuntimeError(
+            f"云端顾问返回空正文（{p['name']}/{p['model']}，out_tokens="
+            f"{out['out_tokens']}——疑为推理 token 吃满 max_tokens）。"
+            f"调高 config cloud.max_tokens 或换非推理供应商再试。")
     return {"text": out["text"], "provider": p["name"], "model": p["model"],
             "in_tokens": out["in_tokens"], "out_tokens": out["out_tokens"],
             "cost_usd": cost}

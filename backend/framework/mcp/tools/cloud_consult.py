@@ -37,6 +37,24 @@ class CloudConsultTool(BaseTool):
         },
         "required": ["question"],
     }
+
+    def __init__(self):
+        # 装配期把「有钥供应商」清单写进参数描述（与 skill_invoke 剧本索引同型）：
+        # 26B 档实测会幻觉 provider="google"、再试无钥供应商，两次报错后放弃求助
+        # ——枚举+「别发明名字」是路由文案的架构侧修法（L4 站调参实案）
+        try:
+            from ...cloud.advisor import load_providers
+            provs = [p["name"] for p in load_providers() if p["has_key"]]
+        except Exception:
+            provs = []
+        if provs:
+            import copy
+            params = copy.deepcopy(type(self).parameters)
+            params["properties"]["provider"]["description"] = (
+                f"Optional. Must be one of: {', '.join(provs)}. Omit to use the "
+                f"default ({provs[0]}). Do NOT pass any name not in this list."
+            )
+            self.parameters = params
     requires_approval = True     # 静态默认；实际按 needs_approval 旋钮动态判定
     is_concurrency_safe = False
     timeout_seconds = 180

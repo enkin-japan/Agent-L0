@@ -106,6 +106,19 @@ def test_egress_ledger_and_budget(tmp_path, monkeypatch):
     assert len(t.calls) == n_calls
 
 
+def test_empty_advice_fails_loud_but_ledger_kept(tmp_path, monkeypatch):
+    """推理型供应商把 max_tokens 花光在隐藏推理上→正文空返（L4 站实测）：
+    必须响亮报错（空建议悄悄回填会误导本地决策），且台账照记（钱确实花了）。"""
+    monkeypatch.setenv("AGENT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("T_OA_KEY", "k1")
+    t = _Transport({"choices": [{"message": {"content": ""}}],
+                    "usage": {"prompt_tokens": 400, "completion_tokens": 2048}})
+    with pytest.raises(RuntimeError, match="空正文"):
+        advisor.consult("q", cfg=_cfg(), transport=t)
+    row = json.loads(advisor.egress_log_path().read_text().splitlines()[-1])
+    assert row["ok"] is True and row["out_tokens"] == 2048
+
+
 def test_failed_call_also_recorded(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("T_AN_KEY", "k2")
