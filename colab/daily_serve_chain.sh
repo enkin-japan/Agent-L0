@@ -22,6 +22,12 @@ TIER="${SERVE_TIER:-l4}"
 if [ "$TIER" = "l4" ] && [ -z "${SERVE_KV_DTYPE:-}" ]; then
   SERVE_KV_DTYPE="fp8"
 fi
+# 缺省上下文 65536（8 页 deck 单轮 ~33k 撞 32768 顶的实案）：L4 fp8 KV 池实测
+# 114,963 token、A100 档 KV bf16 65536≈3.7GiB 均有余量。L4 上手动退 auto KV 时
+# 池只有 57k——须同时显式给 SERVE_MAXLEN（如 49152），此处不猜。
+if [ -z "${SERVE_MAXLEN:-}" ] && { [ "$TIER" = "a100" ] || [ "${SERVE_KV_DTYPE:-}" = "fp8" ]; }; then
+  SERVE_MAXLEN=65536
+fi
 APP=/content/agent
 mkdir -p /content/logs
 
