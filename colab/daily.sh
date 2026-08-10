@@ -133,9 +133,12 @@ stop(){
   # VM 已死则 ssh 不通，退回平台 GC 慢路（-1 后缀风险回归，见账本 8-10 夜横幅）。
   local h
   for h in colab-a100 colab-a100-1; do
+    # 失败留证据（2026-08-11 凌晨两连败均无迹可查）：stderr 落 release.log 供下次验尸
     ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "root@$h" \
-        'tailscale --socket=/content/ts.sock logout' >/dev/null 2>&1 \
-      && { note "tailnet 已释名（经 $h）"; break; }
+        'tailscale --socket=/content/ts.sock logout' \
+        >> "$STATE/logs/release.log" 2>&1 \
+      && { note "tailnet 已释名（经 $h）"; break; } \
+      || echo "$(date +%T) 释名失败 host=$h rc=$?" >> "$STATE/logs/release.log"
   done
   note "停会话 ${name}…"
   local out
@@ -146,7 +149,9 @@ stop(){
   fi
   echo "$out" | tail -1
   sleep 3   # 平台侧注销有延迟，停完即查会误报「仍有会话」
-  colab ls 2>&1 | grep -q "No active sessions" && note "✅ 无残留会话" \
+  # CLI 输出夹 ANSI 色码会让 grep 失配（两晚假警报实案）——先剥码再判
+  colab ls 2>&1 | sed $'s/\x1b\\[[0-9;]*m//g' | grep -q "No active sessions" \
+    && note "✅ 无残留会话" \
     || { note "⚠️ 仍有会话在册："; colab ls 2>&1 | tail -3; }
   # awk 一律 -v 传参：嵌套引号内插在 macOS bash 3.2 下会被劈碎（stop 首跑实案）
   local rate hours cost; rate=$(rate_of "$(session_tier)")

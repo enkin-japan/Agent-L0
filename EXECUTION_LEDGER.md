@@ -394,6 +394,20 @@
 > 目标进程名时 pkill -f 会自匹配杀掉自己的 shell（两次实撞）——杀进程一律
 > 拼接串（`"serve_superv""isor"`）或走独立 ssh 会话。
 
+> 🟢 **2026-08-11（凌晨，用户睡前布置）：31B NVFP4×MTP 40G 实测——成立，~1.7×**。
+> 补齐 MTP 矩阵最后一格（稠密抗量化假设验证）：A100 40G、RedHatAI/gemma-4-31B-
+> it-NVFP4（22G，与 26B 件同发行方同装载路）+ google/gemma-4-31B-it-assistant
+> 草稿（927M）。同口径 chat 3-4×350tok：基线 **37.2 tps**（稳态 39.6）→ MTP k=4
+> **65.7 tps**（57.8-87.3）= **1.66-1.77×**，质量完好（开头与基线逐字同、目检全对）；
+> KV 108k→87k tok（bf16 KV，A100 无 fp8 KV）。**结论组合成立：稠密件量化后 MTP
+> 红利保留大半**（fp8@80G 3.12× → NVFP4@40G ~1.7×，差值含卡带宽与接受率两因子），
+> 与 MoE NVFP4@L4 的负收益形成完整对照——**31B NVFP4+MTP 让"质量王"上 CLI 可开
+> 的 40G 档跑出 ~66tps 可用速度**（80G 浏览器场之外的新选项，费率 5.3u/h 同 40G）。
+> **途中双修**：①transformers<5.15 钉漏了 daily_serve_chain.sh 自带的第二条 pip
+> 行（昨晚只钉 bootstrap.sh，新场照崩 head_dim——双份安装行必须同钉，S.13 同谱系），
+> 已补钉；②daily.sh stop 假警报（CLI ANSI 码致 grep 失配）修掉 + 释名失败改留证
+> release.log（两连败无迹可查）。会话 0.9h≈4.8u，VM 已关停清净。
+
 > 🟢 **2026-08-09：#76 attention/driver 现代化 ✅（免 GPU，本机 e4b）——31B 编排层
 > 验收解锁**。站 B 发现的 harness 漂移清偿：审批环从已移除的同步 `/approval` 迁至
 > 协议 v1 事件账本制（POST /turns 202 → SSE /events 附着观察 → awaiting_approval

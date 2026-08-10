@@ -52,7 +52,10 @@ if [ ! -d "$APP/.git" ]; then
     "$APP" || die "clone 失败"
 fi
 git -C "$APP" rev-parse --short HEAD
-pip -q install -U vllm "huggingface_hub[hf_transfer]" transformers \
+# transformers 钉 <5.15（与 bootstrap.sh:98 同一处方，双份安装行必须同钉——2026-08-11
+# 夜实撞：只钉 bootstrap 漏钉本行，新 A100 场照崩 head_dim）：5.15.0 对 gemma 系
+# 逐层配置强抛 AmbiguousGlobalPerLayerAttribute，vLLM get_head_size 启动即炸。
+pip -q install -U vllm "huggingface_hub[hf_transfer]" "transformers<5.15" \
     fastapi uvicorn pyyaml requests llguidance pillow soundfile || die "pip 失败"
 for d in /usr/local/lib/python3*/dist-packages/nvidia/*/lib; do
   [ -d "$d" ] && export LD_LIBRARY_PATH="$d:$LD_LIBRARY_PATH"
