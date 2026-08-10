@@ -31,7 +31,21 @@ struct ChatView: View {
                         if store.isGenerating || ((store.pendingTools?.isEmpty == false || store.isSuspended)
                                                   && (!store.streamText.isEmpty || !store.thinkingText.isEmpty
                                                       || !store.liveSteps.isEmpty)) {
+                            #if os(macOS)
+                            // 常量高度内滚台：直播期外层布局零变化。流式内容任何高度
+                            // 增长（正文/思考/步骤）都被吸收在这个恒定外框内——27 beta
+                            // AppKit 对约束阶段重入硬抛（13:20/13:32 两份 .ips 同链：
+                            // SplitViewChildController didUpdateMinSize），只钉代码块
+                            // 不够，必须整台钉死。轮末权威消息落地时才有一次性布局变化。
+                            ScrollView {
+                                streamingPreview
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .defaultScrollAnchor(.bottom)
+                            .frame(height: 320)
+                            #else
                             streamingPreview
+                            #endif
                         }
 
                         if let tools = store.pendingTools, !tools.isEmpty {
