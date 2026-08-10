@@ -39,22 +39,31 @@ struct RootView: View {
                 }
         }
         #else
-        NavigationSplitView {
-            SessionListView()
-                .navigationTitle("MacAgent")
-                .navigationSplitViewColumnWidth(min: 220, ideal: 260)
-        } detail: {
-            if store.selectedSessionId != nil {
-                // 常量 minWidth：detail 栏的分栏 min 尺寸不随流式内容抖动——
-                // SplitViewChildController didUpdateMinSize 反复触发是 27 beta
-                // 崩溃链的上半段（下半段修复见 MarkdownText.streaming）
-                ChatView()
-                    .frame(minWidth: 480)
-            } else {
-                ContentUnavailableView(L("选择或新建一个会话"),
-                                       systemImage: "bubble.left.and.bubble.right",
-                                       description: Text("\(L("左上角 ✎ 开始新对话")) · \(Bundle.main.appVersionLabel)"))
+        // macOS 27 beta（26A5388g）临时形态：手工分栏替代 NavigationSplitView。
+        // 三份 .ips（13:20/13:32/13:41）同链—— SplitViewChildController
+        // didUpdateMinSize → 约束阶段重入 → AppKit 硬抛 SIGABRT；流式内容任何
+        // 高度变化都可触发，逐点钉尺寸（代码块降级/常量高度内滚台）两轮未根除，
+        // 故把该机制从存在上移除：HStack + 定宽侧栏走不进 SplitViewChildController。
+        // 代价：侧栏不可拖宽、无折叠动画。27 正式版修复重入执法后可整段回退
+        // NavigationSplitView（git 可查）。
+        NavigationStack {
+            HStack(spacing: 0) {
+                SessionListView()
+                    .navigationTitle("MacAgent")
+                    .frame(width: 260)
+                Divider()
+                Group {
+                    if store.selectedSessionId != nil {
+                        ChatView()
+                    } else {
+                        ContentUnavailableView(L("选择或新建一个会话"),
+                                               systemImage: "bubble.left.and.bubble.right",
+                                               description: Text("\(L("左上角 ✎ 开始新对话")) · \(Bundle.main.appVersionLabel)"))
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(minWidth: 760, minHeight: 480)
         }
         #endif
     }
