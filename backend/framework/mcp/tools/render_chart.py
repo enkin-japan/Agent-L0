@@ -23,9 +23,10 @@ class RenderChartTool(BaseTool):
         "line — copy that line into your reply EXACTLY as returned to display the chart. "
         "For bar/line: 'labels' are the category names (one per value), each series is "
         "{name, values}. For pie: one series, labels = slice names. For scatter: each series "
-        "needs x and values (y) of equal length. Write the title and labels in the language "
-        "the USER is conversing in (unless they ask otherwise) — do not let the data file's "
-        "language leak into a chart made for the user."
+        "needs x and values (y) of equal length. Write the title and axis labels in the "
+        "language the USER is conversing in (unless they ask otherwise); category names "
+        "that come from the data itself may stay in their original form — never rename "
+        "data values."
     )
     requires_approval = False   # 只写本会话 assets 目录（文件名由本层生成，无路径注入面）
     is_concurrency_safe = True  # 文件名含毫秒时间戳，并发互不覆盖

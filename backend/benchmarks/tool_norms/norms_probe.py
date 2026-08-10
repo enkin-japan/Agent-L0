@@ -120,17 +120,16 @@ def build_cases(work):
         return r > 0.3, f"markdown cjk_ratio={r:.2f}（>0.3 判中文为主）"
 
     def judge_chart_lang(calls, responses, final):
+        # 只判模型自著文本（标题/轴标签）：分类名来自数据本身，保持原文是对的
+        # （改写数据值破坏可追溯性；首跑 0.15 的失败即把 North America 计入所致）
         args = [a for n, a in calls if n == "render_chart"]
         if not args:
             return False, f"未调 render_chart; calls={[n for n,_ in calls][:8]}"
         a = args[0]
         text = " ".join([str(a.get("title", "")),
-                         str(a.get("x_label", "")), str(a.get("y_label", "")),
-                         " ".join(map(str, a.get("labels") or [])),
-                         " ".join(str(s.get("name", ""))
-                                  for s in (a.get("series") or []))])
+                         str(a.get("x_label", "")), str(a.get("y_label", ""))])
         r = cjk_ratio(text)
-        return r > 0.3, f"title/labels cjk_ratio={r:.2f}; text={text[:80]!r}"
+        return r > 0.3, f"title/axis cjk_ratio={r:.2f}; text={text[:80]!r}"
 
     return [
         ("lang_west_news",
