@@ -323,6 +323,17 @@
 > --rotate）；待办：四钥全套轮换（对话两度见值）、lxml 围堵两隐患（挂死工人泄漏/
 > 单工人超时级联）。教训入 §S：**同路径双形态安装脚本 = 布局静默切换面**。
 
+> 🟢 **2026-08-10（晚）：iOS TestFlight 68 发布（7-29 的 67 以来首发）+ macOS 同号
+> 68 装机**。iOS「连不上」排查结论：**分发滞后非原因**（协议自 7-18 零改动，67 兼容）
+> ——白天连不上=Mac 侧 401 事故同根，之后=排查期「重新生成」轮换了 AGENT_API_KEY，
+> iPhone 重填新钥即通（实机验证 ✅；tailscale serve → 127.0.0.1:14159 链路实测
+> health 200/现钥 200/错钥 401）。68 随包带上：#84 挂起/重启三态、GlobalTasksResponse
+> running 列表迁移（67 的 str? 解码在 try? 里静默失败，任务中心不刷新）。**发布途中
+> 踩到 ASC 停收过期 beta**：27A5218g（7-3 装，beta 2/3 代）7-29 尚可直传，8-10 被拒
+> 「Unsupported SDK」——beta 4 出后旧 beta 逐步失效；升 27A5228h 后直传成功。
+> ⚠️ 复发预告：**每出新 beta/RC 这个门会再落一次**（9 月 RC 季必踩），发 TestFlight
+> 前先对 developer.apple.com/news/releases 核对本机 beta 是否仍受收。
+
 > 🟢 **2026-08-09：#76 attention/driver 现代化 ✅（免 GPU，本机 e4b）——31B 编排层
 > 验收解锁**。站 B 发现的 harness 漂移清偿：审批环从已移除的同步 `/approval` 迁至
 > 协议 v1 事件账本制（POST /turns 202 → SSE /events 附着观察 → awaiting_approval
