@@ -17,6 +17,10 @@ struct SettingsView: View {
     @State private var copyResetTask: Task<Void, Never>?
     private enum RegenPhase { case idle, restarting, done }
     @State private var regenPhase: RegenPhase = .idle
+    // 「重启执行层」独立三态（与上面的「重新生成密钥」同模式但各自计时，
+    // 共用一个实例会让两枚钮互相串反馈）
+    private enum RestartPhase { case idle, restarting, done, failed }
+    @State private var restartPhase: RestartPhase = .idle
     // Tab 选中态必须显式绑定：store/push 是高频发布源（连接状态、流式事件），
     // 每次 body 重算时无绑定的 TabView 会重置回第一页——实机症状即"点击不切页/
     // 切过去又弹回第一页"。@State 存活于重渲染，选中页才稳得住。
@@ -328,10 +332,22 @@ struct SettingsView: View {
                         // 应用改过的密钥），**不动任何 key**；换 AGENT_API_KEY 走
                         // 连接页的「重新生成」。旧标签「（应用新密钥）」读起来像会
                         // 动 key，正名为纯动作。
-                        Button(L("重启执行层")) {
-                            Task { await sidecar.restart() }
+                        // 三态反馈：重启中…（禁点）→ ✓ 已重启（1.5s）→ 复位；
+                        // 重启要好几秒，零反馈时用户只能盯着不动的按钮猜。
+                        switch restartPhase {
+                        case .idle:
+                            Button(L("重启执行层")) { restartSidecar() }
+                                .disabled(sidecar.state == .external || sidecar.state == .disabled)
+                        case .restarting:
+                            Button(L("重启中…")) {}.disabled(true)
+                        case .done:
+                            Label(L("已重启"), systemImage: "checkmark")
+                                .foregroundStyle(Theme.success)
+                        case .failed:
+                            // 不二次转译：直接摆 sidecar 自己的状态文本（详情在下方 failed 分支）
+                            Label(sidecarStateLabel, systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(Theme.warning)
                         }
-                        .disabled(sidecar.state == .external || sidecar.state == .disabled)
                         LabeledContent(L("状态"), value: sidecarStateLabel)
                         if case .failed(let detail) = sidecar.state {
                             // lib_edge.sh 的原话（端口占用者清单/依赖缺失/日志尾），不二次转译
@@ -471,6 +487,19 @@ struct SettingsView: View {
             withAnimation { regenPhase = .done }
             try? await Task.sleep(for: .seconds(1.5))
             withAnimation { regenPhase = .idle }
+        }
+    }
+
+    /// 纯重启（不动任何 key）：restart() 等到执行层重新就绪才返回，
+    /// 所以返回后 state==.running 即"真的起来了"，否则摆状态文本让用户看到没起来。
+    private func restartSidecar() {
+        restartPhase = .restarting
+        Task {
+            await sidecar.restart()
+            let ok = sidecar.state == .running
+            withAnimation { restartPhase = ok ? .done : .failed }
+            try? await Task.sleep(for: .seconds(ok ? 1.5 : 3))
+            withAnimation { restartPhase = .idle }
         }
     }
     #endif

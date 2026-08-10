@@ -201,10 +201,21 @@ struct ChatView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Button(L("挂起")) { store.suspendTask() }
-                        .font(.caption)
-                        .buttonStyle(.borderless)
-                        .help(L("挂起"))
+                    // 受理后到 suspended 事件回来之间转圈（原位替换按钮，不挤动行）；
+                    // 待审批时 worker 已让出、后端必拒挂起——直接禁点并说明去处，
+                    // 好过让用户点一下换回一条拒绝横幅。
+                    if store.suspendPending {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        let awaitingApproval = store.pendingTools?.isEmpty == false
+                        Button(L("挂起")) { store.suspendTask() }
+                            .font(.caption)
+                            .buttonStyle(.borderless)
+                            .disabled(awaitingApproval)
+                            .help(awaitingApproval
+                                  ? L("待审批时任务已暂停，先处理审批卡")
+                                  : L("挂起"))
+                    }
                 }
             }
         }

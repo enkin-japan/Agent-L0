@@ -88,6 +88,9 @@ enum L10n {
         "已挂起（进度保留）": ("一時停止中（進捗は保持）", "Suspended (progress kept)"),
         // 聊天
         "挂起": ("一時停止", "Suspend"),
+        "待审批时任务已暂停，先处理审批卡":
+            ("承認待ちの間タスクは既に停止しています。先に承認カードを処理してください",
+             "The task is already paused while awaiting approval — handle the approval card first"),
         "恢复续跑": ("再開する", "Resume Task"),
         "任务已挂起（推理资源已让出，进度保留在后端）":
             ("タスクは一時停止中（推論リソースを解放、進捗はバックエンドに保持）",
@@ -294,6 +297,7 @@ enum L10n {
         "❌ 域名可解析但端口不通：确认对端 tailscale serve / 后端进程在运行。":
             ("❌ 解決はできるが接続不可：tailscale serve とバックエンドの稼働を確認",
              "❌ Resolves but can't connect — check tailscale serve / backend process"),
+        "已重启": ("再起動しました", "Restarted"),
         "App 版本": ("Appバージョン", "App Version"),
         // 首启强制引导（OnboardingView）
         "欢迎使用 MacAgent": ("MacAgent へようこそ", "Welcome to MacAgent"),
@@ -376,6 +380,8 @@ enum L10n {
         "分支失败：": ("分岐に失敗：", "Branch failed: "),
         "回退失败": ("ロールバックに失敗", "Rollback failed"),
         "回退失败：": ("ロールバックに失敗：", "Rollback failed: "),
+        "当前无法挂起该任务。": ("このタスクは今は一時停止できません。", "This task cannot be suspended right now."),
+        "挂起请求未送达：": ("一時停止のリクエストが届きませんでした：", "Suspend request did not go through: "),
         "有敏感操作等待你的授权": ("機密操作が承認待ちです", "A sensitive operation awaits your approval"),
         "本轮执行失败，回来看看详情": ("実行に失敗しました。詳細を確認してください", "Turn failed — check details"),
         "任务已完成": ("タスク完了", "Task completed"),

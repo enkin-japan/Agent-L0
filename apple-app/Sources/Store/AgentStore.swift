@@ -27,7 +27,10 @@ final class AgentStore: ObservableObject {
     }
     @Published var messages: [ChatMessage] = []
     // 活跃轮直播态（预览;turn_ended 权威对账后清空）
-    @Published var isGenerating = false
+    @Published var isGenerating = false {
+        // 生成结束（挂起生效/轮次收尾/断开）即撤下挂起转圈：挂起的可见终点只有这两个
+        didSet { if !isGenerating { suspendPending = false } }
+    }
     @Published var streamText = ""
     @Published var thinkingText = ""
     @Published var liveSteps: [String] = []
@@ -35,7 +38,22 @@ final class AgentStore: ObservableObject {
     @Published var taskSnapshot: TaskSnapshot?
     // 暂停态
     @Published var pendingTools: [PendingTool]?
-    @Published var isSuspended = false
+    @Published var isSuspended = false {
+        didSet { if isSuspended { suspendPending = false } }
+    }
+    /// 挂起已受理、等事件确认（UI 在按钮原位显示转圈）。复位有三条路：suspended 事件
+    /// 翻真 isSuspended、任何生成结束翻假 isGenerating、以及断连兜底的计时器——
+    /// 事件流断在半途时不能把转圈永远留在界面上。
+    @Published var suspendPending = false {
+        didSet {
+            suspendPendingTask?.cancel()
+            guard suspendPending else { return }
+            suspendPendingTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                if !Task.isCancelled { self?.suspendPending = false }
+            }
+        }
+    }
     // 错误横幅（自动消失的 toast 语义）
     @Published var errorMessage: String? {
         didSet {
@@ -66,6 +84,7 @@ final class AgentStore: ObservableObject {
     /// App 是否前台活跃（RootView 从 scenePhase 同步）：后台完结的轮次发本地通知
     var isAppActive = true
     private var errorDismissTask: Task<Void, Never>?
+    private var suspendPendingTask: Task<Void, Never>?
     /// 会话历史缓存（内容搜索用）：last_updated 不变即命中
     private var historyCache: [String: (updated: Double, turns: [Turn])] = [:]
 
@@ -403,9 +422,27 @@ final class AgentStore: ObservableObject {
         Task { _ = try? await client.cancelTask(sessionId: sid) }
     }
 
+    /// 挂起（同步判定 + 异步生效）：后端 status=false 时 response 是原因（待审批期
+    /// worker 已让出，"挂不起来"是正确语义），必须摆给用户——静默吞掉会让按钮看着像坏的。
+    /// status=true 只是受理，真正生效由事件流的 suspended 回来确认，其间按钮位转圈。
     func suspendTask() {
         guard let client, let sid = selectedSessionId else { return }
-        Task { _ = try? await client.suspendTask(sessionId: sid) }
+        Task { [weak self] in
+            do {
+                let res = try await client.suspendTask(sessionId: sid)
+                guard let self else { return }
+                if res.status {
+                    self.suspendPending = true
+                } else {
+                    self.suspendPending = false
+                    self.errorMessage = res.response ?? L("当前无法挂起该任务。")
+                }
+            } catch {
+                guard let self else { return }
+                self.suspendPending = false
+                self.errorMessage = L("挂起请求未送达：") + error.localizedDescription
+            }
+        }
     }
 
     /// 恢复挂起任务（202 受理,续跑过程走事件流）。默认当前会话；任务中心可对任意会话恢复。
