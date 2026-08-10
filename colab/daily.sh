@@ -126,6 +126,17 @@ stop(){
   done
   local name; name=$(session_name)
   [ -n "$name" ] || { note "无在册会话；colab ls 核对如下"; colab ls 2>&1 | tail -3; return 0; }
+  # 释名（2026-08-10 复发根修）：ephemeral 节点停机后要等平台 GC 才腾出机器名，
+  # 期间新 VM 只能领 colab-a100-1 后缀名——拨号侧（daily 探活/backend remote 闸/app
+  # 设置）全部脱靶且机器名注册后不随 hostname 自改，只能进管理台手工正名。
+  # 终止前主动 logout = 节点即刻删除、名字即刻回收，下台 VM 恒拿正名。best-effort：
+  # VM 已死则 ssh 不通，退回平台 GC 慢路（-1 后缀风险回归，见账本 8-10 夜横幅）。
+  local h
+  for h in colab-a100 colab-a100-1; do
+    ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "root@$h" \
+        'tailscale --socket=/content/ts.sock logout' >/dev/null 2>&1 \
+      && { note "tailnet 已释名（经 $h）"; break; }
+  done
   note "停会话 ${name}…"
   local out
   if ! out=$(colab stop -s "$name" 2>&1); then   # 管道会吃退出码，必须分开取

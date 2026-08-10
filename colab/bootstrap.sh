@@ -92,7 +92,10 @@ export PIP_CACHE_DIR="$ROOT/cache/pip"
 mkdir -p "$PIP_CACHE_DIR"
 # faster-whisper = ASR 的 CUDA 腿（CTranslate2；A3）——/v1/transcribe 在这台机器上
 # 靠它才不 503（mlx-whisper 是 mac 专属件，装不上也用不了）。pip -U 天然幂等。
-pip -q install -U vllm "huggingface_hub[hf_transfer]" transformers \
+# transformers 钉 <5.15：5.15.0 对 gemma 系逐层配置强抛 AmbiguousGlobalPerLayerAttribute，
+# vLLM get_head_size 全局读 head_dim 即崩（2026-08-10 实案：新 VM 漂到 5.15.0，
+# server 六连崩 supervisor 放弃）。等 vLLM 适配后再解钉。
+pip -q install -U vllm "huggingface_hub[hf_transfer]" "transformers<5.15" \
     fastapi uvicorn pyyaml requests llguidance pillow soundfile faster-whisper \
   || die "pip 安装失败"
 # vLLM 新轮子的原生扩展可能链更高大版的 CUDA 运行时（实测 cu13）而 Colab 自带

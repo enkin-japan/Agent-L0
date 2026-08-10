@@ -350,6 +350,21 @@
 > 用户亲手），命令已交付；Drive 正主 colab.env 的 INFER 同步待下次浏览器场前做
 > （CLI 场用本机副本，daily.sh:53 上传即生效）。
 
+> 🟢 **2026-08-10（夜二）：晚间 VM 拉起「启动过长」= 两故障叠加，双双根修**。
+> ①**依赖漂移崩**：bootstrap pip 无 pin，新 VM 拉到刚发布的 transformers 5.15.0
+> ——其对 gemma 系逐层异构配置强抛 AmbiguousGlobalPerLayerAttribute，vLLM
+> `get_head_size` 全局读 head_dim 启动即炸，supervisor 六连重启后放弃
+> （SUPERVISOR_GAVE_UP，20:27）——「不是慢，是早死了」。VM 上降级 5.14.1 复活
+> （server 就绪实证 200）；bootstrap 钉 `"transformers<5.15"` 并注明解钉条件。
+> ②**tailnet 释名竞态**：旧 ephemeral 节点停机后未即时 GC，新 VM 被迫领
+> `colab-a100-1` 后缀名，而拨号侧全部钉死 colab-a100——就算 server 活着探活也
+> 永远脱靶；且**机器名注册后不随 hostname 自改**（set --hostname 实测无效），
+> 只能管理台手工正名。根修：daily.sh stop 终止前先 ssh 进 VM `tailscale logout`
+> **主动释名**（节点即刻删除、名字即刻回收，下台 VM 恒拿正名；VM 已死则退回
+> GC 慢路）。与上午 401 同谱系教训：**「名字对、实体错」**——401 是端口对身份错、
+> 本案是域名对节点错，#85 的实例指纹思路对两者通杀。本台 -1 节点待用户管理台
+> 一键正名（改完拨号侧零改动）。
+
 > 🟢 **2026-08-09：#76 attention/driver 现代化 ✅（免 GPU，本机 e4b）——31B 编排层
 > 验收解锁**。站 B 发现的 harness 漂移清偿：审批环从已移除的同步 `/approval` 迁至
 > 协议 v1 事件账本制（POST /turns 202 → SSE /events 附着观察 → awaiting_approval
