@@ -142,9 +142,25 @@ def test_copy_file_and_folder(tmp_path):
 
 # ---------- trash ----------
 
-def test_trash_uses_finder_via_argv(monkeypatch, tmp_path):
+def test_trash_prefers_native_nsfilemanager(monkeypatch, tmp_path):
+    # 主路 = NSFileManager（进程内、零 TCC）：native 可用时绝不落 Finder/subprocess
+    #（bundle 守护进程弹不出自动化授权窗，AE 路挂死 30s——2026-08-10 真机实案）
     f = tmp_path / "old.log"
     f.write_text("x")
+    monkeypatch.setattr("framework.mcp.tools.file_manage._trash_native",
+                        lambda p: f"Moved to Trash (recoverable): {p}")
+    osa = _Osa()
+    monkeypatch.setattr("framework.mcp.tools.file_manage.subprocess.run", osa)
+    out = TrashFileTool().execute(str(f))
+    assert "recoverable" in out
+    assert osa.calls == []
+
+
+def test_trash_falls_back_to_finder_via_argv(monkeypatch, tmp_path):
+    # PyObjC 缺席（_trash_native 返回 None）才走 Finder，路径仍经 argv 交付防注入
+    f = tmp_path / "old.log"
+    f.write_text("x")
+    monkeypatch.setattr("framework.mcp.tools.file_manage._trash_native", lambda p: None)
     osa = _Osa()
     monkeypatch.setattr("framework.mcp.tools.file_manage.subprocess.run", osa)
     out = TrashFileTool().execute(str(f))

@@ -1,6 +1,7 @@
 """文件整理三件套（D2 第二批）：move（含改名）/copy/trash，恒审批。
 
-move/copy 纯 Python（shutil），trash 走 Finder——进的是废纸篓不是 rm，用户可恢复
+move/copy 纯 Python（shutil），trash 走 NSFileManager（PyObjC 缺席才回落 Finder）
+——进的是废纸篓不是 rm，用户可恢复
 （这也是不提供硬删除工具的原因：可逆优先，真要 rm 有 run_shell_command 的审批路径）。
 纪律：**绝不静默覆盖**——目标已存在时拒绝并让模型换名/先挪走；目标是已存在目录时
 语义为「挪入/拷入该目录」（Finder 直觉）。审批弹窗里用户看到的就是 source/destination
@@ -99,6 +100,26 @@ class CopyFileTool(BaseTool):
         return f"Copied {src} → {dst}"
 
 
+def _trash_native(p: Path) -> "str | None":
+    """NSFileManager.trashItemAtURL 进废纸篓；PyObjC 缺席返回 None（调用方走 Finder 兜底）。
+
+    首选进程内 API 而非 Finder(Apple Events)：bundle 形态的 backend 是脱管守护进程，
+    TCC「自动化」授权窗弹不出来，AE 请求干等到超时（2026-08-10 真机实案：两连败
+    30s 超时后模型被迫绕道 rm，废纸篓语义丢失）。原生 API 无需任何 TCC 授权，
+    且保留 Finder「放回原处」。"""
+    try:
+        from Foundation import NSURL, NSFileManager
+    except ImportError:
+        return None
+    url = NSURL.fileURLWithPath_(str(p))
+    ok, _resulting, err = NSFileManager.defaultManager() \
+        .trashItemAtURL_resultingItemURL_error_(url, None, None)
+    if ok:
+        return f"Moved to Trash (recoverable): {p}"
+    reason = err.localizedDescription() if err is not None else "unknown error"
+    return f"System Error: could not move to Trash: {reason}"
+
+
 class TrashFileTool(BaseTool):
     name = "trash_file"
     description = (
@@ -130,7 +151,11 @@ class TrashFileTool(BaseTool):
         p = Path(str(path)).expanduser()
         if not p.exists():
             return f"System Error: path not found: {path}"
-        # Finder 的 delete = 进废纸篓；路径经 argv 交付（无 AppleScript 注入面）
+        native = _trash_native(p)
+        if native is not None:
+            return native
+        # PyObjC 缺席的兜底（异构 dev 环境）——Finder 的 delete = 进废纸篓；
+        # 路径经 argv 交付（无 AppleScript 注入面）
         script = ("on run argv\n"
                   "tell application \"Finder\" to delete (POSIX file (item 1 of argv) as alias)\n"
                   "end run")

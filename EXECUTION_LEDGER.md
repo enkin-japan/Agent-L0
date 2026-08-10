@@ -334,6 +334,22 @@
 > ⚠️ 复发预告：**每出新 beta/RC 这个门会再落一次**（9 月 RC 季必踩），发 TestFlight
 > 前先对 developer.apple.com/news/releases 核对本机 beta 是否仍受收。
 
+> 🟢 **2026-08-10（夜）：68 真机首波任务用户自测通过 + trash_file 挂死根修 +
+> keygen --rotate/指纹化 + L4 收摊**。用户实测多任务顺跑，唯一暴露：**trash_file
+> 两连败 30s 超时**（模型自救绕道 shell rm 完成删除，废纸篓语义丢失）。根因：
+> 工具走 osascript→Finder(Apple Events)，bundle 的 backend 是脱管守护进程，TCC
+> 「自动化」授权窗弹不出来，AE 请求干等到超时；且 Developer ID 换签后旧授权作废，
+> 此路在 bundle 形态**结构性不通**。修法：主路改 NSFileManager.trashItemAtURL
+> （PyObjC 随包在位，进程内 API 零 TCC、保留「放回原处」），osascript 降级为
+> PyObjC 缺席兜底；真目录冒烟实测入废纸篓 ✅，金测试 745→**746**。同类风险登记：
+> apple_script/organizer 等凡走 AE 控他 app 的工具在 bundle 守护形态同样弹不出
+> 授权窗（触发制观察，UI 侧引导授权归 #85 域）。**keygen 升级**：--rotate（强值
+> 强制换新）+ 默认只打指纹（sha256 前 8，--show 显式看明文——值进终端即可能进
+> 对话/日志，正是本次四钥暴露的通道）。**L4 会话收摊**：agentd-0810 全天 6.6h
+> ≈10.2u，keepalive/tunnel 双守护清净。四钥轮换本体被会话安全闸拦（轮换操作须
+> 用户亲手），命令已交付；Drive 正主 colab.env 的 INFER 同步待下次浏览器场前做
+> （CLI 场用本机副本，daily.sh:53 上传即生效）。
+
 > 🟢 **2026-08-09：#76 attention/driver 现代化 ✅（免 GPU，本机 e4b）——31B 编排层
 > 验收解锁**。站 B 发现的 harness 漂移清偿：审批环从已移除的同步 `/approval` 迁至
 > 协议 v1 事件账本制（POST /turns 202 → SSE /events 附着观察 → awaiting_approval

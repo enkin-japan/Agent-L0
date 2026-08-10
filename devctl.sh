@@ -202,7 +202,18 @@ do_setup() {
 # 一键换成强随机串——护栏规则「非回环绑定 + 密钥缺失或过弱 = 拒启」的配套逃生口。
 # 目标文件默认仓库根 .env.local，可用 DEVCTL_ENV_FILE 覆盖（测试指临时文件，绝不碰真身）。
 # upsert：只改这四个键、保留文件其余行原样；已是强值则原样保留（幂等）。chmod 600。
+# --rotate：强值也强制换新（密钥疑似暴露后的轮换口，2026-08-10 案）。
+# 默认只打指纹（sha256 前 8）——明文进终端就可能进对话/日志（本案值泄露的通道），
+# 抄值到另一侧用 --show 显式要。
 do_keygen() {
+    local rotate=0 show=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+            --rotate) rotate=1 ;;
+            --show)   show=1 ;;
+            *) fail "keygen 未知参数: ${arg}（可选 --rotate | --show）"; return 1 ;;
+        esac
+    done
     local target="${DEVCTL_ENV_FILE:-$ROOT/.env.local}"
     if [ ! -f "$target" ]; then
         if [ -f "$ROOT/.env.example" ]; then
@@ -217,16 +228,23 @@ do_keygen() {
 
     local key
     for key in AGENT_API_KEY INFER_API_KEY RAG_API_KEY RAG_COMPUTE_API_KEY; do
-        _keygen_upsert "$target" "$key"
+        _keygen_upsert "$target" "$key" "$rotate"
     done
     chmod 600 "$target" 2>/dev/null || true
 
-    # 指引块：四键当前生效值 + 两条部署提示。
+    # 指引块：四键指纹（--show 才打明文）+ 两条部署提示。
     echo ""
-    info "密钥就绪（${target}，权限 600）。当前生效值："
-    for key in AGENT_API_KEY INFER_API_KEY RAG_API_KEY RAG_COMPUTE_API_KEY; do
-        printf '    %-20s = %s\n' "$key" "$(_keygen_read "$target" "$key")"
-    done
+    if [ "$show" -eq 1 ]; then
+        info "密钥就绪（${target}，权限 600）。当前生效值："
+        for key in AGENT_API_KEY INFER_API_KEY RAG_API_KEY RAG_COMPUTE_API_KEY; do
+            printf '    %-20s = %s\n' "$key" "$(_keygen_read "$target" "$key")"
+        done
+    else
+        info "密钥就绪（${target}，权限 600）。指纹（sha256 前 8；抄值到另一侧用 keygen --show）："
+        for key in AGENT_API_KEY INFER_API_KEY RAG_API_KEY RAG_COMPUTE_API_KEY; do
+            printf '    %-20s = %s\n' "$key" "$(_keygen_fp "$target" "$key")"
+        done
+    fi
     echo "  部署提示："
     echo "    • 算力端与工作端两侧 .env.local 四键必须同值（Bearer 两端对齐才能互认）。"
     echo "    • macOS/iOS app 在设置页填 INFER / RAG 两把密钥；后端地址始终是工作端自己的"
@@ -246,11 +264,20 @@ _keygen_read() {  # $1: 文件  $2: 键名
     printf '%s' "$v"
 }
 
+# 单键指纹：sha256 前 8（值不进终端；空值显示 "(空)"）。
+_keygen_fp() {  # $1: 文件  $2: 键名
+    local v
+    v="$(_keygen_read "$1" "$2")"
+    [ -n "$v" ] || { printf '(空)'; return 0; }
+    printf '%s' "$v" | shasum -a 256 | cut -c1-8
+}
+
 # 空值/长度<16 → 生成强随机替换（upsert，保留其余行）；已达强度则原样保留。
-_keygen_upsert() {  # $1: 文件  $2: 键名
-    local file="$1" key="$2" cur
+# $3=1（--rotate）：强值也强制换新。
+_keygen_upsert() {  # $1: 文件  $2: 键名  $3: 强制轮换（0/1，缺省 0）
+    local file="$1" key="$2" force="${3:-0}" cur
     cur="$(_keygen_read "$file" "$key")"
-    if [ "${#cur}" -ge 16 ]; then
+    if [ "$force" != 1 ] && [ "${#cur}" -ge 16 ]; then
         return 0   # 已是强值，原样保留（幂等）
     fi
     local val
@@ -568,7 +595,7 @@ fi
 
 case "$CMD" in
     setup) do_setup ;;
-    keygen) do_keygen ;;
+    keygen) do_keygen "$@" ;;
     model) do_model ;;
     rag-model) do_rag_model ;;
     start)
@@ -672,7 +699,8 @@ case "$CMD" in
     logs)   do_logs "$TARGET" ;;
     *)
         echo "用法: $0 setup                                   # 首次部署（venv/依赖/node_modules，末尾自动 keygen）"
-        echo "      $0 keygen                                  # 生成/补全四把强随机 Bearer 密钥（写 .env.local，600）"
+        echo "      $0 keygen [--rotate] [--show]              # 生成/补全四把强随机 Bearer 密钥（写 .env.local，600）"
+        echo "                                                 #   --rotate 强值也换新（轮换）；--show 打明文（默认只打指纹）"
         echo "      $0 model                                   # 从注册表选择启动模型（钉死 revision）"
         echo "      $0 rag-model                                # 从 rag.tiers 选择 RAG 档位（写 .rag-tier-selection）"
         echo "      $0 start|stop|restart [rag|rag-compute|searx|infer|backend|front|all]"
