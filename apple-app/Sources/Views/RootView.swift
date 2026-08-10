@@ -45,7 +45,11 @@ struct RootView: View {
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260)
         } detail: {
             if store.selectedSessionId != nil {
+                // 常量 minWidth：detail 栏的分栏 min 尺寸不随流式内容抖动——
+                // SplitViewChildController didUpdateMinSize 反复触发是 27 beta
+                // 崩溃链的上半段（下半段修复见 MarkdownText.streaming）
                 ChatView()
+                    .frame(minWidth: 480)
             } else {
                 ContentUnavailableView(L("选择或新建一个会话"),
                                        systemImage: "bubble.left.and.bubble.right",

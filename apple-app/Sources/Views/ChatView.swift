@@ -172,7 +172,7 @@ struct ChatView: View {
             }
 
             if !store.streamText.isEmpty {
-                MarkdownText(text: store.streamText)
+                MarkdownText(text: store.streamText, streaming: true)
             }
 
             VStack(alignment: .leading, spacing: 4) {

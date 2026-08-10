@@ -6,6 +6,12 @@ import SwiftUI
 /// 其余散文段落 → MarkdownUI（GFM 块级全支持：标题/列表/表格/引用）。
 struct MarkdownText: View {
     let text: String
+    /// 流式直播态：代码块降级为纯 Text 不进横滚 ScrollView。macOS 上 ScrollView 桥接
+    /// NSScrollView（AppKitPlatformViewHost），流式打字打进代码围栏时其内容尺寸逐次
+    /// 增长，尺寸约束失效撞上 macOS 27 beta AppKit 约束阶段的重入执法 → NSException
+    /// → SIGABRT（2026-08-10 崩溃报告实案）。轮末权威消息（streaming=false）仍走
+    /// 完整渲染，横滚能力不损失。
+    var streaming = false
 
     private enum Segment: Identifiable {
         case prose(String)
@@ -37,14 +43,24 @@ struct MarkdownText: View {
                         }
                         .selectableOnIOS()
                 case .code(let code):
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    if streaming {
+                        // 直播态：不进 NSScrollView（见 streaming 注释），长行软换行
                         Text(code)
                             .font(.system(.callout, design: .monospaced))
-                            .selectableOnIOS()
                             .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.primary.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    } else {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            Text(code)
+                                .font(.system(.callout, design: .monospaced))
+                                .selectableOnIOS()
+                                .padding(10)
+                        }
+                        .background(Color.primary.opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
-                    .background(Color.primary.opacity(0.06))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
                 case .asset(let path):
                     AssetImage(path: path)
                 }
