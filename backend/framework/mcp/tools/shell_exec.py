@@ -17,6 +17,30 @@ from typing import Any, Dict
 
 from ..base import BaseTool
 
+
+# ── 用户环境 PATH 注入（#84 随案架构缺口，2026-08-10 实案）────────────────────
+# app sidecar / devctl 拉起的 backend 是非登录进程：工具 shell 看不到用户终端里
+# nvm/pyenv/homebrew 注入的 PATH——实案：用户 nvm 里明明有 node v24，工具 shell 报
+# `command not found: npm`，模型误判"没装 node"绕去 brew 重复装。修法：进程内首次
+# 调用时经交互式登录 zsh 取一次真实 PATH（source .zprofile+.zshrc，5s 熔断），缓存
+# 复用；取不到就用当前 env 原样兜底（绝不因环境探测失败挡命令执行）。
+_USER_ENV_CACHE: Dict[str, str] = {}
+
+
+def _user_env() -> Dict[str, str]:
+    if not _USER_ENV_CACHE:
+        env = dict(os.environ)
+        try:
+            r = subprocess.run(["/bin/zsh", "-lic", "print -r -- $PATH"],
+                               capture_output=True, text=True, timeout=5)
+            path = (r.stdout or "").strip().splitlines()[-1] if r.stdout else ""
+            if r.returncode == 0 and path and os.pathsep in path:
+                env["PATH"] = path
+        except Exception:
+            pass                                   # 兜底：backend 自身 PATH
+        _USER_ENV_CACHE.update(env)
+    return dict(_USER_ENV_CACHE)
+
 # 只读命令白名单：执行后不改变系统状态，可自动放行（无需审批）。
 # 刻意不含：curl（-o 写盘 / -d 外发数据，是提示注入外传的第一通道）、
 # networksetup（-set* 直接改网络配置）、env/printenv（会把进程环境变量——含
@@ -175,6 +199,7 @@ class ShellExecTool(BaseTool):
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                env=_user_env(),
             )
         except subprocess.TimeoutExpired:
             return f"System Error: command timed out after {timeout}s (partial output discarded)."
