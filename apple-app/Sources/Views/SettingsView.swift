@@ -349,6 +349,18 @@ struct SettingsView: View {
                                 .foregroundStyle(Theme.warning)
                         }
                         LabeledContent(L("状态"), value: sidecarStateLabel)
+                        // 布局形态显性化（#85）：bundle 判据失败时会静默退 repo 布局，
+                        // 密钥来源随之从钥匙串换成 .env.local——那正是 2026-08-10 全天
+                        // 401 的根因。形态与密钥来源必须写在脸上，不能靠翻日志推断。
+                        if let layoutLabel = sidecarLayoutLabel {
+                            LabeledContent(L("布局"), value: layoutLabel)
+                        }
+                        if sidecar.isBareBundle {
+                            Label(L("包内无执行层（裸包）——完整功能需用 bundle-macos.sh 的全栈包"),
+                                  systemImage: "shippingbox")
+                                .font(.caption)
+                                .foregroundStyle(Theme.warning)
+                        }
                         if case .failed(let detail) = sidecar.state {
                             // lib_edge.sh 的原话（端口占用者清单/依赖缺失/日志尾），不二次转译
                             Text(detail)
@@ -401,6 +413,20 @@ struct SettingsView: View {
         -> Binding<String> {
         Binding(get: { store.settings[keyPath: key] },
                 set: { store.settings[keyPath: key] = SidecarManager.cleanKey($0) })
+    }
+
+    /// 布局形态 + 密钥来源（nil = 尚未解析出布局，不显示该行）。
+    /// 在跑的那个后端自报的形态与本 app 解析出的不一致时（external 收养的 dev 后端），
+    /// 把对方的形态一并摆出来——「我按哪套起 / 实际连上的是哪套」是两件事。
+    private var sidecarLayoutLabel: String? {
+        guard let kind = sidecar.layoutKind else { return nil }
+        var label = kind == "bundle"
+            ? L("bundle（密钥：钥匙串）")
+            : L("repo（dev 桥接，密钥来源 .env.local）")
+        if let peer = sidecar.peerLayout, peer != kind {
+            label += "（\(L("在跑的后端自报"))：\(peer)）"
+        }
+        return label
     }
 
     private var sidecarStateLabel: String {

@@ -105,6 +105,9 @@ EDGE_STOP_CMD="$0 stop"
 # 拆分模式的数据面不 import torch，同一解释器两模式通用）。数据根缺省 rag/ 本目录。
 EDGE_RAG_DIR="$RAG_DIR"
 EDGE_RAG_PY="$RAG_DIR/.venv/bin/python"
+# 布局形态自报（#85）：backend 的 /health 原样回显，探针据此认出「这是 devctl 起的 dev
+# 后端（密钥来源 .env.local）」而非 app 的 bundle 后端——401 事故里两者被混为一谈。
+export AGENT_LAYOUT=repo
 . "$ROOT/scripts/lib_edge.sh" || { fail "无法加载 scripts/lib_edge.sh"; exit 1; }
 
 

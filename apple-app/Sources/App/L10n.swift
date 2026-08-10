@@ -63,6 +63,16 @@ enum L10n {
             ("計算マシンの Tailscale IP を入力。変更後は下の「実行レイヤーを再起動」で反映されます。",
              "Enter the compute machine's Tailscale IP. After changing, tap \"Restart execution layer\" below to apply."),
         "已存长度": ("保存済みの長さ", "Stored length"),
+        // 执行层布局形态（#85）：形态决定密钥来源，必须写在脸上
+        "布局": ("レイアウト", "Layout"),
+        "bundle（密钥：钥匙串）": ("bundle（キー：キーチェーン）", "bundle (key: Keychain)"),
+        "repo（dev 桥接，密钥来源 .env.local）":
+            ("repo（dev ブリッジ、キーの出所は .env.local）",
+             "repo (dev bridge, keys from .env.local)"),
+        "在跑的后端自报": ("稼働中バックエンドの自己申告", "running backend reports"),
+        "包内无执行层（裸包）——完整功能需用 bundle-macos.sh 的全栈包":
+            ("アプリ内に実行レイヤーがありません（クライアントのみ）——全機能には bundle-macos.sh のフルスタック版が必要です",
+             "No execution layer inside the app (client-only build) — full features need the bundle-macos.sh full-stack package"),
         "选择或新建一个会话": ("チャットを選択または新規作成", "Select or create a chat"),
         "左上角 ✎ 开始新对话": ("左上の ✎ から新規チャット", "Tap ✎ to start a new chat"),
         "搜索会话内容…": ("チャット内容を検索…", "Search chat contents…"),

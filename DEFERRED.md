@@ -237,19 +237,19 @@ Resources/backend → `SidecarManager.resolveLayout()` bundle 判据失败**静�
   lib_edge.sh、config.yaml 缺一即组装失败）——同款事故在打包侧不再可能静默产生。
 - 既有：reap 第二判据（解释器路径认自家兵，v0.16.0(51)）、timeout_graceful_shutdown=5。
 
-### 完整版（方案齐，未拍板实施时机）
-1. **探活带鉴权**：`SidecarManager.healthOK()`（SidecarManager.swift:377）收养前验钥，
-   认身份不认端口；/health 加实例指纹（布局形态+密钥指纹哈希），UI 三态：
-   端口被他人占用 / 密钥不匹配 / 健康。
-2. **布局形态显性化**：resolveLayout 落到 repo 布局时 UI 亮出「repo 布局（dev 桥接，
-   密钥来源 .env.local）」；bundle 判据失败（裸包）单独亮「包内无执行层」而非静默换布局。
+### 完整版（1/2/5/6 已落地 2026-08-10 晚；余 3/4 随波次）
+1. ✅ **探活带鉴权**（2026-08-10）：/health 报实例指纹（`service`/`layout`/`key_fp`=
+   密钥 sha256 前 8 位，明文永不出现）；`probeHealth()` 四态（down/foreign/
+   keyMismatch/healthy），收养前认身份比指纹，钥匙不对不收养、当场亮红说清。
+   金测试 +9（test_auth.py）。
+2. ✅ **布局形态显性化**（2026-08-10）：resolveLayout 落成 `layoutKind`/`isBareBundle`
+   published 属性，设置页亮「布局」行（bundle=钥匙串 / repo=dev 桥接 .env.local，
+   对端自报形态不一致时并列显示）+ 裸包琥珀警示。
 3. **external 态重启**给明示/接管选项（现状 restart() 直接 break，SidecarManager.swift:112）。
 4. **handleCrash 改走 autostart(force)** 重读钥匙串（现状用启动时 env 快照复 spawn）。
-5. **regen-from-failed 收养缺口**：`.failed` 态按「重新生成」→ restart() 走
-   `case .failed → autostart()`（非 force）→ 无鉴权探活可收养旧后端——钥匙串已轮换
-   而后端没换钥，客户端键单方面漂移。修法与 1 同源（收养前验钥即堵死）。
-6. devctl 同款探活验钥；`devctl.sh keygen` 加 `--rotate`（现状只补缺不轮换）。
+5. ✅ **regen-from-failed 收养缺口**：随 1 一并堵死（收养前验钥）。
+6. ✅ `devctl.sh keygen --rotate`（2026-08-10，bce0980）；devctl 侧探活验钥可复用
+   /health 指纹（`AGENT_LAYOUT=repo` 已自报），暂无独立工程量。
 
-### 重启触发条件
-已触发过一次（2026-08-10 全天 401）。再次出现「已连接绿灯 + 全端点 401」或
-「布局形态与预期不符」即应实施完整版 1+2；其余随波次择机。
+### 重启触发条件（余项 3/4）
+external 态用户真的需要「接管重启」时上 3；再出现「崩溃自愈后密钥失效」实案时上 4。

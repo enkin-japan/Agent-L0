@@ -73,6 +73,39 @@
         └──────────────────────┘
 ```
 
+### 2.1 密钥拓扑与安装形态（AGENT_API_KEY 的家在哪）
+
+四把密钥，各守一条边（值全部不入仓、不入对话，比对一律走指纹）：
+
+| 密钥 | 守哪条边 | 校验方 |
+|---|---|---|
+| `AGENT_API_KEY` | 客户端（app/web 代理）→ backend :14159 | backend `verify_token()` |
+| `INFER_API_KEY` | backend → inference-server :14161（算力端） | inference-server |
+| `RAG_API_KEY` | backend → rag 数据面 :14160 | rag 数据面 |
+| `RAG_COMPUTE_API_KEY` | rag 数据面 → rag 计算面 :14162（算力端） | rag 计算面 |
+
+**同一个 /Applications/MacAgent.app 有两种安装形态，密钥的家不同**——这是全系统
+最隐蔽的故障面（2026-08-10 全天 401 事故根因，账本 S.12）：
+
+- **bundle 布局**（`bundle-macos.sh` 全栈包）：判据为包内 `Resources/backend/app.py`
+  存在。**Keychain 是密钥的家**：`AGENT_API_KEY` 首启随机生成落 Keychain，
+  `INFER/RAG_API_KEY` 用户在设置页填（同样落 Keychain）；SidecarManager spawn
+  执行层时以 env 注入，app 客户端发同一份 Keychain 值——**天然同源**。
+- **repo 布局**（开发形态，设置页填仓库路径）：dev 桥接平面解析仓库 `.env(.local)`
+  注入后端（与 devctl 同源）；但 **app 客户端发的仍是 Keychain 值**——两源异物，
+  必须人工保持同值，漂移即构造性 401。
+- **形态切换是静默的**：装了裸包（`install-macos.sh` 纯客户端快装）会让 bundle
+  判据失败、静默退 repo 布局=密钥换源。防线三层：打包侧完整性断言（缺执行层
+  四件套即组装失败）、`/health` 实例指纹、设置页布局形态显性化（见下）。
+
+**实例身份探针（#85）**：`/health` 免鉴权返回 `service`（身份标识）、`layout`
+（bundle/repo，来自 `AGENT_LAYOUT` env）、`key_fp`（`AGENT_API_KEY` 的 sha256
+前 8 位指纹，明文永不出现）。app 探活收养（external 态）前比对指纹：不认端口
+认身份——端口被他人占用 / 密钥不匹配 / 健康三态分明，旧钥后端不再被静默收养。
+
+**iOS**：瘦客户端，只持 `AGENT_API_KEY`（Keychain），经 tailscale serve →
+Mac 127.0.0.1:14159 直拨；不持有 INFER/RAG 钥（那两把是 Mac 执行层的拨出边）。
+
 ---
 
 ## 3. backend 内部分层

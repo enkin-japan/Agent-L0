@@ -1,5 +1,6 @@
 from pathlib import Path
 import asyncio
+import hashlib
 import os
 import time
 import yaml
@@ -632,9 +633,40 @@ app.add_middleware(
 
 # 免鉴权健康探活：挂在 app 上（不经 router 的鉴权依赖），供 devctl/反代/负载均衡就绪探测。
 # uvicorn 在 lifespan 启动完成（模型加载完）后才开始受理请求，故 200 即代表已就绪。
+#
+# 实例指纹（#85 完整版 1，2026-08-10 401 事故根治）：探针「14159 上有 200」不足以认领
+# 一个后端——端口可能被别的程序占着，也可能是钥匙已漂移的旧后端（app 恒发钥匙串值 →
+# 构造性 401）。故 /health 除 status 外再报三件可核对的身份信息：
+#   service = 我是谁（非本值 = 端口被外来程序占用）
+#   layout  = 我按哪套布局起的（repo=devctl/dev 桥接 · bundle=app 全栈包 · unknown=直启）
+#   key_fp  = 我认哪把钥匙的 **sha256 前 8 位**（空 = 未启用鉴权的 dev 对端）
+# 红线：明文密钥绝不出现在响应/日志里，只有指纹；指纹在进程启动时算一次（下面的常量），
+# /health 保持零 IO、零哈希，仍是最便宜的一个 GET（devctl/反代/lib_edge 都在轮询它）。
+SERVICE_NAME = "macagent-backend"
+
+
+def key_fingerprint(key: str) -> str:
+    """密钥指纹：sha256 十六进制前 8 位。空钥 = 空串（表示"未启用鉴权"，不是某把钥匙）。
+
+    8 位 = 32 bit：够两端核对"是不是同一把"，不够反推原值（且原值是 32 字节随机 token）。
+    """
+    if not key:
+        return ""
+    return hashlib.sha256(key.encode()).hexdigest()[:8]
+
+
+_HEALTH_KEY_FP = key_fingerprint(API_KEY)
+_HEALTH_LAYOUT = os.environ.get("AGENT_LAYOUT") or "unknown"
+
+
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "service": SERVICE_NAME,
+        "layout": _HEALTH_LAYOUT,
+        "key_fp": _HEALTH_KEY_FP,
+    }
 
 # 自托管 deck 打印页(Phase 4b 解除后端→前端倒挂):`./devctl.sh bundle-print` 把
 # 前端构建产物放进 backend/static/webapp,这里原样出货——前端服务不在时,

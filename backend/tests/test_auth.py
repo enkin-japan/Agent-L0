@@ -1,9 +1,17 @@
-"""鉴权校验面的单元契约（HETERO_COMPUTE §7 预留 1）。
+"""鉴权校验面的单元契约（HETERO_COMPUTE §7 预留 1）+ /health 实例指纹（#85）。
 
-锁两件事：
+锁三件事：
 1. **单密钥期行为与收敛前逐字相同**——这是"预留不得改变现状"的可执行证明。
 2. verify_token 是唯一的比对面：换设备票据/JWT/mTLS 只动它，路由与依赖面不动。
+3. /health 自证身份（service/layout/key_fp），且**明文密钥永不出现在响应里**——
+   探针据此认身份认钥匙而非认端口（2026-08-10 全天 401 事故的根治面）。
 """
+import asyncio
+import hashlib
+import os
+
+import app as app_module
+from app import SERVICE_NAME, health, key_fingerprint
 from framework.api.auth import DEFAULT_DEVICE_ID, verify_token
 
 
@@ -63,3 +71,68 @@ def test_revoking_one_device_does_not_affect_others():
 def test_blank_device_token_never_passes():
     # 配置里某台设备的票据留空，不能变成"空 Bearer 万能钥匙"
     assert verify_token("", devices={"mac-studio": ""}) is None
+
+
+# ---- /health 实例指纹（#85 完整版 1）----
+
+HEX = set("0123456789abcdef")
+
+
+def _health_body() -> dict:
+    return asyncio.run(health())
+
+
+def test_health_reports_identity_fields():
+    # 四字段齐全：探针要能一次问出「你是谁 / 哪套布局 / 认哪把钥匙」
+    body = _health_body()
+    assert set(body) == {"status", "service", "layout", "key_fp"}
+    assert body["status"] == "ok"           # 旧消费方只看这个，语义不变
+    assert body["service"] == SERVICE_NAME == "macagent-backend"
+    assert isinstance(body["layout"], str) and body["layout"]
+
+
+def test_health_key_fp_is_8_hex_or_empty():
+    fp = _health_body()["key_fp"]
+    assert fp == "" or (len(fp) == 8 and set(fp) <= HEX)
+
+
+def test_health_never_leaks_plaintext_key(monkeypatch):
+    # 红线：响应里只有指纹，明文（及其任意长度的前缀）绝不出现
+    secret = "super-secret-agent-key-0123456789"
+    monkeypatch.setattr(app_module, "_HEALTH_KEY_FP", key_fingerprint(secret))
+    body = _health_body()
+    blob = repr(body)
+    assert secret not in blob
+    assert secret[:8] not in blob
+    assert body["key_fp"] == hashlib.sha256(secret.encode()).hexdigest()[:8]
+
+
+def test_health_layout_echoes_env_declaration(monkeypatch):
+    # devctl.sh 的 export AGENT_LAYOUT=repo / app bundle 布局的 "bundle" 原样回显
+    monkeypatch.setattr(app_module, "_HEALTH_LAYOUT", "repo")
+    assert _health_body()["layout"] == "repo"
+
+
+def test_health_layout_defaults_to_unknown():
+    # 未声明布局（绕过启动器直启）时是 "unknown"，不是空串——UI 要能区分"没报"
+    assert app_module._HEALTH_LAYOUT == (os.environ.get("AGENT_LAYOUT") or "unknown")
+
+
+def test_key_fingerprint_is_sha256_prefix():
+    assert key_fingerprint("s3cret") == hashlib.sha256(b"s3cret").hexdigest()[:8]
+    assert len(key_fingerprint("s3cret")) == 8
+
+
+def test_key_fingerprint_empty_key_is_empty_string():
+    # 空 = "未启用鉴权"，不是"某把钥匙的指纹"——app 侧据此判 healthy 而非 keyMismatch
+    assert key_fingerprint("") == ""
+
+
+def test_key_fingerprint_distinguishes_keys():
+    # 钥匙漂移必须能被看见：这正是 401 事故里缺的那一条信息
+    assert key_fingerprint("key-a") != key_fingerprint("key-b")
+
+
+def test_key_fingerprint_handles_non_ascii():
+    # 非 ASCII 密钥不得炸（verify_token 已有同款教训）
+    assert key_fingerprint("密钥") == hashlib.sha256("密钥".encode()).hexdigest()[:8]

@@ -647,7 +647,7 @@ class MyTool(BaseTool):
 
 - 工具探活只发生在服务启动时；若依赖的外部服务（如 RAG）在 Agent 运行期间才上线，需重启服务才能注册对应工具。同理，`rag_search` 的分类目录提示烘在启动时的 schema 里，运行期间新建的分类需经 `rag_list_categories` 现查（工具描述已注明）
 - 请勿以 `reload=True` 方式启动，MLX 模型反复重载会导致严重内存泄漏
-- **鉴权**：`/api/v1/*` 全量套 Bearer 校验（`AGENT_API_KEY` 环境变量优先，回落 `config.yaml` 的 `server.api_key`）；密钥为空视为未启用（启动告警后放行，便于首启/dev），生产务必设置。`/health` 免鉴权供探活。浏览器不持有密钥——dev 由 Vite 代理注入 `Authorization`，生产由 Nginx 注入。比对面收敛在 `api/auth.py` 的 `verify_token` 一个函数里（换设备票据/JWT/mTLS 只动它），另支持 `auth.devices` 多设备票据——留空即单密钥模式，与预留前行为逐字相同（`tests/test_auth.py` 锁死这一点）
+- **鉴权**：`/api/v1/*` 全量套 Bearer 校验（`AGENT_API_KEY` 环境变量优先，回落 `config.yaml` 的 `server.api_key`）；密钥为空视为未启用（启动告警后放行，便于首启/dev），生产务必设置。`/health` 免鉴权供探活，并自报**实例指纹**（`service`=`macagent-backend` 身份、`layout`=布局形态（`AGENT_LAYOUT`：devctl 报 `repo`、app 全栈包报 `bundle`、直启为 `unknown`）、`key_fp`=密钥 sha256 前 8 位，空 = 未启用鉴权）——探针据此**认身份认钥匙而非认端口**（app 收养前验钥，见 #85）；明文密钥永不出现在响应/日志里。浏览器不持有密钥——dev 由 Vite 代理注入 `Authorization`，生产由 Nginx 注入。比对面收敛在 `api/auth.py` 的 `verify_token` 一个函数里（换设备票据/JWT/mTLS 只动它），另支持 `auth.devices` 多设备票据——留空即单密钥模式，与预留前行为逐字相同（`tests/test_auth.py` 锁死这一点）
 - **绑定护栏**：绑定到非回环地址却没设密钥时**拒绝启动**（不是告警），在模型加载前失败。inference-server 与 rag 服务同此纪律。理由：改 host 与设密钥是两个独立动作，先改 host 后忘密钥，服务就对整个可达网络裸奔
 - **远程推理**：`inference.mode: remote` 时本服务不加载权重，生成经 `backends/remote/` 转发给设备 A 的 inference-server（`INFER_API_KEY` 两侧同值）。会话数据仍全部落在本机——服务端只见 prompt 与媒体、不持久化会话。部署见根 [README](../README.md#部署形态)
 - **CORS**：白名单收敛（`server.allowed_origins`，默认仅 `http://localhost:5173`）；走代理时为同源，CORS 仅在浏览器直连 14159 时触发，属纵深防御

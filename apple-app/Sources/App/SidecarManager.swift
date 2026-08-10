@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 import SwiftUI
@@ -29,8 +30,25 @@ final class SidecarManager: ObservableObject {
         case failed(String)      // lib 退出非 0（端口冲突/依赖缺失/超时），附日志尾
     }
 
+    /// 探活四态（#85 完整版 1）：「14159 上有 200」不足以认领一个后端——端口可能被别的
+    /// 程序占着（.foreign），也可能是钥匙已漂移的旧/dev 后端（.keyMismatch，收养即构造性
+    /// 401，2026-08-10 全天事故的实症）。只有身份与钥匙都对得上才收养为 external。
+    enum HealthProbe: Equatable {
+        case down          // 不可达 / 非 200：14159 上没人
+        case foreign       // 有 HTTP 服务但不自称 macagent-backend：端口被外来程序占用
+        case keyMismatch   // 是本系统后端，但它认的钥匙不是 app 手里这把（指纹不等）
+        case healthy       // 身份 + 钥匙都对得上
+    }
+
     @Published private(set) var state: State = .disabled
     @Published private(set) var restartCount = 0
+    /// 本 app 解析出的布局形态（"bundle" / "repo"，nil = 尚未解析或解析失败）。
+    /// 事故根因之一是 bundle 判据失败**静默退 repo 布局**（密钥换源）——形态必须可见。
+    @Published private(set) var layoutKind: String?
+    /// 裸包：包内有 Resources 但没有执行层（install-macos.sh 的纯客户端快装覆盖了全栈包）。
+    @Published private(set) var isBareBundle = false
+    /// 14159 上那个后端自报的布局形态（探活得来；nil = 探不到或对方没报）。
+    @Published private(set) var peerLayout: String?
 
     private struct Layout {
         let libEdge: URL          // scripts/lib_edge.sh
@@ -82,7 +100,23 @@ final class SidecarManager: ObservableObject {
         }
         // 先探活：已有人在跑（devctl 起的 dev 后端）就只用不管。收摊时也不碰它——
         // 「app 退出顺手杀掉用户的开发后端」是最恶劣的一种越权。
-        if await healthOK() { state = .external; return }
+        // 但**认身份、认钥匙，不认端口**（#85）：钥匙对不上的后端收养了也只会全端点 401，
+        // 且退出重开/重新生成/开关关开每一条路都会原样复现（事故实证）——不如当场亮红说清。
+        switch await probeHealth() {
+        case .healthy:
+            state = .external
+            return
+        case .keyMismatch:
+            state = .failed("14159 上有本系统后端在跑，但其密钥与 app 不一致（指纹不匹配）"
+                          + "——若是 devctl 起的 dev 后端，请同步 .env.local 与 app 设置的密钥后重试")
+            return
+        case .foreign:
+            state = .failed("端口 14159 被其他程序占用（非本系统后端；也可能是未自报身份的旧版后端，"
+                          + "重启它即可自证）")
+            return
+        case .down:
+            break
+        }
         await up()
     }
 
@@ -199,9 +233,15 @@ final class SidecarManager: ObservableObject {
 
     private func resolveLayout() -> Layout? {
         let fm = FileManager.default
+        // 裸包判定（#85 完整版 2）：包内有 Resources 却没有 backend/app.py = 纯客户端快装
+        // 覆盖了全栈包。此前这里**静默退 repo 布局**（密钥从钥匙串换成 .env.local）=
+        // 构造性 401 且每条重试路径都原样复现（2026-08-10 事故根因）。形态必须亮给用户。
+        let hasResources = Bundle.main.resourceURL != nil
         // bundle 布局：Resources/ 下带完整执行层（R5-5 之后成立）
         if let res = Bundle.main.resourceURL,
            fm.fileExists(atPath: res.appendingPathComponent("backend/app.py").path) {
+            isBareBundle = false
+            layoutKind = "bundle"
             let dataDir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("dev.enkin.macagent")
             let logDir = dataDir.appendingPathComponent("logs")
@@ -218,6 +258,9 @@ final class SidecarManager: ObservableObject {
             env["EDGE_LOG_DIR"] = logDir.path
             env["EDGE_CONFIG"] = res.appendingPathComponent("config.yaml").path
             env["AGENT_DATA_DIR"] = dataDir.path
+            // 布局自报（#85）：backend 的 /health 原样回显，让探针（本类下次探活、devctl、
+            // 用户 curl）分得清「app 全栈包起的」与「devctl 起的 dev 后端」。
+            env["AGENT_LAYOUT"] = "bundle"
             // bundle 只读：字节码已在组装期 compileall 进印章，运行时一个 .pyc 都
             // 不许写回包内（写了就破坏 codesign 印章——R5-9 实证）。repo 布局不设。
             env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -257,10 +300,12 @@ final class SidecarManager: ObservableObject {
                           env: env, logDir: logDir, isBundle: true)
         }
         // repo 布局：设置里填的仓库检出（开发形态，与 devctl 共用 lib/日志/pid）
-        guard let root = settings?.sidecarRepoRoot, !root.isEmpty else { return nil }
+        isBareBundle = hasResources
+        guard let root = settings?.sidecarRepoRoot, !root.isEmpty else { layoutKind = nil; return nil }
         let rootURL = URL(fileURLWithPath: (root as NSString).expandingTildeInPath)
         guard fm.fileExists(atPath: rootURL.appendingPathComponent("scripts/lib_edge.sh").path)
-        else { return nil }
+        else { layoutKind = nil; return nil }
+        layoutKind = "repo"
         let logDir = rootURL.appendingPathComponent("logs")
         var env = baseEnv()
         env["EDGE_BACKEND_DIR"] = rootURL.appendingPathComponent("backend").path
@@ -290,6 +335,9 @@ final class SidecarManager: ObservableObject {
         // RAG_COMPUTE_API_KEY 无需单独注入：上面的 .env(.local) 平面解析已带全部键。
         env["EDGE_RAG_DIR"] = rootURL.appendingPathComponent("rag").path
         env["EDGE_RAG_PY"] = rootURL.appendingPathComponent("rag/.venv/bin/python").path
+        // 与 devctl 同一句自报（devctl.sh 的 export AGENT_LAYOUT=repo）：同一套仓库检出、
+        // 同一份 .env.local 密钥来源，形态就是 repo，不因发起者是 app 而改称。
+        env["AGENT_LAYOUT"] = "repo"
         return Layout(libEdge: rootURL.appendingPathComponent("scripts/lib_edge.sh"),
                       env: env, logDir: logDir, isBundle: false)
     }
@@ -374,12 +422,40 @@ final class SidecarManager: ObservableObject {
         try LibRun(lib: layout.libEdge, command: command, env: layout.env)
     }
 
-    private func healthOK() async -> Bool {
-        guard let url = URL(string: "http://127.0.0.1:14159/health") else { return false }
+    /// /health 的实例指纹（backend/app.py 的 `health()`）。旧后端不报这三个字段，
+    /// 解不出 service 即判 .foreign——不为「兼容旧后端」留后门：能被收养的必须自证身份。
+    private struct HealthBody: Decodable {
+        let service: String?
+        let layout: String?
+        let keyFP: String?
+        enum CodingKeys: String, CodingKey {
+            case service, layout
+            case keyFP = "key_fp"
+        }
+    }
+
+    /// 收养前的身份 + 密钥核对（免鉴权的 /health 上比对指纹，明文不出网也不入日志）。
+    private func probeHealth() async -> HealthProbe {
+        peerLayout = nil
+        guard let url = URL(string: "http://127.0.0.1:14159/health") else { return .down }
         var req = URLRequest(url: url); req.timeoutInterval = 3
-        guard let (_, resp) = try? await URLSession.shared.data(for: req),
-              let http = resp as? HTTPURLResponse else { return false }
-        return http.statusCode == 200
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, http.statusCode == 200 else { return .down }
+        guard let body = try? JSONDecoder().decode(HealthBody.self, from: data),
+              body.service == "macagent-backend" else { return .foreign }
+        peerLayout = body.layout
+        // 对端 key_fp 为空 = 它没启用鉴权（dev 对端），任何 Bearer 都放行 → 不会 401
+        let peerFP = body.keyFP ?? ""
+        if peerFP.isEmpty { return .healthy }
+        return peerFP == Self.keyFingerprint(settings?.apiKey ?? "") ? .healthy : .keyMismatch
+    }
+
+    /// 密钥指纹：sha256 十六进制前 8 位，与 backend 的 `key_fingerprint()` 同一算法。
+    /// 空钥 → 空串（本地空 + 对端非空 = 不匹配，正是「app 没钥匙却去连有钥后端」那一档）。
+    static func keyFingerprint(_ key: String) -> String {
+        guard !key.isEmpty else { return "" }
+        let hex = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        return String(hex.prefix(8))
     }
 }
 
