@@ -56,7 +56,10 @@ def _guard_project_path(raw: str) -> "Path | str":
 
 
 def _cg_env() -> Dict[str, str]:
-    env = dict(os.environ)
+    # codegraph 靠 PATH 解析；守护形态的 backend 是非登录进程，用户经 npm/nvm 装的
+    # codegraph 不在其 PATH（shell_exec 同案，#84 随案缺口）——借同一份登录 PATH 缓存。
+    from .shell_exec import _user_env
+    env = _user_env()
     env["CODEGRAPH_TELEMETRY"] = "0"
     env["DO_NOT_TRACK"] = "1"
     return env

@@ -331,8 +331,15 @@ def _traf_extract_worker(html: str) -> str:
 # NOT_ALLOCATED → SIGABRT）**带走整个 backend 进程**。原生崩溃在进程内不可捕获，
 # 唯一可靠围堵=抽取挪进子进程：崩了只折损该页（BrokenProcessPool 可捕获），换新
 # 工人继续。卡死（future 超时）同样回收工人。首次 spawn ~1s，此后常驻复用。
+# 两条围堵纪律（首落地当晚复盘出的隐患，随案补）：
+# ① 回收必须补刀——卡死在原生代码里的工人不会因 shutdown(wait=False) 退出，
+#    不 kill 就是进程泄漏（每次超时漏一个常驻僵尸工人）；
+# ② 提交必须串行（_EXTRACT_CALL_LOCK）——单工人池撞上 fetch_concurrency=3 的并发
+#    提交时，排队页的 30s 超时在队列里就开始烧，一页卡死会级联误伤同批其余页；
+#    串行化后排队者在锁上等（不烧自己的超时），正常页 <1s 抽完，代价可忽略。
 _EXTRACT_POOL: Optional[concurrent.futures.ProcessPoolExecutor] = None
 _EXTRACT_POOL_LOCK = threading.Lock()
+_EXTRACT_CALL_LOCK = threading.Lock()
 
 
 def _extract_pool() -> concurrent.futures.ProcessPoolExecutor:
@@ -349,7 +356,18 @@ def _recycle_extract_pool() -> None:
     global _EXTRACT_POOL
     with _EXTRACT_POOL_LOCK:
         if _EXTRACT_POOL is not None:
+            # 先记下工人再 shutdown：卡死的工人（原生代码死循环/死锁）不会自行退出，
+            # 必须 kill 补刀，否则泄漏。_processes 是 CPython 私有属性但 3.8-3.13 稳定；
+            # 取不到就退化为原行为（只漏不炸）。
+            procs = list((getattr(_EXTRACT_POOL, "_processes", None) or {}).values())
             _EXTRACT_POOL.shutdown(wait=False, cancel_futures=True)
+            for p in procs:
+                try:
+                    if p.is_alive():
+                        p.kill()
+                        p.join(timeout=1)   # 收尸，避免僵尸挂到进程表
+                except Exception:
+                    pass
             _EXTRACT_POOL = None
 
 
@@ -375,16 +393,19 @@ def _extract(url: str, html: str, cfg: dict, tier: int) -> Dict:
     """把（任一档位取回的）HTML 净化 → 抽正文（崩溃围堵子进程）→ 反投毒。tier 仅作诊断标记。"""
     per_page = int(cfg.get("per_page_max_chars", 1500))
     html = _scrub_html(html)
-    try:
-        fut = _extract_pool().submit(_traf_extract_worker, html)
-        text = fut.result(timeout=30)
-    except Exception as e:
-        # BrokenProcessPool=工人被原生崩溃带走；TimeoutError=解析卡死。都换新工人、
-        # 只报本页失败——绝不让一张网页的解析事故升级成后端事故。
-        _recycle_extract_pool()
-        return {"url": url, "text": "",
-                "error": f"Text extraction failed (crash-contained): {type(e).__name__}: {e}",
-                "flags": [], "tier": tier}
+    # 串行化提交（围堵纪律②）：超时的回收也在锁内完成，下一个等锁的页拿到的
+    # 一定是干净的新工人，而不是排进死人队列再烧一轮 30s。
+    with _EXTRACT_CALL_LOCK:
+        try:
+            fut = _extract_pool().submit(_traf_extract_worker, html)
+            text = fut.result(timeout=30)
+        except Exception as e:
+            # BrokenProcessPool=工人被原生崩溃带走；TimeoutError=解析卡死。都换新工人、
+            # 只报本页失败——绝不让一张网页的解析事故升级成后端事故。
+            _recycle_extract_pool()
+            return {"url": url, "text": "",
+                    "error": f"Text extraction failed (crash-contained): {type(e).__name__}: {e}",
+                    "flags": [], "tier": tier}
     text = _ZERO_WIDTH.sub("", text)
     return {"url": url, "text": text[:per_page], "error": None, "flags": _flag_injection(text), "tier": tier}
 
