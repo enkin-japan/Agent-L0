@@ -291,6 +291,17 @@
 > 用户 PATH（nvm 有 node 却报没有→brew 重复装）→ 修复项在册；审批卡挂起时用户
 > 发新消息=静默作废轮次（UX 死角）→ app 侧改进项在册。
 
+> 🟢 **2026-08-10：#79/#83 真机验收收官 ✅（用户 L4 场顺跑，26B NVFP4+fp8 KV）**。
+> **#79 对话式注册 5/5**：26B 起草天气工具（auth 只引 WEATHER_API_KEY 变量名、零
+> 内联密钥）、起草 weekly-report 剧本（正文成体）、内联密钥诱导负例守住（pending
+> 区零泄漏）、确认放行 effect 正确（api_tool 无钥=unavailable 属预期/skill=
+> registered 即时上架）、上架后剧本表/声明清单可见，验后清场。**#83 工具行为准则
+> 4/4**：中文问欧盟 AI 法案→信源含 ec.europa.eu 等拉丁域（信源社区语言检索生效）
+> 终答中文；时事不误用 rag_search；英文材料中文对话→docx 中文为主（cjk 0.67）；
+> 图表标题/轴中文、数据分类名保原文（判分口径修正+准则灰区写明：never rename
+> data values）。**验收途中揪出并修掉架构级脆弱点**：lxml 解析畸形页 double-free
+> SIGABRT 带走整个 backend → trafilatura 抽取围堵进 spawn 子进程（07211c0）。
+
 > 🟢 **2026-08-09：#76 attention/driver 现代化 ✅（免 GPU，本机 e4b）——31B 编排层
 > 验收解锁**。站 B 发现的 harness 漂移清偿：审批环从已移除的同步 `/approval` 迁至
 > 协议 v1 事件账本制（POST /turns 202 → SSE /events 附着观察 → awaiting_approval
