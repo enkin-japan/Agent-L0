@@ -17,10 +17,65 @@ import difflib
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 from typing import Optional
 
 from ..base import BaseTool
+
+
+# ── 写后语法自检（D2 谎报围堵 #84，2026-08-10 实案：write_file 落盘的 index.js 尾部
+# 混入工具调用 JSON 垃圾，npm start 一跑才炸）。写入不阻断——文件已落盘、备份在，
+# 但响应里响亮告知语法问题，让模型当场看见而不是等运行时。尽力而为：解释器/检查器
+# 不在场就沉默跳过，绝不把「没装 node」当成语法错误。
+_CHECKABLE = {".json", ".py", ".yaml", ".yml", ".sh", ".bash", ".zsh",
+              ".js", ".mjs", ".cjs"}
+
+
+def _syntax_note(path: str) -> Optional[str]:
+    """返回警示串（含错误摘要）；None = 通过或不可检。"""
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in _CHECKABLE:
+        return None
+    try:
+        if ext == ".json":
+            import json as _json
+            _json.loads(open(path, encoding="utf-8").read())
+            return None
+        if ext in (".yaml", ".yml"):
+            import yaml as _yaml
+            _yaml.safe_load(open(path, encoding="utf-8").read())
+            return None
+        if ext == ".py":
+            import py_compile
+            py_compile.compile(path, doraise=True)
+            return None
+        cmd = None
+        if ext in (".sh", ".bash", ".zsh"):
+            cmd = ["bash", "-n", path]
+        elif ext in (".js", ".mjs", ".cjs"):
+            if shutil.which("node"):
+                cmd = ["node", "--check", path]
+        if cmd:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if r.returncode != 0:
+                return (r.stderr or r.stdout or "syntax check failed").strip()[:300]
+        return None
+    except subprocess.TimeoutExpired:
+        return None                      # 检查器自身卡死不当语法错
+    except Exception as e:               # json/yaml/py_compile 的解析异常 = 真语法错
+        if type(e).__name__ in ("JSONDecodeError", "YAMLError", "PyCompileError",
+                                "ParserError", "ScannerError"):
+            return str(e)[:300]
+        return None                      # 其余环境性异常（权限/编码等）不误报
+
+
+def _syntax_suffix(path: str) -> str:
+    note = _syntax_note(path)
+    if note:
+        return (f"\n⚠️ SYNTAX CHECK FAILED for {os.path.basename(path)} — the file was written "
+                f"but will not run/parse as-is. Fix it before claiming success. Error: {note}")
+    return ""
 
 _MAX_CONTENT_CHARS = 2_000_000  # 单次写入上限（防失控生成把磁盘当输出流）
 
@@ -235,7 +290,8 @@ class EditFileTool(BaseTool):
 
         delta = len(new_text) - len(text)
         return (f"OK: replaced 1 occurrence in {p} "
-                f"({len(old_string)} chars -> {len(new_string)} chars, file size {delta:+d}).")
+                f"({len(old_string)} chars -> {len(new_string)} chars, file size {delta:+d})."
+                + _syntax_suffix(p))
 
 
 class WriteFileTool(BaseTool):
@@ -292,5 +348,6 @@ class WriteFileTool(BaseTool):
             #（与 render_chart 同约定；链接逐字来自这里，不许改写）。
             name = os.path.basename(p)
             return (f"OK: wrote {len(content)} chars to workspace file {name}{note}. "
-                    f"Download link for your reply (copy verbatim): [{name}]({url})")
-        return f"OK: wrote {len(content)} chars to {p}{note}."
+                    f"Download link for your reply (copy verbatim): [{name}]({url})"
+                    + _syntax_suffix(p))
+        return f"OK: wrote {len(content)} chars to {p}{note}." + _syntax_suffix(p)

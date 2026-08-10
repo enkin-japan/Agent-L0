@@ -204,6 +204,24 @@ VERIFY_NUDGE_MAX = 1
 # 故只把这两个确定改文件的工具计作写；shell 内的 sed -i/rm 等写不被覆盖（尽力而为，误报比漏报更伤）。
 _FILE_WRITE_TOOLS = {"edit_file", "write_file"}
 
+# ── D2 谎报围堵（#84，2026-08-10 26B 档实案）────────────────────────────────
+# 失败判据：工具层显式错误，或 shell 响应头部的非零退出码。只认硬信号——语义级
+# 失败（"没找到"之类正常结果）不算，误报会把正常轮次推进无谓的自纠循环。
+_FAILED_RESP_RE = re.compile(r"^System Error:|^exit_code: (?!0\b)\d+", re.M)
+# 动作声明判据：收尾文本声称完成了变更类动作（创建/安装/启动/写入…，中英）。
+# 只在「本轮零成功变更调用」时参与判定；推回文案允许模型改写为"此前完成/建议你执行"，
+# 改写后不再命中 = 自愈放行（防误伤对历史工作的转述）。
+_ACTION_CLAIM_RE = re.compile(
+    r"已(?:经)?(?:成功)?(?:为您|为你|帮您|帮你)?(?:成功)?(?:在后台)?"
+    r"(?:创建|新建|建好|安装|装好|启动|拉起|运行|执行|写入|保存|部署|删除|清理|修改|配置)"
+    r"|(?:I have|I've)\s+(?:successfully\s+)?"
+    r"(?:created|installed|started|launched|executed|written|saved|deployed|deleted|modified|configured)",
+)
+
+
+def _resp_failed(resp: Any) -> bool:
+    return bool(_FAILED_RESP_RE.search(str(resp or "")))
+
 
 def _last_user_text(history: List[Dict[str, Any]]) -> str:
     """从会话历史中提取最近一条用户文本（作为任务 goal）。"""
@@ -344,6 +362,8 @@ class Orchestrator:
                        keep_recent_calls: bool = False,
                        compact_history: bool = True,
                        resume_unverified_write: bool = False,
+                       resume_mutated_ok: bool = False,
+                       resume_failure: bool = False,
                        **gen_kwargs) -> Dict[str, Any]:
         """
         执行一轮完整的编排闭环（一次用户消息 → 最终答复 / 挂起审批 / 取消 / 熔断）。
@@ -375,6 +395,8 @@ class Orchestrator:
         if not keep_recent_calls:
             session.carried_iterations = 0
             session.carried_turn_stats = {}
+            # [D2 谎报围堵] 拒批指纹按轮生效：新用户轮清零，审批续跑沿用（拒了就是拒了）
+            session.denied_call_fps = set()
         no_task_calls: List[str] = []  # 无任务态下的调用指纹（同样拦截重复）
         turn_start_idx = len(session.history)  # 本轮起点：收尾时扫描本轮工具产出的资产链接
         parse_errors: Dict[str, int] = {}  # 本轮坏调用原文 -> 次数（断环 + 升级纠错）
@@ -408,6 +430,15 @@ class Orchestrator:
         # （审批续跑时刚执行的批准写调用由 resume_after_approval 传入）；verify_nudges=已推回次数。
         unverified_write = resume_unverified_write
         verify_nudges = 0
+        # [D2 谎报围堵：26B 档实案 2026-08-10] 三态跟踪——
+        # unresolved_failure：最近的物理调用失败（System Error / shell 非零退出）且其后
+        #   再无成功的物理调用（heredoc 写炸后直接宣布"三个文件都建好了"实案）；
+        # mutated_ok_this_turn：本轮是否有成功放行的变更类物理调用（零调用却声称
+        #   "已用 nohup 在后台拉起"实案的判据）。收尾时据此推回一次，仍坚持则降级 warning。
+        unresolved_failure = resume_failure
+        mutated_ok_this_turn = resume_mutated_ok
+        failure_nudges = 0
+        fabrication_nudges = 0
         goal_verified = False        # 收尾目标校验预算（每次 run_turn 最多审计一次）
         thinking_only_nudges = 0     # 全思考空产出推回预算（THINKING_ONLY_NUDGE_MAX）
         base_max_tokens = int(gen_kwargs.get("max_tokens", 4096))
@@ -605,6 +636,27 @@ class Orchestrator:
                         validated.append(c)
                 phys_calls = validated
 
+                # [D2 谎报围堵：拒批同参拦截] 本轮已被用户拒绝的调用原样重发 → 不再弹窗，
+                # 直接打回（26B 实案：nohup 同命令被拒 2 次仍连发 4 次，用户陷入拒批拉锯）。
+                denied_fps = getattr(session, "denied_call_fps", set())
+                if denied_fps:
+                    redenied = [c for c in phys_calls
+                                if c.get("type") != "error"
+                                and call_fingerprint(c.get("name"),
+                                                     c.get("arguments", {})) in denied_fps]
+                    if redenied:
+                        events.emit("denied_resend_blocked", session=session.session_id,
+                                    tools=[c.get("name") for c in redenied])
+                        for c in redenied:
+                            phys_calls.remove(c)
+                            responses.append({
+                                "name": c.get("name"),
+                                "response": ("Denied-call blocked: the user ALREADY denied this exact "
+                                             "call this turn. Re-sending it unchanged is not allowed. "
+                                             "Change your approach, or explain in your reply what you "
+                                             "wanted to do and let the user decide."),
+                            })
+
                 # [审批闸门] 物理调用中含敏感调用：先落元工具结果，再整批挂起
                 # （按调用动态判定：同一 shell 工具只读命令放行、变更命令弹窗）
                 approval_needed = [
@@ -639,10 +691,27 @@ class Orchestrator:
                     }
 
                 tracker = task.recent_calls if task is not None else no_task_calls
-                responses.extend(
-                    await self._execute_physical(session, phys_calls, tracker, parse_errors,
-                                                 journal=journal)
-                )
+                phys_responses = await self._execute_physical(session, phys_calls, tracker,
+                                                              parse_errors, journal=journal)
+                # [D2 谎报围堵] 按声明序扫描本批结果：失败置位、其后任何成功清位；
+                # 成功的变更类调用记账（收尾时"零变更却声称已做"的判据）。
+                for c, r in zip(phys_calls, phys_responses):
+                    if c.get("type") == "error":
+                        continue
+                    rtext = str(r.get("response") or "")
+                    if _resp_failed(rtext):
+                        unresolved_failure = True
+                        continue
+                    unresolved_failure = False
+                    # 拦截/取消类响应 = 没真执行，不算成功变更
+                    executed = not rtext.startswith(("Duplicate call blocked",
+                                                     "Operation cancelled",
+                                                     "Operation DENIED",
+                                                     "Denied-call blocked"))
+                    if executed and not self.registry.is_read_only(c.get("name"),
+                                                                   c.get("arguments", {})):
+                        mutated_ok_this_turn = True
+                responses.extend(phys_responses)
                 _stamp_turn_stats()  # [仪表 Phase 0] 刷新废轮计数（_execute_physical 可能新增 parse 失败）
                 # [验证门控 T1-4 状态跟踪] 按声明序扫描本批物理调用：改文件（edit_file/write_file）
                 # 置「未验证」，其后任何非写调用（读回文件 / 跑代码 / grep 等）视为复查、清除标记。
@@ -747,6 +816,39 @@ class Orchestrator:
                         "user what to test — do not claim success.")
                     continue
 
+                # [D2 谎报围堵：错误不可吞] 最近的物理调用失败且其后再无成功调用，却要收尾
+                # ——推回一次：要么修复重试、要么在答复里明说失败。仍坚持则放行但降级 warning
+                # （26B 实案：heredoc 写炸 exit 1 后直接宣布"三个文件都建好了"）。
+                if wrapping_up and unresolved_failure and failure_nudges < 1:
+                    failure_nudges += 1
+                    _transition("failure_swallow_nudge")
+                    events.emit("failure_swallow_nudge", session=session.session_id)
+                    session.add_assistant_message(content=text, thoughts=thoughts)
+                    pending_tail_notes.append(
+                        "[System guardrail] Your most recent tool call FAILED and nothing succeeded "
+                        "after it. Do NOT report success. Either fix and retry now (a different, "
+                        "correct approach), or state plainly in your reply that the operation failed "
+                        "and what the error was.")
+                    continue
+
+                # [D2 谎报围堵：零证据动作声明] 本轮没有任何成功的变更类调用，收尾文本却声称
+                # 完成了创建/安装/启动等动作——推回一次改写或真去执行；改写后不再命中即自愈
+                # 放行（26B 实案：零调用声称"已用 nohup 在后台拉起"）。仍坚持则降级 warning。
+                if (wrapping_up and not mutated_ok_this_turn and fabrication_nudges < 1
+                        and _ACTION_CLAIM_RE.search(text)):
+                    fabrication_nudges += 1
+                    _transition("action_claim_nudge")
+                    events.emit("action_claim_nudge", session=session.session_id)
+                    session.add_assistant_message(content=text, thoughts=thoughts)
+                    pending_tail_notes.append(
+                        "[System guardrail] Your reply claims you performed actions (created/installed/"
+                        "started/...), but NO state-changing tool call succeeded this turn. If the "
+                        "action still needs doing, do it now with real tool calls. If you are "
+                        "describing work from an EARLIER turn, or suggesting steps for the user, "
+                        "reword to make that unmistakably clear. Never present unexecuted actions "
+                        "as done.")
+                    continue
+
                 # [收尾目标校验 T-goal] DEFERRED §2 完整版：大计划全部完成后的最终答复，
                 # 用一次独立小生成对照原始目标审计（实测：长任务两侧确定性虚报完成 → 上马）。
                 # 预算 1 次；FAIL 推回自纠（同提前收尾形态），PASS/异常/预算尽 → 放行。
@@ -784,8 +886,16 @@ class Orchestrator:
                 if task is not None and (task.all_done() or not task.plan):
                     # 任务完成即弃：工作过程已沉淀在本轮消息流（blackboard=消息流本身）
                     session.task_state = None
+                # [D2 谎报围堵] 推回后仍坚持吞错/零证据声明 → 放行但状态降级 warning
+                # （汇报可疑要在轮次状态上留痕，前端和评测脚本都看得见）
+                status = "success"
+                if unresolved_failure and failure_nudges >= 1:
+                    status = "warning"
+                elif (not mutated_ok_this_turn and fabrication_nudges >= 1
+                      and _ACTION_CLAIM_RE.search(text)):
+                    status = "warning"
                 # 未完成而输出文本 = 向用户提问/汇报障碍，任务跨轮保留，等用户答复继续
-                return {"status": "success", "response": text, "thoughts": thoughts, "metrics": metrics}
+                return {"status": status, "response": text, "thoughts": thoughts, "metrics": metrics}
 
             # --- 全思考空产出（T1-5）：生成不空但全进了思考频道，用户什么都看不到 ---
             # （典型：无收尾频道块被解析器 §2.7 路由进 thoughts 后正文为空。）思考留档进
@@ -1176,12 +1286,29 @@ class Orchestrator:
         pending_calls = session.pending_tool_calls or []
         session.pending_tool_calls = None
 
+        resume_mutated_ok = False
+        resume_failure = False
         if approved:
             task = session.task_state
             tracker = task.recent_calls if task is not None else []
             # 批准的敏感调用同样经账本发事件（修复旧实现漏发 tool_started/result 的洞）
             responses = await self._execute_physical(session, pending_calls, tracker, {},
                                                      journal=journal)
+            # [D2 谎报围堵] 续跑轮的三态起点必须带上刚执行的批准调用（否则续跑里的
+            # "已执行完毕"会被零证据声明门误推）——判据与主循环扫描完全一致
+            for c, r in zip(pending_calls, responses):
+                if c.get("type") == "error":
+                    continue
+                rtext = str(r.get("response") or "")
+                if _resp_failed(rtext):
+                    resume_failure = True
+                    continue
+                resume_failure = False
+                if not rtext.startswith(("Duplicate call blocked", "Operation cancelled",
+                                         "Operation DENIED", "Denied-call blocked")) \
+                        and not self.registry.is_read_only(c.get("name"),
+                                                           c.get("arguments", {})):
+                    resume_mutated_ok = True
         else:
             responses = [
                 {
@@ -1195,6 +1322,14 @@ class Orchestrator:
                 }
                 for call in pending_calls if call.get("type") != "error"
             ] or [{"name": "system", "response": "Operation denied by user in the confirmation dialog."}]
+            # [D2 谎报围堵] 登记拒批指纹（按轮生效，续跑经 keep_recent_calls 沿用）：
+            # 原样重发不再弹窗，直接在审批闸前打回
+            fps = getattr(session, "denied_call_fps", None)
+            if fps is None:
+                fps = session.denied_call_fps = set()
+            for call in pending_calls:
+                if call.get("type") != "error":
+                    fps.add(call_fingerprint(call.get("name"), call.get("arguments", {})))
 
         session.add_tool_message(responses)
         # 刚批准执行的调用含改文件工具 → 续跑的 run_turn 以「未验证写」状态起步（T1-4）：
@@ -1209,4 +1344,6 @@ class Orchestrator:
         # compact_history=False：轮中重入，本轮未落盘观察不参与压缩（防压缩桩落盘）。
         return await self.run_turn(session, journal=journal,
                                    keep_recent_calls=True, compact_history=False,
-                                   resume_unverified_write=wrote_unverified, **gen_kwargs)
+                                   resume_unverified_write=wrote_unverified,
+                                   resume_mutated_ok=resume_mutated_ok,
+                                   resume_failure=resume_failure, **gen_kwargs)
