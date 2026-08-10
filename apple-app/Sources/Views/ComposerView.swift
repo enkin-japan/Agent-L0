@@ -17,6 +17,10 @@ struct ComposerView: View {
     @State private var dropTargeted = false
     /// 斜杠候选列表的当前选中行（↑↓ 移动，Tab/回车补全）
     @State private var slashSelection = 0
+    /// 发送前拦截的两个暂停态：后端 accept_turn 会先作废旧的暂停轮（语义正确），
+    /// 但作废是不可逆的——发送前必须让用户知情确认，别机械丢掉待审批/挂起的进度。
+    @State private var confirmAbandonApproval = false
+    @State private var confirmAbandonSuspended = false
     #if os(iOS)
     @State private var showPhotos = false
     @State private var photoItems: [PhotosPickerItem] = []
@@ -262,6 +266,20 @@ struct ComposerView: View {
         } message: {
             Text(L("请在系统设置中允许本 App 使用麦克风。"))
         }
+        // 暂停态发送确认（两态各一份：标题随状态切换会在消散动画里闪字）。
+        // 取消 = 什么都不发生，草稿与附件原样留在输入区。
+        .confirmationDialog(L("有操作在等你审批，发送新消息将放弃它。"),
+                            isPresented: $confirmAbandonApproval,
+                            titleVisibility: .visible) {
+            Button(L("放弃并发送"), role: .destructive) { performSend() }
+            Button(L("取消"), role: .cancel) {}
+        }
+        .confirmationDialog(L("当前有挂起的任务，发送新消息将放弃它。"),
+                            isPresented: $confirmAbandonSuspended,
+                            titleVisibility: .visible) {
+            Button(L("放弃并发送"), role: .destructive) { performSend() }
+            Button(L("取消"), role: .cancel) {}
+        }
     }
 
     // MARK: - 附件入口
@@ -371,7 +389,22 @@ struct ComposerView: View {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !uploads.isEmpty
     }
 
+    /// 发送入口：暂停态（待审批 / 已挂起）先弹确认，其余直发。
+    /// 待审批与挂起互斥（后端同一时刻只有一种暂停态），审批优先判。
     private func send() {
+        guard canSend, !store.isGenerating else { return }
+        if store.pendingTools?.isEmpty == false {
+            confirmAbandonApproval = true
+            return
+        }
+        if store.isSuspended {
+            confirmAbandonSuspended = true
+            return
+        }
+        performSend()
+    }
+
+    private func performSend() {
         guard canSend, !store.isGenerating else { return }
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         // 纯语音发送时发空 prompt：后端摄入期会把 ASR 转写升格为本轮用户文本

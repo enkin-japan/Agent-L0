@@ -280,6 +280,14 @@ enum L10n {
         "请在系统设置中允许本 App 使用麦克风。": ("システム設定でマイクの使用を許可してください。", "Allow microphone access in System Settings."),
         "（见附件）": ("（添付参照）", "(see attachments)"),
         "缺依赖：": ("依存不足：", "Missing: "),
+        // 暂停态发送确认（新轮受理会作废旧的暂停轮，不可逆）
+        "有操作在等你审批，发送新消息将放弃它。":
+            ("承認待ちの操作があります。新しいメッセージを送るとそれは破棄されます。",
+             "An action is awaiting your approval. Sending a new message will discard it."),
+        "当前有挂起的任务，发送新消息将放弃它。":
+            ("中断中のタスクがあります。新しいメッセージを送るとそれは破棄されます。",
+             "There's a suspended task. Sending a new message will abandon it."),
+        "放弃并发送": ("破棄して送信", "Discard & Send"),
         // 审批
         "以下敏感操作等待你的授权": ("以下の機密操作が承認待ちです", "Sensitive operations awaiting your approval"),
         "拒绝": ("拒否", "Deny"),

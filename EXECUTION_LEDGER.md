@@ -365,6 +365,23 @@
 > 本案是域名对节点错，#85 的实例指纹思路对两者通杀。本台 -1 节点待用户管理台
 > 一键正名（改完拨号侧零改动）。
 
+> 🟢 **2026-08-10（夜三）：轮换收尾 + 上线前挂账清扫（#85 主体落地）**。轮换闭环：
+> 用户重填 app INFER 钥即通（全端点 200）；Drive 正主 colab.env 旧钥挂账入持久
+> 记忆（下次 80G 浏览器场前必同步，CLI 场不受影响）。**#85 完整版 1+2+5+6 落地**
+> （84e76d8，implementer 施工+主会话审毕）：/health 实例指纹（service/layout/
+> key_fp）+ app 四态探针收养前验钥 + 布局形态显性化上设置页 + AGENT_LAYOUT 双侧
+> 自报；余 3/4（external 接管、handleCrash 重读钥匙串）按触发条件缓做。**lxml
+> 围堵两纪律补齐**：回收补刀 kill（不再每超时漏一僵尸工人）+ 提交串行化（排队页
+> 不再在死人队列里烧自己的 30s）；真击杀金测试 2 例。**code_explore PATH** 借
+> shell_exec 登录 PATH 缓存（守护形态 npm 装的 codegraph 此前不可见）。
+> ARCHITECTURE.md 补 §2.1 密钥拓扑与安装形态。金测试 746→**757**。
+> **暂停轮发送确认**（#84 随案 UX 死角）：待审批/挂起态发新消息=机械作废旧轮
+> （后端语义正确不改），app 侧此前零提示——ComposerView 发送前分态弹确认
+> （「放弃并发送」destructive/取消留草稿），web 补待审批分支（输入区本禁用，
+> 属兜底）；三语文案齐，双平台 BUILD SUCCEEDED、tsc/vitest/夹具 7/7 净。
+> 另 #84 的 shell 登录 PATH 缺口经查已在 71c1a01 修复（bundle 已带上）。
+> 生产机迁移准备按用户指示搁置（未上线）；Q12/Q13 仍待拍板。
+
 > 🟢 **2026-08-09：#76 attention/driver 现代化 ✅（免 GPU，本机 e4b）——31B 编排层
 > 验收解锁**。站 B 发现的 harness 漂移清偿：审批环从已移除的同步 `/approval` 迁至
 > 协议 v1 事件账本制（POST /turns 202 → SSE /events 附着观察 → awaiting_approval

@@ -162,7 +162,14 @@ export default function Page() {
           onToggleContext={() => setInspectorOpen((v) => !v)}
           onApproval={(approve) => void respondApproval(activeId, approve)}
           onSend={(value, files) => {
-            if (suspended && !window.confirm(t.confirm.abandonForNewMessage)) return
+            // 暂停态（待审批 / 已挂起）下的新轮受理会作废旧轮（后端 accept_turn
+            // 先 _abandon_paused_turn），不可逆——先问一句。待审批时输入区本来就
+            // 是禁用的，这里是兜底（禁用被绕过/状态竞态时仍不静默丢弃）。
+            if (pendingTools && pendingTools.length > 0) {
+              if (!window.confirm(t.confirm.abandonApprovalForNewMessage)) return
+            } else if (suspended && !window.confirm(t.confirm.abandonForNewMessage)) {
+              return
+            }
             void sendMessage(value, files)
           }}
           onStop={() => stopGenerating(activeId)}

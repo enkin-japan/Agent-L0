@@ -259,6 +259,8 @@ const en = {
     deleteConversation: "Delete this conversation? The server history and uploaded files will be removed too.",
     deleteLastTurn: "Delete the last turn? Model memory and server history will roll back in sync.",
     abandonForNewMessage: "There's a suspended task. Sending a new message will abandon it. Continue?",
+    abandonApprovalForNewMessage:
+      "An action is awaiting your approval. Sending a new message will discard it. Continue?",
     deleteSchedule: "Delete this scheduled task and its run history? Its past conversation is kept.",
     stopWorkerTask: "Stop this task? The current turn will be rolled back (the cancellation is archived in its history).",
     deleteConversationsMany: (n: number) =>
@@ -530,6 +532,7 @@ const zh: Dict = {
     deleteConversation: "删除该对话？服务端的历史记录和上传文件也会一并清除。",
     deleteLastTurn: "删除最后一轮问答？模型记忆与服务端历史将同步回退。",
     abandonForNewMessage: "当前有挂起的任务，发送新消息将放弃它。继续？",
+    abandonApprovalForNewMessage: "有操作在等你审批，发送新消息将放弃它。继续？",
     deleteSchedule: "删除这个定时任务及其运行历史？它的专属会话（聊天记录）会保留。",
     stopWorkerTask: "中止该任务？当前轮次将被回滚（取消记录会留档在该会话历史中）。",
     deleteConversationsMany: (n: number) => `删除选中的 ${n} 个对话？服务端的历史记录和上传文件也会一并清除。`,
@@ -797,6 +800,7 @@ const ja: Dict = {
     deleteConversation: "この会話を削除しますか？サーバの履歴とアップロードファイルも削除されます。",
     deleteLastTurn: "最後のターンを削除しますか？モデル記憶とサーバ履歴が同期して巻き戻ります。",
     abandonForNewMessage: "中断中のタスクがあります。新規メッセージを送ると破棄されます。続けますか？",
+    abandonApprovalForNewMessage: "承認待ちの操作があります。新規メッセージを送ると破棄されます。続けますか？",
     deleteSchedule: "この定期タスクと実行履歴を削除しますか？専用の会話（チャット履歴）は残ります。",
     stopWorkerTask: "このタスクを中止しますか？現在のターンはロールバックされます（中止はその会話の履歴に記録されます）。",
     deleteConversationsMany: (n: number) => `選択した ${n} 件の会話を削除しますか？サーバーの履歴とアップロードファイルも削除されます。`,
