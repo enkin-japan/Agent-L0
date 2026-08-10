@@ -302,6 +302,27 @@
 > data values）。**验收途中揪出并修掉架构级脆弱点**：lxml 解析畸形页 double-free
 > SIGABRT 带走整个 backend → trafilatura 抽取围堵进 spawn 子进程（07211c0）。
 
+> 🟢 **2026-08-10（晚）：app 全天 401 事故结案（勘误+根修）+ 打包漏拷第二例 +
+> /tasks schema 漂移**。**401 根因**（HANDOFF-20260810 §1 的孤儿收养叙事系误诊，
+> 已就地勘误）：14:38 `install-macos.sh`（日用快装，纯客户端）覆盖了早上的全栈包，
+> 裸包缺 Resources/backend → resolveLayout **静默退 repo 布局**——后端注 `.env.local`
+> 钥、客户端发钥匙串钥，构造性 401；退出重开/重新生成/开关关开每条路都重走 repo
+> 布局，故全部「无效」。铁证：/Applications Resources 仅三件素材文件，与裸
+> xcodebuild 产物同时间戳同内容；external 叙事与实况「运行中」互斥（external 态
+> 重新生成钮不渲染 SettingsView:219、状态文案「外部后端在跑」:409）。**处置**：
+> 重跑 bundle-macos.sh 完整打包（Developer ID 签名，顺带消 ad-hoc ACL 疑云），
+> 组装期加**执行层完整性断言**（缺 backend/app.py 等四件即组装失败）；实测 401
+> 归零全端点 200。**漏拷第二例**：`rag/fts_index.py`（U 系列后加）不在逐文件 cp
+> 清单，包内 RAG 数据面启动即 ModuleNotFoundError（与 retrieval_extras/S.11 同型）
+> ——rag 拷贝改**全量自动入包只排 compute 两件**（宁多勿漏）。**/tasks 500**：
+> 08-09 多 worker 化（46974d7）把 snapshot.running 改列表，schema（Optional[str]）
+> 与 Swift/web 双端未迁——空闲 `[]` 撞 str 校验 500，Swift 端 try? 静默吞掉快照
+> 刷新；三端对齐 `running: List[str]`（web 真值判断改 length，`!![]` 恒真坑）。
+> 金测试 745、tsc 干净。**#85 根治清单誊入 DEFERRED §5**（探活带鉴权/布局显性化/
+> external 重启选项/handleCrash 重读钥匙串/regen-from-failed 收养缺口/keygen
+> --rotate）；待办：四钥全套轮换（对话两度见值）、lxml 围堵两隐患（挂死工人泄漏/
+> 单工人超时级联）。教训入 §S：**同路径双形态安装脚本 = 布局静默切换面**。
+
 > 🟢 **2026-08-09：#76 attention/driver 现代化 ✅（免 GPU，本机 e4b）——31B 编排层
 > 验收解锁**。站 B 发现的 harness 漂移清偿：审批环从已移除的同步 `/approval` 迁至
 > 协议 v1 事件账本制（POST /turns 202 → SSE /events 附着观察 → awaiting_approval
@@ -921,6 +942,28 @@ kwargs/TypedDict 有拼写保护，字符串键字典没有——凡「配置以
 实际 import），已补拷贝并重装。**教训**：给单文件拷贝的入口添加伴生模块时，打包脚本
 是必须同步的第三处（代码 + 金测试 + 打包清单）；bundle 验收永远要用包内解释器实测
 import/启动，不能只看装上了。
+
+### S.12 · 同一安装路径的双形态安装脚本 = 布局静默切换面（2026-08-10）
+
+`install-macos.sh`（日用快装，纯客户端）与 `bundle-macos.sh`（全栈包）都覆盖
+`/Applications/MacAgent.app`，产物布局不同而 UI 无从分辨。快装覆盖全栈包后
+`resolveLayout` 的 bundle 判据静默失败退 repo 布局——**密钥来源随之换轨**
+（Keychain → `.env.local`），app 客户端与后端从此异源，全端点 401 且一切「重启/
+重开/轮换」修法都在同一条错误布局里打转（全天事故，HANDOFF-20260810 §1 勘误版）。
+前会话按「孤儿收养」误诊排查半天，实际两分钟的 `ls Resources/` 即可证伪。
+**教训**：①布局分辨优先——「app 行为异常」先看装的是哪种形态的包（`ls
+/Applications/MacAgent.app/Contents/Resources/backend` 一眼定案）；②同路径多形态
+安装是结构性陷阱，已在 bundle-macos.sh 加执行层完整性断言兜打包侧，UI 亮出布局
+形态（DEFERRED §5 #85-2）是消费侧的另一半；③排查密钥对不上时，先问「两侧各自
+从哪里读」再比值——**来源异轨时值永远对不上，比值是白比**。
+
+### S.13 · 逐文件拷贝清单第二次咬人后升级为反向排除（2026-08-10）
+
+S.11 的同型复发：`rag/fts_index.py`（FTS 关键词索引，U 系列后加）没进 bundle 的
+逐文件 cp 清单，包内 RAG 数据面启动即 ModuleNotFoundError——好在编队就绪门拦下
+backend、app 原话上报，实机当场定位。**同一清单第二次漏拷 = 清单机制本身错了**：
+已改为 `rag/*.py` 全量入包、只点名排除 compute 两件（torch 依赖）——多带纯 py
+无害、漏一件致命，**白名单会随代码演进腐烂，反向排除只在「刻意不带」处设卡**。
 
 ### S.2 · `git add -A` 会扫进不属于本次改动的东西（2026-07-15）
 

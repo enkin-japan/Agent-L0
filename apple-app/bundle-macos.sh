@@ -50,10 +50,13 @@ rsync -a --delete "$ROOT/api_tools/" "$RES/api_tools/"
 # compute_core/compute_server 依赖 torch，不进包。数据（chroma_data/storage）落数据根
 # （EDGE_RAG_DATA_DIR，SidecarManager 注入），代码目录保持只读。
 mkdir -p "$RES/rag"
-cp "$ROOT/rag/rag_server.py" "$RES/rag/rag_server.py"
-# 数据面的零重依赖伴生模块（检索增强抽层）：rag_server.py import 它，漏拷 = 包内
-# 数据面启动即 ModuleNotFoundError（build 54 组装时实测抓到，S.11）
-cp "$ROOT/rag/retrieval_extras.py" "$RES/rag/retrieval_extras.py"
+# 数据面模块**全量自动入包**，只点名排除 compute 两件（torch 依赖）。此前逐文件 cp
+# 漏拷过两回（retrieval_extras S.11 / fts_index 2026-08-10），每漏一件 = 包内数据面
+# 启动即 ModuleNotFoundError；多带一个纯 py 无害，漏一个致命——方向选宁多勿漏。
+for f in "$ROOT"/rag/*.py; do
+  case "$(basename "$f")" in compute_core.py|compute_server.py) continue ;; esac
+  cp "$f" "$RES/rag/"
+done
 # 运行时（已按 hardened runtime 逐 Mach-O 签名，ditto 保留符号链接与权限）
 rm -rf "$RES/python"
 ditto "$RUNTIME" "$RES/python"
@@ -71,6 +74,12 @@ cp "$ROOT/config.yaml" "$RES/config.yaml"
 # 私钥零泄漏断言：包里绝不能有 .p8 / .env*（S 级纪律，宁可组装失败）
 leaked=$(find "$APP" \( -name '*.p8' -o -name '.env' -o -name '.env.*' \) | head -5)
 [ -z "$leaked" ] || { echo "❌ 包内发现私钥/环境文件：" >&2; echo "$leaked" >&2; exit 1; }
+
+# 执行层完整性断言（2026-08-10 401 事故）：resolveLayout 的 bundle 判据就是这些文件，
+# 缺任何一件装出去的 app 会静默退 repo 布局（密钥换源 → 构造性 401）。宁可组装失败。
+for f in backend/app.py python/bin/python3.13 scripts/lib_edge.sh config.yaml; do
+  [ -e "$RES/$f" ] || { echo "❌ 包内执行层不完整：缺 Resources/$f" >&2; exit 1; }
+done
 
 echo "== 重签（资源注入破坏了 bundle 印章）=="
 # 身份优先 Developer ID：ad-hoc 每次构建都是新身份，Keychain 按签名身份做 ACL——

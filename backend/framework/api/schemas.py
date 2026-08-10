@@ -57,7 +57,7 @@ class TaskListResponse(BaseModel):
     供前端「任务切换器」及后续自动调度观测使用。
     """
     status: bool
-    running: Optional[str] = None            # 当前占用 worker 的 session_id（空闲则 None）
+    running: List[str] = []                  # 占用 worker 的 session_id 们（多 worker 化后为列表，空闲 []）
     queued: int = 0                          # 排队等待的任务数
     suspended: int = 0                       # 已挂起（KV 留内存、可恢复）的任务数
     tasks: List[Dict[str, Any]] = []         # 每项含 session_id / status / kind / 等待或运行时长

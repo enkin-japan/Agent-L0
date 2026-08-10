@@ -23,7 +23,7 @@ export function SchedulerStrip({
   onSelect: (id: string) => void
 }) {
   const t = useT()
-  const busy = !!tasks?.running
+  const busy = (tasks?.running?.length ?? 0) > 0
   const items = tasks?.tasks ?? []
 
   function label(id: string): string {

@@ -216,11 +216,11 @@ export interface TaskHandleInfo {
   running_seconds: number
 }
 
-/** 全局单 worker 调度快照（GET /api/v1/tasks，跨会话）。 */
+/** 全局调度快照（GET /api/v1/tasks，跨会话；多 worker 化后 running 为列表）。 */
 export interface TaskListResponse {
   status: boolean
-  /** 当前占用 worker 的 session_id；空闲则 null。 */
-  running: string | null
+  /** 占用 worker 的 session_id 们；空闲则 []。 */
+  running: string[]
   queued: number
   suspended: number
   tasks: TaskHandleInfo[]

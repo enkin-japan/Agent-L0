@@ -221,3 +221,35 @@ API `/api/v1/registrations`（列表/确认/驳回；确认复用表单面同一
 ### 承重代码指针
 `POST/DELETE /api/v1/skills`（剧本管理面）、`POST/DELETE /api/v1/api-tools` +
 `.../test`（API 工具表单面）——两端点契约已现成，届时包壳即可。
+
+## 5. #85 执行层实例身份与密钥观测（2026-08-10 401 事故根治清单）
+
+**事故背景（当日档案，勘误后版本）**：install-macos.sh（日用快装，纯客户端）与
+bundle-macos.sh（全栈包）覆盖同一个 /Applications/MacAgent.app，快装产物缺
+Resources/backend → `SidecarManager.resolveLayout()` bundle 判据失败**静默退 repo
+布局**，dev 桥接注 `.env.local` 的 AGENT_API_KEY，而 app 客户端恒发钥匙串值——
+构造性 401，且退出重开/重新生成/开关关开全部原样复现（每条路都重走 repo 布局）。
+交接文档 HANDOFF-20260810.md §1 的「孤儿收养」叙事系误诊（external 态下重新生成钮
+不渲染、状态文案是「外部后端在跑」，与实况「运行中」互斥）。
+
+### 轻量版（已交付，2026-08-10）
+- bundle-macos.sh 组装期**执行层完整性断言**（backend/app.py、python3.13、
+  lib_edge.sh、config.yaml 缺一即组装失败）——同款事故在打包侧不再可能静默产生。
+- 既有：reap 第二判据（解释器路径认自家兵，v0.16.0(51)）、timeout_graceful_shutdown=5。
+
+### 完整版（方案齐，未拍板实施时机）
+1. **探活带鉴权**：`SidecarManager.healthOK()`（SidecarManager.swift:377）收养前验钥，
+   认身份不认端口；/health 加实例指纹（布局形态+密钥指纹哈希），UI 三态：
+   端口被他人占用 / 密钥不匹配 / 健康。
+2. **布局形态显性化**：resolveLayout 落到 repo 布局时 UI 亮出「repo 布局（dev 桥接，
+   密钥来源 .env.local）」；bundle 判据失败（裸包）单独亮「包内无执行层」而非静默换布局。
+3. **external 态重启**给明示/接管选项（现状 restart() 直接 break，SidecarManager.swift:112）。
+4. **handleCrash 改走 autostart(force)** 重读钥匙串（现状用启动时 env 快照复 spawn）。
+5. **regen-from-failed 收养缺口**：`.failed` 态按「重新生成」→ restart() 走
+   `case .failed → autostart()`（非 force）→ 无鉴权探活可收养旧后端——钥匙串已轮换
+   而后端没换钥，客户端键单方面漂移。修法与 1 同源（收养前验钥即堵死）。
+6. devctl 同款探活验钥；`devctl.sh keygen` 加 `--rotate`（现状只补缺不轮换）。
+
+### 重启触发条件
+已触发过一次（2026-08-10 全天 401）。再次出现「已连接绿灯 + 全端点 401」或
+「布局形态与预期不符」即应实施完整版 1+2；其余随波次择机。

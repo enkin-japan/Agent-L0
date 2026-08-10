@@ -217,7 +217,7 @@ struct TaskHandleInfo: Codable, Identifiable {
 
 struct GlobalTasksResponse: Codable {
     let status: Bool
-    let running: String?
+    let running: [String]?   // 占用 worker 的 session_id 们（多 worker 化后为列表）
     let tasks: [TaskHandleInfo]
 }
 
