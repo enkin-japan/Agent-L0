@@ -319,32 +319,72 @@ def _flag_injection(text: str) -> List[str]:
     return [p for p in _INJECTION if re.search(p, text, re.I)]
 
 
+def _traf_extract_worker(html: str) -> str:
+    """子进程侧：trafilatura 抽正文（其内部经 lxml/libxml2 原生解析）。"""
+    import trafilatura
+    return trafilatura.extract(html, include_comments=False, include_tables=True,
+                               favor_recall=False, deduplicate=True) or ""
+
+
+# 抽取工人池（单工人，spawn）：2026-08-10 实案——lxml 6.1.1 解析某畸形页面在
+# libxml2 层 double-free（___BUG_IN_CLIENT_OF_LIBMALLOC_POINTER_BEING_FREED_WAS_
+# NOT_ALLOCATED → SIGABRT）**带走整个 backend 进程**。原生崩溃在进程内不可捕获，
+# 唯一可靠围堵=抽取挪进子进程：崩了只折损该页（BrokenProcessPool 可捕获），换新
+# 工人继续。卡死（future 超时）同样回收工人。首次 spawn ~1s，此后常驻复用。
+_EXTRACT_POOL: Optional[concurrent.futures.ProcessPoolExecutor] = None
+_EXTRACT_POOL_LOCK = threading.Lock()
+
+
+def _extract_pool() -> concurrent.futures.ProcessPoolExecutor:
+    global _EXTRACT_POOL
+    with _EXTRACT_POOL_LOCK:
+        if _EXTRACT_POOL is None:
+            import multiprocessing
+            _EXTRACT_POOL = concurrent.futures.ProcessPoolExecutor(
+                max_workers=1, mp_context=multiprocessing.get_context("spawn"))
+        return _EXTRACT_POOL
+
+
+def _recycle_extract_pool() -> None:
+    global _EXTRACT_POOL
+    with _EXTRACT_POOL_LOCK:
+        if _EXTRACT_POOL is not None:
+            _EXTRACT_POOL.shutdown(wait=False, cancel_futures=True)
+            _EXTRACT_POOL = None
+
+
 def reset_extraction_cache() -> None:
-    """每轮调查入口调用：清空 trafilatura 的进程级段落去重缓存（LRU_TEST，容量 4096）。
+    """每轮调查入口调用：回收抽取工人 = 连同 trafilatura 的进程级段落去重缓存
+    （LRU_TEST）一起归零。
 
     该缓存是模块级全局、跨 extract() 调用累积（设计给批量爬站抑制样板：同段文本
-    出现超过 MAX_REPETITIONS=2 次即整段删除）。常驻进程里它会跨调查记仇——反复调查
+    出现超过 MAX_REPETITIONS=2 次即整段删除）。常驻工人里它会跨调查记仇——反复调查
     同一页面时，其超 100 字的段落计数迟早超阈值，抽取端从此视该页为空壳，且 T1/T2
-    升级救不回（殊途同归撞同一缓存）、重启进程才"自愈"，极难归因。
-    在调查入口清空，把去重作用域从「进程终身」收缩到「单轮调查」：轮内跨页的站内
-    样板剔除照常工作，跨调查污染归零。缺库/私有结构变动时静默跳过（fail-open）。"""
+    升级救不回（殊途同归撞同一缓存）、重启工人才"自愈"，极难归因。
+    抽取挪进子进程后（lxml 崩溃围堵），清缓存的实现=回收工人：下轮调查用全新工人，
+    轮内跨页的站内样板剔除照常工作，跨调查污染归零。"""
+    _recycle_extract_pool()
     try:
-        from trafilatura.deduplication import LRU_TEST
+        from trafilatura.deduplication import LRU_TEST   # 主进程侧同名缓存顺手清（无害）
         LRU_TEST.clear()
     except Exception:
         pass
 
 
 def _extract(url: str, html: str, cfg: dict, tier: int) -> Dict:
-    """把（任一档位取回的）HTML 净化 → 抽正文 → 反投毒。tier 仅作诊断标记。"""
+    """把（任一档位取回的）HTML 净化 → 抽正文（崩溃围堵子进程）→ 反投毒。tier 仅作诊断标记。"""
     per_page = int(cfg.get("per_page_max_chars", 1500))
     html = _scrub_html(html)
     try:
-        import trafilatura
-        text = trafilatura.extract(html, include_comments=False, include_tables=True,
-                                   favor_recall=False, deduplicate=True) or ""
+        fut = _extract_pool().submit(_traf_extract_worker, html)
+        text = fut.result(timeout=30)
     except Exception as e:
-        return {"url": url, "text": "", "error": f"Text extraction failed (trafilatura missing?): {e}", "flags": [], "tier": tier}
+        # BrokenProcessPool=工人被原生崩溃带走；TimeoutError=解析卡死。都换新工人、
+        # 只报本页失败——绝不让一张网页的解析事故升级成后端事故。
+        _recycle_extract_pool()
+        return {"url": url, "text": "",
+                "error": f"Text extraction failed (crash-contained): {type(e).__name__}: {e}",
+                "flags": [], "tier": tier}
     text = _ZERO_WIDTH.sub("", text)
     return {"url": url, "text": text[:per_page], "error": None, "flags": _flag_injection(text), "tier": tier}
 
