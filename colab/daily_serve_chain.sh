@@ -5,8 +5,12 @@
 # 上限 5 次/天）。就绪信号 /content/SERVE_READY；日志 /content/logs/。
 #
 # 档位由 daily.sh 经 env 注入：
-#   SERVE_TIER=l4|a100    l4 = 26B NVFP4（免在线量化、无 MTP）
-#                         a100 = 26B fp8+MTP k=4 生产形态（拉草稿件+热补丁）
+#   SERVE_TIER=l4|a100|a100-31b
+#                         l4 = 26B NVFP4（免在线量化、无 MTP——L4 上 MTP 实测净减速）
+#                         a100 = 26B fp8+MTP k=4 速度王（拉草稿件+热补丁）
+#                         a100-31b = 31B NVFP4+MTP k=4 质量王（B 方案 2026-08-11：
+#                         缺省 48k 上下文 + max_concurrency 焊 1——40G 为 vl-2b/whisper
+#                         共驻留余量的隐含前提，KV 池对 48k 仅 1.1x，并发即抢占互踢）
 #   SERVE_MAXLEN          可选：覆盖 cuda.max_model_len（L4 显存紧时下调）
 #   SERVE_KV_DTYPE        可选：L4 档缺省 fp8（KV 减半 +20% 提速，tool_call 零漂移
 #                         实测 2026-08-09；传 auto 可退回）。A100=SM80 会被拒，缺省 auto。
@@ -27,6 +31,11 @@ fi
 # 池只有 57k——须同时显式给 SERVE_MAXLEN（如 49152），此处不猜。
 if [ -z "${SERVE_MAXLEN:-}" ] && { [ "$TIER" = "a100" ] || [ "${SERVE_KV_DTYPE:-}" = "fp8" ]; }; then
   SERVE_MAXLEN=65536
+fi
+# a100-31b 缺省 48k：31B bf16 KV（A100 无 fp8 KV）48k 单流 ≈8.9G，为共驻件留 ~7G
+# ——64k 会挤占共驻余量（2026-08-11 sizing 账）。要 64k 独跑时显式传 SERVE_MAXLEN。
+if [ "$TIER" = "a100-31b" ] && [ -z "${SERVE_MAXLEN:-}" ]; then
+  SERVE_MAXLEN=49152
 fi
 APP=/content/agent
 mkdir -p /content/logs
@@ -84,6 +93,11 @@ PY
 if [ "$TIER" = "l4" ]; then
   MODEL_REPO="RedHatAI/gemma-4-26B-A4B-it-NVFP4"
   pull "$MODEL_REPO" gemma-4-26B-A4B-it-NVFP4 || die "NVFP4 拉取失败"
+elif [ "$TIER" = "a100-31b" ]; then
+  # 31B 件与 26B 同发行方=同 compressed-tensors 装载路（2026-08-11 夜测实证 1.7×）
+  MODEL_REPO="RedHatAI/gemma-4-31B-it-NVFP4"
+  pull "$MODEL_REPO" gemma-4-31B-it-NVFP4 || die "31B NVFP4 拉取失败"
+  pull google/gemma-4-31B-it-assistant gemma-4-31B-it-assistant || die "31B 草稿件拉取失败"
 else
   MODEL_REPO="google/gemma-4-26B-A4B-it"
   pull "$MODEL_REPO" gemma-4-26B-A4B-it || die "26B 拉取失败"
@@ -103,6 +117,20 @@ if "NVFP4" not in s:
              '      profile: { }\n'
              '      note: "日用 L4 件（第 6 站已验带内）"\n')
     s = s.replace(anchor, entry + anchor, 1)
+tier = "$TIER"
+if tier == "a100-31b":
+    # 31B NVFP4 注册表条目（表外拒启纪律，server.py resolve 需先注册）
+    if "31B-it-NVFP4" not in s:
+        anchor = '    - repo: "google/gemma-4-26B-A4B-it"'
+        entry = ('    - repo: "RedHatAI/gemma-4-31B-it-NVFP4"\n'
+                 '      dialect: "gemma4"\n'
+                 '      capabilities: ["text", "vision"]\n'
+                 '      profile: { }\n'
+                 '      note: "31B 质量王 40G 档（2026-08-11 夜测 MTP 1.7x）"\n')
+        s = s.replace(anchor, entry + anchor, 1)
+    # 并发闸焊 1（B 方案隐含前提）：48k 池仅 1.1x，放并发=vLLM 抢占互踢；
+    # 后台/沙箱/定时在编排层排队，与 CHARTER §3 单 worker 串行语义一致。
+    s = re.sub(r"(max_concurrency:\s*)\d+", r"\g<1>1", s, count=1)
 maxlen = "${SERVE_MAXLEN:-}"
 if maxlen:
     s = re.sub(r"(max_model_len:\s*)\d+", r"\g<1>" + maxlen, s, count=1) \
@@ -118,8 +146,8 @@ pgrep -f "gpu_keepalive[.]py" >/dev/null || {
   sleep 1; pgrep -f "python3 .*gpu_keepalive[.]py" > /content/gpu_keepalive.pid
 }
 
-echo "== ⑥ 服务监理循环（崩溃自动重启 ≤5 次；A100 档先打 MTP 热补丁）"
-[ "$TIER" = "a100" ] && { python "$APP/colab/mtp_patch.py" || die "MTP 热补丁失败"; }
+echo "== ⑥ 服务监理循环（崩溃自动重启 ≤5 次；MTP 档先打热补丁）"
+[ "$TIER" != "l4" ] && { python "$APP/colab/mtp_patch.py" || die "MTP 热补丁失败"; }
 cat > /content/serve_supervisor.sh <<SUP
 #!/bin/bash
 set -u
@@ -133,6 +161,12 @@ while [ \$RESTARTS -le 5 ]; do
   if [ "$TIER" = "l4" ]; then
     INFER_REMOTE_HOST=127.0.0.1 INFER_PORT=14161 INFER_MODEL_REPO="$MODEL_REPO" \
     INFER_BACKEND=cuda INFER_QUANT=none INFER_KV_DTYPE="${SERVE_KV_DTYPE:-}" PYTHONUNBUFFERED=1 \
+      python ../inference/server.py > /content/logs/infer.log 2>&1 &
+  elif [ "$TIER" = "a100-31b" ]; then
+    DRAFT="$APP/backend/models/gemma-4-31B-it-assistant"
+    INFER_REMOTE_HOST=127.0.0.1 INFER_PORT=14161 INFER_MODEL_REPO="$MODEL_REPO" \
+    INFER_BACKEND=cuda INFER_QUANT=none PYTHONUNBUFFERED=1 \
+    INFER_SPEC_CONFIG="{\"method\":\"mtp\",\"model\":\"\$DRAFT\",\"num_speculative_tokens\":4}" \
       python ../inference/server.py > /content/logs/infer.log 2>&1 &
   else
     DRAFT="$APP/backend/models/gemma-4-26B-A4B-it-assistant"

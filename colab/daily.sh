@@ -1,7 +1,9 @@
 #!/bin/bash
 # 日用算力端一键起停（Mac 侧）。白天 start、晚上 stop，中间不用管。
 #
-#   ./colab/daily.sh start [l4|a100]   开 VM → 全链引导 → 26B 起服 → 挂哨兵/隧道保活
+#   ./colab/daily.sh start [l4|a100|a100-31b]   开 VM → 全链引导 → 起服 → 挂哨兵/隧道保活
+#     l4=26B NVFP4 日用（1.54u/h）· a100=26B fp8+MTP 速度王 · a100-31b=31B NVFP4+MTP
+#     质量王 48k（B 方案 2026-08-11：并发闸 1 焊死，40G 共驻余量前提）
 #   ./colab/daily.sh stop              停哨兵 → 停会话（孤儿自动还原自救）
 #   ./colab/daily.sh status            会话/健康/时长/预估 unit
 #   ./colab/daily.sh rescue            孤儿会话手动自救（还原 sessions.json 备份再 stop）
@@ -23,9 +25,9 @@ note(){ printf '\033[0;32m[daily]\033[0m %s\n' "$*"; }
 
 cmd="${1:-}"; tier="${2:-l4}"
 if [ "$cmd" = "start" ]; then
-  case "$tier" in l4) GPU=L4;; a100) GPU=A100;; *) die "档位只认 l4|a100";; esac
+  case "$tier" in l4) GPU=L4;; a100|a100-31b) GPU=A100;; *) die "档位只认 l4|a100|a100-31b";; esac
 fi
-rate_of(){ [ "$1" = "a100" ] && echo 5.3 || echo 1.54; }
+rate_of(){ case "$1" in a100|a100-31b) echo 5.3;; *) echo 1.54;; esac; }
 
 session_name(){ cat "$STATE/current_session" 2>/dev/null; }
 session_start_ts(){ cat "$STATE/session_start_ts" 2>/dev/null; }
