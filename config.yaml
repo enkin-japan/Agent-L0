@@ -118,6 +118,12 @@ inference:
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
       note: "28.0GB | 静态校验 ✓ | MoE，建议 ≥48GB 统一内存"
+    - repo: "mlx-community/gemma-4-26b-a4b-it-qat-4bit"
+      revision: "0e3cbab38ce568cf6e23543010d08d03b731910c"
+      dialect: "gemma4"
+      capabilities: ["text", "vision"]
+      suppress_ghost_thinking: true
+      note: "15G | 实机验证 ✓（108.6tps@0） | QAT：专家 4bit + 共享 MLP/router 8bit | ⚠️A 毒未根除，阈值 4k→16k（qa 哨 16k+ 秒终止，20260814 实测） | MoE，建议 ≥32GB 统一内存"
     - repo: "mlx-community/gemma-4-26b-a4b-it-nvfp4"
       revision: "31e75786f7646400d9e5d0b29d055326d981db5e"
       dialect: "gemma4"
@@ -136,6 +142,12 @@ inference:
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
       note: "33.8GB | 静态校验 ✓ | 稠密，建议 ≥64GB 统一内存"
+    - repo: "mlx-community/gemma-4-31b-it-qat-4bit"
+      revision: "83b1a12d1da4b07afe435bd2cc310308bfc13984"
+      dialect: "gemma4"
+      capabilities: ["text", "vision"]
+      suppress_ghost_thinking: true
+      note: "27G | 实机验证 ✓（16.2tps@0，64k 稠密 KV 47.2G 不 OOM） | QAT 但 60 层 MLP 全 8bit（近 8bit 字节量） | 发现 B 治愈、tool@64k 挂点（20260814 实测） | 稠密，建议 ≥48GB 统一内存"
     - repo: "mlx-community/gemma-4-31b-it-nvfp4"
       revision: "a0a935b105621b98907915fa12f05348bb9c3c24"
       dialect: "gemma4"

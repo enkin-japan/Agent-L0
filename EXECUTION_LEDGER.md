@@ -1228,6 +1228,18 @@ backend、app 原话上报，实机当场定位。**同一清单第二次漏拷 
   回归/四发现见 `benchmarks/baseline/20260813-m4max64/ANALYSIS.md` 与当日横幅。
   要点：H 逐模型（31B≈13ms）、边际 B_eff 515GB/s、KV 税 5.6-8.4× 天真账、
   26B-8bit 全哨唯一绿。并发格仍待前置①。
+- ✅ **QAT-4bit 附加波 2026-08-14 收官**（用户拍板追加；12/12 格同口径，
+  `benchmarks/baseline/20260814-qat/ANALYSIS.md`）。件与钉值：26b-a4b-qat-4bit
+  @0e3cbab3（15G）、31b-qat-4bit@83b1a12d（27G），contract+装载冒烟双过后入
+  注册表。**配方核验：两件均非纯 4bit**——26B 共享 MLP/router 8bit（专家仍
+  4bit，+1G）；**31B 全 60 层 MLP 8bit（27G，近 8bit 字节量，"qat-4bit"名实
+  不符）**。四判定：① 26B 4bit 车道内 QAT 取代 PTQ（速度 −8~12% 短ctx/64k
+  贴平，A 毒阈值 4k→16k，tool 全绿）；② **A 毒未根除**——16k 机制确认实验
+  同 prompt 抑制开 gen_tokens=1 / 抑制关正常答，26B 缺省档维持 8bit，
+  「26B-8bit 换 qat」判否；③ **31B 质量档易主候选：qat-4bit 替代 8bit**（发现
+  B 治愈、64k 稠密 KV 47.2G 不 OOM〔8bit 同格 OOM〕、快 15%、省 4G；新增
+  tool@64k 挂点待复验）；④ 速度模型续验（27G/515GB/s+H≈13ms 预测 15.3 实测
+  16.2@0）。qat-8bit 判不测（q4_0 训练权重上 8bit=继承成本无收益）。
 - **并发格（前置①齐后补测）**：batch 1/2/4 的实效 B_eff 回归——定位算力墙拐点
   （M4 Max 算强/带宽比 ~62 FLOP/byte，双人+MTP 预计用到 ~40，墙位实测）；
   **MoE 专家并集税**：26B batch 1/2/4 路均衰减曲线（预测 batch2 路均 55-65%），
@@ -1248,7 +1260,15 @@ backend、app 原话上报，实机当场定位。**同一清单第二次漏拷 
   {bf16, PTQ-4bit, QAT-4bit}；「QAT 目标 × QAT 草稿」接受率组合列为重点格
   （接受率=分布匹配性质，QAT 双端同源假设待验）。
 - 矩阵（在阶段一优胜档上做，不全叉乘）：{26B, 31B} × {4bit, 8bit} × k=4 ×
-  草稿 {bf16, 4bit} × ctx {0, 8k, 32k}。
+  草稿 {bf16, 4bit} × ctx {0, 8k, 32k}。〔2026-08-14 QAT 波后修订：31B 目标件
+  以 qat-4bit 顶替 8bit（B 治愈+64k 不 OOM），26B 加 qat-4bit 目标点；
+  「QAT 目标 × QAT 草稿」（31B 草稿 @5234fd58 现成）为最高价值格。〕
+- **前置追加（2026-08-14，harness v3）**：bench_baseline.py 过 reviewer 首审
+  出 4 Critical + 13 Suggestion（EOF 误记成功/哨兵不记 gen_tokens 无退化闸/
+  错误路径缓存泄漏/peak_mem 为进程级高水位非格级），均不动摇已跑两轮数据
+  （升序 ctx + 全格 gen_tokens 事后审计 + 发现 A 独立复现背书），但阶段二格
+  形态更复杂（MTP 接受率、多 run 交错），**v3 修复列为阶段二开格前置**；
+  报告全文见会话 2026-08-14，修复清单以 4 Critical 为必修、Suggestion 择要。
 - 重点验证三件（均为 2026-08-11 理论的可证伪预测）：
   ① **草稿 4bit 化是 Mac 上 MTP 成立的前置**（bf16 草稿在 546GB/s 下预测反亏）；
   ② **8bit 目标接受率 > 4bit 目标**（A100 侧 3.4 vs 1.9 的分布效应是否复现）——
