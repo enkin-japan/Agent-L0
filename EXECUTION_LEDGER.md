@@ -1237,6 +1237,16 @@ backend、app 原话上报，实机当场定位。**同一清单第二次漏拷 
 ### 3) 阶段二 · MTP 格——接受率与草稿形态
 
 - 前置：见 §7-0（mlx-vlm 升级手术 + MTP 接线 + 草稿转换 + 观测口径）。
+- **草稿件供给已查证（2026-08-14 HF API，SHA=当日主干）**，QAT 线全存在：
+  官方 bf16 草稿 `google/gemma-4-26B-A4B-it-assistant`@6e5aaaf4、
+  `google/gemma-4-31B-it-assistant`@627c5ec1；官方 **QAT 底草稿**
+  `google/gemma-4-26B-A4B-it-qat-q4_0-unquantized-assistant`@95371415、
+  `google/gemma-4-31B-it-qat-q4_0-unquantized-assistant`@96d4c8ca；现成 MLX 件
+  `mlx-community/gemma-4-31B-it-qat-assistant-4bit`@5234fd58（**31B 的 4bit QAT
+  草稿免本地转换**）。26B 草稿无任何 MLX 转换 → §7-0 ③ 的本地转换以 26B 为主，
+  转换底优先用 QAT-unquantized（4bit 友好权重）。阶段二矩阵草稿维度相应扩为
+  {bf16, PTQ-4bit, QAT-4bit}；「QAT 目标 × QAT 草稿」接受率组合列为重点格
+  （接受率=分布匹配性质，QAT 双端同源假设待验）。
 - 矩阵（在阶段一优胜档上做，不全叉乘）：{26B, 31B} × {4bit, 8bit} × k=4 ×
   草稿 {bf16, 4bit} × ctx {0, 8k, 32k}。
 - 重点验证三件（均为 2026-08-11 理论的可证伪预测）：
