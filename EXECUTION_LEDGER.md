@@ -1146,6 +1146,9 @@ backend、app 原话上报，实机当场定位。**同一清单第二次漏拷 
    升级 = 铁律 1 手术单独成波（backends/mlx/patch/ 全复验 + e4b revision 矩阵
    重核）；其后才是 **MTP 接线**进 backends/mlx/backend.py（现 drafter 零接线，
    沿既有 speculative.mode 开关制形状）。kv_bits 若也依赖新版 API 同压此后。
+   〔2026-08-13 用户指示：手术同时**顺手评估 Gemma-4 模型版本升级**——顺手
+   （同一波内代价小、revision 矩阵一次重核覆盖）就一起做；不顺手则不强求，
+   留后面单独升，不得为此扩大手术面。〕
 3. 草稿件 4bit 本地转换 + `check_model_contract.py` 静态验证。
 4. 接受数/步观测口径打通。
 5. TurboQuant `kv_bits` 旋钮与 config 键位打通。
