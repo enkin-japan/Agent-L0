@@ -435,6 +435,18 @@
 > sizing 结论：kv8 下两套配置足迹殊途同归（53-63G 窄带），64GB=单人并发下限、
 > 128GB=双人并发起步+双模型共驻白拿；冗余系数 20%（MLX 无抢占安全阀）。
 
+> 🟢 **2026-08-13（续）：§7 第 0 批（环境就位）当日收官**。①金测试 757 全绿
+> （50.6s，venv 随卷迁移完好）；②MLX/Metal 实证通过（mlx_vlm 0.5.0 钉住确认）；
+> ③全栈冒烟：RAG/SearXNG/backend/前端四服务全绿，inprocess+e4b 真实轮次
+> success、**gen 64.6 tps**（前缀缓存命中 15072/15161；验完收摊、config 已还原）；
+> ④基线格权重六锚点齐：e4b/26B/31B × 4bit/8bit 全下齐（mlx-community 件，
+> ~83G 新增，看门狗零报警）；⑤`scripts/wired-limit.sh` 落地（status/set/install
+> 含 LaunchDaemon 持久化），**待用户 sudo install（56G 目标）——阶段一 31B-8bit
+> 长上下文格开跑前必须完成**。遗留：31B bf16 死残件 34G（backend/models/
+> gemma-4-31B-it，仅第 2 分片，8/8 事故遗留）待用户拍板清理；HETERO_COMPUTE.md
+> 发现一处非会话内改动（疑编辑器误触断句删行）待用户过目。下一波=阶段一
+> 基线格 bench 序架（server 形态 + chat 模板路径，见 §7-1 口径）。
+
 > 🟢 **2026-08-13：生产机落地——本机即生产机，M4 Max 64G Mac Studio**。
 > 实核（sysctl + system_profiler）：Mac16,9 / Apple M4 Max / 64GB——64G 配置
 > 即 546GB/s 满血带宽，正是 §7 理论表的原生口径，**阶段四「换算到实际机型带宽」
