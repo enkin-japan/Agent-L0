@@ -7,8 +7,10 @@
 - 引擎权威计时：prompt_tps / generation_tps / peak_memory 取自生成链末 chunk
   （mlx GenerationResult 透传），TTFT 客户端记录；
 - 每格 n≥3 取中位，首跑（含全量 prefill/JIT）单列不计中位；
-- KV 真实物化：首跑全量 prefill 落缓存，后续 run 同 cache_id 前缀复用（KV 在位，
-  decode 读全长）；
+- KV 真实物化：**每 run 独立新缓存、全量 prefill 后测 decode**（v2 改法，2026-08-13）。
+  v1 的同 cache 前缀复用被撤：26B(MoE)+suppress_ghost_thinking 在缓存复用后瞬间
+  EOS（gen_tokens=1）、31B 输出头部窜出孤立 <channel|>——引擎级复用 bug 另案排查，
+  测量先绕开；副产品是 prefill tps 也有 n≥3 中位；
 - 每格质量哨：数到十 / 知识问答 / tool_call 探针（带 tool_specs 约束路径）；
 - 上下文档：0/4k/8k/16k/32k/64k，确定性填充按 tokenizer 计数配平（±2% 验收）；
 - 基线格前提：config speculative.mode=off + kv_bits 缺省稠密——脚本启动即校验，
@@ -256,26 +258,31 @@ def stop_server(proc: subprocess.Popen):
 
 def run_sentinels(cli: Client, dialect, filler: str, cache_id, prefill_budget: float):
     out = {}
-    # ① 数到十
-    _, text, *_ = cli.generate(
-        build_user_prompt(dialect, filler + SENTINEL_COUNT), cache_id=cache_id,
-        sampling={"max_tokens": 80, "temperature": 0.0}, first_chunk_budget=prefill_budget)
-    out["count"] = {"ok": all(z in text for z in ("一", "五", "十")), "sample": text[:120]}
-    # ② 知识问答
-    _, text, *_ = cli.generate(
-        build_user_prompt(dialect, filler + SENTINEL_QA), cache_id=cache_id,
-        sampling={"max_tokens": 40, "temperature": 0.0}, first_chunk_budget=prefill_budget)
-    # 宽容判定：H₂O 可能以 LaTeX（$\text{H}_2\text{O}$）等形态出现，看骨架不看排版
-    out["qa"] = {"ok": bool(re.search(r"H.{0,8}?2.{0,8}?O", text.upper())),
-                 "sample": text[:80]}
+    def fresh_gen(prompt, max_tokens, features=None):
+        # 每哨独立新缓存（v2：复用 bug 绕行），用完即删
+        last, text, ttft, cid, wall = cli.generate(
+            prompt, cache_id=None, sampling={"max_tokens": max_tokens, "temperature": 0.0},
+            features=features, first_chunk_budget=prefill_budget)
+        if cid:
+            try:
+                cli.json_call("DELETE", f"/v1/cache/{cid}")
+            except Exception:
+                pass
+        return text
+
+    # ① 数到十（中文或阿拉伯数字序列均可——判"退化与否"不判排版偏好）
+    text = fresh_gen(build_user_prompt(dialect, filler + SENTINEL_COUNT), 80)
+    ok = all(z in text for z in ("一", "五", "十")) or \
+        bool(re.search(r"1\D{1,4}2\D.*?5\D.*?10", text))
+    out["count"] = {"ok": ok, "sample": text[:120]}
+    # ② 知识问答（宽容判定：H₂O/下标/LaTeX 形态均收，看骨架不看排版）
+    text = fresh_gen(build_user_prompt(dialect, filler + SENTINEL_QA), 40)
+    norm = text.replace("₂", "2").replace("$", "").upper()
+    out["qa"] = {"ok": bool(re.search(r"H.{0,8}?2.{0,8}?O", norm)), "sample": text[:80]}
     # ③ tool_call 探针（真模板带工具段 + tool_specs 约束路径）
     prompt = build_user_prompt(dialect, filler + SENTINEL_TOOL_PROMPT,
                                tools=[SENTINEL_TOOL_SPEC])
-    _, text, *_ = cli.generate(
-        prompt, cache_id=None,  # 工具段改变前缀，独立缓存
-        sampling={"max_tokens": 120, "temperature": 0.0},
-        features={"tool_specs": [SENTINEL_TOOL_SPEC]},
-        first_chunk_budget=prefill_budget)
+    text = fresh_gen(prompt, 120, features={"tool_specs": [SENTINEL_TOOL_SPEC]})
     out["tool"] = {"ok": ("get_current_time" in text and dialect.markers.stc in text),
                    "sample": text[:150]}
     return out
@@ -290,10 +297,17 @@ def main():
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--port", type=int, default=14161)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--skip", default="",
+                    help="逗号分隔的 <repo尾名>:<ctx> 已证不可行格（如 OOM 实证），跳过不测")
     args = ap.parse_args()
 
     models = [m for m in args.models.split(",") if m]
     ctx_levels = [int(x) for x in args.ctx.split(",")]
+    skips = set()
+    for it in args.skip.split(","):
+        if ":" in it:
+            name, c = it.rsplit(":", 1)
+            skips.add((name.strip(), int(c)))
     out_path = Path(args.out)
 
     cfg = load_config()
@@ -338,7 +352,8 @@ def main():
     cli = Client(args.port, read_env_key())
 
     for repo in models:
-        todo = [c for c in ctx_levels if (repo, c) not in done]
+        todo = [c for c in ctx_levels if (repo, c) not in done
+                and (repo.split("/")[-1], c) not in skips]
         if not todo:
             log(f"⏭️  {repo} 全格已测，跳过")
             continue
@@ -366,14 +381,22 @@ def main():
                     task0 = DECODE_TASKS[0]
                     filler = fit_filler(dialect, tok, ctx, task0) if ctx else ""
                     prefill_budget = 180 + ctx / 40  # 40tps 最坏预算
-                    cache_id = cli.json_call("POST", "/v1/cache", {})["cache_id"]
-                    for i in range(args.runs + 1):  # +1 = 首跑（prefill/JIT，不计中位）
+                    for i in range(args.runs + 1):  # +1 = 首跑（JIT 热身，不计中位）
                         task = DECODE_TASKS[i % len(DECODE_TASKS)]
                         prompt = build_user_prompt(dialect, filler + task)
-                        last, text, ttft, cache_id, wall = cli.generate(
-                            prompt, cache_id=cache_id,
+                        # v2：每 run 独立新缓存 + 全量 prefill（复用 bug 绕行，见文件头）
+                        last, text, ttft, run_cache, wall = cli.generate(
+                            prompt, cache_id=None,
                             sampling={"max_tokens": MAX_TOKENS, "temperature": 0.0},
-                            first_chunk_budget=prefill_budget if i == 0 else 240 + ctx / 200)
+                            first_chunk_budget=prefill_budget)
+                        if run_cache:
+                            try:
+                                cli.json_call("DELETE", f"/v1/cache/{run_cache}")
+                            except Exception:
+                                pass
+                        if (last or {}).get("generation_tokens", 0) <= 2:
+                            raise RuntimeError(
+                                f"run{i} 秒停（gen_tokens≤2）——复用 bug 形态在新缓存下复现？")
                         cell["runs"].append({
                             "idx": i, "ttft_s": round(ttft, 3) if ttft else None,
                             "wall_s": round(wall, 2),
@@ -387,18 +410,20 @@ def main():
                             f"gen {cell['runs'][-1]['gen_tps']} tps, "
                             f"prefill {cell['runs'][-1]['prompt_tps']} tps, "
                             f"ttft {cell['runs'][-1]['ttft_s']}s")
-                    # 口径校验：±2%（首跑的 prompt_tokens 为全量）
+                    # 口径校验：±2%（每 run 均为全量 prefill）
                     pt = cell["runs"][0]["prompt_tokens"] or 0
                     if ctx and abs(pt - ctx) > ctx * CTX_TOL:
                         cell["ctx_warning"] = f"prompt_tokens={pt} 偏离目标 >2%"
-                    steady = [r["gen_tps"] for r in cell["runs"][1:] if r["gen_tps"]]
-                    cell["decode_tps_median"] = round(statistics.median(steady), 2) if steady else None
-                    cell["prefill_tps"] = cell["runs"][0]["prompt_tps"]
-                    cell["ttft_full_s"] = cell["runs"][0]["ttft_s"]
+                    steady = cell["runs"][1:]
+                    med = lambda k: (round(statistics.median(  # noqa: E731
+                        [r[k] for r in steady if r.get(k)]), 2)
+                        if any(r.get(k) for r in steady) else None)
+                    cell["decode_tps_median"] = med("gen_tps")
+                    cell["prefill_tps"] = med("prompt_tps")
+                    cell["ttft_full_s"] = med("ttft_s")
                     cell["peak_mem_gb"] = max((r["peak_mem_gb"] or 0) for r in cell["runs"])
-                    cell["sentinels"] = run_sentinels(cli, dialect, filler, cache_id,
+                    cell["sentinels"] = run_sentinels(cli, dialect, filler, None,
                                                       prefill_budget)
-                    cli.json_call("DELETE", f"/v1/cache/{cache_id}")
                     cell["complete"] = True
                     ok = all(v["ok"] for v in cell["sentinels"].values())
                     log(f"✅ 格 {repo.split('/')[-1]} × {ctx}: decode 中位 "
