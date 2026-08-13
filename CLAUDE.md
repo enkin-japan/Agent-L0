@@ -1,24 +1,104 @@
 ## Model Routing Rules
-- Architecture decisions, task breakdown, cross-module refactoring, and final
-  review: handled directly by the main session. Never delegate these.
-- Running tests / lint / documentation / commit messages / implementing a
-  small function from a detailed plan: delegate to chore-worker.
-- Multi-file feature implementation and moderately complex bug fixes:
-  delegate to implementer.
-- Every delegation must include: the specific file paths involved, and
-  explicit acceptance criteria (which tests must pass).
-- After a subagent completes a task that modified code, the main session must
-  review the resulting diff before committing it or building further work on
-  top of it.
-- Escalation: a task counts as failed if its acceptance criteria are not met.
-  If chore-worker fails the same task twice, escalate it to implementer. If
-  implementer fails it, the main session takes over directly.
-- Changes touching the following paths must never be delegated; the main
-  session handles them directly:
-  - apple-app/bundle-macos.sh and apple-app/release-ios.sh (packaging /
-    signing / secret red lines: .p8 and .env* must never enter the bundle)
-  - backend/framework/mcp/tools/api_tool_factory.py — the secrets handling
-    parts (read_secret / write_secret / .secrets.env, 0600 perms)
-  - config.yaml (bundle_id is an Apple-registered APNs topic; must not change)
-- Do not delegate trivial changes (a few lines in a single file); the main
-  session does them directly, as delegation overhead is not worth it.
+
+### Session model
+- The main session runs on Fable 5 while this week's Fable quota remains, and on
+  Opus 5 once it is exhausted. Every rule below applies identically in both
+  cases; only the main session's model changes.
+- Fable quota is the scarce resource. Never spend it on work a pinned subagent
+  can do. It is reserved for the "never delegate" work below.
+- Every subagent pins its own `model` and `effort` so its behaviour does not
+  drift when the session model or session effort changes. Do not remove those
+  pins, and do not set `CLAUDE_CODE_SUBAGENT_MODEL` — it overrides subagent
+  frontmatter and would defeat the pinning.
+
+### Never delegate; the main session handles these directly
+- Architecture decisions, task breakdown, cross-module refactoring, final review.
+- Trivial changes (a few lines in a single file); delegation overhead is not
+  worth it.
+- Changes touching these paths:
+  - `apple-app/bundle-macos.sh` and `apple-app/release-ios.sh` (packaging /
+    signing / secret red lines: `.p8` and `.env*` must never enter the bundle)
+  - `backend/framework/mcp/tools/api_tool_factory.py` — the secrets handling
+    parts (`read_secret` / `write_secret` / `.secrets.env`, 0600 perms)
+  - `config.yaml` (`bundle_id` is an Apple-registered APNs topic; must not change)
+- Governance documents: `CHARTER.md`, `EXECUTION_LEDGER.md`, `PROTOCOL.md`.
+  These carry decision history and discipline, not boilerplate; "documentation"
+  in chore-worker's scope means code-adjacent docs, never these. (`CHARTER.md`
+  additionally requires explicit user consent to change at all.)
+- Anything requiring sudo or changing system state (`scripts/wired-limit.sh`,
+  LaunchDaemons, sysctl) — these end at the user's hands anyway.
+- Anything that starts, stops, or bills paid compute (`colab/daily.sh`,
+  `daily_serve_chain.sh`, colab CLI): spending units is a user-visible act.
+
+### Classifier fallback watch (quality rule, not a cost rule)
+- Cyber-adjacent work — the secrets handling in `api_tool_factory.py`, anything
+  touching `.p8`, `.env*`, or file permissions — can trip a safety classifier and
+  be answered by a weaker fallback model instead. Fable 5's cyber classifiers
+  fire substantially more often than Opus 5's.
+- Prefer starting that work in an Opus 5 session. If a fallback notice appears
+  mid-task, stop and redo the change on Opus 5 rather than accepting the result.
+
+### Single-GPU discipline (this machine is the production M4 Max 64G)
+- One GPU, no preemption safety valve (MLX over-commit = page-thrash cliff).
+  At most ONE real-model process at any moment: benches, inference servers
+  (:14161), `devctl` real-model tests are mutually exclusive — with each other
+  and with any delegated task that would start one.
+- Long measurement runs (`bench_baseline.py` and successors) are main-session
+  background tasks, never delegations: they are a single Bash command; a
+  subagent wrapped around one adds a relay without adding judgment.
+- Subagents must not start/stop services on :14159/:14160/:14161/:8080 or load
+  models unless the delegation explicitly grants it. Golden tests
+  (`backend/tests/`, FakeEngine, CPU-only) are always safe to run concurrently.
+
+### Delegation targets
+- `chore-worker`: running tests / lint / documentation / commit messages /
+  implementing a small function from a detailed plan.
+- `implementer`: multi-file feature implementation and moderately complex bug
+  fixes.
+- `reviewer`: first-pass review of a diff, before the main session signs off.
+- Built-in `Explore` agent: broad read-only codebase reconnaissance that would
+  otherwise flood the main context with file dumps. Pass a cheaper `model` in
+  the Agent call (it has no frontmatter pin and would inherit the session
+  model — i.e. burn Fable quota — if you don't).
+- Delegate only genuinely self-contained work. Do not delegate what you can
+  finish yourself in a handful of tool calls. If one subagent can complete the
+  task, use one rather than several.
+- Do not spawn a subagent to verify or double-check work another subagent just
+  did. The two gates below are the only verification steps.
+
+### Delegation contract
+- Every delegation must include: the specific file paths involved, and explicit
+  acceptance criteria (which tests must pass).
+- Include the environment facts the agent cannot discover and will get wrong:
+  the venv is `backend/.venv` (the repo-root `.venv` is a dead symlink), test
+  runs use `PYTHONUNBUFFERED=1`, and whether the GPU / inference ports are
+  currently occupied by a running bench. State explicitly whether real-model
+  execution is allowed (default: it is not).
+- Hand over the complete specification up front rather than feeding it in
+  stages.
+- A task whose acceptance criteria you cannot write is not ready to delegate.
+  Scope it first.
+
+### Review gates — both mandatory, never collapsed to save usage
+Scope: every non-trivial code diff, **including code the main session wrote
+itself** (a 400-line harness deserves the same first pass as a delegated
+change). Docs-only and ledger-only diffs are exempt.
+1. `reviewer` produces the first pass on the diff.
+2. The main session then reviews the diff itself before committing it or
+   building further work on top of it. The main session owns the sign-off; the
+   reviewer's report is input to that decision, not a replacement for it.
+- Beyond reporting test results, do not instruct subagents to re-verify their own
+  work. Redundant verification instructions cost tokens without adding quality.
+
+### Escalation
+- A task counts as failed if its acceptance criteria are not met.
+- On the first failure, read the delegation itself before doing anything else,
+  and classify it:
+  - spec was incomplete or ambiguous → rewrite the spec, re-delegate once to the
+    same agent
+  - task is genuinely above the agent's level → escalate immediately
+- Never re-run a delegation that already failed unchanged.
+- Ladder: `chore-worker` → `implementer` → main session takes over directly.
+- If a task turns out to need long-horizon autonomous work (30+ minutes,
+  million-token budgets), it is out of `implementer`'s scope by definition:
+  the main session either splits it or handles it.
