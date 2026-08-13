@@ -441,11 +441,13 @@
 > success、**gen 64.6 tps**（前缀缓存命中 15072/15161；验完收摊、config 已还原）；
 > ④基线格权重六锚点齐：e4b/26B/31B × 4bit/8bit 全下齐（mlx-community 件，
 > ~83G 新增，看门狗零报警）；⑤`scripts/wired-limit.sh` 落地（status/set/install
-> 含 LaunchDaemon 持久化），**待用户 sudo install（56G 目标）——阶段一 31B-8bit
-> 长上下文格开跑前必须完成**。遗留：31B bf16 死残件 34G（backend/models/
-> gemma-4-31B-it，仅第 2 分片，8/8 事故遗留）待用户拍板清理；HETERO_COMPUTE.md
-> 发现一处非会话内改动（疑编辑器误触断句删行）待用户过目。下一波=阶段一
-> 基线格 bench 序架（server 形态 + chat 模板路径，见 §7-1 口径）。
+> 含 LaunchDaemon 持久化）。**三挂账当日全清（用户逐项处置）**：①wired limit
+> 用户亲手 install ✅（57344MB 达标 + LaunchDaemon 已装）；②31B bf16 残件确诊
+> =22G 断点缓存+12G 孤儿分片，只清权重垃圾 34G→31M，**tokenizer-only 件保留**
+> （registry `google/gemma-4-31B-it` remote 档 edge 侧分词器在用，离线解析复验
+> 秒过）；③HETERO_COMPUTE.md 断句删行确诊误删（全树 diff 仅此一处单行删除、
+> 删在句中）git checkout 还原，树净。下一波=阶段一基线格 bench 序架
+> （server 形态 + chat 模板路径，见 §7-1 口径）。
 
 > 🟢 **2026-08-13：生产机落地——本机即生产机，M4 Max 64G Mac Studio**。
 > 实核（sysctl + system_profiler）：Mac16,9 / Apple M4 Max / 64GB——64G 配置
