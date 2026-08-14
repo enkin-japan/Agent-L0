@@ -209,6 +209,15 @@ def lookup_generate_step(
         guard.consume(first)
     ngram = _NgramIndex([spec_ngram_max, spec_ngram_min])
     tb = thinking_budget_criteria
+    # 强制收束**只可能**在开思考态发生：ThinkingBudgetCriteria.in_thinking 的初值
+    # 就是 enable_thinking，且只在 `enable_thinking and token==start` 一条路上转真
+    # → budget_exceeded 只在 in_thinking 下置位 → forced_token_id 关思考态永不被设。
+    # `enable_thinking` 在 criteria 构造后不再改写（上游只在 __init__ 赋值一次，
+    # 本栈不碰），故本旗与 tb 一样全程恒定。
+    # 用它而非 `tb is not None` 判预发闸：thinking_budget 缺省 2048 使 tb 几乎恒非空，
+    # 而生产 enable_thinking 缺省 False——拿 tb 当判据会在**所有**生产请求上白白
+    # 砍掉流水重叠，而那条不可回滚的路径根本不可达。
+    forced_collapse_possible = tb is not None and getattr(tb, "enable_thinking", False)
 
     b = first          # 已产出、尚未入缓存的最新 token（缓存恒缺最后一个产出）
     emitted = 1
@@ -276,8 +285,9 @@ def lookup_generate_step(
     def _discard_block(n: int, gdn=None) -> None:
         """整块作废：缓存回退 n 条（强制收束打断已预发的下一轮时用）。
 
-        〔§S.15 后按不变式已不可达〕预发只在 `tb is None` 时发生，而本函数的两个
-        调用点都在 `tb.forced_token_id` 分支内，故 `pending` 恒为 None、二者不相交。
+        〔§S.15 后按不变式已不可达〕预发只在 `not forced_collapse_possible` 时发生，
+        而本函数的两个调用点都在 `tb.forced_token_id` 分支内（该旗只在开思考态才
+        可能置位），故 `pending` 恒为 None、二者不相交。
         保留是因为它还带着 SSM/GDN 分支（别的模型形态会用），且一旦将来有人放宽
         预发条件，旋转态的整块作废会在 rotating_cache_trim 里**显式抛错**而非
         静默给出错误几何——不变式破了要响，不能哑。
@@ -385,14 +395,14 @@ def lookup_generate_step(
         b = new_tokens[-1]
 
         # ---- 预发下一轮（与下方 yield 段的 python 消费重叠）----
-        # 有 thinking 预算时不预发（§S.15）：强制收束会调 _discard_block 整块作废
-        # 已预发的块，而**整块作废在旋转态不可逆**——rollback 用 accepted=-1 即
-        # trim=block_size，切完只剩 max_size-1 条，凑满窗所需的最老 token 已被
-        # _update_concat 的前裁淘汰、不复存在。`tb` 在函数入口绑定一次、全程不重绑，
-        # 故本条使「pending 非空 ⟹ tb is None ⟹ 强制收束分支不可达」成为不变式。
-        # 代价：有 thinking 预算的请求失去这一层流水重叠（正确性 > 速度；若实测
-        # 该重叠值钱，正解是预发前快照将被淘汰的那几行 KV 以支持无损恢复，另案）。
-        if emitted + len(new_tokens) < max_tokens and tb is None:
+        # 开思考态不预发（§S.15）：强制收束会调 _discard_block 整块作废已预发的块，
+        # 而**整块作废在旋转态不可逆**——rollback 用 accepted=-1 即 trim=block_size，
+        # 切完只剩 max_size-1 条，凑满窗所需的最老 token 已被 _update_concat 的前裁
+        # 淘汰、不复存在。`forced_collapse_possible` 全程恒定（见其定义），故本条使
+        # 「pending 非空 ⟹ 强制收束分支不可达 ⟹ _discard_block 不可达」成为不变式。
+        # 代价只落在开思考态的请求上（生产缺省关思考，不受影响）；若将来开思考态
+        # 也要这层重叠，正解是预发前快照将被淘汰的那几行 KV 以支持无损恢复，另案。
+        if emitted + len(new_tokens) < max_tokens and not forced_collapse_possible:
             nd = _next_draft()
             nb = [b] + nd
             nl, npre, ngdn = _launch(nb, nd)
