@@ -223,6 +223,23 @@ async def lifespan(app: FastAPI):
     # 同惯例：env 非空即赢）。Colab/生产 GPU 档据此起 cuda，不必改 config。
     backend_name = (os.environ.get("INFER_BACKEND", "").strip()
                     or str(INFERENCE_CFG.get("backend") or ""))
+
+    # INFER_SPEC_*：投机采样的环境覆盖（同 INFER_BACKEND 惯例：env 非空即赢）。
+    # 阶段二 MTP 格要在一次跑里逐格切 mode / 草稿件 / 块大小；改 config.yaml 既
+    # 污染生产文件又没法逐格切换。构造成 INFERENCE_CFG 的**副本**下发，不改全局。
+    _inf_cfg = INFERENCE_CFG
+    _spec_env = {}
+    if os.environ.get("INFER_SPEC_MODE", "").strip():
+        _spec_env["mode"] = os.environ["INFER_SPEC_MODE"].strip()
+    if os.environ.get("INFER_SPEC_DRAFT_MODEL", "").strip():
+        _spec_env["draft_model"] = os.environ["INFER_SPEC_DRAFT_MODEL"].strip()
+    if os.environ.get("INFER_SPEC_BLOCK_SIZE", "").strip():
+        _spec_env["draft_block_size"] = int(os.environ["INFER_SPEC_BLOCK_SIZE"])
+    if _spec_env:
+        _inf_cfg = {**INFERENCE_CFG,
+                    "speculative": {**(INFERENCE_CFG.get("speculative") or {}),
+                                    **_spec_env}}
+        print(f"[Server] 投机配置被环境覆盖：{_spec_env}")
     print(f"🚀 [Server] loading model: {model} (backend={backend_name or 'default'})")
 
     # T7 并发参数化：锁与执行器按后端能力开闸——MLX 共享单例不可并发（=1，旧语义
@@ -232,7 +249,7 @@ async def lifespan(app: FastAPI):
         n_concurrency = max(1, int((INFERENCE_CFG.get("cuda") or {}).get("max_concurrency") or 8))
     S.executor = ThreadPoolExecutor(max_workers=n_concurrency, thread_name_prefix="inference")
     S.backend = await get_backend_class(backend_name).load(
-        model_path, executor=S.executor, **INFERENCE_CFG)
+        model_path, executor=S.executor, **_inf_cfg)
     # 方言跟着所选模型的注册表条目走（与 engine.py 同一条路）；server 只消费 markers
     _opts = model_options(model)
     S.dialect = get_dialect_class(str(_opts.get("dialect") or "")).create(

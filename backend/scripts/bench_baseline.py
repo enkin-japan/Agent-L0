@@ -39,6 +39,7 @@ import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Optional
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = BACKEND_DIR.parent
@@ -318,9 +319,11 @@ def fit_filler(dialect, tok, target: int, task: str) -> str:
 
 # ---------- server 生命周期 ----------
 
-def start_server(repo: str, port: int, log_path: Path, api_key: str = ""):
+def start_server(repo: str, port: int, log_path: Path, api_key: str = "",
+                 spec: Optional[dict] = None):
     """起 server 子进程，返回 (proc, 日志文件句柄)。
-    INFER_API_KEY 显式下发 read_env_key() 的同一把钥匙——两侧各读各的必然有对不上的一天。"""
+    INFER_API_KEY 显式下发 read_env_key() 的同一把钥匙——两侧各读各的必然有对不上的一天。
+    spec：MTP 格的投机配置，经 INFER_SPEC_* 下发（server 侧 env 非空即赢）。"""
     import os
     env = dict(os.environ)
     env.update({"INFER_MODEL_REPO": repo, "INFER_REMOTE_HOST": "127.0.0.1",
@@ -328,6 +331,17 @@ def start_server(repo: str, port: int, log_path: Path, api_key: str = ""):
                 # .env.local 无钥时回落继承的环境钥——无条件覆写空串会把子进程
                 # 鉴权静默关掉（回环绑定，bind 护栏拦不住这形态）
                 "INFER_API_KEY": api_key or env.get("INFER_API_KEY", "")})
+    # 显式键名映射 + **无条件清洗**：只加不清会让操作者 shell 里遗留的
+    # INFER_SPEC_* 悄悄把一次基线跑变成投机跑，而产物头部仍自称 off——
+    # 那是所有格的分母，是最坏的一种污染
+    _SPEC_ENV = {"mode": "INFER_SPEC_MODE",
+                 "draft_model": "INFER_SPEC_DRAFT_MODEL",
+                 "block_size": "INFER_SPEC_BLOCK_SIZE"}
+    for key, name in _SPEC_ENV.items():
+        if spec and key in spec:
+            env[name] = str(spec[key])
+        else:
+            env.pop(name, None)
     lf = open(log_path, "ab")
     try:
         proc = subprocess.Popen(
@@ -422,6 +436,14 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--skip", default="",
                     help="逗号分隔的 <repo尾名>:<ctx> 已证不可行格（如 OOM 实证），跳过不测")
+    # ---- MTP 格（§7 阶段二）：投机配置逐格下发给 server，不改 config.yaml ----
+    ap.add_argument("--spec-mode", default="",
+                    help="投机模式：留空=用 config（生产缺省 off）；drafter=草稿件投机")
+    ap.add_argument("--draft-model", default="",
+                    help="草稿件目录或 HF id（--spec-mode=drafter 时必给）")
+    ap.add_argument("--draft-block-size", type=int, default=None,
+                    help="草稿块大小（单值正整数）；留空=用草稿件自带值。k 扫描请分次跑"
+                         "本脚本并落到不同 --out，避免把两种 k 的 run 混进同一格中位")
     ap.add_argument("--sentinels-only", action="store_true",
                     help="只跑质量哨，跳过解码 run 与中位（§S.16 修复后的质量重跑："
                          "速度数据未受污染，无需重烧解码段）")
@@ -429,6 +451,28 @@ def main():
 
     models = [m for m in args.models.split(",") if m]
     ctx_levels = [int(x) for x in args.ctx.split(",")]
+
+    # 投机配置：只在显式给了 --spec-mode 时下发；否则一个 INFER_SPEC_* 都不设，
+    # server 走 config.yaml 原路（= 生产缺省 off），基线格行为逐字不变。
+    spec_env = {}
+    _mode = args.spec_mode.strip()
+    if _mode:
+        # 白名单：模式名写错（如 "mtp"）会一路静默跑成非投机，而产物头部与格记录
+        # 都自称投机格——自证口径的字段证了个假，比没有还坏
+        if _mode not in ("off", "prompt_lookup", "drafter"):
+            ap.error(f"--spec-mode 只认 off|prompt_lookup|drafter，收到 {_mode!r}")
+        spec_env["mode"] = _mode
+        if _mode == "drafter":
+            if not args.draft_model:
+                ap.error("--spec-mode=drafter 必须同时给 --draft-model")
+            spec_env["draft_model"] = args.draft_model
+        if args.draft_block_size is not None:
+            if args.draft_block_size <= 0:
+                ap.error("--draft-block-size 必须为正整数")
+            spec_env["block_size"] = args.draft_block_size
+    elif args.draft_model or args.draft_block_size is not None:
+        ap.error("--draft-model / --draft-block-size 需与 --spec-mode 同时给"
+                 "——单给它们不会生效，静默跑成非投机格是最坏结果")
     try:
         skips = parse_skips(args.skip)
         check_runs(args.runs)
@@ -438,9 +482,13 @@ def main():
 
     cfg = load_config()
     inf = cfg.get("inference") or {}
-    spec_mode = str(((inf.get("speculative") or {}).get("mode")) or "off")
-    if spec_mode != "off":
-        sys.exit("❌ 基线格要求 config speculative.mode=off（当前 %r）——先关再跑" % spec_mode)
+    # 护栏看 **config** 值、环境头记 **生效** 值——两者不是一回事，混成一个变量会
+    # 让 --spec-mode 一给就被基线护栏打死（且错误信息还指着 config 让人去改生产文件）
+    cfg_spec_mode = str(((inf.get("speculative") or {}).get("mode")) or "off")
+    if cfg_spec_mode != "off":
+        sys.exit("❌ 本脚本要求 config speculative.mode=off（当前 %r）——投机格请用 "
+                 "--spec-mode 下发，不要改生产 config" % cfg_spec_mode)
+    spec_mode = str(spec_env.get("mode") or cfg_spec_mode)
     if inf.get("kv_bits") is not None:
         sys.exit("❌ 基线格要求 KV 稠密（config 不得设 kv_bits）")
 
@@ -451,8 +499,12 @@ def main():
                 r = json.loads(ln)
                 # 口径必须同款才算「已测」：哨兵格里没有 decode/prefill/峰值，
                 # 拿它顶一个全格会让续跑静默跳过、产出一份缺列的 jsonl
+                # 投机配置同样是口径的一部分：不比对它，一份基线 jsonl 会把
+                # 非投机格顶给 MTP 跑（反之亦然），也会让两个 k 的格互相顶掉，
+                # 最后产出一份「看着完整、实则混口径」的文件
                 if (r.get("type") == "cell" and r.get("complete")
-                        and bool(r.get("sentinels_only")) == bool(args.sentinels_only)):
+                        and bool(r.get("sentinels_only")) == bool(args.sentinels_only)
+                        and (r.get("spec") or {}) == spec_env):
                     done.add((r["model"], r["ctx"]))
             except Exception:
                 pass
@@ -472,7 +524,7 @@ def main():
         "wired_limit_mb": sysctl("iogpu.wired_limit_mb"),
         "macos": platform.mac_ver()[0],
         "mlx": pkg_version("mlx"), "mlx_vlm": pkg_version("mlx-vlm"),
-        "speculative": spec_mode, "kv": "dense",
+        "speculative": spec_mode, "spec_config": dict(spec_env), "kv": "dense",
         "max_tokens": MAX_TOKENS, "runs": args.runs,
         # 口径自证：哨兵口径的文件里没有解码段，header 不写清楚会让读者
         # 以为 runs/max_tokens 真跑过
@@ -506,6 +558,9 @@ def main():
             cell = {"type": "cell", "model": repo, "ctx": ctx,
                     "revision": marker.get("revision"),
                     "weights_bytes": weights_bytes, "runs": [], "complete": False,
+                    # 投机配置逐格落账：产物必须自描述，否则两次不同 k 的 jsonl
+                    # 放在一起就再也分不出谁是谁（非投机跑此键为空 dict）
+                    "spec": dict(spec_env),
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
             # 峰值内存口径=格级：peak_memory 是进程生命期高水位，一个 server 连跑多格
             # 会把前一格（尤其 64k）的高水位带进后一格 → server 每格一起一收
@@ -521,7 +576,7 @@ def main():
                 launching = True  # 配平已过——此后失败才可能是「server 起不来」
 
                 log(f"🚀 起 server: {repo} ctx={ctx}（权重 {weights_bytes / 2**30:.1f}G）")
-                proc, lf = start_server(repo, args.port, slog, api_key)
+                proc, lf = start_server(repo, args.port, slog, api_key, spec=spec_env)
                 dt = wait_health(cli, proc, budget=1200)
                 started = True
                 log(f"   server 就绪（{dt:.0f}s）")
@@ -543,6 +598,14 @@ def main():
                     if ((last or {}).get("generation_tokens") or 0) <= 2:
                         raise RuntimeError(
                             f"run{i} 秒停（gen_tokens≤2）——复用 bug 形态在新缓存下复现？")
+                    # 要投机却一个草稿都没出 = 这一格实际跑成了非投机，而格记录
+                    # 里的 spec 字段仍自称投机。响亮拒收：口径自证的字段证了假，
+                    # 比没有更坏（同 gen_tokens≤2 / ±2% 两处的处置风格）
+                    if spec_env.get("mode") not in (None, "", "off") and \
+                            ((last or {}).get("extra") or {}).get("spec_drafted") is None:
+                        raise RuntimeError(
+                            f"run{i} 要求 spec={spec_env.get('mode')} 却零草稿回吐"
+                            "——投机未真正生效，本格数据不可用")
                     gen_tokens = last.get("generation_tokens") if last else None
                     prompt_tokens = last.get("prompt_tokens") if last else None
                     cell["runs"].append({
@@ -556,6 +619,11 @@ def main():
                         # 提前 EOS 不算错，但要能审：解码量不足 MAX_TOKENS 的 run
                         # 其 tps 采样窗更短，分析时需知情
                         "truncated": (gen_tokens or 0) < MAX_TOKENS,
+                        # MTP 格：接受率随 chunk.extra 回吐。注意 server 发的是
+                        # **嵌套** {"extra": {...}}，不是平铺——取错层级会得到恒 None，
+                        # 而恒 None 与"没开投机"长得一模一样，是会静默骗人的那类错。
+                        "spec_drafted": ((last or {}).get("extra") or {}).get("spec_drafted"),
+                        "spec_accepted": ((last or {}).get("extra") or {}).get("spec_accepted"),
                     })
                     log(f"   [{short} ctx={ctx}] run{i}: "
                         f"gen {cell['runs'][-1]['gen_tps']} tps, "
