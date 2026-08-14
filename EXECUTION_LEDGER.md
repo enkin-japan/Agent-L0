@@ -1191,7 +1191,20 @@ backend、app 原话上报，实机当场定位。**同一清单第二次漏拷 
    〔2026-08-13 用户指示：手术同时**顺手评估 Gemma-4 模型版本升级**——顺手
    （同一波内代价小、revision 矩阵一次重核覆盖）就一起做；不顺手则不强求，
    留后面单独升，不得为此扩大手术面。〕
+   〔2026-08-14 升级侦察（PyPI/GitHub releases 实读）：目标 0.6.13（8/12 发布，
+   项目极活跃）。**破坏面集中在 v0.6.4**：移除 mlx-lm 依赖+文本模型全 vendoring
+   （backends/mlx/patch/ 的 import 路径大概率全移位）、移除 video generate 命令。
+   **上游白赚清单**：MTP 草稿(0.6.x)+MTP 前缀缓存(0.6.4)+接受统计入 response
+   timings(0.6.10→前置④基本免做)+APC×KV 量化(0.6.5)+server --max-num-seqs
+   连续批处理(0.6.12→前置①的引擎侧上游已给，剩编排层接线)+tool_choice(0.6.5)。
+   **模型版本**：无 Gemma 4.1；但 Google 已出 **Gemma 4 12B**（unified 无编码器
+   多模态、带音频，e4b 与 26B 之间的稠密档，需 0.6.6+ 的 unified 修复）——
+   是否入列=阵容决策，待用户拍板，不并入手术面。〕
 3. 草稿件 4bit 本地转换 + `check_model_contract.py` 静态验证。
+   〔2026-08-14 供给勘误：26B 草稿**有** MLX bf16 现成件
+   `mlx-community/gemma-4-26B-A4B-it-assistant-bf16`@cda74908（0.4B/839MB，
+   e4b 同系 @844e008e）——「无任何 MLX 转换」旧记不实；本地转换缩水为
+   839MB 件的本地量化（分钟级）。第三方 4bit/8bit 转换存在但出处不明不采。〕
 4. 接受数/步观测口径打通。
 5. TurboQuant `kv_bits` 旋钮与 config 键位打通。
 6. wired limit 管理：`iogpu.wired_limit_mb` 上调的持久化方案与开机自检。
@@ -1256,7 +1269,9 @@ backend、app 原话上报，实机当场定位。**同一清单第二次漏拷 
   `google/gemma-4-31B-it-qat-q4_0-unquantized-assistant`@96d4c8ca；现成 MLX 件
   `mlx-community/gemma-4-31B-it-qat-assistant-4bit`@5234fd58（**31B 的 4bit QAT
   草稿免本地转换**）。26B 草稿无任何 MLX 转换 → §7-0 ③ 的本地转换以 26B 为主，
-  转换底优先用 QAT-unquantized（4bit 友好权重）。阶段二矩阵草稿维度相应扩为
+  转换底优先用 QAT-unquantized（4bit 友好权重）。〔2026-08-14 勘误：26B 草稿
+  MLX bf16 现成件存在（@cda74908，0.4B/839MB），详见 §7-0 ③ 注；「以 26B 为主
+  的本地转换」降级为分钟级本地量化。〕阶段二矩阵草稿维度相应扩为
   {bf16, PTQ-4bit, QAT-4bit}；「QAT 目标 × QAT 草稿」接受率组合列为重点格
   （接受率=分布匹配性质，QAT 双端同源假设待验）。
 - 矩阵（在阶段一优胜档上做，不全叉乘）：{26B, 31B} × {4bit, 8bit} × k=4 ×
