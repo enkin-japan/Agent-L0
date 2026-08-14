@@ -15,7 +15,7 @@
   → acceptance_walk（投影+处理器+采样）→ accept_verified（**接受后额外的草稿件调用**）
   → draft_hidden
 
-用法：python3 scripts/profile_mtp_round.py [目标件] [草稿件]
+用法：python3 scripts/profile_mtp_round.py [目标件] [草稿件] [block_total]
 单 GPU 纪律：跑之前确认没有别的真模型进程/推理服务在跑。
 """
 import asyncio
@@ -27,6 +27,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 TARGET = sys.argv[1] if len(sys.argv) > 1 else "models/gemma-4-31b-it-4bit"
 DRAFT = sys.argv[2] if len(sys.argv) > 2 else "models/gemma-4-31b-it-assistant-bf16"
+# 第三参 = block_total（= γ+1）。不给则不下发，落到草稿件 config 缺省 4（即 γ=3）。
+# 实测最优是 5（MLX `qmv_wide` 的 5 向量瓦片边界，见 MTP_PROJECT.md §1.4），
+# 故要 profile 最优档必须显式传 5。
+BLOCK = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+if BLOCK == 1 or BLOCK < 0:
+    raise SystemExit("block_total 必须 ≥2（或省略）：=1 时 MTP 轮循环在首个 token 后"
+                     "即退出，会得到一份只有一轮的 profile 且不报错。")
 MAX_TOKENS = 400
 
 STATS: dict = {}
@@ -99,6 +106,8 @@ async def main():
     from framework.backends.mlx.backend import MLXBackend
 
     spec = {"mode": "drafter", "draft_model": DRAFT}
+    if BLOCK:
+        spec["draft_block_size"] = BLOCK
     sampling = {"max_tokens": MAX_TOKENS, "temperature": 0.0,
                 "repetition_penalty": 1.1, "repetition_context_size": 50}
     prompt = _build_prompt(TARGET)
@@ -111,6 +120,11 @@ async def main():
         return last, time.perf_counter() - t0
 
     be = await MLXBackend.load(TARGET, speculative=spec)
+    # 把块大小与是否走了旁路打进表头：传 BLOCK 会同时开 prefer_requested_block_size，
+    # 与缺省路（保留上游自适应天花板）**不是同一个配置**，读数时必须能分辨。
+    print(f"配置：block_total={BLOCK or '缺省(4)'}  "
+          f"旁路={getattr(be.draft_model, 'prefer_requested_block_size', False)}  "
+          f"目标={TARGET}  草稿={DRAFT}")
 
     print("=== 裸跑（无插桩，作为重叠量基准）===")
     last, bare = run(be)

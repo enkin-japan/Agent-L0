@@ -301,8 +301,31 @@ inference:
     draft_model: ""             # 草稿件 HF id 或本地路径，如
                                 # mlx-community/gemma-4-31B-it-qat-assistant-4bit
     draft_kind: ""              # 留空 = 由草稿件的 model_type 自动判定（推荐）
-    draft_block_size: null      # 留空 = 用草稿件自带的块大小
+    draft_block_size: 4         # 〔2026-08-15 实测定档〕**按目标件架构 + 上下文长度分档，
+                                #   不是全栈一个值。** 取 4 是**长对话**（production 形态）下的选择：
+                                #   · 稠密 8bit：ctx≈0 时最优 **5**（2.48×），ctx≈1500 时最优 **4**（2.15×）
+                                #     —— 注意力成本随 M 走而矩阵乘不随，上下文一长，瓦片的免费区就被吃掉。
+                                #     取 4 是折中：短上下文只比最优低 6%，长上下文反而是最优。
+                                #   · 稠密 4bit（31b-4bit）→ **3**；e4b-4bit → **4**
+                                #   · MoE（26b-a4b，任意量化）→ **3**
+                                # 机理：验证步的位数 M = block_size，而 MLX 的 qmv_wide 内核按
+                                # **5 个输入向量一瓦片**切分（mlx/backend/metal/quantized.cpp:322
+                                # `n_tiles = ceil(M/5)`，注释"Each tile re-reads the weights"）。
+                                # 8bit 稠密档 M≤5 只读一遍权重（实测 M=1..5 耗时持平 +4%），
+                                # M=6 起读两遍 → block6 掉 13~14%。4bit 无此平坦区（M=1→5 涨 78%），
+                                # 故最优点前移一档；MoE 走 GatherQMM + 专家并集税，无免费区，再前移。
+                                # 实测（3 次中位）：
+                                #   31b-8bit  block 4=2.34× / **5=2.48×** / 6=2.09×
+                                #   e4b-8bit        2.00× / **2.09×** / 1.81×
+                                #   e4b-4bit  block 3=1.50× / **4=1.57×** / 5=1.49×
+                                #   26b-8bit  block **3=1.28×** / 4=1.27× / 5=1.22× / 6=1.06×
+                                # 留空会落到草稿件 config 的缺省 4；mlx-community 模型卡推荐的 6
+                                # 在稠密档落在断崖的错误一侧。**把 5 套到 26b MoE 上会白丢 5%。**
+                                # 本键仅在 mode=drafter 时生效，mode=off 时完全无作用。
+                                # 详见 MTP_PROJECT.md §1.4/§1.6。
     num_draft_tokens: 8         # 单轮草稿长度 k 上限（无命中时自然退化为普通 decode）
+                                # ⚠️ 该键在 mlx_vlm 中**无任何读取点**（grep 零命中），
+                                # 实际生效的只有 draft_block_size。保留仅为兼容 prompt_lookup。
     ngram_max: 3                # n-gram 匹配窗口上限（3→2 逐级降配）
     ngram_min: 2                # 低于该长度不出草稿（1-gram 误命中率过高）
 
