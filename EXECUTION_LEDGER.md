@@ -1193,12 +1193,13 @@ chat_template 是 `'<|channel>thought\n<channel|>' -}}`（`-}}` 还显式吃空�
   生成头/重放同字节）。**测试当场抓到我修轮头时自己引入的 bug**：把 `role`
   覆写成 `"model"` 后，下游 `elif role == "assistant"` 的重放抑制分支静默失效
   → 历史重放不再吐空频道、KV 前缀断裂。这三条测试写完不到十分钟就还清了成本。
-- **待用户拍板**：CUDA 侧三件（google 31B/26B bf16、RedHatAI 26B NVFP4）同为
-  gemma4 方言、官方模板同样带抑制，但注册表条目从未设 suppress_ghost_thinking
-  ——A100 侧一直在**无抑制**口径下跑，已回填画像（tool 0.96/0.92 等）皆属该口径。
-  补 flag = 画像作废 + 复测烧付费算力，故不擅自改（付费算力起停归用户）。
-  选项：① 保持现状（画像有效，但与 Mac 侧口径不一致）；② 补 flag 并在下次
-  A100 场重跑画像。
+- ✅ **CUDA 侧口径对齐（2026-08-14 用户拍板：补 flag、重跑、排在 Mac 之后）**：
+  google 31B/26B bf16 + RedHatAI 26B NVFP4 三件同为 gemma4 方言、官方模板本就
+  带抑制，却从未设 suppress_ghost_thinking——A100 侧一直跑在**无抑制**口径上。
+  **flag 已补齐（config 三条）**；已回填画像（31B tool 0.96/long 0.833/tps 43、
+  26B tool 0.92/long 0.833/tps 157 等）**均属补 flag 前口径**，标注保留但不撤下
+  （撤下=CUDA 主档失去优先选中资格，弊大于利）。**重跑排期见 §7-7**（优先级
+  在 Mac 侧全部工作之后，且不为它单独起 A100 场）。
 - 待办（同类风险仍在树上，未在本波修）：assistant 轮「正文 + tool_call」重放时
   我方多插 `\n`、tools 场景 system 块尾部 `<turn|>` 重复、`enable_thinking=True`
   头部与官方 `<|think|>` 形态不一致、`sot_token` 兜底值写成 `<|turn|>`（真值
@@ -1457,6 +1458,27 @@ chat_template 是 `'<|channel>thought\n<channel|>' -}}`（`-}}` 还显式吃空�
 > **不要**为"并发感"绕过准入闸直塞引擎；**不要**多实例并跑；批大小上限以实测
 > 算力墙标定（并发×MTP 的 B_eff 拐点，§7 阶段一），不拍脑袋。
 
+### 7) CUDA 侧口径对齐后的画像重跑（2026-08-14 用户拍板，**排在 Mac 之后**）
+
+**起因**：§S.16 同波查出 CUDA 侧三件从未设 `suppress_ghost_thinking`（官方模板
+本就带抑制），A100 侧一直跑在无抑制口径。flag 已补齐（config 三条），画像因此
+与配置不同源。
+
+**优先级（用户明示）**：Mac 侧全部工作在前——含 §7-2 质量哨全量重跑、阶段二
+MTP、阶段三 KV 量化、阶段四定档；本项在其后，**不为它单独起 A100 场**，
+搭下一次因别的事开的 colab/A100 场顺手做。
+
+**范围**（三件均需，付费算力，起停须用户经手）：
+- `google/gemma-4-31B-it`（A100 fp8 档）、`google/gemma-4-26B-A4B-it`（同）、
+  `RedHatAI/gemma-4-26B-A4B-it-NVFP4`（L4 日用档）；
+- 跑 model_eval 全套（tool_call / longchain / vision / vision_hard / tps），
+  与补 flag 前画像**并列对表**——抑制预填省掉的幽灵思考 token 理论上应体现为
+  tps 上升与 longchain 稳定性变化，是一次天然的 A/B；
+- 回填 `config.yaml` profile 与 `PROFILES.md`，撤下"补 flag 前口径"标注。
+
+**搭车顺手项**（同场做，勿单独起场）：RedHatAI NVFP4 上游 2026-08-13 新
+revision（5557756b）核验与升钉；`colab.env` 正主（Drive）INFER 钥仍是旧值，
+开场前必须先同步，否则 401 复发（见记忆项）。
 
 ---
 
