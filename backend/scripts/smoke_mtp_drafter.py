@@ -72,8 +72,15 @@ async def run():
     # 题目必须能稳定撑满 max_tokens：短回答（20-30 tok 就 EOS）下 tps 几乎全是
     # 装载/预热噪声，加速比不可读。26B 用一句话题只生成 23 个 token，
     # 量出 0.52× 的假净亏，就是栽在这里。
-    sampling = {"max_tokens": 400, "temperature": 0.0,
-                "repetition_penalty": 1.1, "repetition_context_size": 50}
+    # MTP_NOPROC=1：关掉全部 logits 处理器。此时我方走查不建上下文、原样委派上游
+    # 的全批量路径（无逐位同步）——用来量"处理器这条路的代价上限"，不是生产口径。
+    import os
+    sampling = {"max_tokens": 400, "temperature": 0.0}
+    if os.environ.get("MTP_NOPROC") != "1":
+        sampling.update({"repetition_penalty": 1.1, "repetition_context_size": 50})
+    else:
+        sampling.update({"repetition_penalty": None, "min_p": 0.0})
+        print("⚠️  MTP_NOPROC=1：处理器全关（非生产口径）")
 
     def gen(backend):
         """返回 (全量文本, 末个 chunk, 墙钟)。
