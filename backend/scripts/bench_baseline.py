@@ -73,12 +73,24 @@ DECODE_TASKS = [
 ]
 SENTINEL_COUNT = "请用中文数字从一数到十，逗号分隔，只输出这一行。"
 SENTINEL_QA = "水的化学式是什么？只回答化学式本身。"
-SENTINEL_TOOL_PROMPT = ("你没有内置时钟，无法自行知道现在的时间。"
-                        "请立即调用工具 get_current_time 查询当前时间，不要凭空回答。")
+# 工具哨用**天气**而非原来的 get_current_time（2026-08-14 换，附完整证据）。
+# 原探针与 prompt 尾部的环境锚点行 `Current date: …` 语义打架：模型被告知"你没有
+# 时钟，去调工具查时间"，紧接着又被塞了当天日期，于是在思考频道里空转不调用。
+# 隔离实验（12b-4bit @4k，单变量，各跑一次）：
+#   时间工具 × 尾部日期锚 ❌ | 时间工具 × 尾部无关句 ✅ | 时间工具 × 尾部地点锚 ✅
+#   天气工具 × 尾部日期锚 ✅ | 天气工具 × 尾部天气锚 ✅
+# 即：既不是"尾部有 system 轮"的问题（换内容就通），也不是"锚点满足了请求"的
+# 泛化效应（天气锚 × 天气工具照样通），是日期/时间这一对特有的冲突。
+# 留着它，工具列测的就不是工具调用能力，而是"模型顶不顶得住我们自己塞的矛盾"。
+# 顺带收益：带一个字符串实参，正好压到 §7-8 紧凑 DSL 的 <|"|> 原文块编码路径。
+SENTINEL_TOOL_PROMPT = ("你没有联网能力，无法自行知道天气。"
+                        "请立即调用工具 get_weather 查询东京的天气，不要凭空回答。")
 SENTINEL_TOOL_SPEC = {
-    "name": "get_current_time",
-    "description": "读取当前的日期与时间",
-    "parameters": {"type": "object", "properties": {}, "required": []},
+    "name": "get_weather",
+    "description": "查询指定城市的当前天气",
+    "parameters": {"type": "object",
+                   "properties": {"city": {"type": "string", "description": "城市名"}},
+                   "required": ["city"]},
 }
 
 # 确定性填充句池（含序号防退化压缩；内容百科体，与解码任务无 n-gram 依赖）
@@ -388,7 +400,11 @@ def run_sentinels(cli: Client, dialect, filler: str, cache_id, prefill_budget: f
     prompt = build_user_prompt(dialect, filler + SENTINEL_TOOL_PROMPT,
                                tools=[SENTINEL_TOOL_SPEC])
     text, last = fresh_gen(prompt, 120, features={"tool_specs": [SENTINEL_TOOL_SPEC]})
-    out["tool"] = {"ok": ("get_current_time" in text and dialect.markers.stc in text),
+    # 判据加严：除了发出调用，实参也必须到位——§7-8 迁移后实参走 <|"|> 原文块，
+    # 只查工具名会漏掉"调用发了但参数编码坏了"这一整类。
+    out["tool"] = {"ok": (SENTINEL_TOOL_SPEC["name"] in text
+                          and dialect.markers.stc in text
+                          and "东京" in text),
                    "sample": text[:150],
                    "gen_tokens": (last or {}).get("generation_tokens"),
                    "prompt_tokens": (last or {}).get("prompt_tokens")}
