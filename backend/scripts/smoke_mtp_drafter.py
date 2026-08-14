@@ -9,7 +9,9 @@
   E) 拒启路径：mode=drafter 而 draft_model 为空 → 拒启，不静默降级。
 
 单 GPU 纪律：本脚本自己加载模型，跑之前确认没有别的真模型进程/推理服务在跑。
-用法：python3 scripts/smoke_mtp_drafter.py
+用法：
+  python3 scripts/smoke_mtp_drafter.py                       # 缺省 e4b 对
+  python3 scripts/smoke_mtp_drafter.py <目标件目录> <草稿件目录>
 """
 import asyncio
 import sys
@@ -20,6 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 TARGET = "models/gemma-4-e4b-it-4bit"
 DRAFT = "models/gemma-4-e4b-it-assistant-bf16"
+if len(sys.argv) >= 3:
+    TARGET, DRAFT = sys.argv[1], sys.argv[2]
 
 PASS = FAIL = 0
 
@@ -32,6 +36,7 @@ def check(name, cond, extra=""):
 
 async def run():
     from framework.backends.mlx.backend import MLXBackend
+    print(f"目标件: {TARGET}\n草稿件: {DRAFT}\n")
 
     spec_off = {"mode": "off"}
     spec_on = {"mode": "drafter", "draft_model": DRAFT, "draft_kind": "",
@@ -53,9 +58,16 @@ async def run():
           f"{time.perf_counter() - t0:.1f}s")
     check("kind 自动判定为 mtp", be.draft_kind == "mtp", f"kind={be.draft_kind}")
 
-    prompt = ("<|turn>user\n用一句话说明什么是光合作用。<turn|>\n"
-              "<|turn>model\n<|channel>thought\n<channel|>")
-    sampling = {"max_tokens": 120, "temperature": 0.0,
+    # prompt **必须由本栈的方言组装器出**，不许手搓（§S.16：模板是字节协议）。
+    # 手搓版在 e4b/26B 上看着正常，到 31B 直接吐 LaTeX 垃圾——而退化文本高度
+    # 可预测，草稿件几乎全中，量出 94% 接受率与 2.06× 的**假红利**。
+    # 一个坏 prompt 不会报错，只会把加速比刷好看。
+    prompt = _build_prompt(TARGET)
+
+    # 题目必须能稳定撑满 max_tokens：短回答（20-30 tok 就 EOS）下 tps 几乎全是
+    # 装载/预热噪声，加速比不可读。26B 用一句话题只生成 23 个 token，
+    # 量出 0.52× 的假净亏，就是栽在这里。
+    sampling = {"max_tokens": 400, "temperature": 0.0,
                 "repetition_penalty": 1.1, "repetition_context_size": 50}
 
     def gen(backend):
@@ -122,6 +134,22 @@ async def run():
 
     print(f"\n===== 汇总 =====\n{PASS}/{PASS + FAIL} 通过")
     return 1 if FAIL else 0
+
+
+QUESTION = ("详细说明光合作用的完整过程，分光反应与暗反应两部分展开，每部分至少三点。")
+
+
+def _build_prompt(target_dir: str) -> str:
+    """走本栈方言组装器（与 bench_baseline 同一条路），不手搓字节。"""
+    from types import SimpleNamespace
+    from transformers import AutoTokenizer
+    from framework.dialects import get_dialect_class
+
+    tok = AutoTokenizer.from_pretrained(target_dir)
+    dialect = get_dialect_class("gemma4").create(
+        SimpleNamespace(tokenizer=tok), options={"suppress_ghost_thinking": True})
+    return dialect.build_prompt(messages=[{"role": "user", "content": QUESTION}],
+                                include_env=False)
 
 
 def _degenerate(text: str) -> bool:
