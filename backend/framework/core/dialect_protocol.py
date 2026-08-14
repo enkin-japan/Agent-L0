@@ -18,10 +18,13 @@ R0 = 把 P0 对算力做过的那台协议手术，对方言再做一遍。
   标记登记处**；R0 只是把这个隐式职责显式化，取值来源与结果完全不变。
 - `build_prompt` / `parse_response` 的签名与原 `PromptBuilder.build` /
   `ResponseParser.parse` **逐字对齐**——R0 是搬运，不是重写。
-- `tool_call_schema` 归方言：它锚定的是本方言**回放给模型看的调用体格式**（原
+- `tool_call_grammar` 归方言：它锚定的是本方言**回放给模型看的调用体格式**（原
   `constrained.build_tool_call_schema` 的 docstring 自陈此事）。而
-  `core/constrained.py` 的状态机本身框架无关、方言无关（起止标记夹一段 JSON，
-  llguidance 做 mask），故**留在 core**，只由方言喂参数（stc/etc + schema）。
+  `core/constrained.py` 的状态机本身框架无关、方言无关（起止标记夹一段调用体，
+  llguidance 做 mask），故**留在 core**，只由方言喂参数（stc/etc + 语法）。
+  §7-8（2026-08-14）把它由「返回 JSON schema」放宽为「返回 ToolCallGrammar」：
+  gemma-4 迁到官方紧凑 DSL 后调用体不再是 JSON，schema 表达不了，方言需要能说
+  「我的语法是 Lark」。core 只按 kind 分派，仍不解读语法内容。
 - 模型级行为开关（如 gemma-4 大杯的 `suppress_ghost_thinking`）经 `create` 的
   `options` 透传——它们是**方言事实**，不该出现在 AgentEngine 的签名里。
 """
@@ -43,6 +46,18 @@ class DialectMarkers:
     eoc: str
     stc: str
     etc: str
+
+
+@dataclass(frozen=True)
+class ToolCallGrammar:
+    """方言给出的调用体约束语法（§7-8）。
+
+    kind  "lark" | "json_schema" —— core/constrained.py 据此选 llguidance 的编译入口；
+          远程后端（vLLM structural-tag 等）据此判断自己能不能表达该语法。
+    body  对应形态的语法体：Lark 源码字符串 / JSON schema 字典。
+    """
+    kind: str
+    body: Any
 
 
 class ModelDialect(Protocol):
@@ -99,11 +114,12 @@ class ModelDialect(Protocol):
         """
         ...
 
-    def tool_call_schema(self, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """本方言回放格式对应的调用体 JSON schema（约束采样用）。
+    def tool_call_grammar(self, tools: List[Dict[str, Any]]) -> "ToolCallGrammar":
+        """本方言回放格式对应的调用体约束语法（约束采样用）。
 
-        必须与 build_prompt 回放工具调用的格式**锚定一致**：约束采样按此 schema 做
-        logits mask，schema 与回放格式一旦漂移，模型会被约束成自己历史里没见过的形状。
+        必须与 build_prompt 回放工具调用的格式**锚定一致**：约束采样按此语法做
+        logits mask，语法与回放格式一旦漂移，模型会被约束成自己历史里没见过的形状。
+        不支持约束的方言抛 NotImplementedError（调用方 fail-open，退回解析纠错闭环）。
         """
         ...
 

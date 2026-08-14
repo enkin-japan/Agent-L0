@@ -229,13 +229,11 @@ async def run_research(engine, query: str, cfg: dict,
         on_exhausted=_exhausted,
         max_parse_retries=int(cfg.get("max_parse_retries", 2)),
         # 这两句额外引导源于一次真实事故：沙箱曾因单次格式错误就「未能形成结论」。
+        # 格式教学由方言提供（见 SandboxSpec.parse_feedback）；这两句额外引导保留
         parse_feedback=(
-            "A tool call must be valid JSON with double quotes, with parameters inside an "
-            "arguments object — the exact same format as your successful web_search call. "
-            "For example, to fetch pages:\n"
-            '{"name": "open_pages", "arguments": {"urls": ["https://a.example", "https://b.example"]}}\n'
-            "Do not flatten the parameters, do not omit the arguments wrapper, do not add "
-            "extra symbols. Resend immediately in the correct format."),
+            "Use the exact same format as your successful web_search call. Do not flatten "
+            "or rename the parameters, and do not add extra symbols. "
+            "Resend immediately in the correct format."),
         should_converge=_converge,
         on_step=_on_step,
     ))

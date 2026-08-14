@@ -2,7 +2,7 @@
 
 守的是什么：prompt 组装（工具声明/思考恒回放/工具调用回放/工具结果白名单/环境
 门控）与响应解析（正常路 + 各类残缺形态不得漏垃圾进正文）的方言事实，以及协议
-面（markers/thinking_prefill/tool_call_schema 拒约束）与注册面的接缝不变量。
+面（markers/thinking_prefill/tool_call_grammar 拒约束）与注册面的接缝不变量。
 本文件不重写实现，只钉行为——与 test_dialect.py（gemma4）同一条铁律。
 """
 import pytest
@@ -170,9 +170,9 @@ def test_markers():
     assert m.etc == "</tool_call>"
 
 
-def test_tool_call_schema_not_implemented():
+def test_tool_call_grammar_not_implemented():
     with pytest.raises(NotImplementedError):
-        _dialect().tool_call_schema([])
+        _dialect().tool_call_grammar([])
 
 
 # ---- 9. 注册面 ----

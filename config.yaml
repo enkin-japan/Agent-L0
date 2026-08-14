@@ -280,8 +280,9 @@ inference:
   kv_quant_scheme: "turboquant" # turboquant | uniform
   quantized_kv_start: 0         # 从第几个 token 起量化（0=全程；调大可保近端全精度）
 
-  # 工具调用段约束采样（inference-speedup Phase 2）：<|tool_call> 区间内按注册工具的
-  # JSON schema 做 logits mask，废轮（格式坏→重试）清零。自由文本/思考段不受约束。
+  # 工具调用段约束采样（inference-speedup Phase 2）：<|tool_call> 区间内按注册工具
+  # 推出的语法做 logits mask，废轮（格式坏→重试）清零。自由文本/思考段不受约束。
+  # 语法形态由方言给（§7-8 起 gemma-4 是 Lark 紧凑 DSL，此前是 JSON schema）。
   # 依赖 llguidance；缺库或语法编译失败自动 fail-open 回自由采样（纠错闭环兜底）。
   constrained_tool_calls: true
 

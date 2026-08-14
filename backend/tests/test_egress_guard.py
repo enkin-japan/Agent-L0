@@ -128,7 +128,7 @@ def test_cloud_consult_wiring_pinned():
 
 def test_guard_module_banned_imports():
     src = (REPO_ROOT / "backend/framework/cloud/egress_guard.py").read_text(encoding="utf-8")
-    for banned in ("dialects", "parse_tool_calls", "response_parser", "tool_schema"):
+    for banned in ("dialects", "parse_tool_calls", "response_parser", "tool_grammar"):
         assert banned not in src, f"egress_guard 触碰了解析面: {banned}（铁律 6）"
 
 

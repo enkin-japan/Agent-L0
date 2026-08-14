@@ -140,13 +140,28 @@ def test_structural_tag_json_shape():
     """声明式约束 → vLLM structural_tag 规格：begin/schema/end + triggers 锚形状。"""
     import json
     from framework.backends.cuda.backend import structural_tag_json
-    spec = {"begin": "<|tool_call>", "end": "<tool_call|>",
-            "schema": {"type": "object", "properties": {"name": {"type": "string"}}}}
+    spec = {"begin": "<|tool_call>", "end": "<tool_call|>", "kind": "json_schema",
+            "body": {"type": "object", "properties": {"name": {"type": "string"}}}}
     tag = json.loads(structural_tag_json(spec))
     assert tag["triggers"] == ["<|tool_call>"]
     assert tag["structures"][0]["begin"] == "<|tool_call>"
     assert tag["structures"][0]["end"] == "<tool_call|>"
     assert tag["structures"][0]["schema"]["type"] == "object"
+
+
+def test_structural_tag_refuses_non_json_schema_grammar():
+    """§7-8：structural-tag 的 schema 字段只能表达 JSON schema。
+
+    gemma-4 迁到紧凑 DSL 后语法是 Lark，硬塞进去等于把模型约束成 JSON——那与提示词
+    里的声明格式**正好相反**，比不约束更坏。必须抛，由调用方落到 logits processor
+    后备路（llguidance 驱动方言的正确语法）。
+    """
+    import pytest
+    from framework.backends.cuda.backend import structural_tag_json
+    spec = {"begin": "<|tool_call>", "end": "<tool_call|>", "kind": "lark",
+            "body": 'start: "call:x{}"'}
+    with pytest.raises(ValueError, match="json_schema"):
+        structural_tag_json(spec)
 
 
 class _FakeTok:

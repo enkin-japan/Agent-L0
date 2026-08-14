@@ -13,6 +13,10 @@
   stc/etc 锚定语义同构；2026-08-07 A100 实测 per-request logits_processors 已被
   vLLM 0.26 拒收，_TorchGuardAdapter 降级路留作旧版后备）。仪表：生成尾声按
   stc/etc token 数出约束段 token 数回填 guard.masked_positions（同进程对象）。
+  ⚠️ §7-8 起 gemma-4 的调用体是紧凑 DSL，structural-tag 表达不了（它只吃 JSON
+  schema），本后端对该方言必然落到后备路；而 vLLM 0.26 又拒 per-request LP ——
+  **净效果是 CUDA 侧 gemma-4 工具段无约束**，靠解析纠错闭环兜底。补法（xgrammar
+  的 grammar 形态 / 服务端全局 LP）需 A100 现场验证，属 §7-7 待办，不可臆测形态。
 - **thinking 预算裁决**：两段式（A1 方案，2026-08-09 落地）——enable_thinking 时
   方言 prompt 以思考开符收尾（生成从思考频道内起步），段一 stop=思考闭符 +
   max_tokens=预算封顶；停因 length（超限）即强插「\n<闭符>」段二续跑，APC 使段二
@@ -107,12 +111,23 @@ def structural_tag_json(constraint: Dict[str, Any]) -> str:
 
     形态对齐 vLLM 0.26 xgrammar 后端的 legacy structural tag（begin/schema/end +
     triggers）——触发标记出现前自由生成，标记内按 JSON schema 掩码，收尾恢复自由，
-    与方言 stc/etc 锚定的 ToolCallGuard 语义同构。"""
+    与方言 stc/etc 锚定的 ToolCallGuard 语义同构。
+
+    **只吃 JSON schema 形态的语法**（§7-8）：structural tag 的 `schema` 字段就是
+    JSON schema，表达不了 gemma-4 迁移后的紧凑 DSL（裸键、`<|"|>` 定界原文串）。
+    拿 lark 语法硬塞会把模型约束成 JSON——那与提示词里的声明格式**正好相反**，
+    比不约束更坏。故此处显式抛出，由调用方落到 per-request logits processor 后备路
+    （那条路走的是 llguidance + 方言的正确 Lark 语法，语义完整）。"""
     import json
+    kind = constraint.get("kind", "json_schema")
+    if kind != "json_schema":
+        raise ValueError(
+            f"structural-tag 只能表达 json_schema 形态的调用体语法，本方言是 {kind!r}"
+            "——退回 logits processor 后备路（llguidance 驱动，语法正确）")
     return json.dumps({
         "structures": [{
             "begin": constraint["begin"],
-            "schema": constraint["schema"],
+            "schema": constraint["body"],
             "end": constraint["end"],
         }],
         "triggers": [constraint["begin"]],
@@ -170,6 +185,7 @@ class CudaVLLMBackend:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._per_request_lp_ok = True   # 首次被拒后降级并只告警一次
+        self._structural_tag_ok = True   # 同上（紧凑 DSL 方言下恒被拒，见 structural_tag_json）
         # 两段式思考预算：外部取消只知外层 request_id，段二真实 rid 经此表间接寻址
         self._rid_map: Dict[str, str] = {}
 
@@ -332,7 +348,7 @@ class CudaVLLMBackend:
                 nonlocal st_used
                 kw = dict(sp_kwargs)
                 kw.update(overrides)
-                if constraint:
+                if constraint and self._structural_tag_ok:
                     # 首选：vLLM 原生 structural-tag（触发前自由、标记内按 schema）。
                     # 构建被拒（老版无此参数/形态变更）则响亮落到 logits processor 后备。
                     try:
@@ -343,8 +359,11 @@ class CudaVLLMBackend:
                         st_used = True
                         return sp_
                     except Exception as e:
+                        # 一次性：对紧凑 DSL 方言这是**恒定**不可用（语法不是 JSON
+                        # schema），每请求刷一行会淹掉日志（两段式思考预算下还是两行）。
+                        self._structural_tag_ok = False
                         print(f"[CUDA] ⚠ structural-tag 约束构建被拒（{e}）——"
-                              f"尝试 per-request logits processor 后备路")
+                              f"本进程后续改走 per-request logits processor 后备路")
                 if guard is not None and self._per_request_lp_ok:
                     try:
                         return SamplingParams(**kw,

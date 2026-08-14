@@ -1,9 +1,9 @@
-"""gemma-4 方言（EXECUTION_LEDGER R0 收编）：频道式模板 + <|tool_call> JSON 调用体。
+"""gemma-4 方言（EXECUTION_LEDGER R0 收编）：频道式模板 + <|tool_call> 紧凑 DSL 调用体。
 
 组成（全部在本目录内，从 core/ 原样搬来，**内部逻辑一行未改**）：
 - `prompt_builder.PromptBuilder`      模板组装（原 core/prompt_builder.py）
 - `response_parser.ResponseParser`    输出反序列化（原 core/response_parser.py）
-- `tool_schema.build_tool_call_schema` 约束采样的调用体 schema（原 core/constrained.py）
+- `dsl` + `tool_grammar`              官方紧凑 DSL 编码器 / 约束采样的 Lark 语法（§7-8）
 
 本类只做一件事：把三者组装成 `core.dialect_protocol.ModelDialect` 的实现。
 它不含任何新逻辑——R0 的验收标准是「行为零变化」，任何"顺便优化"都会让这个
@@ -19,10 +19,10 @@
 """
 from typing import Any, Dict, List, Optional
 
-from ...core.dialect_protocol import DialectMarkers
+from ...core.dialect_protocol import DialectMarkers, ToolCallGrammar
 from .prompt_builder import PromptBuilder
 from .response_parser import ResponseParser
-from .tool_schema import build_tool_call_schema
+from .tool_grammar import build_tool_call_grammar
 
 
 class Gemma4Dialect:
@@ -69,14 +69,26 @@ class Gemma4Dialect:
         # 用方言的实际 token（而非硬编码字面量）：换模型/token 表时保持一致
         return f"{self._markers.soc}thought\n" if enable_thinking else ""
 
-    def tool_call_schema(self, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
-        return build_tool_call_schema(tools)
+    def tool_call_grammar(self, tools: List[Dict[str, Any]]) -> ToolCallGrammar:
+        return ToolCallGrammar(kind="lark", body=build_tool_call_grammar(tools))
 
     def parse_error_retry_hint(self) -> str:
-        # 原编排层硬编码文案逐字搬入（行为零变化）：本方言调用体是 JSON
+        # 本方言调用体是官方紧凑 DSL（§7-8 迁移，2026-08-14）。迁移前这里教的是 JSON、
+        # 还明写「不要用 call: 前缀」——迁移后那正好把模型往错误格式带，必须同步。
+        #
+        # ⚠️ 示例里**不带 <|tool_call> / <tool_call|> 起止标记**：本串会被编排层与沙箱
+        # 当作工具观测体回喂，观测体裹在原文块里——把真的控制标记塞进去等于在观测中
+        # 伪造一个调用块（首过评审揪出，当时实测一条反馈里带进 1 个 <|tool_call>）。
+        # 起止标记模型本就会写，需要教的是**标记之间那一段**。
+        # 串里的 <|"|> 会被 dsl._raw 中和成普通字节（原文块无转义机制），模型仍能从
+        # 每轮都在的工具声明块里看到真定界符，教学不受损。
         return (
-            "A tool call must be VALID JSON with double quotes — the exact same format as "
-            "the tool calls you already made successfully. For example, to update the plan:\n"
-            '{"name": "update_plan", "arguments": {"op": "replace", "steps": ["step one", "step two"]}}\n'
-            "Do NOT use single quotes, a 'call:' prefix, or bare braces. Retry with correct JSON."
+            "A tool call must use the compact call format — the exact same format as the "
+            "tool calls you already made successfully. Between the tool-call markers, emit "
+            "exactly one call body, for example:\n"
+            'call:update_plan{op:<|"|>replace<|"|>,'
+            'steps:[<|"|>step one<|"|>,<|"|>step two<|"|>]}\n'
+            'Every string value is wrapped in the escape marker <|"|> … <|"|>; keys are bare '
+            "(no quotes) and must appear in alphabetical order; numbers and true/false are "
+            "written plainly. Do NOT emit JSON. Retry with the correct format."
         )

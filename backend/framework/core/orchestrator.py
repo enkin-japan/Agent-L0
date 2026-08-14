@@ -43,7 +43,8 @@ _PARSE_HINT_FALLBACK = (
 def parse_error_feedback(call: Dict[str, Any], n: int, format_hint: str) -> str:
     """容错闭环的回喂文案。信封（System Error 前缀 + 原文回显 + 复读升级）是编排策略；
     「正确格式长什么样」是方言事实，由 format_hint（dialect.parse_error_retry_hint()）
-    提供——gemma4 教 JSON、qwen35 教 XML，硬编码任何一种都会把另一家族带偏。
+    提供——gemma4 教官方紧凑 DSL（§7-8 前教 JSON）、qwen35 教 XML，硬编码任何一种
+    都会把另一家族带偏。
     模块级函数：评测框架（benchmarks/model_eval）复刻纠错闭环时复用同一形态。"""
     if n == 1:
         return (

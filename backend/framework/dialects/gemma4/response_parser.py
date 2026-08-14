@@ -2,6 +2,10 @@ import re
 import json
 from typing import Dict, Any
 
+# 调用体实参的紧凑 DSL 解析（§7-8）。与 dsl.format_tool_call 互为逆运算——
+# 编码/解码同源，往返金测试守着，不再靠正则往 JSON 上凑。
+from .dsl import DslParseError, parse_arguments
+
 # error 调用的 raw_input 上限：解析失败的原文会被原样回显给模型（纠错反馈）并进入
 # 历史/账本——失控超长的半截 JSON（可达上万 token）必须截断，防止反馈自体膨胀。
 _ERROR_RAW_MAX = 1500
@@ -54,10 +58,22 @@ class ResponseParser:
             if call_match:
                 func_name = call_match.group(1)
                 raw_args_str = call_match.group(2)
-                
-                # 容错清洗。<|"|> 是模型方言里的"原文字符串块"定界符：成对出现时把
-                # 块内容整体 JSON 转义（内部引号/换行/反斜杠全保真——run_python 传多行
-                # 含引号代码的唯一可靠通道）；奇数个（截断/漏写）退回旧的直替换。
+
+                # 首选：按紧凑 DSL 语法真解析（§7-8）。这是 prompt_builder 回放格式与
+                # 约束语法共同锚定的形状，正常路径恒走这条。
+                try:
+                    result["tool_calls"].append({
+                        "type": "function",
+                        "name": func_name,
+                        "arguments": parse_arguments(raw_args_str),
+                    })
+                    continue
+                except DslParseError:
+                    pass
+
+                # 后备：模型没照 DSL 写（吐了 JSON、或结构残缺）。下面这段正则清洗是
+                # 迁移前的老路，留作兼容——它有已知缺陷（会伸进字符串内容里补引号），
+                # 所以只在 DSL 解析失败后才用，且失败即转 error 走纠错闭环。
                 fixed_args = raw_args_str
                 if '<|"|>' in fixed_args and fixed_args.count('<|"|>') % 2 == 0:
                     fixed_args = re.sub(r'<\|"\|>(.*?)<\|"\|>',
@@ -100,14 +116,14 @@ class ResponseParser:
                         result["tool_calls"].append({
                             "type": "error",
                             "raw_input": _cap(raw_tool_content),
-                            "error_msg": ("A tool call must be a JSON object with a string 'name' "
-                                          "and an 'arguments' object."),
+                            "error_msg": ("A tool call must name a tool and give its arguments "
+                                          "in the taught format."),
                         })
                 except json.JSONDecodeError:
                     result["tool_calls"].append({
                         "type": "error",
                         "raw_input": _cap(raw_tool_content),
-                        "error_msg": "Severely malformed: neither native tool-call format nor valid JSON."
+                        "error_msg": "Severely malformed: not a well-formed tool call."
                     })
 
         current_response = re.sub(tool_pattern, "", current_response, flags=re.DOTALL)
@@ -124,7 +140,7 @@ class ResponseParser:
                 "raw_input": _cap(dangling),
                 "error_msg": ("Unterminated tool call: the closing marker is missing — your "
                               "output ended before the call was complete. Re-issue it as ONE "
-                              "complete, compact JSON call (shorter string values if needed)."),
+                              "complete, compact call in the taught format (shorten string values if needed)."),
             })
             current_response = current_response[:idx]
 
@@ -142,7 +158,7 @@ class ResponseParser:
                 "raw_input": _cap(fragment),
                 "error_msg": ("Corrupted tool call: only the TAIL of a call was found (its "
                               "beginning was cut off, e.g. by the thinking-budget limit). The "
-                              "call was NOT executed. Re-issue it as ONE complete, compact JSON "
+                              "call was NOT executed. Re-issue it as ONE complete, compact "
                               "call — and do not draft tool calls inside your thinking."),
             })
             current_response = current_response[idx + len(self.etc):]

@@ -83,10 +83,14 @@ class SandboxSpec:
     #: excel 不再生成、直接按门禁状态交付或如实报败。故此处是完整回调，不是提示词模板。
     on_exhausted: Callable[[], Awaitable[str]]
 
-    #: 解析纠错反馈的**指令段原文**（拼在 "Parser error: ..." 之后）。
+    #: 解析纠错反馈里**本沙箱特有的额外引导**（拼在方言的格式教学段之后）。
     #: 刻意不做成模板：三份措辞不同且是各自调优过的——research 那两句额外引导源于一次
     #: 真实事故（沙箱因单次格式错误就「未能形成结论」）。骨架只统一闭环控制流
-    #: （计数/入历史/continue），提示词原文归沙箱自己。
+    #: （计数/入历史/continue），额外引导归沙箱自己。
+    #: ⚠️「正确格式长什么样」**不在这里写**：那是方言事实，由 run_sandbox 从
+    #: `engine.dialect.parse_error_retry_hint()` 取（与编排层同一来源）。三份沙箱
+    #: 曾各自硬编码 JSON 示例，§7-8 迁到紧凑 DSL 后它们会把模型往废格式教——
+    #: 这正是 §S.17 的形态：教学与实际协议脱锚，症状是"模型不听话"。
     parse_feedback: str
 
     max_parse_retries: int = 2
@@ -155,11 +159,24 @@ async def run_sandbox(engine, spec: SandboxSpec) -> str:
                 bad = errors[0]
                 sess.history.append({"role": "assistant", "content": text,
                                      "thoughts": thoughts, "tool_calls": raw_calls})
+                # 格式教学取自方言（单一来源），沙箱只补自己的额外引导。
+                # 无方言场景（FakeEngine 等）用编排层同一条格式中立兜底——绝不能
+                # 让纠错反馈里一句格式指导都没有，那等于让模型盲猜。
+                _hint_fn = getattr(getattr(engine, "dialect", None),
+                                   "parse_error_retry_hint", None)
+                if callable(_hint_fn):
+                    _fmt = _hint_fn()
+                else:
+                    # 与编排层共用同一条格式中立兜底（延迟导入：agents 在模块级导入
+                    # core.orchestrator 会成环）。两份拷贝各被一个测试钉住必然漂移。
+                    from ..core.orchestrator import _PARSE_HINT_FALLBACK
+                    _fmt = _PARSE_HINT_FALLBACK
                 sess.history.append({"role": "tool", "tool_responses": [{
                     "name": "system",
                     "response": ("System Error: your tool call could not be parsed and was "
                                  f"not executed.\nYour invalid output: {bad.get('raw_input')}\n"
                                  f"Parser error: {bad.get('error_msg')}\n"
+                                 + (_fmt + "\n" if _fmt else "")
                                  + spec.parse_feedback)}]})
                 continue
 

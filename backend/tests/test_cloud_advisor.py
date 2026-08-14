@@ -182,5 +182,5 @@ def test_advisor_never_parses_tool_calls():
     for rel in ("backend/framework/cloud/advisor.py",
                 "backend/framework/mcp/tools/cloud_consult.py"):
         src = (REPO_ROOT / rel).read_text(encoding="utf-8")
-        for banned in ("dialects", "parse_tool_calls", "response_parser", "tool_schema"):
+        for banned in ("dialects", "parse_tool_calls", "response_parser", "tool_grammar"):
             assert banned not in src, f"{rel} 触碰了解析面: {banned}（铁律 6）"

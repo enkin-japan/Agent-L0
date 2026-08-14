@@ -183,11 +183,8 @@ async def run_math_research(engine, problem: str, cfg: dict) -> str:
         on_give_up=_give_up,
         on_exhausted=_exhausted,
         max_parse_retries=int(cfg.get("max_parse_retries", 2)),
-        parse_feedback=(
-            "A tool call must be valid JSON with double quotes, with parameters inside an "
-            "arguments object. For example:\n"
-            '{"name": "run_python", "arguments": {"code": "solve(x**2 - 5*x + 6, x)"}}\n'
-            "Resend immediately in the correct format."),
+        # 格式教学由方言提供（见 SandboxSpec.parse_feedback）；这里只补本沙箱的引导
+        parse_feedback="Resend immediately in the correct format.",
         # 纯文本结论 = 想靠记忆答题：推回，强制走 submit_answer
         nudge=("You stated a conclusion without computing it. Recall is not acceptable here. "
                "Compute the result with run_python, verify it, then call submit_answer — its "

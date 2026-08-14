@@ -6,6 +6,10 @@ from transformers.processing_utils import ProcessorMixin
 # 环境事实行已收编 dialects/env_facts.py（qwen35 方言波）：内容方言无关，各方言共用；
 # 本 builder 的 _compute_static_env_lines 委托它，输出逐字节不变（test_prompt_env 守着）。
 from ..env_facts import compute_static_env_lines
+# 工具协议的官方紧凑 DSL 编码器（§7-8）。三类块（声明/调用/观测）的字节形态全部
+# 出自 dsl.py，与约束采样语法（tool_grammar.py）共用同一份实现——两处各写一遍
+# 必然漂移，而漂移就是 §S.17。
+from .dsl import format_function_declaration, format_tool_call, format_tool_response
 
 
 class PromptBuilder:
@@ -28,7 +32,9 @@ class PromptBuilder:
         
         self.bos_token = vocab.get("bos_token", "<bos>")
         self.eos_token = vocab.get("eos_token", "<eos>")
-        self.sot_token = vocab.get("sot_token", "<|turn|>")
+        # 兜底值必须是 <|turn>（真值，见 tokenizer 的 special_tokens_map）——旧写法
+        # 兜底成 <|turn|> 是错的，且金测试用空 special_tokens_map 正测过这个错兜底。
+        self.sot_token = vocab.get("sot_token", "<|turn>")
         self.eot_token = vocab.get("eot_token", "<turn|>")
         
         self.boi_token = vocab.get("boi_token", "<|image>")
@@ -60,47 +66,67 @@ class PromptBuilder:
         return str(text)
 
     def _build_tools_declaration(self, tools: List[Dict[str, Any]]) -> str:
-        tools_dec = ""
+        """官方紧凑 DSL 的工具声明串（§7-8 迁移，2026-08-14）。
+
+        旧形态是我方自建 JSON（`<|tool>{"name":…}<tool|>`），模型从没在训练里见过——
+        实测后果：12B 递 JSON 时进 `<|channel>thought` 无限循环、e4b 幻觉「我已经获取
+        了时间」而根本不发调用；同模型同问题只把声明换成官方 DSL 即干净调用（§S.17）。
+        工具间无分隔符、末尾无换行——官方是 <|tool>…<tool|><|tool>…<tool|> 紧邻。
+        """
         if not tools:
-            return tools_dec
-        for t in tools:
-            tools_json = json.dumps(t, ensure_ascii=False)
-            # 工具间无分隔符、末尾无换行——官方模板是 <|tool>…<tool|><|tool>…<tool|> 紧邻
-            tools_dec += f"{self.std_token}{tools_json}{self.etd_token}"
-        return tools_dec
+            return ""
+        return "".join(f"{self.std_token}{format_function_declaration(t)}{self.etd_token}"
+                       for t in tools)
 
     def _build_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> str:
+        """回放模型自己发过的调用：`<|tool_call>call:名字{k:v}<tool_call|>`。
+
+        块末**不带换行**、多调用紧邻（官方模板如此）。本方法与约束采样的 Lark 语法
+        （tool_grammar.build_tool_call_grammar）必须锚定同一形状：回放格式与约束形状
+        一旦漂移，模型会被约束成自己历史里没见过的东西。
+        """
         result = ""
         for call in tool_calls:
             # 如果是异常解析对象，则跳过（异常流由 Engine 处理，此处仅组装合法动作）
             if call.get("type") == "error":
                 continue
-                
+
             func_data = call.get("function", call)
-            if isinstance(func_data.get("arguments"), str):
-                # 拷贝后再解析：不原地改写 history 里的消息 dict（副作用会渗回会话记忆）
-                func_data = dict(func_data)
+            arguments = func_data.get("arguments")
+            if isinstance(arguments, str):
+                # 解析器产出的实参恒为 dict，但历史可能来自 OpenAI 形态（JSON 字符串）。
+                # 解析成功走 DSL 编码；失败则原样放行（官方对字符串实参亦原样吐出）。
                 try:
-                    func_data["arguments"] = json.loads(func_data["arguments"])
+                    arguments = json.loads(arguments)
                 except json.JSONDecodeError:
                     pass
-            call_json = json.dumps(func_data, ensure_ascii=False)
-            result += f"{self.stc_token}{call_json}{self.etc_token}\n"
+            body = format_tool_call(func_data.get("name", ""), arguments)
+            result += f"{self.stc_token}{body}{self.etc_token}"
         return result
 
-    #: 工具观察里**唯一**允许进模型上下文的键。白名单而非黑名单：tool_responses 条目
-    #: 同时是「模型上下文」与「账本/前端渲染源」两用面，新挂的元数据（压缩层的
-    #: _safe/_target、R3 的 render）默认都不该给模型看。黑名单会漏——此前正是整个 dict
-    #: 序列化，`"_safe": true` 一路进了提示词（`_` 前缀只在落盘与 public_turn 处剥，
-    #: 提示词构建处从来没剥过）。
+    #: 工具观察里**唯一**允许进模型上下文的键。tool_responses 条目同时是「模型
+    #: 上下文」与「账本/前端渲染源」两用面，新挂的元数据（压缩层的 _safe/_target、
+    #: R3 的 render）默认都不该给模型看。黑名单会漏——此前正是整个 dict 序列化，
+    #: `"_safe": true` 一路进了提示词（`_` 前缀只在落盘与 public_turn 处剥，提示词
+    #: 构建处从来没剥过）。
+    #: §7-8 起这道白名单**由结构承担**而非按键过滤：_build_tool_responses 只取
+    #: name 与观测体本身（response 优先于 content），别的键根本没有出口。常量保留
+    #: 作为「模型可见面」的声明式记录，qwen35 方言仍按键过滤用它。
     _MODEL_VISIBLE_KEYS = ("name", "response", "content")
 
     def _build_tool_responses(self, tool_responses: List[Dict[str, Any]]) -> str:
+        """工具观测：`<|tool_response>response:名字{k:v}<tool_response|>`（官方 DSL）。
+
+        观测体是 mapping 时键裸写展开，其余一律裹成 `{value:…}`（官方
+        format_tool_response_block 语义）。块末**不带换行**。
+        白名单仍然生效且更紧：只取 name 与观测体本身，元数据一律进不来。
+        """
         result = ""
         for resp in tool_responses:
-            visible = {k: resp[k] for k in self._MODEL_VISIBLE_KEYS if k in resp}
-            resp_json = json.dumps(visible, ensure_ascii=False)
-            result += f"{self.str_token}{resp_json}{self.etr_token}\n"
+            name = resp.get("name", "unknown_tool")
+            # response 优先于 content（两者是同一位置的两种历史写法），都缺则空串。
+            body = resp["response"] if "response" in resp else resp.get("content", "")
+            result += f"{self.str_token}{format_tool_response(name, body)}{self.etr_token}"
         return result
 
     def build(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None,
@@ -118,8 +144,12 @@ class PromptBuilder:
         """
         prompt = self.bos_token
         tools_emitted = False   # 工具声明只发一次（官方：进第一个 system 轮）
+        turn_open = False       # 上一轮是否故意没收口（等着工具观测/续写折进来）
+        pending_content = ""    # 本轮正文（官方轮内次序：正文排在工具块之后）
+        body_start = None       # 当前轮体起点（收口 rstrip 的下界）
 
-        for msg in messages:
+        n_msgs = len(messages)
+        for i, msg in enumerate(messages):
             role = msg.get("role", "user")
             # 官方模板：`role = 'model' if message['role'] == 'assistant' else role`
             # ——轮头写的是 model 不是 assistant。实测（2026-08-14，26B-4bit ×
@@ -128,62 +158,146 @@ class PromptBuilder:
             # 注意：只改**轮头字面量**，下面的分支判定仍用原始 role——写成覆盖
             # role 会让 `role == "assistant"` 的重放抑制分支静默失效（本文件的
             # 字节回归测试当场抓到过一次）。
-            turn_role = "model" if role == "assistant" else role
-            prompt += f"{self.sot_token}{turn_role}\n"
-            
+            # 工具观测折进 model 轮（§7-8）：官方模板整个循环体裹在 `role != 'tool'`
+            # 之下——它**从不开 <|turn>tool 轮**，工具结果是紧跟 <|tool_call> 之后、
+            # 同一个 model 轮内的 <|tool_response> 块。旧写法给每条工具结果单开一个
+            # <|turn>tool 轮头，那是模型训练里不存在的形状。故 tool 消息的轮头字面量
+            # 也是 model（无上一轮可折时自己开一个，见下方 is_model_turn 不变量）。
+            turn_role = "model" if role in ("assistant", "tool") else role
+            # **不变量：开放轮恒为 model 轮**。turn_open 只在 model 轮上置位，fold 也
+            # 只在 turn_open 时发生，两者必须同口径——否则会出现「留了个 user 轮不
+            # 收口、下一条却不折」的双轮头无收口畸形，以及 user 轮吞掉观测块、用户
+            # 正文被挪到观测之后（2026-08-14 首过评审揪出，两例均已实证复现）。
+            is_model_turn = (turn_role == "model")
+            # 有开放轮就折进去。turn_open 只在 model 轮上置位、且只当下一条是 tool 或
+            # assistant 时置位（见下方收口判定），故此处 turn_open 恒蕴含「本条是
+            # tool/assistant，且上一轮是等着它的 model 轮」——续轮无需再看别的判据。
+            # （曾按官方 continue_same_model_turn 加了 prev_non_tool_role=="assistant"
+            #  判据，在 history 以工具结果开头时判错：观测轮不收口、assistant 又不折，
+            #  吐出两个轮头中间没有收口符的畸形。判据与不变量重复且更弱，删掉。）
+            fold_into_prev = turn_open and is_model_turn
+            if not fold_into_prev:
+                prompt += f"{self.sot_token}{turn_role}\n"
+            # 轮体起点：收口时的 rstrip 只作用于此位置之后，绝不吃掉轮头后的 \n
+            # （官方在正文为空时也保留它；旧的整串 rstrip 会连轮头一起削）。
+            body_start = len(prompt)
+
             thoughts = msg.get("thoughts", "")
             if thoughts:
                 prompt += f"{self.soc_token}thought\n{thoughts}\n{self.eoc_token}"
-            elif role == "assistant" and self.suppress_ghost_thinking:
+            elif role == "assistant" and self.suppress_ghost_thinking and not fold_into_prev:
                 # 历史重放与生成头预填保持字节一致：该轮生成时 assistant 头部预填过
                 # 空思考频道（见 build 尾部），重放时不吐同样的空频道会让 KV 前缀
                 # 在此断裂，之后整段重预填。
+                # **续轮的 assistant 不预填**（not fold_into_prev）：官方的思考频道只在
+                # 轮首出现，续写段里凭空插一个空频道是它没有的形状；而"保持 KV 对齐"
+                # 的理由在此也不成立——折轮时这段字节本就与生成时不同（生成时它前面
+                # 是环境轮+新轮头，重放时紧跟 <tool_response|>）。
                 prompt += f"{self.soc_token}thought\n{self.eoc_token}"
 
             content = msg.get("content", "")
+            # 正文**后置**（§7-8）：官方轮内次序是 思考 → tool_calls → tool_responses
+            # → 正文，我方原来把正文放在最前。正文暂存于此、在收口（或本轮工具声明）
+            # 前才落盘——工具观测折进本轮时，正文同样要排在观测之后才与官方一致。
             # role=="tool" 的正文属于 <|tool_response> 块（见下），此处不能再吐一遍
             # ——否则每条工具结果在上下文里出现两次（2026-08-14 查出，白烧 token
             # 且让模型看到重复观测）。
             if isinstance(content, str) and content and role != "tool":
-                prompt += content + "\n"
-            elif isinstance(content, list):
+                pending_content += content + "\n"
+            elif isinstance(content, list) and role != "tool":
+                # role=="tool" 的 list 正文同样归 <|tool_response> 块（见下）。少了这道
+                # 门禁，工具观测的文本会当作模型自己的散文漏进轮体（首过评审揪出）。
                 for item in content:
                     item_type = item.get("type", "")
                     if item_type in ["image", "image_url"]:
-                        prompt += f"{self.boi_token}{self.image_token}{self.eoi_token}"
+                        pending_content += f"{self.boi_token}{self.image_token}{self.eoi_token}"
                     elif item_type in ["audio", "audio_url"]:
-                        prompt += f"{self.boa_token}{self.audio_token}{self.eoa_token}"
+                        pending_content += f"{self.boa_token}{self.audio_token}{self.eoa_token}"
                     elif item_type == "text":
-                        prompt += self._extract_text(item) + "\n"
+                        pending_content += self._extract_text(item) + "\n"
 
             if "tool_calls" in msg and msg["tool_calls"]:
                 prompt += self._build_tool_calls(msg["tool_calls"])
 
+            emitted_responses = False
             if role == "tool" or "tool_responses" in msg:
                 if "tool_responses" in msg:
                     prompt += self._build_tool_responses(msg["tool_responses"])
-                elif isinstance(content, str):
-                    prompt += self._build_tool_responses([{"name": msg.get("name", "unknown_tool"), "content": content}])
-            
-            if role == "system" and tools and not tools_emitted:
+                    emitted_responses = True
+                else:
+                    # 回退路径：role=tool 但没有 tool_responses 字段，观测体在 content 里。
+                    # list 形态（多模态工具结果）按官方语义把 text 段拼起来 —— 不能只认
+                    # str，否则整条观测既不进观测块、又被上面的门禁挡在轮体外 = 静默丢失。
+                    body = content
+                    if isinstance(content, list):
+                        body = "".join(self._extract_text(it) for it in content
+                                       if it.get("type") == "text")
+                    prompt += self._build_tool_responses(
+                        [{"name": msg.get("name", "unknown_tool"), "content": body}])
+                    emitted_responses = True
+                    if isinstance(content, list):
+                        # 媒体标记仍按官方跟在观测块之后
+                        for item in content:
+                            item_type = item.get("type", "")
+                            if item_type in ("image", "image_url"):
+                                prompt += self.image_token
+                            elif item_type in ("audio", "audio_url"):
+                                prompt += self.audio_token
+
+            if role == "system" and i == 0 and tools and not tools_emitted:
                 # 官方模板（2026-08-14 逐字节对表 + 边界渲染实证）：
                 #  · 声明紧跟 system 轮正文，不另开轮头、正文与 <|tool> 间无换行、
                 #    多工具紧邻无分隔，整轮由下面统一的 <turn|> 收口；
-                #  · 只进**第一个** system 轮（多 system 消息时后续轮不带——会话带
-                #    滚动摘要时那是第二条 system，旧写法会把整份声明发两遍）；
+                #  · 只在 messages[0] 就是 system 时并进它，否则另开一个**排在最前**的
+                #    system 轮只放声明（下面的 tools_emitted 兜底）——官方的条件是
+                #    `tools or messages[0].role in [system, developer]`，即有工具就必有
+                #    一个领头的 system 轮。写成"第一个 system 轮"会在 messages[0] 不是
+                #    system 时（如 [user, system, …]）把声明塞进对话中段（自审揪出）。
+                #    多 system 消息时后续轮一律不带——会话带滚动摘要时那是第二条
+                #    system，旧写法会把整份声明发两遍；
                 #  · 正文按 `| trim` 掐两端空白，但**轮头后的 \n 保留**（正文为空时
                 #    官方仍是 <|turn>system\n<|tool>…）。
-                # 注：声明**体**仍是本栈自建 JSON（官方为 declaration:名字{…} 紧凑
-                # DSL），那是与约束采样绑定的架构选择，另案（§7-8 待拍板）。
-                head = f"{self.sot_token}system\n"
-                idx = prompt.rfind(head)
-                if idx >= 0:
-                    cut = idx + len(head)
-                    prompt = prompt[:cut] + prompt[cut:].strip()
+                # 声明**体**已于 §7-8（2026-08-14）迁到官方 declaration:名字{…} DSL。
+                prompt += pending_content.strip()
+                pending_content = ""
                 prompt += self._build_tools_declaration(tools)
                 tools_emitted = True
 
-            prompt = prompt.rstrip() + f"{self.eot_token}\n"
+            next_role = messages[i + 1].get("role", "user") if i + 1 < n_msgs else None
+
+            # 不收口的两种情形（官方轮内形态）——两者都**必须发生在 model 轮上**
+            # （见上方 is_model_turn 不变量）：
+            #  · 下一条是工具结果 —— 留给它把观测块折进本轮；
+            #  · 本条刚吐完观测且无正文，下一条是 assistant —— 它续写同一轮的回答。
+            # 官方在第二种情形下**无条件**不收口（下一条是 user 也不收），那会留下
+            # 一个永不闭合的 model 轮；此处加 next_role 判据收口，是**有意偏离**：
+            # 中途取消/工具结果后直接换人说话在本栈是真实路径（turn_runner 的
+            # cancelled 观测），而未闭合轮头接 <|turn>user 是模型训练里不存在的形状。
+            if is_model_turn and (next_role == "tool"
+                                  or (emitted_responses
+                                      and not pending_content.strip()
+                                      and next_role == "assistant")):
+                turn_open = True
+                continue
+
+            prompt += pending_content
+            pending_content = ""
+            # 只 rstrip 轮体，轮头后的 \n 不动（官方在空正文轮里也保留它）
+            prompt = prompt[:body_start] + prompt[body_start:].rstrip() + f"{self.eot_token}\n"
+            body_start = None
+            turn_open = False
+
+        if turn_open:
+            # 防御性收口。当前控制流走不到这里（turn_open 只在还有后继消息时置位，
+            # 而最后一条消息必定收口），保留是因为「开放轮溢出到可变尾部」是本文件
+            # 最贵的一类错误：可变尾部（task_block/tail_notes/环境锚点）与生成头必须
+            # 排在闭合轮之后，未闭合轮头接 <|turn>system 是模型没见过的形状。
+            # rstrip 同样按 body_start 设界——整串 rstrip 会削掉轮头后的 \n（见上）。
+            prompt += pending_content
+            pending_content = ""
+            cut = body_start if body_start is not None else 0
+            prompt = prompt[:cut] + prompt[cut:].rstrip() + f"{self.eot_token}\n"
+            turn_open = False
 
         if tools and not tools_emitted:
             # 一条 system 消息都没有时，官方仍单开一个 system 轮只放声明，且排在

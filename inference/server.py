@@ -177,10 +177,10 @@ def _tool_guard(tool_specs) -> Optional[ToolCallGuard]:
             etc = tok.encode(S.dialect.markers.etc, add_special_tokens=False)
             if len(stc) != 1 or len(etc) != 1:
                 raise RuntimeError("工具调用标记不是单 token，约束状态机无法锚定")
-            # schema 由方言提供（R0/D1 修复）：少传这个参数 = TypeError → 约束永久禁用
+            # 语法由方言提供（R0/D1 修复）：少传这个参数 = TypeError → 约束永久禁用
             # → e4b 裸奔发畸形 JSON（沙箱 calls=[] / schedule_create 参数崩的共同根因）
             S.constraint_engine = ToolConstraintEngine(tok, stc[0], etc[0],
-                                                       S.dialect.tool_call_schema)
+                                                       S.dialect.tool_call_grammar)
             print("[Server] 约束采样引擎就绪（llguidance）")
         eng = S.constraint_engine
         return ToolCallGuard(eng.matcher_for(tool_specs), eng.stc_id, eng.etc_id, eng.vocab_size)
@@ -453,10 +453,13 @@ async def generate(request: Request):
         features["tool_guard"] = guard
         # 声明式约束规格（引擎原生结构化输出的后端吃这个，如 cuda/vLLM structural-tag
         # ——per-request logits_processors 已被 vLLM 0.26 拒收，2026-08-07 实测）。
-        # guard 构建成功即隐含 schema builder 可用（qwen35 XML 方言在 _tool_guard
+        # guard 构建成功即隐含语法 builder 可用（qwen35 XML 方言在 _tool_guard
         # 内已 fail-open，走不到这里）；MLX 等逐 token 后端忽略此键，语义各自单一来源。
+        # kind 随行（§7-8）：后端据此判断能否表达该语法，不能表达时必须拒。
+        _tc_grammar = S.dialect.tool_call_grammar(tool_specs)
         features["tool_constraint"] = {
-            "schema": S.dialect.tool_call_schema(tool_specs),
+            "kind": _tc_grammar.kind,
+            "body": _tc_grammar.body,
             "begin": S.dialect.markers.stc,
             "end": S.dialect.markers.etc,
         }

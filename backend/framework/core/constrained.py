@@ -1,7 +1,7 @@
 """工具调用段约束采样（inference-speedup Phase 2）——纯逻辑层。
 
 只约束 <|tool_call> … <tool_call|> 区间：命中起始标记后挂上 llguidance 的
-JSON-schema 状态机做 logits mask，JSON 完成即只放行收尾标记；自由文本/思考段
+语法状态机做 logits mask，调用体完成即只放行收尾标记；自由文本/思考段
 完全放开。目标是把「生成→解析失败→纠错反馈→重生成」的废轮清零。
 
 设计要点：
@@ -13,10 +13,13 @@ JSON-schema 状态机做 logits mask，JSON 完成即只放行收尾标记；自
   张量库。数组端的 mask 应用由各推理后端的适配器完成（如 MLX 后端的
   _GuardAdapter），prompt 边界（既往历史不进状态机）与增量消费协议也由
   适配器维护。
-- 方言无关（R0 收编）：调用体的 JSON schema 与起止标记 id 是**方言事实**，
-  由调用方（AgentEngine）从 ModelDialect 取来喂进本模块——本模块只认「起止
-  标记夹一段 JSON」这个通用形状。原 build_tool_call_schema 已迁往
-  dialects/gemma4/tool_schema.py（它 docstring 自陈锚定 prompt_builder 的回放格式）。
+- 方言无关（R0 收编 / §7-8 拓宽）：调用体的**语法**与起止标记 id 是**方言事实**，
+  由调用方（AgentEngine）从 ModelDialect 取来喂进本模块——本模块只认「起止标记
+  夹一段调用体」这个通用形状，按 ToolCallGrammar.kind 选 llguidance 的编译入口，
+  不解读语法内容。语法体住在方言里（gemma-4 见 dialects/gemma4/tool_grammar.py，
+  它 docstring 自陈锚定 prompt_builder 的回放格式）。
+  §7-8 之前这里写死 JSON schema：gemma-4 迁到官方紧凑 DSL 后调用体不再是 JSON
+  （裸键、`<|"|>` 定界的原文串），schema 表达不了，故改为按 kind 分派。
 """
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -35,17 +38,17 @@ except Exception:  # pragma: no cover - 环境缺 llguidance 时整体禁用
 class ToolConstraintEngine:
     """进程级单例部件：LLTokenizer + 按工具集缓存的语法/matcher。
 
-    schema_builder（R0）：`tools -> JSON schema`，由方言提供
-    （ModelDialect.tool_call_schema）。本模块不解读它，只交给 llguidance 编语法。
+    grammar_builder（R0/§7-8）：`tools -> ToolCallGrammar`，由方言提供
+    （ModelDialect.tool_call_grammar）。本模块不解读语法体，只按 kind 选编译入口。
     """
 
     def __init__(self, hf_tokenizer, stc_id: int, etc_id: int,
-                 schema_builder: Callable[[List[Dict[str, Any]]], Dict[str, Any]]):
+                 grammar_builder: Callable[[List[Dict[str, Any]]], Any]):
         self._ltok = _llhf.from_tokenizer(hf_tokenizer)
         self.vocab_size = self._ltok.vocab_size
         self.stc_id = stc_id
         self.etc_id = etc_id
-        self._schema_builder = schema_builder
+        self._grammar_builder = grammar_builder
         self._matchers: Dict[tuple, Any] = {}  # 工具名元组 -> LLMatcher（复用，reset 后重入）
 
     def matcher_for(self, tools: List[Dict[str, Any]]):
@@ -61,10 +64,19 @@ class ToolConstraintEngine:
                 events.emit("matcher_rebuild", error=m.get_error())
                 m = None
         if m is None:
-            grammar = llguidance.LLMatcher.grammar_from_json_schema(
-                self._schema_builder(tools),
-                defaults={"whitespace_flexible": True},
-            )
+            spec = self._grammar_builder(tools)
+            kind = getattr(spec, "kind", "json_schema")
+            if kind == "lark":
+                grammar = llguidance.LLMatcher.grammar_from_lark(spec.body)
+            elif kind == "json_schema":
+                grammar = llguidance.LLMatcher.grammar_from_json_schema(
+                    getattr(spec, "body", spec),
+                    defaults={"whitespace_flexible": True},
+                )
+            else:
+                # 未知语法形态：抛出而非猜测——调用方 fail-open 到自由采样 +
+                # 解析纠错闭环，好过拿错语法把模型约束成畸形调用。
+                raise RuntimeError(f"未知的调用体语法形态: {kind!r}")
             m = llguidance.LLMatcher(self._ltok, grammar)
             if m.is_error():
                 raise RuntimeError(f"llguidance grammar error: {m.get_error()}")
@@ -76,7 +88,7 @@ class ToolCallGuard:
     """单次生成的约束状态机（纯逻辑，不做数组运算）。
 
     IDLE：不约束；消费到 stc 标记 → ACTIVE。
-    ACTIVE：llguidance bitmask 决策；JSON 到达可接受态 → 只放行 etc → IDLE。
+    ACTIVE：llguidance bitmask 决策；调用体到达可接受态 → 只放行 etc → IDLE。
     任何异常 → fail-open（self.failed 置位，之后全程放开）。
 
     后端适配器的消费协议：
@@ -107,7 +119,7 @@ class ToolCallGuard:
             return None
         self.masked_positions += 1
         if self._m.is_accepting():
-            # JSON 已完整：只放行收尾标记，强制立刻闭合（不给模型画蛇添足的机会）
+            # 调用体已完整：只放行收尾标记，强制立刻闭合（不给模型画蛇添足的机会）
             return self._etc
         bm = self._m.compute_bitmask()
         bits = np.unpackbits(np.frombuffer(bm, dtype=np.uint8), bitorder="little")

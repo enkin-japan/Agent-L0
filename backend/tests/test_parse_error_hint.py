@@ -25,14 +25,31 @@ class _Proc:
     tokenizer = _Tok()
 
 
-def test_gemma4_hint_teaches_json_verbatim():
-    """gemma4 教学段 = 原编排层硬编码文案逐字（E0 对 gemma4 行为零变化）。"""
+def test_gemma4_hint_teaches_compact_dsl():
+    """gemma4 教学段教官方紧凑 DSL（§7-8 迁移后）。
+
+    迁移前这里教 JSON 且明写「不要用 call: 前缀」——迁移后那会把模型往**已被证明
+    失效的格式**带（§S.17：递 JSON 声明时 12B 进思考死循环、e4b 幻觉已调用）。
+    教学段必须与真实回放格式同步，否则纠错闭环就是在教模型犯错。
+    """
     hint = Gemma4Dialect.create(_Proc(), options={}, env={}).parse_error_retry_hint()
-    assert "VALID JSON with double quotes" in hint
-    assert '{"name": "update_plan", "arguments"' in hint
-    assert "Retry with correct JSON." in hint
+    assert "call:update_plan{" in hint
+    assert '<|"|>' in hint                       # 原文串定界符
+    assert "Do NOT emit JSON" in hint
+    # 迁移前的教学文案不得残留（会与实际格式互相矛盾）
+    assert "VALID JSON with double quotes" not in hint
+    assert "call:" in hint and "Do NOT use single quotes, a \'call:\' prefix" not in hint
     # 决不能出现 XML 教学（两方言文案串味 = 接缝白开）
-    assert "<tool_call>" not in hint
+    assert "<function=" not in hint
+
+
+def test_gemma4_hint_matches_actual_replay_bytes():
+    """教学段示例必须是 dsl 编码器真的会产出的字节——教学与回放脱锚是 §S.17 的病根。"""
+    from framework.dialects.gemma4.dsl import format_tool_call
+    hint = Gemma4Dialect.create(_Proc(), options={}, env={}).parse_error_retry_hint()
+    real = format_tool_call("update_plan",
+                            {"op": "replace", "steps": ["step one", "step two"]})
+    assert real in hint
 
 
 def test_qwen35_hint_teaches_xml_not_json():

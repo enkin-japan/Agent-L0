@@ -361,10 +361,14 @@ class AgentEngine:
             # 声明式约束规格：引擎原生结构化输出的后端（cuda/vLLM structural-tag）
             # 吃这个——**进程内路径也必须带**（2026-08-08 26B 评测案：只有 server 附
             # 此键，引擎直连评测全场无约束，bfcl-multiple 成批裸格式调用，架构缺口
-            # 非模型智力）。guard 已建成 = schema builder 可用；XML 方言（qwen35）
+            # 非模型智力）。guard 已建成 = 语法 builder 可用；XML 方言（qwen35）
             # 在 _tool_guard 内已 fail-open，走不到这里。MLX 逐 token 后端忽略此键。
+            # kind 随行（§7-8）：后端据此判断自己能不能表达该语法——vLLM 的
+            # structural-tag 只吃 JSON schema，拿 lark 语法必须拒而不是硬塞。
+            _tc_grammar = self.dialect.tool_call_grammar(tools)
             features["tool_constraint"] = {
-                "schema": self.dialect.tool_call_schema(tools),
+                "kind": _tc_grammar.kind,
+                "body": _tc_grammar.body,
                 "begin": self.dialect.markers.stc,
                 "end": self.dialect.markers.etc,
             }
@@ -483,9 +487,9 @@ class AgentEngine:
                 etc = tok.encode(_mk.etc, add_special_tokens=False)
                 if len(stc) != 1 or len(etc) != 1:
                     raise RuntimeError("工具调用标记不是单 token，约束状态机无法锚定")
-                # schema 由方言提供（R0）：约束机制方言无关，调用体格式是方言事实
+                # 语法由方言提供（R0/§7-8）：约束机制方言无关，调用体格式是方言事实
                 self._constraint_engine = ToolConstraintEngine(
-                    tok, stc[0], etc[0], self.dialect.tool_call_schema)
+                    tok, stc[0], etc[0], self.dialect.tool_call_grammar)
                 print("[Engine] 约束采样引擎就绪（llguidance）")
             eng = self._constraint_engine
             return ToolCallGuard(eng.matcher_for(tools), eng.stc_id, eng.etc_id, eng.vocab_size)

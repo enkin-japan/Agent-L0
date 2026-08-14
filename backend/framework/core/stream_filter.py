@@ -26,7 +26,8 @@
 import re
 from typing import Callable, List, Optional, Tuple
 
-# 工具名预告的解析:块首若干字符内找 {"name": "..."} 或旧式 call: name { 前缀。
+# 工具名预告的解析:块首若干字符内找 call: name { 前缀(gemma-4 紧凑 DSL,§7-8 起
+# 是该方言唯一形态)或 {"name": "..."}(qwen35 等 JSON 系方言,以及迁移前的历史)。
 # 两种形态都要求名字之后出现边界符(闭引号 / 左花括号)才算完整——逐 token 喂入时
 # 名字可能只生成了一半,过早匹配会预告出残缺工具名。
 _TOOL_NAME_RE = re.compile(r'"name"\s*:\s*"([A-Za-z0-9_-]+)"|call\s*:\s*"?([A-Za-z0-9_-]+)"?\s*(?=\{)')

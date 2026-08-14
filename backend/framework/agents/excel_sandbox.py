@@ -604,11 +604,8 @@ async def run_excel_task(engine, task: str, input_file: Optional[str],
                 else "[excel_research: no tool activity; nothing delivered]",
             on_exhausted=_exhausted,
             max_parse_retries=max_parse_retries,
-            parse_feedback=(
-                "A tool call must be valid JSON with double quotes, parameters "
-                "inside an arguments object. For example:\n"
-                '{"name": "run_python", "arguments": {"code": "print(1)"}}\n'
-                "Resend immediately in the correct format."),
+            # 格式教学由方言提供（见 SandboxSpec.parse_feedback）；这里只补本沙箱的引导
+            parse_feedback="Resend immediately in the correct format.",
             # 纯文本 = 想绕开工作流：推回，强制走工具
             nudge=("Plain text is not a deliverable here. Use the tools: inspect / "
                    "write with run_python / verify_workbook, and end with finish. "

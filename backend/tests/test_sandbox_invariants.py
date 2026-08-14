@@ -135,7 +135,13 @@ async def test_cancelled_generation_returns_marker():
 
 @pytest.mark.asyncio
 async def test_parse_error_feeds_back_and_retries():
-    """工具格式崩了不是放弃，而是回灌正确 JSON 示例让模型重发（容错闭环）。"""
+    """工具格式崩了不是放弃，而是回灌正确格式教学让模型重发（容错闭环）。
+
+    §7-8 起格式教学取自 `engine.dialect.parse_error_retry_hint()`（与编排层同一来源），
+    沙箱不再硬编码——三份沙箱曾各自写死 JSON 示例，迁到紧凑 DSL 后它们会把模型往
+    废格式教（§S.17 的形态：教学与实际协议脱锚，症状表现为"模型不听话"）。
+    无方言的 FakeEngine 走格式中立兜底，但**绝不能一句格式指导都没有**。
+    """
     eng = FakeEngine([
         {"text": "", "tool_calls": [bad_call('{"name": broken')]},
         {"text": "", "tool_calls": []},
@@ -156,7 +162,43 @@ async def test_parse_error_feeds_back_and_retries():
                 for r in m.get("tool_responses", [])
                 if "could not be parsed" in str(r.get("response", ""))]
     assert feedback, "解析失败必须回灌纠错反馈"
-    assert '"name": "run_python"' in str(feedback[0]), "反馈必须含正确格式示例"
+    assert "EXACT tool-call format" in str(feedback[0]), "无方言时必须走格式中立兜底"
+    assert "Resend immediately" in str(feedback[0]), "沙箱自己的额外引导仍须保留"
+
+
+@pytest.mark.asyncio
+async def test_parse_error_feedback_takes_format_from_dialect():
+    """有方言时，纠错反馈里的格式教学必须来自方言（而非沙箱硬编码）。"""
+    from framework.dialects.gemma4.dialect import Gemma4Dialect
+
+    class _Tok:
+        special_tokens_map = {}
+
+        def encode(self, s, add_special_tokens=False):
+            return [1]
+
+    class _Proc:
+        tokenizer = _Tok()
+
+    eng = FakeEngine([
+        {"text": "", "tool_calls": [bad_call('{"name": broken')]},
+        {"text": "", "tool_calls": []},
+        {"text": "", "tool_calls": []},
+    ])
+    eng.dialect = Gemma4Dialect.create(_Proc(), options={}, env={})
+    captured = {}
+    orig = eng.generate_once
+
+    async def _capture(session, **kw):
+        captured["sess"] = session
+        return await orig(session, **kw)
+
+    eng.generate_once = _capture
+    await math_sandbox.run_math_research(eng, "1+1",
+                                         {"max_steps": 3, "max_parse_retries": 2})
+    body = str(captured["sess"].history)
+    assert "call:update_plan{" in body, "格式教学必须是方言的紧凑 DSL 示例"
+    assert "VALID JSON with double quotes" not in body, "迁移前的 JSON 教学不得复活"
 
 
 @pytest.mark.asyncio
