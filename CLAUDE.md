@@ -102,3 +102,25 @@ change). Docs-only and ledger-only diffs are exempt.
 - If a task turns out to need long-horizon autonomous work (30+ minutes,
   million-token budgets), it is out of `implementer`'s scope by definition:
   the main session either splits it or handles it.
+
+### Phase-completion push (main session only)
+- When a phase of work is finished and the turn ends waiting on the user's
+  decision, push a notification: `reminder/notify.sh "<标题>" "<正文>"`.
+  The user's phone is permanently on silent; this is the only channel that
+  reaches them while they are away from the terminal.
+- Applies to: a wave/phase closing, a long background run finishing, a blocking
+  question that stalls all further work, and anything that spends or is about to
+  spend paid compute. It does NOT apply to routine intermediate steps — a push
+  per tool call trains the user to ignore pushes.
+- Write the body so it is actionable without opening the laptop: what finished,
+  what it means, and what decision (if any) is waiting. Not just "任务完成".
+- Quiet hours 23:00–06:00: the script refuses to send (exit code 9) and appends
+  the content to `reminder/suppressed.log` for the user to read the next morning.
+  That is the designed behaviour, not a failure — do not retry it, do not widen
+  the window with `BARK_QUIET_START/END` (debug-only knobs), and do not invent
+  another channel to get around it. Just say in the final message that the push
+  was suppressed by quiet hours.
+- Never put secrets in the title or body; the token lives only in
+  `reminder/bark.env` (0600, and `/reminder/` is gitignored). Never read, print,
+  or commit that file — the script reads it itself and redacts the key even out
+  of Bark's own error messages.
