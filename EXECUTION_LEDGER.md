@@ -1517,7 +1517,48 @@ repetition_penalty=None`（§7-1 为可复现性刻意钉死）。那恰好是�
    `pop_forced_token_id` 之前，预算到点不会强制收束；生产 enable_thinking 缺省
    False 故正常不触发）。
    **尚未做**：真草稿件端到端（需先取件，见下条③），接受率/速度实测归阶段二。〕
+   〔🔎 **2026-08-14 社区检索交叉验证（用户要求"与实测实装相互印证"）**：
+   **处理器丢失一条被独立佐证**——另一个消费同一上游的项目 omlx 在其发行说明里
+   逐字写着「Fixed VLM MTP silently dropping per-request **grammar constraints,
+   thinking budgets, and repetition or presence penalties**」，与我方查到的三条
+   （工具约束 guard / thinking 预算强制收束 / 重复惩罚）**三比三全中**，
+   且是各自独立发现。**但处置相反**：他们把"需要处理器的请求"整体改走非投机路
+   （降级保正确），我方是把处理器补进走查（保住投机红利）。**对本栈而言他们那条
+   路等于关掉 MTP**——生产恒带 rep 1.1，按他们的判据每个请求都会被踢回非投机。
+   此处记一笔以防将来有人"参照社区做法"把它改成降级式。
+   **上游至今未修**：mlx-vlm 最新发行版即我方所钉的 v0.6.13（8/12），其后无新版，
+   发行说明中无任何处理器相关修复。v0.6.10 的「expose per-request speculative
+   decoding acceptance stats」正是我方 ④ 所用的统计口径来源。
+   **前缀缓存 × MTP 是上游认过的交互面**：v0.6.4 有 `fix(apc): enable APC prefix
+   cache with MTP speculative decoding`——但那修的是**上游自己的 APC**，本栈用的是
+   自建前缀复用路，不在其覆盖内，故评审那条 Critical（缓冲缓存被按稠密语义切片）
+   仍是我方自己的账，上游修不到。
+   **旋转缓存 trim 属公认雷区，但我方版本的形态更坏**：生态里多条同族问题
+   （mlx-lm #980/#118、lmstudio-ai/mlx-engine #177、olmlx #207），描述多为
+   「trim 返回 0 / 缓存变不可裁」——那种形态调用方**看得见失败**。而我方钉的
+   0.6.13 里 `trim()` 返回的是 n（记账已改、内容没搬），**报告成功却是错的**，
+   "trim 返回 0 就回退"这类社区防护在此完全不设防。§S.15 那条（投机回滚 ×
+   旋转态 max|Δ|=22）**未检索到任何同题报告**，仍是本项目独有发现，只是与该
+   已知族相邻。
+   **社区数字（供阶段二对表，非我方实测）**：Gemma-4 MTP 接受率 conversational
+   70–90%、omlx 报 code 负载 88–89%；M3/M4 Max 加速 1.6–2.2×（RTX 4090 1.8–2.5×）。
+   注意这与 §7 阶段二预测①「bf16 草稿在 546GB/s 下反亏、4bit 化是前置」**尚未对上**
+   ——社区的 Mac 数字未标注草稿件精度，不可直接采信为反证，列为阶段二待判。
+   **模型卡自述「Output is byte-identical to no-drafter at temperature=0」**：
+   该承诺只在无处理器时成立（即上面那条缺陷），且本栈生产 temperature 缺省 0.2
+   本就不在其适用域内。〕
 3. 草稿件 4bit 本地转换 + `check_model_contract.py` 静态验证。
+   〔📌 **2026-08-14 供给再勘误（社区检索，二次修正）**：草稿件现成 MLX 件比
+   两次旧记都多，本条的"本地量化"工作量可能整个消失——
+   `mlx-community/gemma-4-E4B-it-assistant-bf16`（**78.8M / 159MB**，4 层）、
+   `gemma-4-26B-A4B-it-qat-assistant-mxfp4`、`gemma-4-31B-it-qat-assistant-nvfp4`、
+   `gemma-4-31B-it-assistant-bf16`、`gemma-4-26B-A4B-it-assistant-bf16`。
+   **mxfp4/nvfp4 的 MLX 件存在但装载未验**（那两种格式在 Mac 侧不常见，
+   v0.6.8 有「mixed-precision compressed-tensors (fp8 + NVFP4)」支持，可能相关）
+   ——取件时先验装载再谈量化，**不得据本条直接宣布③已消**。
+   附：E4B 草稿件仅 159MB，是端到端冒烟最便宜的一对（目标件本机已有）。
+   模型卡给了 `draft_block_size` 建议值：**单请求 6、批处理 3**——我方 config
+   该键此前无取值依据，阶段二 k 扫描以此为起点。〕
    〔2026-08-14 供给勘误：26B 草稿**有** MLX bf16 现成件
    `mlx-community/gemma-4-26B-A4B-it-assistant-bf16`@cda74908（0.4B/839MB，
    e4b 同系 @844e008e）——「无任何 MLX 转换」旧记不实；本地转换缩水为
