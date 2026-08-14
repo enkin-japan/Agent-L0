@@ -24,6 +24,8 @@ TARGET = "models/gemma-4-e4b-it-4bit"
 DRAFT = "models/gemma-4-e4b-it-assistant-bf16"
 if len(sys.argv) >= 3:
     TARGET, DRAFT = sys.argv[1], sys.argv[2]
+# 第三参 = draft_block_size；给 "auto" 则完全不下发（走草稿件 config 缺省 + 上游自适应）
+BLOCK = sys.argv[3] if len(sys.argv) >= 4 else "6"
 
 PASS = FAIL = 0
 
@@ -40,7 +42,10 @@ async def run():
 
     spec_off = {"mode": "off"}
     spec_on = {"mode": "drafter", "draft_model": DRAFT, "draft_kind": "",
-               "draft_block_size": 6, "num_draft_tokens": 8}
+               "num_draft_tokens": 8}
+    if BLOCK != "auto":
+        spec_on["draft_block_size"] = int(BLOCK)
+    print(f"块大小: {BLOCK}")
 
     # ---- E) 拒启路径先测（不占显存）----
     print("=== E) 配置错误必须拒启，不静默降级 ===")

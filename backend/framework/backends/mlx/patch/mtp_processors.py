@@ -181,14 +181,19 @@ def _walk_with_processors(
     # 代价：预算满之后那几位的历史是旧的（未 commit 的不进 guard/惩罚，因为它们
     # 不会产出，commit 进 guard 不可逆）。那些位置的 token 一律丢弃且生成即将结束，
     # 故只影响被丢弃的判决本身，不影响任何产出。
+    # **一次性投影全部位置**（上游是逐位调）：`speculative_logits_from_hidden` 是
+    # `embed_tokens.as_linear(norm(h))`，每调一次就把 [vocab, H] 那张大表整读一遍
+    # （31B 的量化嵌入表数百 MB 级）。逐位调 = 同一张表在一轮里被重读 γ+1 遍，
+    # 纯带宽浪费。对任意前置维度成立，故可直接喂 [1, n, H] 拿 [1, n, V]。
+    # 即便走查在首位就 break，一次大投影仍优于多次小投影——瓶颈是表的读取次数。
+    with mx.stream(_mtp.generation_stream):
+        all_logits = lm.speculative_logits_from_hidden(verify.hidden)
+
     for pos in range(n_draft + 1):
         with mx.stream(_mtp.generation_stream):
-            logits = lm.speculative_logits_from_hidden(
-                verify.hidden[:, pos : pos + 1, :]
-            )
-            if logits.ndim == 3 and logits.shape[1] == 1:
-                logits = logits[:, 0, :]
-            # 此刻 ctx 已含本轮前 `committed` 个（guard 也已推进到位），无额外延长段
+            logits = (all_logits[:, pos, :] if all_logits.ndim == 3
+                      else all_logits[pos : pos + 1, :])
+            # 此刻 ctx 已含本轮前若干个（guard 也已推进到位），无额外延长段
             logits = ctx.apply(logits, [])
             logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
             if positioned:

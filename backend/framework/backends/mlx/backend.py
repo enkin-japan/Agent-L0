@@ -163,6 +163,20 @@ def _load_drafter(target_model, draft_path: str, spec_cfg: Dict[str, Any]):
                 "约束 guard——该形态需单独接线，不得降级。"
             )
 
+    # 草稿深度天花板：官方三个 assistant 件的 config.json **都没有 block_size 键**
+    # （实读 2026-08-14），落到上游默认 4 → 每轮草稿数恒为 3。而
+    # `_effective_mtp_block_size` 把 configured 当**硬顶**，要突破得满足"最近 32 轮里
+    # ≥65% 的轮次把 configured 深度全接受"——实测接受率 ~54% 时全中 3 个约 16%，
+    # **永远够不到**。净效果：模型卡推荐的 draft_block_size=6 在所有已发布件上静默失效，
+    # k 扫描会在 2/4/6 上量出同一个 γ=3。
+    # 上游留了 `prefer_requested_block_size` 旁路：置真则直接采纳请求值。
+    # 只在**显式配了块大小**时置真——不配就沿用上游自适应，行为不变。
+    if spec_cfg.get("draft_block_size"):
+        draft_model.prefer_requested_block_size = True
+        print(f"[Engine] 草稿深度上限已解锁：采纳请求值 "
+              f"draft_block_size={spec_cfg['draft_block_size']}"
+              f"（否则被草稿件 config 缺省值 4 顶死）")
+
     print(f"[Engine] 投机草稿件已装载：{draft_path}（kind={resolved_kind}）")
     return draft_model, resolved_kind
 

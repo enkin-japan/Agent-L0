@@ -23,11 +23,16 @@ PROMPT = [900, 901, 902]
 
 
 class _FakeLM:
-    """hidden[0, pos, 0] 编码该位置的"目标 token"，logits 在该 token 上取最大。"""
+    """hidden[0, pos, 0] 编码该位置的"目标 token"，logits 在该 token 上取最大。
+
+    必须**保留前置维度**（真件是 `embed_tokens.as_linear(norm(h))`，对最后一维做
+    线性）：走查已改为一次性投影全部位置，假件若只吐单位置就测不到真实形状。
+    """
 
     def speculative_logits_from_hidden(self, hidden):
-        want = int(hidden[0, 0, 0].item())
-        return mx.zeros((1, VOCAB)) + mx.where(mx.arange(VOCAB) == want, 10.0, 0.0)
+        want = hidden[..., 0]                       # [1, n]
+        onehot = (mx.arange(VOCAB)[None, None, :] == want[..., None])
+        return mx.where(onehot, 10.0, 0.0)          # [1, n, VOCAB]
 
 
 class _Verify:
