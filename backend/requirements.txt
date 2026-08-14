@@ -2,11 +2,13 @@ fastapi==0.136.1
 fastapi-cli==0.0.13
 fastapi-cloud-cli==0.3.1
 librosa==0.11.0
-mlx==0.31.2
+mlx==0.32.0
 mlx-audio==0.4.3
 mlx-lm==0.31.3
-mlx-metal==0.31.2
-mlx-vlm==0.5.0
+mlx-metal==0.32.0
+mlx-vlm==0.6.13  # 2026-08-14 升级手术；MTP/接受统计/连续批处理上游解锁，patch 复验记录见账本 §7-0②
+miniaudio==1.71  # mlx-vlm 硬依赖（0.5.0 起即有，此前未显式钉）
+opencv-python==5.0.0.93  # mlx-vlm 硬依赖（同上；我方 prepare_inputs 不走视频路，纯为满足上游）
 python-multipart==0.0.20
 PyYAML==6.0.3
 requests==2.32.5
@@ -15,7 +17,7 @@ torch==2.9.1
 torchaudio==2.9.1
 torchcodec==0.11.1
 torchvision==0.24.1
-transformers==5.8.0
+transformers==5.15.0  # mlx-vlm 0.6.13 需 ≥5.14；金测试 776 全绿（colab 侧 <5.15 钉是 vLLM head_dim 锅，与本栈无关）
 uvicorn==0.38.0
 silero_vad==6.2.1
 huggingface_hub==1.15.0
@@ -44,6 +46,10 @@ llguidance>=1.7  # 工具调用段约束采样（inference-speedup Phase 2）；
 
 # 数学工具（run_math / math_research 沙箱预载环境）：缺失时对应工具不注册
 sympy==1.14.0
+# 评测集扩容脚本（benchmarks/model_eval/.../chartqa_expand_sampler.py）：
+# 2026-08-14 前由 mlx-vlm 0.5.0 传递带入，0.6.13 把 datasets 降级为 train extra
+# → 必须显式钉，否则新机 fresh install 后该脚本 ImportError
+datasets==5.0.0  # 值取自升级前 venv 实装版本（该脚本此前就在这版上跑）
 # 数据图表（render_chart / deck 视觉路由 chart 分支）：缺失时 render_chart 不注册
 matplotlib==3.11.0
 # iOS 推送（framework/push：APNs HTTP/2 直发 + .p8 ES256 签名）：缺失时 iOS 推送禁用，macOS 本地通知不受影响

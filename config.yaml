@@ -58,27 +58,30 @@ inference:
     enforce_eager: false          # true 可跳 CUDA graph 编译省启动时间（调试用）
     trust_remote_code: false
   model: "mlx-community/gemma-4-e4b-it-4bit"
-  # 钉死 HF 仓库 commit：上游 2026-07-06 重传（475b9088，裁掉共享 KV 权重）与 mlx-vlm 0.5.0
-  # 不兼容，加载报 Missing 54 parameters。deb1db71 = 重传前最后一版（已在两台机器实证可用）。
-  # 升级 mlx 全家桶后如需跟进新转换，改这里并重新验证 framework/patch 下的补丁。
-  model_revision: "deb1db712068b1c9f83fb1c97f08c1204b9459a1"
+  # 钉死 HF 仓库 commit。上游 2026-07-06 重传（475b9088，裁掉共享 KV 权重）当年与
+  # mlx-vlm 0.5.0 不兼容（Missing 54 parameters），故长期停在 deb1db71；
+  # 〔2026-08-14 升级 0.6.13 后已跟进 475b9088：contract ✓ + 装载生成 smoke ✓〕。
+  # 再动 mlx 全家桶时同样要重验 framework/backends/mlx/patch/ 下的补丁。
+  model_revision: "475b9088d29754a3379866cf5aeb6b41acd313c2"
 
   # ── Gemma-4 家族模型注册表 ──────────────────────────────────────────────
   # 启动选择的候选集：`./devctl.sh model` 交互选择，选中项写仓库根 .model-selection
   # （gitignored 指针文件），app.py 按「选择文件 → 上面的 model 默认」次序解析——
   # 换模型不必手改本文件。revision 逐条钉死在 scripts/check_model_contract.py 静态验证
-  # 通过的转换（参数名集合与模型骨架逐一对齐）。上游 07-05/06 re-upload 的兼容性
-  # **分档而异**（2026-07-29 逐条实测）：e4b 三档被裁掉共享 KV 权重（该共享是 e4b
-  # 独有架构），mlx-vlm 0.5.0 加载 missing 54 → 停 2026-05-19 旧版勿动；26b/31b
-  # 六档参数名全对齐 → 已跟进 07-05/06 新版。
-  # 已知排除：gemma-4-12B-it-*（gemma4_unified 新架构，0.5.0 无模型类，全 revision 不可加载）。
-  # 验证等级：e4b-4bit 实机验证；其余 8 项仅静态校验（加载兼容），运行行为/预算未实测。
+  # 通过的转换（参数名集合与模型骨架逐一对齐）。历史：上游 07-05/06 re-upload 对
+  # mlx-vlm 0.5.0 的兼容性分档而异（e4b 三档被裁共享 KV 权重 → missing 54 只能停旧版；
+  # 26b/31b 六档全对齐已跟进）。〔2026-08-14 升级 mlx-vlm 0.6.13 后此分裂消失：
+  # e4b 三档已升钉 07-06 新版（contract ✓ / 4bit 装载生成 ✓），12B 解禁入列。〕
+  # 验证等级：e4b-4bit + 26b-qat 实机验证、12B 双档装载生成 smoke；其余仅静态校验
+  # （加载兼容），运行行为/预算未实测。
   # suppress_ghost_thinking：官方 thinking 文档要求 12B/26B/31B 关思考时在 model 轮
-  # 开头预填空思考频道抑制「幽灵思考」（e4b 模板无此要求）。PromptBuilder 按此开关生效。
+  # 开头预填空思考频道抑制「幽灵思考」（e4b 模板无此要求）。PromptBuilder 按此开关生效，
+  # 预填形态须与官方模板逐字节一致（尾部无换行——多一个 \n 即「发现 A」，2026-08-14）。
   model_registry:
     # dialect（R0）：模型方言 = prompt 模板 + 输出反序列化 + 频道/工具标记 + 调用体 schema。
     # 实现在 backend/framework/dialects/<name>/，经注册面 get_dialect_class 取用；缺省 "gemma4"。
-    # 当前 9 条全是 gemma-4 家族（e4b/26b-a4b MoE/31b 稠密），故全填 gemma4。
+    # gemma-4 家族（e4b / 12b 稠密 / 26b-a4b MoE / 31b 稠密）全填 gemma4；
+    # 另有 qwen35 方言条目与 CUDA 侧条目在本表后段。
     # ⚠️ 换到 gemma-4 家族之外（Qwen3 / DeepSeek / GLM 等 ChatML 或 Harmony 系）时，
     # 必须新增对应的 dialects/<name>/ 并在此声明——只改 repo 不改 dialect 会让 prompt
     # 用错模板、工具调用全程解析不出来。方言与模型是绑定事实，不是可选配置。
@@ -89,23 +92,41 @@ inference:
     # 通过率（含纠错与终答整合）与生成 tps 中位）。core/model_router 消费：main 粘滞，
     # 专科指标须显著超出（margin 0.05）才切换；**未画像条目绝不被优先选中**。
     # 勿手改——重跑 model_eval 后按新 run 回填（值是测出来的，不是配出来的）。
-    # e4b 新版对齐的前提：升级 mlx-vlm 并复验 backends/mlx/patch/（铁律 1 手术，单独成波）。
+    # 〔e4b 新版对齐的前提「升级 mlx-vlm 并复验 patch」已于 2026-08-14 完成（0.6.13），
+    #  三档均已升钉；e4b-4bit 的 profile 仍是旧钉口径，重跑 model_eval 后回填。〕
     - repo: "mlx-community/gemma-4-e4b-it-4bit"
-      revision: "deb1db712068b1c9f83fb1c97f08c1204b9459a1"
+      revision: "475b9088d29754a3379866cf5aeb6b41acd313c2"  # 2026-08-14 升钉：上游 7/6 重转换件（0.6.x vendoring 对齐）
       dialect: "gemma4"
       capabilities: ["text", "vision", "audio"]
-      profile: { tool_call: 0.88, longchain: 0.83, vision: 1.00, tps: 30.8 }  # run 20260730-192308
+      profile: { tool_call: 0.88, longchain: 0.83, vision: 1.00, tps: 30.8 }  # run 20260730-192308（旧钉口径，待重画像）
       note: "5.2GB | 实机验证 ✓（默认）"
     - repo: "mlx-community/gemma-4-e4b-it-8bit"
-      revision: "d8a1725bb38924b597ed9a3b9f29b4e582187e81"
+      revision: "4255b21bd9a9d3fc807ef7abd80373f5e3a52a73"  # 2026-08-14 升钉
       dialect: "gemma4"
       capabilities: ["text", "vision", "audio"]
       note: "9.0GB | 静态校验 ✓"
     - repo: "mlx-community/gemma-4-e4b-it-nvfp4"
-      revision: "6a7748a3df38d2307e9d8363af331b925f62b62c"
+      revision: "769ca8889f89f8ec8c1ca59bf427332895eb1cb2"  # 2026-08-14 升钉（远程静态校验，未本地拉件）
       dialect: "gemma4"
       capabilities: ["text", "vision", "audio"]
       note: "6.9GB | 静态校验 ✓"
+    # 12B（gemma4_unified）：与 26b/31b 同样需要幽灵思考抑制（官方模板同款），
+    # 抑制预填**逐字节对齐后有效**（2026-08-14：曾因我方多一个尾随 \n 误判为「无视
+    # 抑制」，同一 bug 也是 26B-4bit「发现 A」的真因，已修 prompt_builder）。
+    # 音频：config 带 audio_config、我方 prepare_inputs 产出 input_features 正常，
+    # 端到端能力归 12B 评估波实测后再写进 capabilities（未验不声明）。
+    - repo: "mlx-community/gemma-4-12b-it-4bit"
+      revision: "73bcf09092aa277861d5a191b989b666f7f32e8f"
+      dialect: "gemma4"
+      capabilities: ["text", "vision"]
+      suppress_ghost_thinking: true
+      note: "6.3G | 装载/生成 smoke ✓ + 抑制预填 ✓ | 12B 稠密中档（2026-08-14 用户拍板入列），画像/基线格待跑；音频待验"
+    - repo: "mlx-community/gemma-4-12b-it-8bit"
+      revision: "200bb6db075e137a4deb08838865ac4ddb86292e"
+      dialect: "gemma4"
+      capabilities: ["text", "vision"]
+      suppress_ghost_thinking: true
+      note: "12G | 装载/生成 smoke ✓ | 12B 稠密中档，画像/基线格待跑；音频待验"
     - repo: "mlx-community/gemma-4-26b-a4b-it-4bit"
       revision: "0d77464eeb233a2da68ebf9d7dc4edaac7db956d"
       dialect: "gemma4"
@@ -123,7 +144,7 @@ inference:
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
-      note: "15G | 实机验证 ✓（108.6tps@0） | QAT：专家 4bit + 共享 MLP/router 8bit | ⚠️A 毒未根除，阈值 4k→16k（qa 哨 16k+ 秒终止，20260814 实测） | MoE，建议 ≥32GB 统一内存"
+      note: "15G | 实机验证 ✓（108.6tps@0） | QAT：专家 4bit + 共享 MLP/router 8bit | 质量待评（原「A 毒」判定已撤销=我方 prompt bug §S.16，质量哨全量重跑后回填） | MoE，建议 ≥32GB 统一内存"
     - repo: "mlx-community/gemma-4-26b-a4b-it-nvfp4"
       revision: "31e75786f7646400d9e5d0b29d055326d981db5e"
       dialect: "gemma4"
@@ -147,7 +168,7 @@ inference:
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
-      note: "27G | 实机验证 ✓（16.2tps@0，64k 稠密 KV 47.2G 不 OOM） | QAT 但 60 层 MLP 全 8bit（近 8bit 字节量） | 发现 B 治愈、tool@64k 挂点（20260814 实测） | 稠密，建议 ≥48GB 统一内存"
+      note: "27G | 实机验证 ✓（16.2tps@0，64k 稠密 KV 47.2G 不 OOM——8bit 同格 OOM，此为选它的硬理由） | QAT 但 60 层 MLP 全 8bit（近 8bit 字节量） | 质量待评（§S.16 重跑后回填） | 稠密，建议 ≥48GB 统一内存"
     - repo: "mlx-community/gemma-4-31b-it-nvfp4"
       revision: "a0a935b105621b98907915fa12f05348bb9c3c24"
       dialect: "gemma4"
@@ -185,6 +206,11 @@ inference:
     # capabilities 按 mlx 同家族口径预填；Qwen3.6 方言按 qwen35 预注册（ChatML 同系，
     # 联调首项即验证模板/标记兼容，不兼容则新增 dialects/<name>/ 再改此声明）。
     # 无 profile = 路由绝不优先选中（未画像纪律）。
+    # ⚠️ 待决（2026-08-14 reviewer 二审发现）：下列 google bf16 与 RedHatAI NVFP4
+    # 三件同为 dialect gemma4、同走 build_prompt，其官方模板**也有**幽灵思考抑制，
+    # 但条目均未设 suppress_ghost_thinking——即 CUDA 侧一直在无抑制口径下运行，
+    # 已回填的 A100 画像（tool/long/vision/tps）亦是该口径。补 flag 会使画像作废
+    # 且复测要烧付费算力 → **交用户拍板，不擅自改**（见账本 §7-0 待决项）。
     - repo: "google/gemma-4-31B-it"
       revision: "842da3794eaa0b77d5f08bae87a17459d91ff475"
       dialect: "gemma4"
@@ -257,7 +283,9 @@ inference:
   # prompt-lookup 投机采样（inference-speedup Phase 3）：从上下文 n-gram 匹配草稿、
   # 主模型批量验证 + 回滚，decode 有效吞吐提升。off=关闭（行为与改动前完全一致）。
   speculative:
-    mode: "prompt_lookup"       # off | prompt_lookup
+    mode: "off"                 # off | prompt_lookup ←0.6.13 升级后旋转滑窗回滚失真
+                                # （实质分歧 logprob Δ2.1 + 低命中域倒亏 0.89x，2026-08-14 裁决
+                                # 实验），修复归 MTP 接线波头号项，修好前不开（正确性>速度）
     num_draft_tokens: 8         # 单轮草稿长度 k 上限（无命中时自然退化为普通 decode）
     ngram_max: 3                # n-gram 匹配窗口上限（3→2 逐级降配）
     ngram_min: 2                # 低于该长度不出草稿（1-gram 误命中率过高）

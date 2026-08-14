@@ -70,7 +70,7 @@ inference:
   #     repo: "..."
   #     port: 14163
   model: "mlx-community/gemma-4-e4b-it-4bit"
-  model_revision: "deb1db71…"    # 钉死 HF commit：上游重传与 mlx-vlm 0.5.0 不兼容，勿改指 main
+  model_revision: "475b9088…"    # 钉死 HF commit（2026-08-14 随 mlx-vlm 0.6.13 升钉）；勿改指 main
   model_registry: [...]     # `devctl model` 的候选集（各项钉死 revision + 显存/验证等级备注）
   audio_max_length: 29      # 原生音频 VAD 切片的最大时长（秒），仅原生音频能力启用时用
   modalities: ["text", "image"]  # 模型原生模态：含 "audio" 才原生直喂音频，否则一律 ASR 转写

@@ -10,8 +10,10 @@
 #
 # ── 不在本清单里的，以及为什么（都是实测的反向依赖，不是猜的）─────────────
 # mlx / mlx-metal / mlx-lm / mlx-vlm / mlx-audio
-#     推理在设备 A（inference.mode: remote）。连带去掉 cv2(119M) 与
-#     datasets→pyarrow(126M)（均 ←mlx-vlm）。
+#     推理在设备 A（inference.mode: remote）。连带去掉 cv2(119M) 与 miniaudio
+#     （←mlx-vlm 硬依赖）。〔2026-08-14：mlx-vlm 0.6.13 已把 datasets 降级为
+#     train extra，故 datasets→pyarrow(126M) 不再由它带入——A 侧若要跑
+#     chartqa 扩容脚本需显式装 datasets，见 requirements.txt 注。〕
 #     注：pandas(70M) **去不掉**——markitdown[xlsx] 的 extra 也声明了它（实测），
 #     而 markitdown 是摄入层要保留的。同理 onnxruntime(73M) ←magika←markitdown。
 # mlx-whisper
@@ -44,7 +46,8 @@ fastapi-cloud-cli==0.3.1
 python-multipart==0.0.20
 PyYAML==6.0.3
 requests==2.32.5
-transformers==5.8.0
+transformers==5.15.0  # 必须与 requirements.txt 同版：edge 本机 build prompt/数 token，
+                      # 两个大版本渲染同一模板 = prompt 字节与 KV 前缀静默分裂（§S.16 同类风险）
 uvicorn==0.38.0
 huggingface_hub==1.15.0
 

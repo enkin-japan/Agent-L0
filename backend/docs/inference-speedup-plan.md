@@ -5,7 +5,8 @@
 > **1.92×**、31B k=4 **3.12×**，质量零漂移且与约束采样共存（EXECUTION_LEDGER
 > 大档评测波第 6/7 站）；k 值不定死、按设备实测取值（已拍板）。Mac 侧 mlx-vlm 有
 > `load_drafter(kind="mtp")` 对应路径。本文 §6~§9 的 e2b 执行手册**不再执行**；
-> Phase 0~3 的仪表/约束采样/prompt_lookup（MLX 后端现行）仍在服役。
+> Phase 0~3 的仪表/约束采样仍在服役；**prompt_lookup 自 2026-08-14 停用**
+> （mlx-vlm 0.6.13 升级后回滚数值失真，§S.15；修复前不得重开）。
 >
 > 状态（2026-07-07 更新）：**Phase 0~3 已在开发机（e4b）完成并验证，代码在分支
 > `feat/inference-speedup`（3 个 commit，已推送 origin）。**
@@ -35,9 +36,15 @@
 | 检查 | 脚本 | 结论 |
 |---|---|---|
 | 词表一致性 | `scripts/probe_draft_vocab.py` | e2b / e4b / 31B 词表 262144 逐 id 抽样一致、added_tokens(24) 一致 → **e2b 草稿路线成立** |
-| KV 细粒度回滚 | `scripts/probe_spec_rollback.py` + `_impact.py` | `rollback_speculative_cache` 短上下文**逐位无损**；滑窗（512）旋转后被拒草稿会覆盖环内最老槽位、trim 不可恢复，但**分布级 KL≈5e-4、top-1 不变、连续 10 轮不累积**（污染被后续真实 token 自然淘汰）→ 放行；TurboQuant(kv_bits=3.5) 同口径 → 放行 |
+| KV 细粒度回滚 | `scripts/probe_spec_rollback.py` + `_impact.py` | 〔**该行结论已于 2026-08-14 失效，见下方 ⚠️**〕当时（mlx-vlm 0.5.0）：短上下文**逐位无损**；滑窗旋转后分布级 KL≈5e-4、top-1 不变、不累积 → 放行 |
 
-重要事实（当时的关键发现，后续别再重查）：
+> ⚠️ **2026-08-14 作废重验**（mlx-vlm 0.6.13 升级后，§S.15）：同一探针在新栈上
+> 旋转滑窗态 **max|Δ|=22**（短上下文仍 Δ=0）；端到端裁决实验出实质分歧
+> （logprob Δ2.125）且该域投机净亏 0.89×。**生产 `speculative.mode` 已拨 off**，
+> 根修列 MTP 接线波头号项。下方"后续别再重查"的免检授权**一并撤销**——
+> 引擎升级后数值级探针必须重跑（这正是当初写"别再重查"埋下的坑）。
+
+重要事实（当时的关键发现；凡涉数值结论者已被上方 ⚠️ 覆盖）：
 - 装的 mlx_vlm **已原生支持** `generate_step(logits_processors=…)` 钩子与 `draft_model`
   投机（dflash/mtp 两种训练型草稿头），并提供 `_speculative_walk` 与 gemma4 的
   `rollback_speculative_cache(caches, None, accepted, block_size)`（trim = block_size-accepted-1；

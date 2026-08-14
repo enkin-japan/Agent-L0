@@ -1,8 +1,15 @@
 import mlx.core as mx
-from mlx_vlm.utils import process_image, load_audio, normalize_audio_features, process_inputs_with_fallback
+from mlx_vlm.utils import process_image, load_audio, process_inputs_with_fallback
 from PIL import Image
 import numpy as np
 from mlx_vlm.models.base import BaseImageProcessor
+
+
+def normalize_audio_features(features: mx.array) -> mx.array:
+    """mel 特征均值/方差归一化（有损音频如 MP3 的量化噪声抹平）。
+    收编自 mlx_vlm 0.5.0 utils（0.6.x 上游整个移除了这步）——本栈音频链路
+    （e4b 语音）是带归一化验证通过的，行为跟人不跟版本。"""
+    return (features - mx.mean(features)) / (mx.std(features) + 1e-6)
 
 
 def prepare_inputs(

@@ -17,6 +17,8 @@ class PromptBuilder:
         # 幽灵思考抑制（官方 thinking 文档）：Gemma-4 12B/26B/31B 关思考时须在 model 轮
         # 开头预填空思考频道，否则模型会自发打开 thought 频道（幽灵思考）烧 token。
         # e4b 官方模板无此要求，保持 False。开关来自 config.yaml model_registry 条目。
+        # 预填形态必须与官方模板逐字节一致（尾部无换行，见 build 尾部注释）——
+        # 12B 亦在此列：曾因我方多一个 \n 被误判为「无视抑制」（2026-08-14 更正）。
         self.suppress_ghost_thinking = suppress_ghost_thinking
         # 环境上下文（想法1）：稳定的环境事实，启动时算一次。机器事实自动探测；个人事实来自
         # config.yaml agent.environment（默认全空、opt-in）。只在主编排轮注入——见 build。
@@ -117,16 +119,24 @@ class PromptBuilder:
         
         for msg in messages:
             role = msg.get("role", "user")
-            prompt += f"{self.sot_token}{role}\n"
+            # 官方模板：`role = 'model' if message['role'] == 'assistant' else role`
+            # ——轮头写的是 model 不是 assistant。实测（2026-08-14，26B-4bit ×
+            # 0/4k/16k/32k）两种写法输出均正确，即本项与 §S.16 不同、无实害；
+            # 仍按字节协议纪律对齐官方（"我测的档位没事"正是当初对多余 \n 的误判）。
+            # 注意：只改**轮头字面量**，下面的分支判定仍用原始 role——写成覆盖
+            # role 会让 `role == "assistant"` 的重放抑制分支静默失效（本文件的
+            # 字节回归测试当场抓到过一次）。
+            turn_role = "model" if role == "assistant" else role
+            prompt += f"{self.sot_token}{turn_role}\n"
             
             thoughts = msg.get("thoughts", "")
             if thoughts:
-                prompt += f"{self.soc_token}thought\n{thoughts}\n{self.eoc_token}\n"
+                prompt += f"{self.soc_token}thought\n{thoughts}\n{self.eoc_token}"
             elif role == "assistant" and self.suppress_ghost_thinking:
                 # 历史重放与生成头预填保持字节一致：该轮生成时 assistant 头部预填过
                 # 空思考频道（见 build 尾部），重放时不吐同样的空频道会让 KV 前缀
                 # 在此断裂，之后整段重预填。
-                prompt += f"{self.soc_token}thought\n{self.eoc_token}\n"
+                prompt += f"{self.soc_token}thought\n{self.eoc_token}"
 
             content = msg.get("content", "")
             if isinstance(content, str) and content:
@@ -183,12 +193,17 @@ class PromptBuilder:
                 env_lines.extend(l for l in env_extra if l and l.strip())
         prompt += f"{self.sot_token}system\n" + "\n".join(env_lines) + f"\n{self.eot_token}\n"
 
-        prompt += f"{self.sot_token}assistant\n"
+        prompt += f"{self.sot_token}model\n"   # 官方模板生成头亦为 model（见上方角色映射注）
         if enable_thinking:
             prompt += f"{self.soc_token}thought\n"
         elif self.suppress_ghost_thinking:
             # 关思考时预填「空思考频道」（官方 12B/26B/31B 模板的 ghost-thinking 抑制）：
             # 模型看到已开而即闭的 thought 频道，不再自发思考，直接产出正文/工具调用。
-            prompt += f"{self.soc_token}thought\n{self.eoc_token}\n"
+            # **尾部不带换行**——官方模板的字符串字面量就在 '<channel|>' 处结束
+            # （`{{- … -}}` 削的是模板源码里标签两侧的空白，与输出内容无关，别混淆）。
+            # 多一个 \n 的后果实测（2026-08-14）：26B-4bit ≥4k
+            # 上下文首 token 即 EOT（原「发现 A」的真因，曾被误判为 PTQ 量化损伤）、
+            # 12B 输出退化成 '<|channel>::' 循环。字节级对齐官方模板，一个空白都不许多。
+            prompt += f"{self.soc_token}thought\n{self.eoc_token}"
 
         return prompt

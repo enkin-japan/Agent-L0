@@ -118,6 +118,49 @@ def test_model_option_reaches_dialect():
                                env={}).build(messages=_MSGS)
 
 
+# ---- prompt 字节协议（§S.16：多一个 \n 曾把两波质量测量判成「模型有毒」）----
+
+def test_suppression_prefill_is_byte_exact():
+    """抑制预填必须逐字节等于官方模板片段 '<|channel>thought\\n<channel|>'——
+    尾部**不得**有换行。多一个 \\n 的实测后果（2026-08-14）：26B-4bit ≥4k 上下文
+    首 token 即 EOT（曾被误判为「PTQ 量化损伤」的发现 A）、12B 输出退化成
+    '<|channel>::' 循环、前缀缓存复用瞬停（曾被误判为引擎 bug S.14）。"""
+    pb = PromptBuilder(_Proc(), suppress_ghost_thinking=True, env={})
+    p = pb.build(messages=[{"role": "user", "content": "问"}], include_env=False)
+    soc, eoc = pb.soc_token, pb.eoc_token
+    assert p.endswith(f"{soc}thought\n{eoc}"), repr(p[-40:])
+    assert not p.endswith(f"{soc}thought\n{eoc}\n"), "尾随换行回归（§S.16）"
+
+
+def test_assistant_turn_header_uses_model_role():
+    """官方模板把 assistant 映射为 model 再拼轮头（'<|turn>' + role）。
+    历史重放与生成头都必须写 model——写 assistant 是分布外输入（实测无实害，
+    但字节协议不留裁量余地）。"""
+    pb = PromptBuilder(_Proc(), suppress_ghost_thinking=False, env={})
+    p = pb.build(messages=[{"role": "user", "content": "问"},
+                           {"role": "assistant", "content": "答"}], include_env=False)
+    assert f"{pb.sot_token}model\n" in p
+    assert f"{pb.sot_token}assistant" not in p, "轮头角色名回归为 assistant"
+
+
+def test_head_and_replay_emit_identical_turn_bytes():
+    """生成头与历史重放的 assistant 轮**字节形态必须一致**：该轮生成时模型看到
+    `<|turn>model\\n<|channel>thought\\n<channel|>`，下一轮重放若吐不出同样的字节，
+    KV 前缀就在此断裂、其后整段重预填。
+    （注：整体 prompt 的分层是[稳定前缀][历史][可变尾部]，env/任务块在尾部，
+     故不能断言"生成头是重放结果的前缀"——只比该轮自身的字节。）"""
+    pb = PromptBuilder(_Proc(), suppress_ghost_thinking=True, env={})
+    turn_bytes = f"{pb.sot_token}model\n{pb.soc_token}thought\n{pb.eoc_token}"
+    head = pb.build(messages=[{"role": "user", "content": "问"}], include_env=False)
+    assert head.endswith(turn_bytes), f"生成头字节形态变了: {head[-60:]!r}"
+    replayed = pb.build(messages=[{"role": "user", "content": "问"},
+                                  {"role": "assistant", "content": "答"}],
+                        include_env=False)
+    assert turn_bytes in replayed, (
+        f"历史重放未吐出与生成头相同的轮字节（KV 前缀会断裂）\n"
+        f"期望片段={turn_bytes!r}\n实得={replayed!r}")
+
+
 def test_env_gate_survives_the_seam():
     """隐私门控（个人环境事实只进主编排轮、不进沙箱）必须穿过方言层不变。
     与 test_prompt_env.py 同一条不变量，此处守的是它经 dialect 调用时依然成立。"""

@@ -2,7 +2,10 @@
 
 - **Ornith-1.0-9B-4bit** 方言 qwen35｜revision 1e980b97｜run 20260730-190443｜62 轨迹
 - **Qwen3.5-9B-4bit** 方言 qwen35｜revision 8b2b98c0｜run 20260730-183929｜92 轨迹
-- **gemma-4-e4b-it-4bit** 方言 gemma4｜revision deb1db71｜run 20260730-192308｜92 轨迹
+- **gemma-4-e4b-it-4bit** 方言 gemma4｜revision deb1db71〔2026-08-14 已升钉
+  475b9088，本画像是**旧件**口径，待重跑回填。注：§S.16 的 prompt bug 不影响
+  e4b（它不设 suppress_ghost_thinking，从不走那条路径），画像继续可用于路由〕｜
+  run 20260730-192308｜92 轨迹
 
 | 指标 | Ornith-1.0-9B-4bit | Qwen3.5-9B-4bit | gemma-4-e4b-it-4bit |
 |---|---|---|---|
