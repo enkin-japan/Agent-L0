@@ -127,6 +127,46 @@ class _GuardAdapter:
         return mx.where(mask, logits, neg)
 
 
+def _load_drafter(target_model, draft_path: str, spec_cfg: Dict[str, Any]):
+    """加载并校验投机草稿件，返回 `(draft_model, resolved_kind)`。
+
+    **失败即抛，不降级**（§S.3）：用户显式配了草稿件却装不上/不兼容，那是配置错误。
+    静默退回非投机会把它伪装成"怎么没变快"的性能玄学，而这类玄学本项目已经吃过
+    两次亏（§S.3 / §S.15）。宁可起不来。
+    """
+    from mlx_vlm.speculative.drafters import (
+        load_drafter,
+        validate_drafter_compatibility,
+    )
+
+    kind = (spec_cfg.get("draft_kind") or "").strip() or None
+    draft_model, resolved_kind = load_drafter(draft_path, kind=kind)
+    # 用 resolved_kind 而非配置里那个：上游明说要按自动判定的结果分派
+    validate_drafter_compatibility(target_model, draft_model, resolved_kind)
+
+    # 处理器可补性前置校验：走查要逐位物化 logits 才能应用 repetition_penalty 与
+    # 工具约束 guard。目标件若走"融合 target"快路（不经 logits）或缺少逐位投影，
+    # 处理器就补不上去——那种形态必须在**装载期**否掉，而不是等生成到一半从流里
+    # 抛错（那时 token 已经吐给客户端了）。
+    lm = getattr(target_model, "language_model", target_model)
+    if not hasattr(lm, "speculative_logits_from_hidden"):
+        raise RuntimeError(
+            f"{type(lm).__name__} 未实现 speculative_logits_from_hidden，"
+            "无法在投机走查里逐位应用 logits 处理器（repetition_penalty / 工具"
+            "约束 guard）。该模型形态需单独接线，不得带着失效的处理器跑。"
+        )
+    for fused in ("speculative_argmax_from_hidden", "speculative_verify_logits"):
+        if callable(getattr(lm, fused, None)):
+            raise RuntimeError(
+                f"{type(lm).__name__} 提供了融合目标采样 {fused}()，它绕过 logits、"
+                "因而绕过全部处理器。采用即等于静默丢弃 repetition_penalty 与工具"
+                "约束 guard——该形态需单独接线，不得降级。"
+            )
+
+    print(f"[Engine] 投机草稿件已装载：{draft_path}（kind={resolved_kind}）")
+    return draft_model, resolved_kind
+
+
 class MLXBackend:
     """InferenceBackend 的 MLX 进程内实现。"""
 
@@ -138,17 +178,37 @@ class MLXBackend:
         经 AgentEngine.create 传入专用推理执行器。
         """
         from mlx_vlm.utils import load as _vlm_load
+
+        spec_cfg = cfg.get("speculative") or {}
+        draft_path = ""
+        if spec_cfg.get("mode") == "drafter":
+            draft_path = (spec_cfg.get("draft_model") or "").strip()
+            if not draft_path:
+                raise ValueError(
+                    "speculative.mode=drafter 但 speculative.draft_model 为空。"
+                    "静默按非投机跑会把配置错误伪装成「怎么没变快」的性能玄学"
+                    "（§S.3），故此处拒启。"
+                )
+
+        def _load_all():
+            """目标件与草稿件在**同一线程**加载：MLX 流是线程本地的。"""
+            m, p = _vlm_load(model_path)
+            d = _load_drafter(m, draft_path, spec_cfg) if draft_path else (None, None)
+            return m, p, d
+
         if executor is None:
-            model, processor = _vlm_load(model_path)
+            model, processor, drafter = _load_all()
         else:
             loop = asyncio.get_running_loop()
-            model, processor = await loop.run_in_executor(
-                executor, lambda: _vlm_load(model_path))
-        return cls(model, processor, {**cfg, "model_path": str(model_path)})
+            model, processor, drafter = await loop.run_in_executor(executor, _load_all)
+        return cls(model, processor, {**cfg, "model_path": str(model_path)},
+                   drafter=drafter)
 
-    def __init__(self, model, processor, cfg: Optional[Dict[str, Any]] = None):
+    def __init__(self, model, processor, cfg: Optional[Dict[str, Any]] = None,
+                 drafter=None):
         self.model = model
         self.processor = processor
+        self.draft_model, self.draft_kind = drafter or (None, None)
         cfg = cfg or {}
 
         # KV Cache 量化配置（默认关闭）：kv_bits 为 None 时走稠密缓存，
@@ -313,6 +373,10 @@ class MLXBackend:
             spec_stats = {"drafted": 0, "accepted": 0, "rounds": 0}
             kv_kwargs["speculative"] = self.speculative
             kv_kwargs["spec_stats"] = spec_stats
+            if self.draft_model is not None:
+                # 草稿件模式：模型对象走 kwargs，不进 config 字典
+                kv_kwargs["draft_model"] = self.draft_model
+                kv_kwargs["draft_kind"] = self.draft_kind
 
         # thinking 预算裁决：仅在上层给出预算时启用（摘要等裸生成不带）
         think_kwargs: Dict[str, Any] = {}

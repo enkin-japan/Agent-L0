@@ -17,6 +17,9 @@ except Exception:  # pragma: no cover - 老版本 mlx_vlm 无此模块时降级�
     TurboQuantKVCache = ()
 from .gemma4_utils import prepare_inputs
 from .rotating_cache_trim import install as _install_rotating_trim
+from .mtp_processors import install as _install_mtp_processors
+from .mtp_processors import processor_context as mtp_processor_context
+from .mtp_processors import record_emitted as mtp_record_emitted
 from mlx_vlm.generate import (
     GenerationResult,
     normalize_resize_shape,
@@ -39,6 +42,10 @@ generation_stream = mx.new_thread_local_stream(mx.default_device())
 # 带着这个修正，二者不可分离。幂等。
 _install_rotating_trim()
 
+# [MTP] 上游草稿件投机路不接 logits 处理器（repetition_penalty / 工具约束 guard
+# 会静默失效）。同上，与本模块不可分离。幂等。
+_install_mtp_processors()
+
 
 # ============================================================================
 # prompt-lookup 投机采样（inference-speedup Phase 3）
@@ -57,6 +64,42 @@ _install_rotating_trim()
 # - repetition_penalty / 约束采样 guard 在验证走查中逐位应用，语义与普通
 #   路径对齐（guard 只消费已产出 token，被拒草稿不污染其状态机）。
 # ============================================================================
+
+
+def _mtp_processor_bridge(gen, processors, prompt_tokens, penalty_window,
+                          draft_model=None, spec_stats=None):
+    """把 MTP 走查的处理器上下文套在解码生成器外层，并逐 token 登记已产出。
+
+    做成包装生成器而非 with 块，是为了不动下方那段长消费循环的缩进。语义等价：
+    生成器体在 `with` 内执行，消费方两次 `next()` 之间上下文保持进入态（线程本地，
+    而生成恒在专用推理线程内串行）。登记发生在**上游吐出之后、消费方拿到之前**，
+    因而必定早于下一轮走查——生成器惰性保证了这个次序。
+    """
+    snap = None
+    if draft_model is not None and spec_stats is not None:
+        from mlx_vlm.speculative.common import (
+            speculative_stats_since,
+            speculative_stats_snapshot,
+        )
+        snap = speculative_stats_snapshot(draft_model)
+
+    with mtp_processor_context(processors, prompt_tokens=prompt_tokens,
+                               penalty_window=penalty_window):
+        idx = 0
+        for item in gen:
+            tok = item[0]
+            if isinstance(tok, int):
+                mtp_record_emitted(tok, idx)
+                idx += 1
+            if snap is not None:
+                # 接受率观测（§7-0 ④）：草稿件把轮次/接受/草稿数记在自身的
+                # 终身计数器上，这里按快照取差，与 prompt_lookup 路同一容器回吐
+                rounds, accepted, drafted = speculative_stats_since(draft_model, snap)
+                if rounds is not None:
+                    spec_stats["rounds"] = rounds
+                    spec_stats["accepted"] = accepted
+                    spec_stats["drafted"] = drafted
+            yield item
 
 
 class _NgramIndex:
@@ -587,6 +630,46 @@ def stream_generate(
     # [Phase 3] 投机采样配置（在 prepare_inputs 之前弹出，避免陌生 kwarg 下渗）
     speculative_cfg = kwargs.pop("speculative", None) or {}
     spec_stats = kwargs.pop("spec_stats", None)
+    # 草稿件对象由后端加载后透传（配置里只有路径；模型不进 config 字典）
+    draft_model = kwargs.pop("draft_model", None)
+    draft_kind = kwargs.pop("draft_kind", None)
+
+    # [MTP] 处理器归一：把 repetition_penalty / logit_bias 等标量旋钮**在这里**
+    # 统一构造成处理器列表交给 generate_step，而不是让它自己在内部再造一份。
+    # 理由：上游草稿件投机路（run_speculative_rounds）根本不接处理器，我们要在
+    # MTP 走查里补应用（mtp_processors），而"补应用的那份"必须与"上游 _step 用的
+    # 那份"是同一个列表——各造一份必然随上游演进而漂移。标量旋钮除构造处理器外
+    # 别无他用（ar.py 全文只在 make_logits_processors 调用处出现），故等价。
+    # 条件与下方分派判据保持一致：prompt_lookup 优先级更高，若两者同时配上，
+    # 这里不该把标量旋钮搬走——lookup_generate_step 自建处理器，搬走即丢惩罚。
+    # （后端只在 mode=drafter 时才装草稿件，故实际不会同时成立；此处是让代码本身
+    #  不依赖那个外部约束。）
+    use_mtp = (speculative_cfg.get("mode") == "drafter") and draft_model is not None
+    if speculative_cfg.get("mode") == "drafter" and draft_model is None:
+        raise RuntimeError(
+            "speculative.mode=drafter 但没有草稿件——静默按非投机跑会把配置错误"
+            "伪装成「怎么没变快」的性能玄学（§S.3）。请配 speculative.draft_model。"
+        )
+    mtp_processors_list: Optional[List[Any]] = None
+    mtp_penalty_window = max(int(kwargs.get("repetition_context_size") or 50), 64)
+    if use_mtp:
+        # 必须用 mlx_vlm 那版（= generate_step 内部用的同一个），不是本文件顶部
+        # 导入的 mlx_lm 版——两者不是同一个函数，混用会让 MTP 路与非投机路的
+        # 惩罚语义悄悄分叉
+        from mlx_vlm.sample_utils import (
+            make_logits_processors as _vlm_make_logits_processors,
+        )
+        mtp_processors_list = _vlm_make_logits_processors(
+            kwargs.pop("logit_bias", None),
+            kwargs.pop("repetition_penalty", None),
+            kwargs.pop("repetition_context_size", 20),
+            kwargs.pop("presence_penalty", None),
+            kwargs.pop("presence_context_size", 20),
+            kwargs.pop("frequency_penalty", None),
+            kwargs.pop("frequency_context_size", 20),
+        )
+        mtp_processors_list.extend(kwargs.pop("logits_processors", None) or [])
+        kwargs["logits_processors"] = mtp_processors_list
 
     # Set up thinking budget criteria if requested
     thinking_budget = kwargs.pop("thinking_budget", None)
@@ -660,7 +743,19 @@ def stream_generate(
     if prompt_cache_state is not None:
         prompt_cache_state.last_reused_prefix = 0
 
-    if prompt_cache_state is not None and prompt_cache_state.cache is not None:
+    # [MTP] 缓冲缓存形态一律不复用前缀。MTP 跑过一轮后，上游
+    # `_buffer_mtp_target_cache` 会把 RotatingKVCache **就地**换成
+    # BufferedRotatingKVCache（同一个 prompt_cache 列表对象，也就是我们持久化的
+    # 那份）。它的 `keys.shape[2]` 是带回滚缓冲的**容量**而非有效长度，旋转后有效
+    # 内容跨 [start_position, offset)——下面那段按稠密语义切 [:prefix_len] 会留下
+    # 错的 token 且 start_position 变陈旧，表现为跨轮上下文静默错乱。
+    # 判据必须放在这里：再往下 input_ids 就被截断了，那时候再放弃就成了拿残缺
+    # prompt 冷预填，比不复用更糟。
+    if prompt_cache_state is not None and prompt_cache_state.cache is not None \
+            and any(hasattr(c, "start_position") for c in prompt_cache_state.cache
+                    if c is not None):
+        print("[Memory] MTP 缓冲缓存形态：本轮放弃前缀复用（退冷预填，慢但正确）")
+    elif prompt_cache_state is not None and prompt_cache_state.cache is not None:
         prefix_len = prompt_cache_state.find_prefix_length(full_input_ids_list)
         if prefix_len > 0 and prefix_len < input_ids.shape[1]:
             reused_prefix_len = prefix_len
@@ -831,6 +926,38 @@ def stream_generate(
                 spec_ngram_min=int(speculative_cfg.get("ngram_min", 2)),
                 spec_stats=spec_stats,
                 **kwargs,
+            )
+        elif use_mtp:
+            # 上游投机路 return 在 pop_forced_token_id 之前（ar.py），thinking 预算的
+            # 强制收束在草稿件模式下**不会执行**。prompt_lookup 路自己实现了它，
+            # drafter 路没有——所以这里不能默默跑，否则"预算到点自动收束"这个承诺
+            # 在这条路上是空的。生产 enable_thinking 缺省 False，故正常不触发。
+            if thinking_criteria is not None and getattr(
+                    thinking_criteria, "enable_thinking", False):
+                raise RuntimeError(
+                    "speculative.mode=drafter 与开思考态的 thinking_budget 不兼容："
+                    "上游草稿件投机路不消费 forced_token_id，预算到点不会强制收束。"
+                    "请关思考跑投机，或改用 mode=prompt_lookup（该路实现了强制收束）。"
+                )
+            # [MTP] 草稿件投机：解码循环整段交给上游 generate_step，我方只补两件——
+            # ① 处理器上下文（上游投机路不接处理器，见 mtp_processors 模块头）；
+            # ② 逐 token 登记已产出，供走查拼出真实历史。
+            gen = generate_step(
+                input_ids, model, pixel_values, mask,
+                draft_model=draft_model,
+                draft_kind=draft_kind,
+                draft_block_size=speculative_cfg.get("draft_block_size") or None,
+                **kwargs,
+            )
+            gen = _mtp_processor_bridge(
+                gen, mtp_processors_list,
+                # 惩罚窗口历史必须与上游同口径 = 实际喂进 _step 的 token
+                # （= input_ids；分块预填后上游只剩末段，这里取全量是**更长**的
+                #  窗口上界，再由 penalty_window 截断，不会少喂）
+                prompt_tokens=input_ids.flatten().tolist(),
+                penalty_window=mtp_penalty_window,
+                draft_model=draft_model,
+                spec_stats=spec_stats,
             )
         else:
             gen = generate_step(input_ids, model, pixel_values, mask, **kwargs)

@@ -1478,13 +1478,57 @@ repetition_penalty=None`（§7-1 为可复现性刻意钉死）。那恰好是�
    抑制预填多一个尾随 `\n`）→ **发现 A 撤销、S.14 结案（引擎波缓存手术整项
    取消）、QAT 质量结论作废重跑**。一次升级手术顺手清掉两个「模型/引擎缺陷」
    幻觉，代价是两波质量数据要重测。〕
+   〔✅ **2026-08-14 MTP 接线落地（代码全绿 913，真草稿件端到端待跑）**：
+   config `speculative.mode` 加 `drafter` 档 + `draft_model/draft_kind/
+   draft_block_size` 键位；后端在**推理执行器同线程**内于目标件之后装载草稿件
+   （MLX 流线程本地），`load_drafter` + `validate_drafter_compatibility`
+   **失败即抛不降级**（§S.3）；解码整段交上游 `generate_step`，我方只补两件。
+   **接线途中查实一个上游硬伤（本波真正的工作量所在）**：`generate_step` 在
+   `draft_model is not None` 时整段 `yield from run_speculative_rounds(...)`
+   并 return，而后者**签名里没有 logits_processors**——processors 只在非投机的
+   `_step` 里应用。净效果：**开草稿件投机 = 全部 logits 处理器静默失效**。
+   对本栈两条实害：① `repetition_penalty` 生产缺省 1.1，而 §S.18 实测它正是
+   12B 退化空转的兜底（`min_p` 在 sampler 里活得下来，**只有处理器这一路会死**，
+   故症状会像"只有开投机时模型偶尔发疯"）；② 工具段约束 guard 也是处理器，
+   丢了它 = 投机段 tool_call 无约束，§7-8 刚在格式层修好的问题从另一个入口回来。
+   补法落点逐条查实后收敛到**一个函数**：gemma-4 无 `speculative_argmax_from_hidden`、
+   无 `speculative_verify_logits`、有 `speculative_logits_from_hidden`，assistant
+   草稿件解析成 kind=mtp，B=1 时两条走查都汇到 `_mtp_acceptance_walk`。
+   `patch/mtp_processors.py` 替换该函数并顺序化逐位应用处理器；**无活动处理器时
+   原样委派上游**（零行为变化）。顺序化不损失正确性：被接受的 token 恒等于该位置
+   的 target token，故位置 pos 的正确历史就是「已产出 + 本轮 target[0:pos)」。
+   **首过评审揪出我一条致命设计错误**：我另造了一套 `(tokens, logits)` 协议喂
+   guard，而 `_GuardAdapter` 首调用会把 `_seen` 锁在**上游喂过的 prompt 长度**上
+   （实测 prompt 12 token → `_seen=12`），我方从空历史起步长度 1,2,3… 永远追不上
+   → guard 一个 token 都消费不到 → 工具约束在 MTP 路上等于不存在。而**正解就在
+   同一文件 400 行之上**：`lookup_generate_step` 早已把 guard 从处理器列表里拆出、
+   用 `consume()`/`mask_logits()` 直连协议驱动，惩罚历史用 `input_ids` 播种再按
+   窗口截断。已按该先例重写。**教训**：动一个已有两条实现的机制前，先读另一条
+   怎么做的——我发明了一套平行机制，还发明错了，而正确答案在同文件里。
+   评审另一条 Critical（MTP 跑过一轮后上游把缓存**就地**换成
+   `BufferedRotatingKVCache`，其 `keys.shape[2]` 是带缓冲的容量而非有效长度，
+   被前缀复用段按稠密语义切片 → 跨轮上下文静默错乱）已修：该形态整体放弃前缀
+   复用退冷预填，且判据必须放在 `input_ids` 被截断**之前**——我第一版放在循环里，
+   那时 prompt 已截断，中止等于拿残缺 prompt 冷预填，比原 bug 更糟。
+   连带响亮化：`mode=drafter` 而 `draft_model` 为空 → 拒启；目标件若走融合目标
+   采样（绕过 logits）或缺逐位投影 → **装载期**否掉（不等生成到一半从流里抛）；
+   B>1 批处理轮循环有活动处理器时拒跑（那组走查未补，Q14 并发 × MTP 要先补它）；
+   `mode=drafter` × 开思考态 thinking_budget → 拒跑（上游投机路 return 在
+   `pop_forced_token_id` 之前，预算到点不会强制收束；生产 enable_thinking 缺省
+   False 故正常不触发）。
+   **尚未做**：真草稿件端到端（需先取件，见下条③），接受率/速度实测归阶段二。〕
 3. 草稿件 4bit 本地转换 + `check_model_contract.py` 静态验证。
    〔2026-08-14 供给勘误：26B 草稿**有** MLX bf16 现成件
    `mlx-community/gemma-4-26B-A4B-it-assistant-bf16`@cda74908（0.4B/839MB，
    e4b 同系 @844e008e）——「无任何 MLX 转换」旧记不实；本地转换缩水为
    839MB 件的本地量化（分钟级）。第三方 4bit/8bit 转换存在但出处不明不采。〕
-4. 接受数/步观测口径打通。
-5. TurboQuant `kv_bits` 旋钮与 config 键位打通。
+4. 接受数/步观测口径打通。〔✅ 2026-08-14：草稿件把轮次/接受/草稿数记在自身的
+   **终身计数器**上，接线按 `speculative_stats_snapshot`/`_since` 取差，回吐进与
+   prompt_lookup 路同一个 `spec_stats` 容器。注意上游明说轮次是 batch 级的，
+   B=1 归属精确、并发下会跨请求串味（CHARTER §3 下无碍，Q14 放开时要重做归属）。〕
+5. TurboQuant `kv_bits` 旋钮与 config 键位打通。〔✅ 已在线（早于本波）：
+   backend 的 `kv_bits`/`kv_quant_scheme`/`quantized_kv_start` 三键直通
+   `generate_step`，阶段三开格无需再接。〕
 6. wired limit 管理：`iogpu.wired_limit_mb` 上调的持久化方案与开机自检。
 
 ### 1) 统一测量口径（先于一切，违者数据作废）
