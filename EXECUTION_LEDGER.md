@@ -1197,9 +1197,14 @@ backend、app 原话上报，实机当场定位。**同一清单第二次漏拷 
    **上游白赚清单**：MTP 草稿(0.6.x)+MTP 前缀缓存(0.6.4)+接受统计入 response
    timings(0.6.10→前置④基本免做)+APC×KV 量化(0.6.5)+server --max-num-seqs
    连续批处理(0.6.12→前置①的引擎侧上游已给，剩编排层接线)+tool_choice(0.6.5)。
-   **模型版本**：无 Gemma 4.1；但 Google 已出 **Gemma 4 12B**（unified 无编码器
-   多模态、带音频，e4b 与 26B 之间的稠密档，需 0.6.6+ 的 unified 修复）——
-   是否入列=阵容决策，待用户拍板，不并入手术面。〕
+   **模型版本升级（用户 2026-08-14 澄清：指钉值落后于上游件更新，非代际）**：
+   全注册表钉值 vs HEAD 探测——**e4b 三件（4bit/8bit/nvfp4）上游 2026-07-06
+   集体更新**（=v0.6.4 发布日，疑为 vendoring 后重转换件，即当初直拉报错被迫
+   钉旧版的根源），26B/31B 全系+Qwen+google 原件零漂移；手术波顺手项=e4b
+   三件升钉到新 revision 并复验（大概率**需要**新 mlx-vlm 才装得动，与手术
+   互为条件，天然同波）。横向：RedHatAI 26B NVFP4（colab 侧）上游 2026-08-13
+   刚动，下次 colab 场前复核。另：Google 新出 Gemma 4 12B 稠密档（unified
+   带音频，需 0.6.6+），入列与否=阵容决策待拍板，不并手术面。〕
 3. 草稿件 4bit 本地转换 + `check_model_contract.py` 静态验证。
    〔2026-08-14 供给勘误：26B 草稿**有** MLX bf16 现成件
    `mlx-community/gemma-4-26B-A4B-it-assistant-bf16`@cda74908（0.4B/839MB，

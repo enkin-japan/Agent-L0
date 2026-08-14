@@ -2,11 +2,12 @@
 """§7 阶段一 · 基线格测量序架（EXECUTION_LEDGER §7-1/§7-2，2026-08-13 生产机）。
 
 口径（§7-1，违者数据作废）：
-- server 进程态：本脚本自管 inference/server.py 生命周期（每模型一起一收），
+- server 进程态：本脚本自管 inference/server.py 生命周期（v3 起每格一起一收），
   经 /v1/generate 打**带真模板**的 prompt（方言 PromptBuilder 构造，与生产同路）；
 - 引擎权威计时：prompt_tps / generation_tps / peak_memory 取自生成链末 chunk
   （mlx GenerationResult 透传），TTFT 客户端记录；
-- 每格 n≥3 取中位，首跑（含全量 prefill/JIT）单列不计中位；
+- 每格 n≥3 取中位（--runs≥3；=2 仅告警，稳态样本退化为单点），首跑（含全量
+  prefill/JIT）单列不计中位；
 - KV 真实物化：**每 run 独立新缓存、全量 prefill 后测 decode**（v2 改法，2026-08-13）。
   v1 的同 cache 前缀复用被撤：26B(MoE)+suppress_ghost_thinking 在缓存复用后瞬间
   EOS（gen_tokens=1）、31B 输出头部窜出孤立 <channel|>——引擎级复用 bug 另案排查，
@@ -14,7 +15,14 @@
 - 每格质量哨：数到十 / 知识问答 / tool_call 探针（带 tool_specs 约束路径）；
 - 上下文档：0/4k/8k/16k/32k/64k，确定性填充按 tokenizer 计数配平（±2% 验收）；
 - 基线格前提：config speculative.mode=off + kv_bits 缺省稠密——脚本启动即校验，
-  不符拒跑（防「测了个投机采样基线」的静默口径污染）。
+  不符拒跑（防「测了个投机采样基线」的静默口径污染）；
+- v3 口径变更（2026-08-14，与已入账的 v1/v2 两轮不可直接并表）：采样显式钉死
+  temperature=0 / min_p=0.0 / repetition_penalty=None（真裸贪心：None 才不装
+  重复惩罚 logits 处理器；v2 走 backend 缺省 rep_penalty=1.1，**这是 v2/v3
+  不可并表的真实轴**——temp=0 下 min_p 本被 argmax 忽略，0.05→0.0 无行为差）；
+  且 server 改为**每格**一起一收（峰值内存口径回到格级）。注：环境自证不再靠
+  import mlx_vlm（父进程导入会在 server 旁开第二个 Metal 上下文），版本号走
+  distribution 元数据，导入级损坏会以首格 server 起不来的形式暴露。
 
 用法（backend/ 下）：
   .venv/bin/python scripts/bench_baseline.py --out /path/to/baseline.jsonl
@@ -52,6 +60,10 @@ DEFAULT_CTX = [0, 4096, 8192, 16384, 32768, 65536]
 MAX_TOKENS = 350
 CTX_TOL = 0.02          # ±2%（§7-1）
 INTER_CHUNK_TIMEOUT = 120
+# 采样口径：真裸贪心，显式钉死——不钉则 backend 缺省（min_p=0.05/rep_penalty=1.1）
+# 悄悄定义基线，换版即漂。repetition_penalty 必须是 None 而非 1.0：
+# make_logits_processors 只在 None/0 时跳过处理器，1.0 仍装（白花每 token 的巡检成本）
+SAMPLING_BASE = {"temperature": 0.0, "min_p": 0.0, "repetition_penalty": None}
 
 DECODE_TASKS = [
     "请写一篇约六百字的说明文，介绍潮汐现象的成因与规律。",
@@ -94,6 +106,63 @@ def read_env_key() -> str:
     return ""
 
 
+def sysctl(name: str):
+    """读 sysctl 标量；读不到返回 None（环境头缺一项不值得整跑崩在起跑线）。"""
+    try:
+        r = subprocess.run(["sysctl", "-n", name], capture_output=True, text=True,
+                           timeout=10)
+        return r.stdout.strip() or None
+    except Exception as e:
+        log(f"⚠️  sysctl {name} 读取失败：{type(e).__name__}: {e}")
+        return None
+
+
+def parse_skips(spec: str) -> set:
+    """--skip 解析：<repo尾名>:<ctx>。格式不合即报错——静默忽略等于「以为跳了其实在跑」。"""
+    out = set()
+    for it in (spec or "").split(","):
+        it = it.strip()
+        if not it:
+            continue
+        if ":" not in it:
+            raise ValueError(f"--skip 项 {it!r} 缺冒号，应为 <repo尾名>:<ctx>")
+        name, c = it.rsplit(":", 1)
+        name = name.strip()
+        if not name:
+            raise ValueError(f"--skip 项 {it!r} 模型名为空")
+        try:
+            out.add((name, int(c.strip())))
+        except ValueError:
+            raise ValueError(f"--skip 项 {it!r} 的 ctx {c.strip()!r} 不是整数") from None
+    return out
+
+
+def check_runs(runs: int) -> None:
+    """--runs 门槛：首跑不计中位，故 <2 连一个稳态样本都没有；==2 的「中位」是单点。"""
+    if runs < 2:
+        raise ValueError(f"--runs 至少为 2（首跑单列不计中位），当前 {runs}")
+    if runs == 2:
+        log("⚠️  --runs=2：稳态样本仅 1 个，中位=单点，建议 ≥3")
+
+
+def med(rows, key):
+    """中位 + 样本数。仅丢 None（缺测），0.0 是合法测量值（如亚毫秒 TTFT 圆整）；
+    丢了几个必须随值落账，否则「3 次中位」与「1 次单点」在产物里长得一模一样。"""
+    vals = [r[key] for r in rows if r.get(key) is not None]
+    return (round(statistics.median(vals), 2) if vals else None), len(vals)
+
+
+def drop_cache(cli, holder) -> None:
+    """删服务端 KV 缓存；失败留证（吞掉 = 长上下文格一路泄到 server 收摊）。"""
+    cid = (holder or {}).get("cache_id")
+    if not cid:
+        return
+    try:
+        cli.json_call("DELETE", f"/v1/cache/{cid}")
+    except Exception as e:
+        log(f"⚠️  KV 缓存 {cid} 删除失败：{type(e).__name__}: {e}")
+
+
 # ---------- HTTP ----------
 
 class Client:
@@ -127,9 +196,11 @@ class Client:
             return False
 
     def generate(self, prompt: str, *, cache_id=None, sampling=None, features=None,
-                 first_chunk_budget: float = 300.0):
+                 first_chunk_budget: float = 300.0, cache_out: dict = None):
         """SSE 消费 /v1/generate。返回 (chunks 末件, 全文, ttft, cache_id, wall)。
-        看门狗：首 chunk 前按 prefill 预算，之后逐 chunk INTER_CHUNK_TIMEOUT。"""
+        看门狗：首 chunk 前按 prefill 预算，之后逐 chunk INTER_CHUNK_TIMEOUT。
+        cache_out：meta 事件一到就把 cache_id 写进去——异常路径（超时/error/EOF/坏 JSON）
+        的服务端缓存靠它才删得掉，否则 id 随异常一起丢，KV 泄到 server 收摊为止。"""
         body = {"prompt": prompt, "sampling": sampling or {},
                 # want_delta：不带则 delta 恒 None、text 只是 last_segment（分段重置），
                 # 取全文必须靠 delta 累计（backend stream_generate 实读，2026-08-13）
@@ -144,9 +215,10 @@ class Client:
             if r.status >= 300:
                 raise RuntimeError(f"/v1/generate -> {r.status}: {r.read()[:200]!r}")
             last, text, ttft, got_cache, event = None, "", None, cache_id, ""
-            buf = b""
+            n_chunk, done = 0, False
             while True:
-                line = r.fp.readline()
+                # r.readline()（非 r.fp）：HTTPResponse 才会解 chunked 传输编码
+                line = r.readline()
                 if not line:
                     break
                 line = line.strip()
@@ -156,18 +228,29 @@ class Client:
                 if not line.startswith(b"data:"):
                     continue
                 payload = json.loads(line.split(b":", 1)[1].strip())
-                if event == "meta":
+                kind, event = event, ""  # 消费即清：野 data 行不许挂到上一事件名下
+                if kind == "meta":
                     got_cache = payload.get("cache_id", got_cache)
-                elif event == "chunk":
+                    if cache_out is not None and got_cache:
+                        cache_out["cache_id"] = got_cache
+                elif kind == "chunk":
                     if ttft is None:
                         ttft = time.time() - t0
                         c.sock.settimeout(INTER_CHUNK_TIMEOUT)  # 切换到逐 chunk 看门狗
                     last = payload
+                    n_chunk += 1
                     text += payload.get("delta") or ""
-                elif event == "error":
+                elif kind == "error":
                     raise RuntimeError(f"engine error: {payload}")
-                elif event == "done":
+                elif kind == "done":
+                    done = True
                     break
+            if not done:
+                # socket EOF 早于 done 事件 = 生成被腰斩，不是正常收尾：
+                # 当成功处理会把半截数据当满格入账（末 chunk 的 tps 也是半截口径）
+                raise RuntimeError(
+                    f"SSE 流在 done 事件前断开（EOF）：已收 {n_chunk} chunk / "
+                    f"{(last or {}).get('generation_tokens')} token")
             return last, text, ttft, got_cache, time.time() - t0
         finally:
             c.close()
@@ -223,15 +306,25 @@ def fit_filler(dialect, tok, target: int, task: str) -> str:
 
 # ---------- server 生命周期 ----------
 
-def start_server(repo: str, port: int, log_path: Path) -> subprocess.Popen:
+def start_server(repo: str, port: int, log_path: Path, api_key: str = ""):
+    """起 server 子进程，返回 (proc, 日志文件句柄)。
+    INFER_API_KEY 显式下发 read_env_key() 的同一把钥匙——两侧各读各的必然有对不上的一天。"""
     import os
     env = dict(os.environ)
     env.update({"INFER_MODEL_REPO": repo, "INFER_REMOTE_HOST": "127.0.0.1",
-                "INFER_PORT": str(port), "PYTHONUNBUFFERED": "1"})
+                "INFER_PORT": str(port), "PYTHONUNBUFFERED": "1",
+                # .env.local 无钥时回落继承的环境钥——无条件覆写空串会把子进程
+                # 鉴权静默关掉（回环绑定，bind 护栏拦不住这形态）
+                "INFER_API_KEY": api_key or env.get("INFER_API_KEY", "")})
     lf = open(log_path, "ab")
-    return subprocess.Popen(
-        [str(BACKEND_DIR / ".venv/bin/python"), str(REPO_ROOT / "inference/server.py")],
-        cwd=str(BACKEND_DIR), env=env, stdout=lf, stderr=subprocess.STDOUT)
+    try:
+        proc = subprocess.Popen(
+            [str(BACKEND_DIR / ".venv/bin/python"), str(REPO_ROOT / "inference/server.py")],
+            cwd=str(BACKEND_DIR), env=env, stdout=lf, stderr=subprocess.STDOUT)
+    except Exception:
+        lf.close()
+        raise
+    return proc, lf
 
 
 def wait_health(cli: Client, proc: subprocess.Popen, budget: float = 1200):
@@ -245,13 +338,18 @@ def wait_health(cli: Client, proc: subprocess.Popen, budget: float = 1200):
     raise RuntimeError("server 健康检查超时")
 
 
-def stop_server(proc: subprocess.Popen):
+def stop_server(proc: subprocess.Popen, logfile=None):
     proc.terminate()
     try:
         proc.wait(timeout=30)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait(timeout=10)
+    if logfile is not None:      # 每格一起一收 = 每格一个句柄，不关就攒着
+        try:
+            logfile.close()
+        except Exception:
+            pass
 
 
 # ---------- 质量哨 ----------
@@ -259,32 +357,38 @@ def stop_server(proc: subprocess.Popen):
 def run_sentinels(cli: Client, dialect, filler: str, cache_id, prefill_budget: float):
     out = {}
     def fresh_gen(prompt, max_tokens, features=None):
-        # 每哨独立新缓存（v2：复用 bug 绕行），用完即删
-        last, text, ttft, cid, wall = cli.generate(
-            prompt, cache_id=None, sampling={"max_tokens": max_tokens, "temperature": 0.0},
-            features=features, first_chunk_budget=prefill_budget)
-        if cid:
-            try:
-                cli.json_call("DELETE", f"/v1/cache/{cid}")
-            except Exception:
-                pass
-        return text
+        """每哨独立新缓存（v2：复用 bug 绕行），用完即删。
+        返回 (全文, 末 chunk)——末件里的 gen_tokens 是「瞬间 EOT(=1)」与「答歪了」的
+        唯一分辨依据，只回文本等于把两种失败糊成一种。"""
+        holder = {}
+        try:
+            last, text, ttft, cid, wall = cli.generate(
+                prompt, cache_id=None,
+                sampling={**SAMPLING_BASE, "max_tokens": max_tokens},
+                features=features, first_chunk_budget=prefill_budget,
+                cache_out=holder)
+        finally:
+            drop_cache(cli, holder)
+        return text, last
 
     # ① 数到十（中文或阿拉伯数字序列均可——判"退化与否"不判排版偏好）
-    text = fresh_gen(build_user_prompt(dialect, filler + SENTINEL_COUNT), 80)
+    text, last = fresh_gen(build_user_prompt(dialect, filler + SENTINEL_COUNT), 80)
     ok = all(z in text for z in ("一", "五", "十")) or \
         bool(re.search(r"1\D{1,4}2\D.*?5\D.*?10", text))
-    out["count"] = {"ok": ok, "sample": text[:120]}
+    out["count"] = {"ok": ok, "sample": text[:120],
+                    "gen_tokens": (last or {}).get("generation_tokens")}
     # ② 知识问答（宽容判定：H₂O/下标/LaTeX 形态均收，看骨架不看排版）
-    text = fresh_gen(build_user_prompt(dialect, filler + SENTINEL_QA), 40)
+    text, last = fresh_gen(build_user_prompt(dialect, filler + SENTINEL_QA), 40)
     norm = text.replace("₂", "2").replace("$", "").upper()
-    out["qa"] = {"ok": bool(re.search(r"H.{0,8}?2.{0,8}?O", norm)), "sample": text[:80]}
+    out["qa"] = {"ok": bool(re.search(r"H.{0,8}?2.{0,8}?O", norm)), "sample": text[:80],
+                 "gen_tokens": (last or {}).get("generation_tokens")}
     # ③ tool_call 探针（真模板带工具段 + tool_specs 约束路径）
     prompt = build_user_prompt(dialect, filler + SENTINEL_TOOL_PROMPT,
                                tools=[SENTINEL_TOOL_SPEC])
-    text = fresh_gen(prompt, 120, features={"tool_specs": [SENTINEL_TOOL_SPEC]})
+    text, last = fresh_gen(prompt, 120, features={"tool_specs": [SENTINEL_TOOL_SPEC]})
     out["tool"] = {"ok": ("get_current_time" in text and dialect.markers.stc in text),
-                   "sample": text[:150]}
+                   "sample": text[:150],
+                   "gen_tokens": (last or {}).get("generation_tokens")}
     return out
 
 
@@ -303,11 +407,11 @@ def main():
 
     models = [m for m in args.models.split(",") if m]
     ctx_levels = [int(x) for x in args.ctx.split(",")]
-    skips = set()
-    for it in args.skip.split(","):
-        if ":" in it:
-            name, c = it.rsplit(":", 1)
-            skips.add((name.strip(), int(c)))
+    try:
+        skips = parse_skips(args.skip)
+        check_runs(args.runs)
+    except ValueError as e:
+        ap.error(str(e))
     out_path = Path(args.out)
 
     cfg = load_config()
@@ -330,15 +434,17 @@ def main():
 
     import platform
     from importlib.metadata import version as pkg_version
-    import mlx_vlm  # noqa: F401  可导入性即环境自证
+    mem_raw = sysctl("hw.memsize")
+    try:
+        mem_gb = int(mem_raw) // 2**30
+    except (TypeError, ValueError):
+        log(f"⚠️  hw.memsize 不可解析（{mem_raw!r}），环境头 mem_gb 记 None")
+        mem_gb = None
     header = {
         "type": "header", "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "machine": subprocess.run(["sysctl", "-n", "hw.model"], capture_output=True,
-                                  text=True).stdout.strip(),
-        "mem_gb": int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True,
-                                     text=True).stdout.strip()) // 2**30,
-        "wired_limit_mb": subprocess.run(["sysctl", "-n", "iogpu.wired_limit_mb"],
-                                         capture_output=True, text=True).stdout.strip(),
+        "machine": sysctl("hw.model"),
+        "mem_gb": mem_gb,
+        "wired_limit_mb": sysctl("iogpu.wired_limit_mb"),
         "macos": platform.mac_ver()[0],
         "mlx": pkg_version("mlx"), "mlx_vlm": pkg_version("mlx-vlm"),
         "speculative": spec_mode, "kv": "dense",
@@ -349,7 +455,8 @@ def main():
     log(f"环境头已记：{header['machine']} {header['mem_gb']}G wired={header['wired_limit_mb']}MB "
         f"mlx={header['mlx']} spec={spec_mode}")
 
-    cli = Client(args.port, read_env_key())
+    api_key = read_env_key()
+    cli = Client(args.port, api_key)
 
     for repo in models:
         todo = [c for c in ctx_levels if (repo, c) not in done
@@ -366,77 +473,124 @@ def main():
         marker = json.loads((model_dir / ".download_complete").read_text())
         dialect, tok = make_dialect(model_dir, entry)
 
-        log(f"🚀 起 server: {repo}（权重 {weights_bytes / 2**30:.1f}G）")
-        slog = out_path.parent / f"server_{repo.split('/')[-1]}.log"
-        proc = start_server(repo, args.port, slog)
-        try:
-            dt = wait_health(cli, proc, budget=1200)
-            log(f"   server 就绪（{dt:.0f}s）")
-            for ctx in todo:
-                cell = {"type": "cell", "model": repo, "ctx": ctx,
-                        "revision": marker.get("revision"),
-                        "weights_bytes": weights_bytes, "runs": [], "complete": False,
-                        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
-                try:
-                    task0 = DECODE_TASKS[0]
-                    filler = fit_filler(dialect, tok, ctx, task0) if ctx else ""
-                    prefill_budget = 180 + ctx / 40  # 40tps 最坏预算
-                    for i in range(args.runs + 1):  # +1 = 首跑（JIT 热身，不计中位）
-                        task = DECODE_TASKS[i % len(DECODE_TASKS)]
-                        prompt = build_user_prompt(dialect, filler + task)
-                        # v2：每 run 独立新缓存 + 全量 prefill（复用 bug 绕行，见文件头）
+        short = repo.split("/")[-1]
+        for ctx in todo:
+            cell = {"type": "cell", "model": repo, "ctx": ctx,
+                    "revision": marker.get("revision"),
+                    "weights_bytes": weights_bytes, "runs": [], "complete": False,
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+            # 峰值内存口径=格级：peak_memory 是进程生命期高水位，一个 server 连跑多格
+            # 会把前一格（尤其 64k）的高水位带进后一格 → server 每格一起一收
+            slog = out_path.parent / f"server_{short}_ctx{ctx}.log"
+            proc = lf = None
+            started = launching = False
+            try:
+                # 配平是纯 tokenizer 活，放装载前——配平失败不值得白付一次模型装载，
+                # 也别让模型驻着显存陪二分搜索
+                task0 = DECODE_TASKS[0]
+                filler = fit_filler(dialect, tok, ctx, task0) if ctx else ""
+                prefill_budget = 180 + ctx / 40  # 40tps 最坏预算
+                launching = True  # 配平已过——此后失败才可能是「server 起不来」
+
+                log(f"🚀 起 server: {repo} ctx={ctx}（权重 {weights_bytes / 2**30:.1f}G）")
+                proc, lf = start_server(repo, args.port, slog, api_key)
+                dt = wait_health(cli, proc, budget=1200)
+                started = True
+                log(f"   server 就绪（{dt:.0f}s）")
+                for i in range(args.runs + 1):  # +1 = 首跑（JIT 热身，不计中位）
+                    task = DECODE_TASKS[i % len(DECODE_TASKS)]
+                    prompt = build_user_prompt(dialect, filler + task)
+                    # v2：每 run 独立新缓存 + 全量 prefill（复用 bug 绕行，见文件头）
+                    holder = {}
+                    try:
                         last, text, ttft, run_cache, wall = cli.generate(
                             prompt, cache_id=None,
-                            sampling={"max_tokens": MAX_TOKENS, "temperature": 0.0},
-                            first_chunk_budget=prefill_budget)
-                        if run_cache:
-                            try:
-                                cli.json_call("DELETE", f"/v1/cache/{run_cache}")
-                            except Exception:
-                                pass
-                        if (last or {}).get("generation_tokens", 0) <= 2:
-                            raise RuntimeError(
-                                f"run{i} 秒停（gen_tokens≤2）——复用 bug 形态在新缓存下复现？")
-                        cell["runs"].append({
-                            "idx": i, "ttft_s": round(ttft, 3) if ttft else None,
-                            "wall_s": round(wall, 2),
-                            "prompt_tokens": last.get("prompt_tokens") if last else None,
-                            "prompt_tps": last.get("prompt_tps") if last else None,
-                            "gen_tokens": last.get("generation_tokens") if last else None,
-                            "gen_tps": last.get("generation_tps") if last else None,
-                            "peak_mem_gb": last.get("peak_memory") if last else None,
-                        })
-                        log(f"   [{repo.split('/')[-1]} ctx={ctx}] run{i}: "
-                            f"gen {cell['runs'][-1]['gen_tps']} tps, "
-                            f"prefill {cell['runs'][-1]['prompt_tps']} tps, "
-                            f"ttft {cell['runs'][-1]['ttft_s']}s")
-                    # 口径校验：±2%（每 run 均为全量 prefill）
-                    pt = cell["runs"][0]["prompt_tokens"] or 0
+                            sampling={**SAMPLING_BASE, "max_tokens": MAX_TOKENS},
+                            first_chunk_budget=prefill_budget, cache_out=holder)
+                    finally:
+                        drop_cache(cli, holder)
+                    if ((last or {}).get("generation_tokens") or 0) <= 2:
+                        raise RuntimeError(
+                            f"run{i} 秒停（gen_tokens≤2）——复用 bug 形态在新缓存下复现？")
+                    gen_tokens = last.get("generation_tokens") if last else None
+                    prompt_tokens = last.get("prompt_tokens") if last else None
+                    cell["runs"].append({
+                        "idx": i, "ttft_s": round(ttft, 3) if ttft is not None else None,
+                        "wall_s": round(wall, 2),
+                        "prompt_tokens": prompt_tokens,
+                        "prompt_tps": last.get("prompt_tps") if last else None,
+                        "gen_tokens": gen_tokens,
+                        "gen_tps": last.get("generation_tps") if last else None,
+                        "peak_mem_gb": last.get("peak_memory") if last else None,
+                        # 提前 EOS 不算错，但要能审：解码量不足 MAX_TOKENS 的 run
+                        # 其 tps 采样窗更短，分析时需知情
+                        "truncated": (gen_tokens or 0) < MAX_TOKENS,
+                    })
+                    log(f"   [{short} ctx={ctx}] run{i}: "
+                        f"gen {cell['runs'][-1]['gen_tps']} tps, "
+                        f"prefill {cell['runs'][-1]['prompt_tps']} tps, "
+                        f"ttft {cell['runs'][-1]['ttft_s']}s")
+                    # 口径校验：±2%（每 run 均为全量 prefill，故 run 皆须验，不能只验首跑）
+                    # 放在 run 日志行之后——出事的 run 得先在 stdout 留脸再抛
+                    pt = prompt_tokens or 0
                     if ctx and abs(pt - ctx) > ctx * CTX_TOL:
-                        cell["ctx_warning"] = f"prompt_tokens={pt} 偏离目标 >2%"
-                    steady = cell["runs"][1:]
-                    med = lambda k: (round(statistics.median(  # noqa: E731
-                        [r[k] for r in steady if r.get(k)]), 2)
-                        if any(r.get(k) for r in steady) else None)
-                    cell["decode_tps_median"] = med("gen_tps")
-                    cell["prefill_tps"] = med("prompt_tps")
-                    cell["ttft_full_s"] = med("ttft_s")
-                    cell["peak_mem_gb"] = max((r["peak_mem_gb"] or 0) for r in cell["runs"])
+                        raise RuntimeError(
+                            f"run{i} prompt_tokens={pt} 偏离目标 {ctx} 超 ±2%")
+                steady = cell["runs"][1:]
+                cell["decode_tps_median"], cell["decode_tps_median_n"] = med(steady, "gen_tps")
+                cell["prefill_tps"], cell["prefill_tps_n"] = med(steady, "prompt_tps")
+                cell["ttft_full_s"], cell["ttft_full_s_n"] = med(steady, "ttft_s")
+                cell["peak_mem_gb"] = max((r["peak_mem_gb"] or 0) for r in cell["runs"])
+                # 哨兵炸了不陪葬测量：decode/prefill 中位已到手，SSE 在哨兵段断线
+                # 只该丢质量探针不该丢整格（复跑一格=再付一次装载+全量 prefill）
+                try:
                     cell["sentinels"] = run_sentinels(cli, dialect, filler, None,
                                                       prefill_budget)
-                    cell["complete"] = True
-                    ok = all(v["ok"] for v in cell["sentinels"].values())
-                    log(f"✅ 格 {repo.split('/')[-1]} × {ctx}: decode 中位 "
-                        f"{cell['decode_tps_median']} tps, prefill {cell['prefill_tps']} tps, "
-                        f"峰值 {cell['peak_mem_gb']}G, 质量哨 {'全过' if ok else '⚠️ 有挂'}")
-                except Exception as e:
-                    cell["error"] = f"{type(e).__name__}: {e}"
-                    log(f"❌ 格 {repo.split('/')[-1]} × {ctx} 失败: {cell['error']}")
+                except Exception as se:
+                    cell["sentinel_error"] = f"{type(se).__name__}: {se}"
+                    log(f"⚠️  哨兵段失败（测量保留）: {cell['sentinel_error']}")
+                cell["complete"] = True
+                sent = cell.get("sentinels") or {}
+                ok = bool(sent) and all(v["ok"] for v in sent.values())
+                log(f"✅ 格 {short} × {ctx}: decode 中位 "
+                    f"{cell['decode_tps_median']} tps, prefill {cell['prefill_tps']} tps, "
+                    f"峰值 {cell['peak_mem_gb']}G, 质量哨 "
+                    f"{'全过' if ok else ('⚠️ 有挂' if sent else '⚠️ 未跑成')}")
+            except Exception as e:
+                cell["error"] = f"{type(e).__name__}: {e}"
+                log(f"❌ 格 {short} × {ctx} 失败: {cell['error']}")
+            finally:
+                if proc is not None:
+                    # server 自己死了（OOM/崩）要点名留证，否则下一格只看见一堆连不上
+                    if proc.poll() is not None:
+                        cell["server_died"] = (f"server 进程已退出 rc={proc.returncode}"
+                                               f"（日志 {slog.name}）")
+                        log(f"💥 {cell['server_died']}")
+                    try:
+                        stop_server(proc, lf)
+                        log(f"🛑 收 server: {repo} ctx={ctx}")
+                    except Exception as se:
+                        # 收摊失败不许吞掉格记录（写行在 finally 之后）；进程可能
+                        # 还占着 GPU，点名留证并继续——下一格起 server 前健康检查会撞出来
+                        cell["stop_error"] = f"{type(se).__name__}: {se}"
+                        log(f"⚠️  收 server 失败（进程可能残留）: {cell['stop_error']}")
                 with out_path.open("a") as f:
                     f.write(json.dumps(cell, ensure_ascii=False) + "\n")
-        finally:
-            stop_server(proc)
-            log(f"🛑 收 server: {repo}")
+            if launching and not started:
+                # server 都起不来（装载失败/健康超时 1200s）多半是模型级问题，
+                # 逐格重试只会每格再烧 20 分钟——同模型剩余格记级联跳过后换模型
+                # （配平失败 launching=False 不级联：那是格级配额问题，下一格照跑）
+                for c2 in todo[todo.index(ctx) + 1:]:
+                    skip_cell = {"type": "cell", "model": repo, "ctx": c2,
+                                 "revision": marker.get("revision"),
+                                 "weights_bytes": weights_bytes, "runs": [],
+                                 "complete": False,
+                                 "error": f"级联跳过：ctx={ctx} 的 server 启动失败",
+                                 "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+                    with out_path.open("a") as f:
+                        f.write(json.dumps(skip_cell, ensure_ascii=False) + "\n")
+                log(f"⏭️  {short} 剩余格级联跳过（server 启动失败）")
+                break
 
     log("🏁 基线格全部完成")
 
