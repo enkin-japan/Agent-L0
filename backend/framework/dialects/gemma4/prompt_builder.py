@@ -65,7 +65,8 @@ class PromptBuilder:
             return tools_dec
         for t in tools:
             tools_json = json.dumps(t, ensure_ascii=False)
-            tools_dec += f"{self.std_token}{tools_json}{self.etd_token}\n"
+            # 工具间无分隔符、末尾无换行——官方模板是 <|tool>…<tool|><|tool>…<tool|> 紧邻
+            tools_dec += f"{self.std_token}{tools_json}{self.etd_token}"
         return tools_dec
 
     def _build_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> str:
@@ -116,7 +117,8 @@ class PromptBuilder:
                    避免累积、也不被摘要压缩污染滚动摘要。
         """
         prompt = self.bos_token
-        
+        tools_emitted = False   # 工具声明只发一次（官方：进第一个 system 轮）
+
         for msg in messages:
             role = msg.get("role", "user")
             # 官方模板：`role = 'model' if message['role'] == 'assistant' else role`
@@ -139,7 +141,10 @@ class PromptBuilder:
                 prompt += f"{self.soc_token}thought\n{self.eoc_token}"
 
             content = msg.get("content", "")
-            if isinstance(content, str) and content:
+            # role=="tool" 的正文属于 <|tool_response> 块（见下），此处不能再吐一遍
+            # ——否则每条工具结果在上下文里出现两次（2026-08-14 查出，白烧 token
+            # 且让模型看到重复观测）。
+            if isinstance(content, str) and content and role != "tool":
                 prompt += content + "\n"
             elif isinstance(content, list):
                 for item in content:
@@ -160,12 +165,33 @@ class PromptBuilder:
                 elif isinstance(content, str):
                     prompt += self._build_tool_responses([{"name": msg.get("name", "unknown_tool"), "content": content}])
             
-            if role == "system" and tools:
-                prompt += f"{self.sot_token}system\n"
+            if role == "system" and tools and not tools_emitted:
+                # 官方模板（2026-08-14 逐字节对表 + 边界渲染实证）：
+                #  · 声明紧跟 system 轮正文，不另开轮头、正文与 <|tool> 间无换行、
+                #    多工具紧邻无分隔，整轮由下面统一的 <turn|> 收口；
+                #  · 只进**第一个** system 轮（多 system 消息时后续轮不带——会话带
+                #    滚动摘要时那是第二条 system，旧写法会把整份声明发两遍）；
+                #  · 正文按 `| trim` 掐两端空白，但**轮头后的 \n 保留**（正文为空时
+                #    官方仍是 <|turn>system\n<|tool>…）。
+                # 注：声明**体**仍是本栈自建 JSON（官方为 declaration:名字{…} 紧凑
+                # DSL），那是与约束采样绑定的架构选择，另案（§7-8 待拍板）。
+                head = f"{self.sot_token}system\n"
+                idx = prompt.rfind(head)
+                if idx >= 0:
+                    cut = idx + len(head)
+                    prompt = prompt[:cut] + prompt[cut:].strip()
                 prompt += self._build_tools_declaration(tools)
-                prompt += f"{self.eot_token}\n"
+                tools_emitted = True
 
             prompt = prompt.rstrip() + f"{self.eot_token}\n"
+
+        if tools and not tools_emitted:
+            # 一条 system 消息都没有时，官方仍单开一个 system 轮只放声明，且排在
+            # 对话最前（实测渲染）。旧写法此时把声明整个丢掉——模型看不见工具，
+            # 表现为「装作调用过了」的幻觉，极难归因。
+            decl = (f"{self.sot_token}system\n"
+                    f"{self._build_tools_declaration(tools)}{self.eot_token}\n")
+            prompt = self.bos_token + decl + prompt[len(self.bos_token):]
 
         # 可变尾部：任务状态块（多步任务进行中才存在）
         if task_block:

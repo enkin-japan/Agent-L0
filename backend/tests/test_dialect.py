@@ -161,6 +161,64 @@ def test_head_and_replay_emit_identical_turn_bytes():
         f"期望片段={turn_bytes!r}\n实得={replayed!r}")
 
 
+def _tools_prompt(msgs, tools=_TOOLS, **kw):
+    return PromptBuilder(_Proc(), env={}, **kw).build(
+        messages=msgs, tools=tools, include_env=False)
+
+
+def test_tools_declaration_sits_inside_the_system_turn():
+    """官方模板：声明紧跟 system 轮正文——不另开轮头、正文与 <|tool> 间无换行，
+    整轮只有一个 <turn|>（旧写法双闭合，§S.17）。"""
+    pb = PromptBuilder(_Proc(), env={})
+    p = _tools_prompt([{"role": "system", "content": "SYS"}, {"role": "user", "content": "U"}])
+    assert f"{pb.sot_token}system\nSYS{pb.std_token}" in p, repr(p[:160])
+    assert pb.eot_token * 2 not in p, "轮闭合重复（§S.17 回归）"
+
+
+def test_tools_declarations_are_adjacent_and_emitted_once():
+    """多工具紧邻无分隔；且多条 system 消息时声明只发一次（会话带滚动摘要即第二条
+    system——旧写法把整份声明发两遍，白烧稳定前缀）。"""
+    pb = PromptBuilder(_Proc(), env={})
+    two = _TOOLS + [{"name": "t2", "description": "d2", "parameters": {}}]
+    p = _tools_prompt([{"role": "system", "content": "S1"},
+                       {"role": "system", "content": "S2"},
+                       {"role": "user", "content": "U"}], tools=two)
+    assert f"{pb.etd_token}{pb.std_token}" in p, "工具间混入了分隔符"
+    assert p.count(pb.std_token) == len(two), f"声明被发了 {p.count(pb.std_token)} 段"
+
+
+def test_tools_declaration_survives_when_no_system_message():
+    """一条 system 消息都没有时官方仍单开一轮放声明；丢掉声明=模型看不见工具，
+    却会「装作调用过了」，是最难归因的一类故障。"""
+    pb = PromptBuilder(_Proc(), env={})
+    p = _tools_prompt([{"role": "user", "content": "U"}])
+    assert pb.std_token in p, "无 system 消息时工具声明被丢弃"
+    assert p.startswith(f"{pb.bos_token}{pb.sot_token}system\n{pb.std_token}"), repr(p[:80])
+
+
+def test_empty_system_content_keeps_header_newline():
+    """正文为空时官方是 <|turn>system\\n<|tool>…——轮头后的换行必须留着。"""
+    pb = PromptBuilder(_Proc(), env={})
+    p = _tools_prompt([{"role": "system", "content": ""}, {"role": "user", "content": "U"}])
+    assert f"{pb.sot_token}system\n{pb.std_token}" in p, repr(p[:80])
+
+
+def test_no_tools_means_no_tool_markers():
+    pb = PromptBuilder(_Proc(), env={})
+    p = pb.build(messages=[{"role": "user", "content": "U"}], tools=None, include_env=False)
+    assert pb.std_token not in p
+
+
+def test_tool_observation_appears_once():
+    """工具结果只进 <|tool_response> 块——旧写法额外把正文当普通轮内容再吐一遍，
+    每条观测在上下文里出现两次。"""
+    obs = "2026-08-14 10:00:00"
+    p = _tools_prompt([{"role": "system", "content": "S"},
+                       {"role": "user", "content": "U"},
+                       {"role": "tool", "name": "get_current_time", "content": obs}])
+    assert p.count(obs) == 1, f"观测出现 {p.count(obs)} 次\n{p!r}"
+
+
 def test_env_gate_survives_the_seam():
     """隐私门控（个人环境事实只进主编排轮、不进沙箱）必须穿过方言层不变。
     与 test_prompt_env.py 同一条不变量，此处守的是它经 dialect 调用时依然成立。"""

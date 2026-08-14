@@ -376,19 +376,22 @@ def run_sentinels(cli: Client, dialect, filler: str, cache_id, prefill_budget: f
     ok = all(z in text for z in ("一", "五", "十")) or \
         bool(re.search(r"1\D{1,4}2\D.*?5\D.*?10", text))
     out["count"] = {"ok": ok, "sample": text[:120],
-                    "gen_tokens": (last or {}).get("generation_tokens")}
+                    "gen_tokens": (last or {}).get("generation_tokens"),
+                    "prompt_tokens": (last or {}).get("prompt_tokens")}
     # ② 知识问答（宽容判定：H₂O/下标/LaTeX 形态均收，看骨架不看排版）
     text, last = fresh_gen(build_user_prompt(dialect, filler + SENTINEL_QA), 40)
     norm = text.replace("₂", "2").replace("$", "").upper()
     out["qa"] = {"ok": bool(re.search(r"H.{0,8}?2.{0,8}?O", norm)), "sample": text[:80],
-                 "gen_tokens": (last or {}).get("generation_tokens")}
+                 "gen_tokens": (last or {}).get("generation_tokens"),
+                 "prompt_tokens": (last or {}).get("prompt_tokens")}
     # ③ tool_call 探针（真模板带工具段 + tool_specs 约束路径）
     prompt = build_user_prompt(dialect, filler + SENTINEL_TOOL_PROMPT,
                                tools=[SENTINEL_TOOL_SPEC])
     text, last = fresh_gen(prompt, 120, features={"tool_specs": [SENTINEL_TOOL_SPEC]})
     out["tool"] = {"ok": ("get_current_time" in text and dialect.markers.stc in text),
                    "sample": text[:150],
-                   "gen_tokens": (last or {}).get("generation_tokens")}
+                   "gen_tokens": (last or {}).get("generation_tokens"),
+                   "prompt_tokens": (last or {}).get("prompt_tokens")}
     return out
 
 
@@ -403,6 +406,9 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--skip", default="",
                     help="逗号分隔的 <repo尾名>:<ctx> 已证不可行格（如 OOM 实证），跳过不测")
+    ap.add_argument("--sentinels-only", action="store_true",
+                    help="只跑质量哨，跳过解码 run 与中位（§S.16 修复后的质量重跑："
+                         "速度数据未受污染，无需重烧解码段）")
     args = ap.parse_args()
 
     models = [m for m in args.models.split(",") if m]
@@ -427,7 +433,10 @@ def main():
         for ln in out_path.read_text().splitlines():
             try:
                 r = json.loads(ln)
-                if r.get("type") == "cell" and r.get("complete"):
+                # 口径必须同款才算「已测」：哨兵格里没有 decode/prefill/峰值，
+                # 拿它顶一个全格会让续跑静默跳过、产出一份缺列的 jsonl
+                if (r.get("type") == "cell" and r.get("complete")
+                        and bool(r.get("sentinels_only")) == bool(args.sentinels_only)):
                     done.add((r["model"], r["ctx"]))
             except Exception:
                 pass
@@ -449,6 +458,9 @@ def main():
         "mlx": pkg_version("mlx"), "mlx_vlm": pkg_version("mlx-vlm"),
         "speculative": spec_mode, "kv": "dense",
         "max_tokens": MAX_TOKENS, "runs": args.runs,
+        # 口径自证：哨兵口径的文件里没有解码段，header 不写清楚会让读者
+        # 以为 runs/max_tokens 真跑过
+        "sentinels_only": bool(args.sentinels_only),
     }
     with out_path.open("a") as f:
         f.write(json.dumps(header, ensure_ascii=False) + "\n")
@@ -497,7 +509,10 @@ def main():
                 dt = wait_health(cli, proc, budget=1200)
                 started = True
                 log(f"   server 就绪（{dt:.0f}s）")
-                for i in range(args.runs + 1):  # +1 = 首跑（JIT 热身，不计中位）
+                # 质量重跑口径：只跑哨兵段。server 仍每格一起一收（少省那点装载时间
+                # 不值得把 v1 的跨格共享 server 状态请回来——prefill 才是大头）
+                for i in ([] if args.sentinels_only
+                          else range(args.runs + 1)):  # +1 = 首跑（JIT 热身，不计中位）
                     task = DECODE_TASKS[i % len(DECODE_TASKS)]
                     prompt = build_user_prompt(dialect, filler + task)
                     # v2：每 run 独立新缓存 + 全量 prefill（复用 bug 绕行，见文件头）
@@ -536,11 +551,16 @@ def main():
                     if ctx and abs(pt - ctx) > ctx * CTX_TOL:
                         raise RuntimeError(
                             f"run{i} prompt_tokens={pt} 偏离目标 {ctx} 超 ±2%")
-                steady = cell["runs"][1:]
-                cell["decode_tps_median"], cell["decode_tps_median_n"] = med(steady, "gen_tps")
-                cell["prefill_tps"], cell["prefill_tps_n"] = med(steady, "prompt_tps")
-                cell["ttft_full_s"], cell["ttft_full_s_n"] = med(steady, "ttft_s")
-                cell["peak_mem_gb"] = max((r["peak_mem_gb"] or 0) for r in cell["runs"])
+                if args.sentinels_only:
+                    # 无解码 run → 无中位、无峰值（空序列 max 会抛）；显式标记口径，
+                    # 免得后人把这些格与含速度的格并表
+                    cell["sentinels_only"] = True
+                else:
+                    steady = cell["runs"][1:]
+                    cell["decode_tps_median"], cell["decode_tps_median_n"] = med(steady, "gen_tps")
+                    cell["prefill_tps"], cell["prefill_tps_n"] = med(steady, "prompt_tps")
+                    cell["ttft_full_s"], cell["ttft_full_s_n"] = med(steady, "ttft_s")
+                    cell["peak_mem_gb"] = max((r["peak_mem_gb"] or 0) for r in cell["runs"])
                 # 哨兵炸了不陪葬测量：decode/prefill 中位已到手，SSE 在哨兵段断线
                 # 只该丢质量探针不该丢整格（复跑一格=再付一次装载+全量 prefill）
                 try:
@@ -549,13 +569,22 @@ def main():
                 except Exception as se:
                     cell["sentinel_error"] = f"{type(se).__name__}: {se}"
                     log(f"⚠️  哨兵段失败（测量保留）: {cell['sentinel_error']}")
-                cell["complete"] = True
+                # 哨兵口径下哨兵**就是**全部产出：炸了就是空格，不能标 complete
+                # （标了会被续跑永久跳过）。全格口径下速度中位已到手，仍算完成。
+                cell["complete"] = not (args.sentinels_only and cell.get("sentinel_error"))
                 sent = cell.get("sentinels") or {}
                 ok = bool(sent) and all(v["ok"] for v in sent.values())
-                log(f"✅ 格 {short} × {ctx}: decode 中位 "
-                    f"{cell['decode_tps_median']} tps, prefill {cell['prefill_tps']} tps, "
-                    f"峰值 {cell['peak_mem_gb']}G, 质量哨 "
-                    f"{'全过' if ok else ('⚠️ 有挂' if sent else '⚠️ 未跑成')}")
+                qmark = '全过' if ok else ('⚠️ 有挂' if sent else '⚠️ 未跑成')
+                if args.sentinels_only:
+                    bits = []
+                    for k, v in sent.items():
+                        gt = v.get("gen_tokens")
+                        bits.append(f"{k}:✓" if v.get("ok") else f"{k}:✗(gt={gt})")
+                    log(f"✅ 格 {short} × {ctx}（哨兵口径）: {qmark} — {' / '.join(bits)}")
+                else:
+                    log(f"✅ 格 {short} × {ctx}: decode 中位 "
+                        f"{cell['decode_tps_median']} tps, prefill {cell['prefill_tps']} tps, "
+                        f"峰值 {cell['peak_mem_gb']}G, 质量哨 {qmark}")
             except Exception as e:
                 cell["error"] = f"{type(e).__name__}: {e}"
                 log(f"❌ 格 {short} × {ctx} 失败: {cell['error']}")
