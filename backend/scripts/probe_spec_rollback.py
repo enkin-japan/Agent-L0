@@ -38,6 +38,11 @@ def main():
     from mlx_vlm.models import cache as cache_mod
     from mlx_vlm.generate import maybe_quantize_kv_cache
 
+    # 测的是生产栈：装上 §S.15 根修（旋转态 trim 时序化+物理切尾）。
+    # 不装则「稠密/长上下文」与「TurboQuant/长上下文」两格 max|Δ|=22。
+    from framework.backends.mlx.patch.rotating_cache_trim import install
+    install()
+
     print(f"加载模型：{MODEL_DIR}")
     model, processor = load(MODEL_DIR)
     lm = model.language_model

@@ -16,6 +16,7 @@ try:
 except Exception:  # pragma: no cover - 老版本 mlx_vlm 无此模块时降级为稠密路径
     TurboQuantKVCache = ()
 from .gemma4_utils import prepare_inputs
+from .rotating_cache_trim import install as _install_rotating_trim
 from mlx_vlm.generate import (
     GenerationResult,
     normalize_resize_shape,
@@ -33,6 +34,11 @@ from mlx_vlm.generate import (
 # 生成在哪个线程跑都各自成流,与上游辅助函数(共享其自己的 thread-local 流)天然兼容。
 generation_stream = mx.new_thread_local_stream(mx.default_device())
 
+# §S.15 根修：旋转态 RotatingKVCache.trim 只改记账不搬内容（回滚后 logits
+# max|Δ|=22）。装在这里而非 backend.py：凡用到本模块的投机/MTP 回滚路径都必须
+# 带着这个修正，二者不可分离。幂等。
+_install_rotating_trim()
+
 
 # ============================================================================
 # prompt-lookup 投机采样（inference-speedup Phase 3）
@@ -45,8 +51,9 @@ generation_stream = mx.new_thread_local_stream(mx.default_device())
 # 正确性锚点：
 # - 每个产出 token 都是主模型在「其真实前缀」下按同一 sampler 采出的样本，
 #   草稿只决定验证批的形状，不改变分布（贪心下与普通路径逐 token 一致）；
-# - 拒绝回滚用 gemma4 的 rollback_speculative_cache（Phase 1 探针：短上下文
-#   逐位无损；滑窗旋转态 KL≈5e-4 且不随轮数累积）；
+# - 拒绝回滚用 gemma4 的 rollback_speculative_cache（探针实测：短上下文与滑窗
+#   旋转态均逐位无损 max|Δ|=0.000000，含 TurboQuant 量化态）。旋转态的无损性
+#   依赖 rotating_cache_trim 的 §S.15 根修——上游原实现在该态 max|Δ|=22；
 # - repetition_penalty / 约束采样 guard 在验证走查中逐位应用，语义与普通
 #   路径对齐（guard 只消费已产出 token，被拒草稿不污染其状态机）。
 # ============================================================================
@@ -267,7 +274,14 @@ def lookup_generate_step(
         return logits_all, pre, gdn
 
     def _discard_block(n: int, gdn=None) -> None:
-        """整块作废：缓存回退 n 条（强制收束打断已预发的下一轮时用）。"""
+        """整块作废：缓存回退 n 条（强制收束打断已预发的下一轮时用）。
+
+        〔§S.15 后按不变式已不可达〕预发只在 `tb is None` 时发生，而本函数的两个
+        调用点都在 `tb.forced_token_id` 分支内，故 `pending` 恒为 None、二者不相交。
+        保留是因为它还带着 SSM/GDN 分支（别的模型形态会用），且一旦将来有人放宽
+        预发条件，旋转态的整块作废会在 rotating_cache_trim 里**显式抛错**而非
+        静默给出错误几何——不变式破了要响，不能哑。
+        """
         if n <= 0:
             return
         with mx.stream(generation_stream):
@@ -371,7 +385,14 @@ def lookup_generate_step(
         b = new_tokens[-1]
 
         # ---- 预发下一轮（与下方 yield 段的 python 消费重叠）----
-        if emitted + len(new_tokens) < max_tokens:
+        # 有 thinking 预算时不预发（§S.15）：强制收束会调 _discard_block 整块作废
+        # 已预发的块，而**整块作废在旋转态不可逆**——rollback 用 accepted=-1 即
+        # trim=block_size，切完只剩 max_size-1 条，凑满窗所需的最老 token 已被
+        # _update_concat 的前裁淘汰、不复存在。`tb` 在函数入口绑定一次、全程不重绑，
+        # 故本条使「pending 非空 ⟹ tb is None ⟹ 强制收束分支不可达」成为不变式。
+        # 代价：有 thinking 预算的请求失去这一层流水重叠（正确性 > 速度；若实测
+        # 该重叠值钱，正解是预发前快照将被淘汰的那几行 KV 以支持无损恢复，另案）。
+        if emitted + len(new_tokens) < max_tokens and tb is None:
             nd = _next_draft()
             nb = [b] + nd
             nl, npre, ngdn = _launch(nb, nd)
@@ -749,6 +770,12 @@ def stream_generate(
                         c.values = c.values[:, :, :prefix_len, :]
                         if hasattr(c, "offset"):
                             c.offset = prefix_len
+                        if hasattr(c, "_idx"):
+                            # RotatingKVCache 的 _idx 必须跟着切片走，否则留下
+                            # `_idx != keys.shape[2]` 的不自洽态。今天靠后续
+                            # update_and_fetch 先覆写 _idx 而自愈，但 §S.15 根修
+                            # 后 trim 会**读** _idx（判时序序），不再能指望自愈。
+                            c._idx = prefix_len
             kwargs["prompt_cache"] = kv_cache
 
     if thinking_budget is not None:

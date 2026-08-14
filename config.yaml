@@ -289,9 +289,11 @@ inference:
   # prompt-lookup 投机采样（inference-speedup Phase 3）：从上下文 n-gram 匹配草稿、
   # 主模型批量验证 + 回滚，decode 有效吞吐提升。off=关闭（行为与改动前完全一致）。
   speculative:
-    mode: "off"                 # off | prompt_lookup ←0.6.13 升级后旋转滑窗回滚失真
-                                # （实质分歧 logprob Δ2.1 + 低命中域倒亏 0.89x，2026-08-14 裁决
-                                # 实验），修复归 MTP 接线波头号项，修好前不开（正确性>速度）
+    mode: "off"                 # off | prompt_lookup
+                                # 〔2026-08-14〕正确性障碍（0.6.13 旋转滑窗回滚失真）**已根修**：
+                                # 见 §S.15 / patch/rotating_cache_trim.py，三口径 max|Δ|=0.000000。
+                                # 仍保持 off 的是**性能**理由——同日裁决实验测到低命中域倒亏
+                                # 0.89x（接受率 4%）。开与不开待实测定夺，不是正确性问题了。
     num_draft_tokens: 8         # 单轮草稿长度 k 上限（无命中时自然退化为普通 decode）
     ngram_max: 3                # n-gram 匹配窗口上限（3→2 逐级降配）
     ngram_min: 2                # 低于该长度不出草稿（1-gram 误命中率过高）
