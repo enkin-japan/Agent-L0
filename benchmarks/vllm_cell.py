@@ -15,7 +15,10 @@
   mlx_vlm `speculative/common.py:151-157` accepted = 首次不匹配前的命中数（不含 bonus）
   两边 accepted 语义一致 ⇒ acceptance_rates[k-1] ≡ P(accepted ≥ k)，可逐位对表。
 
-用法：python vllm_cell.py <target> <draft|none> <k|0> <prompt.json> <max_tokens> <out.json> [eager]
+用法：python vllm_cell.py <target> <draft|none> <k|0> <prompt.json> <max_tokens> <out.json>
+          [第7参 eager|graph] [第8参 quantization，如 fp8]
+第 7 参只认字面量 "eager"（其余值一律等于 graph），但要传第 8 参就必须占住第 7 位，
+故惯用 "graph" 当占位。`max_model_len` 由环境变量 VLLM_MAXLEN 控制（缺省 4096）。
 """
 import json
 import os
@@ -27,7 +30,14 @@ os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")  # 探针要挂进�
 TARGET, DRAFT, K = sys.argv[1], sys.argv[2], int(sys.argv[3])
 PROMPT_FILE, MAX_TOKENS, OUT = sys.argv[4], int(sys.argv[5]), sys.argv[6]
 EAGER = len(sys.argv) > 7 and sys.argv[7] == "eager"
+# 第 8 参 = 量化方式（如 fp8）。A100 是 Ampere，vLLM 的 fp8 在这里走 Marlin
+# **权重量化**路——与 MLX 的 8bit 权重量化同类，比 bf16 对齐得多。
+QUANT = sys.argv[8] if len(sys.argv) > 8 else None
 UTIL = float(os.environ.get("VLLM_UTIL", "0.80"))
+# max_model_len 直接决定 KV 池的**需求**。31B fp8 权重占满卡后只剩 0.89GiB，
+# 而 4096 需要 3.45GiB → 引擎拒起。本对照只用 61+400=461 tok，故可压到 1024。
+# 缺省仍为 4096，保持既有 e4b/26B 那两批数据的口径不变。
+MAXLEN = int(os.environ.get("VLLM_MAXLEN", "4096"))
 
 ROUNDS: list = []
 
@@ -51,10 +61,20 @@ def main():
     ids = json.load(open(PROMPT_FILE))["token_ids"]
     sp = SamplingParams(temperature=0.0, max_tokens=MAX_TOKENS)
 
-    kw = dict(model=TARGET, max_model_len=4096, gpu_memory_utilization=UTIL,
+    kw = dict(model=TARGET, max_model_len=MAXLEN, gpu_memory_utilization=UTIL,
               enforce_eager=EAGER, disable_log_stats=False)
+    if QUANT:
+        kw["quantization"] = QUANT
     if K > 0:
         kw["speculative_config"] = {"model": DRAFT, "num_speculative_tokens": K}
+
+    # max_model_len 小于 prompt+生成 会被引擎悄悄截断：tps 按短跑算，
+    # 而 JSON 里仍记着请求的 max_tokens —— 一行看不出问题的坏数据。
+    need = len(ids) + MAX_TOKENS
+    if MAXLEN < need:
+        raise SystemExit(
+            f"VLLM_MAXLEN={MAXLEN} < prompt {len(ids)} + max_tokens {MAX_TOKENS} = {need}："
+            "本格会被截断且不报错，拒绝开跑。")
 
     llm = LLM(**kw)
     llm.generate([TokensPrompt(prompt_token_ids=ids)], sp)      # 预热，不计时
@@ -69,7 +89,8 @@ def main():
     accepted = sum(a for _, a in ROUNDS)
     out = {
         "target": TARGET, "draft": DRAFT if K > 0 else None, "gamma": K,
-        "eager": EAGER, "max_tokens": MAX_TOKENS, "prompt_tokens": len(ids),
+        "eager": EAGER, "quant": QUANT, "max_model_len": MAXLEN,
+        "max_tokens": MAX_TOKENS, "prompt_tokens": len(ids),
         "tps": n / dt, "tokens": n, "sec": dt, "rounds": len(ROUNDS),
         "drafted": drafted, "accepted": accepted,
         "rate": (accepted / drafted) if drafted else None,

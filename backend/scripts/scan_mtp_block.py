@@ -55,46 +55,24 @@ CTX_QUESTION = ("请系统介绍板块构造学说：从大陆漂移假说讲到
 ACCEPT_LOG: list = []
 
 
-def install_moe_sort_patch():
-    """强制打开 SwitchGLU 的排序路（`MTP_FORCE_MOE_SORT=1` 时生效）。
+def report_moe_sort_state() -> str:
+    """报告生产侧 MoE 排序阈值补丁的状态（**只读，本脚本不再自己打补丁**）。
 
-    上游 `switch_layers.py:174` 是 `do_sort = indices.size >= 64`；K=8 时等价于
-    **M≥8 才排序**，而 MTP 验证批 M=block_total ∈ {2..6} 永远够不到。
-    排序路 `_gather_sort` 把同专家的行聚拢并置 `sorted_indices=True`，
-    正是"同一专家只装载一次"的机制——实测 26B 在 M=8 处（排序开启）
-    曲线出现台阶，回收约 +14%。本开关把该阈值降到 0，测小 M 区间能否同样回收。
-
-    只改分组策略，**不改任何数值**：排序后再 `_scatter_unsort` 还原顺序。
+    2026-08-15 之前这里有一份 bench 私有的 `install_moe_sort_patch`，由
+    `MTP_FORCE_MOE_SORT=1` 开启。那份已迁进生产装载路
+    （`framework/backends/mlx/patch/moe_sort_threshold.py`，随 gemma4_generate 导入
+    即安装），bench 侧再留一份就会出现两个补丁互相覆盖、且"bench 能测到、生产拿不到"
+    的老问题。此处只把**当前阈值**取回来随数打印——两张差 9% 的表若不带这个数，
+    事后分不清是补丁生效还是热漂移。
     """
-    import os
-    if os.environ.get("MTP_FORCE_MOE_SORT") != "1":
-        return lambda: None
-    import mlx.core as mx
-    from mlx_vlm.models import switch_layers as SL
-
-    orig = SL.SwitchGLU.__call__
-
-    # 阈值取 16（=M≥2）而非 0：M=1 时一个 token 选 K 个**互不相同**的专家，
-    # 没有重复可消，排序纯是开销——实测强制到 M=1 会把基线拖慢 3.3%。
-    THRESH = int(os.environ.get("MTP_MOE_SORT_THRESH", "16"))
-
-    def forced(self, x, indices):
-        if indices.size < THRESH:
-            return orig(self, x, indices)
-        x = mx.expand_dims(x, (-2, -3))
-        x, idx, inv_order = SL._gather_sort(x, indices)
-        if self.training:
-            idx = mx.stop_gradient(idx)
-        x_up = self.up_proj(x, idx, sorted_indices=True)
-        x_gate = self.gate_proj(x, idx, sorted_indices=True)
-        x = self.down_proj(self.activation(x_up, x_gate), idx, sorted_indices=True)
-        x = SL._scatter_unsort(x, inv_order, indices.shape)
-        return x.squeeze(-2)
-
-    SL.SwitchGLU.__call__ = forced
-    print(f"[patch] SwitchGLU 排序阈值 64 → {THRESH}"
-          f"（indices.size≥{THRESH}，即 M≥{max(1, THRESH // 8)} 时排序）")
-    return lambda: setattr(SL.SwitchGLU, "__call__", orig)
+    try:
+        from framework.backends.mlx.patch import moe_sort_threshold as P
+        from mlx_vlm.models import switch_layers as SL
+        on = SL.SwitchGLU.__call__ is P.switch_glu_call
+        return (f"MoE 排序阈值补丁：{'已装' if on else '**未装**'}，"
+                f"阈值={P.min_size()}（上游缺省 64）")
+    except Exception as exc:  # 稠密档/接口变动都不该让 bench 挂掉
+        return f"MoE 排序阈值补丁：状态未知（{type(exc).__name__}: {exc}）"
 
 
 def install_accept_probe():
@@ -235,7 +213,7 @@ async def main() -> int:
                                "模型提前结束了，本格标签会与事实不符。")
         print()
 
-    unsort = install_moe_sort_patch()
+    print(report_moe_sort_state())
     uninstall = install_accept_probe()
     try:
         results: dict = {}
@@ -311,7 +289,6 @@ async def main() -> int:
               f"{'（可接受）' if abs(drift) < 0.05 else '⚠️ 超 5%，本批数据存疑'}")
     finally:
         uninstall()
-        unsort()
     return 0
 
 

@@ -17,6 +17,10 @@ except Exception:  # pragma: no cover - 老版本 mlx_vlm 无此模块时降级�
     TurboQuantKVCache = ()
 from .gemma4_utils import prepare_inputs
 from .rotating_cache_trim import install as _install_rotating_trim
+try:  # 纯性能补丁：mlx_vlm 挪走 switch_layers 时降级为不装，不拖垮后端
+    from .moe_sort_threshold import install as _install_moe_sort
+except Exception:  # pragma: no cover - 上游模块结构变动时的降级路径
+    _install_moe_sort = None
 from .mtp_processors import install as _install_mtp_processors
 from .mtp_processors import processor_context as mtp_processor_context
 from .mtp_processors import record_emitted as mtp_record_emitted
@@ -45,6 +49,16 @@ _install_rotating_trim()
 # [MTP] 上游草稿件投机路不接 logits 处理器（repetition_penalty / 工具约束 guard
 # 会静默失效）。同上，与本模块不可分离。幂等。
 _install_mtp_processors()
+
+# [MTP·MoE] 上游 SwitchGLU 的排序阈值 64 让 MTP 验证批（M×top_k = 16..48）
+# 永远够不到排序路，同一专家被逐 token 重读。降到 16 后 26B 生产实测 1.37×
+# （同一次装载内开/关交错 A/B：+9.0%，输出逐字符相同）。幂等；
+# 稠密模型不经过 SwitchGLU，装了也不触发。
+# 与上两条不同的是：mlx_vlm 若挪走 switch_layers，本模块的 import 会连带把
+# gemma4_generate 整个拖挂（=后端起不来）。这是个**性能**补丁，不该有这种权力，
+# 故容错降级——拿不到就不装，后端照常起。
+if _install_moe_sort is not None:
+    _install_moe_sort()
 
 
 # ============================================================================
