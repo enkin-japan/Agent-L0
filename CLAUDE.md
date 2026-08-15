@@ -56,6 +56,10 @@
 - `implementer`: multi-file feature implementation and moderately complex bug
   fixes.
 - `reviewer`: first-pass review of a diff, before the main session signs off.
+- `stage-reviewer`: post-stage full review (Opus 5 + xhigh, i.e. the ultracode
+  thinking tier). Not a per-diff reviewer — it audits a whole completed stage:
+  conclusions vs raw data, archive completeness, cross-document consistency,
+  billing/secret paths. See "Stage review" below for when it is mandatory.
 - Built-in `Explore` agent: broad read-only codebase reconnaissance that would
   otherwise flood the main context with file dumps. Pass a cheaper `model` in
   the Agent call (it has no frontmatter pin and would inherit the session
@@ -64,7 +68,8 @@
   finish yourself in a handful of tool calls. If one subagent can complete the
   task, use one rather than several.
 - Do not spawn a subagent to verify or double-check work another subagent just
-  did. The two gates below are the only verification steps.
+  did. The two per-diff gates below and the stage review are the only
+  verification steps.
 
 ### Delegation contract
 - Every delegation must include: the specific file paths involved, and explicit
@@ -89,6 +94,30 @@ change). Docs-only and ledger-only diffs are exempt.
    reviewer's report is input to that decision, not a replacement for it.
 - Beyond reporting test results, do not instruct subagents to re-verify their own
   work. Redundant verification instructions cost tokens without adding quality.
+
+### Stage review — mandatory after every completed stage (user decision, 2026-08-16)
+- Trigger: a stage/station/wave has closed out — its commits are pushed and the
+  closeout is being (or has just been) reported to the user. Before declaring
+  the stage fully done, the main session launches `stage-reviewer` over the
+  stage's entire commit range (plus any external repos touched).
+- This is a third verification layer on top of the per-diff gates, at a
+  different granularity: per-diff review checks the change; stage review audits
+  the stage — conclusions recomputed from raw data, archive completeness
+  (referenced artifacts actually in git), test-assertion validity, billing- and
+  secret-path safety in ops scripts, and cross-document number consistency.
+  Origin: a same-tier full review on 08-16 found 33 real defects in a stage
+  that had already passed both per-diff gates.
+- The delegation must include: the commit range, external repo paths/branches,
+  environment facts (venv, GPU/port occupancy, what verification is allowed),
+  and the stage's claimed conclusions (or where they are recorded).
+- The stage-reviewer only reports; the main session verifies its findings
+  (agents can be wrong — behavioral evidence beats fingerprints), applies the
+  fixes, and runs the fixes through the normal per-diff gates. A stage is not
+  closed until its stage review's confirmed findings are fixed or explicitly
+  deferred with the user.
+- Do not substitute the stage review for the per-diff gates or vice versa;
+  do not run more than one stage review per stage (fix-up commits after the
+  review do not re-trigger it — they go through the per-diff gates only).
 
 ### Escalation
 - A task counts as failed if its acceptance criteria are not met.

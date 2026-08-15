@@ -2248,4 +2248,14 @@ fail-open——已改 case 通配免管道；redact_dir 吞错+豁免使漏密�
 
 ---
 
+**纪律更新：阶段收官全盘复审制度化（2026-08-16，用户拍板）**——新设
+`stage-reviewer` 子代理（钉 Opus 5 + xhigh，即 ultracode 思考档；只读只报告），
+每个阶段收官后由主会话对该阶段全部 commit 发起阶段级审计（结论复算/档案完整性/
+测试有效性/计费与密路/跨文档一致性），为逐 diff 双门之上的第三验证层。发现由
+主会话核实（行为判据优先）、修正走常规双门，未清则阶段不算关。缘起：同日同档
+复审在已过双门的阶段里查出 33 条实错。`.claude/agents/stage-reviewer.md` +
+CLAUDE.md "Stage review" 节。
+
+---
+
 *建立：2026-07-16 ｜ 依据：`ROADMAP.md` + 用户 Q1/Q2 答复 + `CHARTER.md` / `REARCHITECTURE.md` 实读 + 两侧代码实测。*
