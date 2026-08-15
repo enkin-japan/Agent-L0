@@ -155,13 +155,34 @@ def _load_drafter(target_model, draft_path: str, spec_cfg: Dict[str, Any]):
             "无法在投机走查里逐位应用 logits 处理器（repetition_penalty / 工具"
             "约束 guard）。该模型形态需单独接线，不得带着失效的处理器跑。"
         )
+    # 融合目标采样（qwen3_5 类形态自带）绕过 logits、因而绕过全部处理器。
+    # 处置从「拒启」改为「显式击倒」（08-15 夜接线）：实例属性置 None 遮蔽类方法，
+    # 上游两处分派均以 callable(getattr(...)) 判定（mtp.py:117/:145），置 None 即
+    # 干净落回 speculative_logits_from_hidden 的 hidden 路——与 gemma 同形态，
+    # 处理器批量走查照常。§S.3 反静默降级三重保留：①这里响亮打印；②击倒后
+    # 立即复核，遮不住就照旧拒启；③走查侧仍有 target_tokens 兜底断言
+    # （mtp_processors.py），万一上游改了分派判据会当场响。
+    # 覆盖的漂移形态：上游若把 callable(getattr(...)) 判据改成 hasattr(...)，
+    # 击倒后 hasattr 仍真、分派会去调 None() 而在 mtp.py 深处抛 TypeError——
+    # 响但不在守卫处（评审注记）；走查侧 target_tokens 兜底断言仍会先拦。
     for fused in ("speculative_argmax_from_hidden", "speculative_verify_logits"):
         if callable(getattr(lm, fused, None)):
-            raise RuntimeError(
-                f"{type(lm).__name__} 提供了融合目标采样 {fused}()，它绕过 logits、"
-                "因而绕过全部处理器。采用即等于静默丢弃 repetition_penalty 与工具"
-                "约束 guard——该形态需单独接线，不得降级。"
-            )
+            try:
+                setattr(lm, fused, None)
+            except AttributeError as exc:  # property/__slots__ 类只读形态
+                raise RuntimeError(
+                    f"{type(lm).__name__} 的融合目标采样 {fused}() 无法用实例属性"
+                    f"遮蔽（{exc}）。融合路绕过全部处理器，不得降级——"
+                    "该形态需单独接线。"
+                ) from exc
+            if callable(getattr(lm, fused, None)):
+                raise RuntimeError(
+                    f"{type(lm).__name__} 的融合目标采样 {fused}() 置 None 后仍可调"
+                    "（__getattr__ 语义特殊？）。融合路绕过全部处理器，"
+                    "不得降级——该形态需单独接线。"
+                )
+            print(f"[Engine] 已禁用 {type(lm).__name__}.{fused}（融合采样绕过 "
+                  "logits 处理器；改走 hidden+批量投影走查路，与 gemma 同形态）")
 
     # 草稿深度天花板：官方三个 assistant 件的 config.json **都没有 block_size 键**
     # （实读 2026-08-14），落到上游默认 4 → 每轮草稿数恒为 3。而

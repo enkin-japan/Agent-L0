@@ -64,8 +64,16 @@ cleanup(){
     [ -f "$STATE/sessions.json.bak" ] && cp "$STATE/sessions.json.bak" "$CLI_CFG/sessions.json"
     colab stop -s "$name" 2>&1 | tail -1
   fi
-  sleep 3
-  if colab ls 2>&1 | sed $'s/\x1b\\[[0-9;]*m//g' | grep -q "No active sessions"; then
+  # 验停带重试：stop 刚返回时 ls 输出形态不稳（08-15 首跑实撞：3 秒后首查
+  # 未匹配、几秒后即 "No active sessions"——差点误报未停）
+  stopped=0
+  for _ in 1 2 3; do
+    sleep 5
+    if colab ls 2>&1 | sed $'s/\x1b\\[[0-9;]*m//g' | grep -q "No active sessions"; then
+      stopped=1; break
+    fi
+  done
+  if [ "$stopped" = "1" ]; then
     note "✅ 会话已确认停止"
   else
     note "⚠️⚠️ 会话可能未停！立即手查：colab ls / colab stop -s ${name} / daily.sh rescue"

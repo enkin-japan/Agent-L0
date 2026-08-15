@@ -22,7 +22,7 @@
 
 单 GPU 纪律：本脚本自己加载模型，跑之前确认没有别的真模型进程/推理服务在跑。
 用法：
-  python3 scripts/scan_mtp_block.py <目标件> <草稿件> [块列表] [重复数] [tokens] [ctx]
+  python3 scripts/scan_mtp_block.py <目标件> <草稿件> [块列表] [重复数] [tokens] [ctx] [方言]
   python3 scripts/scan_mtp_block.py models/gemma-4-31b-it-8bit \\
       models/gemma-4-31b-it-assistant-bf16 2,3,4,5,6,7,8,10 3 400
 """
@@ -43,6 +43,13 @@ MAX_TOKENS = int(sys.argv[5]) if len(sys.argv) > 5 else 400
 # 第 6 参 = 目标上下文长度（token）。>0 则先用**基线**生成一段真实回答塞进前一轮，
 # 把上下文顶到该长度再开测——production 的形态是长对话，而 ctx=0 的数只说明冷启动。
 CTX = int(sys.argv[6]) if len(sys.argv) > 6 else 0
+# 第 7 参 = 方言（缺省 gemma4，行为不变）。qwen3_5 档必须传 qwen35：gemma4 模板
+# 的特殊标记对 qwen tokenizer 是畸形 prompt，接受率会失真且全程不报错。
+DIALECT = sys.argv[7] if len(sys.argv) > 7 else "gemma4"
+# 立刻验方言名（评审：模型 model_type 是 qwen3_5 而方言键是 qwen35，手滑概率高；
+# 拖到 build_prompt 才炸要先白付 31GB 装载）
+from framework.dialects import get_dialect_class as _validate_dialect  # noqa: E402
+_validate_dialect(DIALECT)
 
 PROMPT_TEXT = ("详细说明光合作用的完整过程，分光反应与暗反应两部分展开，"
                "每部分至少三点。")
@@ -99,7 +106,7 @@ def _dialect(target_dir: str):
     from transformers import AutoTokenizer
     from framework.dialects import get_dialect_class
     tok = AutoTokenizer.from_pretrained(target_dir)
-    return get_dialect_class("gemma4").create(
+    return get_dialect_class(DIALECT).create(
         SimpleNamespace(tokenizer=tok), options={"suppress_ghost_thinking": True}), tok
 
 
@@ -198,7 +205,14 @@ async def main() -> int:
         # 回灌前必须查特殊标记：后端不 skip_special_tokens，解码文本里若混进轮/频道
         # 标记，再经方言组装就会变成**真的**控制 token，造出畸形 prompt 且全程不报错，
         # 接受率随之失真（首过评审 M6）。
-        bad = [m for m in ("<|turn>", "<turn|>", "<|channel>", "<channel|>", "<bos>")
+        # 标记表随方言走（评审 Critical：qwen35 场只查 gemma 标记＝守卫静默空转，
+        # 恰是本守卫要防的"畸形 prompt 不报错"形态）
+        markers = {
+            "gemma4": ("<|turn>", "<turn|>", "<|channel>", "<channel|>", "<bos>"),
+            "qwen35": ("<|im_start|>", "<|im_end|>", "<think>", "</think>",
+                       "<tool_call>", "<|vision_start|>"),
+        }[DIALECT]
+        bad = [m for m in markers
                if m in prior_answer]
         if bad:
             raise RuntimeError(f"前一轮答里含特殊标记 {bad}，回灌会造出畸形 prompt。"
@@ -279,7 +293,7 @@ async def main() -> int:
                   f"接受率 {rate:5.1%}  AL {al:4.2f}  轮 {len(all_acc):>4}  "
                   f"tok {statistics.median(ntok):.0f}"
                   f"{' ⚠️长度偏离基线%.0f%%' % (dev * 100) if dev > 0.02 else ''}  "
-                  f"{'输出同基线' if same else '输出与基线不同(数值,已判良性)'}")
+                  f"{'输出同基线' if same else ('输出与基线不同(数值,已判良性)' if DIALECT == 'gemma4' else '输出与基线不同(数值;等价性判据仅对 gemma4 建立)')}")
             print(f"{'':>13}P(≥k) k=1..{gamma}: {fmt_dist(all_acc, gamma)}")
 
         print()
