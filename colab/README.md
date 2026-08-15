@@ -90,6 +90,17 @@ repetition_context_size 无对应物；vision/audio 载荷透传未实测；per-
 logits_processors 若被所装 vLLM 版本拒绝→约束降级为上游解析兜底（structural-tag
 迁移候补）；Qwen3.6 方言按 qwen35 预注册，模板兼容性=联调首验项。
 
+## bench 专用会话（bench_bootstrap.sh + bench_mtp_recheck.sh，2026-08-15 起）
+
+评测批不走 serve 链（server 起完就得杀掉腾 GPU，且是链条里最脆的段）：Mac 侧
+`colab new` → 上传 colab.env/引导/驱动/评测件 → exec 点火 `bench_bootstrap.sh`
+（tailscale+代码+pip 撕裂处置+拉件+热补丁，就绪信号 BOOT_READY）→ **之后一律走
+ssh/scp（root@colab-a100）**——exec 会话凭据 ~45min 必失效而 VM 照常计费（08-15
+四连崩验尸，§8.3 三案同因），12h 长稳形态的本质就是 exec 只点火。驱动
+`bench_mtp_recheck.sh` 逐格出 `RESULT` 行、产物落 /content/bench_out/，Mac 侧
+逐格 scp 取回（会话丢最多损失一格）。新脚本首跑按磨合纪律分钟级盯梢
+（持久记忆 new-script-shakedown-monitoring）。
+
 ## 日用一键起停（daily.sh，2026-08-09 起）
 
 白天开、晚上关的日常算力端（背景：余量 unit 榨汁，L4 1.54u/h 可支撑约 20 天日用）。

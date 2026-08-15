@@ -1,0 +1,35 @@
+== baseline_8bit (58s) rc=0
+  | 
+  | 光反应发生在**叶绿体的类囊体膜（Thylakoid Membrane）**上。其核心功能是将光能转化为化学能，并产生高能电子载体和质子梯度，为暗反应提供能量和还原力。
+  | 
+  | #### 1. 光能的吸收与电子传递链（ETC）的启动
+  | - **光系统II（PSII）吸收光子**：类囊体膜上的光系统II中的叶绿素a分子吸收光能，导致其反应中心（P680）的电子被激发至高能级。
+  | - **水的光解（Photolysis of Water）**：为了补充失去的电子，PSII催化水分子分解（2H₂O → 4H⁺ + 4e⁻ + O₂）。这一过程释放出氧气（O₂）作为副产物，并产生质子（H⁺）进入类囊体腔。
+  | - **电子传递**：高能电子通过一系列电子载体（如质体醌PQ、细胞色素b6f复合体、质体蓝素PC）传递至光系统I（PSI）。在此过程中，电子能量逐步降低，释放的能量用于将H⁺从叶绿体基质泵入类囊体腔，形成跨膜质子梯度。
+  | 
+  | #### 2. 光系统I（PSI）的再激发与NADPH的生成
+  | - **PSI吸收光子**：电子到达光系统I后，PSI中的叶绿素a分子（
+== mtp_block3_8bit (45s) rc=0
+  | 2. **水的光解与氧气释放**
+  | 在光系统II（PSII）中，为了补充被激发走的电子，水分子（H₂O）在光解酶（OEC）的作用下被分解：
+  | \[
+  | 2H_2O \rightarrow 4H^+ + 4e^- + O_2
+  | \]
+  | 此过程释放出氧气（O₂），作为副产物扩散到大气中；同时产生的质子（H⁺）进入类囊体腔，电子则进入电子传递链。
+  | 
+  | 3. **ATP与NADPH的生成**
+  | - **ATP合成**：电子在传递过程中释放能量，用于将H⁺从类囊体基质泵入类囊体腔，形成跨膜质子梯度。H⁺通过ATP合酶（ATP Synth
+  | Speculative decoding: 2.40 accepted tokens/round (1.40 accepted drafts/round, 70.2% of drafted, avg draft 2.00) over 166 rounds
+== mtp_block4_8bit (39s) rc=0
+  | 2. **水的光解与氧气释放**
+  | 在光系统II（PSII）中，为了补充被激发走的电子，水分子（H₂O）在光解酶（OEC）的作用下被分解：
+  | \[
+  | 2H_2O \rightarrow 4H^+ + 4e^- + O_2
+  | \]
+  | 此过程释放出氧气（O₂），作为副产物扩散到大气中；同时产生的质子（H⁺）进入类囊体腔，电子则进入电子传递链。
+  | 
+  | 3. **ATP与NADPH的生成**
+  | - **ATP合成**：电子在传递过程中释放能量，用于将H⁺从类囊体基质泵入类囊体腔，形成跨膜质子梯度。H⁺通过ATP合酶（ATP Synth
+  | Speculative decoding: 2.82 accepted tokens/round (1.82 accepted drafts/round, 60.8% of drafted, avg draft 2.99) over 142 rounds
+
+[exited with code 0]

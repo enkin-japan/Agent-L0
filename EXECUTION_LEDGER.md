@@ -833,8 +833,10 @@ pass 0.941 / **MRR 0.969 与 A100 完全一致**（name 3/3 满分、multidoc �
 
 **大档评测波·第 6 站 ✅（2026-08-08）：CLI 40G 补测批（batch6，~1.65h≈8.7u）**——
 **头牌 · Gemma-4 官方 MTP assistant（26B）成立**：k=2 +62%、**k=4 1.92×**
-（139.8→269.0 gen_tps）〔08-15 注：本页两处 "k=4" 与 vLLM 官方 PR 同基线用 γ=8
-的记述冲突，其一有误，γ 原值待查起服日志原件——MTP_PROJECT.md §3.1 A9〕，tool_call 0.92 逐项同分/解析错 0/first_shot 0.913 不动
+（139.8→269.0 gen_tps）〔08-15 晚复核收案：γ=8 假说实测判死（受控 1.00×/chat 比
+k4 慢 17%），"k=4" 记法成立；但 **1.92× 绑定本站当时负载（~350tok 长输出+旧题库+
+vLLM 0.26），当前栈短工具调用负载仅 1.18×、受控 400tok 1.39×，不可当现值引用**
+——全案 MTP_PROJECT.md §7，原始数据 benchmarks/data/mtp-vllm-recheck/〕，tool_call 0.92 逐项同分/解析错 0/first_shot 0.913 不动
 ——质量零漂移，且全程 structural-tag 约束在位=**投机 × 约束共存实证**；KV 跨模型
 共享接线日志实锤（草稿 4 层→目标 28/29 层）。排障三层洋葱（各自入坑账）：
 ①speculative_config 须 `method:"mtp"`（无 method 落通用 draft 路径维度崩；网上
@@ -2152,6 +2154,33 @@ tool_call 通过率天花板未知。
 **建议**：迁移。但这是**架构决策 + 高风险改约束采样**，请拍板后再动；
 拍板前 tool 哨数据一律标注「污染口径」不作选型依据。
 → 2026-08-14 用户拍板「迁移，开工」，落地记录见本节开头。
+
+---
+
+**vLLM 1.92× 复核场 ✅（2026-08-15 晚，用户令"搁置扩展/继续优化，先验 1.92×"）**——
+**结论：不复现**。当前栈（vLLM 0.27.1+现题库）短工具调用负载 on/off 仅 **1.18×**、
+k=8 有害（短轮 0.64× 倒亏）、受控 400tok **1.39×**（B5 复现 ✓）；同题库本机 mlx 生产栈
+**1.40×** 反超。γ=8 假说实测判死 → **A9 收案**（台账"k=4"记法成立）。跨平台裁决：
+**差距不归硬件**（同负载稳态打平；硬件差在绝对 tps 1.79×，不在加速比）。附带首测
+A8 代价可见（mlx 开 MTP 前缀命中 0.42→0.0）。全案 MTP_PROJECT.md §7 + 预测判定
+`benchmarks/predictions/prediction_vllm_recheck.md`，原始数据 `benchmarks/data/mtp-vllm-recheck/`。
+场务：**四连崩验尸**（①serve 链 30min 停滞真凶=torch 家族 CUDA 撕裂致 server 六连崩不可见；
+②bash3.2 全角变量坑重蹈；③"-U 对齐"被 PyPI 构建矩阵证伪；④**exec 凭据 ~45min 失效而 VM
+照常计费**——§8.3 三案同因实锤，12h 长稳的本质=exec 只点火其余走 tailscale）→ v5 形态
+（bench_bootstrap.sh 最小引导 + ssh/scp 数据面）干净跑通晋级已验证；撕裂修复回灌
+daily_serve_chain.sh/bootstrap.sh（下场必崩的坑已拆）。监控纪律升级（用户明立）：新脚本/
+环境有变首跑=分钟级磨合监控，看门狗只配已验证脚本（持久记忆 new-script-shakedown-monitoring）。
+Colab 全日 ≈15.8u（余 ~294u），其中 ~7.6u 为设计缺口学费、~4u 为环境漂移发现成本。
+同日并行：**Qwen3.8-27B 入册**（08-13 发布，28B 稠密混合注意力+原生视觉，qwen35 方言
+解析错 0 直接兼容）：8bit 画像 tool 0.92/long 1.0/vision 0.948/16.3tps/36.4G，
+**4bit 全维度反超**（0.96/1.0/0.958/27.9tps/21.1G=效率王）；MTP 草稿件（1 层头，block3）
+上游实测接受率 70.2%@γ2 / 60.8%@γ3（AL 2.40/2.82，量化稳健），**上游路净加速：8bit
+16.5→33.1/34.5 tps（block3 2.01× / block4 2.09×）、4bit 29.0→55.0 tps（block3 1.90×）**
+——内建 MTP 头接受率远超 gemma 外挂 assistant（60.8% vs 45.9% @γ3），净比直逼 gemma-31b
+稠密档。基线双证（引擎直连=eval 画像；4bit 上 CLI 差分与引擎逐位吻合验证口径可混）。
+但**本栈生产路对 qwen3_5 融合采样拒启**（speculative_argmax_from_hidden 绕处理器，
+§S.3 反静默降级）——Qwen MTP 进生产需专门接线，候补任务。原始件
+`benchmarks/data/qwen38-first-look/`。
 
 ---
 

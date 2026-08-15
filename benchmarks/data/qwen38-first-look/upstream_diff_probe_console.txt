@@ -1,0 +1,24 @@
+TIER 8bit
+RAW off mt=100 wall=38.78 
+RAW off mt=400 wall=51.47 
+DIFF off decode_tps≈23.6 (Δwall 12.69s / 300tok)
+RAW mtp_b3 mt=100 wall=30.50 | Speculative decoding: 2.50 accepted tokens/round (1.50 accepted drafts/round, 75.0% of drafted, avg draft 2.00) over 40 rounds
+RAW mtp_b3 mt=400 wall=39.56 | Speculative decoding: 2.40 accepted tokens/round (1.40 accepted drafts/round, 70.2% of drafted, avg draft 2.00) over 166 rounds
+DIFF mtp_b3 decode_tps≈33.1 (Δwall 9.06s / 300tok)
+RAW mtp_b4 mt=100 wall=30.56 | Speculative decoding: 2.86 accepted tokens/round (1.86 accepted drafts/round, 62.5% of drafted, avg draft 2.97) over 35 rounds
+RAW mtp_b4 mt=400 wall=39.26 | Speculative decoding: 2.82 accepted tokens/round (1.82 accepted drafts/round, 60.8% of drafted, avg draft 2.99) over 142 rounds
+DIFF mtp_b4 decode_tps≈34.5 (Δwall 8.70s / 300tok)
+UPSTREAM_PROBE_DONE 8bit
+TIER 4bit
+RAW off mt=100 wall=26.88 
+RAW off mt=400 wall=17.65 
+DIFF off 差分失效(Δ=-9.23s)
+RAW mtp_b3 mt=100 wall=6.17 | Speculative decoding: 2.50 accepted tokens/round (1.50 accepted drafts/round, 75.0% of drafted, avg draft 2.00) over 40 rounds
+RAW mtp_b3 mt=400 wall=11.62 | Speculative decoding: 2.45 accepted tokens/round (1.45 accepted drafts/round, 72.9% of drafted, avg draft 1.99) over 163 rounds
+DIFF mtp_b3 decode_tps≈55.0 (Δwall 5.45s / 300tok)
+RAW mtp_b4 mt=100 wall=6.12 | Speculative decoding: 2.86 accepted tokens/round (1.86 accepted drafts/round, 63.1% of drafted, avg draft 2.94) over 35 rounds
+RAW mtp_b4 mt=400 wall=12.25 | Speculative decoding: 2.88 accepted tokens/round (1.88 accepted drafts/round, 62.9% of drafted, avg draft 2.99) over 139 rounds
+DIFF mtp_b4 decode_tps≈48.9 (Δwall 6.13s / 300tok)
+UPSTREAM_PROBE_DONE 4bit
+
+[exited with code 0]

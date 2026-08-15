@@ -19,6 +19,13 @@
           [第7参 eager|graph] [第8参 quantization，如 fp8]
 第 7 参只认字面量 "eager"（其余值一律等于 graph），但要传第 8 参就必须占住第 7 位，
 故惯用 "graph" 当占位。`max_model_len` 由环境变量 VLLM_MAXLEN 控制（缺省 4096）。
+
+SPEC_METHOD 环境变量（2026-08-15 复核场新增）：非空时写进 speculative_config 的
+"method" 键（如 "mtp"）。台账 batch6 的 1.92× 走的是 method:"mtp"（KV/嵌入共享的
+官方 MTP 路），而本脚本既有各批（e4b/31B/26B B5）从未传 method——vLLM 对
+Gemma4MTP 架构的草稿件会不会自动路由到 mtp 路径，正是本键要 A/B 的问题之一。
+故输出里同时记请求值（spec_method）与**引擎生效值**（spec_method_effective，
+从 vllm_config 读回）——A/B 的证据必须是后者。
 """
 import json
 import os
@@ -33,6 +40,7 @@ EAGER = len(sys.argv) > 7 and sys.argv[7] == "eager"
 # 第 8 参 = 量化方式（如 fp8）。A100 是 Ampere，vLLM 的 fp8 在这里走 Marlin
 # **权重量化**路——与 MLX 的 8bit 权重量化同类，比 bf16 对齐得多。
 QUANT = sys.argv[8] if len(sys.argv) > 8 else None
+SPEC_METHOD = os.environ.get("SPEC_METHOD", "").strip() or None
 UTIL = float(os.environ.get("VLLM_UTIL", "0.80"))
 # max_model_len 直接决定 KV 池的**需求**。31B fp8 权重占满卡后只剩 0.89GiB，
 # 而 4096 需要 3.45GiB → 引擎拒起。本对照只用 61+400=461 tok，故可压到 1024。
@@ -53,7 +61,26 @@ def install_probe():
     M.SpecDecodingStats.observe_draft = patched
 
 
+def effective_spec_method(llm):
+    """从引擎读回实际生效的投机 method（记录进产物）。
+
+    三种异常态用可区分哨兵值，绝不与真值 "mtp" 的缺席混淆（评审）：
+      no_spec_config —— 引擎根本没挂投机（K>0 时出现即投机静默未生效，本探针
+                        存在的头号意义就是抓它）；
+      no_method_attr —— vllm 升级改了属性名；
+      probe_fail:XX  —— 属性路径整个变了。
+    """
+    try:
+        sc = llm.llm_engine.vllm_config.speculative_config
+        if sc is None:
+            return "no_spec_config"
+        return getattr(sc, "method", "no_method_attr")
+    except Exception as exc:
+        return f"probe_fail:{type(exc).__name__}"
+
+
 def main():
+    import vllm as _vllm
     from vllm import LLM, SamplingParams
     from vllm.inputs import TokensPrompt
 
@@ -67,6 +94,8 @@ def main():
         kw["quantization"] = QUANT
     if K > 0:
         kw["speculative_config"] = {"model": DRAFT, "num_speculative_tokens": K}
+        if SPEC_METHOD:
+            kw["speculative_config"]["method"] = SPEC_METHOD
 
     # max_model_len 小于 prompt+生成 会被引擎悄悄截断：tps 按短跑算，
     # 而 JSON 里仍记着请求的 max_tokens —— 一行看不出问题的坏数据。
@@ -89,6 +118,9 @@ def main():
     accepted = sum(a for _, a in ROUNDS)
     out = {
         "target": TARGET, "draft": DRAFT if K > 0 else None, "gamma": K,
+        "spec_method": SPEC_METHOD if K > 0 else None,
+        "spec_method_effective": effective_spec_method(llm) if K > 0 else None,
+        "vllm": _vllm.__version__,
         "eager": EAGER, "quant": QUANT, "max_model_len": MAXLEN,
         "max_tokens": MAX_TOKENS, "prompt_tokens": len(ids),
         "tps": n / dt, "tokens": n, "sec": dt, "rounds": len(ROUNDS),

@@ -1,0 +1,7 @@
+[06:48:14] == 评测窗口：停监理循环与 server，腾 GPU
+[06:48:17] ENV Name: vllm Version: 0.27.1 NVIDIA A100-SXM4-40GB, 40960 MiB 
+[06:48:17] CELL_START c0 (γ=0 method=无)
+[06:48:28] CELL_FAIL c0 rc=1 tail:   File "/usr/local/lib/python3.12/dist-packages/torchaudio/_extension/utils.py", line 124, in _check_cuda_version     raise RuntimeError( RuntimeError: Detected that PyTorch and TorchAudio were compiled with different CUDA versions. PyTorch has CUDA version 13.0 whereas TorchAudio has CUDA version 12.8. Please install the TorchAudio version that matches your PyTorch version. 
+[06:48:28] EVAL_START e_off
+[06:48:36] CELL_FAIL e_off rc=1 tail:   File "/usr/local/lib/python3.12/dist-packages/transformers/utils/import_utils.py", line 2430, in __getattr__     raise ModuleNotFoundError( ModuleNotFoundError: Could not import module 'AutoProcessor'. Are this object's requirements defined correctly? 
+[06:48:36] FATAL: 连续两格失败，中止保预算

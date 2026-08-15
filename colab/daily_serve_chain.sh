@@ -60,15 +60,40 @@ if [ ! -d "$APP/.git" ]; then
     "https://x-access-token:${GIT_TOKEN}@github.com/enkin-japan/Agent-L0.git" \
     "$APP" || die "clone 失败"
 fi
+# 脱敏（2026-08-15 评审）：token URL 会被 git 原样写进 .git/config，日志/控制台
+# 捕获随时可能外带——clone 完立即换回干净 URL
+git -C "$APP" remote set-url origin "https://github.com/enkin-japan/Agent-L0.git" 2>/dev/null
 git -C "$APP" rev-parse --short HEAD
 # transformers 钉 <5.15（与 bootstrap.sh:98 同一处方，双份安装行必须同钉——2026-08-11
 # 夜实撞：只钉 bootstrap 漏钉本行，新 A100 场照崩 head_dim）：5.15.0 对 gemma 系
 # 逐层配置强抛 AmbiguousGlobalPerLayerAttribute，vLLM get_head_size 启动即炸。
-pip -q install -U vllm "huggingface_hub[hf_transfer]" "transformers<5.15" \
+# hf_transfer 按普通包装（hub 1.27 起 extra 'hf-transfer' 不存在，方括号写法静默 no-op）
+pip -q install -U vllm huggingface_hub hf_transfer "transformers<5.15" \
     fastapi uvicorn pyyaml requests llguidance pillow soundfile || die "pip 失败"
+# torch 家族 CUDA 撕裂处置（2026-08-15 复核场实撞，v1 场即本链 30min 停滞判死的
+# 真凶）：新 Colab 镜像 torch=cu13 而预装 torchaudio 停 cu12.8，torchaudio 版本
+# 自检在 vllm 导入链上直接 RuntimeError → server 六连崩，本链的 peek 只看
+# chain.log 尾部、与真停滞不可分辨。PyPI 默认 torchaudio 也是 cu12.8 构建，
+# "-U 对齐"无效——直接卸（transformers 软依赖，缺席干净降级；本链不装 ASR 腿，
+# CUDA ASR 的 faster-whisper 处方在 bootstrap.sh，也不经 torchaudio）。
+pip -q uninstall -y torchaudio >/dev/null 2>&1 || true
 for d in /usr/local/lib/python3*/dist-packages/nvidia/*/lib; do
   [ -d "$d" ] && export LD_LIBRARY_PATH="$d:$LD_LIBRARY_PATH"
 done
+# torchvision 处置须在 LD 路径修复之后（先探会把仅缺库路径的好件误判撕裂）。
+# 本链伺服视觉档（26B/31B capabilities 含 vision），tv 是硬需求：撕裂先对齐重试，
+# 仍撕裂就 FATAL——不卸（卸了=静默阉割视觉，比起不来更糟）。
+python -c "import torchvision" >/dev/null 2>&1 || {
+  echo "torchvision 撕裂 → 尝试与 torch 同波次对齐"
+  pip -q install -U torchvision >/dev/null 2>&1 || true
+}
+# 依赖全链自检：坏依赖在此现形并 FATAL，别拖到 server 六连崩才被判停滞
+python - <<'PY' || die "依赖全链自检失败（torch 家族撕裂？看上方 traceback）"
+import torch, torchvision, vllm
+from transformers import AutoProcessor
+print(f"deps ok: vllm {vllm.__version__} | torch {torch.__version__} | "
+      f"tv {torchvision.__version__} | cuda {torch.cuda.is_available()}")
+PY
 
 echo "== ③ 内存哨兵 + 拉件（tier=${TIER}）"
 ( while true; do

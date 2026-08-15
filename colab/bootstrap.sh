@@ -82,6 +82,8 @@ if [ ! -d "$APP/backend" ]; then
     [ -n "${GIT_TOKEN:-}" ] && CLONE_URL="https://x-access-token:${GIT_TOKEN}@github.com/enkin-japan/Agent-L0.git"
     git clone --depth 1 "$CLONE_URL" "$APP" \
       || die "无 Drive 代码包且 clone 失败"
+    # 脱敏（2026-08-15 评审）：token URL 会留在 .git/config，clone 完立即换干净 URL
+    git -C "$APP" remote set-url origin "https://github.com/enkin-japan/Agent-L0.git" 2>/dev/null
   fi
 fi
 echo "代码就绪: $APP（$(cat "$ROOT/code/HEAD.txt" 2>/dev/null || echo 'HEAD 未知')）"
@@ -95,17 +97,33 @@ mkdir -p "$PIP_CACHE_DIR"
 # transformers 钉 <5.15：5.15.0 对 gemma 系逐层配置强抛 AmbiguousGlobalPerLayerAttribute，
 # vLLM get_head_size 全局读 head_dim 即崩（2026-08-10 实案：新 VM 漂到 5.15.0，
 # server 六连崩 supervisor 放弃）。等 vLLM 适配后再解钉。
-pip -q install -U vllm "huggingface_hub[hf_transfer]" "transformers<5.15" \
+# hf_transfer 按普通包装（hub 1.27 起 extra 'hf-transfer' 不存在，方括号写法静默 no-op）
+pip -q install -U vllm huggingface_hub hf_transfer "transformers<5.15" \
     fastapi uvicorn pyyaml requests llguidance pillow soundfile faster-whisper \
   || die "pip 安装失败"
+# torch 家族 CUDA 撕裂处置（2026-08-15 CLI 复核场实撞）：新镜像 torch=cu13 而预装
+# torchaudio 停 cu12.8，其版本自检在 vllm 导入链上直接 RuntimeError；PyPI 默认
+# torchaudio 同为 cu12.8 构建，"-U 对齐"无效——直接卸（transformers 软依赖，缺席
+# 干净降级；ASR 走 faster-whisper/CTranslate2 不经 torchaudio）。
+pip -q uninstall -y torchaudio >/dev/null 2>&1 || true
 # vLLM 新轮子的原生扩展可能链更高大版的 CUDA 运行时（实测 cu13）而 Colab 自带
 # torch 是 cu12x——pip 的 nvidia/* 库目录全部前置进 LD 路径，两代 cudart soname
 # 不同可共存（A100 首会话实测修法）
 for d in /usr/local/lib/python3*/dist-packages/nvidia/*/lib; do
   [ -d "$d" ] && export LD_LIBRARY_PATH="$d:$LD_LIBRARY_PATH"
 done
-python -c "import vllm, torch; print(f'vllm {vllm.__version__} | torch {torch.__version__} | cuda {torch.cuda.is_available()}')" \
-  || die "vllm/torch 导入失败"
+# torchvision 处置须在 LD 路径修复之后（先探会把仅缺库路径的好件误判撕裂）。
+# 本引导伺服视觉档，tv 是硬需求：撕裂先对齐重试，仍撕裂由下方自检 FATAL——不卸。
+python -c "import torchvision" >/dev/null 2>&1 || {
+  echo "torchvision 撕裂 → 尝试与 torch 同波次对齐"
+  pip -q install -U torchvision >/dev/null 2>&1 || true
+}
+python - <<'PY' || die "依赖全链自检失败（torch 家族撕裂？看上方 traceback）"
+import torch, torchvision, vllm
+from transformers import AutoProcessor
+print(f"vllm {vllm.__version__} | torch {torch.__version__} | "
+      f"tv {torchvision.__version__} | cuda {torch.cuda.is_available()}")
+PY
 
 # ── ④ 权重：Drive → 本地盘 + 下载完整性标记（path_resolver 口径）──
 note "④ 权重落盘: $MODEL_REPO"

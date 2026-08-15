@@ -184,6 +184,28 @@ inference:
       capabilities: ["text", "vision"]
       profile: { tool_call: 1.00, longchain: 1.00, vision: 1.00, tps: 20.1 }  # run 20260730-183929
       note: "6.0GB | 实机联调 ✓（2026-07-29：引擎两轮工具闭环 + 14163 双实例并存冒烟）| 视觉专科候选"
+    # Qwen3.8-27B（2026-08-13 发布，08-15 起测）：28B 稠密混合注意力（linear attn
+    # 混层，Qwen3-Next 系）+ 原生视觉，262k ctx，Apache 2.0。方言先验 qwen35
+    # （同家族 chat template；reasoning_effort 新旋钮方言暂不透传——评测首验项）。
+    # 配对草稿件 mlx-community/Qwen3.8-27B-MTP-{8bit,4bit}（1 层 MTP 头，block_size 3，
+    # 不入注册表，走 speculative.draft_model——与 gemma assistant 同例）。草稿件
+    # revision 钉扎值记此（speculative 段无 revision 字段的结构缺口，防上游重传漂移）：
+    #   MTP-8bit e88e48d055732ad75d9435f3059139d5279f2064
+    #   MTP-4bit b643c01b6d3b094e325edb6ebd832e16c486c575
+    # ⚠️ 下两条的 vision 分数是 n=212 扩容题库口径（含 ChartQA hard），与上方旧条目
+    # 的 vision=1.00（旧小题库）不可直接对表——路由启用前须统一口径重测旧档。
+    - repo: "mlx-community/Qwen3.8-27B-8bit"
+      revision: "815b83c0df8ffd1d1b5244cf75fd6ef14fca9ef9"
+      dialect: "qwen35"
+      capabilities: ["text", "vision"]
+      profile: { tool_call: 0.92, longchain: 1.00, vision: 0.948, tps: 16.3 }  # run 20260815-161411
+      note: "28GB | 画像 ✓（解析错 0=qwen35 方言直接兼容；vision 212 题含 ChartQA hard；峰值内存 36.4G）"
+    - repo: "mlx-community/Qwen3.8-27B-4bit"
+      revision: "3e6447f082e89cc7f0bc6e5441afd38dfce760ff"
+      dialect: "qwen35"
+      capabilities: ["text", "vision"]
+      profile: { tool_call: 0.96, longchain: 1.00, vision: 0.958, tps: 27.9 }  # run 20260815-183117
+      note: "15GB | 画像 ✓ 质量与 8bit 打平（各维差 ≤1-2 题，低于路由噪声带 0.05）而 tps 1.72×/内存 -42% = 本模型效率王"
     - repo: "mlx-community/Ornith-1.0-9B-4bit"
       revision: "1e980b9742a9e554a4d57e90b4c597811fb2fc4e"
       dialect: "qwen35"
