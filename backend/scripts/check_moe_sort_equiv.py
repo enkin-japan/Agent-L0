@@ -20,6 +20,7 @@
 """
 import asyncio
 import hashlib
+import json
 import os
 import statistics
 import sys
@@ -50,6 +51,49 @@ def build_prompt(target_dir: str) -> str:
                           include_env=False)
 
 
+def target_top_k(target_dir: str) -> int:
+    """目标件每 token 的专家数（`indices.size = M × top_k` 的那个 top_k）。
+
+    **不能取顶层的 `top_k`**——那是采样超参（26b 件里是 64），与专家路由无关。
+    只认 `text_config.top_k_experts`，其次顶层同名键。
+    """
+    cfg_path = Path(target_dir) / "config.json"
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise RuntimeError(
+            f"读不到 {cfg_path}——TARGET 须是含 config.json 的本地模型目录"
+            "（HF repo id 请先下到本地），否则无法判定阈值可达性。") from None
+    for scope in (cfg.get("text_config") or {}, cfg):
+        for key in ("top_k_experts", "num_experts_per_tok"):
+            if isinstance(scope.get(key), int):
+                return int(scope[key])
+    raise RuntimeError(
+        f"{target_dir}/config.json 里读不到专家 top_k（top_k_experts / "
+        "num_experts_per_tok）——无法判定阈值是否可达，拒绝在不确定口径下出判据。")
+
+
+def assert_threshold_reachable(min_size_active: int, top_k: int) -> None:
+    """第二扇门：装上了 ≠ 达得到。阈值高于验证批可达的最大 `indices.size` 时，
+    补丁新覆盖的 [16, 64) 窗口一次都不会被触发，开/关两侧行为完全一致
+    ——判据同样是假的。
+
+    验证批的 `M = block_total = BLOCK`（`_dflash_block_total` 原样返回
+    `draft_block_size`，`verify_input = [bonus] + γ 个草稿`，共 BLOCK 位；
+    **不是 BLOCK+1**——首版在这里差了一，阈值 33..40 会漏过闸门）。
+    预填批（prompt_len × top_k ≫ 64）在开/关两侧都走上游排序路，制造不出差异，
+    故不参与可达性判定。
+    """
+    reach = BLOCK * top_k
+    print(f"可达性：top_k={top_k}，验证批最大 indices.size = block {BLOCK} × {top_k} "
+          f"= {reach}，阈值 {min_size_active}")
+    if min_size_active > reach:
+        raise RuntimeError(
+            f"阈值 {min_size_active} 高于验证批可达的最大 indices.size {reach}："
+            "排序路在补丁窗口内一次都不会走，开/关两侧等价，判据无意义。"
+            "调小 MOE_SORT_MIN_SIZE 或调大 block 后重跑。")
+
+
 def gen(be, prompt, sampling):
     """返回 (全量文本, 仅解码 tps)。文本必须**累加** ch.text——它是本次分段而非累积量。"""
     parts, last = [], None
@@ -63,9 +107,15 @@ def gen(be, prompt, sampling):
 
 
 async def main() -> int:
-    # 先 import 后端（会 import gemma4_generate，补丁在那里安装）
-    from framework.backends.mlx.backend import MLXBackend
+    # 只 import 补丁模块（不触发安装），装载前先把纯 CPU 能判的都判掉：
+    # 可达性只需要 config.json + 环境变量，没理由烧一次模型装载才发现闸门不过。
     from framework.backends.mlx.patch import moe_sort_threshold as P
+
+    top_k = target_top_k(TARGET)
+    assert_threshold_reachable(P._resolve_min_size(), top_k)
+
+    # 再 import 后端（会 import gemma4_generate，补丁在那里安装）
+    from framework.backends.mlx.backend import MLXBackend
 
     be = await MLXBackend.load(TARGET, speculative={
         "mode": "drafter", "draft_model": DRAFT, "draft_block_size": BLOCK})
@@ -74,7 +124,8 @@ async def main() -> int:
             "repetition_penalty": 1.1, "repetition_context_size": 50}
 
     print(f"目标 {TARGET}\n草稿 {DRAFT}\nblock={BLOCK} repeats={REPEATS} "
-          f"tokens={MAX_TOKENS}  阈值={P.min_size()}")
+          f"tokens={MAX_TOKENS}  阈值={P.min_size()}"
+          f"（{'已装' if P.is_installed() else '未装'}）")
     print("口径：同一次装载内开/关交错，temp=0，先各跑一次丢弃（排序内核首次特化）\n")
 
     from mlx_vlm.models import switch_layers as SL
@@ -86,7 +137,7 @@ async def main() -> int:
             # 拒绝安装并返回 False。若不检查，开关两侧跑的是同一条上游路径，
             # 本脚本会打印"净增益 0.0% + 输出逐字符相同 ✅"——
             # 给一个**根本没装上**的补丁发数值安全证书（首过评审 Major）。
-            if SL.SwitchGLU.__call__ is not P.switch_glu_call:
+            if not P.is_installed():
                 raise RuntimeError(
                     "补丁未安装（install() 拒绝了，原因见上一行阴性声明）。"
                     "此时开/关两侧等价，等价性判据无意义，故直接失败。")
@@ -96,8 +147,14 @@ async def main() -> int:
                 raise RuntimeError("uninstall() 未能恢复上游实现，对照组不干净。")
         return gen(be, prompt, samp)
 
+    if REPEATS % 2 == 1:
+        print(f"提示：REPEATS={REPEATS} 为奇数 ⇒ ABBA 交错不完全平衡，"
+              "残余单调漂移未全抵消（等价性判据不受影响，只影响 tps 那一列）\n")
+
     # 预热：两条路各跑一次并丢弃（排序路首次调用会 JIT 特化 MLX 内核）
     run(True)
+    # install 定死阈值后按**实际生效值**再校一遍（装载前那次用的是环境变量解析值）
+    assert_threshold_reachable(P.min_size(), top_k)
     run(False)
 
     on_txts, off_txts = [], []

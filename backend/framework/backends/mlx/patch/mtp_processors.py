@@ -20,13 +20,23 @@ processors 只在非投机的 `_step` 里应用（ar.py:360-363）。净效果�
 
 gemma-4 的路径已逐条查实：`speculative_argmax_from_hidden` **无**（融合 argmax 快路
 不适用）、`speculative_verify_logits` **无**、`speculative_logits_from_hidden` **有**。
-故 B=1 时两条走查都汇到 `_mtp_acceptance_walk` 一个函数：
-- 非贪心（生产 temperature 缺省 0.2）→ `_positioned_target_tokens` 批量采全部位置；
-- 贪心（bench 口径）→ `_speculative_walk_deferred_greedy` 逐位延迟。
+故 B=1 时走查都汇到 `_mtp_acceptance_walk` 一个函数，它内部再分两条：
+- `_positioned_target_tokens` 批量采全部位置——**只在 sampler 带 `sample_target` 时**
+  （`mtp.py:238-240` 拿不到就返回 None）；
+- 否则 `_speculative_walk_deferred_greedy` 逐位延迟投影。
 
-本模块只替换 `_mtp_acceptance_walk`，**无活动处理器时原样委派上游**（零行为变化）。
+**本栈恒走后者**，这一点已查实、且与温度无关：`_PositionedTargetSampler` 的构造条件
+是 `seed is not None and temperature > 0 and min_p == 0.0 and top_k == 0 and …`
+（`generate/ar.py:266-278`），而本栈**从不传 seed**（`backend.py` 全文零处），
+单这一条即永不满足（min_p 缺省 0.05 只是第二重保险，请求可覆盖它、覆盖不了 seed）
+→ sampler 是普通 `make_sampler` 产物 → 无 `sample_target`。
 
-# 顺序化为什么不损失正确性
+所以：**本模块没有新增任何逐位同步点**。上游本来就逐位走。本模块只替换
+`_mtp_acceptance_walk`，**无活动处理器时原样委派上游**（零行为变化）；有处理器时
+的净效果是两条——①把处理器补回逐位判决，②把上游那 γ+1 次逐位投影合并成 1 次
+批量投影（见 `_walk_with_processors` 内的注释），故性能上是净赚而非净亏。
+
+# 逐位走查为什么不损失正确性
 
 被接受的 token 恒等于该位置的 target token（草稿被接受 ⟺ draft[i] == target[i]），
 且走查在首次不匹配处停。故本轮实际产出恒为 `target[0..accepted]`，位置 `pos` 的
@@ -34,8 +44,8 @@ gemma-4 的路径已逐条查实：`speculative_argmax_from_hidden` **无**（�
 这条对 `_GuardAdapter` 是硬要求：它按 `_seen` 单调消费，喂进一个草稿就不可逆地跑偏。
 
 批量采样那条路做不到这件事（一次性对全部位置采样，无法给每个位置不同历史），
-所以此处一律顺序化；`sample_target` 接显式 positions，逐位调用与批量调用的 RNG
-流等价，确定性不受影响。
+故即便将来采样口径变成满足 `_PositionedTargetSampler` 条件的那种，本模块仍逐位走：
+`sample_target` 接显式 positions，逐位调用与批量调用的 RNG 流等价，确定性不受影响。
 
 # 覆盖面
 
@@ -51,6 +61,16 @@ from typing import Any, Callable, List, Optional, Tuple
 import mlx.core as mx
 
 from mlx_vlm.speculative import mtp as _mtp
+
+# `utils` 在 import 期 `from .mtp import _mtp_rounds_batch` 抄走了一份同名副本，
+# 而真实分派点在 utils（utils.py:79/181/288）。只改 mtp 的模块全局等于没改。
+# import 失败降级为只覆盖 mtp 侧并打阴性声明——批处理守卫是安全网不是正确性前提，
+# 不该有把后端拖挂的权力（walk 补丁那头是正确性前提，故仍无条件 import）。
+try:
+    from mlx_vlm.speculative import utils as _utils
+except Exception as _exc:  # pragma: no cover - 上游模块结构变动
+    print(f"[MTP] speculative.utils import 失败（{_exc!r}）：批处理守卫只能覆盖 mtp 模块侧")
+    _utils = None
 
 __all__ = ["install", "uninstall", "processor_context", "record_emitted"]
 
@@ -263,6 +283,16 @@ def acceptance_walk_with_processors(
 
 _ORIGINAL_ROUNDS_BATCH = getattr(_mtp, "_mtp_rounds_batch", None)
 
+# `_mtp_rounds_batch` 有**两处**绑定要一起换：`mlx_vlm.speculative.mtp` 的模块全局，
+# 以及 `mlx_vlm.speculative.utils` 在 import 期抄走的同名副本。真正被调用的是后者
+# （utils.py:79 返回它、181/288 直接 `yield from`），只换前者 = 守卫是聋的：
+# B>1 × 有处理器时不会响，处理器照样被静默丢掉——那正是本模块要防的那件事。
+_ROUNDS_BATCH_MODULES = tuple(m for m in (_mtp, _utils) if m is not None)
+
+# {模块: install 时垫在守卫下面的原件}。**在 install 时按当时现状捕获**，不能用
+# import 期快照——第三方若在本模块 import 之后打了补丁，按陈旧快照还原会把它抹掉。
+_rounds_batch_originals: dict = {}
+
 
 def rounds_batch_guarded(*args, **kwargs):
     """B>1 的批处理轮循环：有活动处理器时拒跑。
@@ -282,14 +312,33 @@ def rounds_batch_guarded(*args, **kwargs):
 
 
 def install() -> bool:
-    """装上替换实现（幂等，且校验实时性）。"""
+    """装上替换实现（幂等，且校验实时性）。
+
+    批处理守卫的覆盖校验对着**模块本体**查、逐处打阴性声明——
+    对着刚写过的容器查是恒真（首过评审 Critical），什么也证明不了。
+    """
     changed = False
     if _mtp._mtp_acceptance_walk is not acceptance_walk_with_processors:
         _mtp._mtp_acceptance_walk = acceptance_walk_with_processors
         changed = True
-    if _ORIGINAL_ROUNDS_BATCH is not None and \
-            _mtp._mtp_rounds_batch is not rounds_batch_guarded:
-        _mtp._mtp_rounds_batch = rounds_batch_guarded
+    for mod in _ROUNDS_BATCH_MODULES:
+        cur = getattr(mod, "_mtp_rounds_batch", None)
+        if cur is rounds_batch_guarded:
+            continue
+        if cur is None:
+            # 上游改名/挪走：守卫覆盖不到这个分派点。静默不装 = B>1 时处理器
+            # 被丢而无人知；按"每种拒装都打一行"的纪律打出来。
+            print(f"[MTP] 批处理守卫未覆盖 {mod.__name__}：上游无 _mtp_rounds_batch，"
+                  "接口已变——放开 B>1 前必须先重适配")
+            continue
+        if _ORIGINAL_ROUNDS_BATCH is None or cur is not _ORIGINAL_ROUNDS_BATCH:
+            # 第三方已占位：宁可不装也不抹别人（moe_sort_threshold 同纪律）。
+            # 守卫的委派目标是上游原件，盖在第三方上还会把它整个旁路掉。
+            print(f"[MTP] 批处理守卫未覆盖 {mod.__name__}：该绑定已被第三方实现 "
+                  f"{getattr(cur, '__qualname__', repr(cur))} 占用，拒绝覆盖")
+            continue
+        _rounds_batch_originals[mod] = cur
+        mod._mtp_rounds_batch = rounds_batch_guarded
         changed = True
     return changed
 
@@ -300,8 +349,10 @@ def uninstall() -> bool:
     if _mtp._mtp_acceptance_walk is not _ORIGINAL_WALK:
         _mtp._mtp_acceptance_walk = _ORIGINAL_WALK
         changed = True
-    if _ORIGINAL_ROUNDS_BATCH is not None and \
-            _mtp._mtp_rounds_batch is not _ORIGINAL_ROUNDS_BATCH:
-        _mtp._mtp_rounds_batch = _ORIGINAL_ROUNDS_BATCH
-        changed = True
+    for mod in list(_rounds_batch_originals):
+        # 只还原**当前确实挂着本模块守卫版**的那处：有人垫在守卫之上时不动它、
+        # 也保留原件记录，等下次真轮到我们时再还原（不抹第三方）。
+        if getattr(mod, "_mtp_rounds_batch", None) is rounds_batch_guarded:
+            mod._mtp_rounds_batch = _rounds_batch_originals.pop(mod)
+            changed = True
     return changed

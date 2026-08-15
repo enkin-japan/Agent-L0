@@ -19,7 +19,10 @@ from .gemma4_utils import prepare_inputs
 from .rotating_cache_trim import install as _install_rotating_trim
 try:  # 纯性能补丁：mlx_vlm 挪走 switch_layers 时降级为不装，不拖垮后端
     from .moe_sort_threshold import install as _install_moe_sort
-except Exception:  # pragma: no cover - 上游模块结构变动时的降级路径
+except Exception as _exc:  # pragma: no cover - 上游模块结构变动时的降级路径
+    # 阴性声明照 moe_sort_threshold.py 自家纪律：**每一种拒装都打一行**。
+    # 静默不装 = 归档里两张差 9% 的表分不出来源。
+    print(f"[MoE] 专家排序阈值补丁未安装：import 失败 {_exc!r}，沿用上游阈值 64")
     _install_moe_sort = None
 from .mtp_processors import install as _install_mtp_processors
 from .mtp_processors import processor_context as mtp_processor_context
@@ -58,7 +61,11 @@ _install_mtp_processors()
 # gemma4_generate 整个拖挂（=后端起不来）。这是个**性能**补丁，不该有这种权力，
 # 故容错降级——拿不到就不装，后端照常起。
 if _install_moe_sort is not None:
-    _install_moe_sort()
+    try:
+        _install_moe_sort()
+    except Exception as _exc:  # pragma: no cover - 安装期异常同样不该拖垮后端
+        # 上一段注释宣称的容错意图只覆盖了 import，裸调用仍能把后端拖挂。
+        print(f"[MoE] 专家排序阈值补丁未安装：install 失败 {_exc!r}，沿用上游阈值 64")
 
 
 # ============================================================================
@@ -102,9 +109,22 @@ def _mtp_processor_bridge(gen, processors, prompt_tokens, penalty_window,
         idx = 0
         for item in gen:
             tok = item[0]
-            if isinstance(tok, int):
-                mtp_record_emitted(tok, idx)
-                idx += 1
+            if not isinstance(tok, int):
+                # 上游若改吐 mx/numpy 0-d 标量：能无损取整的就取整继续登记
+                # （登记不缺位，守护不降级）；其余形态一律响——静默跳过 =
+                # 处理器登记全程停摆（guard 一个 token 都消费不到、惩罚窗口
+                # 看不见生成段），与走查里"融合 target 不得降级"同一口径。
+                item = getattr(tok, "item", None)
+                val = item() if callable(item) else None
+                if not isinstance(val, int):
+                    raise RuntimeError(
+                        f"MTP 解码生成器产出的 token 类型为 {type(tok).__name__} 而非 int："
+                        "上游产出类型变了，处理器登记会静默停摆（repetition_penalty 与"
+                        "工具约束 guard 双双失效），须适配后再放行。"
+                    )
+                tok = val
+            mtp_record_emitted(tok, idx)
+            idx += 1
             if snap is not None:
                 # 接受率观测（§7-0 ④）：草稿件把轮次/接受/草稿数记在自身的
                 # 终身计数器上，这里按快照取差，与 prompt_lookup 路同一容器回吐
@@ -378,7 +398,7 @@ def lookup_generate_step(
     # 轮间流水线：walk 完本轮 → 回滚 → 立即异步预发下一轮 forward，再逐个 yield
     # 本轮 token——python 侧消费（detokenizer/流式回调/停止判定）与 GPU 上
     # 下一轮的 forward 重叠，对齐上游普通路径 async_eval 的重叠模式。
-    pending = None  # (block, draft, lazy_logits)
+    pending = None  # (block, draft, logits_all, pre, gdn)
 
     while emitted < max_tokens:
         # thinking 预算强制收束：外层在上一个 yield 后可能置位 forced_token_id。

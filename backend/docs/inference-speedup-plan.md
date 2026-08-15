@@ -3,7 +3,10 @@
 > ⚠️ 状态（2026-08-08 修订）：**Phase 4 的"e2b 通用草稿"路线已被官方 MTP assistant
 > 取代**——A100 实测 gemma-4 官方 assistant 草稿件（vLLM `method:"mtp"`）26B k=4
 > **1.92×**、31B k=4 **3.12×**，质量零漂移且与约束采样共存（EXECUTION_LEDGER
-> 大档评测波第 6/7 站）；k 值不定死、按设备实测取值（已拍板）。Mac 侧 mlx-vlm 有
+> 大档评测波第 6/7 站）；k 值不定死、按设备实测取值（已拍板）。
+> 〔08-15 口径注：1.92×/3.12× 是**真实 chat 负载**口径；MTP_PROJECT.md 里的
+> 1.37×/2.48× 等是**单条 61-token prompt** 口径，两组数不可直接相减，见
+> MTP_PROJECT §5.5。Mac 侧 MTP 专项现状与定档一律以 `MTP_PROJECT.md` 为准。〕Mac 侧 mlx-vlm 有
 > `load_drafter(kind="mtp")` 对应路径。本文 §6~§9 的 e2b 执行手册**不再执行**；
 > Phase 0~3 的仪表/约束采样仍在服役；**prompt_lookup 自 2026-08-14 停用**
 > （mlx-vlm 0.6.13 升级后回滚数值失真，§S.15；修复前不得重开）。

@@ -12,8 +12,10 @@
 # 为什么要做这件事
 
 跨平台对照已经证死了两件事：两侧**接受率逐位一致**（B4，31 个位置）、
-**AL 一致**。故 `加速比 = AL / (γ·d + v(M) + w(M) + oh)` 里，分子两侧相同，
-**全部差距在分母**。但分母是三项之和，此前从未分开量过——
+**AL 一致**。故 `加速比 = AL / (γ·d + v(M) + w(M) + dh + oh)` 里（五项，与代码
+:270 的 `den` 一致：`dh` = draft_hidden，它必须自成一项，见 `dh_units` 处注释），
+分子两侧相同，
+**全部差距在分母**。但分母是五项之和，此前从未分开量过——
 §4.16 我曾用解析式拆过一次，总量对上了而**拆分是错的（verify 低估 2.4 倍）**。
 所以这次不解析，直接在真实生成循环里插桩。
 
@@ -250,7 +252,13 @@ async def main() -> int:
         # 两者混在一起报成"漂移"是错的（首过评审 Major）。此处先在**同口径**下
         # 复测首档拿净漂移，再卸探针复测一次，两者之差即探针扰动量。
         print()
-        be.speculative["draft_block_size"] = BLOCKS[0]
+        if not rows:
+            raise RuntimeError("全部 block 的轮数为 0——没有可对照的批内首测，"
+                               "漂移无从谈起，本次作废")
+        # **与 rows[0] 配对**，不能写死 BLOCKS[0]：若首个 block 因零轮被跳过，
+        # rows[0] 会是另一个档，跨档比出来的"漂移"入了 JSON 就成了假权威数。
+        drift_block = rows[0]["block"]
+        be.speculative["draft_block_size"] = drift_block
         tps_drift = run_once(be, prompt, samp)[0]
     finally:
         unp()
@@ -258,7 +266,7 @@ async def main() -> int:
     tps_noprobe = run_once(be, prompt, samp)[0]
     drift = tps_drift / rows[0]["tps"] - 1
     probe = tps_noprobe / tps_drift - 1
-    print(f"批后复测 block{BLOCKS[0]}（**仍带探针**，同口径）: {tps_drift:.2f} tps"
+    print(f"批后复测 block{drift_block}（**仍带探针**，同口径）: {tps_drift:.2f} tps"
           f"（批内首测 {rows[0]['tps']:.2f}） ⇒ 净漂移 {drift*100:+.1f}%")
     print(f"再卸探针复测: {tps_noprobe:.2f} tps ⇒ 探针扰动 {probe*100:+.1f}%")
 
@@ -275,8 +283,18 @@ async def main() -> int:
               f"{den:7.3f} {pred:7.3f} {r['speedup']:7.3f} "
               f"{(pred/r['speedup']-1)*100:+6.1f}%")
 
+    # 漂移与探针扰动必须**随表落盘**：它们是这张表的口径的一部分，
+    # 只 print 的话，归档里的 JSON 事后无法判断某一格是真差异还是热漂移。
     out = {"target": TARGET, "draft": DRAFT, "base_tps": base_tps, "T1_ms": T1 * 1e3,
-           "max_tokens": MAX_TOKENS, "repeats": REPEATS, "rows": rows}
+           "max_tokens": MAX_TOKENS, "repeats": REPEATS, "rows": rows,
+           # 净漂移：批后在**同口径**（仍带探针）复测首档 vs 批内首测，比值-1
+           "drift": drift,
+           # 探针扰动：卸探针复测 vs 仍带探针复测，比值-1
+           "probe_disturbance": probe,
+           # 上面两个比值各自的原始 tps（首档 block=BLOCKS[0]）
+           "tps_drift_raw": tps_drift,
+           "tps_noprobe_raw": tps_noprobe,
+           "drift_block": drift_block}
     p = Path("../benchmarks/data/mtp-cost/decomp_"
              + Path(TARGET).name + "__" + Path(DRAFT).name + ".json")
     p.parent.mkdir(parents=True, exist_ok=True)

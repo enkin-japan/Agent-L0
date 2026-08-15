@@ -15,6 +15,7 @@ import pytest
 
 mx = pytest.importorskip("mlx.core", reason="需要 mlx")
 _mtp = pytest.importorskip("mlx_vlm.speculative.mtp", reason="需要 mlx_vlm")
+_utils = pytest.importorskip("mlx_vlm.speculative.utils", reason="需要 mlx_vlm")
 
 from framework.backends.mlx.patch import mtp_processors as mp  # noqa: E402
 
@@ -213,6 +214,38 @@ def test_batch_rounds_raise_when_processors_active():
     with _ctx([_Recorder()]):
         with pytest.raises(RuntimeError, match="批处理"):
             _mtp._mtp_rounds_batch()
+
+
+def test_batch_guard_replaces_both_bindings():
+    """守卫必须换掉**两处**绑定，否则它是聋的。
+
+    真实分派点是 `utils`（`from .mtp import _mtp_rounds_batch` 在 import 期抄走了
+    一份副本，utils.py:79/181/288 用的都是那一份）。只换 `mtp` 的模块全局，
+    B>1 × 有处理器时不会响，处理器照样被静默丢掉——那正是本模块要防的事。
+    """
+    if mp._ORIGINAL_ROUNDS_BATCH is None:
+        pytest.skip("上游无 _mtp_rounds_batch")
+    try:
+        mp.install()
+        assert _mtp._mtp_rounds_batch is mp.rounds_batch_guarded
+        assert _utils._mtp_rounds_batch is mp.rounds_batch_guarded
+
+        # 卸载对称还原两处，否则测试隔离本身就是漏的
+        mp.uninstall()
+        assert _mtp._mtp_rounds_batch is not mp.rounds_batch_guarded
+        assert _utils._mtp_rounds_batch is not mp.rounds_batch_guarded
+    finally:
+        # 断言中途失败也要回到已安装态，不能指望下一条用例的 setup 兜底
+        mp.install()
+
+
+def test_batch_rounds_raise_via_utils_binding():
+    """从 utils 那一份副本调进去，同样要响（这才是生产实际走的分派点）。"""
+    if mp._ORIGINAL_ROUNDS_BATCH is None:
+        pytest.skip("上游无 _mtp_rounds_batch")
+    with _ctx([_Recorder()]):
+        with pytest.raises(RuntimeError, match="批处理"):
+            _utils._mtp_rounds_batch()
 
 
 def test_batch_rounds_pass_through_without_processors():

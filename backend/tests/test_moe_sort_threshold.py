@@ -25,13 +25,39 @@ from framework.backends.mlx.patch import moe_sort_threshold as P  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _restore_production_state(monkeypatch):
-    """每个用例跑完都回到生产态（已安装），避免用例间互相污染。"""
-    monkeypatch.delenv("MOE_SORT_MIN_SIZE", raising=False)
-    yield
-    _sl.SwitchGLU.__call__ = P._ORIGINAL_CALL
-    monkeypatch.delenv("MOE_SORT_MIN_SIZE", raising=False)
-    P.install()
+def _restore_production_state():
+    """每个用例跑完都回到生产态（已安装），避免用例间互相污染。
+
+    **不能用 pytest 注入的 `monkeypatch`**：那一份要等本 fixture 的 teardown 跑完
+    才回滚，于是 teardown 里的 `P.install()` 仍看得见用例打的桩
+    （伪 `UPSTREAM_SHA256`、被删掉的 `_gather_sort`）→ install 拒装 →
+    `test_drift_guard_refuses_install` / `test_missing_upstream_helpers_refuses_install`
+    跑完后整个进程停在**未安装**态，污染其后的用例与同进程内的其它测试文件。
+    自建一份并在 yield 后**先 undo 再恢复安装**，次序才是对的。
+    """
+    mp = pytest.MonkeyPatch()
+    mp.delenv("MOE_SORT_MIN_SIZE", raising=False)
+    try:
+        yield mp
+    finally:
+        mp.undo()                      # 先把用例的桩全撤掉
+        _sl.SwitchGLU.__call__ = P._ORIGINAL_CALL
+        with pytest.MonkeyPatch.context() as clean:
+            clean.delenv("MOE_SORT_MIN_SIZE", raising=False)
+            P.install()
+        assert _sl.SwitchGLU.__call__ is P.switch_glu_call, (
+            "teardown 未能恢复生产态（已安装）——后续用例与同进程内其它测试文件"
+            "会跑在未安装态上，且不会报错。")
+
+
+@pytest.fixture
+def mp(_restore_production_state):
+    """本文件专用的 monkeypatch。
+
+    用例一律用它、**不要用 pytest 注入的 `monkeypatch`**：只有这一份保证在
+    "恢复生产态"之前回滚（理由见 `_restore_production_state`）。
+    """
+    return _restore_production_state
 
 
 # ── 1. 副本与上游的一致性 ──────────────────────────────────────────────────
@@ -84,8 +110,8 @@ def test_upstream_sha_matches_live_source():
         "护栏会拒装（安全），但要么上游升级了、要么常量该更新了。")
 
 
-def test_drift_guard_refuses_install(monkeypatch):
-    monkeypatch.setattr(P, "UPSTREAM_SHA256", "0" * 64)
+def test_drift_guard_refuses_install(mp):
+    mp.setattr(P, "UPSTREAM_SHA256", "0" * 64)
     _sl.SwitchGLU.__call__ = P._ORIGINAL_CALL
     assert P.install() is False
     assert _sl.SwitchGLU.__call__ is P._ORIGINAL_CALL
@@ -99,39 +125,39 @@ def test_drift_guard_refuses_install(monkeypatch):
     ("0", 0), ("-1", -1),
     ("l6", 16), ("abc", 16),          # 畸形 → 退回缺省（并打印告警）
 ])
-def test_resolve_min_size(monkeypatch, raw, expected):
+def test_resolve_min_size(mp, raw, expected):
     if raw is None:
-        monkeypatch.delenv("MOE_SORT_MIN_SIZE", raising=False)
+        mp.delenv("MOE_SORT_MIN_SIZE", raising=False)
     else:
-        monkeypatch.setenv("MOE_SORT_MIN_SIZE", raw)
+        mp.setenv("MOE_SORT_MIN_SIZE", raw)
     assert P._resolve_min_size() == expected
 
 
-def test_threshold_zero_means_do_not_install(monkeypatch):
+def test_threshold_zero_means_do_not_install(mp):
     """`<=0` 是**不安装**，不是"永远排序"——后者与直觉相反且会拖慢 M=1 解码。"""
     _sl.SwitchGLU.__call__ = P._ORIGINAL_CALL
     for value in ("0", "-1"):
-        monkeypatch.setenv("MOE_SORT_MIN_SIZE", value)
+        mp.setenv("MOE_SORT_MIN_SIZE", value)
         assert P.install() is False
         assert _sl.SwitchGLU.__call__ is P._ORIGINAL_CALL
 
 
-def test_threshold_above_64_actually_takes_effect(monkeypatch):
+def test_threshold_above_64_actually_takes_effect(mp):
     """曾经的缺陷：阈值 >64 时委派回上游，上游内部仍按 64 判 ⇒ 静默无效。"""
     _sl.SwitchGLU.__call__ = P._ORIGINAL_CALL
-    monkeypatch.setenv("MOE_SORT_MIN_SIZE", "128")
+    mp.setenv("MOE_SORT_MIN_SIZE", "128")
     assert P.install() is True
     assert P.min_size() == 128
     assert _sl.SwitchGLU.__call__ is P.switch_glu_call
 
 
-def test_hot_path_reads_module_global_not_environ(monkeypatch):
+def test_hot_path_reads_module_global_not_environ(mp):
     """阈值必须在 install 时定死：热路径每层每 token 调一次，不能查环境变量。"""
     _sl.SwitchGLU.__call__ = P._ORIGINAL_CALL
-    monkeypatch.setenv("MOE_SORT_MIN_SIZE", "24")
+    mp.setenv("MOE_SORT_MIN_SIZE", "24")
     P.install()
     assert P.min_size() == 24
-    monkeypatch.setenv("MOE_SORT_MIN_SIZE", "0")   # 装好之后再改
+    mp.setenv("MOE_SORT_MIN_SIZE", "0")   # 装好之后再改
     assert P.min_size() == 24, "生效阈值不该随环境变量事后变化"
 
 
@@ -172,8 +198,38 @@ def test_uninstall_does_not_clobber_third_party_patch():
         _sl.SwitchGLU.__call__ = P._ORIGINAL_CALL
 
 
-def test_missing_upstream_helpers_refuses_install(monkeypatch):
-    monkeypatch.delattr(_sl, "_gather_sort", raising=True)
+def test_missing_upstream_helpers_refuses_install(mp):
+    mp.delattr(_sl, "_gather_sort", raising=True)
     _sl.SwitchGLU.__call__ = P._ORIGINAL_CALL
     assert P.install() is False
     assert _sl.SwitchGLU.__call__ is P._ORIGINAL_CALL
+
+
+def test_install_on_installed_state_changes_nothing(mp):
+    """已安装态下再 install()：返回 False，且**阈值也不许动**。
+
+    曾经的缺陷：`_min_size_active = thresh` 排在"已安装早退"之前，于是装好之后
+    改一下环境变量再 install() 就能把热路径阈值换掉，而返回值仍是 False、类上挂的
+    实现也没变——一个看不见的运行期改阈值入口，事后无从从日志里分辨。
+    """
+    _sl.SwitchGLU.__call__ = P._ORIGINAL_CALL
+    mp.setenv("MOE_SORT_MIN_SIZE", "24")
+    assert P.install() is True
+    assert P.min_size() == 24
+
+    mp.setenv("MOE_SORT_MIN_SIZE", "48")
+    assert P.install() is False
+    assert P.min_size() == 24, "已安装态下 install() 不该改动生效阈值"
+    assert _sl.SwitchGLU.__call__ is P.switch_glu_call
+
+
+def test_is_installed_tracks_the_class_attribute():
+    """`min_size()` 只是"上次解析值"，"装没装"唯一可信的判据是 `is_installed()`。"""
+    _sl.SwitchGLU.__call__ = P._ORIGINAL_CALL
+    assert P.is_installed() is False
+    P.install()
+    assert P.is_installed() is True
+    P.uninstall()
+    assert P.is_installed() is False
+    # 拒装态下 min_size() 照样返回上次解析值 —— 正是不能单看它的原因
+    assert P.min_size() >= 1

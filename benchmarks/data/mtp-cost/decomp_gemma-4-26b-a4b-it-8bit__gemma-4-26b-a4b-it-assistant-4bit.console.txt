@@ -1,0 +1,30 @@
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同一专家的权重每批只装载一次
+目标 models/gemma-4-26b-a4b-it-8bit
+草稿 models/gemma-4-26b-a4b-it-assistant-4bit
+块 [2, 3, 4, 5, 6]  tokens=400 repeats=3
+口径：temp=0 / rep1.1 / ctx50 / 冷启动 / 单请求；相边界强制 mx.eval
+
+/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/transformers/audio_utils.py:723: UserWarning: At least one mel filter has all zero values. The value for `num_mel_filters` (128) may be set too high. Or, the value for `num_frequency_bins` (257) may be set too low.
+  warnings.warn(
+[Engine] 草稿深度上限已解锁：采纳请求值 draft_block_size=2（否则被草稿件 config 缺省值 4 顶死）
+[Engine] 投机草稿件已装载：models/gemma-4-26b-a4b-it-assistant-4bit（kind=mtp）
+[Engine] 投机采样启用：{'mode': 'drafter', 'draft_model': 'models/gemma-4-26b-a4b-it-assistant-4bit', 'draft_block_size': 2}
+基线 79.54 tps  (T1 = 12.572 ms/token)   样本 [79.54, 79.66, 79.46]
+block 2   γ=1   92.87 tps  1.168×  AL=1.702 轮=235  | 每轮 draft   1.16 verify  14.84 walk   2.10 dh  0.15 | 插桩合计  18.25 真实  18.33 ms
+block 3   γ=2  100.34 tps  1.261×  AL=2.174 轮=184  | 每轮 draft   2.27 verify  16.83 walk   2.31 dh  0.18 | 插桩合计  21.58 真实  21.67 ms
+block 4   γ=3  103.24 tps  1.298×  AL=2.509 轮=159  | 每轮 draft   3.29 verify  18.37 walk   2.44 dh  0.18 | 插桩合计  24.27 真实  24.37 ms
+block 5   γ=4   99.73 tps  1.254×  AL=2.759 轮=145  | 每轮 draft   4.27 verify  20.51 walk   2.61 dh  0.18 | 插桩合计  27.56 真实  27.66 ms
+block 6   γ=5   86.15 tps  1.083×  AL=2.830 轮=141  | 每轮 draft   5.12 verify  24.26 walk   3.27 dh  0.18 | 插桩合计  32.83 真实  32.93 ms
+
+批后复测 block2（**仍带探针**，同口径）: 92.56 tps（批内首测 92.87） ⇒ 净漂移 -0.3%
+再卸探针复测: 98.94 tps ⇒ 探针扰动 +6.9%
+
+=== 以 T1 为单位的每轮成本（这才是跨平台可比的量）===
+γ       AL     γ·d    v(M)    w(M)      dh      其它      分母     预测×     实测×      偏差
+1    1.702   0.093   1.180   0.167   0.012   0.006   1.458   1.168   1.168   -0.0%
+2    2.174   0.180   1.338   0.183   0.014   0.007   1.723   1.261   1.261   +0.0%
+3    2.509   0.261   1.461   0.194   0.014   0.008   1.938   1.295   1.298   -0.2%
+4    2.759   0.340   1.631   0.207   0.014   0.008   2.200   1.254   1.254   +0.0%
+5    2.830   0.407   1.930   0.260   0.015   0.008   2.619   1.080   1.083   -0.3%
+
+落盘 ../benchmarks/data/mtp-cost/decomp_gemma-4-26b-a4b-it-8bit__gemma-4-26b-a4b-it-assistant-4bit.json

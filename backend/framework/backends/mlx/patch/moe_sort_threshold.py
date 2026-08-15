@@ -7,10 +7,20 @@
 而 MTP 验证批的 M = `block_total` ∈ {2..6} → size = 16..48，**永远够不到**。
 
 排序路（`_gather_sort` → `sorted_indices=True` → `_scatter_unsort`）把同一专家的
-行聚拢，让 `gather_qmm` 对每个专家的权重**只装载一次**；不排序时同一专家被几个
-token 各选中一次，就各读一遍。实测（§1.3-成本分解，26b-8bit）验证成本
-`v(M)` 随 M **线性增长 0.21 T1/位**，而同一批次实测的专家**并集**是强次线性的
-（M=4 时并集只有 1.93×，而线性对数是 3.0×）——两者的差就是重读。
+行聚拢。**收益不是"每个专家的权重只装载一次"**——那条在内核层为假，别再写进归档：
+MLX（0.32.0 与 main 逐字相同）`GatherQMM::eval_gpu` 里唯一消费 sorted 标志的分支
+守卫是 `M==1 && B>=16 && right_sorted && B/E>=4`（v0.32.0 `quantized.cpp:1583`）。
+26b top_k=8 / E=128 时它要求 B≥512，即 M_tok≥64，而 MTP 验证批 B = M×top_k = 16..48，
+**永远够不到**；实际派发的是 `affine_gather_qmv`，对每个 (token, 专家) 对独立读权重。
+
+排序的真实收益是两条：
+① 同一专家的 (token, 专家) 对在 `grid.z` 上相邻 ⇒ 重复读命中**硬件缓存**
+   （每专家每矩阵约 2.1MB，可驻留 SLC）——省的是 DRAM 带宽，不是读取次数；
+② 排序路把 `x_batch_ndims` 3→1，省掉 broadcast 寻址。
+实测（§1.3-成本分解，26b-8bit）验证成本 `v(M)` 随 M **线性增长 0.21 T1/位**，
+而同一批次实测的专家**并集**是强次线性的（M=4 时并集只有 1.93×，线性对数是 3.0×）
+——两者的差就是这些重复读取，排序把其中一部分变成缓存命中。数值 +9.0% 不变，
+变的只是归因。
 
 净效果：MoE 档的 MTP 收益被压在 1.28×。本补丁把它抬到 **1.37×**（生产实测，
 同一次装载内开/关交错 A/B **+9.0%**，输出逐字符相同）。
@@ -35,15 +45,23 @@ token 各选中一次，就各读一遍。实测（§1.3-成本分解，26b-8bit
 本补丁改的是 `SwitchGLU.__call__` 这个**类属性**，故一旦安装即**进程级生效**。
 
 **打得到的**：`class SwitchGLU` 在 mlx_vlm 全树只有一处定义
-（`models/switch_layers.py`），而 **dots1 / llama4 / gpt_oss / olmoe / qwen3_next /
-mixtral / youtu_vl / kimi_k3 / deepseek_v32 / granitemoe / minimax_m3_vl /
-gemma4_text 等约十二个模型族全部 import 它**——本栈只跑 gemma-4，但补丁对同进程内
-任何一个都生效。另有 `inkling` 的 `InklingSwitchGLU(SwitchGLU)`
-（`models/inkling/language.py:491`）**是真子类**，其 `__call__` 在
-`scales_trivial()` 为真时 `super().__call__(...)` 直接落进本实现。
+（`models/switch_layers.py`），而 **41 个模型模块** import 它（mlx_vlm 0.6.13 实测，
+口径 `grep -rn '^from ..switch_layers import' models/ | grep SwitchGLU | wc -l`，
+**随上游版本变**，别把这个数当常量）。节选：dots1 / llama4 / gpt_oss / olmoe /
+qwen3_next / mixtral / youtu_vl / kimi_k3 / deepseek_v32 / granitemoe /
+minimax_m3_vl / gemma4_text。本栈只跑 gemma-4，但补丁对同进程内任何一个都生效。
+另有 `inkling` 的 `InklingSwitchGLU(SwitchGLU)`（`models/inkling/language.py:491`）
+**是真子类**，其 `__call__` 在 `scales_trivial()` 为真时 `super().__call__(...)`
+直接落进本实现。
 
-**打不到的**：laguna / moondream3 / minimax_m3_vl / diffusion_gemma 另有**独立的**
-MoE 调用点（各自 import `_gather_sort` 自行拼装，带各自的阈值），不经过 `SwitchGLU`。
+**打不到的**：
+- laguna / moondream3 / diffusion_gemma 另有**独立的** MoE 调用点
+  （各自 import `_gather_sort` 自行拼装，带各自的阈值），不经过 `SwitchGLU`。
+- **同文件的 `SwitchMLP.__call__`（`switch_layers.py:214`）另有一处 64 阈值，
+  本补丁不覆盖**——它是另一个类，gemma4 不用它。使用方：nemotron_h / phixtral /
+  zaya1_vl。要覆盖它得再复制一份函数体，本模块有意不做（本栈用不到）。
+- `minimax_m3_vl` 按配置二选一：走 `SwitchGLU` 的那支受本补丁影响，
+  走 `MiniMaxPackedSwitchGLU` 的那支不受。
 
 安全性不靠"只打到 gemma-4"，而靠两条：①排序是恒等重排，数值上任何模型都不受影响
 （判据见 `scripts/check_moe_sort_equiv.py`）；②阈值 16 只让 M×top_k ∈ [16,64) 的批
@@ -69,7 +87,8 @@ import mlx.core as mx
 
 from mlx_vlm.models import switch_layers as _sl
 
-__all__ = ["install", "uninstall", "min_size", "UPSTREAM_SHA256"]
+__all__ = ["install", "uninstall", "is_installed", "min_size",
+           "switch_glu_call", "UPSTREAM_SHA256"]
 
 _ORIGINAL_CALL = _sl.SwitchGLU.__call__
 
@@ -88,8 +107,19 @@ _min_size_active = _DEFAULT_MIN_SIZE
 
 
 def min_size() -> int:
-    """当前**生效中**的阈值（`install()` 时从环境变量解析后定死）。"""
+    """**上次成功解析的**阈值（`install()` 成功时从环境变量解析后定死）。
+
+    注意它不等于"当前真正生效的阈值"：拒装态与卸载态下类上挂的是上游原件，
+    真正生效的是上游写死的 **64**，本函数仍会返回上次解析出来的值。
+    要判"补丁到底在不在"，调用方必须配合 `is_installed()` 一起看——
+    只看本函数会把拒装读成已装（归档里两张差 9% 的表就是这么分不清来源的）。
+    """
     return _min_size_active
+
+
+def is_installed() -> bool:
+    """本模块的实现是否真的挂在 `SwitchGLU` 上（唯一可信的"装没装"判据）。"""
+    return _sl.SwitchGLU.__call__ is switch_glu_call
 
 
 def _resolve_min_size() -> int:
@@ -150,13 +180,23 @@ def switch_glu_call(self: Any, x: mx.array, indices: mx.array) -> mx.array:
 def install() -> bool:
     """把降阈值版 `__call__` 装到 `SwitchGLU` 上。
 
-    幂等（已是本模块的实现则直接返回 False）。三种情况会**拒绝安装**，
-    每种都打印阴性声明——静默不装 = 归档里两张差 8% 的表分不出来源：
+    幂等：**已安装则最先早退**（静默返回 False，不动阈值也不打声明——
+    早退若放在拒装分支之后，"已安装 + MOE_SORT_MIN_SIZE=0" 会打出一句
+    假的"未安装"声明，恰是本模块的打印纪律要防的）。四种情况会**拒绝安装**
+    （按代码顺序），每种都打印阴性声明——静默不装 = 归档里两张差 8% 的表
+    分不出来源：
       1. `MOE_SORT_MIN_SIZE <= 0`：显式关闭
-      2. 上游源码 sha 与本副本不符：上游漂移，副本可能已丢新行为
-      3. `_gather_sort` / `_scatter_unsort` 不在上游模块里：接口变了
+      2. `_gather_sort` / `_scatter_unsort` 不在上游模块里：接口变了
+      3. 上游源码 sha 与本副本不符：上游漂移，副本可能已丢新行为
+      4. 类上已挂第三方实现：拒绝覆盖别人的补丁
     """
     global _min_size_active
+    # 已安装 ⇒ 真正什么都不做。**这一条必须最先判**，两个理由：
+    # ① 早退若晚于 `_min_size_active = thresh`，装好后再 install() 会静默改阈值；
+    # ② 早退若晚于拒装分支，已安装态会打出假的"未安装"声明。
+    if _sl.SwitchGLU.__call__ is switch_glu_call:
+        return False
+
     thresh = _resolve_min_size()
     if thresh <= 0:
         print("[MoE] 专家排序阈值补丁**未安装**（MOE_SORT_MIN_SIZE<=0），"
@@ -185,17 +225,15 @@ def install() -> bool:
               "覆盖它会静默丢掉那份修改。")
         return False
 
+    # （已安装的早退在函数最上方；走到这里 current 只可能是上游原件。）
     # 阈值先定死再换实现：反过来会有一瞬间用着旧阈值的新实现。
     _min_size_active = thresh
-    if current is switch_glu_call:
-        return False
-
     _sl.SwitchGLU.__call__ = switch_glu_call
     # 阈值直接决定"哪些批会排序"，故必须打出来：归档里两张差 8% 的表若不带这个数，
     # 事后分不清是补丁生效还是热漂移（首过评审 Major）。
     covers = "覆盖 MTP 验证批" if thresh <= 16 else f"MTP 验证批需 M×top_k ≥ {thresh} 才覆盖"
     print(f"[MoE] 专家排序阈值 64 → {thresh}（{covers}）：达阈的批走排序路，"
-          "同一专家的权重每批只装载一次")
+          "同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）")
     return True
 
 

@@ -58,7 +58,13 @@ def install_router_probe(_model):
         return idx, w
 
     Router.__call__ = wrapped
-    return lambda: setattr(Router, "__call__", orig)
+
+    def _uninstall():
+        # 只在类上挂的确实是本探针时才还原：有人在上面又垫了一层的话，
+        # 无条件 setattr 会把那一层抹掉（与生产补丁的 uninstall 同一条纪律）。
+        if Router.__call__ is wrapped:
+            Router.__call__ = orig
+    return _uninstall
 
 
 def build_prompt(target_dir: str) -> str:
@@ -85,34 +91,39 @@ async def main() -> int:
     K = int(getattr(cfg, "top_k_experts", 0))
     print(f"专家总数 E={E}  每 token top-k={K}\n")
 
-    install_router_probe(be.model)
+    # 探针打在**类**上（进程级），跑完必须卸：不卸的话同进程内后续任何生成都还
+    # 带着每层每次前向的 mx.eval + set 去重，测出来的时间全是错的。
+    uninstall_probe = install_router_probe(be.model)
     sampling = {"max_tokens": MAX_TOKENS, "temperature": 0.0,
                 "repetition_penalty": 1.1, "repetition_context_size": 50}
     prompt = build_prompt(TARGET)
 
-    for blk in BLOCKS:
-        be.speculative["draft_block_size"] = blk
-        UNION.clear()
-        cache = be.new_cache()
-        for _ in be.stream_generate(prompt, cache=cache, sampling=sampling):
-            pass
-        print(f"=== block_total={blk}（γ={blk-1}）===")
-        print(f"{'M':>3}{'次数':>8}{'并集中位':>10}{'并集均值':>10}"
-              f"{'独立假设':>10}{'相对 M=1':>10}{'税(vs 理想)':>12}")
-        print("-" * 66)
-        # M=1 的基准**按定义就是 K**：单 token 恰好选 top-k 个专家，并集无从谈起。
-        # 不能等实测——投机路的目标件永远以 M=block_total 调用，M=1 那行根本不出现，
-        # 初版据此取基准，于是整列算成 nan。
-        base = float(K)
-        for m in sorted(UNION):
-            vals = UNION[m]
-            med = statistics.median(vals)
-            mean = statistics.mean(vals)
-            indep = E * (1 - (1 - K / E) ** m) if E and K else float("nan")
-            rel = mean / base if base else float("nan")
-            print(f"{m:>3}{len(vals):>8}{med:>10.1f}{mean:>10.2f}"
-                  f"{indep:>10.1f}{rel:>10.2f}×{(rel - 1) * 100:>11.0f}%")
-        print()
+    try:
+        for blk in BLOCKS:
+            be.speculative["draft_block_size"] = blk
+            UNION.clear()
+            cache = be.new_cache()
+            for _ in be.stream_generate(prompt, cache=cache, sampling=sampling):
+                pass
+            print(f"=== block_total={blk}（γ={blk-1}）===")
+            print(f"{'M':>3}{'次数':>8}{'并集中位':>10}{'并集均值':>10}"
+                  f"{'独立假设':>10}{'相对 M=1':>10}{'税(vs 理想)':>12}")
+            print("-" * 66)
+            # M=1 的基准**按定义就是 K**：单 token 恰好选 top-k 个专家，并集无从谈起。
+            # 不能等实测——投机路的目标件永远以 M=block_total 调用，M=1 那行根本不出现，
+            # 初版据此取基准，于是整列算成 nan。
+            base = float(K)
+            for m in sorted(UNION):
+                vals = UNION[m]
+                med = statistics.median(vals)
+                mean = statistics.mean(vals)
+                indep = E * (1 - (1 - K / E) ** m) if E and K else float("nan")
+                rel = mean / base if base else float("nan")
+                print(f"{m:>3}{len(vals):>8}{med:>10.1f}{mean:>10.2f}"
+                      f"{indep:>10.1f}{rel:>10.2f}×{(rel - 1) * 100:>11.0f}%")
+            print()
+    finally:
+        uninstall_probe()
 
     print("读法：『相对 M=1』就是**专家字节读取量相对单 token 解码的倍数**。")
     print("      理想（稠密件那样）是 1.00×；『独立假设』是路由完全不相关时的上界。")
