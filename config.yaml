@@ -325,7 +325,9 @@ inference:
                                 #   31b-4bit → gemma-4-31b-it-assistant-8bit
                                 #   26b-a4b-8bit → gemma-4-26b-a4b-it-assistant-**4bit**（MoE 档 T1 便宜，草稿税是真杠杆）
                                 #   e4b → gemma-4-e4b-it-assistant-bf16
-    draft_kind: ""              # 留空 = 由草稿件的 model_type 自动判定（推荐）
+    draft_kind: ""              # 留空 = 由草稿件的 model_type 自动判定（推荐）。注意：本栈处理器
+                                #   接线仅覆盖判定结果为 mtp 的草稿件；解析成 dflash/eagle3 会在装载期
+                                #   拒启（那两类轮循环不消费 logits 处理器，08-16 复审收口）
     draft_block_size: 4         # 〔2026-08-15 实测定档；同日午后复测证实〕**按目标件分档，不是全栈一个值。**
                                 #   取 4 = 长对话稠密档折中 + MoE 档（排序补丁后）最优点，两头都对：
                                 #   · 稠密 8bit：ctx≈0 时最优 **5**（2.48×），ctx≈1500 时最优 **4**（2.15×）

@@ -1,0 +1,27 @@
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+目标件: models/gemma-4-12b-it-8bit
+草稿件: models/gemma-4-12b-it-assistant-bf16
+块列表: [3, 4, 5, 6]  重复: 3  max_tokens: 400  ctx目标: 0
+
+[Engine] 草稿深度上限已解锁：采纳请求值 draft_block_size=3（否则被草稿件 config 缺省值 4 顶死）
+[Engine] 投机草稿件已装载：models/gemma-4-12b-it-assistant-bf16（kind=mtp）
+[Engine] 投机采样启用：{'mode': 'drafter', 'draft_model': 'models/gemma-4-12b-it-assistant-bf16', 'draft_block_size': 3}
+装载完成 15.8s
+
+MoE 排序阈值补丁：已装，阈值=16（上游缺省 64）
+=== 基线（mode=off）===
+baseline-前     解码tps   34.40  (min 34.40 max 34.41)  墙钟tps  33.93  tok 400  sha 89d2deb02fff
+
+=== 投机各档 ===
+block  3 (γ=2)  解码tps   58.80 (min 58.73 max 58.81)  加速  1.71×  接受率 55.4%  AL 2.11  轮  570  tok 400  输出与基线不同(数值,已判良性)
+             P(≥k) k=1..2: 68.9% 41.6%
+block  4 (γ=3)  解码tps   60.71 (min 60.67 max 60.71)  加速  1.76×  接受率 44.4%  AL 2.33  轮  516  tok 400  输出与基线不同(数值,已判良性)
+             P(≥k) k=1..3: 69.2% 37.8% 25.6%
+block  5 (γ=4)  解码tps   61.98 (min 61.97 max 62.04)  加速  1.80×  接受率 40.1%  AL 2.59  轮  462  tok 400  输出与基线不同(数值,已判良性)
+             P(≥k) k=1..4: 66.2% 40.3% 30.5% 22.1%
+block  6 (γ=5)  解码tps   48.69 (min 48.66 max 48.71)  加速  1.42×  接受率 32.2%  AL 2.60  轮  462  tok 400  输出与基线不同(数值,已判良性)
+             P(≥k) k=1..5: 64.9% 37.0% 24.7% 18.8% 14.3%
+
+baseline-后     解码tps   34.46  (min 34.46 max 34.50)  墙钟tps  34.01  tok 400  sha 89d2deb02fff
+
+基线漂移 +0.2%  （可接受）

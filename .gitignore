@@ -56,6 +56,17 @@ rag/storage/
 logs/
 *.log
 *.pid
+# 例外：benchmarks/data/ 与 backend/benchmarks/ 下的 .log 是**测量原始件**，
+# 不是运行日志——文档/台账直接引用它们作证据，被上面的 *.log 静默吞掉会让
+# 结论不可复算（08-16 复审：T5 整站与 T6b 头号结论的唯一原始证据都曾因此漏
+# 入库）。入库前照例密扫。backend 树里存在名为 logs/ 的结果子目录，须先解除
+# 目录级排除才能豁免其中文件（git 不能从被排除目录里再包含文件）。
+# 注意：backend/benchmarks/model_eval/results/ 有本地 .gitignore 的 `*`（E7
+# 拍板：运行产物含大段生成文本不入库，结论走评测报告）——嵌套规则更深者优先，
+# 该目录不受下面豁免影响，属有意设计而非疏漏。
+!benchmarks/data/**/*.log
+!backend/benchmarks/**/logs/
+!backend/benchmarks/**/*.log
 
 # ═══════════ SearXNG（settings.yml 含随机 secret_key，由 devctl 首启生成；源码由 setup 克隆）═══════════
 searxng/settings.yml

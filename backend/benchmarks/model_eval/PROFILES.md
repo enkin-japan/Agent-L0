@@ -55,5 +55,8 @@
 **4bit 全维度 ≥ 8bit = 本模型效率王**。MTP 生产接线已通（融合采样在装载期显式击倒、
 改走 hidden+批量投影走查路，处理器全程在岗；`mode` 仍 off 待用户拍板）：8bit 几乎
 全额兑现上游预估（2.06 vs 2.09），4bit 差额（1.69 vs 1.90）是处理器+走查的正常税。
-接受率与上游 CLI 互证（67.8% vs 70.2% @γ2）。生产扫描日志 `scan_qwen4/8.log`，
+接受率与上游探针互证（@γ2 同量化配对：**8bit 68.3% vs 70.2% = −1.9pt、
+4bit 67.8% vs 72.9% = −5.1pt**。08-16 复审改：首版"67.8 vs 70.2"把生产 4bit
+配上了上游 8bit，跨量化不可比；上游 4bit 值在 `upstream_diff_probe_console.txt`
+TIER 4bit 段）。生产扫描日志 `scan_qwen4/8.log`，
 原始件 `benchmarks/data/qwen38-first-look/`。

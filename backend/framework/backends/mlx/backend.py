@@ -136,11 +136,36 @@ def _load_drafter(target_model, draft_path: str, spec_cfg: Dict[str, Any]):
     """
     from mlx_vlm.speculative.drafters import (
         load_drafter,
+        resolve_drafter_kind,
         validate_drafter_compatibility,
     )
 
     kind = (spec_cfg.get("draft_kind") or "").strip() or None
-    draft_model, resolved_kind = load_drafter(draft_path, kind=kind)
+    # 处理器接线目前只覆盖 mtp 轮循环：mtp_processors.install() 只替换
+    # `_mtp_acceptance_walk` 与 `_mtp_rounds_batch` 两类分派点，而 dflash/eagle3
+    # 的轮循环**不消费 logits_processors**（上游 dflash.py/eagle3.py 对 processors
+    # 零引用，08-16 复审实查）。放行即静默丢掉 repetition_penalty 与工具约束
+    # guard——且下方的融合采样击倒也只对 mtp 路成立。fail-closed（§S.3）。
+    # 注意可达性陷阱：model_type 不在上游 DRAFTER_KIND_BY_MODEL_TYPE 表里的
+    # 草稿件（含 config.json 缺失/不可读，_peek 返回 None）会静默落到
+    # DEFAULT_DRAFTER_KIND="dflash"，正好命中这里。
+    # 判 kind 只需 peek config.json，故放在 load_drafter **之前**——拒启不必
+    # 先白付几 GB 权重装载（评审建议）。
+    resolved_kind = resolve_drafter_kind(draft_path, kind)
+    if resolved_kind != "mtp":
+        raise RuntimeError(
+            f"草稿件 {draft_path} 解析为 kind={resolved_kind!r}，该轮循环不经过"
+            " logits 处理器（repetition_penalty / 工具约束 guard 会静默失效）。"
+            "本栈处理器接线目前仅覆盖 kind='mtp'；其它 kind 需单独接线，不得降级。"
+            "若该件本应是 mtp：检查其 config.json 是否缺失/损坏（peek 失败会静默"
+            "落到缺省 dflash）。"
+        )
+    draft_model, resolved_kind_post = load_drafter(draft_path, kind=kind)
+    if resolved_kind_post != resolved_kind:  # 预判与装载判定分裂 = 上游语义漂移
+        raise RuntimeError(
+            f"resolve_drafter_kind={resolved_kind!r} 与 load_drafter"
+            f"={resolved_kind_post!r} 不一致——上游判定语义漂移，需重审接线。"
+        )
     # 用 resolved_kind 而非配置里那个：上游明说要按自动判定的结果分派
     validate_drafter_compatibility(target_model, draft_model, resolved_kind)
 
@@ -157,14 +182,17 @@ def _load_drafter(target_model, draft_path: str, spec_cfg: Dict[str, Any]):
         )
     # 融合目标采样（qwen3_5 类形态自带）绕过 logits、因而绕过全部处理器。
     # 处置从「拒启」改为「显式击倒」（08-15 夜接线）：实例属性置 None 遮蔽类方法，
-    # 上游两处分派均以 callable(getattr(...)) 判定（mtp.py:117/:145），置 None 即
+    # 上游两处分派均以 callable(getattr(...)) 判定（mtp.py:116/:145-146），置 None 即
     # 干净落回 speculative_logits_from_hidden 的 hidden 路——与 gemma 同形态，
     # 处理器批量走查照常。§S.3 反静默降级三重保留：①这里响亮打印；②击倒后
     # 立即复核，遮不住就照旧拒启；③走查侧仍有 target_tokens 兜底断言
     # （mtp_processors.py），万一上游改了分派判据会当场响。
     # 覆盖的漂移形态：上游若把 callable(getattr(...)) 判据改成 hasattr(...)，
-    # 击倒后 hasattr 仍真、分派会去调 None() 而在 mtp.py 深处抛 TypeError——
-    # 响但不在守卫处（评审注记）；走查侧 target_tokens 兜底断言仍会先拦。
+    # 击倒后 hasattr 仍真、分派会去调 None() 而在 verify 链内抛
+    # TypeError（mtp.py:120 `_mtp_verify_without_logits`/:149）——先于走查执行，所以**先响的是这里**，
+    # 不是走查侧 target_tokens 断言（那两条断言在 acceptance_walk 体内，永远
+    # 排在 verify 之后；非贪心采样时 :145 段整体跳过、断言根本不触发）。
+    # 两种形态都不会静默降级，只是排障入口在 verify 不在守卫（08-16 复审修注）。
     for fused in ("speculative_argmax_from_hidden", "speculative_verify_logits"):
         if callable(getattr(lm, fused, None)):
             try:

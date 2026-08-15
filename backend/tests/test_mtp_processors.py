@@ -126,13 +126,26 @@ def test_no_context_matches_upstream_semantics():
     投影存在内核归约次序差，argmax 平局位可翻（§1.7.4，模块头已明记）。
     budget=1 一档专门对"预算满仍继续计 accepted"（喂 KV 回滚裁剪量）的语义。
     """
-    # 自防：若分派规回委派上游，本测试两边同为 _ORIGINAL_WALK，逐案空过
-    assert _mtp._mtp_acceptance_walk.__name__ != mp._ORIGINAL_WALK.__name__
+    # 自防（08-16 复审修）：旧断言比的是已安装补丁函数与上游的**函数名**——
+    # 那对名字是常量、恒不等，分派内部规回委派上游它照样绿（比对退化成
+    # 上游自比，逐案空过）。真自防 = 逐案确认"我们这臂"没有调用过上游走查。
     for targets, drafts, budget in [([3, 4, 5], [3, 4], 99),
                                     ([3, 9, 5], [3, 4], 99),
                                     ([9, 4, 5], [3, 4], 99),
                                     ([3, 4, 5], [3, 4], 1)]:
-        ours = _walk(_Verify(targets), drafts, budget=budget)
+        hits = {"n": 0}
+        orig = mp._ORIGINAL_WALK
+
+        def _spy(*a, _orig=orig, **k):
+            hits["n"] += 1
+            return _orig(*a, **k)
+
+        try:
+            mp._ORIGINAL_WALK = _spy
+            ours = _walk(_Verify(targets), drafts, budget=budget)
+        finally:
+            mp._ORIGINAL_WALK = orig
+        assert hits["n"] == 0, "无处理器臂委派了上游——批量快路分派被改回去了"
         upstream = mp._ORIGINAL_WALK(
             _FakeLM(), _Verify(targets), mx.array([drafts]), _sampler, budget,
             row_id=0, base_position=0)

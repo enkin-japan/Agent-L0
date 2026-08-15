@@ -10,10 +10,16 @@
 """
 import json
 import sys
+from pathlib import Path
 
-SP = "/private/tmp/claude-501/-Volumes-enkin-project-Agent/16c208c5-a64c-4cd9-a6c6-ba5d232b7af7/scratchpad"
-base = json.load(open(f"{SP}/t4_base.json"))
-spec = json.load(open(f"{SP}/t4_spec.json"))
+# 缺省读同目录入库件（08-16 复审修：首版硬编码会话级 scratchpad，入库即失联）；
+# 或显式传两个路径：t4_verdict.py <base.json> <spec.json>。全给或全不给——
+# 只给一个会静默混用显式 base + 缺省 spec（评审 nit）。
+if len(sys.argv) not in (1, 3):
+    sys.exit("用法: t4_verdict.py [<base.json> <spec.json>]（两个路径要么都给要么都省）")
+_HERE = Path(__file__).resolve().parent
+base = json.load(open(sys.argv[1] if len(sys.argv) > 1 else _HERE / "t4_base.json"))
+spec = json.load(open(sys.argv[2] if len(sys.argv) > 2 else _HERE / "t4_spec.json"))
 
 rows_b = base["rows"]
 emit_b = [r["ids"][0] for r in rows_b]           # temp=0：每行产出即 top-1
@@ -62,7 +68,10 @@ tok_b, tok_s = emit_b[D], emit_s[D][0]
 print(f"\n首分歧步 D={D}: 基线出 {tok_b}，投机出 {tok_s}")
 print(f"基线该步 top2: {rb['ids'][:2]} vals {rb['vals'][:2]}  gap={gap_b:.6f}")
 print(f"投机该步 top2: {rs['ids'][:2]} vals {rs['vals'][:2]}  gap={gap_s:.6f}")
-print(f"两路共同 top-id 最大 logprob 差 diff(D)={diff_D:.6f}")
+# diff_D 可为 None（top16 无交集）——下方判定行已用 `or 1e9` 兜住，这里同样兜
+# （评审 nit：原 f"{diff_D:.6f}" 在 None 上抛 TypeError）
+print("两路共同 top-id 最大 logprob 差 diff(D)="
+      + (f"{diff_D:.6f}" if diff_D is not None else "N/A（top16 无交集）"))
 if pre:
     print(f"分歧前 {len(pre)} 对齐步的 diff：中位 {sorted(pre)[len(pre)//2]:.6f} "
           f"最大 {max(pre):.6f}")

@@ -1,0 +1,103 @@
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/transformers/audio_utils.py:723: UserWarning: At least one mel filter has all zero values. The value for `num_mel_filters` (128) may be set too high. Or, the value for `num_frequency_bins` (257) may be set too low.
+  warnings.warn(
+== 评测 mlx-community/gemma-4-26b-a4b-it-8bit（方言 gemma4）：25 题 × 1 重复 → /Volumes/enkin/project/Agent/backend/benchmarks/model_eval/results/gemma-4-26b-a4b-it-8bit/20260815-145923
+[Engine] 约束采样引擎就绪（llguidance）
+[Engine] 前缀命中 0/229 tokens，gen 66.4 tps
+[Constrained] 本次生成有 24 步受工具 schema 约束
+✅ tc-bfcl-simple_0 r0 (3.61s)
+[Engine] 前缀命中 0/199 tokens，gen 67.7 tps
+[Constrained] 本次生成有 19 步受工具 schema 约束
+✅ tc-bfcl-simple_17 r0 (0.54s)
+[Engine] 前缀命中 0/279 tokens，gen 68.2 tps
+[Constrained] 本次生成有 15 步受工具 schema 约束
+[Engine] 前缀命中 206/487 tokens，gen 67.4 tps
+[Constrained] 本次生成有 15 步受工具 schema 约束
+❌ tc-bfcl-multiple_2 r0 (1.05s)  | 无完全合格调用（期望 country_info.capital，实际 []）
+[Engine] 前缀命中 0/502 tokens，gen 64.6 tps
+[Constrained] 本次生成有 49 步受工具 schema 约束
+[Engine] 前缀命中 429/744 tokens，gen 63.7 tps
+[Constrained] 本次生成有 49 步受工具 schema 约束
+❌ tc-bfcl-multiple_5 r0 (2.28s)  | 无完全合格调用（期望 weather.get_by_coordinates_date，实际 []）
+[Engine] 前缀命中 0/416 tokens，gen 65.7 tps
+[Constrained] 本次生成有 41 步受工具 schema 约束
+[Engine] 前缀命中 343/655 tokens，gen 64.3 tps
+[Constrained] 本次生成有 41 步受工具 schema 约束
+❌ tc-bfcl-multiple_10 r0 (1.95s)  | 无完全合格调用（期望 database.modify_columns，实际 []）
+[Engine] 前缀命中 0/480 tokens，gen 65.3 tps
+[Constrained] 本次生成有 42 步受工具 schema 约束
+[Engine] 前缀命中 407/725 tokens，gen 64.6 tps
+[Constrained] 本次生成有 42 步受工具 schema 约束
+❌ tc-bfcl-multiple_17 r0 (2.02s)  | 无完全合格调用（期望 currency_conversion.get_rate，实际 []）
+[Engine] 前缀命中 0/370 tokens，gen 64.8 tps
+❌ tc-bfcl-multiple_21 r0 (3.31s)  | 无完全合格调用（期望 generate_sound_wave，实际 []）
+[Engine] 前缀命中 0/508 tokens，gen 65.2 tps
+[Constrained] 本次生成有 38 步受工具 schema 约束
+[Engine] 前缀命中 435/757 tokens，gen 64.5 tps
+[Constrained] 本次生成有 38 步受工具 schema 约束
+❌ tc-bfcl-multiple_23 r0 (1.93s)  | 无完全合格调用（期望 basketball.player_stats.get，实际 []）
+[Engine] 前缀命中 0/228 tokens，gen 67.1 tps
+[Constrained] 本次生成有 24 步受工具 schema 约束
+✅ tc-bfcl-live_simple_0-0-0 r0 (0.63s)
+[Engine] 前缀命中 0/294 tokens，gen 66.2 tps
+[Constrained] 本次生成有 35 步受工具 schema 约束
+✅ tc-bfcl-live_simple_1-1-0 r0 (0.84s)
+[Engine] 前缀命中 0/296 tokens，gen 66.1 tps
+[Constrained] 本次生成有 36 步受工具 schema 约束
+[Engine] 前缀命中 223/530 tokens，gen 65.3 tps
+[Constrained] 本次生成有 36 步受工具 schema 约束
+❌ tc-bfcl-live_simple_2-2-0 r0 (1.73s)  | 无完全合格调用（期望 uber.ride，实际 []）
+[Engine] 前缀命中 0/268 tokens，gen 64.8 tps
+[Constrained] 本次生成有 25 步受工具 schema 约束
+✅ tc-bfcl-live_simple_4-3-0 r0 (0.69s)
+[Engine] 前缀命中 0/272 tokens，gen 66.6 tps
+[Constrained] 本次生成有 24 步受工具 schema 约束
+✅ tc-bfcl-live_simple_13-3-9 r0 (0.66s)
+[Engine] 前缀命中 0/167 tokens，gen 68.7 tps
+[Constrained] 本次生成有 13 步受工具 schema 约束
+[Engine] 前缀命中 94/224 tokens，gen 68.3 tps
+✅ tc-seed-001 r0 (0.88s)
+[Engine] 前缀命中 0/153 tokens，gen 69.0 tps
+[Constrained] 本次生成有 13 步受工具 schema 约束
+[Engine] 前缀命中 80/211 tokens，gen 67.8 tps
+✅ tc-seed-002 r0 (0.87s)
+[Engine] 前缀命中 0/147 tokens，gen 69.1 tps
+[Constrained] 本次生成有 12 步受工具 schema 约束
+[Engine] 前缀命中 74/197 tokens，gen 68.7 tps
+✅ tc-seed-003 r0 (0.79s)
+[Engine] 前缀命中 0/182 tokens，gen 66.5 tps
+[Constrained] 本次生成有 36 步受工具 schema 约束
+[Engine] 前缀命中 109/255 tokens，gen 67.6 tps
+✅ tc-seed-004 r0 (1.35s)
+[Engine] 前缀命中 0/161 tokens，gen 67.2 tps
+[Constrained] 本次生成有 23 步受工具 schema 约束
+[Engine] 前缀命中 88/221 tokens，gen 69.1 tps
+✅ tc-seed-005 r0 (1.01s)
+[Engine] 前缀命中 0/232 tokens，gen 68.0 tps
+[Constrained] 本次生成有 16 步受工具 schema 约束
+[Engine] 前缀命中 159/278 tokens，gen 68.7 tps
+✅ tc-seed-006 r0 (0.93s)
+[Engine] 前缀命中 0/189 tokens，gen 68.0 tps
+[Constrained] 本次生成有 18 步受工具 schema 约束
+[Engine] 前缀命中 116/261 tokens，gen 65.5 tps
+✅ tc-seed-007 r0 (2.39s)
+[Engine] 前缀命中 0/152 tokens，gen 66.1 tps
+✅ tc-seed-008 r0 (1.34s)
+[Engine] 前缀命中 0/144 tokens，gen 71.8 tps
+✅ tc-seed-009 r0 (0.34s)
+[Engine] 前缀命中 0/174 tokens，gen 67.3 tps
+[Constrained] 本次生成有 21 步受工具 schema 约束
+[Engine] 前缀命中 101/232 tokens，gen 67.5 tps
+✅ tc-seed-010 r0 (1.09s)
+[Engine] 前缀命中 0/167 tokens，gen 66.7 tps
+[Constrained] 本次生成有 31 步受工具 schema 约束
+[Engine] 前缀命中 94/227 tokens，gen 68.2 tps
+✅ tc-seed-011 r0 (1.19s)
+[Engine] 前缀命中 0/157 tokens，gen 68.5 tps
+[Constrained] 本次生成有 15 步受工具 schema 约束
+[Engine] 前缀命中 84/223 tokens，gen 67.2 tps
+✅ tc-seed-012 r0 (1.11s)
+== summary: {"tool_call": {"n": 25, "pass_rate": 0.72, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.696, "parse_errors_total": 12, "restraint_ok_rate": 1.0, "turns_used_total": 41, "valid_call_ok_rate": 0.696, "correction_success_rate": 0.0}}
+== cot: {"n": 25, "ctrl_leak_traj_rate": 0.0, "dup_rate_mean": 0.0, "dup_rate_max": 0.0, "recite_rate_mean": 0.0, "recite_rate_max": 0.0, "other_script_max": 0.0, "empty_think_turns_total": 41, "think_chars_mean": 0.0}
+== speed: {"generation_tps": {"mean": 66.92, "median": 67.16, "min": 63.67, "max": 71.76, "n": 41}, "prompt_tps": {"mean": 1290.26, "median": 1225.54, "min": 109.68, "max": 2715.37, "n": 41}, "peak_memory_max": 28.52, "kv_prefix_hit_rate": {"mean": 0.46, "median": 0.42, "min": 0.38, "max": 0.58, "n": 16}}
+== 产物: /Volumes/enkin/project/Agent/backend/benchmarks/model_eval/results/gemma-4-26b-a4b-it-8bit/20260815-145923

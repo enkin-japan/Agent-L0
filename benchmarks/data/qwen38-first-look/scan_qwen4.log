@@ -1,0 +1,29 @@
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+目标件: models/Qwen3.8-27B-4bit
+草稿件: models/Qwen3.8-27B-MTP-4bit
+块列表: [2, 3, 4, 5]  重复: 3  max_tokens: 400  ctx目标: 0
+
+[Engine] 已禁用 LanguageModel.speculative_argmax_from_hidden（融合采样绕过logits 处理器；改走 hidden+批量投影走查路，与 gemma 同形态）
+[Engine] 已禁用 LanguageModel.speculative_verify_logits（融合采样绕过logits 处理器；改走 hidden+批量投影走查路，与 gemma 同形态）
+[Engine] 草稿深度上限已解锁：采纳请求值 draft_block_size=2（否则被草稿件 config 缺省值 4 顶死）
+[Engine] 投机草稿件已装载：models/Qwen3.8-27B-MTP-4bit（kind=mtp）
+[Engine] 投机采样启用：{'mode': 'drafter', 'draft_model': 'models/Qwen3.8-27B-MTP-4bit', 'draft_block_size': 2}
+装载完成 19.5s
+
+MoE 排序阈值补丁：已装，阈值=16（上游缺省 64）
+=== 基线（mode=off）===
+baseline-前     解码tps   29.47  (min 29.47 max 29.50)  墙钟tps  28.80  tok 400  sha 521fcad8a5a1
+
+=== 投机各档 ===
+block  2 (γ=1)  解码tps   46.17 (min 45.70 max 46.18)  加速  1.57×  接受率 81.4%  AL 1.81  轮  660  tok 400  输出与基线不同(数值,已判良性)
+             P(≥k) k=1..1: 81.4%
+block  3 (γ=2)  解码tps   49.87 (min 49.67 max 49.88)  加速  1.69×  接受率 67.8%  AL 2.35  轮  510  tok 400  输出与基线不同(数值,已判良性)
+             P(≥k) k=1..2: 82.4% 52.9%
+block  4 (γ=3)  解码tps   43.41 (min 43.27 max 43.41)  加速  1.47×  接受率 53.6%  AL 2.61  轮  459  tok 400  输出与基线不同(数值,已判良性)
+             P(≥k) k=1..3: 77.1% 51.6% 32.0%
+block  5 (γ=4)  解码tps   38.20 (min 37.99 max 38.21)  加速  1.30×  接受率 44.3%  AL 2.77  轮  432  tok 400  输出与基线不同(数值,已判良性)
+             P(≥k) k=1..4: 79.2% 53.5% 27.8% 16.7%
+
+baseline-后     解码tps   29.53  (min 29.52 max 29.53)  墙钟tps  28.85  tok 400  sha 521fcad8a5a1
+
+基线漂移 +0.2%  （可接受）

@@ -1,0 +1,33 @@
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+目标件: models/gemma-4-31b-it-4bit
+草稿件: models/gemma-4-31b-it-assistant-4bit
+块列表: [3, 4, 5, 6, 7, 8]  重复: 3  max_tokens: 400  ctx目标: 0
+
+/Volumes/enkin/project/Agent/backend/.venv-mlxsrc/lib/python3.13/site-packages/transformers/audio_utils.py:723: UserWarning: At least one mel filter has all zero values. The value for `num_mel_filters` (128) may be set too high. Or, the value for `num_frequency_bins` (257) may be set too low.
+  warnings.warn(
+[Engine] 草稿深度上限已解锁：采纳请求值 draft_block_size=3（否则被草稿件 config 缺省值 4 顶死）
+[Engine] 投机草稿件已装载：models/gemma-4-31b-it-assistant-4bit（kind=mtp）
+[Engine] 投机采样启用：{'mode': 'drafter', 'draft_model': 'models/gemma-4-31b-it-assistant-4bit', 'draft_block_size': 3}
+装载完成 1.5s
+
+MoE 排序阈值补丁：已装，阈值=16（上游缺省 64）
+=== 基线（mode=off）===
+baseline-前     解码tps   25.09  (min 25.08 max 25.41)  墙钟tps  24.52  tok 400  sha ab13a68cc64a
+
+=== 投机各档 ===
+block  3 (γ=2)  解码tps   44.26 (min 44.26 max 44.28)  加速  1.76×  接受率 64.8%  AL 2.29  轮  522  tok 400  输出与基线不同(数值,已判良性)
+             P(≥k) k=1..2: 75.9% 53.4%
+block  4 (γ=3)  解码tps   41.75 (min 41.75 max 41.76)  加速  1.66×  接受率 55.6%  AL 2.66  轮  450  tok 400  输出与基线不同(数值,已判良性)
+             P(≥k) k=1..3: 74.7% 52.7% 38.7%
+block  5 (γ=4)  解码tps   38.08 (min 38.06 max 38.10)  加速  1.52×  接受率 48.3%  AL 2.93  轮  408  tok 400  输出与基线不同(数值,已判良性)
+             P(≥k) k=1..4: 75.7% 52.2% 36.8% 28.7%
+block  6 (γ=5)  解码tps   30.34 (min 30.33 max 30.37)  加速  1.21×  接受率 37.2%  AL 2.86  轮  420  tok 400  输出与基线不同(数值,已判良性)
+             P(≥k) k=1..5: 71.4% 45.0% 31.4% 22.9% 15.0%
+block  7 (γ=6)  解码tps   26.18 (min 26.18 max 26.19)  加速  1.04×  接受率 33.6%  AL 3.01  轮  399  tok 400  输出与基线不同(数值,已判良性)
+             P(≥k) k=1..6: 71.4% 45.9% 31.6% 21.8% 15.8% 14.3%
+block  8 (γ=7)  解码tps   27.71 (min 27.71 max 27.71)  加速  1.10×  接受率 32.0%  AL 3.22  轮  372  tok 400  输出与基线不同(数值,已判良性)
+             P(≥k) k=1..7: 74.2% 48.4% 32.3% 25.0% 17.7% 13.7% 10.5%
+
+baseline-后     解码tps   25.09  (min 25.08 max 25.10)  墙钟tps  24.52  tok 400  sha ab13a68cc64a
+
+基线漂移 +0.0%  （可接受）

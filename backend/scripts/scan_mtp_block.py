@@ -18,7 +18,9 @@
 
 正确性哨：报告投机路输出是否与基线逐字节相同。**不同不等于有错**——M>1 与 M=1
 走不同 MLX 内核，浮点归约次序会在近似平局位翻。该分歧已由
-`check_mtp_equivalence.py` 单独判定为良性，此处只作提示，不作失败判据。
+`check_mtp_equivalence.py` 单独判定为良性——**该判定仅对 gemma4 档建立**
+（§1.7.4 的决定性实验也是 gemma4）；其它方言档此处只报"不同"，不背书良性。
+此哨只作提示，不作失败判据。
 
 单 GPU 纪律：本脚本自己加载模型，跑之前确认没有别的真模型进程/推理服务在跑。
 用法：
@@ -35,19 +37,57 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-TARGET = sys.argv[1] if len(sys.argv) > 1 else "models/gemma-4-31b-it-8bit"
-DRAFT = sys.argv[2] if len(sys.argv) > 2 else "models/gemma-4-31b-it-assistant-bf16"
-BLOCKS = [int(b) for b in (sys.argv[3] if len(sys.argv) > 3 else "4,5,6").split(",")]
-REPEATS = int(sys.argv[4]) if len(sys.argv) > 4 else 3
-MAX_TOKENS = int(sys.argv[5]) if len(sys.argv) > 5 else 400
+# 作为库被导入时（t4 探针 import build_prompt/run_once）不得继承宿主进程的
+# argv——否则宿主的位置参数会被误读成本脚本的（评审 nit：宿主 ≥8 个参数且第 8
+# 个不是方言名时，import 即死在下面的 fail-fast 上）。截断到只剩程序名=全走缺省。
+_ARGS = sys.argv if __name__ == "__main__" else sys.argv[:1]
+TARGET = _ARGS[1] if len(_ARGS) > 1 else "models/gemma-4-31b-it-8bit"
+DRAFT = _ARGS[2] if len(_ARGS) > 2 else "models/gemma-4-31b-it-assistant-bf16"
+BLOCKS = [int(b) for b in (_ARGS[3] if len(_ARGS) > 3 else "4,5,6").split(",")]
+REPEATS = int(_ARGS[4]) if len(_ARGS) > 4 else 3
+MAX_TOKENS = int(_ARGS[5]) if len(_ARGS) > 5 else 400
 # 第 6 参 = 目标上下文长度（token）。>0 则先用**基线**生成一段真实回答塞进前一轮，
 # 把上下文顶到该长度再开测——production 的形态是长对话，而 ctx=0 的数只说明冷启动。
-CTX = int(sys.argv[6]) if len(sys.argv) > 6 else 0
+CTX = int(_ARGS[6]) if len(_ARGS) > 6 else 0
 # 第 7 参 = 方言（缺省 gemma4，行为不变）。qwen3_5 档必须传 qwen35：gemma4 模板
 # 的特殊标记对 qwen tokenizer 是畸形 prompt，接受率会失真且全程不报错。
-DIALECT = sys.argv[7] if len(sys.argv) > 7 else "gemma4"
-# 立刻验方言名（评审：模型 model_type 是 qwen3_5 而方言键是 qwen35，手滑概率高；
-# 拖到 build_prompt 才炸要先白付 31GB 装载）
+DIALECT = _ARGS[7] if len(_ARGS) > 7 else "gemma4"
+
+# CTX>0 回灌守卫用的特殊标记册子（按方言）。两档都直接抄各自 tokenizer.json 的
+# added_tokens 全表（gemma4 24 个 / qwen35 33 个；守卫是字符串包含检查，列全
+# 零成本）——挑子集就是给守卫开洞（08-16 复审两连：qwen35 先前只列 6 个开标记
+# 连 </tool_call> 都没有；gemma4 首版也只挑了 5 个，同一条理由适用于缺省方言）。
+SPECIAL_MARKERS = {
+    "gemma4": (
+        "<pad>", "<eos>", "<bos>", "<unk>", "<mask>",
+        "<|tool>", "<tool|>", "<|tool_call>", "<tool_call|>",
+        "<|tool_response>", "<tool_response|>", '<|"|>', "<|think|>",
+        "<|channel>", "<channel|>", "<|turn>", "<turn|>",
+        "<|image>", "<|audio>", "<|image|>", "<|audio|>",
+        "<image|>", "<audio|>", "<|video|>",
+    ),
+    "qwen35": (
+        "<|endoftext|>", "<|im_start|>", "<|im_end|>",
+        "<|object_ref_start|>", "<|object_ref_end|>",
+        "<|box_start|>", "<|box_end|>", "<|quad_start|>", "<|quad_end|>",
+        "<|vision_start|>", "<|vision_end|>", "<|vision_pad|>",
+        "<|image_pad|>", "<|video_pad|>",
+        "<tool_call>", "</tool_call>", "<tool_response>", "</tool_response>",
+        "<|fim_prefix|>", "<|fim_middle|>", "<|fim_suffix|>", "<|fim_pad|>",
+        "<|repo_name|>", "<|file_sep|>",
+        "<think>", "</think>",
+        "<|audio_start|>", "<|audio_end|>", "<|audio_pad|>",
+        "<tts_pad>", "<tts_text_bos>", "<tts_text_eod>",
+        "<tts_text_bos_single>",
+    ),
+}
+# 立刻验方言名，两道闸都在装载前（评审：model_type 是 qwen3_5 而方言键是
+# qwen35，手滑概率高；拖到 build_prompt 才炸要先白付 31GB 装载）：
+# ①本脚本册子成员检查——注意 get_dialect_class("") 会静默回落缺省方言，
+#   空串必须在这里显式拒掉，不能只靠注册表；②框架注册表检查。
+if DIALECT not in SPECIAL_MARKERS:
+    sys.exit(f"未知方言 {DIALECT!r}：本脚本已备标记册子的方言仅 "
+             f"{sorted(SPECIAL_MARKERS)}（空串/别名同样拒）")
 from framework.dialects import get_dialect_class as _validate_dialect  # noqa: E402
 _validate_dialect(DIALECT)
 
@@ -206,13 +246,9 @@ async def main() -> int:
         # 标记，再经方言组装就会变成**真的**控制 token，造出畸形 prompt 且全程不报错，
         # 接受率随之失真（首过评审 M6）。
         # 标记表随方言走（评审 Critical：qwen35 场只查 gemma 标记＝守卫静默空转，
-        # 恰是本守卫要防的"畸形 prompt 不报错"形态）
-        markers = {
-            "gemma4": ("<|turn>", "<turn|>", "<|channel>", "<channel|>", "<bos>"),
-            "qwen35": ("<|im_start|>", "<|im_end|>", "<think>", "</think>",
-                       "<tool_call>", "<|vision_start|>"),
-        }[DIALECT]
-        bad = [m for m in markers
+        # 恰是本守卫要防的"畸形 prompt 不报错"形态）；册子本体在模块顶
+        # SPECIAL_MARKERS，与方言 fail-fast 同一本账。
+        bad = [m for m in SPECIAL_MARKERS[DIALECT]
                if m in prior_answer]
         if bad:
             raise RuntimeError(f"前一轮答里含特殊标记 {bad}，回灌会造出畸形 prompt。"
@@ -283,8 +319,9 @@ async def main() -> int:
             base_ntok = statistics.median([r[1] for r in base_rows])
             dev = abs(statistics.median(ntok) - base_ntok) / max(1, base_ntok)
             # 输出与基线不同 **不等于** 有错：M>1 与 M=1 走不同 MLX 内核，浮点归约
-            # 次序不同会在近似平局位翻。已由 check_mtp_equivalence.py 判定为良性
-            # （关处理器时同样分歧）。此处只作提示，不作失败判据。
+            # 次序不同会在近似平局位翻。良性判定（check_mtp_equivalence.py +
+            # §1.7.4）**仅对 gemma4 档建立**（关处理器时同样分歧）；其它方言此处
+            # 只报"不同"，不背书良性。只作提示，不作失败判据。
             print(f"block {blk:>2} (γ={gamma})  解码tps {med:7.2f} "
                   f"(min {min(tps):.2f} max {max(tps):.2f})  "
                   f"加速 {med / base_tps:5.2f}×  "

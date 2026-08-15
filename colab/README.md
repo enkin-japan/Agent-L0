@@ -102,10 +102,13 @@ ssh/scp（root@colab-a100）**——exec 会话凭据 ~45min 必失效而 VM 照
 （持久记忆 new-script-shakedown-monitoring）。
 
 Mac 侧一键编排已落库：`./colab/bench_orchestrate.sh <VM侧驱动名>`（上述全流程 +
-trap 必停会话 + 逐分钟活动监测 + 60min 硬顶 + 控制台脱敏落地）。场参经
-`bench.env`（非密）传 VM：`BENCH_TARGET_REPO/DIR`、`BENCH_DRAFT_REPO/DIR` 定
-boot 预拉对象（重件一律 boot 期预拉，绝不塞进评测格 timeout），`BENCH_SKIP_PULL=1`
-跳过预拉。驱动示例：`bench_31b_fp8_cells.sh`（31B fp8 γ 补格）。
+trap 先于计费动作装上 + 逐分钟活动监测（含 ssh 失联计入停滞）+ 60min 硬顶 +
+落地产物过脱敏闸——json/log/txt 白名单就地脱敏，白名单外文件与脱敏失败会
+响亮告警并在收尾提醒手查，git add 前看告警）。场参经 `bench.env`（非密）传 VM：`BENCH_TARGET_REPO/DIR`、
+`BENCH_DRAFT_REPO/DIR` 定 boot 预拉对象（重件一律 boot 期预拉，绝不塞进评测格
+timeout），`BENCH_SKIP_PULL=1` 跳过预拉。**缺省场参是 31B 场**；换模型时在编排器
+外部 export 同名 `BENCH_*` 变量 + `BENCH_PROMPT` 指向对应 prompt 件覆盖，否则
+boot 期会先拉错 62GB 权重。驱动示例：`bench_31b_fp8_cells.sh`（31B fp8 γ 补格）。
 
 ## 日用一键起停（daily.sh，2026-08-09 起）
 
