@@ -24,7 +24,7 @@ NO_STOP="${NO_STOP:-0}"
 HARD_CAP_MIN=60
 die(){ echo "❌ $*"; exit 1; }
 note(){ printf '\033[0;36m[bench]\033[0m %s\n' "$*"; }
-redact(){ sed -E 's/(x-access-token|hf_[A-Za-z0-9]{4})[^@[:space:]]*/\1***REDACTED***/g'; }
+redact(){ sed -E 's/(x-access-token|hf_[A-Za-z0-9]{4}|tskey-[A-Za-z0-9]{0,4}|github_pat_)[^@[:space:]]*/\1***REDACTED***/g'; }
 
 [ -f "$ENVF" ] || die "缺 $ENVF"
 [ -f "$HERE/$DRIVER" ] || die "缺驱动 $HERE/$DRIVER"
