@@ -32,9 +32,15 @@ gemma-4 的路径已逐条查实：`speculative_argmax_from_hidden` **无**（�
 → sampler 是普通 `make_sampler` 产物 → 无 `sample_target`。
 
 所以：**本模块没有新增任何逐位同步点**。上游本来就逐位走。本模块只替换
-`_mtp_acceptance_walk`，**无活动处理器时原样委派上游**（零行为变化）；有处理器时
-的净效果是两条——①把处理器补回逐位判决，②把上游那 γ+1 次逐位投影合并成 1 次
-批量投影（见 `_walk_with_processors` 内的注释），故性能上是净赚而非净亏。
+`_mtp_acceptance_walk`。有处理器时的净效果是两条——①把处理器补回逐位判决，
+②把上游那 γ+1 次逐位投影合并成 1 次批量投影（见 `_walk_with_processors` 内的
+注释），故性能上是净赚而非净亏。**无活动处理器时也走同一条批量快路**（空上下文，
+08-15 夜改，§2.1-c 门控修正）：投影次数不再随处理器开关而变。语义边界随之变化，
+明记两条——①temp>0 普通 sampler 的 RNG 流与旧"委派上游"形态不同（每轮多耗
+γ+1−k 个 key 且经 sync_draft 传导草稿流），该配置的接受率读数与修正前存档不可
+互相对表；②temp=0 时批量投影与上游逐位投影存在 M=1 vs M>1 内核归约次序差
+（§1.7.4：噪声中位 0.25 logprob），argmax 表示级平局位可翻——旧"零行为变化"
+保证改为"平局位以内等价"。融合 target / 缺投影接口的形态仍原样委派上游。
 
 # 逐位走查为什么不损失正确性
 
@@ -137,7 +143,8 @@ def _ctx() -> Optional[_Ctx]:
 class processor_context:
     """在 with 块内让 MTP 走查看到这批处理器；块外恢复（可嵌套）。
 
-    processors 为空时不建上下文——走查将原样委派上游。
+    processors 为空时不建上下文——走查走空上下文批量快路（见
+    acceptance_walk_with_processors 的 ctx is None 分支）。
     """
 
     def __init__(self, processors: Optional[List[Callable]],
@@ -366,11 +373,25 @@ def acceptance_walk_with_processors(
     """`_mtp_acceptance_walk` 的替换实现。"""
     ctx = _ctx()
     if ctx is None:
-        # 无活动处理器：原样委派上游，零行为变化
-        return _ORIGINAL_WALK(
-            lm, verify, draft_tokens, sampler, budget,
-            row_id=row_id, base_position=base_position,
-        )
+        # 无活动处理器：仍走批量快路，只是挂一个空上下文（apply=恒等）。
+        # 修正前这里委派上游逐位投影路，导致「投影次数」随处理器开关而变——
+        # 关惩罚的 bench 吃不到单次大投影收益，且开/关处理器的 A/B 连投影
+        # 次数都不同，§1.7/T4 类对照不可比（§2.1-c Major）。
+        # 上游融合 target 或缺投影接口的模型形态照旧委派：那两条路上没有
+        # 处理器可丢，上游语义即正确语义。
+        if (getattr(verify, "target_tokens", None) is not None
+                or not hasattr(lm, "speculative_logits_from_hidden")):
+            return _ORIGINAL_WALK(
+                lm, verify, draft_tokens, sampler, budget,
+                row_id=row_id, base_position=base_position,
+            )
+        # 空 ctx **故意不装进 _local**（载重决策，勿"顺手"改掉）：装了会让
+        # record_emitted 开始登记、让 B>1 的 rounds_batch_guarded 误判"有活动
+        # 处理器"而拒跑——两处都以 _ctx() is None 为"无处理器"的判据。
+        # 空 ctx 只作 apply=恒等的走查参数，用完即弃。
+        ctx = _Ctx([], None, [], 64)
+        return _walk_batched(lm, verify, draft_tokens, sampler, budget,
+                             row_id, base_position, ctx)
 
     if getattr(verify, "target_tokens", None) is not None:
         # 模型自带融合 target（未经处理器）。gemma-4 不走这条（既无

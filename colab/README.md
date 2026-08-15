@@ -101,6 +101,12 @@ ssh/scp（root@colab-a100）**——exec 会话凭据 ~45min 必失效而 VM 照
 逐格 scp 取回（会话丢最多损失一格）。新脚本首跑按磨合纪律分钟级盯梢
 （持久记忆 new-script-shakedown-monitoring）。
 
+Mac 侧一键编排已落库：`./colab/bench_orchestrate.sh <VM侧驱动名>`（上述全流程 +
+trap 必停会话 + 逐分钟活动监测 + 60min 硬顶 + 控制台脱敏落地）。场参经
+`bench.env`（非密）传 VM：`BENCH_TARGET_REPO/DIR`、`BENCH_DRAFT_REPO/DIR` 定
+boot 预拉对象（重件一律 boot 期预拉，绝不塞进评测格 timeout），`BENCH_SKIP_PULL=1`
+跳过预拉。驱动示例：`bench_31b_fp8_cells.sh`（31B fp8 γ 补格）。
+
 ## 日用一键起停（daily.sh，2026-08-09 起）
 
 白天开、晚上关的日常算力端（背景：余量 unit 榨汁，L4 1.54u/h 可支撑约 20 天日用）。

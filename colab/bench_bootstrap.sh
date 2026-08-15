@@ -9,7 +9,15 @@ export LD_LIBRARY_PATH="/usr/lib64-nvidia:${LD_LIBRARY_PATH:-}"
 export PATH="/opt/bin:$PATH"
 die(){ echo "FATAL: $*"; exit 1; }
 [ -f /content/colab.env ] || die "缺 /content/colab.env"
+# 场参先、密钥后：bench.env（非密场参，Mac 侧生成）覆盖不了 GIT_TOKEN/HF_TOKEN。
+# 旋钮：BENCH_SKIP_PULL=1 跳过 ④；BENCH_TARGET_REPO/DIR、BENCH_DRAFT_REPO/DIR
+# 覆盖拉件对象（缺省 26B 场不变）。
+[ -f /content/bench.env ] && { set -a; . /content/bench.env; set +a; }
 set -a; . /content/colab.env; set +a
+# 大件必须落大盘（/root 小盘拉一半撞满=白烧钱）；无条件钉死，连 HF_HUB_CACHE
+# 一起（它能整个越过 HF_HOME——评审）
+export HF_HOME=/content/hf
+export HF_HUB_CACHE=/content/hf/hub
 [ -n "${GIT_TOKEN:-}" ] || die "colab.env 缺 GIT_TOKEN"
 [ -n "${HF_TOKEN:-}" ] || die "colab.env 缺 HF_TOKEN"
 APP=/content/agent
@@ -79,7 +87,7 @@ echo "== ② 评测件就位（Mac 侧上传到 /content/ 暂存，clone 后落�
 cp /content/vllm_cell.py "$APP/benchmarks/vllm_cell.py" || die "vllm_cell.py 未上传"
 cp /content/_prompt.json "$APP/benchmarks/data/mtp-moe/_prompt.json" || die "_prompt.json 未上传"
 # 上传件哈希登记（评审：上传覆盖了 clone 副本，HEAD 短哈希不再唯一标识评测器）
-sha256sum /content/vllm_cell.py /content/_prompt.json /content/bench_mtp_recheck.sh 2>/dev/null
+sha256sum /content/vllm_cell.py /content/_prompt.json /content/bench_*.sh 2>/dev/null
 
 echo "== ③ GPU 保活 0.5G + 内存哨兵（拉件期 GPU 空闲防判零；pidfile 纪律）"
 pgrep -f "gpu_keepalive[.]py" >/dev/null || {
@@ -110,8 +118,14 @@ Path(dst, ".download_complete").write_text(json.dumps({"revision": None}))
 print(f"OK {repo} {time.time()-t0:.0f}s", flush=True)
 PY
 }
-pull google/gemma-4-26B-A4B-it gemma-4-26B-A4B-it || die "26B 拉取失败"
-pull google/gemma-4-26B-A4B-it-assistant gemma-4-26B-A4B-it-assistant || die "草稿件拉取失败"
+if [ "${BENCH_SKIP_PULL:-0}" = "1" ]; then
+  echo "跳过预拉（BENCH_SKIP_PULL=1，评测器将经 vLLM 自拉，HF_HOME=${HF_HOME}）"
+else
+  pull "${BENCH_TARGET_REPO:-google/gemma-4-26B-A4B-it}" \
+       "${BENCH_TARGET_DIR:-gemma-4-26B-A4B-it}" || die "目标件拉取失败"
+  pull "${BENCH_DRAFT_REPO:-google/gemma-4-26B-A4B-it-assistant}" \
+       "${BENCH_DRAFT_DIR:-gemma-4-26B-A4B-it-assistant}" || die "草稿件拉取失败"
+fi
 
 echo "== ⑤ MTP 热补丁（嵌入共享护栏豁免）"
 python3 "$APP/colab/mtp_patch.py" || die "MTP 热补丁失败"

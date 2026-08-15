@@ -1,7 +1,9 @@
 """MTP 投机走查的 logits 处理器契约（全离线，假 lm/sampler，无模型无 GPU）。
 
 钉住的行为：
-1. 无活动处理器 → 原样委派上游（零行为变化，这是"开投机不改语义"的底线）；
+1. 无活动处理器 → 仍走批量快路（空上下文，apply=恒等；投影次数不随处理器开关
+   而变，§2.1-c）；但融合 target / 缺投影接口的形态原样委派上游——那两条路上
+   没有处理器可丢，上游语义即正确语义；
 2. **两类处理器分开驱动**——约束 guard 走 `consume()`/`mask_logits()` 自有协议，
    惩罚类走 `(tokens, logits)` 且历史用 prompt 播种。首过评审的 Critical：
    拿 `(tokens, logits)` 喂 guard 会让 `_GuardAdapter._seen` 锁在 prompt 长度上，
@@ -99,7 +101,8 @@ def test_install_idempotent_and_uninstall():
     assert mp.install() is True
 
 
-def test_no_context_delegates_upstream():
+def test_no_context_uses_batched_fast_path_not_upstream():
+    """无处理器也走批量快路：投影次数不随处理器开关而变（§2.1-c 门控修正）。"""
     called = {}
 
     def _sentinel(*a, **k):
@@ -110,6 +113,88 @@ def test_no_context_delegates_upstream():
     try:
         mp._ORIGINAL_WALK = _sentinel
         got = _walk(_Verify([3, 4, 5]), [3, 4])
+    finally:
+        mp._ORIGINAL_WALK = orig
+    assert called.get("hit") is None, "无处理器不该再委派上游"
+    assert got == (2, [3, 4, 5])
+
+
+def test_no_context_matches_upstream_semantics():
+    """空上下文批量路与上游走查同走查/预算语义（accepted 计数、产出、截断）。
+
+    注意钉的是**语义**不是数值：假件两种切法算得完全一致，真件上批量 vs 逐位
+    投影存在内核归约次序差，argmax 平局位可翻（§1.7.4，模块头已明记）。
+    budget=1 一档专门对"预算满仍继续计 accepted"（喂 KV 回滚裁剪量）的语义。
+    """
+    # 自防：若分派规回委派上游，本测试两边同为 _ORIGINAL_WALK，逐案空过
+    assert _mtp._mtp_acceptance_walk.__name__ != mp._ORIGINAL_WALK.__name__
+    for targets, drafts, budget in [([3, 4, 5], [3, 4], 99),
+                                    ([3, 9, 5], [3, 4], 99),
+                                    ([9, 4, 5], [3, 4], 99),
+                                    ([3, 4, 5], [3, 4], 1)]:
+        ours = _walk(_Verify(targets), drafts, budget=budget)
+        upstream = mp._ORIGINAL_WALK(
+            _FakeLM(), _Verify(targets), mx.array([drafts]), _sampler, budget,
+            row_id=0, base_position=0)
+        assert ours == upstream, (targets, drafts, budget)
+
+
+def test_projection_called_once_regardless_of_processors():
+    """门控修正的核心不变量：投影次数=1，不随处理器开关而变。"""
+
+    class _CountingLM(_FakeLM):
+        def __init__(self):
+            self.calls = 0
+
+        def speculative_logits_from_hidden(self, hidden):
+            self.calls += 1
+            return super().speculative_logits_from_hidden(hidden)
+
+    for procs in (None, [_Recorder()]):
+        lm = _CountingLM()
+        with _ctx(procs):
+            _mtp._mtp_acceptance_walk(
+                lm, _Verify([3, 4, 5]), mx.array([[3, 4]]), _sampler, 99,
+                row_id=0, base_position=0)
+        assert lm.calls == 1, f"procs={procs}: 投影 {lm.calls} 次"
+
+
+def test_no_context_fused_target_delegates_upstream():
+    """融合 target 且无处理器：没有处理器可丢，照旧委派上游。"""
+    called = {}
+
+    def _sentinel(*a, **k):
+        called["hit"] = True
+        return (0, [7])
+
+    orig = mp._ORIGINAL_WALK
+    try:
+        mp._ORIGINAL_WALK = _sentinel
+        got = _walk(_Verify([3, 4, 5], target_tokens=mx.array([[3, 4, 5]])),
+                    [3, 4])
+    finally:
+        mp._ORIGINAL_WALK = orig
+    assert called.get("hit") is True
+    assert got == (0, [7])
+
+
+def test_no_context_without_projection_delegates_upstream():
+    """缺 speculative_logits_from_hidden 且无处理器：照旧委派上游。"""
+    called = {}
+
+    def _sentinel(*a, **k):
+        called["hit"] = True
+        return (0, [7])
+
+    class _BareLM:
+        pass
+
+    orig = mp._ORIGINAL_WALK
+    try:
+        mp._ORIGINAL_WALK = _sentinel
+        got = _mtp._mtp_acceptance_walk(
+            _BareLM(), _Verify([3, 4, 5]), mx.array([[3, 4]]), _sampler, 99,
+            row_id=0, base_position=0)
     finally:
         mp._ORIGINAL_WALK = orig
     assert called.get("hit") is True
