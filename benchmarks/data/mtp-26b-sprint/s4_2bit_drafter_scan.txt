@@ -1,0 +1,31 @@
+装载 models/gemma-4-26b-a4b-it-assistant-bf16
+量化前：419.7M 参数 / 801 MiB
+量化后：125 MiB  （15.6%）
+已写出 models/gemma-4-26b-a4b-it-assistant-2bit
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+目标件: models/gemma-4-26b-a4b-it-8bit
+草稿件: models/gemma-4-26b-a4b-it-assistant-2bit
+块列表: [3, 4, 5]  重复: 3  max_tokens: 400  ctx目标: 0
+
+/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/transformers/audio_utils.py:723: UserWarning: At least one mel filter has all zero values. The value for `num_mel_filters` (128) may be set too high. Or, the value for `num_frequency_bins` (257) may be set too low.
+  warnings.warn(
+[Engine] 草稿深度上限已解锁：采纳请求值 draft_block_size=3（否则被草稿件 config 缺省值 4 顶死）
+[Engine] 投机草稿件已装载：models/gemma-4-26b-a4b-it-assistant-2bit（kind=mtp）
+[Engine] 投机采样启用：{'mode': 'drafter', 'draft_model': 'models/gemma-4-26b-a4b-it-assistant-2bit', 'draft_block_size': 3}
+装载完成 12.4s
+
+MoE 排序阈值补丁：已装，阈值=16（上游缺省 64）
+=== 基线（mode=off）===
+baseline-前     解码tps   79.68  (min 79.65 max 79.71)  墙钟tps  77.60  tok 400  sha 1b8e6c8b507b
+
+=== 投机各档 ===
+block  3 (γ=2)  解码tps   81.04 (min 80.27 max 81.18)  加速  1.02×  接受率 29.7%  AL 1.59  轮  753  tok 400  输出与基线不同(数值,已判良性)
+             P(≥k) k=1..2: 42.2% 17.1%
+block  4 (γ=3)  解码tps   76.94 (min 76.82 max 77.24)  加速  0.97×  接受率 23.1%  AL 1.69  轮  708  tok 400  输出与基线不同(数值,已判良性)
+             P(≥k) k=1..3: 43.2% 17.8%  8.1%
+block  5 (γ=4)  解码tps   69.00 (min 68.96 max 69.04)  加速  0.87×  接受率 18.5%  AL 1.74  轮  690  tok 400  输出与基线不同(数值,已判良性)
+             P(≥k) k=1..4: 44.3% 17.8%  7.4%  4.3%
+
+baseline-后     解码tps   79.36  (min 79.34 max 79.81)  墙钟tps  77.33  tok 400  sha 1b8e6c8b507b
+
+基线漂移 -0.4%  （可接受）

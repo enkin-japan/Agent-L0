@@ -1,0 +1,35 @@
+{
+ "label": "main_k256",
+ "mlx_version": "0.32.1.dev20260815+adf21de",
+ "layers": 8,
+ "rows": [
+  {
+   "m_tok": 1,
+   "B": 8,
+   "which": "gateup",
+   "sorted": false,
+   "median_ms": 0.7425419753417373
+  },
+  {
+   "m_tok": 1,
+   "B": 8,
+   "which": "down",
+   "sorted": false,
+   "median_ms": 0.5559170094784349
+  },
+  {
+   "m_tok": 4,
+   "B": 32,
+   "which": "gateup",
+   "sorted": true,
+   "median_ms": 2.1926669869571924
+  },
+  {
+   "m_tok": 4,
+   "B": 32,
+   "which": "down",
+   "sorted": true,
+   "median_ms": 1.3133749889675528
+  }
+ ]
+}

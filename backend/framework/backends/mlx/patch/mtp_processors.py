@@ -186,6 +186,118 @@ def _walk_with_processors(
     base_position: Optional[int],
     ctx: _Ctx,
 ) -> Tuple[int, List[int]]:
+    """走查分派：无 guard 走批量快路（一次同步），有 guard 走逐位顺序路。
+
+    guard（工具约束状态机）的 `consume` 不可逆、`mask_logits` 依赖逐位推进后的
+    状态——批量路要为位置 pos 预知「接受 draft[:pos] 之后」的 mask，等于要求
+    状态机可虚拟前滚，它做不到。故 guard 活动时（工具调用构造段）回退顺序路；
+    其余时段（绝大多数解码）走批量路。两条路在 temp=0 下逐位等价（见各自 docstring），
+    tests/test_mtp_processors.py 有并排断言。
+    """
+    if ctx.guard is None:
+        return _walk_batched(lm, verify, draft_tokens, sampler, budget,
+                             row_id, base_position, ctx)
+    return _walk_sequential(lm, verify, draft_tokens, sampler, budget,
+                            row_id, base_position, ctx)
+
+
+def _walk_batched(
+    lm: Any,
+    verify: Any,
+    draft_tokens: mx.array,
+    sampler: Callable[[mx.array], mx.array],
+    budget: int,
+    row_id: int,
+    base_position: Optional[int],
+    ctx: _Ctx,
+) -> Tuple[int, List[int]]:
+    """批量走查（无 guard 专用）：全部位置一次建图、一次同步。
+
+    可行性（§1.3-b 早已论证）：位置 pos 只有在 `0..pos-1` 全被接受时才会被消费，
+    而"被接受 ⟺ target==draft"，故其正确历史恒为 `hist + draft[:pos]`——
+    **在采样之前就已知**，惩罚可逐位按各自历史在图内算好，无需逐位同步。
+
+    与顺序路的等价性（temp=0 逐位相同，实测判据）：
+    - 惩罚历史逐位对齐：顺序路只 commit 进预算内的产出，故位置 pos 实际看到的
+      延长段是 `draft[:min(pos, budget)]`——此处照抄这个式子，含"预算满后历史
+      停更"的语义，保证与顺序路**逐位同 logits**；
+    - 采样逐行调用同一个 sampler（懒建图，不依赖采样器支持批维）。temp=0 时
+      argmax 逐行等价。temp>0 分两种：**positioned 分支逐位可复现**
+      （`_PositionedTargetSampler` 按 (seed,row,position) 派生 key，不耗全局 RNG，
+      两条路位到位相同）；普通 sampler 分支则**多耗 RNG 且量随数据变**——
+      本路对全 γ+1 位都构了采样图，被拒轮比顺序路多耗 γ+1−k 次全局 key，
+      且 `target_sampled(sync_draft=True)` 会把走查后的全局态喂给草稿流 ⇒
+      下一轮草稿的 key 随之移动。**分布不受影响**（接受判据是相等比较、产出
+      恒取自目标 logits），但 temp>0 下两条路的接受率读数不可互相对表。
+    - accepted 计数/预算语义逐句照抄顺序路（accepted 决定回滚裁剪量，少报即多裁）。
+    - 前置条件：plain_procs 必须是 (tokens, logits) 的**纯函数**——本路对断点后
+      的行也会调用它们（结果丢弃）。有状态处理器必须走 guard 协议（consume/
+      mask_logits），那会被分派到顺序路；两个协议都不带的有状态处理器会被
+      静默多驱动，属接线错误。
+
+    收益与代价（实测定案）：每轮同步 1+γ+1 次 → 2 次；代价是被拒轮多算
+    γ+1−k 行词表宽的惩罚/归一化/采样图。26b-8bit 端到端净赚 **+2.3%**
+    （block4 109.89→112.43 tps，AL/轮数逐位相同，§6.2-b S5）。
+    """
+    n_draft = int(draft_tokens.shape[1])
+    draft_list = [int(x) for x in draft_tokens.reshape(-1).tolist()]
+    accepted = 0
+    new_tokens: List[int] = []
+
+    sample_target = getattr(sampler, "sample_target", None)
+    positioned = callable(sample_target) and base_position is not None
+
+    with mx.stream(_mtp.generation_stream):
+        all_logits = lm.speculative_logits_from_hidden(verify.hidden)
+        targets = []
+        for pos in range(n_draft + 1):
+            row = (all_logits[:, pos, :] if all_logits.ndim == 3
+                   else all_logits[pos : pos + 1, :])
+            row = ctx.apply(row, draft_list[: min(pos, budget)])
+            logprobs = row - mx.logsumexp(row, axis=-1, keepdims=True)
+            if positioned:
+                t = sample_target(logprobs, row_ids=[int(row_id)],
+                                  positions=[int(base_position) + pos])
+            else:
+                t = sampler(logprobs)
+            targets.append(t.reshape(-1))
+        stacked = mx.concatenate(targets)
+    mx.eval(stacked)
+    if int(stacked.shape[0]) != n_draft + 1:
+        # 逐位索引依赖"每行恰一元素"。采样器若返回 keepdim/批维，长度对不上时
+        # 此后每个位置读的都是别人的 token → accepted 错 → KV 回滚裁剪错
+        # （顺序路同场景会在 .item() 上响，这里必须补上同等响度）。
+        raise RuntimeError(
+            f"批量走查的采样结果长度 {int(stacked.shape[0])} ≠ 位置数 {n_draft + 1}："
+            "sampler 每行返回了多于/少于一个元素，逐位对应已错位，拒绝继续。")
+    target_list = [int(x) for x in stacked.tolist()]
+
+    for pos in range(n_draft + 1):
+        token = target_list[pos]
+        if pos < n_draft and token == draft_list[pos]:
+            accepted += 1
+            if len(new_tokens) < budget:
+                new_tokens.append(token)
+                ctx.commit(token)
+            continue
+        if len(new_tokens) < budget:
+            new_tokens.append(token)
+            ctx.commit(token)
+        break
+
+    return accepted, new_tokens
+
+
+def _walk_sequential(
+    lm: Any,
+    verify: Any,
+    draft_tokens: mx.array,
+    sampler: Callable[[mx.array], mx.array],
+    budget: int,
+    row_id: int,
+    base_position: Optional[int],
+    ctx: _Ctx,
+) -> Tuple[int, List[int]]:
     """逐位走查：每个位置先按真实历史过处理器，再采样、再比对草稿。"""
     n_draft = int(draft_tokens.shape[1])
     draft_list = [int(x) for x in draft_tokens.reshape(-1).tolist()]

@@ -1,0 +1,48 @@
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+目标 models/gemma-4-26b-a4b-it-8bit
+草稿 models/gemma-4-26b-a4b-it-assistant-4bit
+tokens=300  层数=30  口径：temp=0/rep1.1/ctx50/单请求；逐组件 mx.eval 插桩，只采信比值
+
+探针固定开销下界 c ≈ 0.2 µs/次（比值同时报原始与减 c 校正）
+
+/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/transformers/audio_utils.py:723: UserWarning: At least one mel filter has all zero values. The value for `num_mel_filters` (128) may be set too high. Or, the value for `num_frequency_bins` (257) may be set too low.
+  warnings.warn(
+[Engine] 草稿深度上限已解锁：采纳请求值 draft_block_size=4（否则被草稿件 config 缺省值 4 顶死）
+[Engine] 投机草稿件已装载：models/gemma-4-26b-a4b-it-assistant-4bit（kind=mtp）
+[Engine] 投机采样启用：{'mode': 'drafter', 'draft_model': 'models/gemma-4-26b-a4b-it-assistant-4bit', 'draft_block_size': 4}
+[off1] 解码 26.86 tps（探针态，禁止引用）
+[b4] 解码 47.23 tps（探针态，禁止引用）
+[b6] 解码 46.33 tps（探针态，禁止引用）
+[off2] 解码 26.85 tps（探针态，禁止引用）
+
+组件            off① L=1     n    b4 L=4     n    b6 L=6     n  t4/t1     校正  t6/t4     校正
+--------------------------------------------------------------------------------------------
+attention        0.339  9000     0.371  3630     0.413  3090  1.094  1.094  1.112  1.112
+dense_mlp        0.243  9000     0.252  3630     0.270  3090  1.038  1.038  1.071  1.071
+router           0.222  9000     0.224  3630     0.219  3090  1.013  1.013  0.976  0.975
+experts          0.334  9000     0.495  3630     0.593  3090  1.481  1.481  1.198  1.198
+lm_head          1.764   301     1.789   121     2.521   103  1.014  1.014  1.409  1.409
+
+杂散桶（run, 组件, L, 次数）——含预填与草稿步（草稿件复用 gemma4 类），不参与判定：
+  ('b4', 'attention', 1, 1460)
+  ('b4', 'attention', 3, 30)
+  ('b4', 'attention', 61, 30)
+  ('b4', 'dense_mlp', 1, 1460)
+  ('b4', 'dense_mlp', 3, 30)
+  ('b4', 'dense_mlp', 61, 30)
+  ('b4', 'experts', 3, 30)
+  ('b4', 'experts', 61, 30)
+  ('b4', 'lm_head', 1, 1)
+  ('b4', 'lm_head', 3, 1)
+  ('b4', 'router', 3, 30)
+  ('b4', 'router', 61, 30)
+  ('b6', 'attention', 1, 2080)
+  ('b6', 'attention', 3, 30)
+  ('b6', 'attention', 61, 30)
+  ('b6', 'dense_mlp', 1, 2080)
+  ('b6', 'dense_mlp', 3, 30)
+  ('b6', 'dense_mlp', 61, 30)
+  ('b6', 'experts', 3, 30)
+  ('b6', 'experts', 61, 30)
+
+⛔ 阳性对照失败：稠密件 t(6)/t(4) = {'dense_mlp': 1.0707211426098246, 'lm_head': 1.4094149740154511}，未见瓦片 1→2 跳变（预测带 [1.5,2.2]，底线 1.3）。探针不可信，整组作废（P1 预先承诺）。

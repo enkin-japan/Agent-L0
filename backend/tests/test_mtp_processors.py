@@ -207,6 +207,135 @@ def test_record_emitted_without_context_is_noop():
     assert mp._ctx() is None
 
 
+def test_dispatch_batched_iff_no_guard(monkeypatch):
+    """无 guard → 批量快路；有 guard → 顺序路（状态机不可虚拟前滚）。"""
+    calls = []
+    orig_b, orig_s = mp._walk_batched, mp._walk_sequential
+    monkeypatch.setattr(mp, "_walk_batched",
+                        lambda *a, **k: (calls.append("b"), orig_b(*a, **k))[1])
+    monkeypatch.setattr(mp, "_walk_sequential",
+                        lambda *a, **k: (calls.append("s"), orig_s(*a, **k))[1])
+    with _ctx([_Recorder()]):
+        _walk(_Verify([3, 4, 5]), [3, 4])
+    with _ctx([_FakeGuard()]):
+        _walk(_Verify([3, 4, 5]), [3, 4])
+    assert calls == ["b", "s"]
+
+
+class _LastTokenBan:
+    """**依赖历史**的惩罚处理器：把历史末位 token 打成 -1e9。
+
+    等价性测试必须用它而不是 _Recorder——后者不改 logits，喂错历史照样全绿，
+    `extra = draft[:min(pos, budget)]` 那行的预算钳位就没有任何断言看着
+    （首过评审 Critical：换成 `draft[:pos]` 变异体在纯 _Recorder 用例下存活）。
+    """
+
+    def __call__(self, tokens, logits):
+        last = tokens[-1]
+        return logits + mx.where(mx.arange(VOCAB) == last, -1e9, 0.0)
+
+
+def test_batched_equals_sequential_positionwise():
+    """批量与顺序两条路在 temp=0 下逐位等价：accepted/产出/持久历史/计数全同。
+
+    覆盖：全接受、中途拒、首位拒、预算截断；且用历史敏感处理器（_LastTokenBan）
+    让"喂错历史"必然翻转判决。最后一组专门设计成能杀死 `draft[:pos]` 变异体：
+    budget=1、pos=2 仍在草稿范围内、目标恰等于草稿末位——顺序路 pos=2 的历史
+    末位是 3（ban 3，目标 4 存活 → 接受），错误的未钳位历史末位是 4
+    （ban 4 → 翻拒）。
+    """
+    cases = [
+        ([3, 4], [3, 4, 5], 99),
+        ([3, 4], [3, 9, 5], 99),
+        ([3, 4], [7, 4, 5], 99),
+        ([3, 4], [3, 4, 5], 1),
+        ([3, 4, 4], [3, 4, 4, 6], 1),   # 杀 min(pos,budget) 变异体的那组
+    ]
+    for drafts, targets, budget in cases:
+        outs, seens = [], []
+        for fn in (mp._walk_batched, mp._walk_sequential):
+            rec = _Recorder()
+            with _ctx([_LastTokenBan(), rec]):
+                ctx = mp._ctx()
+                got = fn(_FakeLM(), _Verify(targets), mx.array([drafts]),
+                         _sampler, budget, 0, 0, ctx)
+                outs.append((got, list(ctx.hist), ctx.n_emitted))
+                seens.append(rec.seen)
+        assert outs[0] == outs[1], \
+            f"批量与顺序分叉: drafts={drafts} targets={targets} budget={budget} {outs}"
+        # 断点前的处理器所见历史逐行相同（批量路断点后多出的行不参与比较）
+        n_seq = len(seens[1])
+        assert seens[0][:n_seq] == seens[1], \
+            f"处理器历史分叉: drafts={drafts} targets={targets} budget={budget}"
+
+
+class _PositionedSampler:
+    """带 sample_target 的假采样器：记录调用参数，按 hidden 编码返回目标。"""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, logprobs):          # 不该被走到（positioned 优先）
+        raise AssertionError("positioned 采样器不该落到普通调用")
+
+    def sample_target(self, logprobs, row_ids, positions):
+        self.calls.append((tuple(row_ids), tuple(positions)))
+        return mx.argmax(logprobs, axis=-1)
+
+
+def test_batched_equals_sequential_positioned_branch():
+    """positioned 分支：两条路对已走位置的 (row_ids, positions) 调用序列逐参相同。"""
+    outs, calls = [], []
+    for fn in (mp._walk_batched, mp._walk_sequential):
+        s = _PositionedSampler()
+        with _ctx([_LastTokenBan()]):
+            ctx = mp._ctx()
+            got = fn(_FakeLM(), _Verify([3, 9, 5]), mx.array([[3, 4]]),
+                     s, 99, 7, 100, ctx)
+            outs.append((got, list(ctx.hist)))
+            calls.append(s.calls)
+    assert outs[0] == outs[1]
+    n_seq = len(calls[1])
+    assert calls[0][:n_seq] == calls[1]
+    assert calls[1][0] == ((7,), (100,))          # row_id 与 base_position 真的进了参数
+
+
+class _FakeLM2D:
+    """吐 2 维投影（[n, VOCAB]）的形态——批量路的 else 分支要能流经 concat。"""
+
+    def speculative_logits_from_hidden(self, hidden):
+        want = hidden[0, :, 0]                    # [n]
+        onehot = (mx.arange(VOCAB)[None, :] == want[:, None])
+        return mx.where(onehot, 10.0, 0.0)        # [n, VOCAB]
+
+
+def test_batched_handles_2d_projection():
+    with _ctx([_Recorder()]):
+        ctx = mp._ctx()
+        accepted, new_tokens = mp._walk_batched(
+            _FakeLM2D(), _Verify([3, 4, 5]), mx.array([[3, 4]]),
+            _sampler, 99, 0, 0, ctx)
+    assert (accepted, new_tokens) == (2, [3, 4, 5])
+
+
+def test_batched_probes_beyond_break_are_called_but_discarded():
+    """批量路为断点之后的位置也会构图调用惩罚处理器（纯函数，结果丢弃）。
+
+    钉住语义：被拒草稿值可出现在那些行各自的 extra 里（行级视图），
+    但**绝不进持久历史**——这与"被拒草稿永不进 guard/惩罚历史"不冲突：
+    持久历史（ctx.hist）只收真产出。"""
+    rec = _Recorder()
+    with _ctx([rec]):
+        ctx = mp._ctx()
+        accepted, new_tokens = mp._walk_batched(
+            _FakeLM(), _Verify([3, 9, 5]), mx.array([[3, 4]]),
+            _sampler, 99, 0, 0, ctx)
+    assert (accepted, new_tokens) == (1, [3, 9])
+    assert len(rec.seen) == 3                    # 三行全被调用（含断点后一行）
+    assert rec.seen[2] == PROMPT + [3, 4]        # 断点后行的 extra 含被拒草稿
+    assert ctx.hist == PROMPT + [3, 9]           # 持久历史只有真产出
+
+
 def test_batch_rounds_raise_when_processors_active():
     """B>1 走的是另一组未补处理器的走查——有处理器时必须响，不能悄悄丢。"""
     if mp._ORIGINAL_ROUNDS_BATCH is None:

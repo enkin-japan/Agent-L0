@@ -1,0 +1,12 @@
+[wheel0320] mlx 0.32.0  设备 Apple M4 Max
+  M_tok=1 B=8 gateup  中位    0.774 ms（8 层, sorted=False）
+  M_tok=1 B=8 down    中位    0.565 ms（8 层, sorted=False）
+  M_tok=4 B=32 gateup  中位    2.247 ms（8 层, sorted=True）
+  M_tok=4 B=32 down    中位    1.330 ms（8 层, sorted=True）
+落盘 benchmarks/data/mtp-26b-sprint/fastjudge_wheel0320.json
+[main_k256] mlx 0.32.1.dev20260815+adf21de  设备 Apple M4 Max
+  M_tok=1 B=8 gateup  中位    0.743 ms（8 层, sorted=False）
+  M_tok=1 B=8 down    中位    0.556 ms（8 层, sorted=False）
+  M_tok=4 B=32 gateup  中位    2.193 ms（8 层, sorted=True）
+  M_tok=4 B=32 down    中位    1.313 ms（8 层, sorted=True）
+落盘 benchmarks/data/mtp-26b-sprint/fastjudge_main_k256.json
