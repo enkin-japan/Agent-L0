@@ -1,0 +1,379 @@
+diff --git a/mlx/backend/metal/kernels/quantized.h b/mlx/backend/metal/kernels/quantized.h
+index f628c05..54837fb 100644
+--- a/mlx/backend/metal/kernels/quantized.h
++++ b/mlx/backend/metal/kernels/quantized.h
+@@ -1,6 +1,7 @@
+ // Copyright © 2023-2024 Apple Inc.
+ 
+ #include <metal_simdgroup>
++#include <metal_simdgroup_matrix>
+ #include <metal_stdlib>
+ 
+ constant bool align_M [[function_constant(200)]];
+@@ -1079,6 +1080,154 @@ METAL_FUNC void qmv_wide_impl(
+   }
+ }
+ 
++// One dequantized element (scale * q + bias done by the caller) at position k
++// of a packed row. Byte-aligned power-of-2 widths only: the per-element decode
++// is what lets each lane fill exactly its two B-fragment slots.
++template <int bits>
++METAL_FUNC float extract_q(const device uint8_t* wrow, int k) {
++  static_assert(
++      bits == 2 || bits == 4 || bits == 8,
++      "qmv_mma supports only byte-aligned power-of-2 bit widths");
++  if (bits == 8) {
++    return float(wrow[k]);
++  } else if (bits == 4) {
++    return float((wrow[k >> 1] >> ((k & 1) * 4)) & 0x0f);
++  } else {
++    return float((wrow[k >> 2] >> ((k & 3) * 2)) & 0x03);
++  }
++}
++
++// Simdgroup count of the qmv_mma threadgroup. The [[kernel]] wrapper's
++// threadgroup scratch and the host-side group_dims (quantized.cpp qmv_mma)
++// must agree with this.
++MLX_MTL_CONST int QMV_MMA_SIMDGROUPS = 4;
++
++// simdgroup-matrix variant of qmv_wide for the dispatched range (M = 6..12):
++// the
++// scalar FMA inner loop there costs ALU proportional to vecs_per_tg x packing
++// (4-bit worst), while the weight bytes stay constant. Here each simdgroup
++// owns an 8-output-row x M tile and walks K in 8-value chunks as 8x8x8 MMAs.
++// Fragments are built per lane in registers via the steel BaseMMAFrag
++// coordinate map -- no threadgroup staging. All fragments are float, the same
++// numeric class as qmv_wide's float accumulate (and steel's AccumType).
++// Rows and vectors past the edge are clamped like qmv_wide (computed on
++// duplicate data, never stored).
++template <typename T, int group_size, int bits>
++METAL_FUNC void qmv_mma_impl(
++    const device uint32_t* w,
++    const device T* scales,
++    const device T* biases,
++    const device T* x,
++    device T* y,
++    threadgroup float* tg_acc, // scratch, [num_simdgroups - 1][32][2]
++    const constant int& in_vec_size,
++    const constant int& out_vec_size,
++    const constant int& M,
++    uint3 tid [[threadgroup_position_in_grid]],
++    uint simd_gid [[simdgroup_index_in_threadgroup]],
++    uint simd_lid [[thread_index_in_simdgroup]]) {
++  constexpr int num_simdgroups = QMV_MMA_SIMDGROUPS;
++  constexpr int rows_per_tg = 8;
++  constexpr int chunks = group_size / 8;
++  static_assert(group_size % 8 == 0, "qmv_mma needs group_size % 8 == 0");
++
++  typedef float U;
++
++  // steel BaseMMAFrag<T, 8, 8> coordinate map: each lane owns fragment
++  // elements (fm, fn) and (fm, fn + 1).
++  const short qid = simd_lid / 4;
++  const short fm = (qid & 4) + ((simd_lid / 2) % 4);
++  const short fn = (qid & 2) * 2 + (simd_lid % 2) * 2;
++
++  // All simdgroups share one 8-row x 8-vector tile and split K: the kernel is
++  // issue bound, so the serial per-lane chunk walk is what has to shrink.
++  const int n0 = tid.y * rows_per_tg;
++  const int vec0 = tid.x * 8;
++
++  const int in_vec_size_w = in_vec_size * bits / 8; // bytes per weight row
++  const int in_vec_size_g = in_vec_size / group_size;
++  // Uneven splits handled: idle simdgroups contribute zero fragments.
++  const int g_lo = (in_vec_size_g * (int)simd_gid) / num_simdgroups;
++  const int g_hi = (in_vec_size_g * ((int)simd_gid + 1)) / num_simdgroups;
++
++  // B fragment sources: element (fm, fn + j) = dq(w[n0 + fn + j][k0 + fm]).
++  const int row_a = min(n0 + fn, out_vec_size - 1);
++  const int row_b = min(n0 + fn + 1, out_vec_size - 1);
++  const device uint8_t* wr_a = (const device uint8_t*)w + row_a * in_vec_size_w;
++  const device uint8_t* wr_b = (const device uint8_t*)w + row_b * in_vec_size_w;
++  const device T* sr_a = scales + row_a * in_vec_size_g;
++  const device T* sr_b = scales + row_b * in_vec_size_g;
++  const device T* br_a = biases + row_a * in_vec_size_g;
++  const device T* br_b = biases + row_b * in_vec_size_g;
++
++  // A fragment source: element (fm, fn + j) = x[vec0 + fm][k0 + fn + j].
++  const device T* xr = x + min(vec0 + fm, M - 1) * in_vec_size;
++
++  // A/B fragments carry T (A is exact: x already is T; B rounds the decoded
++  // weight to T once, the same envelope as the qmm path's threadgroup
++  // staging); the accumulator is float, like qmv_wide's and steel's.
++  // Measured on M4 Max (31B shapes): fragment dtype, accumulator dtype, dual
++  // accumulators and the simdgroup layout move the wall time by at most a few
++  // percent -- the kernel is pinned by total ALU issue, simdgroup_matrix
++  // having no dedicated hardware on this generation. A per-group T-accumulate
++  // variant was 1-3% faster but blew the f16 error budget (ratios up to 6x vs
++  // qmv_wide at gs128); this form is error-neutral-or-better everywhere.
++  auto C = make_filled_simdgroup_matrix<U, 8, 8>(U(0));
++
++  for (int g = g_lo; g < g_hi; g++) {
++    const U s_a = sr_a[g];
++    const U b_a = br_a[g];
++    const U s_b = sr_b[g];
++    const U b_b = br_b[g];
++#pragma unroll
++    for (int c = 0; c < chunks; c++) {
++      const int k0 = g * group_size + c * 8;
++      simdgroup_matrix<T, 8, 8> A;
++      simdgroup_matrix<T, 8, 8> B;
++      // Scalar loads on purpose: x may be a zero-copy view whose element
++      // offset (or batch stride) breaks vec<T,2> alignment. The compiler
++      // merges these when the pointer is provably aligned (review finding;
++      // same reason steel's BaseMMAFrag::load is scalar).
++      A.thread_elements()[0] = xr[k0 + fn];
++      A.thread_elements()[1] = xr[k0 + fn + 1];
++      const int kk = k0 + fm;
++      B.thread_elements()[0] =
++          static_cast<T>(s_a * extract_q<bits>(wr_a, kk) + b_a);
++      B.thread_elements()[1] =
++          static_cast<T>(s_b * extract_q<bits>(wr_b, kk) + b_b);
++      simdgroup_multiply_accumulate(C, A, B, C);
++    }
++  }
++
++  // Cross-simdgroup K reduction through threadgroup memory. (No barrier
++  // before the writes: this is the first threadgroup-memory access.)
++  if (simd_gid > 0) {
++    tg_acc[((int)simd_gid - 1) * 64 + (int)simd_lid * 2] =
++        C.thread_elements()[0];
++    tg_acc[((int)simd_gid - 1) * 64 + (int)simd_lid * 2 + 1] =
++        C.thread_elements()[1];
++  }
++  threadgroup_barrier(mem_flags::mem_threadgroup);
++  if (simd_gid == 0) {
++    U r0 = C.thread_elements()[0];
++    U r1 = C.thread_elements()[1];
++#pragma unroll
++    for (int s = 0; s < num_simdgroups - 1; s++) {
++      r0 += tg_acc[s * 64 + (int)simd_lid * 2];
++      r1 += tg_acc[s * 64 + (int)simd_lid * 2 + 1];
++    }
++    const int vrow = vec0 + fm;
++    if (vrow < M) {
++      if (n0 + fn < out_vec_size) {
++        y[vrow * out_vec_size + n0 + fn] = static_cast<T>(r0);
++      }
++      if (n0 + fn + 1 < out_vec_size) {
++        y[vrow * out_vec_size + n0 + fn + 1] = static_cast<T>(r1);
++      }
++    }
++  }
++}
++
+ template <typename T, const int group_size, const int bits>
+ METAL_FUNC void qvm_impl(
+     const device uint32_t* w,
+@@ -1771,6 +1920,61 @@ template <
+       simd_lid);
+ }
+ 
++template <typename T, int group_size, int bits, bool batched>
++[[kernel]] void affine_qmv_mma(
++    const device uint32_t* w,
++    const device T* scales,
++    const device T* biases,
++    const device T* x,
++    device T* y,
++    const constant int& in_vec_size,
++    const constant int& out_vec_size,
++    const constant int& M,
++    const constant int& x_batch_ndims,
++    const constant int* x_shape,
++    const constant int64_t* x_strides,
++    const constant int& w_batch_ndims,
++    const constant int* w_shape,
++    const constant int64_t* w_strides,
++    const constant int64_t* s_strides,
++    const constant int64_t* b_strides,
++    uint3 tid [[threadgroup_position_in_grid]],
++    uint simd_gid [[simdgroup_index_in_threadgroup]],
++    uint simd_lid [[thread_index_in_simdgroup]]) {
++  if (batched) {
++    adjust_matrix_offsets<T>(
++        x,
++        w,
++        scales,
++        biases,
++        y,
++        out_vec_size * M,
++        x_batch_ndims,
++        x_shape,
++        x_strides,
++        w_batch_ndims,
++        w_shape,
++        w_strides,
++        s_strides,
++        b_strides,
++        tid);
++  }
++  threadgroup float tg_acc[(QMV_MMA_SIMDGROUPS - 1) * 64];
++  qmv_mma_impl<T, group_size, bits>(
++      w,
++      scales,
++      biases,
++      x,
++      y,
++      tg_acc,
++      in_vec_size,
++      out_vec_size,
++      M,
++      tid,
++      simd_gid,
++      simd_lid);
++}
++
+ template <
+     typename T,
+     const int group_size,
+diff --git a/mlx/backend/metal/kernels/quantized.metal b/mlx/backend/metal/kernels/quantized.metal
+index 069482c..e306311 100644
+--- a/mlx/backend/metal/kernels/quantized.metal
++++ b/mlx/backend/metal/kernels/quantized.metal
+@@ -179,4 +179,28 @@
+   instantiate_quantized_groups(6) \
+   instantiate_quantized_groups(8)
+ 
+-instantiate_quantized_all() // clang-format on
++instantiate_quantized_all()
++
++// [T6b] simdgroup-matrix small-M kernels. Byte-aligned power-of-2 widths only
++// (per-element decode in the B fragment); dispatch guards the same set.
++#define instantiate_quantized_mma(type, group_size, bits, batched)               \
++  instantiate_kernel(                                                            \
++      "affine_qmv_mma_" #type "_gs_" #group_size "_b_" #bits "_batch_" #batched, \
++      affine_qmv_mma, type, group_size, bits, batched)
++
++#define instantiate_quantized_mma_bits(type, group_size) \
++  instantiate_quantized_mma(type, group_size, 2, 0)      \
++  instantiate_quantized_mma(type, group_size, 2, 1)      \
++  instantiate_quantized_mma(type, group_size, 4, 0)      \
++  instantiate_quantized_mma(type, group_size, 4, 1)      \
++  instantiate_quantized_mma(type, group_size, 8, 0)      \
++  instantiate_quantized_mma(type, group_size, 8, 1)
++
++#define instantiate_quantized_mma_types(group_size)     \
++  instantiate_quantized_mma_bits(float, group_size)     \
++  instantiate_quantized_mma_bits(float16_t, group_size) \
++  instantiate_quantized_mma_bits(bfloat16_t, group_size)
++
++instantiate_quantized_mma_types(32)
++instantiate_quantized_mma_types(64)
++instantiate_quantized_mma_types(128) // clang-format on
+diff --git a/mlx/backend/metal/quantized.cpp b/mlx/backend/metal/quantized.cpp
+index 5db3893..67fd6a6 100644
+--- a/mlx/backend/metal/quantized.cpp
++++ b/mlx/backend/metal/quantized.cpp
+@@ -1,5 +1,7 @@
+ // Copyright © 2023-2026 Apple Inc.
+ 
++#include <cstdlib>
++
+ #include "mlx/backend/common/quantized.h"
+ #include "mlx/backend/common/broadcasting.h"
+ #include "mlx/backend/common/compiled.h"
+@@ -624,6 +626,73 @@ void qmv_wide(
+   compute_encoder.dispatch_threadgroups(grid_dims, group_dims);
+ }
+ 
++// [T6b] simdgroup-matrix qmv for the small-M range. Same tiling role as
++// qmv_wide, but each simdgroup owns 8 output rows x an 8-vector M tile and
++// the M-proportional scalar FMA inner loop becomes 8x8x8 matrix ops, so the
++// per-vector ALU cost (what makes the 4-bit M curve climb) drops out.
++void qmv_mma(
++    const array& x,
++    const array& w,
++    const array& scales,
++    const std::optional<array>& biases,
++    array& out,
++    int group_size,
++    int bits,
++    int M,
++    int N,
++    int K,
++    metal::Device& d,
++    const Stream& s,
++    const std::string& mode) {
++  // All simdgroups in a threadgroup share one 8-row tile and split K.
++  // num_simdgroups mirrors QMV_MMA_SIMDGROUPS in kernels/quantized.h (which
++  // also sizes the threadgroup reduction scratch) -- keep them in sync.
++  constexpr int num_simdgroups = 4;
++  constexpr int rows_per_tg = 8;
++  constexpr int vecs_per_tg = 8; // one 8-row MMA fragment of input vectors
++  int B = out.size() / M / N;
++  bool batched = B > 1;
++
++  MTL::Size group_dims(32, num_simdgroups, 1);
++  MTL::Size grid_dims(
++      (M + vecs_per_tg - 1) / vecs_per_tg,
++      (N + rows_per_tg - 1) / rows_per_tg,
++      B);
++
++  std::string kname;
++  kname.reserve(64);
++  std::string type_string = get_type_string(x.dtype());
++  concatenate(
++      kname,
++      mode + "_qmv_mma_",
++      type_string,
++      "_gs_",
++      group_size,
++      "_b_",
++      bits,
++      batched ? "_batch_1" : "_batch_0");
++  auto kernel = get_quantized_kernel_wrapped(
++      d, kname, "qmv_mma", mode, type_string, group_size, bits, batched);
++
++  auto& compute_encoder = metal::get_command_encoder(s);
++  compute_encoder.set_compute_pipeline_state(kernel);
++
++  int c = 0;
++  compute_encoder.set_input_array(w, c++);
++  compute_encoder.set_input_array(scales, c++);
++  if (biases) {
++    compute_encoder.set_input_array(*biases, c++);
++  }
++  compute_encoder.set_input_array(x, c++);
++  compute_encoder.set_output_array(out, c++);
++  compute_encoder.set_bytes(K, c++);
++  compute_encoder.set_bytes(N, c++);
++  compute_encoder.set_bytes(M, c++);
++  add_strides_and_shapes(compute_encoder, !batched, x, w, scales, biases, c);
++
++  compute_encoder.dispatch_threadgroups(grid_dims, group_dims);
++}
++
+ void qvm_split_k(
+     const array& x,
+     const array& w,
+@@ -1756,6 +1825,29 @@ void dispatch_qmv(
+     return;
+   }
+ 
++  // [T6b] simdgroup-matrix path for M = 6..12 -- from where qmv_wide starts
++  // re-reading weights with a second tile, up to the top of the measured
++  // range (gen-17 batch limits admit M up to 32 here; unmeasured, so capped).
++  // Measured (M4 Max, 31B shapes): the MMA kernel is flat in M (~52ms 4-bit /
++  // ~62ms 8-bit for M=2..8) because simdgroup_matrix runs on the same ALU
++  // pipes (no dedicated matrix unit on gen 16), so it loses to the scalar
++  // wide kernel below M=6 and wins 5-30% in 6..12. Byte-aligned widths only
++  // (per-element B-fragment decode); biases required (the affine no-bias call
++  // path mis-binds buffers for every qmv kernel -- keep this one out of it).
++  // MLX_DISABLE_QMV_MMA=<non-empty, non-"0"> falls through to qmv_wide for
++  // same-build A/B.
++  static const bool disable_qmv_mma = []() {
++    const char* v = std::getenv("MLX_DISABLE_QMV_MMA");
++    return v && v[0] != '\0' && !(v[0] == '0' && v[1] == '\0');
++  }();
++  if (M >= 6 && M <= 12 && mode == "affine" && biases && !global_scale &&
++      !disable_qmv_mma && (bits == 2 || bits == 4 || bits == 8) &&
++      group_size % 8 == 0 && K % group_size == 0 &&
++      d.get_architecture_gen() >= 15) {
++    qmv_mma(x, w, scales, biases, out, group_size, bits, M, N, K, d, s, mode);
++    return;
++  }
++
+   // Small batch so route to qmv_wide, which reuses each weight group across the
+   // M vectors.
+   if (M >= 2 && use_qmv_wide(mode, d) && !global_scale) {
