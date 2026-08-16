@@ -139,15 +139,27 @@ change). Docs-only and ledger-only diffs are exempt.
   million-token budgets), it is out of `implementer`'s scope by definition:
   the main session either splits it or handles it.
 
-### Phase-completion push (main session only)
-- When a phase of work is finished and the turn ends waiting on the user's
-  decision, push a notification: `reminder/notify.sh "<标题>" "<正文>"`.
-  The user's phone is permanently on silent; this is the only channel that
-  reaches them while they are away from the terminal.
-- Applies to: a wave/phase closing, a long background run finishing, a blocking
-  question that stalls all further work, and anything that spends or is about to
-  spend paid compute. It does NOT apply to routine intermediate steps — a push
-  per tool call trains the user to ignore pushes.
+### Completion-or-blocked push ONLY (user decision 2026-08-16, replaces the old
+### phase-completion rule after a 4-pushes-in-20-minutes incident)
+- Push a notification (`reminder/notify.sh "<标题>" "<正文>"`) in exactly TWO
+  cases, and no others:
+  1. The ENTIRE task is finished — verified, analysis written — and is now
+     waiting for the user to review. Not "the run finished, analysis pending";
+     verified means the main session has confirmed the results are real before
+     pushing (13:57 incident: a script pushed 「全部完成」 while one whole arm
+     had silently produced zero data).
+  2. Work is blocked and cannot proceed without the user (a decision only they
+     can make, or something only they can physically do).
+- Everything else is silent: phase/milestone completions inside a larger task,
+  minor hiccups and recoveries the main session handles itself, watchdog or
+  sentinel alarms (they wake the MAIN SESSION, which intervenes; push only if
+  the intervention then hits case 2), and restart-duplicated notifications.
+- Scripts must not embed mid-run notify calls. The completion push comes from
+  the main session, once, after verification — never from a phase boundary
+  inside a queue script.
+- The user's phone is permanently on silent; push is the only channel that
+  reaches them away from the terminal. That is precisely why it must stay
+  low-noise — a push per milestone trains the user to ignore pushes.
 - Write the body so it is actionable without opening the laptop: what finished,
   what it means, and what decision (if any) is waiting. Not just "任务完成".
 - Quiet hours 23:00–06:00: the script refuses to send (exit code 9) and appends
