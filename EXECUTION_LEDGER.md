@@ -519,6 +519,7 @@
 | **D.18** | **DEFERRED§4 完整版（对话式工具/剧本注册）建**。红线照旧：①密钥只引变量名（31B 起草实测已自发遵守）；②声明落「待用户确认」态、不可静默生效（待确认状态机+设置页审批队列=主要工程量） | 2026-08-09 用户 | #77 能力评估达标 |
 | **D.19** | **生产起服 `max_model_len` 调 64K**（config cuda 段 32768→65536）。依据：8 页 deck 单轮 ~33k 撞顶实案；L4 fp8 KV 池实测 114,963 token、A100 档 KV bf16 65536≈3.7GiB 均有余量 | 2026-08-09 用户 | #77 新架构发现；L4 站实测 |
 | **D.15** | **内嵌运行时选 `python-build-standalone`**（R5-3 选型，三条判据全部实测）。**否决 PyInstaller**——与本仓库「文件系统即真相源」的约定直接相冲：`mcp/registry.py:26` 扫目录找 `.py` 发现工具、`skill_registry.py:58` 与 `memory/notes.py:86` 扫 `*.md`，冻结后统统扫不到；且 `:21-23` 目录不存在时**静默建空目录后 return** → **零工具注册且不报错**。**否决「venv 拷进 bundle」**——`backend/.venv/bin/python3.13` 是指向 `/Library/Frameworks/Python.framework` 的**绝对路径符号链接**（venv 里没有解释器本体），而该 framework 的 install-name 也是绝对路径、本身搬不动，净体积 307M 且签的是 PSF 的 Developer ID | 2026-07-16 实测 | 归档 §3.5 R5-3；`scripts/build-runtime.sh` |
+| **D.20** | **模型阵容收束 14→6 档**：保留 26b-4bit（26B 缺省）/26b-8bit/31b-4bit/e4b-8bit + Qwen3.8-27B 4bit/8bit，其余全部舍弃（Ornith-9B/Qwen3.5-9B/12b×2/e4b-4bit/26b-qat/31b-qat/31b-8bit）；舍弃模型的残余任务随之销案；T6b 改条件触发（qwen38 开 MTP 且补丁进生产构建）；T7 上游提报不做。qwen35 方言与 CUDA 侧保留模型部署形态（fp8/RedHatAI NVFP4）不在舍弃列 | 2026-08-16 用户 | 08-16 全库横评 14 档同口径数据 + Ornith 突出点盘点（无决定性突出点） |
 | **D.12** | **`tool_responses[]` 条目是「模型上下文 + 渲染源」两用面**，模型可见键走**白名单** `{name, response, content}`。R3 的 `render` 载荷挂同一条目但不进提示词；顺带修掉 `_safe`/`_target` 的既有泄漏。代价（已知并接受）：模型提示词发生变化，16GB 机上无真模型可验证质量 | 2026-07-16 用户 | 归档 §3.3 实测结果 |
 
 ---
@@ -1914,6 +1915,11 @@ repetition_penalty=None`（§7-1 为可复现性刻意钉死）。那恰好是�
 
 ### 3) 阶段二 · MTP 格——接受率与草稿形态
 
+> 〔✅→⛔ **2026-08-16 收束，本节矩阵不再执行**：08-16 全库 MTP×ctx 矩阵
+> （MTP_PROJECT §6.3-a）已判外挂草稿路线对 Agent 负载死刑（gemma 各档随 ctx
+> 单调跌穿 1.0），且 D.20 阵容收束舍弃了本节矩阵的多数目标档（qat/12b/31b-8bit）。
+> MTP 余项仅剩 **A8**（qwen38 内建头多轮净收益实测，开关拍板前置）。〕
+
 - 前置：见 §7-0（mlx-vlm 升级手术 + MTP 接线 + 草稿转换 + 观测口径）。
 - **草稿件供给已查证（2026-08-14 HF API，SHA=当日主干）**，QAT 线全存在：
   官方 bf16 草稿 `google/gemma-4-26B-A4B-it-assistant`@6e5aaaf4、
@@ -1960,6 +1966,10 @@ repetition_penalty=None`（§7-1 为可复现性刻意钉死）。那恰好是�
 - 并发能力齐后：取针质量从单流扩到**并发流**（kv8/kv4 × batch 2）。
 
 ### 5) 阶段四 · 定档收口
+
+> 〔2026-08-16 D.20 后口径：候选=保留六档（26B 缺省已裁 26b-4bit，08-16 画像即
+> model_eval 全量口径）；对表清单 ②③④⑤ 涉 MTP 外挂形态已随判死作废，① 与
+> 三验/24h 长稳门禁/Q14 进宪判定照旧。〕
 
 - 候选 2-3 组合跑 model_eval mini（tool_call / longchain 子集）+ 既定 24h 长稳
   门禁 → 定生产缺省档；`config.yaml` 注册表 profile 回填（PROFILES.md 口径），
@@ -2283,8 +2293,8 @@ CLAUDE.md "Stage review" 节。
 ④档案：`benchmarks/baseline/20260816-overnight/` 全目录入库 182 件+.gitignore 豁免（jsonl 双臂+
 q_summaries ×14+逐模型日志+ANALYSIS.md 六结论）；PROFILES.md 增 08-16 全库横评章；
 注册表 9 档 profile 新回填 + 3 档更新。零 unit，全本地。
-挂起待用户：Ornith vision capabilities 复核；Ornith 长链 0.33 回退复核；
-qwen38 生产开 MTP 的 A8 前置。
+挂起待用户：~~Ornith vision capabilities 复核；Ornith 长链 0.33 回退复核~~
+〔随 D.20 阵容收束销案〕；qwen38 生产开 MTP 的 A8 前置（在册）。
 ⑤**阶段复审（stage-reviewer 首次实战，Opus+xhigh）**：抓 **1 Critical + 4 Major +
 21 Minor**，全部核实修正（本条目上方数字为修正后口径）。**C1（生产级）：流式增量
 快路 hasattr 鸭子判把 BPE detokenizer 误当 SPM → ByteLevel 词表（Qwen 全家族）
@@ -2296,6 +2306,25 @@ qwen38 生产开 MTP 的 A8 前置。
 0.98×=穿越点提前）；1.41×vs1.21× 归因反向（实为 MTP 臂慢 13.7%、基线仅+1.1%）；
 watchdog 重启场景旧 DONE 行 fail-open；.gitignore 豁免钉死单日期目录。其余为
 文档数字/措辞级，逐条已修。
+
+---
+
+**阵容收束（2026-08-16，用户拍板 → D.20）——模型阵容 14→6 档**——
+**保留**：gemma-4 家族 26b-4bit（26B 缺省）/ 26b-8bit（长上下文×结构化后备）/
+31b-4bit / e4b-8bit + Qwen3.8-27B 4bit/8bit。**其余全部舍弃**：Ornith-1.0-9B、
+Qwen3.5-9B、12b-4bit/8bit、e4b-4bit、26b-qat-4bit、31b-qat-4bit、31b-8bit
+（MLX nvfp4 三候补件同弃）。**连带销案（残余任务随模型舍弃放弃）**：Ornith
+vision capabilities 复核、Ornith 长链 0.33 回退复核、12B 转正门禁三项（§7-0）、
+Ornith NVFP4 换件可选项。**T6b 改条件触发**：唯一触发=qwen38 生产开 MTP 且拍板
+把 qmv_mma 补丁带进生产构建（8bit b5 验证步 M=6 落在 MMA 收益段）；**T7 上游
+提报不做**（其提报前置 P5/2bit 随之作废，欠账与内核一并留 `.venv-mlxsrc` 归档）。
+**边界注意**：qwen35 方言保留（Qwen3.8 在用）；CUDA 侧 26B/31B fp8 与 RedHatAI
+26B NVFP4（L4 日用档）是保留模型的部署形态，不在舍弃列；google/gemma-4-31B-it
+tokenizer-only 件保留（remote edge 分词器在用）。**新增落地工程（走双门）**：
+①config 注册表收口——缺省档 e4b-4bit→e4b-8bit、删舍弃条目、金测试与路由引用
+排查（顺带核 e4b-8bit 在旧 16GB 机 dev 栈的可行性）；②舍弃权重磁盘清理
+（~100G 级，清单先行再删）；③gemma tool_call 架构锅重测范围收缩为保留四档
+（26b-4bit/8bit、31b-4bit、e4b-8bit，~1h）。
 
 ---
 
