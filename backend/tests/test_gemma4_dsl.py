@@ -24,8 +24,10 @@ from framework.dialects.gemma4.prompt_builder import PromptBuilder
 from framework.dialects.gemma4.tool_grammar import build_tool_call_grammar
 
 _MODELS = Path(__file__).resolve().parents[1] / "models"
-_CANDIDATES = ("gemma-4-12b-it-4bit", "gemma-4-e4b-it-4bit", "gemma-4-26b-a4b-it-4bit",
-               "gemma-4-31b-it-4bit")
+_CANDIDATES = ("gemma-4-31b-it-4bit", "gemma-4-26b-a4b-it-4bit",
+               "gemma-4-e4b-it-8bit")  # D.20 保留档。次序有讲究：e4b 模板缺
+# 幽灵思考抑制块（比 26b/31b 短 130B），差分基准须优先落在带抑制块的模板上，
+# 否则该字节段（"发现 A"同类）失去官方对照覆盖；e4b 仅作兜底。
 
 
 def _model_dir():

@@ -57,14 +57,13 @@ inference:
     enable_prefix_caching: true   # 引擎内自动前缀缓存 = 本后端 clone/复用的物理承载
     enforce_eager: false          # true 可跳 CUDA graph 编译省启动时间（调试用）
     trust_remote_code: false
-  model: "mlx-community/gemma-4-e4b-it-4bit"
-  # 钉死 HF 仓库 commit。上游 2026-07-06 重传（475b9088，裁掉共享 KV 权重）当年与
-  # mlx-vlm 0.5.0 不兼容（Missing 54 parameters），故长期停在 deb1db71；
-  # 〔2026-08-14 升级 0.6.13 后已跟进 475b9088：contract ✓ + 装载生成 smoke ✓〕。
+  model: "mlx-community/gemma-4-e4b-it-8bit"
+  # 钉死 HF 仓库 commit（2026-08-14 升钉的上游 7/6 重转换件）。缺省档 2026-08-16
+  # 随 D.20 阵容收束由 e4b-4bit 改为 e4b-8bit（4bit 档舍弃）。
   # 再动 mlx 全家桶时同样要重验 framework/backends/mlx/patch/ 下的补丁。
-  model_revision: "475b9088d29754a3379866cf5aeb6b41acd313c2"
+  model_revision: "4255b21bd9a9d3fc807ef7abd80373f5e3a52a73"
 
-  # ── Gemma-4 家族模型注册表 ──────────────────────────────────────────────
+  # ── 模型注册表（gemma-4 / Qwen 两家族 + CUDA 部署形态）──────────────────
   # 启动选择的候选集：`./devctl.sh model` 交互选择，选中项写仓库根 .model-selection
   # （gitignored 指针文件），app.py 按「选择文件 → 上面的 model 默认」次序解析——
   # 换模型不必手改本文件。revision 逐条钉死在 scripts/check_model_contract.py 静态验证
@@ -72,8 +71,11 @@ inference:
   # mlx-vlm 0.5.0 的兼容性分档而异（e4b 三档被裁共享 KV 权重 → missing 54 只能停旧版；
   # 26b/31b 六档全对齐已跟进）。〔2026-08-14 升级 mlx-vlm 0.6.13 后此分裂消失：
   # e4b 三档已升钉 07-06 新版（contract ✓ / 4bit 装载生成 ✓），12B 解禁入列。〕
-  # 验证等级：e4b-4bit + 26b-qat 实机验证、12B 双档装载生成 smoke；其余仅静态校验
-  # （加载兼容），运行行为/预算未实测。
+  # 〔2026-08-16 D.20 阵容收束：本表收口为 6 档——e4b-8bit（缺省）/ 26b-4bit（26B
+  # 缺省）/ 26b-8bit / 31b-4bit / Qwen3.8-27B 4bit+8bit，另保留 CUDA 侧部署形态；
+  # 舍弃的 11 条（Ornith-9B/Qwen3.5-9B/12b×2/e4b-4bit/26b-qat/31b-8bit/31b-qat/
+  # nvfp4×3）与 CUDA 侧 3 条（Qwen3.6/Ornith-35B×2）见 D.20 收束 commit 之前的
+  # 版本（台账 2026-08-16「阵容收束」条）。〕
   # suppress_ghost_thinking：官方 thinking 文档要求 12B/26B/31B 关思考时在 model 轮
   # 开头预填空思考频道抑制「幽灵思考」（e4b 模板无此要求）。PromptBuilder 按此开关生效，
   # 预填形态须与官方模板逐字节一致（尾部无换行——多一个 \n 即「发现 A」，2026-08-14）。
@@ -96,42 +98,12 @@ inference:
     #  MLX 档 profile。⚠️ gemma 家族 tool_call 列受 gemma4 方言 DSL 链路系统性问题压制
     #  （七档同分 0.72/解析错 12，见 PROFILES.md 08-16 章），数值对路由是真实的
     #  （路由消费的正是这条组合链路），但不代表裸模型能力；链路修复重测后更新。〕
-    - repo: "mlx-community/gemma-4-e4b-it-4bit"
-      revision: "475b9088d29754a3379866cf5aeb6b41acd313c2"  # 2026-08-14 升钉：上游 7/6 重转换件（0.6.x vendoring 对齐）
-      dialect: "gemma4"
-      capabilities: ["text", "vision", "audio"]
-      profile: { tool_call: 0.64, longchain: 1.00, vision: 0.84, tps: 100.6 }  # run 20260816-033032（新钉口径，M4 Max）
-      note: "5.2GB | 实机验证 ✓（默认）| 08-16 全库横评画像 ✓"
     - repo: "mlx-community/gemma-4-e4b-it-8bit"
-      revision: "4255b21bd9a9d3fc807ef7abd80373f5e3a52a73"  # 2026-08-14 升钉
+      revision: "4255b21bd9a9d3fc807ef7abd80373f5e3a52a73"  # 2026-08-14 升钉：上游 7/6 重转换件（0.6.x vendoring 对齐）
       dialect: "gemma4"
       capabilities: ["text", "vision", "audio"]
       profile: { tool_call: 0.64, longchain: 1.00, vision: 0.88, tps: 72.4 }  # run 20260816-034903
-      note: "9.0GB | 静态校验 ✓ | 08-16 画像 ✓"
-    - repo: "mlx-community/gemma-4-e4b-it-nvfp4"
-      revision: "769ca8889f89f8ec8c1ca59bf427332895eb1cb2"  # 2026-08-14 升钉（远程静态校验，未本地拉件）
-      dialect: "gemma4"
-      capabilities: ["text", "vision", "audio"]
-      note: "6.9GB | 静态校验 ✓"
-    # 12B（gemma4_unified）：与 26b/31b 同样需要幽灵思考抑制（官方模板同款），
-    # 抑制预填**逐字节对齐后有效**（2026-08-14：曾因我方多一个尾随 \n 误判为「无视
-    # 抑制」，同一 bug 也是 26B-4bit「发现 A」的真因，已修 prompt_builder）。
-    # 音频：config 带 audio_config、我方 prepare_inputs 产出 input_features 正常，
-    # 端到端能力归 12B 评估波实测后再写进 capabilities（未验不声明）。
-    - repo: "mlx-community/gemma-4-12b-it-4bit"
-      revision: "73bcf09092aa277861d5a191b989b666f7f32e8f"
-      dialect: "gemma4"
-      capabilities: ["text", "vision"]
-      suppress_ghost_thinking: true
-      profile: { tool_call: 0.68, longchain: 0.83, vision: 0.74, tps: 68.1 }  # run 20260816-032535
-      note: "6.3G | 装载/生成 smoke ✓ + 抑制预填 ✓ | 12B 稠密中档 | 08-16 画像 ✓：全库唯一 vision 实跌量化档（0.74 vs 8bit 0.82），vision 活路由给 8bit；音频待验"
-    - repo: "mlx-community/gemma-4-12b-it-8bit"
-      revision: "200bb6db075e137a4deb08838865ac4ddb86292e"
-      dialect: "gemma4"
-      capabilities: ["text", "vision"]
-      suppress_ghost_thinking: true
-      profile: { tool_call: 0.72, longchain: 0.83, vision: 0.82, tps: 40.7 }  # run 20260816-031937
-      note: "12G | 装载/生成 smoke ✓ | 12B 稠密中档 | 08-16 画像 ✓；音频待验"
+      note: "9.0GB | 缺省档（D.20 阵容收束，2026-08-16）| 装载生成 smoke ✓（2026-08-17）| 08-16 画像 ✓"
     - repo: "mlx-community/gemma-4-26b-a4b-it-4bit"
       revision: "0d77464eeb233a2da68ebf9d7dc4edaac7db956d"
       dialect: "gemma4"
@@ -146,55 +118,14 @@ inference:
       suppress_ghost_thinking: true
       profile: { tool_call: 0.72, longchain: 1.00, vision: 0.87, tps: 75.4 }  # run 20260816-022711
       note: "28.0GB | 静态校验 ✓ | 08-16 画像 ✓（26B 缺省档让位 4bit，任长上下文结构化后备） | MoE，建议 ≥48GB 统一内存"
-    - repo: "mlx-community/gemma-4-26b-a4b-it-qat-4bit"
-      revision: "0e3cbab38ce568cf6e23543010d08d03b731910c"
-      dialect: "gemma4"
-      capabilities: ["text", "vision"]
-      suppress_ghost_thinking: true
-      profile: { tool_call: 0.72, longchain: 0.83, vision: 0.82, tps: 94.1 }  # run 20260816-023123
-      note: "15G | 实机验证 ✓ | QAT：专家 4bit + 共享 MLP/router 8bit | 08-16 质量收案：长链/vision/速度均不优于 PTQ-4bit → 无入列理由（「A 毒」撤销案沿革见台账） | MoE，建议 ≥32GB 统一内存"
-    - repo: "mlx-community/gemma-4-26b-a4b-it-nvfp4"
-      revision: "31e75786f7646400d9e5d0b29d055326d981db5e"
-      dialect: "gemma4"
-      capabilities: ["text", "vision"]
-      suppress_ghost_thinking: true
-      note: "15.6GB | 静态校验 ✓ | MoE，建议 ≥32GB 统一内存"
     - repo: "mlx-community/gemma-4-31b-it-4bit"
       revision: "696d436c404745a59f30e4939a658162b0a9e57f"
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
       profile: { tool_call: 0.72, longchain: 0.83, vision: 0.90, tps: 27.8 }  # run 20260816-025147
-      note: "18.4GB | 静态校验 ✓ | 08-16 画像 ✓ | 稠密，建议 ≥32GB 统一内存"
-    - repo: "mlx-community/gemma-4-31b-it-8bit"
-      revision: "f5f3dc92ab4af76724c36c21eb6bedadb3a851be"
-      dialect: "gemma4"
-      capabilities: ["text", "vision"]
-      suppress_ghost_thinking: true
-      profile: { tool_call: 0.72, longchain: 1.00, vision: 0.93, tps: 16.0 }  # run 20260816-023535
-      note: "33.8GB | 静态校验 ✓ | 08-16 画像 ✓（vision 全库 gemma 最高档并列 qat） | 稠密，建议 ≥64GB 统一内存；64k OOM 已证"
-    - repo: "mlx-community/gemma-4-31b-it-qat-4bit"
-      revision: "83b1a12d1da4b07afe435bd2cc310308bfc13984"
-      dialect: "gemma4"
-      capabilities: ["text", "vision"]
-      suppress_ghost_thinking: true
-      profile: { tool_call: 0.72, longchain: 1.00, vision: 0.93, tps: 18.4 }  # run 20260816-030444
-      note: "27G | 实机验证 ✓（64k 稠密 KV 47.2G 不 OOM——8bit 同格 OOM，此为选它的硬理由） | QAT 但 60 层 MLP 全 8bit | 08-16 质量收案：与 31b-8bit 逐项打平（vision 0.93/长链 1.00）且速度略胜 → 31B 长上下文档地位坐实 | 稠密，建议 ≥48GB 统一内存"
-    - repo: "mlx-community/gemma-4-31b-it-nvfp4"
-      revision: "a0a935b105621b98907915fa12f05348bb9c3c24"
-      dialect: "gemma4"
-      capabilities: ["text", "vision"]
-      suppress_ghost_thinking: true
-      note: "18.4GB | 静态校验 ✓ | 稠密，建议 ≥32GB 统一内存"
-    # ── Qwen3.5 家族（多模型协作测试档，2026-07-29 用户指定）────────────────
-    # 两模型同为 Qwen3_5ForConditionalGeneration 架构、共用 qwen35 方言
-    # （chat template 仅差思考回放范围，方言取恒回放口径）。
-    - repo: "mlx-community/Qwen3.5-9B-4bit"
-      revision: "8b2b98c00a6b4d291155e4890773ca8f769aee53"
-      dialect: "qwen35"
-      capabilities: ["text", "vision"]
-      profile: { tool_call: 0.96, longchain: 1.00, vision: 0.95, tps: 84.1 }  # run 20260816-040838（08-16 全库横评；vision 扩到 212 题口径，机器换 M4 Max）
-      note: "6.0GB | 实机联调 ✓（2026-07-29：引擎两轮工具闭环 + 14163 双实例并存冒烟）| 视觉专科候选"
+      note: "18.4GB | 静态校验 ✓ | 08-16 画像 ✓ | 31B 唯一在册档兼长上下文位（D.20 后 31b-8bit/qat 舍弃；64k 15.8tps 不 OOM）| 稠密，建议 ≥32GB 统一内存"
+    # ── Qwen 家族（qwen35 方言）────────────────────────────────────────────
     # Qwen3.8-27B（2026-08-13 发布，08-15 起测）：28B 稠密混合注意力（linear attn
     # 混层，Qwen3-Next 系）+ 原生视觉，262k ctx，Apache 2.0。方言先验 qwen35
     # （同家族 chat template；reasoning_effort 新旋钮方言暂不透传——评测首验项）。
@@ -203,8 +134,6 @@ inference:
     # revision 钉扎值记此（speculative 段无 revision 字段的结构缺口，防上游重传漂移）：
     #   MTP-8bit e88e48d055732ad75d9435f3059139d5279f2064
     #   MTP-4bit b643c01b6d3b094e325edb6ebd832e16c486c575
-    # ⚠️ 下两条的 vision 分数是 n=212 扩容题库口径（含 ChartQA hard），与上方旧条目
-    # 的 vision=1.00（旧小题库）不可直接对表——路由启用前须统一口径重测旧档。
     - repo: "mlx-community/Qwen3.8-27B-8bit"
       revision: "815b83c0df8ffd1d1b5244cf75fd6ef14fca9ef9"
       dialect: "qwen35"
@@ -217,27 +146,11 @@ inference:
       capabilities: ["text", "vision"]
       profile: { tool_call: 0.96, longchain: 1.00, vision: 0.958, tps: 27.9 }  # run 20260815-183117
       note: "15GB | 画像 ✓ 质量与 8bit 打平（各维差 ≤1-2 题，低于路由噪声带 0.05）而 tps 1.72×/内存 -42% = 本模型效率王"
-    - repo: "mlx-community/Ornith-1.0-9B-4bit"
-      revision: "1e980b9742a9e554a4d57e90b4c597811fb2fc4e"
-      dialect: "qwen35"
-      # 架构含视觉塔（vision_config 存在），但按用户口径视觉质量近乎不可用——
-      # capabilities 是路由用的**可用能力**声明，故不含 vision；生产机实测后复核
-      capabilities: ["text"]
-      # 上游 06-28 转换把 vision_config.model_type 写成 "qwen3_5_vision"（新代转换器
-      # 命名），mlx-vlm 0.5.0 只认 "qwen3_5"。骨架实测（2026-07-29）：改此一键后
-      # 1260 参数名全对齐（与 Qwen3.5-9B 同构）。local_config_fixups 由
-      # path_resolver 在模型落盘后声明式应用（幂等、响亮日志、可跨机复现）。
-      local_config_fixups:
-        "vision_config.model_type": "qwen3_5"
-      # 画像先验反转（model_eval 2026-07-30）："长链强"指长链**思考**不指工具编排
-      # （longchain 0.67 且复读 26 次）——路由不应把多步工具任务派给它
-      profile: { tool_call: 0.96, longchain: 0.33, tps: 84.6 }  # run 20260816-043520（长链 0.33 vs 07-30 的 0.67：题库演化，复核待办，暂按实测入册）；无 vision（capabilities 复核待用户拍板）
-      note: "6.0GB | 实机联调 ✓（2026-07-29：fixup 后 0.5.0 加载，两轮工具闭环）| 长链专科候选资格暂停（08-16 长链 0.33，题库演化复核待办）"
     # ── CUDA 档（bf16 原件，backend: cuda / Colab A100 联调；2026-08-06 用户指定）──
-    # revision 已钉死（2026-08-06 HF API 主干 SHA；四仓 lastModified 均早于入库日，
+    # revision 已钉死（2026-08-06 HF API 主干 SHA；各仓 lastModified 均早于入库日，
     # 与 Drive 权重一致——凡常驻均应钉死的纪律）。
-    # capabilities 按 mlx 同家族口径预填；Qwen3.6 方言按 qwen35 预注册（ChatML 同系，
-    # 联调首项即验证模板/标记兼容，不兼容则新增 dialects/<name>/ 再改此声明）。
+    # capabilities 按 mlx 同家族口径预填。〔2026-08-16 D.20：Qwen3.6 与 Ornith-35B
+    # 两家三条随阵容收束删除（见 git 历史）；保留条目=保留模型的 CUDA 部署形态。〕
     # 无 profile = 路由绝不优先选中（未画像纪律）。
     # ⚠️ 待决（2026-08-14 reviewer 二审发现）：下列 google bf16 与 RedHatAI NVFP4
     # 三件同为 dialect gemma4、同走 build_prompt，其官方模板**也有**幽灵思考抑制，
@@ -265,16 +178,6 @@ inference:
       # 加难批另测）、gen_tps 157 均值（KV 前缀命中 0.60 均值）
       profile: { tool_call: 0.92, longchain: 0.833, vision: 1.0, vision_hard: 0.832, tps: 157.2 }
       note: "bf16 ~52GB MoE | A100 联调 ✓ 契约 19/19 | 评测画像已回填（2026-08-08）| ChartQA 扩容定稿（#77 2026-08-09）：vision_hard 0.832=合并批 n=197；yn 全量 0.760(n=104) 不入题库只记聚合 | L4 日用档=RedHatAI NVFP4 件（2026-08-09 实测：tool 0.96/long 1.0 零损、vision hard 档 -8pp、gen ~50tps、FP8 KV 缺省开=+20% 提速 tool 零漂移、vision n=212 补跑 0.816 vs auto-KV 0.764=零损上抖（翻转 17↑/6↓ 边界噪声）；视觉关键活换 a100 fp8 档）"
-    - repo: "Qwen/Qwen3.6-35B-A3B"
-      revision: "995ad96eacd98c81ed38be0c5b274b04031597b0"
-      dialect: "qwen35"
-      capabilities: ["text"]
-      # model_eval 2026-08-08 A100 fp8：tool_call 0.88（XML fail-open 下零解析错，
-      # 失败=参数取值/克制类）、longchain 1.0 满分、gen_tps 143。
-      # ⚠ KV 前缀命中仅 0.03（gemma 系 0.5-0.6）——方言 prompt 布局疑破坏前缀
-      # 稳定性，缓存友好性待查（架构侧观察项）
-      profile: { tool_call: 0.88, longchain: 1.0, tps: 143.4 }
-      note: "bf16 ~70GB MoE | A100 联调 ✓ 契约 19/19 | 评测画像已回填（2026-08-08）"
     # ── FP4 量化件（MoE 档 FP4 偏移评测专用，2026-08-08 用户指示；A100 经 Marlin
     # 仿真只验能力不代表生产速度。无 profile=路由绝不选中；评完留档作生产 nvfp4 参照）──
     - repo: "RedHatAI/gemma-4-26B-A4B-it-NVFP4"
@@ -283,20 +186,6 @@ inference:
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true   # 2026-08-14 用户拍板补齐（L4 日用档，实测数据见 26B 条 note）
       note: "~15GB NVFP4 | FP4 偏移评测件（Red Hat 官方量化组）| 非生产候选 | 上游 2026-08-13 有新 revision（5557756b）待下次 colab 场核"
-    - repo: "sakamakismile/Ornith-1.0-35B-NVFP4"
-      revision: "b6c70b1b77fbd1822dbe01011d8ae5a6f5dd6101"
-      dialect: "qwen35"
-      capabilities: ["text"]
-      note: "~20GB NVFP4 | FP4 偏移评测件（社区高采用量化）| 非生产候选"
-    - repo: "ornith-ai/Ornith-1.0-35B"
-      revision: "5df2ed3f675c7beaa490328cc70bb573b65fb660"
-      dialect: "qwen35"
-      capabilities: ["text"]
-      # model_eval 2026-08-08 A100 fp8：tool_call 0.92、longchain 1.0、gen_tps 144，
-      # 零解析错误。9B 档"编排弱"先验大档反转（小档量化伪像）；"长链强"保持。
-      # KV 前缀命中 0.0——与 Qwen3.6 同方言同病，见 qwen35 条目观察项
-      profile: { tool_call: 0.92, longchain: 1.0, tps: 143.9 }
-      note: "qwen3_5_moe 256专家 bf16 ~70GB | A100 联调 ✓ 契约 19/19 | 评测画像已回填（2026-08-08）"
 
   audio_max_length: 29
 
@@ -328,38 +217,25 @@ inference:
                                 # 仍保持 off 的是**性能**理由——同日裁决实验测到低命中域倒亏
                                 # 0.89x（接受率 4%）。开与不开待实测定夺，不是正确性问题了。
     # ---- drafter 模式专用（草稿件投机 / 本项目台账称 MTP）----
-    # gemma-4 的 assistant 草稿件会被上游解析成 kind="mtp"。留空 = 不启用。
+    # 〔2026-08-16 全库矩阵 + D.20 收束后的口径〕gemma 外挂 assistant 草稿路线对
+    # Agent 负载已判死（加速比随 ctx 单调跌穿 1.0，26b ≤4k 即净亏；MTP_PROJECT
+    # §6.3-a），草稿件与逐档调参档案见 git 历史与 MTP_PROJECT §6.2/6.3-b。
+    # **在册唯一路线 = Qwen3.8-27B 内建 MTP 头**（全 ctx 段净赚：8bit 1.70→1.27×、
+    # 4bit 1.54→1.21×）。开启前置：A8（drafter 模式丢前缀复用、每轮冷预填，多轮
+    # 净收益未测）实测 + 用户拍板。留空 = 不启用。
     # 装不上或与目标件不兼容一律**抛错不降级**：静默退回非投机会把配置错误
     # 伪装成"怎么没变快"的性能玄学（§S.3）。
-    draft_model: ""             # 草稿件 HF id 或本地路径。**按目标件选位宽**（MTP_PROJECT.md §6.3）：
-                                #   31b-8bit → gemma-4-31b-it-assistant-**8bit**（block5 与 4bit 打平，AL 余量更高）
-                                #   31b-4bit → gemma-4-31b-it-assistant-8bit
-                                #   26b-a4b-8bit → gemma-4-26b-a4b-it-assistant-**4bit**（MoE 档 T1 便宜，草稿税是真杠杆）
-                                #   e4b → gemma-4-e4b-it-assistant-bf16
+    draft_model: ""             # 草稿件 HF id 或本地路径。按目标件配对：
+                                #   Qwen3.8-27B-8bit → mlx-community/Qwen3.8-27B-MTP-8bit
+                                #   Qwen3.8-27B-4bit → mlx-community/Qwen3.8-27B-MTP-4bit
+                                #   （revision 钉扎值见注册表 Qwen3.8 条目上方注释）
     draft_kind: ""              # 留空 = 由草稿件的 model_type 自动判定（推荐）。注意：本栈处理器
                                 #   接线仅覆盖判定结果为 mtp 的草稿件；解析成 dflash/eagle3 会在装载期
                                 #   拒启（那两类轮循环不消费 logits 处理器，08-16 复审收口）
-    draft_block_size: 4         # 〔2026-08-15 实测定档；同日午后复测证实〕**按目标件分档，不是全栈一个值。**
-                                #   取 4 = 长对话稠密档折中 + MoE 档（排序补丁后）最优点，两头都对：
-                                #   · 稠密 8bit：ctx≈0 时最优 **5**（2.48×），ctx≈1500 时最优 **4**（2.15×）
-                                #     —— 注意力成本随 M 走而矩阵乘不随，上下文一长，瓦片免费区被吃掉。
-                                #   · 稠密 4bit（31b-4bit）→ **3**；e4b-4bit → **4**
-                                #   · **MoE（26b-a4b-8bit）→ 4**（1.37×；排序阈值补丁进生产后最优点从 3 回到 4。
-                                #     旧注写"→3 / 1.28×"是补丁前的数，已过时）
-                                #   · 26b-a4b-**4bit**：整档净亏（0.68~0.93×），**不要开**。
-                                # 机理：验证步位数 M = block_size；稠密路 qmv_wide 按 5 向量一瓦片
-                                # （quantized.cpp v0.32.0，"Each tile re-reads the weights"），8bit 稠密档
-                                # M≤5 免费、M=6 断崖；4bit 无平坦区，最优点前移；MoE 走 GatherQMM
-                                # 逐 (token,专家) 对读权重，无免费区——排序阈值补丁
-                                # （patch/moe_sort_threshold.py，随生产装载路自动安装，无需配置）
-                                # 靠缓存命中回收约 +9%，把 MoE 最优点推回 4。
-                                # 实测（3 次中位）：
-                                #   31b-8bit  block 4=2.34× / **5=2.48×** / 6=2.09×
-                                #   e4b-8bit        2.00× / **2.09×** / 1.81×
-                                #   e4b-4bit  block 3=1.50× / **4=1.57×** / 5=1.49×
-                                #   26b-8bit（排序补丁后）block 3=1.34× / **4=1.37×** / 5=1.32×
-                                # 留空会落到草稿件 config 的缺省 4；mlx-community 模型卡推荐的 6
-                                # 在稠密档落在断崖的错误一侧。
+    draft_block_size: 4         # 按目标件分档（08-16 矩阵实测最优）：qwen38-8bit → **5**、
+                                #   qwen38-4bit → **3**（浅块逐位命中率高）。留空落草稿件 config 缺省。
+                                #   gemma 各档旧调参（瓦片断崖机理、排序补丁最优点）随路线判死归档，
+                                #   见 MTP_PROJECT §6.3-b 与 git 历史。
                                 # 本键仅在 mode=drafter 时生效，mode=off 时完全无作用。
                                 # ⚠️ 开 drafter 的已知代价：该会话此后放弃前缀复用（缓冲缓存形态），
                                 # 多轮对话净收益未测（MTP_PROJECT.md §3.1 A8）——扳开关前先测 A8。

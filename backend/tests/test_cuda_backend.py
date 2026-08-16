@@ -112,10 +112,14 @@ def test_config_cuda_knobs_and_registry_entries():
     assert cuda.get("quantization") == "fp8"
     assert cuda.get("enable_prefix_caching") is True
     reg = {e["repo"]: e for e in inf["model_registry"]}
+    # D.20 阵容收束（2026-08-16）：Qwen3.6 / Ornith-35B 两条已随舍弃移出本钉。
+    # RedHatAI NVFP4（L4 日用档，daily_serve_chain.sh 消费）无 profile 属预期
+    # （评测件不入路由优先选中），单独钉在册+方言+revision。
+    l4 = reg.get("RedHatAI/gemma-4-26B-A4B-it-NVFP4")
+    assert l4 is not None, "L4 日用档 RedHatAI NVFP4 未注册（daily.sh 起服会拒启）"
+    assert l4["dialect"] == "gemma4" and l4.get("revision")
     for repo, dialect in (("google/gemma-4-31B-it", "gemma4"),
-                          ("google/gemma-4-26B-A4B-it", "gemma4"),
-                          ("Qwen/Qwen3.6-35B-A3B", "qwen35"),
-                          ("ornith-ai/Ornith-1.0-35B", "qwen35")):
+                          ("google/gemma-4-26B-A4B-it", "gemma4")):
         assert repo in reg, f"CUDA 档 {repo} 未注册（表外拒启）"
         assert reg[repo]["dialect"] == dialect
         # 画像回填后（model_eval 2026-08-08）：条目必须携真实画像且钉死 revision

@@ -49,13 +49,13 @@ from framework.utils.config_loader import load_config          # noqa: E402
 from framework.utils.model_selection import model_options       # noqa: E402
 from framework.dialects import get_dialect_class                # noqa: E402
 
-DEFAULT_MODELS = [
-    "mlx-community/gemma-4-e4b-it-4bit",
+DEFAULT_MODELS = [  # D.20 阵容收束（2026-08-16）：缺省臂=保留六档；表外档「跳过」是响亮日志但仍属静默缩臂，改名单而非依赖跳过
     "mlx-community/gemma-4-e4b-it-8bit",
     "mlx-community/gemma-4-26b-a4b-it-4bit",
     "mlx-community/gemma-4-26b-a4b-it-8bit",
     "mlx-community/gemma-4-31b-it-4bit",
-    "mlx-community/gemma-4-31b-it-8bit",
+    "mlx-community/Qwen3.8-27B-4bit",
+    "mlx-community/Qwen3.8-27B-8bit",
 ]
 DEFAULT_CTX = [0, 4096, 8192, 16384, 32768, 65536]
 MAX_TOKENS = 350

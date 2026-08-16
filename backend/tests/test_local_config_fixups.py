@@ -2,7 +2,8 @@
 
 守的是什么：`_apply_local_config_fixups` 按注册表条目的点分路径修正 model_dir/config.json——
 声明命中即改、幂等（已是目标值零写盘）、路径不存在只警告不崩、无声明零动作；
-以及 config.yaml 里 Ornith/Qwen3.5 两条注册表事实本身没有漂移。
+以及 config.yaml 注册表阵容与 D.20 收束决策（2026-08-16）没有漂移。
+（机制的原始消费方 Ornith 已随 D.20 舍弃；机制保留，现无在册声明方。）
 """
 import json
 from pathlib import Path
@@ -82,14 +83,42 @@ def test_fixup_no_declaration_is_noop(tmp_path, monkeypatch):
     assert before == after
 
 
-# ---- 5. 真 config 钉：Ornith 声明 fixups，Qwen3.5 不声明 ----
+# ---- 5. 真 config 钉：D.20 阵容收束（2026-08-16）不漂移 ----
 
-def test_registry_fixups_declaration_matches_ornith_case():
+_KEPT_MLX = (
+    "mlx-community/gemma-4-e4b-it-8bit",
+    "mlx-community/gemma-4-26b-a4b-it-4bit",
+    "mlx-community/gemma-4-26b-a4b-it-8bit",
+    "mlx-community/gemma-4-31b-it-4bit",
+    "mlx-community/Qwen3.8-27B-8bit",
+    "mlx-community/Qwen3.8-27B-4bit",
+)
+_DROPPED = (
+    "mlx-community/gemma-4-e4b-it-4bit",
+    "mlx-community/gemma-4-e4b-it-nvfp4",
+    "mlx-community/gemma-4-12b-it-4bit",
+    "mlx-community/gemma-4-12b-it-8bit",
+    "mlx-community/gemma-4-26b-a4b-it-qat-4bit",
+    "mlx-community/gemma-4-26b-a4b-it-nvfp4",
+    "mlx-community/gemma-4-31b-it-8bit",
+    "mlx-community/gemma-4-31b-it-qat-4bit",
+    "mlx-community/gemma-4-31b-it-nvfp4",
+    "mlx-community/Qwen3.5-9B-4bit",
+    "mlx-community/Ornith-1.0-9B-4bit",
+    "Qwen/Qwen3.6-35B-A3B",
+    "ornith-ai/Ornith-1.0-35B",
+    "sakamakismile/Ornith-1.0-35B-NVFP4",
+)
+
+
+def test_registry_matches_d20_roster():
     entries = {e.get("repo"): e for e in _registry()}
-    ornith = entries.get("mlx-community/Ornith-1.0-9B-4bit")
-    qwen35 = entries.get("mlx-community/Qwen3.5-9B-4bit")
-    assert ornith is not None, "Ornith-1.0-9B-4bit 注册表条目缺失"
-    assert qwen35 is not None, "Qwen3.5-9B-4bit 注册表条目缺失"
-
-    assert ornith.get("local_config_fixups") == {"vision_config.model_type": "qwen3_5"}
-    assert "local_config_fixups" not in qwen35
+    # 6 MLX 保留档 + 3 CUDA 部署形态 = 9；长度钉防"静默加档不触钉"
+    assert len(entries) == 9, f"注册表应为 9 条（D.20），实际 {len(entries)}: {sorted(entries)}"
+    for repo in _KEPT_MLX:
+        assert repo in entries, f"{repo} 注册表条目缺失（D.20 保留档）"
+    for repo in _DROPPED:
+        assert repo not in entries, f"{repo} 应已随 D.20 阵容收束删除"
+    # fixups 机制保留但现无在册声明方（原消费方 Ornith 已舍弃）
+    declared = [r for r, e in entries.items() if e.get("local_config_fixups")]
+    assert not declared, f"意外的 local_config_fixups 声明方: {declared}"

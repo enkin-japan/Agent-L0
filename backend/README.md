@@ -4,7 +4,7 @@
 
 ## 特性
 
-- **纯本地推理（后端可插拔）**：推理面收敛在 `InferenceBackend` 协议（`core/backend_protocol.py`）后，编排/记忆/工具一律不认识 MLX。`inference.mode` 决定承载——`inprocess` 用 `backends/mlx/` 在本进程加载多模态模型（默认 `mlx-community/gemma-4-e4b-it-4bit`，文本 / 图像原生输入），`remote` 用 `backends/remote/` 把生成托给另一台机器的 inference-server（同一协议两个实现，见根 [HETERO_COMPUTE.md](../HETERO_COMPUTE.md)）。无论哪种，数据都不出自己的机器
+- **纯本地推理（后端可插拔）**：推理面收敛在 `InferenceBackend` 协议（`core/backend_protocol.py`）后，编排/记忆/工具一律不认识 MLX。`inference.mode` 决定承载——`inprocess` 用 `backends/mlx/` 在本进程加载多模态模型（默认 `mlx-community/gemma-4-e4b-it-8bit`，文本 / 图像原生输入），`remote` 用 `backends/remote/` 把生成托给另一台机器的 inference-server（同一协议两个实现，见根 [HETERO_COMPUTE.md](../HETERO_COMPUTE.md)）。无论哪种，数据都不出自己的机器
 - **摄入解析层（多模态分路）**：文本 + 图像原生直喂模型；其余模态在进模型前的 worker 之外急解析——音频经 mlx-whisper 转写、PDF/办公文档折成带 provenance 标记的文本、扫描型 PDF 渲染成图走原生视觉、代码/大文件懒登记（只给路径不倾倒正文）；解析结果烘进历史日志、重放不重解析；模型可用 `file_extract` 逃生舱按 path 回源取精确内容（PDF 某页 / 音频某时段 / 代码某行区间）
 - **编排循环（多步任务 Agent）**：护栏是代码、计划是数据——模型通过结构化元工具（`update_plan` / `complete_step`）制定并推进多步计划，确定性护栏管预算（单步自纠上限 / 总迭代熔断 / 重规划上限）、失败路由（重试 / 改计划 / 降级 / 问用户兜底）与死循环拦截（同名同参调用直接打回）；任务可跨轮存续并随冷冻落盘恢复
 - **保持集中的推理约束**：借鉴大厂 agent loop，把「让模型专注当前步、少发散」的约束落到代码——**结构性提醒**（步骤边界 / 漂移 / 收尾验证的即时 nudge 贴到最新观察旁）、**完成门控**（计划未完成却提前吐文本收尾则有界推回，堵住「一段散文绕过整个计划」）、**输出截断恢复**（撞 `max_tokens` 先升档重试同一步、再多轮「从断点接着写」，消除半截答复→下轮道歉复述）；每处恢复分支均有界并带命名 transition，杜绝新增分支造成死循环；这些一次性护栏提醒走**可变尾部注入**（用完即弃、不进历史、不被摘要压缩污染）
@@ -69,8 +69,8 @@ inference:
   #   - name: "moe-fast"      #   host 共享 remote.host，repo 须先在 model_registry 注册
   #     repo: "..."
   #     port: 14163
-  model: "mlx-community/gemma-4-e4b-it-4bit"
-  model_revision: "475b9088…"    # 钉死 HF commit（2026-08-14 随 mlx-vlm 0.6.13 升钉）；勿改指 main
+  model: "mlx-community/gemma-4-e4b-it-8bit"
+  model_revision: "4255b21b…"    # 钉死 HF commit（缺省档随 D.20 收束改 8bit，2026-08-16）；勿改指 main
   model_registry: [...]     # `devctl model` 的候选集（各项钉死 revision + 显存/验证等级备注）
   audio_max_length: 29      # 原生音频 VAD 切片的最大时长（秒），仅原生音频能力启用时用
   modalities: ["text", "image"]  # 模型原生模态：含 "audio" 才原生直喂音频，否则一律 ASR 转写

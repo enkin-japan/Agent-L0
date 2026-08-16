@@ -2324,7 +2324,10 @@ tokenizer-only 件保留（remote edge 分词器在用）。**新增落地工程
 ①config 注册表收口——缺省档 e4b-4bit→e4b-8bit、删舍弃条目、金测试与路由引用
 排查（顺带核 e4b-8bit 在旧 16GB 机 dev 栈的可行性）；②舍弃权重磁盘清理
 （~100G 级，清单先行再删）；③gemma tool_call 架构锅重测范围收缩为保留四档
-（26b-4bit/8bit、31b-4bit、e4b-8bit，~1h）。
+（26b-4bit/8bit、31b-4bit、e4b-8bit，~1h）；④qwen35 方言假设复核（reviewer
+08-17 发现）——「思考恒回放」等口径的原始依据是 Qwen3.5-9B/Ornith 模板差分，
+两模型均已舍弃，唯一幸存消费方 Qwen3.8 的模板（字节数不同的另一件）从未做过
+差分核对，补一次 Qwen3.8 模板 vs 方言行为的差分检查（本机免 GPU，~0.5h）。
 
 ---
 

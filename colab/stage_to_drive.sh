@@ -30,8 +30,7 @@ REPO_URL_BASE="github.com/enkin-japan/Agent-L0.git"
 MAIN_MODELS=(
   "google/gemma-4-31B-it"
   "google/gemma-4-26B-A4B-it"
-  "Qwen/Qwen3.6-35B-A3B"
-  "ornith-ai/Ornith-1.0-35B"
+  # Qwen3.6-35B / Ornith-1.0-35B 已随 D.20 阵容收束（2026-08-16）移出，不再入 Drive
 )
 RAG_MODELS=(
   "Qwen/Qwen3-Embedding-0.6B"

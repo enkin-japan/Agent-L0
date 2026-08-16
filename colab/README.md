@@ -88,7 +88,7 @@ vLLM 实现 InferenceBackend 协议（server 一行不动，`INFER_BACKEND=cuda`
 诚实边界（联调清单，代码内均响亮告警）：thinking 预算裁决未实现；
 repetition_context_size 无对应物；vision/audio 载荷透传未实测；per-request
 logits_processors 若被所装 vLLM 版本拒绝→约束降级为上游解析兜底（structural-tag
-迁移候补）；Qwen3.6 方言按 qwen35 预注册，模板兼容性=联调首验项。
+迁移候补）。〔Qwen3.6/Ornith-35B 已随 D.20 阵容收束（2026-08-16）移出注册表。〕
 
 ## bench 专用会话（bench_bootstrap.sh + bench_mtp_recheck.sh，2026-08-15 起）
 
