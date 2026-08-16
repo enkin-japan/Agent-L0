@@ -60,6 +60,13 @@
   thinking tier). Not a per-diff reviewer — it audits a whole completed stage:
   conclusions vs raw data, archive completeness, cross-document consistency,
   billing/secret paths. See "Stage review" below for when it is mandatory.
+- `task-sentinel`: 3-minute real-time monitoring of ANY task expected to run
+  longer than 10 minutes (user decision 2026-08-16, superseding the old
+  "shakedown only for new scripts" rule — verified scripts get a sentinel too).
+  Pinned Haiku 4.5 + low effort + batched polling to keep cost negligible;
+  read-only, report-only; exits to wake the main session on anomaly. Attach it
+  in the same action sequence that launches the long task. It watches the
+  measurement run — the run itself stays a main-session background task.
 - Built-in `Explore` agent: broad read-only codebase reconnaissance that would
   otherwise flood the main context with file dumps. Pass a cheaper `model` in
   the Agent call (it has no frontmatter pin and would inherit the session
