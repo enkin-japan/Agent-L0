@@ -1,0 +1,32 @@
+INFO:     Started server process [47535]
+INFO:     Waiting for application startup.
+🚀 [Server] loading model: mlx-community/gemma-4-12b-it-8bit (backend=mlx)
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:58129 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58130 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58164 - "DELETE /v1/cache/dea7bdf99e904f0bb73f975f587fe8e7 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58165 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58176 - "DELETE /v1/cache/e471832b9a404b5b9b0e249be409019a HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58177 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58211 - "DELETE /v1/cache/e7b0378ebeae4da7b616a091ad4fb882 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58212 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58227 - "DELETE /v1/cache/29c8655da97d4fff887e3982aea3dd07 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58228 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58262 - "DELETE /v1/cache/13a7c7d8bd6f404791891fbe6e1f4936 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58263 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58272 - "DELETE /v1/cache/5f2902f121404192b6a607e518cd4c3b HTTP/1.1" 200 OK
+[Server] 约束采样引擎就绪（llguidance）
+INFO:     127.0.0.1:58273 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58308 - "DELETE /v1/cache/6cc22318f82746c78a8c7b615ae346d3 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [47535]
+/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/multiprocessing/resource_tracker.py:277: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown: {'/loky-47535-33c1usyu'}
+  warnings.warn(

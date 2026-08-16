@@ -1,0 +1,34 @@
+INFO:     Started server process [47187]
+INFO:     Waiting for application startup.
+🚀 [Server] loading model: mlx-community/gemma-4-31b-it-qat-4bit (backend=mlx)
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/transformers/audio_utils.py:723: UserWarning: At least one mel filter has all zero values. The value for `num_mel_filters` (128) may be set too high. Or, the value for `num_frequency_bins` (257) may be set too low.
+  warnings.warn(
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:57148 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57149 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57158 - "DELETE /v1/cache/d13787e167d245b6aaaa89d9ec8f7350 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57159 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57170 - "DELETE /v1/cache/3f96e802866447079db53ba9c58a123b HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57171 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57201 - "DELETE /v1/cache/cdbadc887987475da767bb1e088bf253 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57202 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57217 - "DELETE /v1/cache/76ca4d554aa34808ac78dea8a1f7cd5d HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57218 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57227 - "DELETE /v1/cache/7bc91262ed1340c9969b055762b2caa8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57228 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57239 - "DELETE /v1/cache/bee89b4b5e924979b0e1053c50d638ab HTTP/1.1" 200 OK
+[Server] 约束采样引擎就绪（llguidance）
+INFO:     127.0.0.1:57240 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57270 - "DELETE /v1/cache/705b8ea8c9224fb0b1b0ac141936ada8 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [47187]
+/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/multiprocessing/resource_tracker.py:277: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown: {'/loky-47187-9b56pycj'}
+  warnings.warn(

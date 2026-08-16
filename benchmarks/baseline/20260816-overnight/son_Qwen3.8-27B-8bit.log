@@ -1,0 +1,49 @@
+[13:56:42] 环境头已记：Mac16,9 64G wired=57344MB mlx=0.32.0 spec=drafter
+[13:56:45] 🚀 起 server: mlx-community/Qwen3.8-27B-8bit ctx=0（权重 27.5G）
+[13:57:24] ❌ 格 Qwen3.8-27B-8bit × 0 失败: RuntimeError: server 提前退出 rc=3
+[13:57:24] 💥 server 进程已退出 rc=3（日志 server_Qwen3.8-27B-8bit_ctx0.log）
+[13:57:24] 🛑 收 server: mlx-community/Qwen3.8-27B-8bit ctx=0
+[13:57:24] ⏭️  Qwen3.8-27B-8bit 剩余格级联跳过（server 启动失败）
+[13:57:24] 🏁 基线格全部完成
+[18:18:55] 环境头已记：Mac16,9 64G wired=57344MB mlx=0.32.0 spec=drafter
+[18:18:58] 🚀 起 server: mlx-community/Qwen3.8-27B-8bit ctx=0（权重 27.5G）
+[18:19:37]    server 就绪（39s）
+[18:19:50]    [Qwen3.8-27B-8bit ctx=0] run0: gen 29.099435350591857 tps, prefill 95.38981810672131 tps, ttft 0.55s
+[18:20:02]    [Qwen3.8-27B-8bit ctx=0] run1: gen 30.144306501104033 tps, prefill 170.2431480584528 tps, ttft 0.29s
+[18:20:15]    [Qwen3.8-27B-8bit ctx=0] run2: gen 28.28670070359797 tps, prefill 163.7236327749587 tps, ttft 0.289s
+[18:20:28]    [Qwen3.8-27B-8bit ctx=0] run3: gen 27.53791913204955 tps, prefill 173.45868248087396 tps, ttft 0.29s
+[18:20:31] ✅ 格 Qwen3.8-27B-8bit × 0: decode 中位 28.29 tps, prefill 170.24 tps, 峰值 31.708497504G, 质量哨 ⚠️ 有挂
+[18:20:32] 🛑 收 server: mlx-community/Qwen3.8-27B-8bit ctx=0
+[18:20:32] 🚀 起 server: mlx-community/Qwen3.8-27B-8bit ctx=4096（权重 27.5G）
+[18:20:50]    server 就绪（18s）
+[18:21:20]    [Qwen3.8-27B-8bit ctx=4096] run0: gen 25.38034671934569 tps, prefill 248.77242411128904 tps, ttft 17.026s
+[18:21:48]    [Qwen3.8-27B-8bit ctx=4096] run1: gen 27.95442301485798 tps, prefill 252.21500283505537 tps, ttft 16.249s
+[18:22:18]    [Qwen3.8-27B-8bit ctx=4096] run2: gen 26.701667212118316 tps, prefill 251.41766382267113 tps, ttft 16.293s
+[18:22:48]    [Qwen3.8-27B-8bit ctx=4096] run3: gen 24.547335659838375 tps, prefill 251.33767701408047 tps, ttft 16.31s
+[18:23:40] ✅ 格 Qwen3.8-27B-8bit × 4096: decode 中位 26.7 tps, prefill 251.42 tps, 峰值 37.722774316G, 质量哨 ⚠️ 有挂
+[18:23:41] 🛑 收 server: mlx-community/Qwen3.8-27B-8bit ctx=4096
+[18:23:41] 🚀 起 server: mlx-community/Qwen3.8-27B-8bit ctx=16384（权重 27.5G）
+[18:24:08]    server 就绪（27s）
+[18:25:33]    [Qwen3.8-27B-8bit ctx=16384] run0: gen 20.302492046491974 tps, prefill 238.93650678597797 tps, ttft 68.561s
+[18:26:55]    [Qwen3.8-27B-8bit ctx=16384] run1: gen 24.946636766952313 tps, prefill 241.00071794574797 tps, ttft 67.946s
+[18:28:17]    [Qwen3.8-27B-8bit ctx=16384] run2: gen 24.127927650555588 tps, prefill 241.05460225067162 tps, ttft 67.922s
+[18:29:41]    [Qwen3.8-27B-8bit ctx=16384] run3: gen 22.392609066138817 tps, prefill 241.08500340387397 tps, ttft 67.926s
+[18:33:08] ✅ 格 Qwen3.8-27B-8bit × 16384: decode 中位 24.13 tps, prefill 241.05 tps, 峰值 39.836179244G, 质量哨 ⚠️ 有挂
+[18:33:08] 🛑 收 server: mlx-community/Qwen3.8-27B-8bit ctx=16384
+[18:33:08] 🚀 起 server: mlx-community/Qwen3.8-27B-8bit ctx=32768（权重 27.5G）
+[18:33:38]    server 就绪（30s）
+[18:36:21]    [Qwen3.8-27B-8bit ctx=32768] run0: gen 19.714793704440268 tps, prefill 226.50574474584104 tps, ttft 144.789s
+[18:39:00]    [Qwen3.8-27B-8bit ctx=32768] run1: gen 21.960422232641584 tps, prefill 227.17100396125625 tps, ttft 144.315s
+[18:41:41]    [Qwen3.8-27B-8bit ctx=32768] run2: gen 21.546592449436208 tps, prefill 227.2409505788538 tps, ttft 144.26s
+[18:44:25]    [Qwen3.8-27B-8bit ctx=32768] run3: gen 18.84976651263197 tps, prefill 225.9399281078799 tps, ttft 145.104s
+[18:51:41] ✅ 格 Qwen3.8-27B-8bit × 32768: decode 中位 21.55 tps, prefill 227.17 tps, 峰值 42.714553132G, 质量哨 ⚠️ 有挂
+[18:51:42] 🛑 收 server: mlx-community/Qwen3.8-27B-8bit ctx=32768
+[18:51:42] 🚀 起 server: mlx-community/Qwen3.8-27B-8bit ctx=65536（权重 27.5G）
+[18:52:15]    server 就绪（33s）
+[18:58:03]    [Qwen3.8-27B-8bit ctx=65536] run0: gen 15.348888597010887 tps, prefill 201.527026762634 tps, ttft 325.228s
+[19:03:48]    [Qwen3.8-27B-8bit ctx=65536] run1: gen 17.619255564829906 tps, prefill 201.8476506032252 tps, ttft 324.672s
+[19:09:33]    [Qwen3.8-27B-8bit ctx=65536] run2: gen 17.809468788203546 tps, prefill 200.79221773822698 tps, ttft 326.365s
+[19:15:22]    [Qwen3.8-27B-8bit ctx=65536] run3: gen 14.68050764013818 tps, prefill 201.61535172524836 tps, ttft 325.051s
+[19:31:40] ✅ 格 Qwen3.8-27B-8bit × 65536: decode 中位 17.62 tps, prefill 201.62 tps, 峰值 48.457317128G, 质量哨 ⚠️ 有挂
+[19:31:41] 🛑 收 server: mlx-community/Qwen3.8-27B-8bit ctx=65536
+[19:31:41] 🏁 基线格全部完成

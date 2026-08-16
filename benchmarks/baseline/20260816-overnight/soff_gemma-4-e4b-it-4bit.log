@@ -1,0 +1,45 @@
+[10:25:53] 环境头已记：Mac16,9 64G wired=57344MB mlx=0.32.0 spec=off
+[10:25:55] 🚀 起 server: mlx-community/gemma-4-e4b-it-4bit ctx=0（权重 4.8G）
+[10:26:07]    server 就绪（12s）
+[10:26:11]    [gemma-4-e4b-it-4bit ctx=0] run0: gen 116.94704068650687 tps, prefill 447.31391341979855 tps, ttft 0.148s
+[10:26:14]    [gemma-4-e4b-it-4bit ctx=0] run1: gen 117.14401223288668 tps, prefill 885.9671503797314 tps, ttft 0.059s
+[10:26:17]    [gemma-4-e4b-it-4bit ctx=0] run2: gen 117.09734253476527 tps, prefill 868.6132047691455 tps, ttft 0.06s
+[10:26:20]    [gemma-4-e4b-it-4bit ctx=0] run3: gen 117.13958682353666 tps, prefill 934.0758038179849 tps, ttft 0.06s
+[10:26:21] ✅ 格 gemma-4-e4b-it-4bit × 0: decode 中位 117.14 tps, prefill 885.97 tps, 峰值 5.294420422G, 质量哨 全过
+[10:26:22] 🛑 收 server: mlx-community/gemma-4-e4b-it-4bit ctx=0
+[10:26:22] 🚀 起 server: mlx-community/gemma-4-e4b-it-4bit ctx=4096（权重 4.8G）
+[10:26:28]    server 就绪（6s）
+[10:26:33]    [gemma-4-e4b-it-4bit ctx=4096] run0: gen 107.31506088011757 tps, prefill 2468.9331551943287 tps, ttft 1.736s
+[10:26:38]    [gemma-4-e4b-it-4bit ctx=4096] run1: gen 107.13360869239705 tps, prefill 2505.3669139019316 tps, ttft 1.64s
+[10:26:43]    [gemma-4-e4b-it-4bit ctx=4096] run2: gen 107.21165448937587 tps, prefill 2502.4905508666934 tps, ttft 1.642s
+[10:26:47]    [gemma-4-e4b-it-4bit ctx=4096] run3: gen 107.2603249846738 tps, prefill 2495.271282925112 tps, ttft 1.647s
+[10:26:54] ✅ 格 gemma-4-e4b-it-4bit × 4096: decode 中位 107.21 tps, prefill 2502.49 tps, 峰值 6.271357872G, 质量哨 全过
+[10:26:54] 🛑 收 server: mlx-community/gemma-4-e4b-it-4bit ctx=4096
+[10:26:54] 🚀 起 server: mlx-community/gemma-4-e4b-it-4bit ctx=16384（权重 4.8G）
+[10:27:00]    server 就绪（6s）
+[10:27:11]    [gemma-4-e4b-it-4bit ctx=16384] run0: gen 90.74288805003177 tps, prefill 2337.5511903530805 tps, ttft 7.042s
+[10:27:22]    [gemma-4-e4b-it-4bit ctx=16384] run1: gen 90.6211559323343 tps, prefill 2360.4825301557603 tps, ttft 6.947s
+[10:27:33]    [gemma-4-e4b-it-4bit ctx=16384] run2: gen 90.71581713753714 tps, prefill 2360.633456473998 tps, ttft 6.945s
+[10:27:44]    [gemma-4-e4b-it-4bit ctx=16384] run3: gen 90.73699699902112 tps, prefill 2361.2706063479654 tps, ttft 6.945s
+[10:28:06] ✅ 格 gemma-4-e4b-it-4bit × 16384: decode 中位 90.72 tps, prefill 2360.63 tps, 峰值 7.178564502G, 质量哨 全过
+[10:28:07] 🛑 收 server: mlx-community/gemma-4-e4b-it-4bit ctx=16384
+[10:28:07] 🚀 起 server: mlx-community/gemma-4-e4b-it-4bit ctx=32768（权重 4.8G）
+[10:28:13]    server 就绪（6s）
+[10:28:32]    [gemma-4-e4b-it-4bit ctx=32768] run0: gen 75.56155457811043 tps, prefill 2194.2068396484665 tps, ttft 15.009s
+[10:28:52]    [gemma-4-e4b-it-4bit ctx=32768] run1: gen 75.63702719887738 tps, prefill 2197.683815435257 tps, ttft 14.925s
+[10:29:11]    [gemma-4-e4b-it-4bit ctx=32768] run2: gen 75.44416337665939 tps, prefill 2197.728554439794 tps, ttft 14.923s
+[10:29:31]    [gemma-4-e4b-it-4bit ctx=32768] run3: gen 75.63320387847388 tps, prefill 2195.439099377099 tps, ttft 14.941s
+[10:30:18] ✅ 格 gemma-4-e4b-it-4bit × 32768: decode 中位 75.63 tps, prefill 2197.68 tps, 峰值 8.424240022G, 质量哨 全过
+[10:30:18] 🛑 收 server: mlx-community/gemma-4-e4b-it-4bit ctx=32768
+[10:30:18] 🚀 起 server: mlx-community/gemma-4-e4b-it-4bit ctx=65536（权重 4.8G）
+[10:30:24]    server 就绪（6s）
+[10:31:05]    [gemma-4-e4b-it-4bit ctx=65536] run0: gen 55.97731500042192 tps, prefill 1930.8271471898547 tps, ttft 34.028s
+[10:31:45]    [gemma-4-e4b-it-4bit ctx=65536] run1: gen 56.11371368660474 tps, prefill 1930.9342595848343 tps, ttft 33.956s
+[10:32:25]    [gemma-4-e4b-it-4bit ctx=65536] run2: gen 56.088880683678504 tps, prefill 1930.7914233759143 tps, ttft 33.958s
+[10:33:05]    [gemma-4-e4b-it-4bit ctx=65536] run3: gen 55.99624003597238 tps, prefill 1930.9229536081702 tps, ttft 33.957s
+[10:34:49] ✅ 格 gemma-4-e4b-it-4bit × 65536: decode 中位 56.09 tps, prefill 1930.92 tps, 峰值 11.029713774G, 质量哨 全过
+[10:34:49] 🛑 收 server: mlx-community/gemma-4-e4b-it-4bit ctx=65536
+[10:34:49] 🏁 基线格全部完成
+[14:00:08] 环境头已记：Mac16,9 64G wired=57344MB mlx=0.32.0 spec=off
+[14:00:08] ⏭️  mlx-community/gemma-4-e4b-it-4bit 全格已测，跳过
+[14:00:08] 🏁 基线格全部完成

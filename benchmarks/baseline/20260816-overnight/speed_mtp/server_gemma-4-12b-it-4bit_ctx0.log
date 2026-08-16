@@ -1,0 +1,35 @@
+INFO:     Started server process [51384]
+INFO:     Waiting for application startup.
+[Server] 投机配置被环境覆盖：{'mode': 'drafter', 'draft_model': '/Volumes/enkin/project/Agent/backend/models/gemma-4-12b-it-assistant-bf16', 'draft_block_size': 3}
+🚀 [Server] loading model: mlx-community/gemma-4-12b-it-4bit (backend=mlx)
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+ERROR:    Traceback (most recent call last):
+  File "/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/starlette/routing.py", line 638, in lifespan
+    async with self.lifespan_context(app) as maybe_state:
+               ~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/enkin/project/Agent/inference/server.py", line 251, in lifespan
+    S.backend = await get_backend_class(backend_name).load(
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        model_path, executor=S.executor, **_inf_cfg)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/enkin/project/Agent/backend/framework/backends/mlx/backend.py", line 266, in load
+    model, processor, drafter = await loop.run_in_executor(executor, _load_all)
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+  File "/Volumes/enkin/project/Agent/backend/framework/backends/mlx/backend.py", line 259, in _load_all
+    d = _load_drafter(m, draft_path, spec_cfg) if draft_path else (None, None)
+        ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/enkin/project/Agent/backend/framework/backends/mlx/backend.py", line 154, in _load_drafter
+    resolved_kind = resolve_drafter_kind(draft_path, kind)
+  File "/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/mlx_vlm/speculative/drafters/__init__.py", line 126, in resolve_drafter_kind
+    model_type = _peek_drafter_model_type(model_path)
+  File "/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/mlx_vlm/speculative/drafters/__init__.py", line 107, in _peek_drafter_model_type
+    with open(model_path / "config.json") as f:
+              ~~~~~~~~~~~^~~~~~~~~~~~~~~
+TypeError: unsupported operand type(s) for /: 'str' and 'str'
+
+ERROR:    Application startup failed. Exiting.

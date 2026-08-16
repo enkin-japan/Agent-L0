@@ -1,0 +1,45 @@
+[05:11:10] 环境头已记：Mac16,9 64G wired=57344MB mlx=0.32.0 spec=off
+[05:11:14] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=0（权重 14.5G）
+[05:11:38]    server 就绪（24s）
+[05:11:42]    [gemma-4-26b-a4b-it-qat-4bit ctx=0] run0: gen 111.91737811417121 tps, prefill 511.85375604573 tps, ttft 0.274s
+[05:11:45]    [gemma-4-26b-a4b-it-qat-4bit ctx=0] run1: gen 112.47482219740135 tps, prefill 547.0257215499649 tps, ttft 0.101s
+[05:11:48]    [gemma-4-26b-a4b-it-qat-4bit ctx=0] run2: gen 112.42846487952352 tps, prefill 538.8742986462403 tps, ttft 0.1s
+[05:11:51]    [gemma-4-26b-a4b-it-qat-4bit ctx=0] run3: gen 113.14634902345203 tps, prefill 554.6307089697724 tps, ttft 0.105s
+[05:11:53] ✅ 格 gemma-4-26b-a4b-it-qat-4bit × 0: decode 中位 112.47 tps, prefill 547.03 tps, 峰值 15.764190846G, 质量哨 全过
+[05:11:53] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=0
+[05:11:53] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=4096（权重 14.5G）
+[05:11:59]    server 就绪（6s）
+[05:12:06]    [gemma-4-26b-a4b-it-qat-4bit ctx=4096] run0: gen 104.35410287826114 tps, prefill 1510.8178183779971 tps, ttft 2.874s
+[05:12:12]    [gemma-4-26b-a4b-it-qat-4bit ctx=4096] run1: gen 104.15883020309356 tps, prefill 1523.3475720795434 tps, ttft 2.696s
+[05:12:18]    [gemma-4-26b-a4b-it-qat-4bit ctx=4096] run2: gen 103.99503743517991 tps, prefill 1524.0358811937792 tps, ttft 2.694s
+[05:12:24]    [gemma-4-26b-a4b-it-qat-4bit ctx=4096] run3: gen 104.1226856773224 tps, prefill 1520.3156298983604 tps, ttft 2.704s
+[05:12:34] ✅ 格 gemma-4-26b-a4b-it-qat-4bit × 4096: decode 中位 104.12 tps, prefill 1523.35 tps, 峰值 17.392557386G, 质量哨 全过
+[05:12:34] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=4096
+[05:12:34] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=16384（权重 14.5G）
+[05:12:40]    server 就绪（6s）
+[05:12:56]    [gemma-4-26b-a4b-it-qat-4bit ctx=16384] run0: gen 89.45405867727726 tps, prefill 1383.6990515571215 tps, ttft 11.998s
+[05:13:12]    [gemma-4-26b-a4b-it-qat-4bit ctx=16384] run1: gen 89.426660123893 tps, prefill 1384.541968547524 tps, ttft 11.84s
+[05:13:27]    [gemma-4-26b-a4b-it-qat-4bit ctx=16384] run2: gen 89.29536800317928 tps, prefill 1384.7420522072402 tps, ttft 11.837s
+[05:13:43]    [gemma-4-26b-a4b-it-qat-4bit ctx=16384] run3: gen 89.37795655498793 tps, prefill 1384.9294044692022 tps, ttft 11.839s
+[05:14:21] ✅ 格 gemma-4-26b-a4b-it-qat-4bit × 16384: decode 中位 89.38 tps, prefill 1384.74 tps, 峰值 18.55878689G, 质量哨 全过
+[05:14:21] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=16384
+[05:14:21] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=32768（权重 14.5G）
+[05:14:27]    server 就绪（6s）
+[05:14:58]    [gemma-4-26b-a4b-it-qat-4bit ctx=32768] run0: gen 76.60089928145929 tps, prefill 1236.1640014659517 tps, ttft 26.677s
+[05:15:29]    [gemma-4-26b-a4b-it-qat-4bit ctx=32768] run1: gen 76.50769896989564 tps, prefill 1236.8301541501498 tps, ttft 26.511s
+[05:16:00]    [gemma-4-26b-a4b-it-qat-4bit ctx=32768] run2: gen 76.58335888261828 tps, prefill 1236.271158749903 tps, ttft 26.522s
+[05:16:31]    [gemma-4-26b-a4b-it-qat-4bit ctx=32768] run3: gen 77.78739748573138 tps, prefill 1236.9065029837213 tps, ttft 26.511s
+[05:17:53] ✅ 格 gemma-4-26b-a4b-it-qat-4bit × 32768: decode 中位 76.58 tps, prefill 1236.83 tps, 峰值 20.06242849G, 质量哨 全过
+[05:17:53] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=32768
+[05:17:53] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=65536（权重 14.5G）
+[05:17:59]    server 就绪（6s）
+[05:19:10]    [gemma-4-26b-a4b-it-qat-4bit ctx=65536] run0: gen 60.30573759422486 tps, prefill 1016.173117599358 tps, ttft 64.664s
+[05:20:20]    [gemma-4-26b-a4b-it-qat-4bit ctx=65536] run1: gen 60.321385874016855 tps, prefill 1016.6045848613998 tps, ttft 64.479s
+[05:21:30]    [gemma-4-26b-a4b-it-qat-4bit ctx=65536] run2: gen 59.99838347218922 tps, prefill 1015.9877900040933 tps, ttft 64.516s
+[05:22:41]    [gemma-4-26b-a4b-it-qat-4bit ctx=65536] run3: gen 60.339925830490515 tps, prefill 1016.9261637072215 tps, ttft 64.46s
+[05:25:56] ✅ 格 gemma-4-26b-a4b-it-qat-4bit × 65536: decode 中位 60.32 tps, prefill 1016.6 tps, 峰值 23.040616196G, 质量哨 全过
+[05:25:57] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=65536
+[05:25:57] 🏁 基线格全部完成
+[14:00:06] 环境头已记：Mac16,9 64G wired=57344MB mlx=0.32.0 spec=off
+[14:00:06] ⏭️  mlx-community/gemma-4-26b-a4b-it-qat-4bit 全格已测，跳过
+[14:00:06] 🏁 基线格全部完成

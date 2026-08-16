@@ -1,0 +1,38 @@
+INFO:     Started server process [54318]
+INFO:     Waiting for application startup.
+[Server] 投机配置被环境覆盖：{'mode': 'drafter', 'draft_model': '/Volumes/enkin/project/Agent/backend/models/gemma-4-31b-it-assistant-8bit', 'draft_block_size': 3}
+🚀 [Server] loading model: mlx-community/gemma-4-31b-it-4bit (backend=mlx)
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/transformers/audio_utils.py:723: UserWarning: At least one mel filter has all zero values. The value for `num_mel_filters` (128) may be set too high. Or, the value for `num_frequency_bins` (257) may be set too low.
+  warnings.warn(
+[Engine] 草稿深度上限已解锁：采纳请求值 draft_block_size=3（否则被草稿件 config 缺省值 4 顶死）
+[Engine] 投机草稿件已装载：/Volumes/enkin/project/Agent/backend/models/gemma-4-31b-it-assistant-8bit（kind=mtp）
+[Engine] 投机采样启用：{'mode': 'drafter', 'draft_model': '/Volumes/enkin/project/Agent/backend/models/gemma-4-31b-it-assistant-8bit', 'draft_kind': '', 'draft_block_size': 3, 'num_draft_tokens': 8, 'ngram_max': 3, 'ngram_min': 2}
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:62429 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62430 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62431 - "DELETE /v1/cache/13e9c70b584a4b3e89dd025be978e28c HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62432 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62436 - "DELETE /v1/cache/22ce5af9aefb433f85b0d864e5287eff HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62437 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62438 - "DELETE /v1/cache/bebb3ebb6e4f4970be574ecead47366d HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62439 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62440 - "DELETE /v1/cache/79757473704c40db9e12fab2482d52bb HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62441 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62457 - "DELETE /v1/cache/7cd411eb34944082a659c7827c573bec HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62458 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62459 - "DELETE /v1/cache/7d359f606fa54d57a469d389b6df28b5 HTTP/1.1" 200 OK
+[Server] 约束采样引擎就绪（llguidance）
+INFO:     127.0.0.1:62460 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62461 - "DELETE /v1/cache/58b6a684aba24c3eb3ade9f642ee1323 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [54318]
+/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/multiprocessing/resource_tracker.py:277: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown: {'/loky-54318-qq1sgzxs'}
+  warnings.warn(

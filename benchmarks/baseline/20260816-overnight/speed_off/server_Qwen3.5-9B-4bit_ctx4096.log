@@ -1,0 +1,33 @@
+INFO:     Started server process [50923]
+INFO:     Waiting for application startup.
+🚀 [Server] loading model: mlx-community/Qwen3.5-9B-4bit (backend=mlx)
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:60275 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60276 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60277 - "DELETE /v1/cache/cf1ced6980154ca09b826522bf96e3cd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60278 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60279 - "DELETE /v1/cache/a8b64e3893b248b2828c37b1eda17f98 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60280 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60281 - "DELETE /v1/cache/c2d3d9b59aff4b82995405af0d4db3e4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60282 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60283 - "DELETE /v1/cache/2fad767d3d7845659b17fc83826c0307 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60284 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60285 - "DELETE /v1/cache/1281e045ed864c9cbaebf824f6c34352 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60286 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60287 - "DELETE /v1/cache/93ae61d881674016bfe35424b212e2d8 HTTP/1.1" 200 OK
+[Server] 约束采样引擎就绪（llguidance）
+[Server] 约束采样构建失败，永久禁用: NotImplementedError: qwen35 方言使用原生 XML 调用体（<function=…><parameter=…>），按设计不启用 约束采样——engine 将 fail-open 到自由采样 + 解析纠错闭环。
+INFO:     127.0.0.1:60288 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60289 - "DELETE /v1/cache/395a4c5f50d44754a28aa858007e5bd5 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [50923]
+/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/multiprocessing/resource_tracker.py:277: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown: {'/loky-50923-cazockv0'}
+  warnings.warn(

@@ -1,0 +1,45 @@
+[06:10:27] 环境头已记：Mac16,9 64G wired=57344MB mlx=0.32.0 spec=off
+[06:10:31] 🚀 起 server: mlx-community/gemma-4-31b-it-4bit ctx=0（权重 17.1G）
+[06:10:58]    server 就绪（27s）
+[06:11:13]    [gemma-4-31b-it-4bit ctx=0] run0: gen 25.363566571831004 tps, prefill 146.97500493278534 tps, ttft 0.633s
+[06:11:27]    [gemma-4-31b-it-4bit ctx=0] run1: gen 25.386112649802232 tps, prefill 142.4846407660705 tps, ttft 0.378s
+[06:11:41]    [gemma-4-31b-it-4bit ctx=0] run2: gen 25.393704064026004 tps, prefill 139.85711513836227 tps, ttft 0.377s
+[06:11:55]    [gemma-4-31b-it-4bit ctx=0] run3: gen 25.386758884929506 tps, prefill 150.52954141853982 tps, ttft 0.377s
+[06:11:59] ✅ 格 gemma-4-31b-it-4bit × 0: decode 中位 25.39 tps, prefill 142.48 tps, 峰值 18.996583154G, 质量哨 全过
+[06:11:59] 🛑 收 server: mlx-community/gemma-4-31b-it-4bit ctx=0
+[06:11:59] 🚀 起 server: mlx-community/gemma-4-31b-it-4bit ctx=4096（权重 17.1G）
+[06:12:05]    server 就绪（6s）
+[06:12:41]    [gemma-4-31b-it-4bit ctx=4096] run0: gen 23.619740201258143 tps, prefill 199.50317681120146 tps, ttft 20.69s
+[06:13:16]    [gemma-4-31b-it-4bit ctx=4096] run1: gen 23.60202335545818 tps, prefill 201.30434967329546 tps, ttft 20.379s
+[06:13:51]    [gemma-4-31b-it-4bit ctx=4096] run2: gen 23.616037374352665 tps, prefill 201.37961284657766 tps, ttft 20.364s
+[06:14:27]    [gemma-4-31b-it-4bit ctx=4096] run3: gen 23.60759980354687 tps, prefill 200.9960212373367 tps, ttft 20.425s
+[06:15:31] ✅ 格 gemma-4-31b-it-4bit × 4096: decode 中位 23.61 tps, prefill 201.3 tps, 峰值 22.699085032G, 质量哨 全过
+[06:15:31] 🛑 收 server: mlx-community/gemma-4-31b-it-4bit ctx=4096
+[06:15:31] 🚀 起 server: mlx-community/gemma-4-31b-it-4bit ctx=16384（权重 17.1G）
+[06:15:37]    server 就绪（6s）
+[06:17:20]    [gemma-4-31b-it-4bit ctx=16384] run0: gen 21.51421038950804 tps, prefill 189.84075516807238 tps, ttft 86.538s
+[06:19:03]    [gemma-4-31b-it-4bit ctx=16384] run1: gen 21.524461035552516 tps, prefill 189.780648554842 tps, ttft 86.324s
+[06:20:45]    [gemma-4-31b-it-4bit ctx=16384] run2: gen 21.518108442941827 tps, prefill 189.796614977532 tps, ttft 86.311s
+[06:22:28]    [gemma-4-31b-it-4bit ctx=16384] run3: gen 21.51605113726463 tps, prefill 189.86368208015432 tps, ttft 86.302s
+[06:26:50] ✅ 格 gemma-4-31b-it-4bit × 16384: decode 中位 21.52 tps, prefill 189.8 tps, 峰值 25.27285583G, 质量哨 全过
+[06:26:51] 🛑 收 server: mlx-community/gemma-4-31b-it-4bit ctx=16384
+[06:26:51] 🚀 起 server: mlx-community/gemma-4-31b-it-4bit ctx=32768（权重 17.1G）
+[06:26:57]    server 就绪（6s）
+[06:30:20]    [gemma-4-31b-it-4bit ctx=32768] run0: gen 19.32333952874921 tps, prefill 177.10251882036525 tps, ttft 185.315s
+[06:33:43]    [gemma-4-31b-it-4bit ctx=32768] run1: gen 19.302040557263005 tps, prefill 177.12712555024785 tps, ttft 185.035s
+[06:37:07]    [gemma-4-31b-it-4bit ctx=32768] run2: gen 19.32119712242052 tps, prefill 177.11310432389183 tps, ttft 185.043s
+[06:40:30]    [gemma-4-31b-it-4bit ctx=32768] run3: gen 19.319794649182906 tps, prefill 177.07940378406508 tps, ttft 185.103s
+[06:49:49] ✅ 格 gemma-4-31b-it-4bit × 32768: decode 中位 19.32 tps, prefill 177.11 tps, 峰值 29.08759171G, 质量哨 全过
+[06:49:49] 🛑 收 server: mlx-community/gemma-4-31b-it-4bit ctx=32768
+[06:49:49] 🚀 起 server: mlx-community/gemma-4-31b-it-4bit ctx=65536（权重 17.1G）
+[06:50:01]    server 就绪（12s）
+[06:57:25]    [gemma-4-31b-it-4bit ctx=65536] run0: gen 15.866749376267272 tps, prefill 155.22774856757638 tps, ttft 422.268s
+[07:04:49]    [gemma-4-31b-it-4bit ctx=65536] run1: gen 15.851966456535148 tps, prefill 155.3085079471138 tps, ttft 421.914s
+[07:12:13]    [gemma-4-31b-it-4bit ctx=65536] run2: gen 15.847188430038123 tps, prefill 155.29193096761244 tps, ttft 421.952s
+[07:19:37]    [gemma-4-31b-it-4bit ctx=65536] run3: gen 15.901972909166034 tps, prefill 155.30498083248034 tps, ttft 421.941s
+[07:40:48] ✅ 格 gemma-4-31b-it-4bit × 65536: decode 中位 15.85 tps, prefill 155.3 tps, 峰值 36.690504942G, 质量哨 全过
+[07:40:48] 🛑 收 server: mlx-community/gemma-4-31b-it-4bit ctx=65536
+[07:40:48] 🏁 基线格全部完成
+[14:00:07] 环境头已记：Mac16,9 64G wired=57344MB mlx=0.32.0 spec=off
+[14:00:07] ⏭️  mlx-community/gemma-4-31b-it-4bit 全格已测，跳过
+[14:00:07] 🏁 基线格全部完成

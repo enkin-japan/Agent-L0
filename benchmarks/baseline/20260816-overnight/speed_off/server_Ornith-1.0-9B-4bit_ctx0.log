@@ -1,0 +1,31 @@
+INFO:     Started server process [51144]
+INFO:     Waiting for application startup.
+🚀 [Server] loading model: mlx-community/Ornith-1.0-9B-4bit (backend=mlx)
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:60419 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60420 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60421 - "DELETE /v1/cache/7b2e8581faa94644baa1ab197b34f3d5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60422 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60423 - "DELETE /v1/cache/4fd38bdb2bb843aea82da5f12f6838a3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60424 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60425 - "DELETE /v1/cache/ea9b7dfcae7b49fa85bde07dc5c1304d HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60426 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60427 - "DELETE /v1/cache/daf75a8d1fc04490aa6436fd7102254d HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60428 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60429 - "DELETE /v1/cache/0701253d0d5747e8906992bc0de6c8ec HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60430 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60431 - "DELETE /v1/cache/33a1388e70bc4312ac636b77f7f1c5ec HTTP/1.1" 200 OK
+[Server] 约束采样引擎就绪（llguidance）
+[Server] 约束采样构建失败，永久禁用: NotImplementedError: qwen35 方言使用原生 XML 调用体（<function=…><parameter=…>），按设计不启用 约束采样——engine 将 fail-open 到自由采样 + 解析纠错闭环。
+INFO:     127.0.0.1:60432 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60433 - "DELETE /v1/cache/f16cd26b270f49979e91aa4e92659e11 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [51144]

@@ -1,0 +1,39 @@
+INFO:     Started server process [57137]
+INFO:     Waiting for application startup.
+[Server] 投机配置被环境覆盖：{'mode': 'drafter', 'draft_model': '/Volumes/enkin/project/Agent/backend/models/Qwen3.8-27B-MTP-4bit', 'draft_block_size': 3}
+🚀 [Server] loading model: mlx-community/Qwen3.8-27B-4bit (backend=mlx)
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+[Engine] 已禁用 LanguageModel.speculative_argmax_from_hidden（融合采样绕过 logits 处理器；改走 hidden+批量投影走查路，与 gemma 同形态）
+[Engine] 已禁用 LanguageModel.speculative_verify_logits（融合采样绕过 logits 处理器；改走 hidden+批量投影走查路，与 gemma 同形态）
+[Engine] 草稿深度上限已解锁：采纳请求值 draft_block_size=3（否则被草稿件 config 缺省值 4 顶死）
+[Engine] 投机草稿件已装载：/Volumes/enkin/project/Agent/backend/models/Qwen3.8-27B-MTP-4bit（kind=mtp）
+[Engine] 投机采样启用：{'mode': 'drafter', 'draft_model': '/Volumes/enkin/project/Agent/backend/models/Qwen3.8-27B-MTP-4bit', 'draft_kind': '', 'draft_block_size': 3, 'num_draft_tokens': 8, 'ngram_max': 3, 'ngram_min': 2}
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:64771 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64772 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64800 - "DELETE /v1/cache/e9d030ec927d4d4caf9b9dc47c82c380 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64801 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64824 - "DELETE /v1/cache/8ff808f7554b4bdda03a92b25994057b HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64825 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64828 - "DELETE /v1/cache/bed3040b21314842820be3e598615b7b HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64829 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64847 - "DELETE /v1/cache/210b2383b359467aa586d981f2454e92 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64848 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64853 - "DELETE /v1/cache/44553d428349487b9e79b7514fbb90e6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64854 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64857 - "DELETE /v1/cache/30748a1dac0943f896c7a347e491101b HTTP/1.1" 200 OK
+[Server] 约束采样引擎就绪（llguidance）
+[Server] 约束采样构建失败，永久禁用: NotImplementedError: qwen35 方言使用原生 XML 调用体（<function=…><parameter=…>），按设计不启用 约束采样——engine 将 fail-open 到自由采样 + 解析纠错闭环。
+INFO:     127.0.0.1:64858 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64874 - "DELETE /v1/cache/f6281a2668e247e6aea0ca66e8ce3a70 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [57137]
+/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/multiprocessing/resource_tracker.py:277: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown: {'/loky-57137-f99s3_wn'}
+  warnings.warn(

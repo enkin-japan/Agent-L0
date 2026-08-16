@@ -1,0 +1,52 @@
+[13:31:03] 环境头已记：Mac16,9 64G wired=57344MB mlx=0.32.0 spec=off
+[13:31:05] 🚀 起 server: mlx-community/Ornith-1.0-9B-4bit ctx=0（权重 5.5G）
+[13:31:17]    server 就绪（12s）
+[13:31:21]    [Ornith-1.0-9B-4bit ctx=0] run0: gen 89.38350029078454 tps, prefill 253.13961724261696 tps, ttft 0.22s
+[13:31:25]    [Ornith-1.0-9B-4bit ctx=0] run1: gen 89.48259693149585 tps, prefill 514.8462699274965 tps, ttft 0.099s
+[13:31:29]    [Ornith-1.0-9B-4bit ctx=0] run2: gen 89.45567911778637 tps, prefill 496.87536752583196 tps, ttft 0.098s
+[13:31:33]    [Ornith-1.0-9B-4bit ctx=0] run3: gen 89.4747229724939 tps, prefill 525.620260969118 tps, ttft 0.099s
+[13:31:35] ✅ 格 Ornith-1.0-9B-4bit × 0: decode 中位 89.47 tps, prefill 514.85 tps, 峰值 6.904795692G, 质量哨 ⚠️ 有挂
+[13:31:36] 🛑 收 server: mlx-community/Ornith-1.0-9B-4bit ctx=0
+[13:31:36] 🚀 起 server: mlx-community/Ornith-1.0-9B-4bit ctx=4096（权重 5.5G）
+[13:31:42]    server 就绪（6s）
+[13:31:50]    [Ornith-1.0-9B-4bit ctx=4096] run0: gen 86.82389958050105 tps, prefill 890.2837842284479 tps, ttft 4.668s
+[13:31:59]    [Ornith-1.0-9B-4bit ctx=4096] run1: gen 86.82927461277436 tps, prefill 900.1711084448514 tps, ttft 4.56s
+[13:32:08]    [Ornith-1.0-9B-4bit ctx=4096] run2: gen 86.72700222931684 tps, prefill 894.23740152368 tps, ttft 4.585s
+[13:32:16]    [Ornith-1.0-9B-4bit ctx=4096] run3: gen 86.74267232434964 tps, prefill 897.7872434944757 tps, ttft 4.569s
+[13:32:32] ✅ 格 Ornith-1.0-9B-4bit × 4096: decode 中位 86.74 tps, prefill 897.79 tps, 峰值 8.602740266G, 质量哨 ⚠️ 有挂
+[13:32:32] 🛑 收 server: mlx-community/Ornith-1.0-9B-4bit ctx=4096
+[13:32:32] 🚀 起 server: mlx-community/Ornith-1.0-9B-4bit ctx=16384（权重 5.5G）
+[13:32:38]    server 就绪（6s）
+[13:33:02]    [Ornith-1.0-9B-4bit ctx=16384] run0: gen 80.19201557459624 tps, prefill 854.7808715623466 tps, ttft 19.241s
+[13:33:25]    [Ornith-1.0-9B-4bit ctx=16384] run1: gen 80.10197286909596 tps, prefill 855.4049901241186 tps, ttft 19.153s
+[13:33:49]    [Ornith-1.0-9B-4bit ctx=16384] run2: gen 80.05061257143225 tps, prefill 855.578944829398 tps, ttft 19.146s
+[13:34:12]    [Ornith-1.0-9B-4bit ctx=16384] run3: gen 80.03007834024389 tps, prefill 854.5100110481172 tps, ttft 19.173s
+[13:35:11] ✅ 格 Ornith-1.0-9B-4bit × 16384: decode 中位 80.05 tps, prefill 855.4 tps, 峰值 9.895667242G, 质量哨 ⚠️ 有挂
+[13:35:12] 🛑 收 server: mlx-community/Ornith-1.0-9B-4bit ctx=16384
+[13:35:12] 🚀 起 server: mlx-community/Ornith-1.0-9B-4bit ctx=32768（权重 5.5G）
+[13:35:18]    server 就绪（6s）
+[13:36:04]    [Ornith-1.0-9B-4bit ctx=32768] run0: gen 72.55315018728122 tps, prefill 800.7075783010752 tps, ttft 41.024s
+[13:36:49]    [Ornith-1.0-9B-4bit ctx=32768] run1: gen 72.51465411101833 tps, prefill 800.6354213576982 tps, ttft 40.964s
+[13:37:35]    [Ornith-1.0-9B-4bit ctx=32768] run2: gen 72.50590748349444 tps, prefill 800.6670629648881 tps, ttft 40.959s
+[13:38:21]    [Ornith-1.0-9B-4bit ctx=32768] run3: gen 72.4655322387682 tps, prefill 799.844809454277 tps, ttft 41.005s
+[13:40:26] ✅ 格 Ornith-1.0-9B-4bit × 32768: decode 中位 72.51 tps, prefill 800.64 tps, 峰值 11.656701482G, 质量哨 ⚠️ 有挂
+[13:40:26] 🛑 收 server: mlx-community/Ornith-1.0-9B-4bit ctx=32768
+[13:40:27] 🚀 起 server: mlx-community/Ornith-1.0-9B-4bit ctx=65536（权重 5.5G）
+[13:40:33]    server 就绪（6s）
+[13:42:11]    [Ornith-1.0-9B-4bit ctx=65536] run0: gen 60.78423164060295 tps, prefill 708.4998405878597 tps, ttft 92.604s
+[13:43:49]    [Ornith-1.0-9B-4bit ctx=65536] run1: gen 60.96281534992738 tps, prefill 709.1177546936013 tps, ttft 92.447s
+[13:45:27]    [Ornith-1.0-9B-4bit ctx=65536] run2: gen 60.80495114808782 tps, prefill 708.9098456661321 tps, ttft 92.469s
+[13:47:06]    [Ornith-1.0-9B-4bit ctx=65536] run3: gen 60.87107948860627 tps, prefill 709.4074025927156 tps, ttft 92.408s
+[13:51:45] ✅ 格 Ornith-1.0-9B-4bit × 65536: decode 中位 60.87 tps, prefill 709.12 tps, 峰值 15.159969294G, 质量哨 ⚠️ 有挂
+[13:51:45] 🛑 收 server: mlx-community/Ornith-1.0-9B-4bit ctx=65536
+[13:51:45] 🏁 基线格全部完成
+[14:00:09] 环境头已记：Mac16,9 64G wired=57344MB mlx=0.32.0 spec=off
+[14:00:12] 🚀 起 server: mlx-community/Ornith-1.0-9B-4bit ctx=65536（权重 5.5G）
+[14:00:24]    server 就绪（12s）
+[14:02:03]    [Ornith-1.0-9B-4bit ctx=65536] run0: gen 60.5452859817377 tps, prefill 702.24512543607 tps, ttft 93.386s
+[14:03:42]    [Ornith-1.0-9B-4bit ctx=65536] run1: gen 60.72975739450786 tps, prefill 703.1610629730435 tps, ttft 93.235s
+[14:05:21]    [Ornith-1.0-9B-4bit ctx=65536] run2: gen 60.4814008460121 tps, prefill 704.9593983240694 tps, ttft 92.986s
+[14:07:01]    [Ornith-1.0-9B-4bit ctx=65536] run3: gen 60.717421003368585 tps, prefill 697.1750527784283 tps, ttft 94.03s
+[14:11:44] ✅ 格 Ornith-1.0-9B-4bit × 65536: decode 中位 60.72 tps, prefill 703.16 tps, 峰值 15.159969294G, 质量哨 ⚠️ 有挂
+[14:11:45] 🛑 收 server: mlx-community/Ornith-1.0-9B-4bit ctx=65536
+[14:11:45] 🏁 基线格全部完成

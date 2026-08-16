@@ -1,0 +1,116 @@
+⚠️ Ornith-1.0-9B-4bit 未声明 vision 能力，跳过 212 道视觉题（注册表 capabilities 单一真相）
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+== 评测 mlx-community/Ornith-1.0-9B-4bit（方言 qwen35）：31 题 × 1 重复 → /Volumes/enkin/project/Agent/backend/benchmarks/model_eval/results/Ornith-1.0-9B-4bit/20260816-043520
+[Engine] 约束采样引擎就绪（llguidance）
+[Engine] 约束采样构建失败，永久禁用（纠错闭环兜底）: NotImplementedError: qwen35 方言使用原生 XML 调用体（<function=…><parameter=…>），按设计不启用 约束采样——engine 将 fail-open 到自由采样 + 解析纠错闭环。
+[Engine] 前缀命中 0/360 tokens，gen 84.7 tps
+✅ tc-bfcl-simple_0 r0 (2.82s)
+[Engine] 前缀命中 0/327 tokens，gen 85.2 tps
+✅ tc-bfcl-simple_17 r0 (1.64s)
+[Engine] 前缀命中 0/413 tokens，gen 85.4 tps
+✅ tc-bfcl-multiple_2 r0 (1.29s)
+[Engine] 前缀命中 0/640 tokens，gen 84.3 tps
+✅ tc-bfcl-multiple_5 r0 (3.12s)
+[Engine] 前缀命中 0/550 tokens，gen 84.2 tps
+✅ tc-bfcl-multiple_10 r0 (4.62s)
+[Engine] 前缀命中 0/605 tokens，gen 84.6 tps
+✅ tc-bfcl-multiple_17 r0 (2.45s)
+[Engine] 前缀命中 0/515 tokens，gen 84.6 tps
+✅ tc-bfcl-multiple_21 r0 (2.49s)
+[Engine] 前缀命中 0/640 tokens，gen 84.5 tps
+✅ tc-bfcl-multiple_23 r0 (2.63s)
+[Engine] 前缀命中 0/361 tokens，gen 85.0 tps
+✅ tc-bfcl-live_simple_0-0-0 r0 (1.92s)
+[Engine] 前缀命中 0/426 tokens，gen 84.7 tps
+✅ tc-bfcl-live_simple_1-1-0 r0 (2.76s)
+[Engine] 前缀命中 0/426 tokens，gen 84.6 tps
+✅ tc-bfcl-live_simple_2-2-0 r0 (2.89s)
+[Engine] 前缀命中 0/403 tokens，gen 84.6 tps
+✅ tc-bfcl-live_simple_4-3-0 r0 (2.67s)
+[Engine] 前缀命中 0/402 tokens，gen 84.7 tps
+✅ tc-bfcl-live_simple_13-3-9 r0 (2.34s)
+[Engine] 前缀命中 0/298 tokens，gen 84.8 tps
+[Engine] 前缀命中 227/492 tokens，gen 84.4 tps
+✅ tc-seed-001 r0 (5.17s)
+[Engine] 前缀命中 0/285 tokens，gen 84.6 tps
+[Engine] 前缀命中 214/490 tokens，gen 84.5 tps
+✅ tc-seed-002 r0 (4.7s)
+[Engine] 前缀命中 0/278 tokens，gen 85.3 tps
+[Engine] 前缀命中 207/399 tokens，gen 85.0 tps
+✅ tc-seed-003 r0 (2.48s)
+[Engine] 前缀命中 0/309 tokens，gen 84.7 tps
+[Engine] 前缀命中 238/525 tokens，gen 84.5 tps
+✅ tc-seed-004 r0 (4.76s)
+[Engine] 前缀命中 0/293 tokens，gen 85.3 tps
+[Engine] 前缀命中 222/414 tokens，gen 85.1 tps
+✅ tc-seed-005 r0 (2.56s)
+[Engine] 前缀命中 0/372 tokens，gen 85.4 tps
+[Engine] 前缀命中 301/480 tokens，gen 85.1 tps
+✅ tc-seed-006 r0 (2.57s)
+[Engine] 前缀命中 0/325 tokens，gen 85.1 tps
+[Engine] 前缀命中 254/474 tokens，gen 84.9 tps
+[Engine] 前缀命中 403/632 tokens，gen 84.5 tps
+❌ tc-seed-007 r0 (4.53s)  | must_any 全缺: ['0.30', 'MLX']
+[Engine] 前缀命中 0/281 tokens，gen 84.7 tps
+✅ tc-seed-008 r0 (2.68s)
+[Engine] 前缀命中 0/276 tokens，gen 84.9 tps
+✅ tc-seed-009 r0 (2.18s)
+[Engine] 前缀命中 0/305 tokens，gen 85.0 tps
+[Engine] 前缀命中 234/465 tokens，gen 84.5 tps
+✅ tc-seed-010 r0 (4.32s)
+[Engine] 前缀命中 0/296 tokens，gen 85.0 tps
+[Engine] 前缀命中 225/440 tokens，gen 85.2 tps
+✅ tc-seed-011 r0 (2.88s)
+[Engine] 前缀命中 0/286 tokens，gen 85.2 tps
+[Engine] 前缀命中 215/437 tokens，gen 84.1 tps
+✅ tc-seed-012 r0 (7.22s)
+[Engine] 前缀命中 0/490 tokens，gen 85.3 tps
+[Engine] 前缀命中 419/602 tokens，gen 83.9 tps
+[Engine] 前缀命中 531/1454 tokens，gen 83.2 tps
+[Engine] 前缀命中 1383/2200 tokens，gen 84.0 tps
+✅ lc-seed-001 r0 (23.18s)
+[Engine] 前缀命中 0/493 tokens，gen 85.2 tps
+[Engine] 前缀命中 422/650 tokens，gen 84.8 tps
+[Engine] 前缀命中 579/825 tokens，gen 84.3 tps
+[Engine] 前缀命中 754/1004 tokens，gen 84.7 tps
+[Engine] 前缀命中 933/1183 tokens，gen 84.3 tps
+[Engine] 前缀命中 1112/1362 tokens，gen 84.4 tps
+[Engine] 前缀命中 1291/1541 tokens，gen 84.1 tps
+[Engine] 前缀命中 1470/1720 tokens，gen 84.0 tps
+❌ lc-seed-002 r0 (11.65s)  | files/config.json: regex 失败: '(?s)^(?!.*8080)' 不匹配 '{\n  "host": "127.0.0.1",\n  "port": 8080,\n  "debug": false\n}'; 步数
+[Engine] 前缀命中 0/377 tokens，gen 85.1 tps
+[Engine] 前缀命中 306/550 tokens，gen 84.8 tps
+[Engine] 前缀命中 479/682 tokens，gen 84.4 tps
+[Engine] 前缀命中 611/856 tokens，gen 84.3 tps
+[Engine] 前缀命中 785/1056 tokens，gen 84.4 tps
+[Engine] 前缀命中 985/1256 tokens，gen 84.3 tps
+[Engine] 前缀命中 1185/1456 tokens，gen 83.9 tps
+[Engine] 前缀命中 1385/1656 tokens，gen 83.8 tps
+❌ lc-seed-003 r0 (14.52s)  | 步数超限: 14 > 5; 回合上限 8 耗尽仍在发调用; 无收尾答复
+[Engine] 前缀命中 0/489 tokens，gen 85.2 tps
+[Engine] 前缀命中 418/603 tokens，gen 84.4 tps
+[Engine] 前缀命中 532/914 tokens，gen 84.1 tps
+[Engine] 前缀命中 843/1270 tokens，gen 85.1 tps
+[Engine] 前缀命中 1199/1381 tokens，gen 85.0 tps
+[Engine] 前缀命中 1310/1492 tokens，gen 84.9 tps
+[Engine] 前缀命中 1421/1603 tokens，gen 84.6 tps
+[Engine] 前缀命中 1532/1714 tokens，gen 84.5 tps
+❌ lc-seed-004 r0 (13.03s)  | 步数超限: 10 > 6; 回合上限 8 耗尽仍在发调用; 无收尾答复
+[Engine] 前缀命中 0/486 tokens，gen 85.2 tps
+[Engine] 前缀命中 415/606 tokens，gen 84.0 tps
+[Engine] 前缀命中 535/975 tokens，gen 85.2 tps
+[Engine] 前缀命中 904/1061 tokens，gen 84.4 tps
+✅ lc-seed-005 r0 (8.6s)
+[Engine] 前缀命中 0/481 tokens，gen 84.7 tps
+[Engine] 前缀命中 410/621 tokens，gen 84.3 tps
+[Engine] 前缀命中 550/869 tokens，gen 84.1 tps
+[Engine] 前缀命中 798/1070 tokens，gen 84.7 tps
+[Engine] 前缀命中 999/1198 tokens，gen 84.2 tps
+[Engine] 前缀命中 1127/1326 tokens，gen 84.5 tps
+[Engine] 前缀命中 1255/1454 tokens，gen 84.3 tps
+[Engine] 前缀命中 1383/1582 tokens，gen 84.2 tps
+❌ lc-seed-006 r0 (13.73s)  | 步数超限: 8 > 5; 回合上限 8 耗尽仍在发调用; 无收尾答复
+== summary: {"tool_call": {"n": 25, "pass_rate": 0.96, "aborted_rate": 0.04, "corrected_rate": 0.0, "final_ok_rate": 0.96, "first_shot_ok_rate": 1.0, "parse_errors_total": 0, "restraint_ok_rate": 1.0, "turns_used_total": 36, "valid_call_ok_rate": 1.0}, "longchain": {"n": 6, "pass_rate": 0.333, "aborted_rate": 0.667, "env_errors_total": 1, "final_text_ok_rate": 0.333, "recovered_rate": 0.167, "redundant_calls_total": 27, "state_ok_rate": 0.833, "steps_total": 46, "steps_ok_rate": 0.333, "recovery_success_rate": 1.0}}
+== cot: {"n": 31, "ctrl_leak_traj_rate": 0.0, "dup_rate_mean": 0.042, "dup_rate_max": 0.373, "recite_rate_mean": 0.017, "recite_rate_max": 0.265, "other_script_max": 0.0, "empty_think_turns_total": 0, "think_chars_mean": 792.2}
+== speed: {"generation_tps": {"mean": 84.63, "median": 84.61, "min": 83.22, "max": 85.43, "n": 76}, "prompt_tps": {"mean": 2012.93, "median": 1490.65, "min": 665.62, "max": 6459.28, "n": 76}, "peak_memory_max": 8.26, "kv_prefix_hit_rate": {"mean": 0.69, "median": 0.7, "min": 0.36, "max": 0.89, "n": 45}}
+== 产物: /Volumes/enkin/project/Agent/backend/benchmarks/model_eval/results/Ornith-1.0-9B-4bit/20260816-043520

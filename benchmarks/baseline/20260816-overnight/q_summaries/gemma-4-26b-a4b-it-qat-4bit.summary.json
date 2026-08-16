@@ -1,0 +1,77 @@
+{
+  "model": "mlx-community/gemma-4-26b-a4b-it-qat-4bit",
+  "revision": "0e3cbab38ce568cf6e23543010d08d03b731910c",
+  "dialect": "gemma4",
+  "stamp": "20260816-023123",
+  "n_runs": 243,
+  "dimensions": {
+    "tool_call": {
+      "n": 25,
+      "pass_rate": 0.72,
+      "aborted_rate": 0.0,
+      "corrected_rate": 0.0,
+      "final_ok_rate": 1.0,
+      "first_shot_ok_rate": 0.696,
+      "parse_errors_total": 12,
+      "restraint_ok_rate": 1.0,
+      "turns_used_total": 41,
+      "valid_call_ok_rate": 0.696,
+      "correction_success_rate": 0.0
+    },
+    "longchain": {
+      "n": 6,
+      "pass_rate": 0.833,
+      "aborted_rate": 0.0,
+      "env_errors_total": 1,
+      "final_text_ok_rate": 1.0,
+      "recovered_rate": 0.167,
+      "redundant_calls_total": 0,
+      "state_ok_rate": 0.833,
+      "steps_total": 20,
+      "steps_ok_rate": 1.0,
+      "recovery_success_rate": 1.0
+    },
+    "vision": {
+      "n": 212,
+      "pass_rate": 0.825,
+      "aborted_rate": 0.0,
+      "final_ok_rate": 0.825,
+      "stray_calls_total": 0
+    }
+  },
+  "cot_purity": {
+    "n": 243,
+    "ctrl_leak_traj_rate": 0.0,
+    "dup_rate_mean": 0.0,
+    "dup_rate_max": 0.0,
+    "recite_rate_mean": 0.0,
+    "recite_rate_max": 0.0,
+    "other_script_max": 0.0,
+    "empty_think_turns_total": 278,
+    "think_chars_mean": 0.0
+  },
+  "speed": {
+    "generation_tps": {
+      "mean": 93.21,
+      "median": 94.09,
+      "min": 79.85,
+      "max": 106.9,
+      "n": 278
+    },
+    "prompt_tps": {
+      "mean": 926.62,
+      "median": 655.77,
+      "min": 630.62,
+      "max": 3927.46,
+      "n": 278
+    },
+    "peak_memory_max": 16.56,
+    "kv_prefix_hit_rate": {
+      "mean": 0.59,
+      "median": 0.65,
+      "min": 0.38,
+      "max": 0.8,
+      "n": 35
+    }
+  }
+}

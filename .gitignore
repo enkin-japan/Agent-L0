@@ -67,6 +67,8 @@ logs/
 !benchmarks/data/**/*.log
 !backend/benchmarks/**/logs/
 !backend/benchmarks/**/*.log
+# 08-16 通宵战役目录整目录入库（progress/逐模型/server 日志都是证据链）
+!benchmarks/baseline/20260816-overnight/**/*.log
 
 # ═══════════ SearXNG（settings.yml 含随机 secret_key，由 devctl 首启生成；源码由 setup 克隆）═══════════
 searxng/settings.yml

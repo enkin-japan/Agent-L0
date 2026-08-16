@@ -1,0 +1,577 @@
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/transformers/audio_utils.py:723: UserWarning: At least one mel filter has all zero values. The value for `num_mel_filters` (128) may be set too high. Or, the value for `num_frequency_bins` (257) may be set too low.
+  warnings.warn(
+== 评测 mlx-community/gemma-4-26b-a4b-it-qat-4bit（方言 gemma4）：243 题 × 1 重复 → /Volumes/enkin/project/Agent/backend/benchmarks/model_eval/results/gemma-4-26b-a4b-it-qat-4bit/20260816-023123
+[Engine] 约束采样引擎就绪（llguidance）
+[Engine] 前缀命中 0/229 tokens，gen 85.8 tps
+[Constrained] 本次生成有 24 步受工具 schema 约束
+✅ tc-bfcl-simple_0 r0 (1.83s)
+[Engine] 前缀命中 0/199 tokens，gen 87.8 tps
+[Constrained] 本次生成有 19 步受工具 schema 约束
+✅ tc-bfcl-simple_17 r0 (0.46s)
+[Engine] 前缀命中 0/279 tokens，gen 88.4 tps
+[Constrained] 本次生成有 15 步受工具 schema 约束
+[Engine] 前缀命中 206/487 tokens，gen 87.3 tps
+[Constrained] 本次生成有 15 步受工具 schema 约束
+❌ tc-bfcl-multiple_2 r0 (0.89s)  | 无完全合格调用（期望 country_info.capital，实际 []）
+[Engine] 前缀命中 0/502 tokens，gen 84.0 tps
+[Constrained] 本次生成有 49 步受工具 schema 约束
+[Engine] 前缀命中 429/744 tokens，gen 82.7 tps
+[Constrained] 本次生成有 49 步受工具 schema 约束
+❌ tc-bfcl-multiple_5 r0 (1.88s)  | 无完全合格调用（期望 weather.get_by_coordinates_date，实际 []）
+[Engine] 前缀命中 0/416 tokens，gen 84.8 tps
+[Constrained] 本次生成有 34 步受工具 schema 约束
+[Engine] 前缀命中 343/648 tokens，gen 83.7 tps
+[Constrained] 本次生成有 34 步受工具 schema 约束
+❌ tc-bfcl-multiple_10 r0 (1.45s)  | 无完全合格调用（期望 database.modify_columns，实际 []）
+[Engine] 前缀命中 0/480 tokens，gen 84.2 tps
+[Constrained] 本次生成有 42 步受工具 schema 约束
+[Engine] 前缀命中 407/725 tokens，gen 82.5 tps
+[Constrained] 本次生成有 42 步受工具 schema 约束
+❌ tc-bfcl-multiple_17 r0 (1.69s)  | 无完全合格调用（期望 currency_conversion.get_rate，实际 []）
+[Engine] 前缀命中 0/370 tokens，gen 84.0 tps
+❌ tc-bfcl-multiple_21 r0 (2.65s)  | 无完全合格调用（期望 generate_sound_wave，实际 []）
+[Engine] 前缀命中 0/508 tokens，gen 84.6 tps
+[Constrained] 本次生成有 38 步受工具 schema 约束
+[Engine] 前缀命中 435/757 tokens，gen 82.7 tps
+[Constrained] 本次生成有 38 步受工具 schema 约束
+❌ tc-bfcl-multiple_23 r0 (1.62s)  | 无完全合格调用（期望 basketball.player_stats.get，实际 []）
+[Engine] 前缀命中 0/228 tokens，gen 86.5 tps
+[Constrained] 本次生成有 24 步受工具 schema 约束
+✅ tc-bfcl-live_simple_0-0-0 r0 (0.53s)
+[Engine] 前缀命中 0/294 tokens，gen 85.7 tps
+[Constrained] 本次生成有 35 步受工具 schema 约束
+✅ tc-bfcl-live_simple_1-1-0 r0 (0.69s)
+[Engine] 前缀命中 0/296 tokens，gen 85.5 tps
+[Constrained] 本次生成有 36 步受工具 schema 约束
+[Engine] 前缀命中 223/530 tokens，gen 84.1 tps
+[Constrained] 本次生成有 36 步受工具 schema 约束
+❌ tc-bfcl-live_simple_2-2-0 r0 (1.42s)  | 无完全合格调用（期望 uber.ride，实际 []）
+[Engine] 前缀命中 0/268 tokens，gen 86.6 tps
+[Constrained] 本次生成有 25 步受工具 schema 约束
+✅ tc-bfcl-live_simple_4-3-0 r0 (0.56s)
+[Engine] 前缀命中 0/272 tokens，gen 86.4 tps
+[Constrained] 本次生成有 24 步受工具 schema 约束
+✅ tc-bfcl-live_simple_13-3-9 r0 (0.55s)
+[Engine] 前缀命中 0/167 tokens，gen 89.5 tps
+[Constrained] 本次生成有 13 步受工具 schema 约束
+[Engine] 前缀命中 94/224 tokens，gen 89.0 tps
+✅ tc-seed-001 r0 (0.74s)
+[Engine] 前缀命中 0/153 tokens，gen 89.6 tps
+[Constrained] 本次生成有 13 步受工具 schema 约束
+[Engine] 前缀命中 80/211 tokens，gen 89.2 tps
+✅ tc-seed-002 r0 (0.7s)
+[Engine] 前缀命中 0/147 tokens，gen 88.7 tps
+[Constrained] 本次生成有 12 步受工具 schema 约束
+[Engine] 前缀命中 74/197 tokens，gen 89.8 tps
+✅ tc-seed-003 r0 (0.67s)
+[Engine] 前缀命中 0/182 tokens，gen 86.4 tps
+[Constrained] 本次生成有 36 步受工具 schema 约束
+[Engine] 前缀命中 109/255 tokens，gen 88.8 tps
+✅ tc-seed-004 r0 (1.03s)
+[Engine] 前缀命中 0/161 tokens，gen 87.3 tps
+[Constrained] 本次生成有 23 步受工具 schema 约束
+[Engine] 前缀命中 88/221 tokens，gen 89.1 tps
+✅ tc-seed-005 r0 (0.84s)
+[Engine] 前缀命中 0/232 tokens，gen 87.7 tps
+[Constrained] 本次生成有 16 步受工具 schema 约束
+[Engine] 前缀命中 159/278 tokens，gen 88.9 tps
+✅ tc-seed-006 r0 (0.79s)
+[Engine] 前缀命中 0/189 tokens，gen 88.0 tps
+[Constrained] 本次生成有 18 步受工具 schema 约束
+[Engine] 前缀命中 116/261 tokens，gen 85.1 tps
+✅ tc-seed-007 r0 (2.07s)
+[Engine] 前缀命中 0/152 tokens，gen 87.0 tps
+✅ tc-seed-008 r0 (0.64s)
+[Engine] 前缀命中 0/144 tokens，gen 92.9 tps
+✅ tc-seed-009 r0 (0.29s)
+[Engine] 前缀命中 0/174 tokens，gen 87.9 tps
+[Constrained] 本次生成有 21 步受工具 schema 约束
+[Engine] 前缀命中 101/232 tokens，gen 87.9 tps
+✅ tc-seed-010 r0 (0.9s)
+[Engine] 前缀命中 0/167 tokens，gen 86.4 tps
+[Constrained] 本次生成有 40 步受工具 schema 约束
+[Engine] 前缀命中 94/236 tokens，gen 86.8 tps
+✅ tc-seed-011 r0 (1.22s)
+[Engine] 前缀命中 0/157 tokens，gen 88.6 tps
+[Constrained] 本次生成有 15 步受工具 schema 约束
+[Engine] 前缀命中 84/223 tokens，gen 87.2 tps
+✅ tc-seed-012 r0 (0.92s)
+[Engine] 前缀命中 0/342 tokens，gen 91.0 tps
+[Constrained] 本次生成有 7 步受工具 schema 约束
+[Engine] 前缀命中 269/380 tokens，gen 87.9 tps
+[Constrained] 本次生成有 15 步受工具 schema 约束
+[Engine] 前缀命中 304/429 tokens，gen 85.0 tps
+[Constrained] 本次生成有 32 步受工具 schema 约束
+[Engine] 前缀命中 353/489 tokens，gen 85.0 tps
+✅ lc-seed-001 r0 (2.0s)
+[Engine] 前缀命中 0/343 tokens，gen 91.5 tps
+[Constrained] 本次生成有 7 步受工具 schema 约束
+[Engine] 前缀命中 270/381 tokens，gen 87.9 tps
+[Constrained] 本次生成有 15 步受工具 schema 约束
+[Engine] 前缀命中 305/461 tokens，gen 83.7 tps
+[Constrained] 本次生成有 56 步受工具 schema 约束
+[Engine] 前缀命中 385/545 tokens，gen 83.0 tps
+✅ lc-seed-002 r0 (3.23s)
+[Engine] 前缀命中 0/238 tokens，gen 86.2 tps
+[Constrained] 本次生成有 29 步受工具 schema 约束
+[Engine] 前缀命中 165/331 tokens，gen 88.2 tps
+[Constrained] 本次生成有 14 步受工具 schema 约束
+[Engine] 前缀命中 255/372 tokens，gen 85.8 tps
+✅ lc-seed-003 r0 (1.61s)
+[Engine] 前缀命中 0/340 tokens，gen 90.9 tps
+[Constrained] 本次生成有 7 步受工具 schema 约束
+[Engine] 前缀命中 267/394 tokens，gen 86.8 tps
+[Constrained] 本次生成有 17 步受工具 schema 约束
+[Engine] 前缀命中 318/456 tokens，gen 86.6 tps
+[Constrained] 本次生成有 17 步受工具 schema 约束
+[Engine] 前缀命中 380/520 tokens，gen 86.4 tps
+[Constrained] 本次生成有 17 步受工具 schema 约束
+[Engine] 前缀命中 444/580 tokens，gen 85.0 tps
+[Constrained] 本次生成有 23 步受工具 schema 约束
+[Engine] 前缀命中 504/633 tokens，gen 82.1 tps
+❌ lc-seed-004 r0 (4.9s)  | files/error_count.txt: contains 失败: '7' 不在 '6'
+[Engine] 前缀命中 0/338 tokens，gen 90.4 tps
+[Constrained] 本次生成有 7 步受工具 schema 约束
+[Engine] 前缀命中 265/376 tokens，gen 87.4 tps
+[Constrained] 本次生成有 15 步受工具 schema 约束
+[Engine] 前缀命中 300/426 tokens，gen 85.2 tps
+[Constrained] 本次生成有 28 步受工具 schema 约束
+[Engine] 前缀命中 350/482 tokens，gen 87.2 tps
+[Constrained] 本次生成有 15 步受工具 schema 约束
+[Engine] 前缀命中 406/525 tokens，gen 84.8 tps
+✅ lc-seed-005 r0 (2.17s)
+[Engine] 前缀命中 0/331 tokens，gen 85.8 tps
+[Constrained] 本次生成有 26 步受工具 schema 约束
+[Engine] 前缀命中 258/400 tokens，gen 85.8 tps
+[Constrained] 本次生成有 26 步受工具 schema 约束
+[Engine] 前缀命中 324/454 tokens，gen 87.8 tps
+✅ lc-seed-006 r0 (1.5s)
+[Engine] 前缀命中 0/382 tokens，gen 103.6 tps
+✅ vi-chartqa-2 r0 (0.64s)
+[Engine] 前缀命中 0/386 tokens，gen 90.0 tps
+✅ vi-chartqa-8 r0 (1.68s)
+[Engine] 前缀命中 0/377 tokens，gen 91.5 tps
+✅ vi-chartqa-16 r0 (0.82s)
+[Engine] 前缀命中 0/371 tokens，gen 89.8 tps
+✅ vi-chartqa-34 r0 (1.53s)
+[Engine] 前缀命中 0/364 tokens，gen 91.5 tps
+✅ vi-chartqa-50 r0 (0.89s)
+[Engine] 前缀命中 0/381 tokens，gen 90.8 tps
+✅ vi-chartqa-68 r0 (0.96s)
+[Engine] 前缀命中 0/377 tokens，gen 81.3 tps
+✅ vi-chartqa-110 r0 (1.04s)
+[Engine] 前缀命中 0/380 tokens，gen 91.5 tps
+✅ vi-chartqa-122 r0 (1.03s)
+[Engine] 前缀命中 0/371 tokens，gen 91.5 tps
+✅ vi-chartqa-130 r0 (0.83s)
+[Engine] 前缀命中 0/383 tokens，gen 90.9 tps
+✅ vi-chartqa-146 r0 (1.04s)
+[Engine] 前缀命中 0/389 tokens，gen 96.3 tps
+❌ vi-chartqa-hard-209 r0 (0.67s)  | regex_any 全不中: ['\\b203\\b']
+[Engine] 前缀命中 0/383 tokens，gen 103.7 tps
+✅ vi-chartqa-hard-227 r0 (0.63s)
+[Engine] 前缀命中 0/383 tokens，gen 100.5 tps
+✅ vi-chartqa-hard-249 r0 (0.64s)
+[Engine] 前缀命中 0/376 tokens，gen 90.4 tps
+✅ vi-chartqa-hard-256 r0 (0.99s)
+[Engine] 前缀命中 0/386 tokens，gen 96.6 tps
+✅ vi-chartqa-hard-277 r0 (0.66s)
+[Engine] 前缀命中 0/384 tokens，gen 101.1 tps
+✅ vi-chartqa-hard-291 r0 (0.64s)
+[Engine] 前缀命中 0/383 tokens，gen 81.6 tps
+✅ vi-chartqa-hard-332 r0 (0.92s)
+[Engine] 前缀命中 0/384 tokens，gen 96.0 tps
+✅ vi-chartqa-hard-359 r0 (0.66s)
+[Engine] 前缀命中 0/384 tokens，gen 95.8 tps
+✅ vi-chartqa-hard-371 r0 (0.66s)
+[Engine] 前缀命中 0/394 tokens，gen 104.2 tps
+✅ vi-chartqa-hard-381 r0 (0.64s)
+[Engine] 前缀命中 0/385 tokens，gen 93.6 tps
+✅ vi-chartqa-hard-397 r0 (0.68s)
+[Engine] 前缀命中 0/388 tokens，gen 95.7 tps
+✅ vi-chartqa-hard-419 r0 (0.68s)
+[Engine] 前缀命中 0/384 tokens，gen 100.8 tps
+❌ vi-chartqa-hard-439 r0 (0.63s)  | regex_any 全不中: ['\\b25\\b']
+[Engine] 前缀命中 0/377 tokens，gen 97.9 tps
+❌ vi-chartqa-hard-443 r0 (0.62s)  | regex_any 全不中: ['\\b98\\b']
+[Engine] 前缀命中 0/387 tokens，gen 101.6 tps
+✅ vi-chartqa-hard-447 r0 (0.64s)
+[Engine] 前缀命中 0/393 tokens，gen 98.7 tps
+✅ vi-chartqa-hard-448 r0 (0.66s)
+[Engine] 前缀命中 0/393 tokens，gen 99.9 tps
+✅ vi-chartqa-hard-459 r0 (0.65s)
+[Engine] 前缀命中 0/400 tokens，gen 98.0 tps
+✅ vi-chartqa-hard-460 r0 (0.66s)
+[Engine] 前缀命中 0/400 tokens，gen 99.5 tps
+✅ vi-chartqa-hard-461 r0 (0.66s)
+[Engine] 前缀命中 0/397 tokens，gen 99.9 tps
+✅ vi-chartqa-hard-469 r0 (0.66s)
+[Engine] 前缀命中 0/370 tokens，gen 100.8 tps
+✅ vi-chartqa-hard-471 r0 (0.61s)
+[Engine] 前缀命中 0/392 tokens，gen 95.3 tps
+❌ vi-chartqa-hard-479 r0 (0.66s)  | regex_any 全不中: ['\\b99\\b']
+[Engine] 前缀命中 0/383 tokens，gen 99.2 tps
+✅ vi-chartqa-hard-483 r0 (0.62s)
+[Engine] 前缀命中 0/386 tokens，gen 97.7 tps
+❌ vi-chartqa-hard-505 r0 (0.65s)  | regex_any 全不中: ['\\b16\\b']
+[Engine] 前缀命中 0/396 tokens，gen 103.2 tps
+❌ vi-chartqa-hard-509 r0 (0.64s)  | regex_any 全不中: ['\\b6\\b']
+[Engine] 前缀命中 0/368 tokens，gen 94.8 tps
+✅ vi-chartqa-hard-513 r0 (0.64s)
+[Engine] 前缀命中 0/374 tokens，gen 94.4 tps
+❌ vi-chartqa-hard-515 r0 (0.65s)  | regex_any 全不中: ['\\b151\\b']
+[Engine] 前缀命中 0/360 tokens，gen 88.7 tps
+✅ vi-chartqa-hard-517 r0 (1.91s)
+[Engine] 前缀命中 0/370 tokens，gen 97.6 tps
+✅ vi-chartqa-hard-519 r0 (0.62s)
+[Engine] 前缀命中 0/380 tokens，gen 99.3 tps
+✅ vi-chartqa-hard-534 r0 (0.62s)
+[Engine] 前缀命中 0/372 tokens，gen 95.5 tps
+✅ vi-chartqa-hard-549 r0 (0.64s)
+[Engine] 前缀命中 0/389 tokens，gen 98.6 tps
+✅ vi-chartqa-hard-552 r0 (0.65s)
+[Engine] 前缀命中 0/390 tokens，gen 98.5 tps
+✅ vi-chartqa-hard-555 r0 (0.65s)
+[Engine] 前缀命中 0/382 tokens，gen 96.1 tps
+✅ vi-chartqa-hard-556 r0 (0.65s)
+[Engine] 前缀命中 0/392 tokens，gen 98.1 tps
+✅ vi-chartqa-hard-565 r0 (0.65s)
+[Engine] 前缀命中 0/373 tokens，gen 93.3 tps
+✅ vi-chartqa-hard-598 r0 (0.64s)
+[Engine] 前缀命中 0/389 tokens，gen 98.1 tps
+✅ vi-chartqa-hard-617 r0 (0.64s)
+[Engine] 前缀命中 0/385 tokens，gen 90.7 tps
+✅ vi-chartqa-hard2-635 r0 (0.66s)
+[Engine] 前缀命中 0/386 tokens，gen 91.6 tps
+✅ vi-chartqa-hard2-637 r0 (0.66s)
+[Engine] 前缀命中 0/376 tokens，gen 97.3 tps
+✅ vi-chartqa-hard2-661 r0 (0.63s)
+[Engine] 前缀命中 0/378 tokens，gen 100.5 tps
+✅ vi-chartqa-hard2-663 r0 (0.63s)
+[Engine] 前缀命中 0/379 tokens，gen 98.5 tps
+✅ vi-chartqa-hard2-667 r0 (0.64s)
+[Engine] 前缀命中 0/381 tokens，gen 94.5 tps
+❌ vi-chartqa-hard2-671 r0 (0.66s)  | regex_any 全不中: ['\\b44,519\\b', '\\b44[\\s,\\u00a0\\u202f\\u2009]?519\\b']
+[Engine] 前缀命中 0/376 tokens，gen 103.0 tps
+✅ vi-chartqa-hard2-673 r0 (0.62s)
+[Engine] 前缀命中 0/378 tokens，gen 97.9 tps
+✅ vi-chartqa-hard2-695 r0 (0.63s)
+[Engine] 前缀命中 0/377 tokens，gen 100.2 tps
+✅ vi-chartqa-hard2-703 r0 (0.63s)
+[Engine] 前缀命中 0/380 tokens，gen 106.9 tps
+✅ vi-chartqa-hard2-705 r0 (0.62s)
+[Engine] 前缀命中 0/376 tokens，gen 94.3 tps
+✅ vi-chartqa-hard2-716 r0 (0.65s)
+[Engine] 前缀命中 0/392 tokens，gen 95.7 tps
+✅ vi-chartqa-hard2-721 r0 (0.66s)
+[Engine] 前缀命中 0/381 tokens，gen 94.0 tps
+✅ vi-chartqa-hard2-725 r0 (0.66s)
+[Engine] 前缀命中 0/388 tokens，gen 94.2 tps
+✅ vi-chartqa-hard2-739 r0 (0.66s)
+[Engine] 前缀命中 0/377 tokens，gen 94.4 tps
+❌ vi-chartqa-hard2-741 r0 (0.66s)  | regex_any 全不中: ['\\b22[\\s,\\u00a0\\u202f\\u2009]?738\\b', '\\b22,738\\b']
+[Engine] 前缀命中 0/384 tokens，gen 92.5 tps
+✅ vi-chartqa-hard2-742 r0 (0.68s)
+[Engine] 前缀命中 0/408 tokens，gen 98.4 tps
+✅ vi-chartqa-hard2-747 r0 (0.65s)
+[Engine] 前缀命中 0/387 tokens，gen 95.9 tps
+✅ vi-chartqa-hard2-755 r0 (0.65s)
+[Engine] 前缀命中 0/376 tokens，gen 98.9 tps
+✅ vi-chartqa-hard2-763 r0 (0.63s)
+[Engine] 前缀命中 0/380 tokens，gen 98.4 tps
+✅ vi-chartqa-hard2-767 r0 (0.63s)
+[Engine] 前缀命中 0/376 tokens，gen 100.4 tps
+✅ vi-chartqa-hard2-769 r0 (0.63s)
+[Engine] 前缀命中 0/380 tokens，gen 104.2 tps
+✅ vi-chartqa-hard2-781 r0 (0.62s)
+[Engine] 前缀命中 0/380 tokens，gen 100.1 tps
+✅ vi-chartqa-hard2-785 r0 (0.63s)
+[Engine] 前缀命中 0/396 tokens，gen 95.7 tps
+✅ vi-chartqa-hard2-787 r0 (0.66s)
+[Engine] 前缀命中 0/380 tokens，gen 93.7 tps
+✅ vi-chartqa-hard2-803 r0 (0.67s)
+[Engine] 前缀命中 0/376 tokens，gen 100.9 tps
+✅ vi-chartqa-hard2-804 r0 (0.63s)
+[Engine] 前缀命中 0/375 tokens，gen 89.7 tps
+✅ vi-chartqa-hard2-808 r0 (0.65s)
+[Engine] 前缀命中 0/382 tokens，gen 97.9 tps
+✅ vi-chartqa-hard2-825 r0 (0.63s)
+[Engine] 前缀命中 0/380 tokens，gen 100.3 tps
+✅ vi-chartqa-hard2-835 r0 (0.63s)
+[Engine] 前缀命中 0/393 tokens，gen 93.4 tps
+✅ vi-chartqa-hard2-839 r0 (0.67s)
+[Engine] 前缀命中 0/378 tokens，gen 93.5 tps
+❌ vi-chartqa-hard2-849 r0 (0.67s)  | regex_any 全不中: ['\\b78\\b']
+[Engine] 前缀命中 0/381 tokens，gen 93.8 tps
+✅ vi-chartqa-hard2-864 r0 (0.66s)
+[Engine] 前缀命中 0/380 tokens，gen 97.2 tps
+✅ vi-chartqa-hard2-866 r0 (0.64s)
+[Engine] 前缀命中 0/381 tokens，gen 97.7 tps
+❌ vi-chartqa-hard2-881 r0 (0.64s)  | regex_any 全不中: ['\\b38\\b']
+[Engine] 前缀命中 0/378 tokens，gen 93.5 tps
+✅ vi-chartqa-hard2-887 r0 (0.63s)
+[Engine] 前缀命中 0/387 tokens，gen 95.5 tps
+✅ vi-chartqa-hard2-893 r0 (0.65s)
+[Engine] 前缀命中 0/382 tokens，gen 89.3 tps
+✅ vi-chartqa-hard2-897 r0 (0.65s)
+[Engine] 前缀命中 0/388 tokens，gen 99.7 tps
+✅ vi-chartqa-hard2-899 r0 (0.64s)
+[Engine] 前缀命中 0/379 tokens，gen 96.3 tps
+❌ vi-chartqa-hard2-907 r0 (0.64s)  | regex_any 全不中: ['\\b55\\b']
+[Engine] 前缀命中 0/391 tokens，gen 98.4 tps
+❌ vi-chartqa-hard2-917 r0 (0.64s)  | regex_any 全不中: ['\\b15\\b']
+[Engine] 前缀命中 0/400 tokens，gen 93.7 tps
+❌ vi-chartqa-hard2-923 r0 (0.68s)  | regex_any 全不中: ['\\b18,019\\b', '\\b18[\\s,\\u00a0\\u202f\\u2009]?019\\b']
+[Engine] 前缀命中 0/392 tokens，gen 96.4 tps
+❌ vi-chartqa-hard2-925 r0 (0.66s)  | regex_any 全不中: ['\\b60\\b']
+[Engine] 前缀命中 0/394 tokens，gen 99.4 tps
+❌ vi-chartqa-hard2-929 r0 (0.64s)  | regex_any 全不中: ['\\b85\\b']
+[Engine] 前缀命中 0/382 tokens，gen 98.0 tps
+❌ vi-chartqa-hard2-935 r0 (0.63s)  | regex_any 全不中: ['\\b66\\b']
+[Engine] 前缀命中 0/384 tokens，gen 97.3 tps
+❌ vi-chartqa-hard2-941 r0 (0.64s)  | regex_any 全不中: ['\\b72\\b']
+[Engine] 前缀命中 0/384 tokens，gen 100.7 tps
+✅ vi-chartqa-hard2-943 r0 (0.63s)
+[Engine] 前缀命中 0/383 tokens，gen 97.4 tps
+✅ vi-chartqa-hard2-945 r0 (0.64s)
+[Engine] 前缀命中 0/383 tokens，gen 95.3 tps
+✅ vi-chartqa-hard2-947 r0 (0.66s)
+[Engine] 前缀命中 0/383 tokens，gen 97.7 tps
+❌ vi-chartqa-hard2-949 r0 (0.64s)  | regex_any 全不中: ['\\b14\\b']
+[Engine] 前缀命中 0/374 tokens，gen 98.4 tps
+❌ vi-chartqa-hard2-953 r0 (0.63s)  | regex_any 全不中: ['\\b50\\b']
+[Engine] 前缀命中 0/378 tokens，gen 98.3 tps
+✅ vi-chartqa-hard2-955 r0 (0.63s)
+[Engine] 前缀命中 0/380 tokens，gen 106.1 tps
+✅ vi-chartqa-hard2-961 r0 (0.62s)
+[Engine] 前缀命中 0/384 tokens，gen 87.9 tps
+✅ vi-chartqa-hard2-966 r0 (1.43s)
+[Engine] 前缀命中 0/372 tokens，gen 90.6 tps
+✅ vi-chartqa-hard2-969 r0 (0.95s)
+[Engine] 前缀命中 0/377 tokens，gen 96.9 tps
+✅ vi-chartqa-hard2-985 r0 (0.63s)
+[Engine] 前缀命中 0/382 tokens，gen 94.7 tps
+✅ vi-chartqa-hard2-987 r0 (0.66s)
+[Engine] 前缀命中 0/378 tokens，gen 99.8 tps
+✅ vi-chartqa-hard2-988 r0 (0.62s)
+[Engine] 前缀命中 0/395 tokens，gen 94.3 tps
+❌ vi-chartqa-hard2-993 r0 (0.66s)  | regex_any 全不中: ['\\b2\\b']
+[Engine] 前缀命中 0/376 tokens，gen 96.3 tps
+✅ vi-chartqa-hard2-995 r0 (0.64s)
+[Engine] 前缀命中 0/383 tokens，gen 96.3 tps
+❌ vi-chartqa-hard2-996 r0 (0.64s)  | regex_any 全不中: ['\\b47\\b']
+[Engine] 前缀命中 0/384 tokens，gen 88.8 tps
+✅ vi-chartqa-hard2-997 r0 (1.78s)
+[Engine] 前缀命中 0/380 tokens，gen 89.3 tps
+✅ vi-chartqa-hard2-999 r0 (2.3s)
+[Engine] 前缀命中 0/381 tokens，gen 99.6 tps
+✅ vi-chartqa-hard2-1003 r0 (0.63s)
+[Engine] 前缀命中 0/380 tokens，gen 95.0 tps
+✅ vi-chartqa-hard2-1013 r0 (0.65s)
+[Engine] 前缀命中 0/392 tokens，gen 97.3 tps
+❌ vi-chartqa-hard2-1025 r0 (0.64s)  | regex_any 全不中: ['\\b12\\b']
+[Engine] 前缀命中 0/384 tokens，gen 88.6 tps
+✅ vi-chartqa-hard2-1027 r0 (1.48s)
+[Engine] 前缀命中 0/379 tokens，gen 89.8 tps
+✅ vi-chartqa-hard2-1035 r0 (0.65s)
+[Engine] 前缀命中 0/376 tokens，gen 92.6 tps
+✅ vi-chartqa-hard2-1037 r0 (0.67s)
+[Engine] 前缀命中 0/369 tokens，gen 82.8 tps
+✅ vi-chartqa-hard2-1041 r0 (2.1s)
+[Engine] 前缀命中 0/382 tokens，gen 95.9 tps
+✅ vi-chartqa-hard2-1047 r0 (0.64s)
+[Engine] 前缀命中 0/381 tokens，gen 97.5 tps
+❌ vi-chartqa-hard2-1069 r0 (0.64s)  | regex_any 全不中: ['\\b4\\b']
+[Engine] 前缀命中 0/370 tokens，gen 89.3 tps
+✅ vi-chartqa-hard2-1071 r0 (2.74s)
+[Engine] 前缀命中 0/388 tokens，gen 95.3 tps
+✅ vi-chartqa-hard2-1073 r0 (0.65s)
+[Engine] 前缀命中 0/377 tokens，gen 89.3 tps
+❌ vi-chartqa-hard2-1085 r0 (1.24s)  | regex_any 全不中: ['\\b1\\b']
+[Engine] 前缀命中 0/381 tokens，gen 93.4 tps
+❌ vi-chartqa-hard2-1087 r0 (0.67s)  | regex_any 全不中: ['\\b273\\b']
+[Engine] 前缀命中 0/381 tokens，gen 96.5 tps
+❌ vi-chartqa-hard2-1088 r0 (0.65s)  | regex_any 全不中: ['\\b2[\\s,\\u00a0\\u202f\\u2009]?112\\b', '\\b2,112\\b']
+[Engine] 前缀命中 0/381 tokens，gen 91.6 tps
+❌ vi-chartqa-hard2-1089 r0 (0.69s)  | regex_any 全不中: ['\\b5,564\\b', '\\b5[\\s,\\u00a0\\u202f\\u2009]?564\\b']
+[Engine] 前缀命中 0/392 tokens，gen 96.1 tps
+✅ vi-chartqa-hard2-1091 r0 (0.66s)
+[Engine] 前缀命中 0/381 tokens，gen 89.2 tps
+✅ vi-chartqa-hard2-1095 r0 (2.88s)
+[Engine] 前缀命中 0/378 tokens，gen 79.8 tps
+✅ vi-chartqa-hard2-1097 r0 (2.53s)
+[Engine] 前缀命中 0/398 tokens，gen 92.6 tps
+✅ vi-chartqa-hard2-1101 r0 (0.66s)
+[Engine] 前缀命中 0/376 tokens，gen 99.7 tps
+✅ vi-chartqa-hard2-1105 r0 (0.63s)
+[Engine] 前缀命中 0/376 tokens，gen 105.2 tps
+✅ vi-chartqa-hard2-1109 r0 (0.62s)
+[Engine] 前缀命中 0/379 tokens，gen 96.4 tps
+✅ vi-chartqa-hard2-1115 r0 (0.64s)
+[Engine] 前缀命中 0/377 tokens，gen 93.9 tps
+❌ vi-chartqa-hard2-1119 r0 (0.67s)  | regex_any 全不中: ['\\b25\\b']
+[Engine] 前缀命中 0/383 tokens，gen 93.9 tps
+✅ vi-chartqa-hard2-1125 r0 (0.66s)
+[Engine] 前缀命中 0/380 tokens，gen 96.5 tps
+✅ vi-chartqa-hard2-1127 r0 (0.64s)
+[Engine] 前缀命中 0/395 tokens，gen 94.6 tps
+✅ vi-chartqa-hard2-1137 r0 (0.66s)
+[Engine] 前缀命中 0/381 tokens，gen 95.7 tps
+✅ vi-chartqa-hard2-1151 r0 (0.64s)
+[Engine] 前缀命中 0/378 tokens，gen 89.7 tps
+✅ vi-chartqa-hard2-1153 r0 (0.65s)
+[Engine] 前缀命中 0/382 tokens，gen 100.1 tps
+❌ vi-chartqa-hard2-1159 r0 (0.63s)  | regex_any 全不中: ['\\b68\\b']
+[Engine] 前缀命中 0/384 tokens，gen 95.6 tps
+✅ vi-chartqa-hard2-1161 r0 (0.65s)
+[Engine] 前缀命中 0/379 tokens，gen 87.9 tps
+✅ vi-chartqa-hard2-1173 r0 (0.66s)
+[Engine] 前缀命中 0/375 tokens，gen 97.2 tps
+✅ vi-chartqa-hard2-1185 r0 (0.63s)
+[Engine] 前缀命中 0/390 tokens，gen 97.8 tps
+✅ vi-chartqa-hard2-1187 r0 (0.64s)
+[Engine] 前缀命中 0/381 tokens，gen 98.9 tps
+✅ vi-chartqa-hard2-1189 r0 (0.63s)
+[Engine] 前缀命中 0/381 tokens，gen 96.5 tps
+❌ vi-chartqa-hard2-1191 r0 (0.64s)  | regex_any 全不中: ['\\b56\\b']
+[Engine] 前缀命中 0/376 tokens，gen 89.5 tps
+✅ vi-chartqa-hard2-1192 r0 (1.86s)
+[Engine] 前缀命中 0/377 tokens，gen 87.6 tps
+✅ vi-chartqa-hard2-1193 r0 (1.7s)
+[Engine] 前缀命中 0/375 tokens，gen 88.0 tps
+✅ vi-chartqa-hard2-1194 r0 (0.66s)
+[Engine] 前缀命中 0/381 tokens，gen 96.2 tps
+✅ vi-chartqa-hard2-1197 r0 (0.64s)
+[Engine] 前缀命中 0/399 tokens，gen 96.6 tps
+✅ vi-chartqa-hard2-1201 r0 (0.65s)
+[Engine] 前缀命中 0/387 tokens，gen 96.3 tps
+❌ vi-chartqa-hard2-1209 r0 (0.66s)  | regex_any 全不中: ['\\b5,864\\b', '\\b5[\\s,\\u00a0\\u202f\\u2009]?864\\b']
+[Engine] 前缀命中 0/375 tokens，gen 98.7 tps
+✅ vi-chartqa-hard2-1213 r0 (0.63s)
+[Engine] 前缀命中 0/382 tokens，gen 96.2 tps
+✅ vi-chartqa-hard2-1219 r0 (0.64s)
+[Engine] 前缀命中 0/383 tokens，gen 99.7 tps
+✅ vi-chartqa-hard2-1225 r0 (0.63s)
+[Engine] 前缀命中 0/375 tokens，gen 97.4 tps
+✅ vi-chartqa-hard2-1229 r0 (0.63s)
+[Engine] 前缀命中 0/376 tokens，gen 96.0 tps
+✅ vi-chartqa-hard2-1235 r0 (0.65s)
+[Engine] 前缀命中 0/385 tokens，gen 102.4 tps
+✅ vi-chartqa-hard2-1237 r0 (0.63s)
+[Engine] 前缀命中 0/375 tokens，gen 94.9 tps
+✅ vi-chartqa-hard2-1241 r0 (0.64s)
+[Engine] 前缀命中 0/395 tokens，gen 95.2 tps
+✅ vi-chartqa-hard2-1249 r0 (0.66s)
+[Engine] 前缀命中 0/378 tokens，gen 89.5 tps
+✅ vi-chartqa-hard2-1264 r0 (1.46s)
+[Engine] 前缀命中 0/380 tokens，gen 95.0 tps
+❌ vi-chartqa-hard2-1283 r0 (0.65s)  | regex_any 全不中: ['\\b2[\\s,\\u00a0\\u202f\\u2009]?000\\b', '\\b2,000\\b']
+[Engine] 前缀命中 0/382 tokens，gen 89.7 tps
+✅ vi-chartqa-hard2-1306 r0 (0.87s)
+[Engine] 前缀命中 0/396 tokens，gen 95.5 tps
+✅ vi-chartqa-hard2-1309 r0 (0.66s)
+[Engine] 前缀命中 0/382 tokens，gen 92.7 tps
+✅ vi-chartqa-hard2-1338 r0 (0.68s)
+[Engine] 前缀命中 0/385 tokens，gen 93.2 tps
+✅ vi-chartqa-hard2-1344 r0 (0.68s)
+[Engine] 前缀命中 0/384 tokens，gen 92.3 tps
+✅ vi-chartqa-hard2-1355 r0 (0.68s)
+[Engine] 前缀命中 0/395 tokens，gen 97.4 tps
+✅ vi-chartqa-hard2-1434 r0 (0.66s)
+[Engine] 前缀命中 0/377 tokens，gen 95.7 tps
+✅ vi-chartqa-hard2-1460 r0 (0.64s)
+[Engine] 前缀命中 0/382 tokens，gen 89.7 tps
+✅ vi-chartqa-hard2-1514 r0 (1.01s)
+[Engine] 前缀命中 0/390 tokens，gen 96.7 tps
+✅ vi-chartqa-hard2-1589 r0 (0.64s)
+[Engine] 前缀命中 0/388 tokens，gen 97.5 tps
+✅ vi-chartqa-hard2-1602 r0 (0.65s)
+[Engine] 前缀命中 0/385 tokens，gen 93.5 tps
+✅ vi-chartqa-hard2-1682 r0 (0.64s)
+[Engine] 前缀命中 0/375 tokens，gen 89.2 tps
+✅ vi-chartqa-hard2-1686 r0 (2.28s)
+[Engine] 前缀命中 0/382 tokens，gen 94.7 tps
+✅ vi-chartqa-hard2-1695 r0 (0.65s)
+[Engine] 前缀命中 0/386 tokens，gen 96.7 tps
+✅ vi-chartqa-hard2-1756 r0 (0.65s)
+[Engine] 前缀命中 0/392 tokens，gen 95.4 tps
+✅ vi-chartqa-hard2-1766 r0 (0.65s)
+[Engine] 前缀命中 0/396 tokens，gen 97.0 tps
+✅ vi-chartqa-hard2-1768 r0 (0.66s)
+[Engine] 前缀命中 0/377 tokens，gen 89.5 tps
+✅ vi-chartqa-hard2-1795 r0 (2.08s)
+[Engine] 前缀命中 0/381 tokens，gen 95.2 tps
+❌ vi-chartqa-hard2-1817 r0 (0.64s)  | regex_any 全不中: ['\\b109\\b']
+[Engine] 前缀命中 0/371 tokens，gen 89.3 tps
+✅ vi-chartqa-hard2-1825 r0 (2.03s)
+[Engine] 前缀命中 0/382 tokens，gen 94.8 tps
+✅ vi-chartqa-hard2-1833 r0 (0.64s)
+[Engine] 前缀命中 0/382 tokens，gen 89.9 tps
+✅ vi-chartqa-hard2-1870 r0 (1.25s)
+[Engine] 前缀命中 0/388 tokens，gen 95.4 tps
+✅ vi-chartqa-hard2-1874 r0 (0.65s)
+[Engine] 前缀命中 0/377 tokens，gen 89.2 tps
+✅ vi-chartqa-hard2-1898 r0 (0.86s)
+[Engine] 前缀命中 0/385 tokens，gen 93.4 tps
+✅ vi-chartqa-hard2-1911 r0 (0.68s)
+[Engine] 前缀命中 0/385 tokens，gen 94.0 tps
+✅ vi-chartqa-hard2-1931 r0 (0.67s)
+[Engine] 前缀命中 0/390 tokens，gen 98.5 tps
+✅ vi-chartqa-hard2-2000 r0 (0.64s)
+[Engine] 前缀命中 0/378 tokens，gen 89.7 tps
+✅ vi-chartqa-hard2-2009 r0 (0.67s)
+[Engine] 前缀命中 0/393 tokens，gen 95.3 tps
+✅ vi-chartqa-hard2-2033 r0 (0.66s)
+[Engine] 前缀命中 0/386 tokens，gen 95.2 tps
+✅ vi-chartqa-hard2-2034 r0 (0.65s)
+[Engine] 前缀命中 0/379 tokens，gen 94.6 tps
+✅ vi-chartqa-hard2-2044 r0 (0.65s)
+[Engine] 前缀命中 0/385 tokens，gen 94.0 tps
+✅ vi-chartqa-hard2-2049 r0 (0.66s)
+[Engine] 前缀命中 0/400 tokens，gen 94.3 tps
+❌ vi-chartqa-hard2-2079 r0 (0.68s)  | regex_any 全不中: ['\\b1[\\s,\\u00a0\\u202f\\u2009]?986\\b', '\\b1,986\\b']
+[Engine] 前缀命中 0/390 tokens，gen 96.1 tps
+✅ vi-chartqa-hard2-2135 r0 (0.65s)
+[Engine] 前缀命中 0/387 tokens，gen 90.2 tps
+✅ vi-chartqa-hard2-2138 r0 (0.65s)
+[Engine] 前缀命中 0/382 tokens，gen 94.2 tps
+✅ vi-chartqa-hard2-2169 r0 (0.65s)
+[Engine] 前缀命中 0/390 tokens，gen 94.0 tps
+❌ vi-chartqa-hard2-2175 r0 (0.67s)  | regex_any 全不中: ['\\b1[\\s,\\u00a0\\u202f\\u2009]?125\\b', '\\b1,125\\b']
+[Engine] 前缀命中 0/388 tokens，gen 98.9 tps
+✅ vi-chartqa-hard2-2222 r0 (0.64s)
+[Engine] 前缀命中 0/382 tokens，gen 98.0 tps
+✅ vi-chartqa-hard2-2223 r0 (0.63s)
+[Engine] 前缀命中 0/385 tokens，gen 95.2 tps
+❌ vi-chartqa-hard2-2279 r0 (0.65s)  | regex_any 全不中: ['\\b810\\b']
+[Engine] 前缀命中 0/398 tokens，gen 89.3 tps
+✅ vi-chartqa-hard2-2293 r0 (1.62s)
+[Engine] 前缀命中 0/374 tokens，gen 97.9 tps
+✅ vi-chartqa-hard2-2300 r0 (0.62s)
+[Engine] 前缀命中 0/380 tokens，gen 91.2 tps
+✅ vi-chartqa-hard2-2301 r0 (0.87s)
+[Engine] 前缀命中 0/388 tokens，gen 95.3 tps
+✅ vi-chartqa-hard2-2385 r0 (0.67s)
+[Engine] 前缀命中 0/377 tokens，gen 96.4 tps
+✅ vi-chartqa-hard2-2431 r0 (0.64s)
+[Engine] 前缀命中 0/376 tokens，gen 96.5 tps
+✅ vi-chartqa-hard2-2432 r0 (0.64s)
+[Engine] 前缀命中 0/387 tokens，gen 94.4 tps
+✅ vi-chartqa-hard2-2459 r0 (0.67s)
+[Engine] 前缀命中 0/388 tokens，gen 94.0 tps
+✅ vi-chartqa-hard2-2467 r0 (0.68s)
+[Engine] 前缀命中 0/381 tokens，gen 81.9 tps
+✅ vi-seed-001 r0 (0.85s)
+[Engine] 前缀命中 0/373 tokens，gen 91.4 tps
+✅ vi-seed-002 r0 (0.73s)
+[Engine] 前缀命中 0/390 tokens，gen 102.8 tps
+✅ vi-seed-003 r0 (0.65s)
+[Engine] 前缀命中 0/391 tokens，gen 90.6 tps
+✅ vi-seed-004 r0 (0.86s)
+[Engine] 前缀命中 0/372 tokens，gen 92.0 tps
+✅ vi-seed-005 r0 (0.71s)
+== summary: {"tool_call": {"n": 25, "pass_rate": 0.72, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.696, "parse_errors_total": 12, "restraint_ok_rate": 1.0, "turns_used_total": 41, "valid_call_ok_rate": 0.696, "correction_success_rate": 0.0}, "longchain": {"n": 6, "pass_rate": 0.833, "aborted_rate": 0.0, "env_errors_total": 1, "final_text_ok_rate": 1.0, "recovered_rate": 0.167, "redundant_calls_total": 0, "state_ok_rate": 0.833, "steps_total": 20, "steps_ok_rate": 1.0, "recovery_success_rate": 1.0}, "vision": {"n": 212, "pass_rate": 0.825, "aborted_rate": 0.0, "final_ok_rate": 0.825, "stray_calls_total": 0}}
+== cot: {"n": 243, "ctrl_leak_traj_rate": 0.0, "dup_rate_mean": 0.0, "dup_rate_max": 0.0, "recite_rate_mean": 0.0, "recite_rate_max": 0.0, "other_script_max": 0.0, "empty_think_turns_total": 278, "think_chars_mean": 0.0}
+== speed: {"generation_tps": {"mean": 93.21, "median": 94.09, "min": 79.85, "max": 106.9, "n": 278}, "prompt_tps": {"mean": 926.62, "median": 655.77, "min": 630.62, "max": 3927.46, "n": 278}, "peak_memory_max": 16.56, "kv_prefix_hit_rate": {"mean": 0.59, "median": 0.65, "min": 0.38, "max": 0.8, "n": 35}}
+== 产物: /Volumes/enkin/project/Agent/backend/benchmarks/model_eval/results/gemma-4-26b-a4b-it-qat-4bit/20260816-023123

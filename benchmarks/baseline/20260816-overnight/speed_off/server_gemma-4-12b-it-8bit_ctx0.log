@@ -1,0 +1,30 @@
+INFO:     Started server process [47468]
+INFO:     Waiting for application startup.
+🚀 [Server] loading model: mlx-community/gemma-4-12b-it-8bit (backend=mlx)
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:57929 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57930 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57931 - "DELETE /v1/cache/68eaf9589ac44fd8b0a4636f15208e52 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57932 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57948 - "DELETE /v1/cache/2f3af519bb3141f590d21607af93195b HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57949 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57950 - "DELETE /v1/cache/3522b307125f4a0e8c09910ce87b5df4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57951 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57956 - "DELETE /v1/cache/175085d08cf74c41875606bdb67dd833 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57957 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57958 - "DELETE /v1/cache/e3cea172218d44c8a96f8591e7bb342e HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57959 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57960 - "DELETE /v1/cache/5a9c55ea6975456e832df9908da7980c HTTP/1.1" 200 OK
+[Server] 约束采样引擎就绪（llguidance）
+INFO:     127.0.0.1:57961 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57962 - "DELETE /v1/cache/41a24bd64d61411f8cd4441a5e742512 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [47468]

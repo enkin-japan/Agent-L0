@@ -1,0 +1,7 @@
+[13:56:09] 环境头已记：Mac16,9 64G wired=57344MB mlx=0.32.0 spec=drafter
+[13:56:11] 🚀 起 server: mlx-community/gemma-4-e4b-it-8bit ctx=0（权重 8.3G）
+[13:56:26] ❌ 格 gemma-4-e4b-it-8bit × 0 失败: RuntimeError: server 提前退出 rc=3
+[13:56:26] 💥 server 进程已退出 rc=3（日志 server_gemma-4-e4b-it-8bit_ctx0.log）
+[13:56:26] 🛑 收 server: mlx-community/gemma-4-e4b-it-8bit ctx=0
+[13:56:26] ⏭️  gemma-4-e4b-it-8bit 剩余格级联跳过（server 启动失败）
+[13:56:26] 🏁 基线格全部完成

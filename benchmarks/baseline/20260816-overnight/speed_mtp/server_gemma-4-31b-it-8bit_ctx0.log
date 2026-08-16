@@ -1,0 +1,73 @@
+INFO:     Started server process [51309]
+INFO:     Waiting for application startup.
+[Server] 投机配置被环境覆盖：{'mode': 'drafter', 'draft_model': '/Volumes/enkin/project/Agent/backend/models/gemma-4-31b-it-assistant-8bit', 'draft_block_size': 4}
+🚀 [Server] loading model: mlx-community/gemma-4-31b-it-8bit (backend=mlx)
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/transformers/audio_utils.py:723: UserWarning: At least one mel filter has all zero values. The value for `num_mel_filters` (128) may be set too high. Or, the value for `num_frequency_bins` (257) may be set too low.
+  warnings.warn(
+ERROR:    Traceback (most recent call last):
+  File "/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/starlette/routing.py", line 638, in lifespan
+    async with self.lifespan_context(app) as maybe_state:
+               ~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/enkin/project/Agent/inference/server.py", line 251, in lifespan
+    S.backend = await get_backend_class(backend_name).load(
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        model_path, executor=S.executor, **_inf_cfg)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/enkin/project/Agent/backend/framework/backends/mlx/backend.py", line 266, in load
+    model, processor, drafter = await loop.run_in_executor(executor, _load_all)
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+  File "/Volumes/enkin/project/Agent/backend/framework/backends/mlx/backend.py", line 259, in _load_all
+    d = _load_drafter(m, draft_path, spec_cfg) if draft_path else (None, None)
+        ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/enkin/project/Agent/backend/framework/backends/mlx/backend.py", line 154, in _load_drafter
+    resolved_kind = resolve_drafter_kind(draft_path, kind)
+  File "/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/mlx_vlm/speculative/drafters/__init__.py", line 126, in resolve_drafter_kind
+    model_type = _peek_drafter_model_type(model_path)
+  File "/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/mlx_vlm/speculative/drafters/__init__.py", line 107, in _peek_drafter_model_type
+    with open(model_path / "config.json") as f:
+              ~~~~~~~~~~~^~~~~~~~~~~~~~~
+TypeError: unsupported operand type(s) for /: 'str' and 'str'
+
+ERROR:    Application startup failed. Exiting.
+INFO:     Started server process [54133]
+INFO:     Waiting for application startup.
+[Server] 投机配置被环境覆盖：{'mode': 'drafter', 'draft_model': '/Volumes/enkin/project/Agent/backend/models/gemma-4-31b-it-assistant-8bit', 'draft_block_size': 4}
+🚀 [Server] loading model: mlx-community/gemma-4-31b-it-8bit (backend=mlx)
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/transformers/audio_utils.py:723: UserWarning: At least one mel filter has all zero values. The value for `num_mel_filters` (128) may be set too high. Or, the value for `num_frequency_bins` (257) may be set too low.
+  warnings.warn(
+[Engine] 草稿深度上限已解锁：采纳请求值 draft_block_size=4（否则被草稿件 config 缺省值 4 顶死）
+[Engine] 投机草稿件已装载：/Volumes/enkin/project/Agent/backend/models/gemma-4-31b-it-assistant-8bit（kind=mtp）
+[Engine] 投机采样启用：{'mode': 'drafter', 'draft_model': '/Volumes/enkin/project/Agent/backend/models/gemma-4-31b-it-assistant-8bit', 'draft_kind': '', 'draft_block_size': 4, 'num_draft_tokens': 8, 'ngram_max': 3, 'ngram_min': 2}
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:62097 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62098 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62099 - "DELETE /v1/cache/ad73d8ce2d044173b7ce943af19b078f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62100 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62101 - "DELETE /v1/cache/768146eb06cc4a4eb7149c8107068e36 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62102 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62103 - "DELETE /v1/cache/d1289d34e3da41709cff9c8e3e037f86 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62104 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62105 - "DELETE /v1/cache/ffa8d58f72a44d66970fab9cdb89f63d HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62106 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62107 - "DELETE /v1/cache/3fdd7ce453264cf88b8ee80ccd0088a1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62108 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62109 - "DELETE /v1/cache/eac0052fce084f61a8d7d7b603560b35 HTTP/1.1" 200 OK
+[Server] 约束采样引擎就绪（llguidance）
+INFO:     127.0.0.1:62110 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62111 - "DELETE /v1/cache/0c764870f17541f39b4a39ce8935e3a6 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [54133]

@@ -1,0 +1,45 @@
+[04:39:34] 环境头已记：Mac16,9 64G wired=57344MB mlx=0.32.0 spec=off
+[04:39:37] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=0（权重 14.3G）
+[04:40:01]    server 就绪（24s）
+[04:40:04]    [gemma-4-26b-a4b-it-4bit ctx=0] run0: gen 121.62025985014365 tps, prefill 217.85740165173246 tps, ttft 0.284s
+[04:40:07]    [gemma-4-26b-a4b-it-4bit ctx=0] run1: gen 121.71709608422316 tps, prefill 546.5518697387021 tps, ttft 0.101s
+[04:40:10]    [gemma-4-26b-a4b-it-4bit ctx=0] run2: gen 121.84941649004772 tps, prefill 542.424507225546 tps, ttft 0.1s
+[04:40:13]    [gemma-4-26b-a4b-it-4bit ctx=0] run3: gen 122.54865844106352 tps, prefill 557.317907551999 tps, ttft 0.105s
+[04:40:15] ✅ 格 gemma-4-26b-a4b-it-4bit × 0: decode 中位 121.85 tps, prefill 546.55 tps, 峰值 15.50249725G, 质量哨 全过
+[04:40:15] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=0
+[04:40:15] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=4096（权重 14.3G）
+[04:40:21]    server 就绪（6s）
+[04:40:27]    [gemma-4-26b-a4b-it-4bit ctx=4096] run0: gen 111.32664302594445 tps, prefill 1517.5085926107286 tps, ttft 2.862s
+[04:40:33]    [gemma-4-26b-a4b-it-4bit ctx=4096] run1: gen 111.60792432605851 tps, prefill 1531.00952270459 tps, ttft 2.683s
+[04:40:39]    [gemma-4-26b-a4b-it-4bit ctx=4096] run2: gen 111.4826180886661 tps, prefill 1531.1125332540169 tps, ttft 2.682s
+[04:40:44]    [gemma-4-26b-a4b-it-4bit ctx=4096] run3: gen 110.5689299394792 tps, prefill 1527.3007805704226 tps, ttft 2.692s
+[04:40:54] ✅ 格 gemma-4-26b-a4b-it-4bit × 4096: decode 中位 111.48 tps, prefill 1531.01 tps, 峰值 17.125662026G, 质量哨 全过
+[04:40:54] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=4096
+[04:40:54] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=16384（权重 14.3G）
+[04:41:01]    server 就绪（6s）
+[04:41:16]    [gemma-4-26b-a4b-it-4bit ctx=16384] run0: gen 95.33987326436299 tps, prefill 1371.0941890058436 tps, ttft 11.977s
+[04:41:32]    [gemma-4-26b-a4b-it-4bit ctx=16384] run1: gen 95.12278959259083 tps, prefill 1388.7561544350358 tps, ttft 11.804s
+[04:41:47]    [gemma-4-26b-a4b-it-4bit ctx=16384] run2: gen 95.2565741579673 tps, prefill 1388.4061853102196 tps, ttft 11.806s
+[04:42:03]    [gemma-4-26b-a4b-it-4bit ctx=16384] run3: gen 95.19581511169523 tps, prefill 1388.300934186347 tps, ttft 11.81s
+[04:42:40] ✅ 格 gemma-4-26b-a4b-it-4bit × 16384: decode 中位 95.2 tps, prefill 1388.41 tps, 峰值 18.29189153G, 质量哨 全过
+[04:42:40] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=16384
+[04:42:40] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=32768（权重 14.3G）
+[04:42:46]    server 就绪（6s）
+[04:43:17]    [gemma-4-26b-a4b-it-4bit ctx=32768] run0: gen 80.49106139458 tps, prefill 1237.8900136234386 tps, ttft 26.648s
+[04:43:48]    [gemma-4-26b-a4b-it-4bit ctx=32768] run1: gen 80.65092747885039 tps, prefill 1238.8140881318272 tps, ttft 26.468s
+[04:44:19]    [gemma-4-26b-a4b-it-4bit ctx=32768] run2: gen 80.5038714307832 tps, prefill 1238.945859106289 tps, ttft 26.464s
+[04:44:50]    [gemma-4-26b-a4b-it-4bit ctx=32768] run3: gen 80.36624274543257 tps, prefill 1237.9584130304463 tps, ttft 26.489s
+[04:46:11] ✅ 格 gemma-4-26b-a4b-it-4bit × 32768: decode 中位 80.5 tps, prefill 1238.81 tps, 峰值 19.79553313G, 质量哨 全过
+[04:46:11] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=32768
+[04:46:12] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=65536（权重 14.3G）
+[04:46:18]    server 就绪（6s）
+[04:47:28]    [gemma-4-26b-a4b-it-4bit ctx=65536] run0: gen 61.67403462129878 tps, prefill 1016.1668875730023 tps, ttft 64.664s
+[04:48:38]    [gemma-4-26b-a4b-it-4bit ctx=65536] run1: gen 61.612478659131824 tps, prefill 1016.5469670311676 tps, ttft 64.482s
+[04:49:48]    [gemma-4-26b-a4b-it-4bit ctx=65536] run2: gen 61.63904562334961 tps, prefill 1017.1839192382088 tps, ttft 64.44s
+[04:50:58]    [gemma-4-26b-a4b-it-4bit ctx=65536] run3: gen 61.788288563778366 tps, prefill 1016.7584781925405 tps, ttft 64.47s
+[04:54:14] ✅ 格 gemma-4-26b-a4b-it-4bit × 65536: decode 中位 61.64 tps, prefill 1016.76 tps, 峰值 22.773720836G, 质量哨 全过
+[04:54:14] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=65536
+[04:54:14] 🏁 基线格全部完成
+[14:00:06] 环境头已记：Mac16,9 64G wired=57344MB mlx=0.32.0 spec=off
+[14:00:06] ⏭️  mlx-community/gemma-4-26b-a4b-it-4bit 全格已测，跳过
+[14:00:06] 🏁 基线格全部完成

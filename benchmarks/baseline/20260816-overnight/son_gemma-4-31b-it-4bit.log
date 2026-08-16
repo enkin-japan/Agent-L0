@@ -1,0 +1,49 @@
+[13:54:13] 环境头已记：Mac16,9 64G wired=57344MB mlx=0.32.0 spec=drafter
+[13:54:17] 🚀 起 server: mlx-community/gemma-4-31b-it-4bit ctx=0（权重 17.1G）
+[13:54:44] ❌ 格 gemma-4-31b-it-4bit × 0 失败: RuntimeError: server 提前退出 rc=3
+[13:54:45] 💥 server 进程已退出 rc=3（日志 server_gemma-4-31b-it-4bit_ctx0.log）
+[13:54:45] 🛑 收 server: mlx-community/gemma-4-31b-it-4bit ctx=0
+[13:54:45] ⏭️  gemma-4-31b-it-4bit 剩余格级联跳过（server 启动失败）
+[13:54:45] 🏁 基线格全部完成
+[15:44:45] 环境头已记：Mac16,9 64G wired=57344MB mlx=0.32.0 spec=drafter
+[15:44:49] 🚀 起 server: mlx-community/gemma-4-31b-it-4bit ctx=0（权重 17.1G）
+[15:45:16]    server 就绪（27s）
+[15:45:26]    [gemma-4-31b-it-4bit ctx=0] run0: gen 39.05464675573488 tps, prefill 117.50499134354945 tps, ttft 0.61s
+[15:45:34]    [gemma-4-31b-it-4bit ctx=0] run1: gen 42.36638641472888 tps, prefill 157.57262802802043 tps, ttft 0.338s
+[15:45:44]    [gemma-4-31b-it-4bit ctx=0] run2: gen 39.421336272852145 tps, prefill 154.65722759380523 tps, ttft 0.338s
+[15:45:53]    [gemma-4-31b-it-4bit ctx=0] run3: gen 36.723567224292175 tps, prefill 166.33782767049706 tps, ttft 0.338s
+[15:45:57] ✅ 格 gemma-4-31b-it-4bit × 0: decode 中位 39.42 tps, prefill 157.57 tps, 峰值 20.048046468G, 质量哨 全过
+[15:45:57] 🛑 收 server: mlx-community/gemma-4-31b-it-4bit ctx=0
+[15:45:57] 🚀 起 server: mlx-community/gemma-4-31b-it-4bit ctx=4096（权重 17.1G）
+[15:46:03]    server 就绪（6s）
+[15:46:36]    [gemma-4-31b-it-4bit ctx=4096] run0: gen 28.93261208188241 tps, prefill 199.61575629400767 tps, ttft 20.689s
+[15:47:07]    [gemma-4-31b-it-4bit ctx=4096] run1: gen 31.006712315594154 tps, prefill 201.38028318691914 tps, ttft 20.368s
+[15:47:40]    [gemma-4-31b-it-4bit ctx=4096] run2: gen 28.808162191002047 tps, prefill 201.45220713029477 tps, ttft 20.356s
+[15:48:13]    [gemma-4-31b-it-4bit ctx=4096] run3: gen 28.746662851947203 tps, prefill 201.09563844190885 tps, ttft 20.411s
+[15:49:16] ✅ 格 gemma-4-31b-it-4bit × 4096: decode 中位 28.81 tps, prefill 201.38 tps, 峰值 23.256671238G, 质量哨 全过
+[15:49:16] 🛑 收 server: mlx-community/gemma-4-31b-it-4bit ctx=4096
+[15:49:17] 🚀 起 server: mlx-community/gemma-4-31b-it-4bit ctx=16384（权重 17.1G）
+[15:49:23]    server 就绪（6s）
+[15:51:07]    [gemma-4-31b-it-4bit ctx=16384] run0: gen 19.771763657635287 tps, prefill 189.40190465007734 tps, ttft 86.631s
+[15:52:52]    [gemma-4-31b-it-4bit ctx=16384] run1: gen 19.09997372210212 tps, prefill 189.6700904786872 tps, ttft 86.368s
+[15:54:37]    [gemma-4-31b-it-4bit ctx=16384] run2: gen 18.04684465875102 tps, prefill 189.63867429490512 tps, ttft 86.377s
+[15:56:23]    [gemma-4-31b-it-4bit ctx=16384] run3: gen 17.926696458333844 tps, prefill 189.4493863067663 tps, ttft 86.484s
+[16:00:46] ✅ 格 gemma-4-31b-it-4bit × 16384: decode 中位 18.05 tps, prefill 189.64 tps, 峰值 25.931105332G, 质量哨 全过
+[16:00:46] 🛑 收 server: mlx-community/gemma-4-31b-it-4bit ctx=16384
+[16:00:46] 🚀 起 server: mlx-community/gemma-4-31b-it-4bit ctx=32768（权重 17.1G）
+[16:00:55]    server 就绪（9s）
+[16:04:29]    [gemma-4-31b-it-4bit ctx=32768] run0: gen 12.519786926761324 tps, prefill 176.7036873718663 tps, ttft 185.535s
+[16:08:01]    [gemma-4-31b-it-4bit ctx=32768] run1: gen 12.898603272303937 tps, prefill 176.84970472639483 tps, ttft 185.323s
+[16:11:36]    [gemma-4-31b-it-4bit ctx=32768] run2: gen 12.11630980643454 tps, prefill 176.83463669213324 tps, ttft 185.333s
+[16:15:11]    [gemma-4-31b-it-4bit ctx=32768] run3: gen 11.85185860788976 tps, prefill 176.85272227716962 tps, ttft 185.335s
+[16:24:31] ✅ 格 gemma-4-31b-it-4bit × 32768: decode 中位 12.12 tps, prefill 176.85 tps, 峰值 29.880091708G, 质量哨 全过
+[16:24:32] 🛑 收 server: mlx-community/gemma-4-31b-it-4bit ctx=32768
+[16:24:32] 🚀 起 server: mlx-community/gemma-4-31b-it-4bit ctx=65536（权重 17.1G）
+[16:24:47]    server 就绪（15s）
+[16:32:40]    [gemma-4-31b-it-4bit ctx=65536] run0: gen 7.252545354133346 tps, prefill 154.1697111685137 tps, ttft 425.164s
+[16:40:33]    [gemma-4-31b-it-4bit ctx=65536] run1: gen 7.478591203839921 tps, prefill 154.0124515601332 tps, ttft 425.461s
+[16:48:24]    [gemma-4-31b-it-4bit ctx=65536] run2: gen 7.648319071664242 tps, prefill 154.11042558387174 tps, ttft 425.182s
+[16:56:14]    [gemma-4-31b-it-4bit ctx=65536] run3: gen 7.305181957177177 tps, prefill 155.14985363366998 tps, ttft 422.358s
+[17:17:26] ✅ 格 gemma-4-31b-it-4bit × 65536: decode 中位 7.48 tps, prefill 154.11 tps, 峰值 37.751440396G, 质量哨 全过
+[17:17:26] 🛑 收 server: mlx-community/gemma-4-31b-it-4bit ctx=65536
+[17:17:26] 🏁 基线格全部完成

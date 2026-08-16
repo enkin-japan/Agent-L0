@@ -1,0 +1,157 @@
+[2026-08-16 02:22:56] ==== CAMPAIGN START pid=45792 ====
+[2026-08-16 02:22:56] PHASE Q START（12 模型，dims=tool_call,longchain,vision）
+[2026-08-16 02:22:56] Q gemma-4-26b-a4b-it-4bit start
+[2026-08-16 02:26:35] Q gemma-4-26b-a4b-it-4bit rc=0 dur=219s == summary: {"tool_call": {"n": 25, "pass_rate": 0.72, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.696, "parse_errors_total": 12, "restraint_ok_rate": 1.0, "turns_used_total": 41, "valid_call_ok_rate": 0.696, "correction_success_rate": 0.0}, "longchain":
+[2026-08-16 02:26:35] Q gemma-4-26b-a4b-it-8bit start
+[2026-08-16 02:31:00] Q gemma-4-26b-a4b-it-8bit rc=0 dur=265s == summary: {"tool_call": {"n": 25, "pass_rate": 0.72, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.696, "parse_errors_total": 12, "restraint_ok_rate": 1.0, "turns_used_total": 41, "valid_call_ok_rate": 0.696, "correction_success_rate": 0.0}, "longchain":
+[2026-08-16 02:31:00] Q gemma-4-26b-a4b-it-qat-4bit start
+[2026-08-16 02:34:52] Q gemma-4-26b-a4b-it-qat-4bit rc=0 dur=232s == summary: {"tool_call": {"n": 25, "pass_rate": 0.72, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.696, "parse_errors_total": 12, "restraint_ok_rate": 1.0, "turns_used_total": 41, "valid_call_ok_rate": 0.696, "correction_success_rate": 0.0}, "longchain":
+[2026-08-16 02:34:52] Q gemma-4-31b-it-8bit start
+[2026-08-16 02:51:21] Q gemma-4-31b-it-8bit rc=0 dur=989s == summary: {"tool_call": {"n": 25, "pass_rate": 0.72, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.696, "parse_errors_total": 12, "restraint_ok_rate": 1.0, "turns_used_total": 41, "valid_call_ok_rate": 0.696, "correction_success_rate": 0.0}, "longchain":
+[2026-08-16 02:51:21] Q gemma-4-31b-it-4bit start
+[2026-08-16 03:04:08] Q gemma-4-31b-it-4bit rc=0 dur=767s == summary: {"tool_call": {"n": 25, "pass_rate": 0.72, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.696, "parse_errors_total": 12, "restraint_ok_rate": 1.0, "turns_used_total": 41, "valid_call_ok_rate": 0.696, "correction_success_rate": 0.0}, "longchain":
+[2026-08-16 03:04:08] Q gemma-4-31b-it-qat-4bit start
+[2026-08-16 03:19:17] Q gemma-4-31b-it-qat-4bit rc=0 dur=909s == summary: {"tool_call": {"n": 25, "pass_rate": 0.72, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.696, "parse_errors_total": 12, "restraint_ok_rate": 1.0, "turns_used_total": 41, "valid_call_ok_rate": 0.696, "correction_success_rate": 0.0}, "longchain":
+[2026-08-16 03:19:17] Q gemma-4-12b-it-8bit start
+[2026-08-16 03:25:24] Q gemma-4-12b-it-8bit rc=0 dur=367s == summary: {"tool_call": {"n": 25, "pass_rate": 0.72, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.696, "parse_errors_total": 12, "restraint_ok_rate": 1.0, "turns_used_total": 41, "valid_call_ok_rate": 0.696, "correction_success_rate": 0.0}, "longchain":
+[2026-08-16 03:25:24] Q gemma-4-12b-it-4bit start
+[2026-08-16 03:30:22] Q gemma-4-12b-it-4bit rc=0 dur=298s == summary: {"tool_call": {"n": 25, "pass_rate": 0.68, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.652, "parse_errors_total": 12, "restraint_ok_rate": 1.0, "turns_used_total": 41, "valid_call_ok_rate": 0.652, "correction_success_rate": 0.0}, "longchain":
+[2026-08-16 03:30:22] Q gemma-4-e4b-it-4bit start
+[2026-08-16 03:48:49] Q gemma-4-e4b-it-4bit rc=0 dur=1107s == summary: {"tool_call": {"n": 25, "pass_rate": 0.64, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.609, "parse_errors_total": 10, "restraint_ok_rate": 1.0, "turns_used_total": 40, "valid_call_ok_rate": 0.609, "correction_success_rate": 0.0}, "longchain":
+[2026-08-16 03:48:49] Q gemma-4-e4b-it-8bit start
+[2026-08-16 04:08:27] Q gemma-4-e4b-it-8bit rc=0 dur=1178s == summary: {"tool_call": {"n": 25, "pass_rate": 0.64, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.609, "parse_errors_total": 12, "restraint_ok_rate": 1.0, "turns_used_total": 41, "valid_call_ok_rate": 0.609, "correction_success_rate": 0.0}, "longchain":
+[2026-08-16 04:08:27] Q Qwen3.5-9B-4bit start
+[2026-08-16 04:35:10] Q Qwen3.5-9B-4bit rc=0 dur=1603s == summary: {"tool_call": {"n": 25, "pass_rate": 0.96, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.957, "parse_errors_total": 0, "restraint_ok_rate": 1.0, "turns_used_total": 35, "valid_call_ok_rate": 0.957}, "longchain": {"n": 6, "pass_rate": 1.0, "abor
+[2026-08-16 04:35:10] Q Ornith-1.0-9B-4bit start
+[2026-08-16 04:38:05] Q Ornith-1.0-9B-4bit rc=0 dur=175s == summary: {"tool_call": {"n": 25, "pass_rate": 0.96, "aborted_rate": 0.04, "corrected_rate": 0.0, "final_ok_rate": 0.96, "first_shot_ok_rate": 1.0, "parse_errors_total": 0, "restraint_ok_rate": 1.0, "turns_used_total": 36, "valid_call_ok_rate": 1.0}, "longchain": {"n": 6, "pass_rate": 0.333, "abor
+[2026-08-16 04:38:05] notify rc=9 title=质量测评阶段完成
+[2026-08-16 04:39:34] ==== CAMPAIGN START pid=46426 ====
+[2026-08-16 04:39:34] PHASE Q START（12 模型，dims=tool_call,longchain,vision）
+[2026-08-16 04:39:34] Q gemma-4-26b-a4b-it-4bit 已完成（marker 存在），跳过
+[2026-08-16 04:39:34] Q gemma-4-26b-a4b-it-8bit 已完成（marker 存在），跳过
+[2026-08-16 04:39:34] Q gemma-4-26b-a4b-it-qat-4bit 已完成（marker 存在），跳过
+[2026-08-16 04:39:34] Q gemma-4-31b-it-8bit 已完成（marker 存在），跳过
+[2026-08-16 04:39:34] Q gemma-4-31b-it-4bit 已完成（marker 存在），跳过
+[2026-08-16 04:39:34] Q gemma-4-31b-it-qat-4bit 已完成（marker 存在），跳过
+[2026-08-16 04:39:34] Q gemma-4-12b-it-8bit 已完成（marker 存在），跳过
+[2026-08-16 04:39:34] Q gemma-4-12b-it-4bit 已完成（marker 存在），跳过
+[2026-08-16 04:39:34] Q gemma-4-e4b-it-4bit 已完成（marker 存在），跳过
+[2026-08-16 04:39:34] Q gemma-4-e4b-it-8bit 已完成（marker 存在），跳过
+[2026-08-16 04:39:34] Q Qwen3.5-9B-4bit 已完成（marker 存在），跳过
+[2026-08-16 04:39:34] Q Ornith-1.0-9B-4bit 已完成（marker 存在），跳过
+[2026-08-16 04:39:34] notify rc=9 title=质量测评阶段完成
+[2026-08-16 04:39:34] PHASE S-off START（14 模型 × ctx 0,4096,16384,32768,65536，runs=3）
+[2026-08-16 04:39:34] S-off gemma-4-26b-a4b-it-4bit start
+[2026-08-16 04:54:15] S-off gemma-4-26b-a4b-it-4bit rc=0 cells=5/5 dur=881s
+[2026-08-16 04:54:15] S-off gemma-4-26b-a4b-it-8bit start
+[2026-08-16 05:11:09] S-off gemma-4-26b-a4b-it-8bit rc=0 cells=5/5 dur=1014s
+[2026-08-16 05:11:09] S-off gemma-4-26b-a4b-it-qat-4bit start
+[2026-08-16 05:25:57] S-off gemma-4-26b-a4b-it-qat-4bit rc=0 cells=5/5 dur=888s
+[2026-08-16 05:25:57] S-off gemma-4-31b-it-8bit start
+[2026-08-16 06:10:27] S-off gemma-4-31b-it-8bit rc=0 cells=4/4 dur=2670s
+[2026-08-16 06:10:27] S-off gemma-4-31b-it-4bit start
+[2026-08-16 07:40:48] S-off gemma-4-31b-it-4bit rc=0 cells=5/5 dur=5421s
+[2026-08-16 07:40:48] S-off gemma-4-31b-it-qat-4bit start
+[2026-08-16 09:15:28] S-off gemma-4-31b-it-qat-4bit rc=0 cells=5/5 dur=5680s
+[2026-08-16 09:15:28] S-off gemma-4-12b-it-8bit start
+[2026-08-16 09:51:32] S-off gemma-4-12b-it-8bit rc=0 cells=5/5 dur=2164s
+[2026-08-16 09:51:32] S-off gemma-4-12b-it-4bit start
+[2026-08-16 10:25:52] S-off gemma-4-12b-it-4bit rc=0 cells=5/5 dur=2060s
+[2026-08-16 10:25:52] S-off gemma-4-e4b-it-4bit start
+[2026-08-16 10:34:50] S-off gemma-4-e4b-it-4bit rc=0 cells=5/5 dur=538s
+[2026-08-16 10:34:50] S-off gemma-4-e4b-it-8bit start
+[2026-08-16 10:44:26] S-off gemma-4-e4b-it-8bit rc=0 cells=5/5 dur=576s
+[2026-08-16 10:44:26] S-off Qwen3.8-27B-8bit start
+[2026-08-16 11:59:38] S-off Qwen3.8-27B-8bit rc=0 cells=5/5 dur=4512s
+[2026-08-16 11:59:38] S-off Qwen3.8-27B-4bit start
+[2026-08-16 13:10:19] S-off Qwen3.8-27B-4bit rc=0 cells=5/5 dur=4241s
+[2026-08-16 13:10:19] S-off Qwen3.5-9B-4bit start
+[2026-08-16 13:31:02] S-off Qwen3.5-9B-4bit rc=0 cells=5/5 dur=1243s
+[2026-08-16 13:31:02] S-off Ornith-1.0-9B-4bit start
+[2026-08-16 13:51:45] S-off Ornith-1.0-9B-4bit rc=0 cells=5/5 dur=1243s
+[2026-08-16 13:51:46] notify rc=0 title=速度基线臂完成
+[2026-08-16 13:51:46] PHASE S-on START（12 档 × ctx 0,4096,16384,32768,65536，runs=3）
+[2026-08-16 13:51:46] S-on gemma-4-26b-a4b-it-8bit draft=gemma-4-26b-a4b-it-assistant-4bit block=4 start
+[2026-08-16 13:52:29] S-on gemma-4-26b-a4b-it-8bit rc=0 cells=0/5 dur=43s
+[2026-08-16 13:52:29] S-on gemma-4-26b-a4b-it-4bit draft=gemma-4-26b-a4b-it-assistant-4bit block=3 start
+[2026-08-16 13:52:57] S-on gemma-4-26b-a4b-it-4bit rc=0 cells=0/5 dur=28s
+[2026-08-16 13:52:57] S-on gemma-4-26b-a4b-it-qat-4bit draft=gemma-4-26b-a4b-it-assistant-4bit block=3 start
+[2026-08-16 13:53:24] S-on gemma-4-26b-a4b-it-qat-4bit rc=0 cells=0/5 dur=27s
+[2026-08-16 13:53:24] S-on gemma-4-31b-it-8bit draft=gemma-4-31b-it-assistant-8bit block=4 start
+[2026-08-16 13:54:13] S-on gemma-4-31b-it-8bit rc=0 cells=0/4 dur=49s
+[2026-08-16 13:54:13] S-on gemma-4-31b-it-4bit draft=gemma-4-31b-it-assistant-8bit block=3 start
+[2026-08-16 13:54:45] S-on gemma-4-31b-it-4bit rc=0 cells=0/5 dur=32s
+[2026-08-16 13:54:45] S-on gemma-4-31b-it-qat-4bit draft=gemma-4-31b-it-assistant-8bit block=3 start
+[2026-08-16 13:55:27] S-on gemma-4-31b-it-qat-4bit rc=0 cells=0/5 dur=42s
+[2026-08-16 13:55:27] S-on gemma-4-12b-it-8bit draft=gemma-4-12b-it-assistant-bf16 block=5 start
+[2026-08-16 13:55:53] S-on gemma-4-12b-it-8bit rc=0 cells=0/5 dur=26s
+[2026-08-16 13:55:53] S-on gemma-4-12b-it-4bit draft=gemma-4-12b-it-assistant-bf16 block=3 start
+[2026-08-16 13:56:08] S-on gemma-4-12b-it-4bit rc=0 cells=0/5 dur=15s
+[2026-08-16 13:56:08] S-on gemma-4-e4b-it-8bit draft=gemma-4-e4b-it-assistant-bf16 block=5 start
+[2026-08-16 13:56:27] S-on gemma-4-e4b-it-8bit rc=0 cells=0/5 dur=19s
+[2026-08-16 13:56:27] S-on gemma-4-e4b-it-4bit draft=gemma-4-e4b-it-assistant-bf16 block=4 start
+[2026-08-16 13:56:42] S-on gemma-4-e4b-it-4bit rc=0 cells=0/5 dur=15s
+[2026-08-16 13:56:42] S-on Qwen3.8-27B-8bit draft=Qwen3.8-27B-MTP-8bit block=5 start
+[2026-08-16 13:57:24] S-on Qwen3.8-27B-8bit rc=0 cells=0/5 dur=42s
+[2026-08-16 13:57:24] S-on Qwen3.8-27B-4bit draft=Qwen3.8-27B-MTP-4bit block=3 start
+[2026-08-16 13:57:53] S-on Qwen3.8-27B-4bit rc=0 cells=0/5 dur=29s
+[2026-08-16 13:57:53] ==== CAMPAIGN DONE q_fail=0 soff_fail=0 son_fail=12 ====
+[2026-08-16 13:57:53] notify rc=0 title=通宵战役全部完成
+[2026-08-16 14:00:05] ==== CAMPAIGN START pid=52502 ====
+[2026-08-16 14:00:05] PHASE Q START（12 模型，dims=tool_call,longchain,vision）
+[2026-08-16 14:00:05] Q gemma-4-26b-a4b-it-4bit 已完成（marker 存在），跳过
+[2026-08-16 14:00:05] Q gemma-4-26b-a4b-it-8bit 已完成（marker 存在），跳过
+[2026-08-16 14:00:05] Q gemma-4-26b-a4b-it-qat-4bit 已完成（marker 存在），跳过
+[2026-08-16 14:00:05] Q gemma-4-31b-it-8bit 已完成（marker 存在），跳过
+[2026-08-16 14:00:05] Q gemma-4-31b-it-4bit 已完成（marker 存在），跳过
+[2026-08-16 14:00:05] Q gemma-4-31b-it-qat-4bit 已完成（marker 存在），跳过
+[2026-08-16 14:00:05] Q gemma-4-12b-it-8bit 已完成（marker 存在），跳过
+[2026-08-16 14:00:05] Q gemma-4-12b-it-4bit 已完成（marker 存在），跳过
+[2026-08-16 14:00:05] Q gemma-4-e4b-it-4bit 已完成（marker 存在），跳过
+[2026-08-16 14:00:05] Q gemma-4-e4b-it-8bit 已完成（marker 存在），跳过
+[2026-08-16 14:00:05] Q Qwen3.5-9B-4bit 已完成（marker 存在），跳过
+[2026-08-16 14:00:05] Q Ornith-1.0-9B-4bit 已完成（marker 存在），跳过
+[2026-08-16 14:00:06] notify rc=0 title=质量测评阶段完成
+[2026-08-16 14:00:06] PHASE S-off START（14 模型 × ctx 0,4096,16384,32768,65536，runs=3）
+[2026-08-16 14:00:06] S-off gemma-4-26b-a4b-it-4bit start
+[2026-08-16 14:00:06] S-off gemma-4-26b-a4b-it-4bit rc=0 cells=0/5 dur=0s
+[2026-08-16 14:00:06] S-off gemma-4-26b-a4b-it-8bit start
+[2026-08-16 14:00:06] S-off gemma-4-26b-a4b-it-8bit rc=0 cells=0/5 dur=0s
+[2026-08-16 14:00:06] S-off gemma-4-26b-a4b-it-qat-4bit start
+[2026-08-16 14:00:06] S-off gemma-4-26b-a4b-it-qat-4bit rc=0 cells=0/5 dur=0s
+[2026-08-16 14:00:06] S-off gemma-4-31b-it-8bit start
+[2026-08-16 14:00:07] S-off gemma-4-31b-it-8bit rc=0 cells=0/4 dur=1s
+[2026-08-16 14:00:07] S-off gemma-4-31b-it-4bit start
+[2026-08-16 14:00:07] S-off gemma-4-31b-it-4bit rc=0 cells=0/5 dur=0s
+[2026-08-16 14:00:07] S-off gemma-4-31b-it-qat-4bit start
+[2026-08-16 14:00:07] S-off gemma-4-31b-it-qat-4bit rc=0 cells=0/5 dur=0s
+[2026-08-16 14:00:07] S-off gemma-4-12b-it-8bit start
+[2026-08-16 14:00:07] S-off gemma-4-12b-it-8bit rc=0 cells=0/5 dur=0s
+[2026-08-16 14:00:07] S-off gemma-4-12b-it-4bit start
+[2026-08-16 14:00:08] S-off gemma-4-12b-it-4bit rc=0 cells=0/5 dur=1s
+[2026-08-16 14:00:08] S-off gemma-4-e4b-it-4bit start
+[2026-08-16 14:00:08] S-off gemma-4-e4b-it-4bit rc=0 cells=0/5 dur=0s
+[2026-08-16 14:00:08] S-off gemma-4-e4b-it-8bit start
+[2026-08-16 14:00:08] S-off gemma-4-e4b-it-8bit rc=0 cells=0/5 dur=0s
+[2026-08-16 14:00:08] S-off Qwen3.8-27B-8bit start
+[2026-08-16 14:00:09] S-off Qwen3.8-27B-8bit rc=0 cells=0/5 dur=1s
+[2026-08-16 14:00:09] S-off Qwen3.8-27B-4bit start
+[2026-08-16 14:00:09] S-off Qwen3.8-27B-4bit rc=0 cells=0/5 dur=0s
+[2026-08-16 14:00:09] S-off Qwen3.5-9B-4bit start
+[2026-08-16 14:00:09] S-off Qwen3.5-9B-4bit rc=0 cells=0/5 dur=0s
+[2026-08-16 14:00:09] S-off Ornith-1.0-9B-4bit start
+[2026-08-16 14:11:45] S-off Ornith-1.0-9B-4bit rc=0 cells=1/5 dur=696s
+[2026-08-16 14:11:45] notify rc=0 title=速度基线臂完成
+[2026-08-16 14:11:45] PHASE S-on START（12 档 × ctx 0,4096,16384,32768,65536，runs=3）
+[2026-08-16 14:11:45] S-on gemma-4-26b-a4b-it-8bit draft=gemma-4-26b-a4b-it-assistant-4bit block=4 start
+[2026-08-16 14:29:47] S-on gemma-4-26b-a4b-it-8bit rc=0 cells=5/5 dur=1082s
+[2026-08-16 14:29:47] S-on gemma-4-26b-a4b-it-4bit draft=gemma-4-26b-a4b-it-assistant-4bit block=3 start
+[2026-08-16 14:45:44] S-on gemma-4-26b-a4b-it-4bit rc=0 cells=5/5 dur=957s
+[2026-08-16 14:45:44] S-on gemma-4-26b-a4b-it-qat-4bit draft=gemma-4-26b-a4b-it-assistant-4bit block=3 start
+[2026-08-16 15:01:55] S-on gemma-4-26b-a4b-it-qat-4bit rc=0 cells=5/5 dur=971s
+[2026-08-16 15:01:55] S-on gemma-4-31b-it-8bit draft=gemma-4-31b-it-assistant-8bit block=4 start
+[2026-08-16 15:44:45] S-on gemma-4-31b-it-8bit rc=0 cells=4/4 dur=2570s
+[2026-08-16 15:44:45] S-on gemma-4-31b-it-4bit draft=gemma-4-31b-it-assistant-8bit block=3 start
+[2026-08-16 17:17:26] S-on gemma-4-31b-it-4bit rc=0 cells=5/5 dur=5561s
+[2026-08-16 17:17:26] S-on gemma-4-31b-it-qat-4bit draft=gemma-4-31b-it-assistant-8bit block=3 start
+[2026-08-16 18:14:47] 收到 INT/TERM：转发子进程 pid=54826 并清理 inference server
