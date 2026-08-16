@@ -27,10 +27,14 @@ import re
 from typing import Callable, List, Optional, Tuple
 
 # 工具名预告的解析:块首若干字符内找 call: name { 前缀(gemma-4 紧凑 DSL,§7-8 起
-# 是该方言唯一形态)或 {"name": "..."}(qwen35 等 JSON 系方言,以及迁移前的历史)。
-# 两种形态都要求名字之后出现边界符(闭引号 / 左花括号)才算完整——逐 token 喂入时
-# 名字可能只生成了一半,过早匹配会预告出残缺工具名。
-_TOOL_NAME_RE = re.compile(r'"name"\s*:\s*"([A-Za-z0-9_-]+)"|call\s*:\s*"?([A-Za-z0-9_-]+)"?\s*(?=\{)')
+# 是该方言唯一形态)、{"name": "..."}(纯 JSON 约束产物与迁移前历史)、或
+# <function=name>(qwen35 方言的 XML 调用体)。三种形态都要求名字之后出现边界符
+# (闭引号 / 左花括号 / '>')才算完整——逐 token 喂入时名字可能只生成了一半,
+# 过早匹配会预告出残缺工具名。字符集含 '.'(Gemini 函数名规范,response_parser 同口径)。
+_TOOL_NAME_RE = re.compile(
+    r'"name"\s*:\s*"([A-Za-z0-9_.-]+)"'
+    r'|call\s*:\s*"?([A-Za-z0-9_.-]+)"?\s*(?=\{)'
+    r'|<function=([A-Za-z0-9_.-]+)>')
 _TOOL_NAME_SCAN_LIMIT = 200  # 超过此长度还没出现 name 就放弃预告(不影响执行)
 
 
@@ -154,7 +158,7 @@ class VisibleTextStreamer:
                     if (m2 := _TOOL_NAME_RE.search(self._tool_buf)) is not None:
                         self._tool_announced = True
                         if self.on_tool_pending is not None:
-                            self.on_tool_pending(m2.group(1) or m2.group(2))
+                            self.on_tool_pending(m2.group(1) or m2.group(2) or m2.group(3))
                 i += 1
 
         # 未处理的尾部（holdback 或未闭合标记）留待下次

@@ -2343,4 +2343,28 @@ pgrep 验活自己的循环）。纪律从"仅新脚本磨合期分钟级盯"改
 
 ---
 
+**第一梯队夜战（2026-08-17 睡前任务，用户指令"只做第一梯队"）——**
+**旧 16GB MacBook 退役（用户拍板）**：不再作为开发设备；开发/生产至少 M4 Max
+64G 级别或以上。D.20 收口后"注册表最小档 e4b-8bit 在 16G 机可行性"待办随之销案。
+**① gemma tool_call 架构锅取证定性（已实锤）**：08-16 画像 gemma 系 7 档 0.72/
+12 例解析失败**全部**是带点号工具名（BFCL 命名空间风格 `country_info.capital`
+等），调用语义完好——`gemma4/response_parser.py:56` 工具名正则字符集
+`[a-zA-Z0-9_-]+` 缺 `.`，匹配失败掉 JSON 兜底报 "Severely malformed"。而声明侧
+（dsl.format_function_declaration）与约束语法侧（tool_grammar 把 `call:名字{`
+做成 Lark 字面量）都对带点名原样放行/强制——三方脱锚，正是 §S.17 故障类。
+纠错闭环 0% 成功的成因：调用本来就没错，模型重发同样正确的调用再次被拒。
+**分类：parser 过严（架构锅），非模型特性**；例外 tc-bfcl-multiple_21（1 例）
+是模型写散文代替调用，真模型行为。修复：response_parser + stream_filter
+`_TOOL_NAME_RE` 两处字符集加 `.`（qwen35 方言正则本就含 `\.`，无此锅）+ 3 条
+回归测试（含实测失败样本逐字节回放）；全量金测试 963 绿。重测四档见下。
+**④ qwen35 方言假设复核（完成，假设成立）**：Qwen3.8-27B 官方模板（4 目录件
+md5 同字节）实读差分——(a) **「思考恒回放」升格为官方默认**：Qwen3.8 模板新增
+`preserve_thinking` 开关且缺省 true（恒回放全部 <think>），方言当年取的 Ornith
+口径如今正是官方缺省，不再是偏离；(b) XML 调用体/参数 tojson 规则/生成头字节
+（`<think>\n` 与空块预填）/声明块形态全部与方言锚定一致；(c) 唯一新发现：
+Qwen3.8 新增 `reasoning_effort` 旋钮（xhigh 缺省/medium/low，开思考时向 system
+注入一句效率指令），方言未实现——可选旋钮非缺陷，待 Qwen3.8 转正评估时一并拍板。
+
+---
+
 *建立：2026-07-16 ｜ 依据：`ROADMAP.md` + 用户 Q1/Q2 答复 + `CHARTER.md` / `REARCHITECTURE.md` 实读 + 两侧代码实测。*

@@ -124,3 +124,30 @@ def test_tool_call_inside_unclosed_thought_still_executes():
     assert out["tool_calls"] and out["tool_calls"][0]["name"] == "list_dir"
     assert "先分析一下" in out["thoughts"]
     assert out["text"] == ""
+
+
+def test_dotted_tool_name_dsl_call_parses():
+    """带点工具名(BFCL 命名空间风格)必须走 DSL 主路解析成功。
+
+    声明侧与约束语法侧都对 call:a.b{…} 原样放行,解析侧曾因名字字符集缺 '.'
+    把模型照声明写出的合法调用判成 Severely malformed(08-16 全库画像 gemma 系
+    tool_call 0.72、12 例解析失败全数此因;纠错闭环 0% 成功——调用本来就没错)。
+    """
+    p = make_parser()
+    out = p.parse('<|tool_call>call:country_info.capital{country:<|"|>Brazil<|"|>}<tool_call|>')
+    assert out["tool_calls"] == [
+        {"type": "function", "name": "country_info.capital",
+         "arguments": {"country": "Brazil"}}]
+    assert out["text"] == ""    # 铁律级不变量：调用块不得漏进正文
+
+
+def test_dotted_tool_name_nested_args_parse():
+    """实测失败样本回放:多参数+数组值+带点名,逐字节取自 08-16 评测转录。"""
+    p = make_parser()
+    out = p.parse('<|tool_call>call:basketball.player_stats.get{player_name:<|"|>LeBron James<|"|>,'
+                  'stats_fields:[<|"|>points<|"|>,<|"|>assists<|"|>,<|"|>minutes<|"|>]}<tool_call|>')
+    assert out["tool_calls"] == [
+        {"type": "function", "name": "basketball.player_stats.get",
+         "arguments": {"player_name": "LeBron James",
+                       "stats_fields": ["points", "assists", "minutes"]}}]
+    assert out["text"] == ""    # 铁律级不变量：调用块不得漏进正文

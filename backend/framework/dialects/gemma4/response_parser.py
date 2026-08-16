@@ -53,7 +53,12 @@ class ResponseParser:
         tool_pattern = rf"{re.escape(self.stc)}(.*?){re.escape(self.etc)}"
         for match in re.finditer(tool_pattern, current_response, re.DOTALL):
             raw_tool_content = match.group(1).strip()
-            call_match = re.search(r'call\s*:\s*"?([a-zA-Z0-9_-]+)"?\s*(\{.*\})', raw_tool_content, re.DOTALL)
+            # 工具名字符集 = Gemini 函数名规范全集（字母/数字/_/./-，见官方 function
+            # declaration 命名规则）——声明侧与约束语法侧对名字原样放行，解析侧比它们
+            # 窄一个字符就是三方脱锚（§S.17 故障类；08-16 案：缺 '.' 拒收 BFCL 命名
+            # 空间名）。已知边界：search 不锚定块首，实参字符串里出现 `call:x{` 会
+            # 劫持 DSL 分支（修复前后同样存在，动匹配语义需先有实测证据）。
+            call_match = re.search(r'call\s*:\s*"?([a-zA-Z0-9_.-]+)"?\s*(\{.*\})', raw_tool_content, re.DOTALL)
             
             if call_match:
                 func_name = call_match.group(1)

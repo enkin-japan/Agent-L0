@@ -72,3 +72,20 @@ def test_budget_forced_close_stops_thinking():
     v, t, p = run_stream("思考中被掐断\n<channel|>继续输出正文", in_thought=True)
     assert t == "思考中被掐断\n"
     assert v == "继续输出正文"
+
+
+def test_dotted_tool_name_announced():
+    """带点工具名的预告(response_parser 同口径修复,08-16 gemma tool_call 案)。"""
+    v, t, p = run_stream('<|tool_call>call:country_info.capital{country:<|"|>Brazil<|"|>}<tool_call|>')
+    assert p == ["country_info.capital"]
+    assert v == ""    # 抑制半边同样要钉：调用块不得流出为可见正文
+
+
+def test_qwen35_xml_function_name_announced():
+    """qwen35 方言(XML 调用体)的工具名预告——此前两种形态都匹配不上,预告静默失灵。"""
+    pending = []
+    s = VisibleTextStreamer(soc="<think>", eoc="</think>",
+                            stc="<tool_call>", etc="</tool_call>",
+                            on_tool_pending=pending.append)
+    s.feed("<tool_call>\n<function=web.search>\n<parameter=query>\n天气\n</parameter>")
+    assert pending == ["web.search"]

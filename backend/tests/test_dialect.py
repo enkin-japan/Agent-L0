@@ -276,6 +276,8 @@ _ROUNDTRIP = [
     ("代码含裸花括号", "run_python", {"code": "d = {a:1}\nprint(d)"}),
     ("代码含 JSON", "run_python", {"code": 'j = {"x": 1}'}),
     ("串里有冒号逗号", "fn", {"s": "a:b, c:d"}),
+    # 带点命名空间名（BFCL 风格）：08-16 案——声明/语法放行、解析拒收的三方脱锚
+    ("带点命名空间名", "country_info.capital", {"country": "Brazil"}),
 ]
 
 

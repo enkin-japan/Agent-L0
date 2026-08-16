@@ -72,6 +72,11 @@ _TOOLS = [
      "parameters": {"type": "object",
                     "properties": {"code": {"type": "string", "description": "代码"}},
                     "required": ["code"]}},
+    # 带点命名空间名（BFCL 风格）：钉「声明 == 语法 == 解析」三方在工具名空间上不漂移
+    {"name": "country_info.capital", "description": "Country capital lookup",
+     "parameters": {"type": "object",
+                    "properties": {"country": {"type": "string", "description": "Country"}},
+                    "required": ["country"]}},
 ]
 _NESTED = [{"type": "function", "function": t} for t in _TOOLS]
 
@@ -271,6 +276,7 @@ def matcher_factory(tok):
     ("run_python", {"code": 'import os\nprint("hi")\n'}),     # 多行含引号
     ("run_python", {"code": ""}),
     ("run_python", {"code": "打印('中文')"}),
+    ("country_info.capital", {"country": "Brazil"}),   # 带点名：语法侧同样必须放行
 ])
 def test_grammar_accepts_replay_format(matcher_factory, name, args):
     """约束语法必须接受 dsl 编码器产出的每一种合法调用。
