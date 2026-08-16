@@ -1,0 +1,23 @@
+INFO:     Started server process [53988]
+INFO:     Waiting for application startup.
+🚀 [Server] loading model: mlx-community/gemma-4-12b-it-4bit (backend=mlx)
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:63789 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63790 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63797 - "DELETE /v1/cache/cf256b2eb02f4023b42faade185e05f3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63798 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63803 - "DELETE /v1/cache/19ec27b5d95c449ca3f44ae18efef8fa HTTP/1.1" 200 OK
+[Server] 约束采样引擎就绪（llguidance）
+INFO:     127.0.0.1:63804 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63809 - "DELETE /v1/cache/74b8a5ca5e9245019336a4a9db7ec05e HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [53988]
+/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/multiprocessing/resource_tracker.py:277: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown: {'/loky-53988-2f8k14rg'}
+  warnings.warn(

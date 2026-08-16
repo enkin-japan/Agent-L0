@@ -105,7 +105,9 @@ for m in "${Q_MODELS[@]}"; do
   run_step "$PY" benchmarks/model_eval/run_eval.py --model "$m" \
       --dims tool_call,longchain,vision >> "$DIR/q_${m}.log" 2>&1
   rc=$?
-  summ=$(grep -m1 '^== summary:' "$DIR/q_${m}.log")
+  # 取**最后一条** summary：q 日志跨次追加，-m1 会拿到上一轮的旧行、让本轮失败
+  # 被旧成功掩护（stage review M7，与 cells_done 同病根）
+  summ=$(grep '^== summary:' "$DIR/q_${m}.log" | tail -1)
   summ=${summ:0:300}
   if [ $rc -eq 0 ] && [ -n "$summ" ]; then
     touch "$DIR/q_done_${m}"
@@ -196,4 +198,7 @@ for entry in "${S_ON[@]}"; do
 done
 
 note "==== CAMPAIGN DONE q_fail=$q_fail soff_fail=$soff_fail son_fail=$son_fail ===="
+# 失败计数必须进退出码：全 0 才 rc=0，否则外层按 rc 判成败会 fail-open
+# （stage review M6：son_fail=12 的整臂全灭曾以 rc=0 收场）
+[ $((q_fail + soff_fail + son_fail)) -eq 0 ] || exit 2
 exit 0

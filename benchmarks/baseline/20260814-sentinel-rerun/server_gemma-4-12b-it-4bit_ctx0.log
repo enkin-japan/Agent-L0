@@ -1,0 +1,21 @@
+INFO:     Started server process [36879]
+INFO:     Waiting for application startup.
+🚀 [Server] loading model: mlx-community/gemma-4-12b-it-4bit (backend=mlx)
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:60787 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60788 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60789 - "DELETE /v1/cache/34b385cc56a14f90b36f149c00479bc5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60790 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60791 - "DELETE /v1/cache/c124ac0a39e743179501ca5e69c159ef HTTP/1.1" 200 OK
+[Server] 约束采样引擎就绪（llguidance）
+INFO:     127.0.0.1:60792 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60793 - "DELETE /v1/cache/05ebf6ea49db4e969717af01086f3860 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [36879]

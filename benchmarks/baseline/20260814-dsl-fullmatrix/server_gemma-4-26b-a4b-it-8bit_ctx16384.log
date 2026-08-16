@@ -1,0 +1,25 @@
+INFO:     Started server process [53798]
+INFO:     Waiting for application startup.
+🚀 [Server] loading model: mlx-community/gemma-4-26b-a4b-it-8bit (backend=mlx)
+/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/transformers/audio_utils.py:723: UserWarning: At least one mel filter has all zero values. The value for `num_mel_filters` (128) may be set too high. Or, the value for `num_frequency_bins` (257) may be set too low.
+  warnings.warn(
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:63572 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63573 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63574 - "DELETE /v1/cache/d3dc0d8474da40ada58b0b87a0955a01 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63575 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63576 - "DELETE /v1/cache/80f7ae81f4144545bf9a5f504596f130 HTTP/1.1" 200 OK
+[Server] 约束采样引擎就绪（llguidance）
+INFO:     127.0.0.1:63577 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63582 - "DELETE /v1/cache/76b4d0cd6f6b4aa5a484ab87e43099b6 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [53798]
+/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/multiprocessing/resource_tracker.py:277: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown: {'/loky-53798-eb_ggxis'}
+  warnings.warn(

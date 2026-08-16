@@ -127,6 +127,24 @@ class _GuardAdapter:
         return mx.where(mask, logits, neg)
 
 
+def _select_delta_detokenizer(processor) -> Optional[object]:
+    """展示增量快路的门卫：只放行 SPM 流式 detokenizer，其余返回 None。
+
+    快路做 `text + _unflushed` 拼接，这只对 SPM 语义成立；BPE 的 _unflushed 是
+    未经 byte_decoder 还原的字节面原文，放进快路 = ByteLevel 词表（Qwen 全家族）
+    流式乱码（08-16 stage review C1）。isinstance 判型，不做 hasattr 鸭子判——
+    BPE 恰好同名同属性，鸭子判正是当初漏进来的路。
+    上游改名/裁类时降级到安全支（返回 None=调用方走 result.text），不在生成中途炸。
+    """
+    try:
+        from mlx_vlm.tokenizer_utils import SPMStreamingDetokenizer
+    except ImportError:
+        return None
+
+    d = getattr(processor, "detokenizer", None)
+    return d if isinstance(d, SPMStreamingDetokenizer) else None
+
+
 def _load_drafter(target_model, draft_path: str, spec_cfg: Dict[str, Any]):
     """加载并校验投机草稿件，返回 `(draft_model, resolved_kind)`。
 
@@ -194,7 +212,9 @@ def _load_drafter(target_model, draft_path: str, spec_cfg: Dict[str, Any]):
     # （mtp_processors.py），万一上游改了分派判据会当场响。
     # 覆盖的漂移形态：上游若把 callable(getattr(...)) 判据改成 hasattr(...)，
     # 击倒后 hasattr 仍真、分派会去调 None() 而在 verify 链内抛
-    # TypeError（mtp.py:120 `_mtp_verify_without_logits`/:149）——先于走查执行，所以**先响的是这里**，
+    # TypeError（mtp.py:120 的 `verify_logits(...)` 调用行即 speculative_verify_logits；
+    # `_mtp_verify_without_logits` 本体在 :57、调用在 :147/:159。08-16 stage review
+    # M22 改：首版把 :120 贴错成后者的名字）——先于走查执行，所以**先响的是这里**，
     # 不是走查侧 target_tokens 断言（那两条断言在 acceptance_walk 体内，永远
     # 排在 verify 之后；非贪心采样时 :145 段整体跳过、断言根本不触发）。
     # 两种形态都不会静默降级，只是排障入口在 verify 不在守卫（08-16 复审修注）。
@@ -463,13 +483,19 @@ class MLXBackend:
         # 会把文本攒在 _unflushed 里、到 ▁ 词边界或 finalize 才 flush，导致 last_segment
         # 中途恒空、整段答复在结尾一次性吐出。盯 text+_unflushed 可让中文也逐 token 出。
         # 该 detokenizer 与底层 stream_generate 用的是同一实例（processor.detokenizer）。
+        # ⚠️ 该快路**仅对 SPM 成立**，必须 isinstance 判型而非 hasattr 鸭子判：
+        # BPEStreamingDetokenizer 同样有 text/_unflushed，但它的 _unflushed 是未经
+        # byte_decoder 还原的字节面原文（ä¸Ģ…），且中文 token 无前导空格、永不触发
+        # flush——直接拼接 = ByteLevel 词表全家族（Qwen3.5/3.8、Ornith）流式全程乱码
+        # （08-16 stage review C1；速度矩阵 31 格质量哨齐响即此，档案里有样本）。
+        # 非 SPM（BPE/Naive）走 else 支的 result.text 增量：字节正确，但对中文这类
+        # 无空格语言 BPE 的 last_segment 中间恒空——**实际是整段到 finalize 一次性
+        # 吐出，不是"粒度粗些"**（评审实测）。qwen 家族真流式需接上游
+        # _ServerTokenStreamer 式 BPE 增量解码，记为独立工作项，不在 C1 修复面内。
         detok = None
         prev = ""
         if features.get("want_delta"):
-            d = self.processor.detokenizer
-            if hasattr(d, "text") and hasattr(d, "_unflushed"):
-                detok = d
-            # 非 SPM 类 detokenizer：delta=None，调用方退回 text 增量
+            detok = _select_delta_detokenizer(self.processor)
 
         for result in _patched_stream_generate(
             model=self.model,

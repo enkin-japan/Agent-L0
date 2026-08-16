@@ -2268,10 +2268,11 @@ CLAUDE.md "Stage review" 节。
 不变，对照 qwen35 方言解析错 0 → 判定 gemma4 方言工具 DSL 链路架构锅，已立独立
 待办（取证分类→修复双门→仅重测 gemma×tool_call ~1.5h→回填）；修复前 gemma tool
 列"对路由真实、不代表裸模型能力"。
-②**速度**：bench_baseline v3 真贪心 server 口径双臂——基线 14 档 × 5 ctx 全齐 +
-MTP 臂 8 档（12b/e4b 判不测零增量；31b-qat×64k 用户停场作废）。**主结论换位：MTP
-加速比随 ctx 单调衰减，gemma 全家族在 Agent 常驻区间（4k–32k）跌穿 1.0 净亏**
-（26b 家族 4-8k 穿越、31b-8bit ~32k 打平、4bit 档 64k 只剩 0.36-0.47×）；
+②**速度**：bench_baseline v3 真贪心 server 口径双臂——基线 14 档 69 格
+（31b-8bit×64k 按已证 OOM 跳）+ MTP 臂 8 档（12b/e4b 判不测零增量；31b-qat×64k
+用户停场作废）。**主结论换位：MTP 加速比随 ctx 衰减（gemma 各档单调、qwen 平缓非
+严格单调），gemma 全家族在 Agent 常驻区间跌穿 1.0 净亏**（26b 三档 ≤4k 穿越、
+31b-4bit/qat ~16k、31b-8bit ~32k 打平、gemma 4bit 三档 64k 只剩 0.34-0.47×）；
 **Qwen3.8 内建头两档唯一全段净赚**（8bit 1.70→1.27×、4bit 1.54→1.21×，接受率
 不随 ctx 劣化）→ 外挂整件草稿路线对 Agent 负载判死，§6.3 重构（矩阵升主结论
 6.3-a、冷启动定档降格 6.3-b）；A8 前置不变。
@@ -2279,11 +2280,22 @@ MTP 臂 8 档（12b/e4b 判不测零增量；31b-qat×64k 用户停场作废）�
 （`$CTX，`）中断队列；`_load_drafter` 守卫 str/Path TypeError 致 S-on 首轮 12 档
 全灭（金测试 mock 太深杀不死该变异体，已补真函数用例，7835cd2）；`cells_done`
 字面 grep 撞 jsonl 混合序列化计数恒 0（已修 json 口径）。
-④档案：`benchmarks/baseline/20260816-overnight/` 全目录入库 183 件（jsonl 双臂+
+④档案：`benchmarks/baseline/20260816-overnight/` 全目录入库 182 件+.gitignore 豁免（jsonl 双臂+
 q_summaries ×14+逐模型日志+ANALYSIS.md 六结论）；PROFILES.md 增 08-16 全库横评章；
 注册表 9 档 profile 新回填 + 3 档更新。零 unit，全本地。
 挂起待用户：Ornith vision capabilities 复核；Ornith 长链 0.33 回退复核；
 qwen38 生产开 MTP 的 A8 前置。
+⑤**阶段复审（stage-reviewer 首次实战，Opus+xhigh）**：抓 **1 Critical + 4 Major +
+21 Minor**，全部核实修正（本条目上方数字为修正后口径）。**C1（生产级）：流式增量
+快路 hasattr 鸭子判把 BPE detokenizer 误当 SPM → ByteLevel 词表（Qwen 全家族）
+流式全程乱码**——本战役速度矩阵 31 格质量哨齐响即其现形（恰好全是 qwen 档，样本
+在 jsonl），首版分析漏看；缺陷早于本阶段、金测试零覆盖故历次双门未拦。修
+`_select_delta_detokenizer` isinstance 门卫 + 4 回归钉（958 绿）。质量测评（非流式）
+与速度数字（计 token）不受影响。M 级要点：§二/§三首版混用含/剔首跑两种中位口径
+（已统一为 jsonl `decode_tps_median` 稳态口径重算，26b-8bit@4k 因此从 1.02× 改判
+0.98×=穿越点提前）；1.41×vs1.21× 归因反向（实为 MTP 臂慢 13.7%、基线仅+1.1%）；
+watchdog 重启场景旧 DONE 行 fail-open；.gitignore 豁免钉死单日期目录。其余为
+文档数字/措辞级，逐条已修。
 
 ---
 

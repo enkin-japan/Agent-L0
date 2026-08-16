@@ -6,7 +6,7 @@
 #          刷日志（重试/告警循环），把它算进活性会让停滞报警永不触发。
 #          最长静默段实测参照：31b 档装载+64k 预填 ×4 run ≈ 20min 级，留一倍余量。
 #   超时 = 总时长超 40h（全队列预估 ~28-30h，超 40h 必有异常）
-# 所有异常路径都推送 notify（静默时段 rc=9 会压进 suppressed.log，次晨可读，属设计）。
+# 不推送（2026-08-16 推送纪律：脚本不推送）；报警通道 = 退出码唤醒主会话。
 set -u
 BASE=/Volumes/enkin/project/Agent
 DIR="$BASE/benchmarks/baseline/20260816-overnight"
@@ -16,6 +16,9 @@ PID="${1:?用法: watchdog.sh <campaign pid>}"
 STALL_S=2400
 DEADLINE_S=$((40 * 3600))
 t_start=$(date +%s)
+# progress.log 跨次启动追加，陈旧的 CAMPAIGN DONE 行会把"重启后中途死亡"伪装成善终
+# （stage review M5，当天实撞）。记开跑基线行数，善终判据只认**增量行**里的 DONE。
+prog_base=$(wc -l < "$PROG" 2>/dev/null || echo 0)
 
 # push 已拆除（2026-08-16 推送纪律：脚本不推送；报警=退出唤醒主会话）
 
@@ -50,8 +53,9 @@ while kill -0 "$PID" 2>/dev/null; do
   fi
 done
 
-# 进程退出 ≠ 正常收尾：必须见到 DONE 行才算善终（半夜 OOM-kill 与跑完长得一样）
-if grep -q 'CAMPAIGN DONE' "$PROG" 2>/dev/null; then
+# 进程退出 ≠ 正常收尾：必须在**本次开跑之后新增的行**里见到 DONE 才算善终
+# （半夜 OOM-kill 与跑完长得一样；旧 DONE 行不算数）
+if tail -n +"$((prog_base + 1))" "$PROG" 2>/dev/null | grep -q 'CAMPAIGN DONE'; then
   echo "WATCHDOG: campaign 正常收尾（见 CAMPAIGN DONE），看门狗收工"
   exit 0
 fi

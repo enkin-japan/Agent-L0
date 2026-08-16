@@ -139,8 +139,7 @@ change). Docs-only and ledger-only diffs are exempt.
   million-token budgets), it is out of `implementer`'s scope by definition:
   the main session either splits it or handles it.
 
-### Completion-or-blocked push ONLY (user decision 2026-08-16, replaces the old
-### phase-completion rule after a 4-pushes-in-20-minutes incident)
+### Completion-or-blocked push ONLY (user decision 2026-08-16; replaces the old phase-completion rule after a 4-pushes-in-20-minutes incident)
 - Push a notification (`reminder/notify.sh "<标题>" "<正文>"`) in exactly TWO
   cases, and no others:
   1. The ENTIRE task is finished — verified, analysis written — and is now

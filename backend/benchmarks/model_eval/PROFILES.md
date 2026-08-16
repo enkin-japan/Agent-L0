@@ -63,6 +63,10 @@
 配上了上游 8bit，跨量化不可比；上游 4bit 值在 `upstream_diff_probe_console.txt`
 TIER 4bit 段）。生产扫描日志 `scan_qwen4/8.log`，
 原始件 `benchmarks/data/qwen38-first-look/`。
+〔与 08-16 全库横评的接受率和解（stage review M24）：本节 4bit @γ2 67.8% 是
+scan 口径（rep=1.1、61-token 单 prompt）；08-16 战役同档同 γ 记 50.2–58.0%，是
+v3 真裸贪心 server 口径 + 不同 prompt 集。两数不矛盾，接受率本就随采样与负载变
+（§5.5），跨口径不可直比。〕
 
 ## 全库横评（2026-08-16 通宵战役；14 档同口径同题库，tool 25/长链 6/vision 212）
 

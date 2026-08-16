@@ -1,0 +1,23 @@
+INFO:     Started server process [36121]
+INFO:     Waiting for application startup.
+🚀 [Server] loading model: mlx-community/gemma-4-26b-a4b-it-8bit (backend=mlx)
+/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/transformers/audio_utils.py:723: UserWarning: At least one mel filter has all zero values. The value for `num_mel_filters` (128) may be set too high. Or, the value for `num_frequency_bins` (257) may be set too low.
+  warnings.warn(
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:60600 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60601 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60602 - "DELETE /v1/cache/2789282f0eb0479db24416a4ec6dd769 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60603 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60604 - "DELETE /v1/cache/c2a25e3c744c47d98b934022edba6152 HTTP/1.1" 200 OK
+[Server] 约束采样引擎就绪（llguidance）
+INFO:     127.0.0.1:60605 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60606 - "DELETE /v1/cache/f3291c803c024035853cbb1b4b7bc4e1 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [36121]

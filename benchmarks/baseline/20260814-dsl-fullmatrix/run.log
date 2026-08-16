@@ -1,0 +1,238 @@
+[16:48:00] 环境头已记：Mac16,9 64G wired=57344MB mlx=0.32.0 spec=off
+[16:48:03] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=0（权重 14.3G）
+[16:48:27]    server 就绪（24s）
+[16:48:29] ✅ 格 gemma-4-26b-a4b-it-4bit × 0（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[16:48:29] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=0
+[16:48:29] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=4096（权重 14.3G）
+[16:48:35]    server 就绪（6s）
+[16:48:45] ✅ 格 gemma-4-26b-a4b-it-4bit × 4096（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[16:48:45] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=4096
+[16:48:45] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=8192（权重 14.3G）
+[16:48:51]    server 就绪（6s）
+[16:49:10] ✅ 格 gemma-4-26b-a4b-it-4bit × 8192（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[16:49:10] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=8192
+[16:49:10] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=16384（权重 14.3G）
+[16:49:16]    server 就绪（6s）
+[16:49:53] ✅ 格 gemma-4-26b-a4b-it-4bit × 16384（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[16:49:54] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=16384
+[16:49:54] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=32768（权重 14.3G）
+[16:50:00]    server 就绪（6s）
+[16:51:21] ✅ 格 gemma-4-26b-a4b-it-4bit × 32768（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[16:51:22] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=32768
+[16:51:22] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=65536（权重 14.3G）
+[16:51:28]    server 就绪（6s）
+[16:54:43] ✅ 格 gemma-4-26b-a4b-it-4bit × 65536（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[16:54:43] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-4bit ctx=65536
+[16:54:44] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-8bit ctx=0（权重 26.0G）
+[16:55:20]    server 就绪（36s）
+[16:55:22] ✅ 格 gemma-4-26b-a4b-it-8bit × 0（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[16:55:23] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-8bit ctx=0
+[16:55:23] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-8bit ctx=4096（权重 26.0G）
+[16:55:44]    server 就绪（21s）
+[16:55:55] ✅ 格 gemma-4-26b-a4b-it-8bit × 4096（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[16:55:55] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-8bit ctx=4096
+[16:55:55] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-8bit ctx=8192（权重 26.0G）
+[16:56:16]    server 就绪（21s）
+[16:56:36] ✅ 格 gemma-4-26b-a4b-it-8bit × 8192（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[16:56:36] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-8bit ctx=8192
+[16:56:37] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-8bit ctx=16384（权重 26.0G）
+[16:56:58]    server 就绪（21s）
+[16:57:36] ✅ 格 gemma-4-26b-a4b-it-8bit × 16384（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[16:57:37] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-8bit ctx=16384
+[16:57:37] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-8bit ctx=32768（权重 26.0G）
+[16:57:58]    server 就绪（21s）
+[16:59:21] ✅ 格 gemma-4-26b-a4b-it-8bit × 32768（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[16:59:22] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-8bit ctx=32768
+[16:59:22] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-8bit ctx=65536（权重 26.0G）
+[16:59:43]    server 就绪（21s）
+[17:03:01] ✅ 格 gemma-4-26b-a4b-it-8bit × 65536（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:03:02] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-8bit ctx=65536
+[17:03:03] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=0（权重 14.5G）
+[17:03:27]    server 就绪（24s）
+[17:03:29] ✅ 格 gemma-4-26b-a4b-it-qat-4bit × 0（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:03:29] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=0
+[17:03:29] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=4096（权重 14.5G）
+[17:03:35]    server 就绪（6s）
+[17:03:45] ✅ 格 gemma-4-26b-a4b-it-qat-4bit × 4096（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:03:45] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=4096
+[17:03:45] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=8192（权重 14.5G）
+[17:03:51]    server 就绪（6s）
+[17:04:10] ✅ 格 gemma-4-26b-a4b-it-qat-4bit × 8192（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:04:10] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=8192
+[17:04:10] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=16384（权重 14.5G）
+[17:04:16]    server 就绪（6s）
+[17:04:54] ✅ 格 gemma-4-26b-a4b-it-qat-4bit × 16384（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:04:54] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=16384
+[17:04:54] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=32768（权重 14.5G）
+[17:05:00]    server 就绪（6s）
+[17:06:22] ✅ 格 gemma-4-26b-a4b-it-qat-4bit × 32768（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:06:22] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=32768
+[17:06:22] 🚀 起 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=65536（权重 14.5G）
+[17:06:28]    server 就绪（6s）
+[17:09:44] ✅ 格 gemma-4-26b-a4b-it-qat-4bit × 65536（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:09:44] 🛑 收 server: mlx-community/gemma-4-26b-a4b-it-qat-4bit ctx=65536
+[17:09:45] 🚀 起 server: mlx-community/gemma-4-12b-it-4bit ctx=0（权重 6.3G）
+[17:09:57]    server 就绪（12s）
+[17:10:00] ✅ 格 gemma-4-12b-it-4bit × 0（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:10:00] 🛑 收 server: mlx-community/gemma-4-12b-it-4bit ctx=0
+[17:10:00] 🚀 起 server: mlx-community/gemma-4-12b-it-4bit ctx=4096（权重 6.3G）
+[17:10:06]    server 就绪（6s）
+[17:10:31] ✅ 格 gemma-4-12b-it-4bit × 4096（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:10:31] 🛑 收 server: mlx-community/gemma-4-12b-it-4bit ctx=4096
+[17:10:31] 🚀 起 server: mlx-community/gemma-4-12b-it-4bit ctx=8192（权重 6.3G）
+[17:10:37]    server 就绪（6s）
+[17:11:26] ✅ 格 gemma-4-12b-it-4bit × 8192（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:11:26] 🛑 收 server: mlx-community/gemma-4-12b-it-4bit ctx=8192
+[17:11:26] 🚀 起 server: mlx-community/gemma-4-12b-it-4bit ctx=16384（权重 6.3G）
+[17:11:32]    server 就绪（6s）
+[17:13:12] ✅ 格 gemma-4-12b-it-4bit × 16384（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:13:12] 🛑 收 server: mlx-community/gemma-4-12b-it-4bit ctx=16384
+[17:13:12] 🚀 起 server: mlx-community/gemma-4-12b-it-4bit ctx=32768（权重 6.3G）
+[17:13:18]    server 就绪（6s）
+[17:16:50] ✅ 格 gemma-4-12b-it-4bit × 32768（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:16:50] 🛑 收 server: mlx-community/gemma-4-12b-it-4bit ctx=32768
+[17:16:50] 🚀 起 server: mlx-community/gemma-4-12b-it-4bit ctx=65536（权重 6.3G）
+[17:16:56]    server 就绪（6s）
+[17:24:53] ✅ 格 gemma-4-12b-it-4bit × 65536（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:24:54] 🛑 收 server: mlx-community/gemma-4-12b-it-4bit ctx=65536
+[17:24:54] 🚀 起 server: mlx-community/gemma-4-12b-it-8bit ctx=0（权重 11.8G）
+[17:25:15]    server 就绪（21s）
+[17:25:18] ✅ 格 gemma-4-12b-it-8bit × 0（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:25:19] 🛑 收 server: mlx-community/gemma-4-12b-it-8bit ctx=0
+[17:25:19] 🚀 起 server: mlx-community/gemma-4-12b-it-8bit ctx=4096（权重 11.8G）
+[17:25:25]    server 就绪（6s）
+[17:25:51] ✅ 格 gemma-4-12b-it-8bit × 4096（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:25:51] 🛑 收 server: mlx-community/gemma-4-12b-it-8bit ctx=4096
+[17:25:51] 🚀 起 server: mlx-community/gemma-4-12b-it-8bit ctx=8192（权重 11.8G）
+[17:25:57]    server 就绪（6s）
+[17:26:47] ✅ 格 gemma-4-12b-it-8bit × 8192（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:26:47] 🛑 收 server: mlx-community/gemma-4-12b-it-8bit ctx=8192
+[17:26:47] 🚀 起 server: mlx-community/gemma-4-12b-it-8bit ctx=16384（权重 11.8G）
+[17:26:53]    server 就绪（6s）
+[17:28:33] ✅ 格 gemma-4-12b-it-8bit × 16384（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:28:34] 🛑 收 server: mlx-community/gemma-4-12b-it-8bit ctx=16384
+[17:28:34] 🚀 起 server: mlx-community/gemma-4-12b-it-8bit ctx=32768（权重 11.8G）
+[17:28:40]    server 就绪（6s）
+[17:32:12] ✅ 格 gemma-4-12b-it-8bit × 32768（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:32:12] 🛑 收 server: mlx-community/gemma-4-12b-it-8bit ctx=32768
+[17:32:13] 🚀 起 server: mlx-community/gemma-4-12b-it-8bit ctx=65536（权重 11.8G）
+[17:32:19]    server 就绪（6s）
+[17:40:18] ✅ 格 gemma-4-12b-it-8bit × 65536（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:40:18] 🛑 收 server: mlx-community/gemma-4-12b-it-8bit ctx=65536
+[17:40:19] 🚀 起 server: mlx-community/gemma-4-31b-it-4bit ctx=0（权重 17.1G）
+[17:40:46]    server 就绪（27s）
+[17:40:50] ✅ 格 gemma-4-31b-it-4bit × 0（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:40:50] 🛑 收 server: mlx-community/gemma-4-31b-it-4bit ctx=0
+[17:40:50] 🚀 起 server: mlx-community/gemma-4-31b-it-4bit ctx=4096（权重 17.1G）
+[17:40:56]    server 就绪（6s）
+[17:42:01] ✅ 格 gemma-4-31b-it-4bit × 4096（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:42:01] 🛑 收 server: mlx-community/gemma-4-31b-it-4bit ctx=4096
+[17:42:01] 🚀 起 server: mlx-community/gemma-4-31b-it-4bit ctx=8192（权重 17.1G）
+[17:42:07]    server 就绪（6s）
+[17:44:15] ✅ 格 gemma-4-31b-it-4bit × 8192（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:44:16] 🛑 收 server: mlx-community/gemma-4-31b-it-4bit ctx=8192
+[17:44:16] 🚀 起 server: mlx-community/gemma-4-31b-it-4bit ctx=16384（权重 17.1G）
+[17:44:22]    server 就绪（6s）
+[17:48:44] ✅ 格 gemma-4-31b-it-4bit × 16384（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:48:45] 🛑 收 server: mlx-community/gemma-4-31b-it-4bit ctx=16384
+[17:48:45] 🚀 起 server: mlx-community/gemma-4-31b-it-4bit ctx=32768（权重 17.1G）
+[17:48:51]    server 就绪（6s）
+[17:58:10] ✅ 格 gemma-4-31b-it-4bit × 32768（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[17:58:10] 🛑 收 server: mlx-community/gemma-4-31b-it-4bit ctx=32768
+[17:58:10] 🚀 起 server: mlx-community/gemma-4-31b-it-4bit ctx=65536（权重 17.1G）
+[17:58:22]    server 就绪（12s）
+[18:19:33] ✅ 格 gemma-4-31b-it-4bit × 65536（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[18:19:33] 🛑 收 server: mlx-community/gemma-4-31b-it-4bit ctx=65536
+[18:19:34] 🚀 起 server: mlx-community/gemma-4-31b-it-qat-4bit ctx=0（权重 26.8G）
+[18:20:13]    server 就绪（39s）
+[18:20:18] ✅ 格 gemma-4-31b-it-qat-4bit × 0（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[18:20:18] 🛑 收 server: mlx-community/gemma-4-31b-it-qat-4bit ctx=0
+[18:20:18] 🚀 起 server: mlx-community/gemma-4-31b-it-qat-4bit ctx=4096（权重 26.8G）
+[18:20:39]    server 就绪（21s）
+[18:21:45] ✅ 格 gemma-4-31b-it-qat-4bit × 4096（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[18:21:46] 🛑 收 server: mlx-community/gemma-4-31b-it-qat-4bit ctx=4096
+[18:21:46] 🚀 起 server: mlx-community/gemma-4-31b-it-qat-4bit ctx=8192（权重 26.8G）
+[18:22:10]    server 就绪（24s）
+[18:24:20] ✅ 格 gemma-4-31b-it-qat-4bit × 8192（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[18:24:20] 🛑 收 server: mlx-community/gemma-4-31b-it-qat-4bit ctx=8192
+[18:24:20] 🚀 起 server: mlx-community/gemma-4-31b-it-qat-4bit ctx=16384（权重 26.8G）
+[18:24:44]    server 就绪（24s）
+[18:29:09] ✅ 格 gemma-4-31b-it-qat-4bit × 16384（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[18:29:10] 🛑 收 server: mlx-community/gemma-4-31b-it-qat-4bit ctx=16384
+[18:29:10] 🚀 起 server: mlx-community/gemma-4-31b-it-qat-4bit ctx=32768（权重 26.8G）
+[18:29:37]    server 就绪（27s）
+[18:38:58] ✅ 格 gemma-4-31b-it-qat-4bit × 32768（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[18:38:59] 🛑 收 server: mlx-community/gemma-4-31b-it-qat-4bit ctx=32768
+[18:38:59] 🚀 起 server: mlx-community/gemma-4-31b-it-qat-4bit ctx=65536（权重 26.8G）
+[18:39:32]    server 就绪（33s）
+[19:00:46] ✅ 格 gemma-4-31b-it-qat-4bit × 65536（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:00:47] 🛑 收 server: mlx-community/gemma-4-31b-it-qat-4bit ctx=65536
+[19:00:48] 🚀 起 server: mlx-community/gemma-4-31b-it-8bit ctx=0（权重 31.4G）
+[19:01:33]    server 就绪（45s）
+[19:01:38] ✅ 格 gemma-4-31b-it-8bit × 0（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:01:39] 🛑 收 server: mlx-community/gemma-4-31b-it-8bit ctx=0
+[19:01:39] 🚀 起 server: mlx-community/gemma-4-31b-it-8bit ctx=4096（权重 31.4G）
+[19:02:09]    server 就绪（30s）
+[19:03:16] ✅ 格 gemma-4-31b-it-8bit × 4096（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:03:17] 🛑 收 server: mlx-community/gemma-4-31b-it-8bit ctx=4096
+[19:03:17] 🚀 起 server: mlx-community/gemma-4-31b-it-8bit ctx=8192（权重 31.4G）
+[19:03:47]    server 就绪（30s）
+[19:05:57] ✅ 格 gemma-4-31b-it-8bit × 8192（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:05:58] 🛑 收 server: mlx-community/gemma-4-31b-it-8bit ctx=8192
+[19:05:58] 🚀 起 server: mlx-community/gemma-4-31b-it-8bit ctx=16384（权重 31.4G）
+[19:06:28]    server 就绪（30s）
+[19:10:53] ✅ 格 gemma-4-31b-it-8bit × 16384（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:10:53] 🛑 收 server: mlx-community/gemma-4-31b-it-8bit ctx=16384
+[19:10:54] 🚀 起 server: mlx-community/gemma-4-31b-it-8bit ctx=32768（权重 31.4G）
+[19:11:27]    server 就绪（33s）
+[19:20:49] ✅ 格 gemma-4-31b-it-8bit × 32768（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:20:50] 🛑 收 server: mlx-community/gemma-4-31b-it-8bit ctx=32768
+[19:20:50] 🚀 起 server: mlx-community/gemma-4-e4b-it-4bit ctx=0（权重 4.8G）
+[19:21:02]    server 就绪（12s）
+[19:21:04] ✅ 格 gemma-4-e4b-it-4bit × 0（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:21:05] 🛑 收 server: mlx-community/gemma-4-e4b-it-4bit ctx=0
+[19:21:05] 🚀 起 server: mlx-community/gemma-4-e4b-it-4bit ctx=4096（权重 4.8G）
+[19:21:11]    server 就绪（6s）
+[19:21:17] ✅ 格 gemma-4-e4b-it-4bit × 4096（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:21:18] 🛑 收 server: mlx-community/gemma-4-e4b-it-4bit ctx=4096
+[19:21:18] 🚀 起 server: mlx-community/gemma-4-e4b-it-4bit ctx=8192（权重 4.8G）
+[19:21:24]    server 就绪（6s）
+[19:21:35] ✅ 格 gemma-4-e4b-it-4bit × 8192（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:21:36] 🛑 收 server: mlx-community/gemma-4-e4b-it-4bit ctx=8192
+[19:21:36] 🚀 起 server: mlx-community/gemma-4-e4b-it-4bit ctx=16384（权重 4.8G）
+[19:21:42]    server 就绪（6s）
+[19:22:04] ✅ 格 gemma-4-e4b-it-4bit × 16384（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:22:05] 🛑 收 server: mlx-community/gemma-4-e4b-it-4bit ctx=16384
+[19:22:05] 🚀 起 server: mlx-community/gemma-4-e4b-it-4bit ctx=32768（权重 4.8G）
+[19:22:11]    server 就绪（6s）
+[19:22:58] ✅ 格 gemma-4-e4b-it-4bit × 32768（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:22:58] 🛑 收 server: mlx-community/gemma-4-e4b-it-4bit ctx=32768
+[19:22:58] 🚀 起 server: mlx-community/gemma-4-e4b-it-4bit ctx=65536（权重 4.8G）
+[19:23:04]    server 就绪（6s）
+[19:24:48] ✅ 格 gemma-4-e4b-it-4bit × 65536（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:24:48] 🛑 收 server: mlx-community/gemma-4-e4b-it-4bit ctx=65536
+[19:24:49] 🚀 起 server: mlx-community/gemma-4-e4b-it-8bit ctx=0（权重 8.3G）
+[19:25:04]    server 就绪（15s）
+[19:25:06] ✅ 格 gemma-4-e4b-it-8bit × 0（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:25:07] 🛑 收 server: mlx-community/gemma-4-e4b-it-8bit ctx=0
+[19:25:07] 🚀 起 server: mlx-community/gemma-4-e4b-it-8bit ctx=4096（权重 8.3G）
+[19:25:13]    server 就绪（6s）
+[19:25:20] ✅ 格 gemma-4-e4b-it-8bit × 4096（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:25:20] 🛑 收 server: mlx-community/gemma-4-e4b-it-8bit ctx=4096
+[19:25:20] 🚀 起 server: mlx-community/gemma-4-e4b-it-8bit ctx=8192（权重 8.3G）
+[19:25:26]    server 就绪（6s）
+[19:25:38] ✅ 格 gemma-4-e4b-it-8bit × 8192（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:25:38] 🛑 收 server: mlx-community/gemma-4-e4b-it-8bit ctx=8192
+[19:25:38] 🚀 起 server: mlx-community/gemma-4-e4b-it-8bit ctx=16384（权重 8.3G）
+[19:25:44]    server 就绪（6s）
+[19:26:07] ✅ 格 gemma-4-e4b-it-8bit × 16384（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:26:08] 🛑 收 server: mlx-community/gemma-4-e4b-it-8bit ctx=16384
+[19:26:08] 🚀 起 server: mlx-community/gemma-4-e4b-it-8bit ctx=32768（权重 8.3G）
+[19:26:14]    server 就绪（6s）
+[19:27:01] ✅ 格 gemma-4-e4b-it-8bit × 32768（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:27:01] 🛑 收 server: mlx-community/gemma-4-e4b-it-8bit ctx=32768
+[19:27:02] 🚀 起 server: mlx-community/gemma-4-e4b-it-8bit ctx=65536（权重 8.3G）
+[19:27:08]    server 就绪（6s）
+[19:28:52] ✅ 格 gemma-4-e4b-it-8bit × 65536（哨兵口径）: 全过 — count:✓ / qa:✓ / tool:✓
+[19:28:52] 🛑 收 server: mlx-community/gemma-4-e4b-it-8bit ctx=65536
+[19:28:52] 🏁 基线格全部完成
