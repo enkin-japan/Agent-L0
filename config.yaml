@@ -95,35 +95,36 @@ inference:
     # 专科指标须显著超出（margin 0.05）才切换；**未画像条目绝不被优先选中**。
     # 勿手改——重跑 model_eval 后按新 run 回填（值是测出来的，不是配出来的）。
     # 〔e4b 三档 2026-08-14 已升钉；2026-08-16 全库横评（14 档同口径）已回填全部本地
-    #  MLX 档 profile。⚠️ gemma 家族 tool_call 列受 gemma4 方言 DSL 链路系统性问题压制
-    #  （七档同分 0.72/解析错 12，见 PROFILES.md 08-16 章），数值对路由是真实的
-    #  （路由消费的正是这条组合链路），但不代表裸模型能力；链路修复重测后更新。〕
+    #  MLX 档 profile。gemma 家族 tool_call 列曾受 gemma4 方言 DSL 链路架构锅压制
+    #  （带点工具名被解析侧拒收，七档同分 0.72/解析错 12）；2026-08-17 修复
+    #  （commit a61e27e）后保留四档重测归零并已回填（runs 20260817-00*），
+    #  详见 PROFILES.md 08-17 重测节。longchain/vision 列仍为 08-16 run。〕
     - repo: "mlx-community/gemma-4-e4b-it-8bit"
       revision: "4255b21bd9a9d3fc807ef7abd80373f5e3a52a73"  # 2026-08-14 升钉：上游 7/6 重转换件（0.6.x vendoring 对齐）
       dialect: "gemma4"
       capabilities: ["text", "vision", "audio"]
-      profile: { tool_call: 0.64, longchain: 1.00, vision: 0.88, tps: 72.4 }  # run 20260816-034903
+      profile: { tool_call: 0.88, longchain: 1.00, vision: 0.88, tps: 72.4 }  # tool run 20260817-004704，其余 20260816-034903
       note: "9.0GB | 缺省档（D.20 阵容收束，2026-08-16）| 装载生成 smoke ✓（2026-08-17）| 08-16 画像 ✓"
     - repo: "mlx-community/gemma-4-26b-a4b-it-4bit"
       revision: "0d77464eeb233a2da68ebf9d7dc4edaac7db956d"
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
-      profile: { tool_call: 0.72, longchain: 1.00, vision: 0.84, tps: 101.2 }  # run 20260816-022318
+      profile: { tool_call: 0.92, longchain: 1.00, vision: 0.84, tps: 101.2 }  # tool run 20260817-004908，其余 20260816-022318
       note: "15.6GB | 静态校验 ✓ | 08-16 画像 ✓ + 26B 缺省档裁决胜出（质量与 8bit 打平、速度 1.34×、省 12G；长上下文×结构化输出弱信号场景路由给 8bit） | MoE，建议 ≥32GB 统一内存"
     - repo: "mlx-community/gemma-4-26b-a4b-it-8bit"
       revision: "33c6d23798a0af159529890f79329206dbfbd73c"
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
-      profile: { tool_call: 0.72, longchain: 1.00, vision: 0.87, tps: 75.4 }  # run 20260816-022711
+      profile: { tool_call: 0.92, longchain: 1.00, vision: 0.87, tps: 75.4 }  # tool run 20260817-005007，其余 20260816-022711
       note: "28.0GB | 静态校验 ✓ | 08-16 画像 ✓（26B 缺省档让位 4bit，任长上下文结构化后备） | MoE，建议 ≥48GB 统一内存"
     - repo: "mlx-community/gemma-4-31b-it-4bit"
       revision: "696d436c404745a59f30e4939a658162b0a9e57f"
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
-      profile: { tool_call: 0.72, longchain: 0.83, vision: 0.90, tps: 27.8 }  # run 20260816-025147
+      profile: { tool_call: 0.96, longchain: 0.83, vision: 0.90, tps: 27.8 }  # tool run 20260817-005105，其余 20260816-025147
       note: "18.4GB | 静态校验 ✓ | 08-16 画像 ✓ | 31B 唯一在册档兼长上下文位（D.20 后 31b-8bit/qat 舍弃；64k 15.8tps 不 OOM）| 稠密，建议 ≥32GB 统一内存"
     # ── Qwen 家族（qwen35 方言）────────────────────────────────────────────
     # Qwen3.8-27B（2026-08-13 发布，08-15 起测）：28B 稠密混合注意力（linear attn

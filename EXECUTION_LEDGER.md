@@ -2355,8 +2355,16 @@ pgrep 验活自己的循环）。纪律从"仅新脚本磨合期分钟级盯"改
 纠错闭环 0% 成功的成因：调用本来就没错，模型重发同样正确的调用再次被拒。
 **分类：parser 过严（架构锅），非模型特性**；例外 tc-bfcl-multiple_21（1 例）
 是模型写散文代替调用，真模型行为。修复：response_parser + stream_filter
-`_TOOL_NAME_RE` 两处字符集加 `.`（qwen35 方言正则本就含 `\.`，无此锅）+ 3 条
-回归测试（含实测失败样本逐字节回放）；全量金测试 963 绿。重测四档见下。
+`_TOOL_NAME_RE` 两处字符集加 `.`（钉 Gemini 函数名规范口径；qwen35 方言正则本就
+含 `\.`，无此锅），reviewer 首过后又补：往返表/约束语法表两处带点名锚定（钉
+「声明==语法==解析」三方不再漂移）、qwen35 XML 调用体 `<function=NAME>` 工具名
+预告分支（此前该方言预告静默失灵）。金测试 968 绿，commit a61e27e。
+**重测（保留四档 × tool_call，runs 20260817-00*，全程 5.5 分钟）：解析错四档
+全部归零**；pass e4b-8bit 0.64→0.88、26b-4bit/8bit 0.72→0.92、31b-4bit
+0.72→**0.96**（并平 Qwen3.8-4bit）。残余失败均真模型行为（multiple_21 四档共同
+写散文不调用；multiple_10 参数措辞/选了先备份的另一合理工具；live_simple_13
+仅 e4b 参数小偏）。PROFILES.md 加 08-17 重测节、config.yaml 四档 profile 已按
+新 run 回填（longchain/vision 列仍 08-16 run）。
 **④ qwen35 方言假设复核（完成，假设成立）**：Qwen3.8-27B 官方模板（4 目录件
 md5 同字节）实读差分——(a) **「思考恒回放」升格为官方默认**：Qwen3.8 模板新增
 `preserve_thinking` 开关且缺省 true（恒回放全部 <think>），方言当年取的 Ornith
