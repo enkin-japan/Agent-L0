@@ -92,19 +92,22 @@ inference:
     # 通过率（含纠错与终答整合）与生成 tps 中位）。core/model_router 消费：main 粘滞，
     # 专科指标须显著超出（margin 0.05）才切换；**未画像条目绝不被优先选中**。
     # 勿手改——重跑 model_eval 后按新 run 回填（值是测出来的，不是配出来的）。
-    # 〔e4b 新版对齐的前提「升级 mlx-vlm 并复验 patch」已于 2026-08-14 完成（0.6.13），
-    #  三档均已升钉；e4b-4bit 的 profile 仍是旧钉口径，重跑 model_eval 后回填。〕
+    # 〔e4b 三档 2026-08-14 已升钉；2026-08-16 全库横评（14 档同口径）已回填全部本地
+    #  MLX 档 profile。⚠️ gemma 家族 tool_call 列受 gemma4 方言 DSL 链路系统性问题压制
+    #  （七档同分 0.72/解析错 12，见 PROFILES.md 08-16 章），数值对路由是真实的
+    #  （路由消费的正是这条组合链路），但不代表裸模型能力；链路修复重测后更新。〕
     - repo: "mlx-community/gemma-4-e4b-it-4bit"
       revision: "475b9088d29754a3379866cf5aeb6b41acd313c2"  # 2026-08-14 升钉：上游 7/6 重转换件（0.6.x vendoring 对齐）
       dialect: "gemma4"
       capabilities: ["text", "vision", "audio"]
-      profile: { tool_call: 0.88, longchain: 0.83, vision: 1.00, tps: 30.8 }  # run 20260730-192308（旧钉口径，待重画像）
-      note: "5.2GB | 实机验证 ✓（默认）"
+      profile: { tool_call: 0.64, longchain: 1.00, vision: 0.84, tps: 100.6 }  # run 20260816-033032（新钉口径，M4 Max）
+      note: "5.2GB | 实机验证 ✓（默认）| 08-16 全库横评画像 ✓"
     - repo: "mlx-community/gemma-4-e4b-it-8bit"
       revision: "4255b21bd9a9d3fc807ef7abd80373f5e3a52a73"  # 2026-08-14 升钉
       dialect: "gemma4"
       capabilities: ["text", "vision", "audio"]
-      note: "9.0GB | 静态校验 ✓"
+      profile: { tool_call: 0.64, longchain: 1.00, vision: 0.88, tps: 72.4 }  # run 20260816-034903
+      note: "9.0GB | 静态校验 ✓ | 08-16 画像 ✓"
     - repo: "mlx-community/gemma-4-e4b-it-nvfp4"
       revision: "769ca8889f89f8ec8c1ca59bf427332895eb1cb2"  # 2026-08-14 升钉（远程静态校验，未本地拉件）
       dialect: "gemma4"
@@ -120,31 +123,36 @@ inference:
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
-      note: "6.3G | 装载/生成 smoke ✓ + 抑制预填 ✓ | 12B 稠密中档（2026-08-14 用户拍板入列），画像/基线格待跑；音频待验"
+      profile: { tool_call: 0.68, longchain: 0.83, vision: 0.74, tps: 68.1 }  # run 20260816-032535
+      note: "6.3G | 装载/生成 smoke ✓ + 抑制预填 ✓ | 12B 稠密中档 | 08-16 画像 ✓：全库唯一 vision 实跌量化档（0.74 vs 8bit 0.82），vision 活路由给 8bit；音频待验"
     - repo: "mlx-community/gemma-4-12b-it-8bit"
       revision: "200bb6db075e137a4deb08838865ac4ddb86292e"
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
-      note: "12G | 装载/生成 smoke ✓ | 12B 稠密中档，画像/基线格待跑；音频待验"
+      profile: { tool_call: 0.72, longchain: 0.83, vision: 0.82, tps: 40.7 }  # run 20260816-031937
+      note: "12G | 装载/生成 smoke ✓ | 12B 稠密中档 | 08-16 画像 ✓；音频待验"
     - repo: "mlx-community/gemma-4-26b-a4b-it-4bit"
       revision: "0d77464eeb233a2da68ebf9d7dc4edaac7db956d"
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
-      note: "15.6GB | 静态校验 ✓ | MoE，建议 ≥32GB 统一内存"
+      profile: { tool_call: 0.72, longchain: 1.00, vision: 0.84, tps: 101.2 }  # run 20260816-022318
+      note: "15.6GB | 静态校验 ✓ | 08-16 画像 ✓ + 26B 缺省档裁决胜出（质量与 8bit 打平、速度 1.34×、省 12G；长上下文×结构化输出弱信号场景路由给 8bit） | MoE，建议 ≥32GB 统一内存"
     - repo: "mlx-community/gemma-4-26b-a4b-it-8bit"
       revision: "33c6d23798a0af159529890f79329206dbfbd73c"
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
-      note: "28.0GB | 静态校验 ✓ | MoE，建议 ≥48GB 统一内存"
+      profile: { tool_call: 0.72, longchain: 1.00, vision: 0.87, tps: 75.4 }  # run 20260816-022711
+      note: "28.0GB | 静态校验 ✓ | 08-16 画像 ✓（26B 缺省档让位 4bit，任长上下文结构化后备） | MoE，建议 ≥48GB 统一内存"
     - repo: "mlx-community/gemma-4-26b-a4b-it-qat-4bit"
       revision: "0e3cbab38ce568cf6e23543010d08d03b731910c"
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
-      note: "15G | 实机验证 ✓（108.6tps@0） | QAT：专家 4bit + 共享 MLP/router 8bit | 质量待评（原「A 毒」判定已撤销=我方 prompt bug §S.16，质量哨全量重跑后回填） | MoE，建议 ≥32GB 统一内存"
+      profile: { tool_call: 0.72, longchain: 0.83, vision: 0.82, tps: 94.1 }  # run 20260816-023123
+      note: "15G | 实机验证 ✓ | QAT：专家 4bit + 共享 MLP/router 8bit | 08-16 质量收案：长链/vision/速度均不优于 PTQ-4bit → 无入列理由（「A 毒」撤销案沿革见台账） | MoE，建议 ≥32GB 统一内存"
     - repo: "mlx-community/gemma-4-26b-a4b-it-nvfp4"
       revision: "31e75786f7646400d9e5d0b29d055326d981db5e"
       dialect: "gemma4"
@@ -156,19 +164,22 @@ inference:
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
-      note: "18.4GB | 静态校验 ✓ | 稠密，建议 ≥32GB 统一内存"
+      profile: { tool_call: 0.72, longchain: 0.83, vision: 0.90, tps: 27.8 }  # run 20260816-025147
+      note: "18.4GB | 静态校验 ✓ | 08-16 画像 ✓ | 稠密，建议 ≥32GB 统一内存"
     - repo: "mlx-community/gemma-4-31b-it-8bit"
       revision: "f5f3dc92ab4af76724c36c21eb6bedadb3a851be"
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
-      note: "33.8GB | 静态校验 ✓ | 稠密，建议 ≥64GB 统一内存"
+      profile: { tool_call: 0.72, longchain: 1.00, vision: 0.93, tps: 16.0 }  # run 20260816-023535
+      note: "33.8GB | 静态校验 ✓ | 08-16 画像 ✓（vision 全库 gemma 最高档并列 qat） | 稠密，建议 ≥64GB 统一内存；64k OOM 已证"
     - repo: "mlx-community/gemma-4-31b-it-qat-4bit"
       revision: "83b1a12d1da4b07afe435bd2cc310308bfc13984"
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
-      note: "27G | 实机验证 ✓（16.2tps@0，64k 稠密 KV 47.2G 不 OOM——8bit 同格 OOM，此为选它的硬理由） | QAT 但 60 层 MLP 全 8bit（近 8bit 字节量） | 质量待评（§S.16 重跑后回填） | 稠密，建议 ≥48GB 统一内存"
+      profile: { tool_call: 0.72, longchain: 1.00, vision: 0.93, tps: 18.4 }  # run 20260816-030444
+      note: "27G | 实机验证 ✓（64k 稠密 KV 47.2G 不 OOM——8bit 同格 OOM，此为选它的硬理由） | QAT 但 60 层 MLP 全 8bit | 08-16 质量收案：与 31b-8bit 逐项打平（vision 0.93/长链 1.00）且速度略胜 → 31B 长上下文档地位坐实 | 稠密，建议 ≥48GB 统一内存"
     - repo: "mlx-community/gemma-4-31b-it-nvfp4"
       revision: "a0a935b105621b98907915fa12f05348bb9c3c24"
       dialect: "gemma4"
@@ -182,7 +193,7 @@ inference:
       revision: "8b2b98c00a6b4d291155e4890773ca8f769aee53"
       dialect: "qwen35"
       capabilities: ["text", "vision"]
-      profile: { tool_call: 1.00, longchain: 1.00, vision: 1.00, tps: 20.1 }  # run 20260730-183929
+      profile: { tool_call: 0.96, longchain: 1.00, vision: 0.95, tps: 84.1 }  # run 20260816-040838（08-16 全库横评；vision 扩到 212 题口径，机器换 M4 Max）
       note: "6.0GB | 实机联调 ✓（2026-07-29：引擎两轮工具闭环 + 14163 双实例并存冒烟）| 视觉专科候选"
     # Qwen3.8-27B（2026-08-13 发布，08-15 起测）：28B 稠密混合注意力（linear attn
     # 混层，Qwen3-Next 系）+ 原生视觉，262k ctx，Apache 2.0。方言先验 qwen35
@@ -220,7 +231,7 @@ inference:
         "vision_config.model_type": "qwen3_5"
       # 画像先验反转（model_eval 2026-07-30）："长链强"指长链**思考**不指工具编排
       # （longchain 0.67 且复读 26 次）——路由不应把多步工具任务派给它
-      profile: { tool_call: 0.84, longchain: 0.67, tps: 20.8 }  # run 20260730-190443；无 vision
+      profile: { tool_call: 0.96, longchain: 0.33, tps: 84.6 }  # run 20260816-043520（长链 0.33 vs 07-30 的 0.67：题库演化，复核待办，暂按实测入册）；无 vision（capabilities 复核待用户拍板）
       note: "6.0GB | 实机联调 ✓（2026-07-29：fixup 后 0.5.0 加载，两轮工具闭环）| 长链推理专科候选"
     # ── CUDA 档（bf16 原件，backend: cuda / Colab A100 联调；2026-08-06 用户指定）──
     # revision 已钉死（2026-08-06 HF API 主干 SHA；四仓 lastModified 均早于入库日，
