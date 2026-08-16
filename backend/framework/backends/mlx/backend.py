@@ -151,7 +151,12 @@ def _load_drafter(target_model, draft_path: str, spec_cfg: Dict[str, Any]):
     # DEFAULT_DRAFTER_KIND="dflash"，正好命中这里。
     # 判 kind 只需 peek config.json，故放在 load_drafter **之前**——拒启不必
     # 先白付几 GB 权重装载（评审建议）。
-    resolved_kind = resolve_drafter_kind(draft_path, kind)
+    # 必须包成 Path：上游 _peek 做 `model_path / "config.json"`，str 传入是
+    # TypeError 裸炸（不在其捕获清单里）——08-16 S-on 臂 12 档全灭即此。金测试
+    # 当时把 resolve_drafter_kind 整个打了桩，杀不死这个变异体，已补真函数用例。
+    # 顺带口径：draft_path 必须是本地目录（生产/§6.3 绑定皆是）；HF repo id 会
+    # 因 peek 不到 config.json 落到 dflash 而被下方守卫按 fail-closed 拒启。
+    resolved_kind = resolve_drafter_kind(Path(draft_path), kind)
     if resolved_kind != "mtp":
         raise RuntimeError(
             f"草稿件 {draft_path} 解析为 kind={resolved_kind!r}，该轮循环不经过"

@@ -59,6 +59,26 @@ def _stub_drafters(monkeypatch, resolved_kind):
     return draft
 
 
+def test_real_resolve_kind_accepts_str_path(monkeypatch, tmp_path):
+    """真 resolve_drafter_kind + str 路径 + 真 config.json。
+
+    杀 08-16 S-on 全灭的变异体：守卫把 str 直接递给上游 peek（`path / "config.json"`
+    对 str 是 TypeError 裸炸，且不在其捕获清单）。其余用例把 resolve_drafter_kind
+    整个桩掉，永远杀不死它——本用例只桩 load_drafter/validate 两件，判 kind 走真路。
+    """
+    import mlx_vlm.speculative.drafters as drafters
+
+    (tmp_path / "config.json").write_text('{"model_type": "gemma4_assistant"}',
+                                          encoding="utf-8")
+    draft = types.SimpleNamespace()
+    monkeypatch.setattr(
+        drafters, "load_drafter", lambda path, kind=None: (draft, "mtp"))
+    monkeypatch.setattr(
+        drafters, "validate_drafter_compatibility", lambda *a, **k: None)
+    res = _load_drafter(_Target(_HiddenLM()), str(tmp_path), {})
+    assert res[0] is draft
+
+
 def test_non_mtp_kind_refused(monkeypatch):
     """dflash/eagle3 轮循环不接处理器 → 装载期拒启，不得静默降级。"""
     _stub_drafters(monkeypatch, "dflash")
