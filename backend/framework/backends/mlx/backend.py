@@ -76,6 +76,19 @@ class _GuardAdapter:
       mask_logits(logits) / active——补丁按 hasattr(consume, mask_logits) 识别。
 
     数组运算（mask 应用）全在这里；状态机与 llguidance bitmask 在纯逻辑 guard 内。
+
+    ⚠️ 已知不一致（T9，08-15 复审 minor；此处只记档，统一另案）——**首个生成
+    token 是否受掩码**三条路语义不同：
+    - normal 路（`__call__` 协议）：首调用只把 `_seen` 置为 prompt 边界就返回
+      **未掩**的 logits——首 token 不掩，掩码从第二个 token 起生效；
+    - lookup 路（patch.gemma4_generate.lookup_generate_step 预填出首 token 处）：
+      采样前先 `mask_logits` ——首 token **掩**；
+    - MTP 路（patch.mtp_processors._Ctx）：同 lookup 口径，首 token 掩。
+    实际影响面：guard 只在工具调用块内激活，生成首 token 落在块内的场景罕见
+    （如纠错重发时 prompt 尾停在块中），但三路语义应统一——统一前先以本注记
+    为准，勿把 normal 路的首 token 直通当作可依赖行为。
+    隐含前提：`consume()` 在 `_seen is None` 时不推进计数器——两套协议对同一
+    实例**不可混用**，混用会让 `_seen` 与真实历史失准（当前调用方不混用）。
     """
 
     def __init__(self, guard):
@@ -531,6 +544,10 @@ class MLXBackend:
             rp = getattr(cache.state, "last_reused_prefix", None)
             if rp is not None:
                 extra["reused_prefix"] = rp
+            # T8 门的放弃原因：与「压根没命中」区分开（都表现为 reused_prefix=0）
+            rb = getattr(cache.state, "reuse_blocked", None)
+            if rb:
+                extra["reuse_blocked"] = rb
             yield GenChunk(
                 text=result.text,
                 delta=delta,

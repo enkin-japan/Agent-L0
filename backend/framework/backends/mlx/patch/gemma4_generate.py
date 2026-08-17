@@ -517,6 +517,127 @@ def lookup_generate_step(
             mx.clear_cache()
 
 
+# ---- 前缀复用的回滚能力门（T8 根修，2026-08-17）--------------------------
+# 复用 = 把缓存回滚到公共前缀、只喂新增段。回滚不是每种缓存都做得到：
+#   · 稠密 KVCache：物理切片，恒可；
+#   · TurboQuantKVCache：自带 trim/offset 协议，按 is_trimmable() 判；
+#   · RotatingKVCache：线性态记账 trim 无损；**旋转态**必须走 §S.15 的
+#     时序化+物理切尾，且被淘汰出窗的 token 已不存在时语义上无法回滚
+#     （rotating_cache_trim 同一判据）。修复前 stream_generate 里按稠密语义
+#     切 `[:prefix_len]`——旋转态 `keys.shape[2]`（=窗宽）常 < prefix_len，
+#     条件恒假 → 缓存原样带着分叉尾复用，窗内容/offset 双错。gemma 系滑窗
+#     仅 512/1024，多轮超窗即中——08-13 bench v1「26B 复用后瞬间 EOS、31B
+#     窜孤立 <channel|>」的形态与此完全吻合；
+#   · 无 keys 协议的递归状态缓存（qwen3_5 线性注意力 ArraysCache）：根本
+#     没有回滚接口。修复前被裁剪循环整个跳过 → 全注意力层回滚了、线性层
+#     还带着上一轮的尾巴，且重喂段被其状态**二次消化**（A8 评审 C1 实锤，
+#     2026-08-17）。
+# 门的口径：任何一层无法无损回滚 → 整轮放弃复用退冷预填（慢但正确），
+# 响亮日志。静默近似是 §S.15 的成因，不再重演。
+
+def _offset_int(c) -> Optional[int]:
+    """缓存的流位置（已消费 token 数）；无 offset 协议返回 None。
+
+    不用 `or 0` 布尔化——BatchKVCache 的 offset 是 mx.array，布尔化会抛。
+    """
+    v = getattr(c, "offset", None)
+    return None if v is None else int(v)
+
+
+def _dispatch(c) -> str:
+    """缓存回滚能力分派（blocker 与 trim 共用同一张表，防两侧口径漂移）：
+
+    rotating  — RotatingKVCache（isinstance；hasattr(max_size) 太脆——
+                StaticPrefixKVCache 也带 max_size 却无 _temporal_order）
+    dense     — keys 是稠密 mx.array：物理切片恒可
+    trimproto — 自带 trim/is_trimmable 协议的打包结构（TurboQuant / 上游
+                QuantizedKVCache / HybridQuantKVCache：keys 是 tuple，按稠密
+                切片会炸 'tuple' has no 'shape'）
+    stateful  — 其余（qwen3_5 线性注意力 ArraysCache 等递归状态）：无回滚接口
+    """
+    if isinstance(c, cache.RotatingKVCache):
+        return "rotating"
+    if isinstance(getattr(c, "keys", None), mx.array):
+        return "dense"
+    if hasattr(c, "trim") and hasattr(c, "is_trimmable"):
+        return "trimproto"
+    return "stateful"
+
+
+def _prefix_reuse_blocker(kv_cache, prefix_len: int) -> Optional[str]:
+    """返回 None=全部缓存可无损回滚到 prefix_len；否则返回放弃原因。只读不动缓存。
+
+    excess 一律逐层算（offset 各归各）——层间 offset 理论上同步，但门与
+    trim 必须同口径，全局 max 口径曾让两侧隐式不一致（首过评审 M5）。
+    """
+    offsets = [o for o in (_offset_int(c) for c in kv_cache if c is not None)
+               if o is not None]
+    if not offsets:
+        # 整组缓存都不暴露流位置：分叉尾存在与否不可判。fail-open 正是本门
+        # 要消灭的缺陷形态（首过评审 C1），此处必须拒绝而不是放行
+        return "缓存组无任何 offset 承载层，流位置不可判"
+    if max(offsets) - prefix_len <= 0:
+        return None          # 纯追加：无需回滚，任何缓存类型都安全
+    for i, c in enumerate(kv_cache):
+        if c is None:
+            continue
+        kind = _dispatch(c)
+        off = _offset_int(c)
+        excess = (off - prefix_len) if off is not None else None
+        if kind == "dense":
+            continue         # 稠密：按 offset 物理切片恒可行
+        if kind == "trimproto":
+            if excess is not None and excess > 0 and not c.is_trimmable():
+                return f"层 {i} {type(c).__name__} 不可回裁（is_trimmable=False）"
+            continue
+        if kind == "stateful":
+            state = getattr(c, "cache", None)
+            has_state = (any(x is not None for x in state)
+                         if isinstance(state, list) else True)
+            if has_state:
+                return f"层 {i} {type(c).__name__} 是递归状态缓存，无回滚接口"
+            continue
+        # rotating：复刻 rotating_cache_trim 的可裁判据（不动缓存）
+        if c.keys is None or excess is None or excess <= 0:
+            continue
+        n = min(off, excess)
+        if off < c.max_size:
+            continue         # 线性态记账 trim 无损
+        valid = int(c._temporal_order(c.keys).shape[2])
+        kept = valid - n
+        if n >= valid or (kept < c.max_size and valid != off):
+            return (f"层 {i} RotatingKVCache 旋转态不可回裁"
+                    f"（excess={n}, 时序序 {valid} 条, offset={off}, "
+                    f"max_size={c.max_size}）")
+    return None
+
+
+def _trim_caches_to(kv_cache, prefix_len: int) -> None:
+    """把混合类型缓存组整体回滚到 prefix_len（前提：`_prefix_reuse_blocker` 已判 None）。"""
+    for c in kv_cache:
+        if c is None:
+            continue
+        kind = _dispatch(c)
+        off = _offset_int(c)
+        excess = (off - prefix_len) if off is not None else None
+        if excess is None or excess <= 0:
+            continue
+        if kind == "rotating":
+            # 一律走 §S.15 修正版 trim——线性态记账回退、旋转态时序化+物理切尾
+            # （修复前的稠密切片在旋转态是错的）
+            c.trim(excess)
+        elif kind == "trimproto":
+            # 打包量化态无稠密张量，用自身 trim/offset 协议回退
+            if c.is_trimmable():
+                c.trim(excess)
+        elif kind == "dense":
+            # 稠密：物理切片。excess 按 offset 判（首过评审 C2：物理缓冲是
+            # 256 步预分配的，按 keys.shape[2] 判会把未写入的全零行抬进有效区）
+            c.keys = c.keys[:, :, :prefix_len, :]
+            c.values = c.values[:, :, :prefix_len, :]
+            c.offset = prefix_len
+        # stateful：blocker 保证 excess>0 时根本走不到这里
+
 
 def generate(
     model: nn.Module,
@@ -773,9 +894,12 @@ def stream_generate(
     full_input_ids_list = input_ids.flatten().tolist()
 
     # 前缀命中可观测性（T4R）：挂在 state 上供后端读走进 GenChunk.extra——
-    # 命中退化（装配层把易变段挪到了前面）只有被看见才会被修。先记 0，命中时更新
+    # 命中退化（装配层把易变段挪到了前面）只有被看见才会被修。先记 0，命中时更新。
+    # reuse_blocked 同理（T8 门）：被门拒和压根没命中在 reused_prefix=0 上同貌，
+    # 只有分开回吐才能在线上区分退化与未命中（首过评审 M7）。
     if prompt_cache_state is not None:
         prompt_cache_state.last_reused_prefix = 0
+        prompt_cache_state.reuse_blocked = None
 
     # [MTP] 缓冲缓存形态一律不复用前缀。MTP 跑过一轮后，上游
     # `_buffer_mtp_target_cache` 会把 RotatingKVCache **就地**换成
@@ -791,7 +915,16 @@ def stream_generate(
         print("[Memory] MTP 缓冲缓存形态：本轮放弃前缀复用（退冷预填，慢但正确）")
     elif prompt_cache_state is not None and prompt_cache_state.cache is not None:
         prefix_len = prompt_cache_state.find_prefix_length(full_input_ids_list)
-        if prefix_len > 0 and prefix_len < input_ids.shape[1]:
+        _reusable = prefix_len > 0 and prefix_len < input_ids.shape[1]
+        if _reusable:
+            # 回滚能力门（T8 根修）必须在 input_ids 截断**之前**判：过了这行再
+            # 放弃就成了拿残缺 prompt 冷预填（与上面 MTP 缓冲形态判据同一条纪律）
+            _blocker = _prefix_reuse_blocker(prompt_cache_state.cache, prefix_len)
+            if _blocker is not None:
+                print(f"[Memory] 前缀复用放弃（退冷预填，慢但正确）：{_blocker}")
+                prompt_cache_state.reuse_blocked = _blocker
+                _reusable = False
+        if _reusable:
             reused_prefix_len = prefix_len
             prompt_cache_state.last_reused_prefix = prefix_len
             # Trim to only new tokens
@@ -890,31 +1023,10 @@ def stream_generate(
 #####################################################################
 
             # Reuse the saved KV cache (trimmed to prefix length).
-            # 缓存可能是混合类型：开启 KV 量化后，全局注意力层为 TurboQuantKVCache，
-            # 滑窗层/末层仍是稠密 KVCache/RotatingKVCache，需按类型分别裁剪到 prefix_len。
+            # 缓存可能是混合类型（量化/滑窗/稠密/递归状态），逐类型回滚见模块级
+            # `_trim_caches_to`（T8 根修）；能力门已在上面判过 None 才会走到这里。
             kv_cache = prompt_cache_state.cache
-            for c in kv_cache:
-                if isinstance(c, TurboQuantKVCache):
-                    # 量化缓存：存的是打包量化态（无 (B,H,T,D) 稠密张量），
-                    # 用缓存自身的 trim/offset 接口回退（trim 内部只减 offset，
-                    # 下次 update_and_fetch 会从该 offset 覆盖写入，与稠密语义一致）
-                    excess = getattr(c, "offset", 0) - prefix_len
-                    if excess > 0 and c.is_trimmable():
-                        c.trim(excess)
-                elif hasattr(c, "keys") and c.keys is not None:
-                    # 稠密缓存（KVCache / RotatingKVCache）：保持原物理切片逻辑不变
-                    cached_len = c.keys.shape[2]
-                    if cached_len > prefix_len:
-                        c.keys = c.keys[:, :, :prefix_len, :]
-                        c.values = c.values[:, :, :prefix_len, :]
-                        if hasattr(c, "offset"):
-                            c.offset = prefix_len
-                        if hasattr(c, "_idx"):
-                            # RotatingKVCache 的 _idx 必须跟着切片走，否则留下
-                            # `_idx != keys.shape[2]` 的不自洽态。今天靠后续
-                            # update_and_fetch 先覆写 _idx 而自愈，但 §S.15 根修
-                            # 后 trim 会**读** _idx（判时序序），不再能指望自愈。
-                            c._idx = prefix_len
+            _trim_caches_to(kv_cache, prefix_len)
             kwargs["prompt_cache"] = kv_cache
 
     if thinking_budget is not None:
