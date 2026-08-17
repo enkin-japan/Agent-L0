@@ -31,6 +31,28 @@ MILESTONE_TYPES = {
 # 持久化副本的字段截断上限(SSE 实时帧不受此限)
 _PERSIST_TRUNCATE = 2000
 
+# ── 重启后的 seq 水位余量(OSS 扫描 §6.3,2026-08-17)────────────────────────────
+# 增量事件(token_delta/thinking_delta)同样消耗 seq,但**不在 MILESTONE_TYPES 里、
+# 不落盘**——一次长回答轻松吃掉上千个 seq。进程重启后若直接从末条里程碑续号,seq 会
+# **就地回退**到崩溃前已经用过的号段;而客户端游标是内存态、跨重连刻意保留
+# (PROTOCOL §2.4「任何时刻、任意次」),于是重启后的新事件全部撞上服务端直播循环的
+# `seq <= 游标` 判定被当成重放丢弃——**会话对用户表现为永久静音**。触发者是最常规的
+# 动作:devctl restart / SidecarManager 监护重启 / 崩溃自愈(app 内嵌 sidecar 就是设计,
+# 重启是日常)。
+# 修法:重启续号跳过一整段余量,取 1e6(Python 整数无上限,JSON/JS Number 到 2^53 也远够用:
+# 按每次重启 +1e6 计约 9e9 次重启才触顶)。
+# **真正的不变量**(别记成「1e6 > 单轮增量数」):自**最后一条成功落盘的里程碑**以来
+# emit 的事件总数必须 < 1e6。正常态下里程碑很密(tool_started/tool_result 都是),
+# 空档被单段生成的 token 数封顶(~1e4 量级),余量有百倍冗余;但 `_persist` 失败会被吞掉
+# (磁盘满/只读),那时 last_persisted 冻住而 self.seq 继续爬,爬过 1e6 后下次重启仍会回退。
+# 故落盘失败必须响亮可见(见 _persist 的一次性告警),而不是每条事件打一行 print 淹掉。
+# 彻底闭合要在 __init__ 落一条持久高水位线,那会引入新的账本记录类型,超出止血范围。
+# ⚠️ 这只是止血,治不了另一半:进程死时那一轮没有 `turn_ended`
+# (SessionManager.recover_inflight_turns 只补写 history、不发任何账本事件),客户端仍会
+# 停在 generating。那一半要代际围栏(后续项;全局 feed 的 feed_seq 进程内归零是同源
+# 缺陷,但它无持久层,修法不同源,一并归入该项)。
+SEQ_RESTART_RESERVE = 1_000_000
+
 # 轮次状态(PROTOCOL.md §1)
 TURN_NONE = "none"
 TURN_QUEUED = "queued"
@@ -64,10 +86,16 @@ class TurnJournal:
         self.session_id = session_id or session_dir.name
         self.feed = feed
         self.path = session_dir / "journal.jsonl"
-        self.seq = self._load_last_seq()
+        last_persisted = self._load_last_seq()
+        # 判据是「账本在不在」,**不是** last_persisted 的真假:后者为 0 有三种含义
+        # (无账本 / 空账本 / 读失败),把「读失败」当成冷启动会从 0 起号——正是账本
+        # 损坏这个最该防的场景下把永久静音原样重现,比原缺陷更狠。
+        # 无账本 = 冷启动的新会话,保持 0 让 seq 从 1 起(可读,且不存在回退风险)。
+        self.seq = 0 if last_persisted is None else last_persisted + SEQ_RESTART_RESERVE
         self.ring: List[Dict[str, Any]] = []          # 活跃轮全部事件(信封)
         self._listeners: set = set()                   # asyncio.Queue 集合
         self._closed = False
+        self._persist_failed = False                   # 落盘失败告警去重(见 _persist)
 
         # ---- 轮次状态跟踪(GET /turn 的数据源,由 emit 单点驱动) ----
         self.current_turn_id: Optional[str] = None
@@ -81,10 +109,15 @@ class TurnJournal:
         self.turn_first_seq: int = 0
 
     # ---------- 落盘 ----------
-    def _load_last_seq(self) -> int:
+    def _load_last_seq(self) -> Optional[int]:
+        """账本里已落盘的最大 seq(取全部记录的 max,不是「末行」——坏行会让末行不是最大)。
+
+        **None 专指「没有账本文件」**(冷启动),与「读失败」「空账本」严格区分:后两者
+        返回 0 且照样吃水位余量,否则一次读盘失败就会把 seq 打回 0(见 __init__)。
+        """
+        if not self.path.exists():
+            return None
         try:
-            if not self.path.exists():
-                return 0
             last = 0
             with open(self.path, "r", encoding="utf-8") as f:
                 for line in f:
@@ -99,7 +132,8 @@ class TurnJournal:
                         last = max(last, rec["seq"])
             return last
         except Exception as e:
-            print(f"[Journal] 读取账本失败(seq 从 0 起): {e}")
+            # 返回 0 而非 None:账本文件确实在,只是读不动——仍按「续跑」加余量起号
+            print(f"[Journal] 读取账本失败(仍按续跑加水位余量起号): {e}")
             return 0
 
     def _persist(self, env: Dict[str, Any]) -> None:
@@ -118,8 +152,15 @@ class TurnJournal:
                 if is_new:
                     f.write(json.dumps({"kind": "journal_header", "v": 1}) + "\n")
                 f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+            self._persist_failed = False
         except Exception as e:
-            print(f"[Journal] 里程碑落盘失败(事件仍在内存环): {e}")
+            # 落盘失败会悄悄侵蚀水位余量的不变量(last_persisted 冻住、self.seq 继续爬,
+            # 爬过 SEQ_RESTART_RESERVE 后下次重启照样回退),故首次失败必须响亮——
+            # 之后只在恢复时再说一次,避免磁盘满时每条事件刷一行把日志淹掉。
+            if not self._persist_failed:
+                self._persist_failed = True
+                print(f"[Journal] ⚠️ 里程碑落盘失败(事件仍在内存环;持续失败会使重启后的 "
+                      f"seq 水位余量失效,见 SEQ_RESTART_RESERVE): {e}")
 
     # ---------- 写入(唯一入口) ----------
     def emit(self, etype: str, data: Optional[Dict[str, Any]] = None,

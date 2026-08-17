@@ -274,6 +274,18 @@ resumed/turn_ended,信封加 `session_id` 字段)+ 定时任务运行事件。�
 后台通知的唯一数据源,替代 /tasks 差分轮询。`global_seq` 独立于会话 seq。
 (`GET /api/v1/tasks` 快照保留,作为低频对账与调试接口。)
 
+⚠️ **已知缺陷(未修,2026-08-17 记)**:`feed_seq` 纯内存(`core/feed.py` 的
+`GlobalFeed.seq`),**每次进程启动归零**,而两端客户端游标跨重连保留且不读首帧的
+`last_feed_seq`——于是后端一重启,新条目全部撞上 `feed_seq <= 游标` 被静默丢弃。
+它比 §3 已修的会话 seq 回退**更狠**:那个要攒够未落盘增量才回退,这个 100% 重启即
+回退。feed 无持久层,「加水位余量」的修法不适用,正解是客户端按首帧重锚(代际围栏),
+与 §3 末尾那半留待同一个后续项一并解决。
+当前缓解**只覆盖一半**:两端都另有 30s 级慢对账定时器(Swift `startGlobalMonitor` 的
+fallback 任务、前端 `schedulerTimer`),故任务中心的**状态**最终会收敛;但被丢弃的
+那些事件本身不会补发,依赖 feed 逐条触发的**通知**(轮次完结、待审批)是真丢的——
+注意 dispatch 循环里 `feed_seq <= 游标` 的 `continue` 发生在刷新与通知**之前**,
+不要误以为每条事件的刷新能兜住它。
+
 ### 2.8 推送投影(additive,2026-07-12;不改既有事件语义,不升版本)
 
 通知不是新事件源——后端 `framework/push/` 的 dispatcher 是 feed/journal 的**读者**
@@ -307,8 +319,20 @@ approval / approval_autodenied / schedule_start;Live Activity content-state 契�
   - `sessions/{sid}/journal.jsonl`:仅 ★ 里程碑事件追加落盘,首行 journal_header;
     `tool_started.args` / `tool_result.response` 持久化副本截断至 2000 字符并加
     `"truncated": true` 标记(SSE 实时帧不截断——以观察上限 4000 为界)。
-- `seq` 恢复:进程重启后取 journal 末行 seq 续增;内存环不恢复(增量丢失可接受,
-  因为崩溃时轮次本身会被补 fail)。
+- `seq` 恢复:进程重启后取 journal 中**已落盘记录的最大 seq**(取 max 而非读末行——
+  坏行会让末行不是最大)**加一段水位余量**(1e6,`journal.SEQ_RESTART_RESERVE`)续增;
+  内存环不恢复(增量丢失可接受,因为崩溃时轮次本身会被补 fail)。
+  由此 **`seq` 单调但不连续**:每次重启留下一个百万级空洞。客户端只可把 `seq` 当
+  排序键与游标,**不得据空洞判定「我漏收了事件」**并触发重同步。
+  **余量不可省**,它正是 §2.4「任何时刻、任意次」那句成立的前提:增量事件
+  (`token_delta`/`thinking_delta`)同样消耗 seq 却不落盘,直接接末行会让 seq
+  **就地回退**到已用号段,而客户端游标是内存态、跨重连保留——重启后的新事件会全部
+  撞上服务端直播循环的 `seq <= 已发送最大号` 判定被当成重放丢弃,会话对用户表现为
+  **永久静音**。(此前本行写作「取末行 seq 续增」,与 §2.4 直接矛盾,两端实现都照
+  §2.4 办;OSS 扫描 §6.3 复现,2026-08-17 修。)
+  ⚠️ 余量只保证 seq 不回退。进程死时那一轮没有 `turn_ended`(恢复流程只补写
+  history、不发账本事件),客户端仍会停在 generating;这一半要代际围栏(后续项,
+  与 §2.7 全局 feed 的 `feed_seq` 进程内归零同源)。
 - journal 随会话删除/清理(`session_cleanup`)一并回收;不设独立轮转(v1)。
 - `inflight.json` 语义收窄为**纯崩溃防丢**(write-ahead);客户端不再用它探测
   进行中轮次(用 `/turn`)。

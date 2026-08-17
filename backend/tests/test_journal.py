@@ -1,7 +1,7 @@
 """事件账本单元测试(PROTOCOL.md §2/§3 的实现契约)。"""
 import json
 
-from framework.core.journal import TurnJournal, new_turn_id
+from framework.core.journal import SEQ_RESTART_RESERVE, TurnJournal, new_turn_id
 
 
 def make_journal(tmp_path):
@@ -15,18 +15,102 @@ def disk_records(d):
     return [json.loads(l) for l in lines]
 
 
-def test_seq_monotonic_and_reload(tmp_path):
-    j, d = make_journal(tmp_path)
+def test_seq_monotonic_within_process(tmp_path):
+    """新会话冷启动:seq 从 1 起、逐事件单调(增量事件同样占号)。"""
+    j, _ = make_journal(tmp_path)
+    assert j.seq == 0
     j.emit("turn_queued", {"prompt": "p", "gen": {}, "origin": "chat"}, turn_id=new_turn_id())
     j.emit("turn_started", {})
     j.emit("token_delta", {"text": "hi"})
     assert [e["seq"] for e in j.ring] == [1, 2, 3]
 
-    # 重启(新实例):seq 从磁盘里程碑续增(token_delta 不落盘,最后里程碑 seq=2)
-    j2 = TurnJournal(d)
-    assert j2.seq == 2
-    env = j2.emit("turn_started", {})
-    assert env["seq"] == 3
+
+def test_seq_never_regresses_across_restart(tmp_path):
+    """重启后 seq 必须严格大于崩溃前用过的最大号——**含未落盘的增量事件**。
+
+    旧实现直接接末条里程碑续号(本测试原先正是这么断言的),而 token_delta /
+    thinking_delta 占号却不落盘 → seq 就地回退到已用号段(OSS 扫描 §6.3)。
+    """
+    j, d = make_journal(tmp_path)
+    j.emit("turn_queued", {"prompt": "p", "gen": {}, "origin": "chat"}, turn_id=new_turn_id())
+    j.emit("turn_started", {})                        # 末条里程碑 seq=2
+    for _ in range(50):
+        j.emit("token_delta", {"text": "x"})          # 占号不落盘
+    used_max = j.seq
+    assert used_max == 52                             # 崩溃前真实用到的最大号
+
+    j2 = TurnJournal(d)                               # 进程重启
+    assert j2.seq >= used_max                         # 起号不得落回已用号段
+    assert j2.emit("turn_started", {})["seq"] > used_max
+
+
+def test_restart_events_clear_the_client_cursor(tmp_path):
+    """要害:重启后的新事件必须越得过客户端游标,否则被服务端直播循环静默丢弃。
+
+    `routes.attach_events` 对 `seq <= 已发送最大号` 的事件直接 continue,而两端客户端
+    的游标是内存态、跨重连保留且不读 stream_attached.last_seq——seq 一回退,整条会话
+    对用户就永久静音。这条测的是那个后果,不是实现细节。
+    """
+    j, d = make_journal(tmp_path)
+    j.emit("turn_queued", {"prompt": "p", "gen": {}, "origin": "chat"}, turn_id=new_turn_id())
+    j.emit("turn_started", {})
+    for _ in range(200):
+        j.emit("thinking_delta", {"text": "x"})
+    client_cursor = j.seq                             # 客户端已消费到这里
+
+    j2 = TurnJournal(d)                               # devctl restart
+    env = j2.emit("turn_queued", {"prompt": "p2", "gen": {}, "origin": "chat"},
+                  turn_id=new_turn_id())
+    assert env["seq"] > client_cursor
+    # 重放同样要能把新事件交出去(游标之后的都在)
+    assert [e["seq"] for e in j2.replay(after=client_cursor)] == [env["seq"]]
+
+
+def test_seq_monotonic_across_repeated_restarts(tmp_path):
+    """连续多次重启:每次起号都高于**上一实例真正分配到的最高号**(含未落盘增量)。
+
+    每轮必须发未落盘的增量事件,否则本条会退化成「里程碑 seq 单调」——那在修复前
+    就已成立,测不出任何东西(首过评审 M3:原写法把 RESERVE 改成 0 照样绿)。
+    """
+    j, d = make_journal(tmp_path)
+    j.emit("turn_queued", {"prompt": "p", "gen": {}, "origin": "chat"}, turn_id=new_turn_id())
+    highest = j.seq
+    for _ in range(3):
+        jn = TurnJournal(d)
+        assert jn.seq >= highest                      # 起号不得落回上一实例用过的号段
+        jn.emit("turn_started", {})                   # 里程碑,落盘
+        for _ in range(30):
+            jn.emit("token_delta", {"text": "x"})     # 占号不落盘 —— 余量要盖住的正是这些
+        highest = jn.seq
+
+
+def test_unreadable_journal_does_not_restart_from_zero(tmp_path):
+    """账本存在但读不动 → 仍按续跑加余量起号,绝不退回 0。
+
+    `_load_last_seq` 对「无账本」「空账本」「读失败」原本都返回 0;若按真假判断,
+    账本损坏这个最该防的场景反而会从 0 起号,把永久静音以最大严重度重现
+    (首过评审 M1)。
+    """
+    j, d = make_journal(tmp_path)
+    j.emit("turn_queued", {"prompt": "p", "gen": {}, "origin": "chat"}, turn_id=new_turn_id())
+    for _ in range(50):
+        j.emit("token_delta", {"text": "x"})
+    used_max = j.seq
+
+    # 账本被写坏成不可解析的字节(断尾/乱码)
+    (d / "journal.jsonl").write_text("{{{ not json at all", encoding="utf-8")
+    assert TurnJournal(d).seq > used_max
+
+    # 极端:整份账本连读都读不动(此处用「路径是目录」构造 IO 异常,走 except 分支)
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    (broken / "journal.jsonl").mkdir()
+    assert TurnJournal(broken).seq >= SEQ_RESTART_RESERVE
+
+    # 对照:真正的冷启动(没有账本文件)才从 0 起
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    assert TurnJournal(fresh).seq == 0
 
 
 def test_milestone_only_persistence_and_slim_turn_ended(tmp_path):

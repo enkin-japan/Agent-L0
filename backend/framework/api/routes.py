@@ -983,7 +983,11 @@ async def get_turn_state(session_id: str, request: Request):
         sdir = session_manager.sessions_dir / session_id
         if not sdir.exists():
             return {"status": True, "turn": None, "last_seq": 0}
-        journal = TurnJournal(sdir)  # 只读实例：冷会话无活跃轮,仅取账本游标
+        # 只读实例：冷会话无活跃轮,仅取账本游标。注意它返回的 last_seq 已含
+        # SEQ_RESTART_RESERVE（构造即加），不是磁盘上的最大 seq——这是本仓唯一一处
+        # 对「非重启」场景加余量的地方。无害且必须如此：稍后 get_or_create 建的真
+        # 账本从同一份磁盘状态算出同一个起点，客户端游标正好落在首个新事件的前一位。
+        journal = TurnJournal(sdir)
 
     snap = journal.turn_snapshot()
     if snap is not None and snap["state"] == "queued":
