@@ -1540,7 +1540,7 @@ B5 实测 γ=4 接受率仅 **39.5%**（AL 2.581），而台账拟合的 8bit �
 |---|---|
 | 本机 GPU | ✅ 空闲（08-17 夜战实跑过：gemma 四档 tool_call 重测、e4b-8bit smoke、A8 两轮四臂起服——均已收摊验停） |
 | 工作树 | ✅ 干净。08-17 第一梯队波 6 个 commit（6e21652→23002c7）**已入库已推送** |
-| 生产开关 | ✅ `speculative.mode` 仍 `off`、`draft_model` 仍空。**是否对生产流量开 MTP = 用户拍板项**——A8 已收案（08-17 v2）：qwen38 多轮口径 drafter 净赚（8bit 1.30× / 4bit 1.12×，无复用不对称性），数据面**建议对 qwen38 档开启（8bit b5 / 4bit b3）**；投机数值漂移实测存在且 **8bit 首轮即分叉**（t1 同 prompt 贪心 215 vs 187 tok、首段措辞已不同；4bit t1/t2 逐字节等价、t3 起漂移）需用户知情。gemma 系维持不开（解码净亏 + 缓冲转换真丢复用） |
+| 生产开关 | ✅ **已开（D.21，2026-08-17 用户拍板）**：实现为注册表**条目级 speculative**——Qwen3.8-27B-8bit→drafter b5、4bit→b3（draft_revision 钉扎，merge_entry_speculative 两消费方共用，env 强制 > 条目 > 全局）；全局 `speculative.mode` 保持 `off`（条目级是唯一开启面），gemma 档天然不受影响（解码净亏 + 缓冲转换真丢复用）。实机冒烟：qwen38-8bit 零 env 起服即 spec_drafted、e4b 无投机。拍板依据：A8 v2（多轮 1.30×/1.12×）+ 漂移知情（8bit 首轮即分叉） |
 | 自建 MLX | `backend/.venv-mlxsrc`（**非生产**）装的是 **qmv_mma 混合派发内核**（T6b）；`/Volumes/enkin/project/mlx-src` 在分支 **`t6b-qmv-mma`@74ed440**（不再是 pristine main）。⚠️ dist-info 版本串写 `+b1c292d`（构建时源码未 commit，指纹滞后一位）——已用两个行为判据（M≤12 上界、空串 env 语义）判明实体是 74ed440，见 `benchmarks/data/t6b-qmv-mma/README.md`。生产 `.venv` 仍 stock wheel 0.32.0；**读上游源码要对齐 v0.32.0**（`git show v0.32.0:<path>`） |
 | Colab A100 | ✅ 无活动会话（补格场 08-15 夜已验停） |
 

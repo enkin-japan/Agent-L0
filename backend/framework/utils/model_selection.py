@@ -119,3 +119,34 @@ def model_options(repo: Optional[str]) -> dict:
         if entry.get("repo") == repo:
             return entry
     return {}
+
+
+def merge_entry_speculative(inference_cfg: dict, entry: dict,
+                            env_forced: bool = False) -> dict:
+    """注册表条目级 speculative 覆盖全局段（D.21：qwen38 生产 MTP 转正，2026-08-17）。
+
+    投机配对是**模型绑定事实**（qwen38 内建 MTP 头 vs gemma 无可用路线），全局
+    开关无法表达"选中 qwen38 自动配对、gemma 档天然 off"——条目声明 `speculative`
+    时覆盖 `inference.speculative`。两个消费方（inference/server.py 与
+    AgentEngine.create）共用本函数，防两侧口径漂移。
+
+    优先级：**env 强制（INFER_SPEC_*）> 条目 > 全局段**。env_forced=True 时条目
+    整个不参与——评测臂必须能把任意档强制 off/drafter，否则基线被条目静默污染
+    （13:57 事故同型）。
+
+    本函数是**纯字典合并**——draft_model 保持注册仓 id 原样，路径解析下沉到
+    MLXBackend.load 的装载线程里做（首过评审 C1/C2：在这里解析会让 remote/edge
+    机白拽 15-28G 草稿权重、且同步大下载堵死 asyncio 事件循环）。draft_revision
+    键随 dict 一路传到装载处按钉扎解析。返回新 dict，不改入参。
+    """
+    spec_entry = (entry or {}).get("speculative")
+    if not spec_entry or env_forced:
+        return inference_cfg
+    mode = str(spec_entry.get("mode") or "off")
+    if mode not in ("off", "prompt_lookup", "drafter"):
+        # 白名单（与 bench_baseline --spec-mode 同口径）：条目 mode 拼错会在下游
+        # 被 `== "drafter"` 静默跳过、跑成非投机——配置错误必须响亮（§S.3）
+        raise ValueError(f"注册表条目 speculative.mode 只认 off|prompt_lookup|drafter，"
+                         f"收到 {mode!r}（repo={entry.get('repo')!r}）")
+    merged = {**(inference_cfg.get("speculative") or {}), **spec_entry}
+    return {**inference_cfg, "speculative": merged}

@@ -130,23 +130,31 @@ inference:
     # Qwen3.8-27B（2026-08-13 发布，08-15 起测）：28B 稠密混合注意力（linear attn
     # 混层，Qwen3-Next 系）+ 原生视觉，262k ctx，Apache 2.0。方言先验 qwen35
     # （同家族 chat template；reasoning_effort 新旋钮方言暂不透传——评测首验项）。
-    # 配对草稿件 mlx-community/Qwen3.8-27B-MTP-{8bit,4bit}（1 层 MTP 头，block_size 3，
-    # 不入注册表，走 speculative.draft_model——与 gemma assistant 同例）。草稿件
-    # revision 钉扎值记此（speculative 段无 revision 字段的结构缺口，防上游重传漂移）：
-    #   MTP-8bit e88e48d055732ad75d9435f3059139d5279f2064
-    #   MTP-4bit b643c01b6d3b094e325edb6ebd832e16c486c575
+    # 条目级 speculative（D.21，2026-08-17 用户拍板「qwen38 生产 MTP 开」）：
+    # 投机配对是模型绑定事实——选中 qwen38 自动配对内建 MTP 头，gemma 档天然 off。
+    # 消费方 = merge_entry_speculative（server 与 AgentEngine.create 共用），优先级
+    # env 强制（INFER_SPEC_*）> 条目 > 全局段；draft_model 经 path_resolver 按
+    # draft_revision 钉扎解析。block 取 08-16 矩阵最优：8bit→5、4bit→3。
+    # A8 收案口径（08-17 v2）：多轮墙钟 8bit 1.30×/4bit 1.12×；已知代价 = 投机数值
+    # 漂移（8bit 首轮即可见，内容合理但贪心不逐位等价），用户知情后拍板开启。
     - repo: "mlx-community/Qwen3.8-27B-8bit"
       revision: "815b83c0df8ffd1d1b5244cf75fd6ef14fca9ef9"
       dialect: "qwen35"
       capabilities: ["text", "vision"]
-      profile: { tool_call: 0.92, longchain: 1.00, vision: 0.948, tps: 16.3 }  # run 20260815-161411
-      note: "28GB | 画像 ✓（解析错 0=qwen35 方言直接兼容；vision 212 题含 ChartQA hard；峰值内存 36.4G）"
+      speculative: { mode: "drafter", draft_model: "mlx-community/Qwen3.8-27B-MTP-8bit",
+                     draft_revision: "e88e48d055732ad75d9435f3059139d5279f2064",
+                     draft_block_size: 5 }
+      profile: { tool_call: 0.92, longchain: 1.00, vision: 0.948, tps: 16.3 }  # run 20260815-161411（mode=off 口径）
+      note: "28GB | 画像 ✓（解析错 0=qwen35 方言直接兼容；vision 212 题含 ChartQA hard；峰值内存 36.4G）| D.21 生产 MTP b5（多轮 1.30×）"
     - repo: "mlx-community/Qwen3.8-27B-4bit"
       revision: "3e6447f082e89cc7f0bc6e5441afd38dfce760ff"
       dialect: "qwen35"
       capabilities: ["text", "vision"]
-      profile: { tool_call: 0.96, longchain: 1.00, vision: 0.958, tps: 27.9 }  # run 20260815-183117
-      note: "15GB | 画像 ✓ 质量与 8bit 打平（各维差 ≤1-2 题，低于路由噪声带 0.05）而 tps 1.72×/内存 -42% = 本模型效率王"
+      speculative: { mode: "drafter", draft_model: "mlx-community/Qwen3.8-27B-MTP-4bit",
+                     draft_revision: "b643c01b6d3b094e325edb6ebd832e16c486c575",
+                     draft_block_size: 3 }
+      profile: { tool_call: 0.96, longchain: 1.00, vision: 0.958, tps: 27.9 }  # run 20260815-183117（mode=off 口径）
+      note: "15GB | 画像 ✓ 质量与 8bit 打平（各维差 ≤1-2 题，低于路由噪声带 0.05）而 tps 1.72×/内存 -42% = 本模型效率王 | D.21 生产 MTP b3（多轮 1.12×）"
     # ── CUDA 档（bf16 原件，backend: cuda / Colab A100 联调；2026-08-06 用户指定）──
     # revision 已钉死（2026-08-06 HF API 主干 SHA；各仓 lastModified 均早于入库日，
     # 与 Drive 权重一致——凡常驻均应钉死的纪律）。

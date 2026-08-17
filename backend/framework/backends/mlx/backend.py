@@ -15,6 +15,7 @@ P0 平移物：原 core/engine.py 的 MLX 物理层（模型加载 / KV 量化�
 import asyncio
 import copy
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -268,6 +269,17 @@ def _load_drafter(target_model, draft_path: str, spec_cfg: Dict[str, Any]):
     return draft_model, resolved_kind
 
 
+def _resolve_draft_path(draft_path: str, spec_cfg: Dict[str, Any]) -> str:
+    """草稿件路径解析（D.21）：本地目录原样放行（评测臂经 INFER_SPEC_DRAFT_MODEL
+    传绝对路径），否则视为注册仓 id 经 path_resolver 按 draft_revision 钉扎
+    解析/补拉。只应在装载线程内调用（可能发生同步下载）。"""
+    if os.path.isdir(draft_path):
+        return draft_path
+    from ...utils.path_resolver import resolve_model_path
+    return str(resolve_model_path(draft_path,
+                                  revision=spec_cfg.get("draft_revision")))
+
+
 class MLXBackend:
     """InferenceBackend 的 MLX 进程内实现。"""
 
@@ -292,9 +304,17 @@ class MLXBackend:
                 )
 
         def _load_all():
-            """目标件与草稿件在**同一线程**加载：MLX 流是线程本地的。"""
+            """目标件与草稿件在**同一线程**加载：MLX 流是线程本地的。
+
+            草稿件路径解析也在这里（D.21 首过评审 C1/C2）：放在装载线程才不堵
+            事件循环，且只有真要执行投机的本后端会拉权重（remote/cuda 消费方
+            不走此路）。解析语义见 `_resolve_draft_path`。
+            """
+            resolved_draft = (_resolve_draft_path(draft_path, spec_cfg)
+                              if draft_path else "")
             m, p = _vlm_load(model_path)
-            d = _load_drafter(m, draft_path, spec_cfg) if draft_path else (None, None)
+            d = (_load_drafter(m, resolved_draft, spec_cfg)
+                 if resolved_draft else (None, None))
             return m, p, d
 
         if executor is None:

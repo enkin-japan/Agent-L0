@@ -50,6 +50,12 @@ class AgentEngine:
             print(f"[Engine] max_inference_concurrency={max_concurrency} 仅对 remote 后端生效，"
                   f"进程内后端强制钳制为 1（共享单例不可并发）")
             max_concurrency = 1
+        # 条目级投机覆盖（D.21 qwen38 MTP 转正）：进程内路（app.py / run_eval 引擎
+        # 直连）与 server 同口径——评测面即部署面。本路无 INFER_SPEC_* env 概念
+        # （env 只由 server 消费并在彼处压过条目），故 env_forced 恒 False。
+        from ..utils.model_selection import merge_entry_speculative
+        kv_config = merge_entry_speculative(dict(kv_config or {}),
+                                            model_options or {})
         executor = ThreadPoolExecutor(max_workers=max_concurrency,
                                       thread_name_prefix="inference")
         from ..backends import get_backend_class  # 后端命名收编在注册面（缺省即默认后端）

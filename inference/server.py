@@ -52,7 +52,8 @@ from fastapi import FastAPI, Depends, Form, Header, HTTPException, Request, Uplo
 from fastapi.responses import StreamingResponse
 
 from framework.utils.config_loader import load_config
-from framework.utils.model_selection import model_options, resolve_selected_model
+from framework.utils.model_selection import (
+    merge_entry_speculative, model_options, resolve_selected_model)
 from framework.utils.path_resolver import resolve_model_path
 # 方言经注册面取（R0）：server 只要工具段标记（dialect.markers.stc/etc 喂约束采样），
 # 不 import 任何家族私有模块——直接 import gemma4 的 ResponseParser 就是把
@@ -235,11 +236,34 @@ async def lifespan(app: FastAPI):
         _spec_env["draft_model"] = os.environ["INFER_SPEC_DRAFT_MODEL"].strip()
     if os.environ.get("INFER_SPEC_BLOCK_SIZE", "").strip():
         _spec_env["draft_block_size"] = int(os.environ["INFER_SPEC_BLOCK_SIZE"])
+    # 条目级投机覆盖（D.21 qwen38 MTP 转正）+ env 覆盖，优先级从低到高：
+    # 全局段 < 注册表条目 < INFER_SPEC_*（逐键覆盖）。条目整体压制只由
+    # INFER_SPEC_MODE 触发（评测臂强制 off/drafter 的口子）；只给
+    # INFER_SPEC_BLOCK_SIZE 之类调参键不该把条目整个丢掉、静默跑成非投机
+    # （首过评审 M4）。合并语义与 AgentEngine.create 共用同一函数（防两侧漂移）。
+    _entry_spec = (model_options(model) or {}).get("speculative")
+    _inf_cfg = merge_entry_speculative(_inf_cfg, model_options(model),
+                                       env_forced=("mode" in _spec_env))
     if _spec_env:
-        _inf_cfg = {**INFERENCE_CFG,
-                    "speculative": {**(INFERENCE_CFG.get("speculative") or {}),
+        _inf_cfg = {**_inf_cfg,
+                    "speculative": {**(_inf_cfg.get("speculative") or {}),
                                     **_spec_env}}
         print(f"[Server] 投机配置被环境覆盖：{_spec_env}")
+    # 处置日志（首过评审 16）：条目存在时三种去向必须可辨——生效 / 被
+    # INFER_SPEC_MODE 压制 / 条目本身声明 off
+    if _entry_spec:
+        if "mode" in _spec_env:
+            print(f"[Server] 注册表条目 speculative 被 INFER_SPEC_MODE="
+                  f"{_spec_env['mode']!r} 压制（条目声明 mode={_entry_spec.get('mode')!r}）")
+        else:
+            print(f"[Server] 注册表条目 speculative 生效：mode={_entry_spec.get('mode')}"
+                  f" draft={_entry_spec.get('draft_model')}"
+                  f" block={_entry_spec.get('draft_block_size')}")
+    _eff_spec = (_inf_cfg.get("speculative") or {})
+    if str(_eff_spec.get("mode") or "off") != "off":
+        print(f"[Server] 投机生效配置：mode={_eff_spec.get('mode')} "
+              f"draft={_eff_spec.get('draft_model')} "
+              f"block={_eff_spec.get('draft_block_size') or _eff_spec.get('block_size')}")
     print(f"🚀 [Server] loading model: {model} (backend={backend_name or 'default'})")
 
     # T7 并发参数化：锁与执行器按后端能力开闸——MLX 共享单例不可并发（=1，旧语义

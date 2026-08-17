@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from framework.utils.model_selection import resolve_selected_model
+from framework.utils.model_selection import model_options, resolve_selected_model
 from framework.utils.path_resolver import resolve_model_path, resolve_tokenizer_only_path
 
 
@@ -35,6 +35,20 @@ def main() -> int:
         print(f"❌ {kind}准备失败: {e}", file=sys.stderr)
         return 1
     print(f"✅ {kind}就绪: {path}")
+    # 条目级投机草稿件（D.21）：所选条目声明 drafter 时一并前台预拉——
+    # 否则草稿件在 backend lifespan 里惰性下载，正是本脚本要消灭的"观感如死机"。
+    # edge（--tokenizer-only）不拉：远程模式草稿件由算力端自备。
+    spec = (model_options(repo) or {}).get("speculative") or {}
+    draft = str(spec.get("draft_model") or "").strip()
+    if not tokenizer_only and str(spec.get("mode") or "off") == "drafter" and draft:
+        print(f"📦 投机草稿件: {draft}"
+              + (f" @ {str(spec.get('draft_revision'))[:8]}" if spec.get("draft_revision") else ""))
+        try:
+            dpath = resolve_model_path(draft, revision=spec.get("draft_revision"))
+        except Exception as e:
+            print(f"❌ 草稿件准备失败: {e}", file=sys.stderr)
+            return 1
+        print(f"✅ 草稿件就绪: {dpath}")
     return 0
 
 

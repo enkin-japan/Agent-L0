@@ -438,7 +438,8 @@ def main():
                     help="逗号分隔的 <repo尾名>:<ctx> 已证不可行格（如 OOM 实证），跳过不测")
     # ---- MTP 格（§7 阶段二）：投机配置逐格下发给 server，不改 config.yaml ----
     ap.add_argument("--spec-mode", default="",
-                    help="投机模式：留空=用 config（生产缺省 off）；drafter=草稿件投机")
+                    help="投机模式：留空=强制 off（D.21 后注册表条目可声明 drafter，"
+                         "基线纯度靠显式 env 压制）；drafter=草稿件投机")
     ap.add_argument("--draft-model", default="",
                     help="草稿件目录或 HF id（--spec-mode=drafter 时必给）")
     ap.add_argument("--draft-block-size", type=int, default=None,
@@ -452,27 +453,30 @@ def main():
     models = [m for m in args.models.split(",") if m]
     ctx_levels = [int(x) for x in args.ctx.split(",")]
 
-    # 投机配置：只在显式给了 --spec-mode 时下发；否则一个 INFER_SPEC_* 都不设，
-    # server 走 config.yaml 原路（= 生产缺省 off），基线格行为逐字不变。
+    # 投机配置：显式给了 --spec-mode 就按给的下发；**留空 = 强制下发 mode=off**。
+    # 〔D.21（2026-08-17）后不能再"不设 env 走 config 原路"：注册表条目级
+    #  speculative（qwen38 两档已声明 drafter）会在 env 缺席时被 server 合并生效，
+    #  基线格就静默变成投机格——13:57 事故同型。env 强制恒压过条目，故基线纯度
+    #  由显式 off 保证；下方 config 全局段护栏继续兜底。〕
     spec_env = {}
     _mode = args.spec_mode.strip()
-    if _mode:
-        # 白名单：模式名写错（如 "mtp"）会一路静默跑成非投机，而产物头部与格记录
-        # 都自称投机格——自证口径的字段证了个假，比没有还坏
-        if _mode not in ("off", "prompt_lookup", "drafter"):
-            ap.error(f"--spec-mode 只认 off|prompt_lookup|drafter，收到 {_mode!r}")
-        spec_env["mode"] = _mode
-        if _mode == "drafter":
-            if not args.draft_model:
-                ap.error("--spec-mode=drafter 必须同时给 --draft-model")
-            spec_env["draft_model"] = args.draft_model
-        if args.draft_block_size is not None:
-            if args.draft_block_size <= 0:
-                ap.error("--draft-block-size 必须为正整数")
-            spec_env["block_size"] = args.draft_block_size
-    elif args.draft_model or args.draft_block_size is not None:
+    if not _mode and (args.draft_model or args.draft_block_size is not None):
         ap.error("--draft-model / --draft-block-size 需与 --spec-mode 同时给"
                  "——单给它们不会生效，静默跑成非投机格是最坏结果")
+    _mode = _mode or "off"
+    # 白名单：模式名写错（如 "mtp"）会一路静默跑成非投机，而产物头部与格记录
+    # 都自称投机格——自证口径的字段证了个假，比没有还坏
+    if _mode not in ("off", "prompt_lookup", "drafter"):
+        ap.error(f"--spec-mode 只认 off|prompt_lookup|drafter，收到 {_mode!r}")
+    spec_env["mode"] = _mode
+    if _mode == "drafter":
+        if not args.draft_model:
+            ap.error("--spec-mode=drafter 必须同时给 --draft-model")
+        spec_env["draft_model"] = args.draft_model
+    if args.draft_block_size is not None:
+        if args.draft_block_size <= 0:
+            ap.error("--draft-block-size 必须为正整数")
+        spec_env["block_size"] = args.draft_block_size
     try:
         skips = parse_skips(args.skip)
         check_runs(args.runs)
@@ -486,9 +490,11 @@ def main():
     # 让 --spec-mode 一给就被基线护栏打死（且错误信息还指着 config 让人去改生产文件）
     cfg_spec_mode = str(((inf.get("speculative") or {}).get("mode")) or "off")
     if cfg_spec_mode != "off":
-        sys.exit("❌ 本脚本要求 config speculative.mode=off（当前 %r）——投机格请用 "
-                 "--spec-mode 下发，不要改生产 config" % cfg_spec_mode)
-    spec_mode = str(spec_env.get("mode") or cfg_spec_mode)
+        sys.exit("❌ 本脚本要求 config **全局段** speculative.mode=off（当前 %r）——投机格请用 "
+                 "--spec-mode 下发，不要改生产 config。（注册表**条目级** speculative"
+                 "（D.21 qwen38）无需理会：本脚本恒显式下发 INFER_SPEC_MODE，env 压过条目）"
+                 % cfg_spec_mode)
+    spec_mode = spec_env["mode"]     # D.21 后恒显式（留空已折算为 off），无二源回落
     if inf.get("kv_bits") is not None:
         sys.exit("❌ 基线格要求 KV 稠密（config 不得设 kv_bits）")
 
@@ -502,9 +508,15 @@ def main():
                 # 投机配置同样是口径的一部分：不比对它，一份基线 jsonl 会把
                 # 非投机格顶给 MTP 跑（反之亦然），也会让两个 k 的格互相顶掉，
                 # 最后产出一份「看着完整、实则混口径」的文件
+                # 归一比较（D.21 改留空=显式 off 后的兼容层）：旧档案基线格记
+                # spec={} 或缺键，新基线格记 {"mode":"off"}——两者同口径，直接
+                # 相等比较会把全部历史基线判成"没测过"、单 GPU 整矩阵重烧（评审 C3）
+                def _spec_key(s):
+                    s = dict(s or {})
+                    return {} if str(s.get("mode") or "off") == "off" else s
                 if (r.get("type") == "cell" and r.get("complete")
                         and bool(r.get("sentinels_only")) == bool(args.sentinels_only)
-                        and (r.get("spec") or {}) == spec_env):
+                        and _spec_key(r.get("spec")) == _spec_key(spec_env)):
                     done.add((r["model"], r["ctx"]))
             except Exception:
                 pass

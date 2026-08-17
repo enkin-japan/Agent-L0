@@ -517,6 +517,7 @@
 | **D.16** | **可写数据经 `AGENT_DATA_DIR` 旋钮分家**（Q7 定案，选项 B）：dev 默认仓库内（保住「数据随手可见可删」的手感），app 注入 `~/Library/Application Support/dev.enkin.macagent/`。**不选「一律搬 App Support、dev 也用」**——dev 时数据离开仓库会让排查与清库都变绕。代价是两套路径都得测。与 D.13 要求的「启动逻辑对仓库布局 vs bundle 布局参数化」**是同一个旋钮**，不是第二个 | 2026-07-16 用户 | 归档 §3.5 R5-4 |
 | **D.17** | **R2b（skill 自主发现）全开**（用户二次拍板改全开，非半开）：撤 skill_invoke「只认用户点名」禁令，工具描述内嵌剧本索引（装配期生成），任务明确匹配即**自主调用**、点名照常必调。依据：#77 口测=31B 未点名守禁✓且手工自发复刻 chart-report 步骤。回退开关=恢复旧描述（git 可查）；误配风险由 26B/31B 真机行为验证把关（L4 测试任务在册） | 2026-08-09 用户 | #77 口测；D.9 触发条件达成 |
 | **D.18** | **DEFERRED§4 完整版（对话式工具/剧本注册）建**。红线照旧：①密钥只引变量名（31B 起草实测已自发遵守）；②声明落「待用户确认」态、不可静默生效（待确认状态机+设置页审批队列=主要工程量） | 2026-08-09 用户 | #77 能力评估达标 |
+| **D.21** | **qwen38 生产 MTP 开**（Qwen3.8-27B 8bit→drafter b5 / 4bit→b3），实现为**注册表条目级 speculative**（选中 qwen38 自动配对内建 MTP 头、gemma 档天然 off；merge_entry_speculative 两消费方共用，env 强制 > 条目 > 全局）；**e4b 多轮首字延迟不单测、等「prompt 字节流只增不改」上位解**（覆盖两家族复用恢复） | 2026-08-17 用户 | A8 v2 收案数据（多轮 1.30×/1.12×、无复用不对称）+ 漂移知情（8bit 首轮即分叉）+ T8 门冷预填代价量级（qwen38 t5 ttft 5s→23s） |
 | **D.19** | **生产起服 `max_model_len` 调 64K**（config cuda 段 32768→65536）。依据：8 页 deck 单轮 ~33k 撞顶实案；L4 fp8 KV 池实测 114,963 token、A100 档 KV bf16 65536≈3.7GiB 均有余量 | 2026-08-09 用户 | #77 新架构发现；L4 站实测 |
 | **D.15** | **内嵌运行时选 `python-build-standalone`**（R5-3 选型，三条判据全部实测）。**否决 PyInstaller**——与本仓库「文件系统即真相源」的约定直接相冲：`mcp/registry.py:26` 扫目录找 `.py` 发现工具、`skill_registry.py:58` 与 `memory/notes.py:86` 扫 `*.md`，冻结后统统扫不到；且 `:21-23` 目录不存在时**静默建空目录后 return** → **零工具注册且不报错**。**否决「venv 拷进 bundle」**——`backend/.venv/bin/python3.13` 是指向 `/Library/Frameworks/Python.framework` 的**绝对路径符号链接**（venv 里没有解释器本体），而该 framework 的 install-name 也是绝对路径、本身搬不动，净体积 307M 且签的是 PSF 的 Developer ID | 2026-07-16 实测 | 归档 §3.5 R5-3；`scripts/build-runtime.sh` |
 | **D.20** | **模型阵容收束 14→6 档**：保留 26b-4bit（26B 缺省）/26b-8bit/31b-4bit/e4b-8bit + Qwen3.8-27B 4bit/8bit，其余全部舍弃（Ornith-9B/Qwen3.5-9B/12b×2/e4b-4bit/26b-qat/31b-qat/31b-8bit）；舍弃模型的残余任务随之销案；T6b 改条件触发（qwen38 开 MTP 且补丁进生产构建）；T7 上游提报不做。qwen35 方言与 CUDA 侧保留模型部署形态（fp8/RedHatAI NVFP4）不在舍弃列 | 2026-08-16 用户 | 08-16 全库横评 14 档同口径数据 + Ornith 突出点盘点（无决定性突出点） |
@@ -2412,6 +2413,39 @@ M2 config 投机注释过时前提改写、M3 修复前取证 transcripts ×4 �
 记录、行号指针、模板 md5 入档、ANALYSIS 回指、死 import 清除、unit 记账、
 门快路 fail-closed 收紧（+1 测试）。复审确认无问题面：四档重测/A8 全部数字
 独立重算吻合、密扫零命中、计费路（daily_serve_chain 锚点）未被收口打断。
+
+---
+
+**D.21 落地：qwen38 生产 MTP 转正（2026-08-17，用户三连拍板）——**
+用户拍板：①qwen38 生产 MTP 开；②e4b 首字延迟不单测、等上位解；③任务流程重排。
+**实现（条目级 speculative）**：全局扳 drafter 会让 gemma 档撞配对拒启，故把投机
+配对下沉为**注册表条目事实**——Qwen3.8 两条目声明
+`speculative:{mode:drafter, draft_model:MTP 件, draft_revision:钉扎, draft_block_size:5/3}`，
+新增 `merge_entry_speculative`（server 与 AgentEngine.create 两消费方共用；优先级
+**env 强制 > 条目 > 全局段**，draft 经 path_resolver 按钉扎 revision 解析）。
+配套防线：bench_baseline `--spec-mode` 留空语义改为**强制下发 off**（否则 qwen38
+基线格被条目静默变投机格，13:57 同型）；run_eval summary 新增 `speculative`
+生效配置自描述（评测面即部署面，但画像口径必须可辨）。金测试 987 绿（新增 5 条：
+语义 4 + 真 config 钉 1）。**实机冒烟双段过**：qwen38-8bit 无任何 env 起服即
+spec_drafted=56（短生成 gtps 30.2 vs off 基线 ~16.5）；e4b 缺省档无投机。
+**连带**：T6b 触发条件之一（qwen38 生产开 MTP）自此成立，剩余条件=用户拍板
+qmv_mma 补丁是否带进生产构建（见新任务流程）。
+
+**新任务流程（D.21 后重排，2026-08-17）——**
+**第一优先：「prompt 字节流只增不改」上位解**（用户拍板 e4b 等它）：装配层把
+历史轮尾块（env 锚点/生成头）按当时字节原样回放，使跨轮 excess==0 走 T8 门的
+纯追加快路——两家族前缀复用**无损全额恢复**（量级：qwen38 t5 ttft 23s→5s；
+e4b 缺省档多轮首字延迟同解；qwen38 上 drafter 与复用自此共存）。涉两方言
+prompt_builder + 引擎历史管理，走双门 + 复用命中回归。
+**第二梯队**：26b-4bit 12h 长稳（用户既定：架构完善后测，上位解落地即解锁）；
+§7 连续批处理接线与并发格；阶段三 KV 量化；阶段四收口/Q14。
+**搭车项**：CUDA 侧重画像（下次 colab 场搭车；**前置：Drive 正主 colab.env 的
+INFER 钥未同步，进场先补**）；reasoning_effort 旋钮透传（qwen38 已是生产 MTP
+档，转正评估时一并）；qwen38 MTP 口径重画像（tps profile 现为 off 口径，路由
+`_tps` 排序对 qwen38 低估 ~1.3×——D.21 评审 M7，重测班车搭上位解后的回归测）。**等用户拍板**：T6b——条件已半触发，是否把 qmv_mma
+补丁带进生产构建（若带，qwen38-8bit b5 的验证步 M=6 落在 MMA 收益段 +5~30%）。
+**无行动项**：gemma tool_call 残余失败（multiple_21 类写散文不调用）系真模型
+行为，不立项。
 
 ---
 

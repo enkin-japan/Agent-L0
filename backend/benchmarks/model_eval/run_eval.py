@@ -103,6 +103,11 @@ async def amain(args: argparse.Namespace) -> int:
 
     from framework.core.engine import AgentEngine   # 惰性：装载后端前先把参数错误挡完
     inference_cfg = load_section("inference")
+    if args.spec_mode == "off":
+        # 逃生口（D.21 评审 M6）：重测 mode=off 口径画像时压制条目级 speculative，
+        # 不必去改生产 config（bench_baseline 同一条纪律）
+        opts = {k: v for k, v in opts.items() if k != "speculative"}
+        inference_cfg = {**inference_cfg, "speculative": {"mode": "off"}}
     engine = await AgentEngine.create(model_path, kv_config=inference_cfg,
                                       model_options=opts, env={}, backend=args.backend)
 
@@ -132,8 +137,18 @@ async def amain(args: argparse.Namespace) -> int:
                        else "  | " + "; ".join(score.get("why") or [])[:120])
                 print(f"{mark} {item['id']} r{rep} ({traj['wall_s']}s){why}")
 
+    # 生效投机配置入 summary（D.21 后条目级 speculative 会在引擎装配期合并生效，
+    # 评测面即部署面——但画像口径必须自描述，否则 tps 跨 run 不可比）。
+    # 只有暴露 speculative 属性的后端（MLX）才可断言；cuda 走 INFER_SPEC_CONFIG
+    # env、remote 由服务端自决——记 unrecorded 而不是谎报 off（评审 M5）。
+    if hasattr(engine.backend, "speculative"):
+        _spec_eff = engine.backend.speculative or {"mode": "off"}
+    else:
+        _spec_eff = {"mode": "unrecorded",
+                     "note": f"backend={args.backend} 不暴露生效投机配置"}
     summary = {"model": repo, "revision": opts.get("revision"),
                "dialect": opts.get("dialect") or "gemma4",
+               "speculative": _spec_eff,
                "stamp": stamp, "n_runs": len(records),
                "dimensions": summarize_scores(records),
                "cot_purity": cot_purity.aggregate(records),
@@ -157,6 +172,9 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 题（冒烟用）")
     ap.add_argument("--ids", default="", help="只跑指定题 id（逗号分隔）")
     ap.add_argument("--out", default="", help="产物目录（缺省 results/<模型>/<时间戳>）")
+    ap.add_argument("--spec-mode", default="", choices=["", "off"],
+                    help="off=压制条目级 speculative 测 mode=off 口径（D.21 后 qwen38 "
+                         "缺省按部署配置跑 drafter）；留空=按部署配置")
     return asyncio.run(amain(ap.parse_args()))
 
 
