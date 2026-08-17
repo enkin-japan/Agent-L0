@@ -559,6 +559,22 @@ def _dispatch(c) -> str:
     return "stateful"
 
 
+def _fed_length(kv_cache, upper: int) -> int:
+    """真实已喂入缓存的 token 数（上位解）。生成收尾的记录不能照抄
+    「prompt + 全部已采样 token」：**停止符已采样但未必喂入**（消费方在
+    stopping_criteria 命中处 break，上游 generate_step 是否已把它前向过取决于
+    流水线预喂）。原样记录会让下一轮「追加式 prompt」在停止符处与缓存错一位
+    ——公共前缀多数出缓存流位置 1 个 token，T8 门判负 excess 整轮拒绝复用。
+    以 offset 承载层的**最小**流位置为准截断记录（评审 M8：取 max 会把滞后层
+    没消费过的 token 记进去，下一轮该层 excess 为负、门的快路放行后滞后层静默
+    缺 token=损坏；取 min 最坏只是多裁/多拒，方向安全。层间 offset 理论上同步，
+    此处是 fail-safe 方向选择）；无 offset 层（纯 stateful 组合，现网不存在）
+    保持 upper 原样，门的 fail-closed 兜底。"""
+    offs = [o for o in (_offset_int(c) for c in kv_cache if c is not None)
+            if o is not None]
+    return min(upper, min(offs)) if offs else upper
+
+
 def _prefix_reuse_blocker(kv_cache, prefix_len: int) -> Optional[str]:
     """返回 None=全部缓存可无损回滚到 prefix_len；否则返回放弃原因。只读不动缓存。
 
@@ -1162,6 +1178,9 @@ def stream_generate(
             all_ids = full_input_ids_list + [
                 t.item() if hasattr(t, "item") else t for t in generated_tokens
             ]
+            # 记录截到真实已喂长度（上位解，_fed_length 注释详述）：停止符
+            # 已采样未必已喂，原样记录会让追加式 prompt 在此错一位被 T8 门拒
+            all_ids = all_ids[:_fed_length(tracked_cache, len(all_ids))]
             prompt_cache_state.update(all_ids, tracked_cache)
 
         # Cleanup after generation

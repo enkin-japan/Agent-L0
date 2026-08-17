@@ -25,9 +25,10 @@
 """
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..env_facts import compute_static_env_lines
+from ...core.dialect_protocol import TASK_BLOCK_RETRACT_NOTE
 
 IM_START = "<|im_start|>"
 IM_END = "<|im_end|>"
@@ -123,6 +124,8 @@ class Qwen35PromptBuilder:
               tail_notes: Optional[List[str]] = None, include_env: bool = False,
               env_extra: Optional[List[str]] = None) -> str:
         prompt = ""  # Qwen 家族无 BOS（tokenizer_config bos_token: null）
+        tools_emitted = False   # 声明只发一次（评审 M3：旧写法跟在**每条** system
+                                # 之后——滚动摘要/中段护栏都是 system，声明会发多遍）
 
         for msg in messages:
             role = msg.get("role", "user")
@@ -166,9 +169,16 @@ class Qwen35PromptBuilder:
 
             prompt += f"{IM_START}{role}\n{body.rstrip()}{IM_END}\n"
 
-            # 工具声明并入稳定前缀：紧跟首条 system（与 gemma4 同布局）
-            if role == "system" and tools:
+            # 工具声明并入稳定前缀：紧跟首条 system（与 gemma4 同布局同纪律：
+            # 后续 system——滚动摘要/护栏——一律不带，增量路渲染 system 亦不带）
+            if role == "system" and tools and not tools_emitted:
                 prompt += self._system_block(self._build_tools_declaration(tools))
+                tools_emitted = True
+
+        if tools and not tools_emitted:
+            # 一条 system 消息都没有时声明单独成块、排在最前（gemma4 同兜底：
+            # 声明整个丢掉的表现是「装作调用过了」的幻觉，极难归因）
+            prompt = self._system_block(self._build_tools_declaration(tools)) + prompt
 
         # 可变尾部：任务状态块 → 一次性护栏尾注 → 环境锚点（与 gemma4 同序同语义）
         if task_block:
@@ -178,6 +188,14 @@ class Qwen35PromptBuilder:
             if notes.strip():
                 prompt += self._system_block(notes)
 
+        prompt += self._system_block(self._env_block_content(include_env, env_extra))
+
+        prompt += self._generation_head(enable_thinking)
+        return prompt
+
+    def _env_block_content(self, include_env: bool,
+                           env_extra: Optional[List[str]] = None) -> str:
+        """环境锚点块内容（全量渲染尾部与增量段共用同一字节权威——上位解）。"""
         _now = datetime.now()
         env_lines = [f"Current date: {_now.strftime('%Y-%m-%d')} ({_now.strftime('%A')})"]
         if include_env:
@@ -187,13 +205,103 @@ class Qwen35PromptBuilder:
                 env_lines.extend(self.static_env_lines)
             if env_extra:
                 env_lines.extend(l for l in env_extra if l and l.strip())
-        prompt += self._system_block("\n".join(env_lines))
+        return "\n".join(env_lines)
 
-        # 生成头。关思考时预填空 <think> 块（官方模板 enable_thinking=false 同款）：
-        # Qwen3.5/Ornith 默认自发思考，空块预填是本家族的"幽灵思考抑制"，恒开无开关。
-        prompt += f"{IM_START}assistant\n"
+    def _generation_head(self, enable_thinking: bool) -> str:
+        """生成头（全量渲染与增量段共用）。关思考时预填空 <think> 块（官方模板
+        enable_thinking=false 同款）：Qwen3.5/Ornith 默认自发思考，空块预填是
+        本家族的"幽灵思考抑制"，恒开无开关。"""
+        head = f"{IM_START}assistant\n"
         if enable_thinking:
-            prompt += f"{THINK_OPEN}\n"
+            head += f"{THINK_OPEN}\n"
         else:
-            prompt += f"{THINK_OPEN}\n\n{THINK_CLOSE}\n\n"
-        return prompt
+            head += f"{THINK_OPEN}\n\n{THINK_CLOSE}\n\n"
+        return head
+
+    def tail_state(self, task_block: Optional[str] = None,
+                   include_env: bool = False,
+                   env_extra: Optional[List[str]] = None) -> Dict[str, str]:
+        """全量渲染路径落进流的尾块快照（上位解「变了才追加」的比对基准）。
+        与 build 尾部各调一次 datetime.now()——跨午夜微秒错位至多多追加一次
+        或旧日期滞留一天、次日自愈，与 gemma4 同口径不设共享时钟。"""
+        return {"env": self._env_block_content(include_env, env_extra),
+                "task": task_block or "", "task_appends": 0}
+
+    #: 任务块冻结快照的收拢阈值（评审 C2，与 gemma4 同值同语义）
+    TASK_APPENDS_COLLAPSE = 6
+
+    def build_prompt_delta(self, new_messages: List[Dict[str, Any]], *,
+                           enable_thinking: bool = False,
+                           task_block: Optional[str] = None,
+                           tail_notes: Optional[List[str]] = None,
+                           include_env: bool = False,
+                           env_extra: Optional[List[str]] = None,
+                           prev_tail: Optional[Dict[str, str]] = None
+                           ) -> Optional[Tuple[str, Dict[str, str]]]:
+        """增量段（上位解，与 gemma4 同名方法同一契约）：接在「已记录字节流」
+        （以一次生成的原始字节收尾、assistant 轮开放、<|im_end|> 不在流内）之后。
+
+        恒以 `<|im_end|>\\n` 收口开头——停止符已喂/未喂两种情形的 token 流都与
+        缓存记录纯追加对齐（见 gemma4_generate._fed_length）。tool 结果按官方
+        形态独立成 user 轮 <tool_response> 块（本方言无折轮概念，形态与全量
+        渲染完全一致）。尾块按 prev_tail 变了才追加。返回 None = 增量不支持的
+        消息形态，调用方退全量重渲染。
+        """
+        prev_tail = prev_tail or {}
+        delta = f"{IM_END}\n"
+        for msg in new_messages:
+            role = msg.get("role", "user")
+            if role == "assistant":
+                return None   # 回放字节恒等是全量路的 §S.17 难题，增量绝不重蹈
+            if msg.get("thoughts") or (role != "tool" and (
+                    "tool_responses" in msg or msg.get("tool_calls"))):
+                return None   # 全量渲染另有字节的形态：宁退全量不静默丢字段
+            if role == "tool":
+                if "tool_responses" in msg:
+                    delta += self._build_tool_responses(msg["tool_responses"])
+                else:
+                    content = msg.get("content", "")
+                    delta += self._build_tool_responses(
+                        [{"name": msg.get("name", "unknown_tool"),
+                          "content": content if isinstance(content, str) else str(content)}])
+            elif role in ("user", "system"):
+                content = msg.get("content", "")
+                body = ""
+                if isinstance(content, str) and content:
+                    body += content
+                elif isinstance(content, list):
+                    parts = []
+                    for item in content:
+                        t = item.get("type", "")
+                        if t in ("image", "image_url"):
+                            parts.append(VISION_PLACEHOLDER)
+                        elif t == "text":
+                            parts.append(self._extract_text(item))
+                    body += "\n".join(parts)
+                elif not isinstance(content, str):
+                    return None
+                delta += f"{IM_START}{role}\n{body.rstrip()}{IM_END}\n"
+            else:
+                return None   # 未知角色：增量不支持
+        env_content = self._env_block_content(include_env, env_extra)
+        prev_task = prev_tail.get("task", "")
+        task_appends = int(prev_tail.get("task_appends", 0) or 0)
+        if task_block:
+            if task_block != prev_task:
+                if task_appends >= self.TASK_APPENDS_COLLAPSE:
+                    return None   # 快照堆积达阈：退全量收拢（评审 C2）
+                delta += self._system_block(task_block)
+                task_appends += 1
+        elif prev_task:
+            delta += self._system_block(TASK_BLOCK_RETRACT_NOTE)
+            task_appends += 1
+        new_tail = {"env": env_content, "task": task_block or "",
+                    "task_appends": task_appends}
+        if tail_notes:
+            notes = "\n".join(n for n in tail_notes if n and n.strip())
+            if notes.strip():
+                delta += self._system_block(notes)
+        if env_content != prev_tail.get("env"):
+            delta += self._system_block(env_content)
+        delta += self._generation_head(enable_thinking)
+        return delta, new_tail

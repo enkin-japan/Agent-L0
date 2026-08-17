@@ -51,6 +51,19 @@ class Qwen35Dialect:
                                    task_block=task_block, tail_notes=tail_notes,
                                    include_env=include_env, env_extra=env_extra)
 
+    def build_prompt_delta(self, new_messages, *, enable_thinking=False,
+                           task_block=None, tail_notes=None, include_env=False,
+                           env_extra=None, prev_tail=None):
+        # 上位解增量段：字节权威在 builder（与 build_prompt 同一处），此处纯转发
+        return self._builder.build_prompt_delta(
+            new_messages, enable_thinking=enable_thinking, task_block=task_block,
+            tail_notes=tail_notes, include_env=include_env, env_extra=env_extra,
+            prev_tail=prev_tail)
+
+    def tail_state(self, task_block=None, include_env=False, env_extra=None):
+        return self._builder.tail_state(task_block=task_block,
+                                        include_env=include_env, env_extra=env_extra)
+
     def parse_response(self, raw: str) -> Dict[str, Any]:
         return self._parser.parse(raw)
 

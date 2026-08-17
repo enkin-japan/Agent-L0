@@ -82,6 +82,10 @@ class ChatSession:
         self._backend = backend
         # 内存状态（热数据）：会话级推理缓存句柄（CacheHandle，实现不透明）
         self.brain_memory_state = backend.new_cache() if backend is not None else None
+        # 上位解 prompt 字节流（core/prompt_stream.PromptStream，仅存内存）：引擎在
+        # 每次成功生成后提交，下一轮组装只渲染增量段。失效自愈（内容指纹校验），
+        # 冻结/解冻不持久化——解冻首轮走全量路重新记录即可，正确性不依赖它。
+        self.prompt_stream = None
         self.history: List[Dict[str, Any]] = []
         self.images: List[str] = []
         self.audios: List[str] = []
@@ -274,11 +278,14 @@ class ChatSession:
                     self._backend.release_cache(self.brain_memory_state)
                 self.brain_memory_state = self._backend.new_cache()
             
-            # 清空内存中的历史文本与资源路径引用
+            # 清空内存中的历史文本与资源路径引用。prompt_stream 一并释放（评审
+            # M5：它持有整段渲染上下文的字符串，比刚清掉的 history 还大，留着就
+            # 白冻结了）；解冻首轮走全量路重新记录，正确性不依赖它。
             self.history.clear()
             self.images.clear()
             self.audios.clear()
-            
+            self.prompt_stream = None
+
             self.is_cold = True
 
     def restore_from_disk(self):
@@ -311,6 +318,7 @@ class ChatSession:
         self.history.clear()
         self.images.clear()
         self.audios.clear()
+        self.prompt_stream = None   # 历史整体重建=流必然失效，直接释放（评审 M5）
         self._init_system_prompt("")  # 从 system.json 恢复原提示词
         self.load_memory()
         self._seed_summary_block()

@@ -33,6 +33,9 @@ class EphemeralSession:
     #: 隐私边界：个人环境事实（位置/语言/画像）绝不进沙箱子生成上下文。
     #: 显式写死而非依赖引擎的 getattr 兜底——见模块 docstring。
     inject_env_context = False
+    #: 上位解 prompt 字节流：引擎在成功生成后会写本属性（一次性会话通常只生成
+    #: 一次、写了也用不上，但契约「暴露 generate_once 读写的字段」要如实）
+    prompt_stream = None
 
     def __init__(self, backend, system_prompt: str, opening: str,
                  images: Optional[List[str]] = None, time_anchor: bool = False):

@@ -5,6 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Optional, Callable
 
+from . import prompt_stream
 from .backend_protocol import InferenceBackend
 from .dialect_protocol import ModelDialect
 from .stream_filter import VisibleTextStreamer
@@ -241,6 +242,12 @@ class AgentEngine:
         下一真实轮的前缀匹配可命中到新用户消息之前的全部内容。成功清 context_dirty。"""
         if session.brain_memory_state is None:
             return False
+        # 上位解（评审 M11）：流仍有效时预热是危险的 no-op——全量渲染字节与
+        # 流字节在首个冻结 env 块处分叉，喂进会话缓存反而把下一轮增量路的纯追加
+        # 命中打碎。流失效（压缩改写后正是如此）才值得预热。
+        if prompt_stream.stream_valid(getattr(session, "prompt_stream", None),
+                                      session.history, tools):
+            return False
         prompt = self.dialect.build_prompt(
             messages=session.history, tools=tools,
             include_env=getattr(session, "inject_env_context", False),
@@ -265,6 +272,36 @@ class AgentEngine:
         session.context_dirty = False
         print(f"[Engine] 会话 {session.session_id} 空闲预热完成（{time.time() - t0:.1f}s）")
         return True
+
+    # ---------- 上位解：prompt 字节流「只增不改」组装 ----------
+
+    def _assemble_prompt(self, session: ChatSession,
+                         tools: Optional[List[Dict[str, Any]]], *,
+                         enable_thinking: bool, task_block: Optional[str],
+                         tail_notes: Optional[List[str]], include_env: bool,
+                         env_extra: Optional[List[str]]):
+        """本轮 prompt 组装：优先「已记录字节流 + 方言增量段」（跨轮 token 纯追加，
+        T8 门对全部缓存类型放行复用），流失效/方言不支持则退全量重渲染。
+        返回 (prompt, 尾块快照 tail_state 或 None, 是否走了增量路)。
+        tail_state is None 表示方言不支持流机制——本轮不提交流。"""
+        ps = getattr(session, "prompt_stream", None)
+        delta_fn = getattr(self.dialect, "build_prompt_delta", None)
+        if delta_fn is not None and prompt_stream.stream_valid(ps, session.history, tools):
+            out = delta_fn(session.history[ps.seen + 1:],
+                           enable_thinking=enable_thinking, task_block=task_block,
+                           tail_notes=tail_notes, include_env=include_env,
+                           env_extra=env_extra, prev_tail=ps.tail)
+            if out is not None:
+                delta, tail = out
+                return ps.stream + delta, tail, True
+        prompt = self.dialect.build_prompt(
+            messages=session.history, tools=tools, enable_thinking=enable_thinking,
+            task_block=task_block, tail_notes=tail_notes,
+            include_env=include_env, env_extra=env_extra)
+        tail_fn = getattr(self.dialect, "tail_state", None)
+        tail = (tail_fn(task_block=task_block, include_env=include_env,
+                        env_extra=env_extra) if tail_fn is not None else None)
+        return prompt, tail, False
 
     async def generate_once(self,
                             session: ChatSession,
@@ -299,9 +336,8 @@ class AgentEngine:
         if getattr(session, "inject_env_context", False):
             self._prepare_session_cache(session)
 
-        formatted_prompt = self.dialect.build_prompt(
-            messages=session.history,
-            tools=tools,
+        formatted_prompt, _stream_tail, _stream_delta = self._assemble_prompt(
+            session, tools,
             enable_thinking=enable_thinking,
             task_block=task_block,
             tail_notes=tail_notes,
@@ -432,6 +468,9 @@ class AgentEngine:
         metrics = outcome["metrics"] or metrics
         cancelled = outcome["cancelled"]
 
+        if _stream_delta and not cancelled:
+            metrics["stream_delta"] = True
+
         # [Phase 3] 投机采样仪表：后端经 GenChunk.extra 回吐接受率统计
         extra = outcome.get("extra") or {}
         if extra.get("spec_drafted"):
@@ -461,6 +500,17 @@ class AgentEngine:
         )
 
         parsed = self.dialect.parse_response(generated_text)
+
+        # 上位解流提交：成功生成后记录「实际喂入 prompt + 实际生成原始字节」。
+        # 三种情形不提交（详见 prompt_stream.commit docstring）：取消（上面已
+        # return）、带一次性尾注（冻结进流会把只此一轮的提醒变成永久指令，评审
+        # C1）、产出含解析失败调用（全量渲染刻意不回放 error 调用，评审 M4）——
+        # 后两者本轮照常吃增量提速，只是下一轮退全量、坏字节/尾注不进流。
+        # 方言不支持（tail_state 缺位 → _stream_tail is None）则全程走全量路。
+        if _stream_tail is not None and not tail_notes \
+                and not any(c.get("type") == "error" for c in parsed["tool_calls"]):
+            session.prompt_stream = prompt_stream.commit(
+                formatted_prompt, outcome["text"], session.history, tools, _stream_tail)
         # 截断检测（供上层 max_tokens 恢复用）：底层生成流遇 EOS/停止符会 break、
         # 生成 token 数 < max_tokens；撞上 max_tokens 上限则是生成器自然耗尽、恰好产满
         # max_tokens 个 token。故 generation_tokens >= max_tokens 即判定本次生成被长度截断。

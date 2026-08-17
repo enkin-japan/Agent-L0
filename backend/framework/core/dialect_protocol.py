@@ -29,7 +29,13 @@ R0 = 把 P0 对算力做过的那台协议手术，对方言再做一遍。
   `options` 透传——它们是**方言事实**，不该出现在 AgentEngine 的签名里。
 """
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Tuple
+
+#: 任务状态块「撤销」尾注（上位解）：prompt 字节流只增不改后，task_block 从有到无
+#: 时旧状态块会留在上下文里，必须追加一条撤销声明防止模型接续已死任务。内容方言
+#: 无关（与环境事实同理），字面量收编在协议层——两方言各写一遍必然漂移（§S.17）。
+TASK_BLOCK_RETRACT_NOTE = ("[System] The task status block above has concluded "
+                           "and is no longer in effect.")
 
 
 @dataclass(frozen=True)
@@ -95,6 +101,36 @@ class ModelDialect(Protocol):
         env_extra（R4）是运行期才知道的环境事实（如长期记忆索引），实现**必须**把它
         与静态环境事实一起压在同一条 include_env 门控之下——它同样是个人事实。
         """
+        ...
+
+    def build_prompt_delta(self, new_messages: List[Dict[str, Any]], *,
+                           enable_thinking: bool = False,
+                           task_block: Optional[str] = None,
+                           tail_notes: Optional[List[str]] = None,
+                           include_env: bool = False,
+                           env_extra: Optional[List[str]] = None,
+                           prev_tail: Optional[Dict[str, str]] = None
+                           ) -> Optional[Tuple[str, Dict[str, str]]]:
+        """（可选方法，上位解）渲染接在「已记录字节流」之后的增量段。
+
+        调用方（core/prompt_stream.py 的消费面）保证：流以一次生成的原始字节结尾
+        （开放的 assistant/model 轮，停止符不在流内），new_messages 是流覆盖点之后
+        的新消息（生成对应的 assistant 消息已被跳过）。实现恒以**本方言的轮收口符
+        开头**（后端记录侧截到真实已喂长度后，停止符已喂/未喂两种情形在此都归零
+        excess，见 gemma4_generate._fed_length），随后渲染新消息、按 prev_tail
+        「变了才追加」尾块（env 锚点/任务块），最后是生成头。
+        返回 (增量字节, 新尾块状态)；遇到本方言增量不支持的消息形态（如 assistant
+        重放）返回 None——调用方退全量重渲染，正确性永不受损。
+        不实现本方法的方言天然全程走全量路（引擎按 getattr 探测）。
+        """
+        ...
+
+    def tail_state(self, task_block: Optional[str] = None,
+                   include_env: bool = False,
+                   env_extra: Optional[List[str]] = None) -> Dict[str, str]:
+        """（可选方法，上位解）全量渲染路径下本轮落进流的尾块内容快照，
+        供下一轮增量段做「变了才追加」比对。键与 build_prompt_delta 的
+        prev_tail 一致：{"env": 环境锚点块内容, "task": 任务状态块内容}。"""
         ...
 
     def parse_response(self, raw: str) -> Dict[str, Any]:

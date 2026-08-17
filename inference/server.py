@@ -62,6 +62,7 @@ from framework.dialects import get_dialect_class
 from framework.core.constrained import ToolConstraintEngine, ToolCallGuard, llguidance as _llg
 from framework.backends import (AsrProviderUnavailable, get_asr_provider,
                                 get_backend_class, resolve_local_asr_provider)
+from framework.core import prompt_stream as pstream
 from framework.core.stream_filter import VisibleTextStreamer
 
 import openai_facade as oai  # 同目录纯逻辑层（T6 门面）
@@ -151,6 +152,9 @@ class ServerState:
     model_name: str = ""                          # /v1/models 报告用
     facade_cache = None                           # T6 门面专用缓存（不入注册表、不 TTL；
                                                   # 聊天客户端全量重发历史 → 前缀匹配白拿增量预填）
+    facade_stream = None                          # 门面 prompt 字节流（上位解）：与 facade_cache
+                                                  # 配对；会话延续（指纹校验）时走「记录流+增量段」，
+                                                  # 跨轮 token 纯追加，全部缓存类型可复用前缀
     gen_sem: Optional[asyncio.Semaphore] = None   # 生成并发闸（T7 参数化：MLX=1 即旧
                                                   # 互斥语义；vLLM=cuda.max_concurrency，
                                                   # 引擎连续批处理白拿并发）
@@ -619,15 +623,45 @@ async def oai_models():
     return oai.models_response(S.model_name)
 
 
+def _facade_assemble(msgs):
+    """门面 prompt 组装（上位解）：客户端全量重发历史，若与上次门面会话延续
+    （prompt_stream 指纹校验：已覆盖段逐字节未改 + 新首条是我们生成的 assistant
+    占位）则走「已记录字节流 + 方言增量段」——跨轮 token 纯追加，T8 门对全部
+    缓存类型放行前缀复用。否则（新会话/多客户端交错/方言不支持）退全量渲染。
+    返回 (prompt, 尾块快照或 None, 是否走了增量路)。"""
+    ps = S.facade_stream
+    delta_fn = getattr(S.dialect, "build_prompt_delta", None)
+    if delta_fn is not None and pstream.stream_valid(ps, msgs, None):
+        out = delta_fn(msgs[ps.seen + 1:], prev_tail=ps.tail)
+        if out is not None:
+            delta, tail = out
+            return ps.stream + delta, tail, True
+    prompt = S.dialect.build_prompt(messages=msgs, tools=None, include_env=False)
+    tail_fn = getattr(S.dialect, "tail_state", None)
+    return prompt, (tail_fn() if tail_fn is not None else None), False
+
+
+def _facade_commit(prompt: str, raw_text: str, msgs, tail, visible_text: str) -> None:
+    """成功生成后的门面流提交。组装与提交都在 gen_sem 临界区内的事件循环线程
+    发生（评审 M6：组装-生成-提交是一组读改写，出了临界区会被并发请求交错
+    clobber；MLX 形态 gen_sem=1 即完整串行——cuda >1 形态门面缓存本就共享，
+    流退化为「最后提交者赢」，正确性由指纹兜底）。
+    中途断连/取消不提交——旧流仍是缓存内容的字节前缀，残局由前缀匹配消化。
+    visible_text 是滤掉思考/工具频道后的正文（客户端拿到的字节）：记为占位
+    assistant 消息的预期正文，客户端改写过回复（编辑重答类 UI）时下一轮指纹
+    校验必须察觉并退全量（评审 M7）。"""
+    if tail is not None:
+        S.facade_stream = pstream.commit(prompt, raw_text, msgs, None, tail,
+                                         expected_text=visible_text)
+
+
 @app.post("/v1/chat/completions", dependencies=[Depends(verify_api_key)])
 async def oai_chat_completions(request: Request):
     body = await request.json()
     err = oai.validate_messages(body.get("messages"))
     if err:
         raise HTTPException(status_code=400, detail=err)
-    prompt = S.dialect.build_prompt(
-        messages=oai.to_dialect_messages(body["messages"]), tools=None,
-        include_env=False)
+    dialect_msgs = oai.to_dialect_messages(body["messages"])
     sampling = oai.parse_sampling(body)
     if S.facade_cache is None:
         S.facade_cache = S.backend.new_cache()
@@ -637,21 +671,29 @@ async def oai_chat_completions(request: Request):
     if not bool(body.get("stream")):
         filt = _facade_streamer()
 
-        def _run():
-            last, parts = None, []
+        def _run(prompt):
+            last, parts, raw = None, [], []
             for ch in S.backend.stream_generate(prompt, cache=S.facade_cache,
                                                 sampling=sampling, features={}):
                 last = ch
+                raw.append(ch.text)   # 原始字节（含思考/工具块）——门面流提交用
                 v = filt.feed(ch.text)
                 if v:
                     parts.append(v)
             tail = filt.close()
             if tail:
                 parts.append(tail)
-            return "".join(parts), last
+            return "".join(parts), last, "".join(raw)
 
         async with S.gen_sem:
-            text, last = await loop.run_in_executor(S.executor, _run)
+            # 组装-生成-提交整组进临界区（评审 M6，_facade_commit docstring）
+            prompt, stream_tail, used_delta = _facade_assemble(dialect_msgs)
+            if used_delta:
+                S.metrics["facade_stream_delta_total"] = \
+                    S.metrics.get("facade_stream_delta_total", 0) + 1
+            text, last, raw_text = await loop.run_in_executor(
+                S.executor, lambda: _run(prompt))
+            _facade_commit(prompt, raw_text, dialect_msgs, stream_tail, text)
         pt = last.prompt_tokens if last else 0
         gt = last.generation_tokens if last else 0
         return oai.completion_response(
@@ -663,39 +705,48 @@ async def oai_chat_completions(request: Request):
     stop = {"flag": False}
     filt = _facade_streamer()
 
+    asm: Dict[str, Any] = {}   # 组装结果（在 _sse 拿到 gen_sem 后才填——评审 M6）
+
     def _blocking():
-        last = None
+        last, raw, vis = None, [], []
         try:
-            for ch in S.backend.stream_generate(prompt, cache=S.facade_cache,
+            for ch in S.backend.stream_generate(asm["prompt"], cache=S.facade_cache,
                                                 sampling=sampling, features={}):
                 last = ch
+                raw.append(ch.text)   # 原始字节——门面流提交用（仅完整走完才提交）
                 v = filt.feed(ch.text)
                 if not v:
                     if stop["flag"]:
-                        return last
+                        return last, "", "", False
                     continue
+                vis.append(v)         # 可见正文——占位 assistant 预期正文（评审 M7）
                 fut = asyncio.run_coroutine_threadsafe(queue.put(v), loop)
                 while True:
                     if stop["flag"]:
                         fut.cancel()
-                        return last
+                        return last, "", "", False
                     try:
                         fut.result(timeout=0.5)
                         break
                     except FuturesTimeout:
                         continue
                     except Exception:
-                        return last
-            return last
+                        return last, "", "", False
+            return last, "".join(raw), "".join(vis), True
         except Exception as e:
             print(f"[Facade] 生成异常: {type(e).__name__}: {e}")
-            return last
+            return last, "", "", False
 
     async def _sse():
         await S.gen_sem.acquire()
         task = None
         try:
             yield oai.stream_line(S.model_name, cid, role="assistant")
+            asm["prompt"], asm["tail"], asm["used_delta"] = \
+                _facade_assemble(dialect_msgs)
+            if asm["used_delta"]:
+                S.metrics["facade_stream_delta_total"] = \
+                    S.metrics.get("facade_stream_delta_total", 0) + 1
             task = loop.run_in_executor(S.executor, _blocking)
             while True:
                 get_q = asyncio.ensure_future(queue.get())
@@ -704,11 +755,16 @@ async def oai_chat_completions(request: Request):
                     yield oai.stream_line(S.model_name, cid, content=get_q.result())
                     continue
                 get_q.cancel()
-                last = task.result()
+                last, raw_text, vis_text, completed = task.result()
                 while not queue.empty():
                     yield oai.stream_line(S.model_name, cid,
                                           content=queue.get_nowait())
                 tail = filt.close()
+                if completed:
+                    # 提交仍持锁（放锁在 done-callback，生成线程已退出）：与下一
+                    # 请求的组装不可交错。预期正文=可见流全文（含冲刷尾段）。
+                    _facade_commit(asm["prompt"], raw_text, dialect_msgs,
+                                   asm["tail"], vis_text + tail)
                 if tail:
                     yield oai.stream_line(S.model_name, cid, content=tail)
                 gt = last.generation_tokens if last else 0

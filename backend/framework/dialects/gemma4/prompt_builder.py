@@ -1,11 +1,12 @@
 import json
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from transformers.processing_utils import ProcessorMixin
 
 # 环境事实行已收编 dialects/env_facts.py（qwen35 方言波）：内容方言无关，各方言共用；
 # 本 builder 的 _compute_static_env_lines 委托它，输出逐字节不变（test_prompt_env 守着）。
 from ..env_facts import compute_static_env_lines
+from ...core.dialect_protocol import TASK_BLOCK_RETRACT_NOTE
 # 工具协议的官方紧凑 DSL 编码器（§7-8）。三类块（声明/调用/观测）的字节形态全部
 # 出自 dsl.py，与约束采样语法（tool_grammar.py）共用同一份实现——两处各写一遍
 # 必然漂移，而漂移就是 §S.17。
@@ -321,6 +322,17 @@ class PromptBuilder:
         # 变动只失效尾部一小段）。日期永远注入（相对时间锚点；需精确时分秒模型另有 get_current_time
         # 工具，mcp/tools/datetime_now.py）。机器/个人事实仅在主编排轮注入（include_env=True）——
         # 沙箱子生成复用同一 builder 但默认 include_env=False，个人信息绝不入沙箱上下文（隐私边界）。
+        prompt += (f"{self.sot_token}system\n"
+                   + self._env_block_content(include_env, env_extra)
+                   + f"\n{self.eot_token}\n")
+
+        prompt += self._generation_head(enable_thinking)
+
+        return prompt
+
+    def _env_block_content(self, include_env: bool,
+                           env_extra: Optional[List[str]] = None) -> str:
+        """环境锚点块内容（全量渲染尾部与增量段共用同一字节权威——上位解）。"""
         _now = datetime.now()
         env_lines = [f"Current date: {_now.strftime('%Y-%m-%d')} ({_now.strftime('%A')})"]
         if include_env:
@@ -331,11 +343,13 @@ class PromptBuilder:
                 env_lines.extend(self.static_env_lines)
             if env_extra:
                 env_lines.extend(l for l in env_extra if l and l.strip())
-        prompt += f"{self.sot_token}system\n" + "\n".join(env_lines) + f"\n{self.eot_token}\n"
+        return "\n".join(env_lines)
 
-        prompt += f"{self.sot_token}model\n"   # 官方模板生成头亦为 model（见上方角色映射注）
+    def _generation_head(self, enable_thinking: bool) -> str:
+        """生成头（全量渲染与增量段共用）。官方模板生成头亦为 model（见 build 内角色映射注）。"""
+        head = f"{self.sot_token}model\n"
         if enable_thinking:
-            prompt += f"{self.soc_token}thought\n"
+            head += f"{self.soc_token}thought\n"
         elif self.suppress_ghost_thinking:
             # 关思考时预填「空思考频道」（官方 12B/26B/31B 模板的 ghost-thinking 抑制）：
             # 模型看到已开而即闭的 thought 频道，不再自发思考，直接产出正文/工具调用。
@@ -344,6 +358,142 @@ class PromptBuilder:
             # 多一个 \n 的后果实测（2026-08-14）：26B-4bit ≥4k
             # 上下文首 token 即 EOT（原「发现 A」的真因，曾被误判为 PTQ 量化损伤）、
             # 12B 输出退化成 '<|channel>::' 循环。字节级对齐官方模板，一个空白都不许多。
-            prompt += f"{self.soc_token}thought\n{self.eoc_token}"
+            head += f"{self.soc_token}thought\n{self.eoc_token}"
+        return head
 
-        return prompt
+    def tail_state(self, task_block: Optional[str] = None,
+                   include_env: bool = False,
+                   env_extra: Optional[List[str]] = None) -> Dict[str, str]:
+        """全量渲染路径落进流的尾块快照（上位解「变了才追加」的比对基准）。
+        与 build 尾部各调一次 datetime.now()——跨午夜微秒的记录/渲染错位至多
+        造成一次多余追加或一天内的旧日期滞留，次日自愈，不设共享时钟。"""
+        return {"env": self._env_block_content(include_env, env_extra),
+                "task": task_block or "", "task_appends": 0}
+
+    #: 任务块冻结快照的收拢阈值（评审 C2）：增量路连续追加这么多份任务块后，
+    #: 下一次变更拒渲染、退全量重渲染收拢。一步任务的 Budget 行逐迭代变化，
+    #: 阈值权衡「快照堆积的上下文税」与「收拢时不可回滚缓存的整段冷预填」。
+    TASK_APPENDS_COLLAPSE = 6
+
+    def build_prompt_delta(self, new_messages: List[Dict[str, Any]], *,
+                           enable_thinking: bool = False,
+                           task_block: Optional[str] = None,
+                           tail_notes: Optional[List[str]] = None,
+                           include_env: bool = False,
+                           env_extra: Optional[List[str]] = None,
+                           prev_tail: Optional[Dict[str, str]] = None
+                           ) -> Optional[Tuple[str, Dict[str, str]]]:
+        """增量段（上位解）：接在「已记录字节流」（以一次生成的原始字节收尾、
+        model 轮开放、停止符不在流内）之后的追加字节。
+
+        形态决策（08-17）：**恒以 `<turn|>\\n` 收口开头**，观测/新消息各归各轮，
+        不做官方的「观测折进上一 model 轮」内联形态——模型停止时采样出的 <turn|>
+        可能已喂入缓存（流水线预喂）也可能没有，收口符打头让两种情形的 token
+        流都与缓存记录（截到真实已喂长度，见 gemma4_generate._fed_length）纯追加
+        对齐；而观测独立成 model 轮是全量渲染对「history 以工具结果开头」本就
+        产出的形状（自开 model 轮），模型见过。尾块按 prev_tail 变了才追加——
+        同日多轮 env 块零重复，跨天才追加新块（旧日期戳留在当轮位置，语义上
+        就是「那轮发生的日期」）。
+
+        返回 None = 本方言增量不支持的消息形态（assistant 重放/未知角色/system
+        带工具字段），调用方退全量重渲染。
+        """
+        prev_tail = prev_tail or {}
+        delta = f"{self.eot_token}\n"
+        obs_open = False   # 观测承载 model 轮是否开放（连续 tool 消息共用一轮）
+
+        def _close_obs() -> str:
+            nonlocal obs_open
+            if obs_open:
+                obs_open = False
+                return f"{self.eot_token}\n"
+            return ""
+
+        for msg in new_messages:
+            role = msg.get("role", "user")
+            if role == "assistant":
+                # assistant 重放（审批合并/截断改写等改写路径）：增量不支持——
+                # 回放字节恒等正是全量路的 §S.17 难题，增量绝不重蹈
+                return None
+            if msg.get("thoughts") or (role != "tool" and (
+                    "tool_responses" in msg or msg.get("tool_calls"))):
+                # 全量渲染对这些形态另有字节（非 assistant 轮的 thoughts、user 轮
+                # 内嵌观测块等），现网生产者不产出——宁可退全量也不静默丢字段
+                return None
+            if role == "tool":
+                if not obs_open:
+                    delta += f"{self.sot_token}model\n"
+                    obs_open = True
+                content = msg.get("content", "")
+                if "tool_responses" in msg:
+                    delta += self._build_tool_responses(msg["tool_responses"])
+                else:
+                    body = content
+                    if isinstance(content, list):
+                        body = "".join(self._extract_text(it) for it in content
+                                       if it.get("type") == "text")
+                    delta += self._build_tool_responses(
+                        [{"name": msg.get("name", "unknown_tool"), "content": body}])
+                    if isinstance(content, list):
+                        for item in content:
+                            item_type = item.get("type", "")
+                            if item_type in ("image", "image_url"):
+                                delta += self.image_token
+                            elif item_type in ("audio", "audio_url"):
+                                delta += self.audio_token
+            elif role == "user":
+                delta += _close_obs()
+                body = ""
+                content = msg.get("content", "")
+                if isinstance(content, str) and content:
+                    body += content + "\n"
+                elif isinstance(content, list):
+                    for item in content:
+                        item_type = item.get("type", "")
+                        if item_type in ["image", "image_url"]:
+                            body += f"{self.boi_token}{self.image_token}{self.eoi_token}"
+                        elif item_type in ["audio", "audio_url"]:
+                            body += f"{self.boa_token}{self.audio_token}{self.eoa_token}"
+                        elif item_type == "text":
+                            body += self._extract_text(item) + "\n"
+                delta += f"{self.sot_token}user\n{body.rstrip()}{self.eot_token}\n"
+            elif role == "system":
+                # 编排器的中段护栏消息（no_plan_nudge / 步骤失败菜单）——纯文本形态。
+                # rstrip 不 strip：与全量渲染的收口语义逐字节一致（build 只 rstrip
+                # 轮体、保留正文前导空白——评审 M2，两侧分叉会打碎失效后的前缀命中）
+                content = msg.get("content", "")
+                if not isinstance(content, str):
+                    return None
+                delta += _close_obs()
+                delta += f"{self.sot_token}system\n{content.rstrip()}{self.eot_token}\n"
+            else:
+                return None   # 未知角色：增量不支持
+        delta += _close_obs()
+
+        env_content = self._env_block_content(include_env, env_extra)
+        prev_task = prev_tail.get("task", "")
+        task_appends = int(prev_tail.get("task_appends", 0) or 0)
+        if task_block:
+            if task_block != prev_task:
+                # 任务块逐迭代变化（Budget 计数器行），冻结快照会无限堆积（评审
+                # C2）：追加计数达阈即拒渲染 → 引擎退全量重渲染，历史快照收拢为
+                # 尾部一块并重新记录。阈值内的快照按时序读是任务进度的转录，最新
+                # 一块（Current task state + 就近性）即现状。
+                if task_appends >= self.TASK_APPENDS_COLLAPSE:
+                    return None
+                delta += f"{self.sot_token}system\n{task_block}\n{self.eot_token}\n"
+                task_appends += 1
+        elif prev_task:
+            delta += f"{self.sot_token}system\n{TASK_BLOCK_RETRACT_NOTE}\n{self.eot_token}\n"
+            task_appends += 1
+        new_tail = {"env": env_content, "task": task_block or "",
+                    "task_appends": task_appends}
+        if tail_notes:
+            notes = "\n".join(n for n in tail_notes if n and n.strip())
+            if notes.strip():
+                delta += f"{self.sot_token}system\n{notes}\n{self.eot_token}\n"
+        if env_content != prev_tail.get("env"):
+            delta += f"{self.sot_token}system\n{env_content}\n{self.eot_token}\n"
+
+        delta += self._generation_head(enable_thinking)
+        return delta, new_tail
