@@ -1,10 +1,19 @@
 {
-  "stamp": "20260730-234952",
+  "stamp": "20260818-000648",
+  "tier": "vl-2b",
+  "floors": {
+    "vl-2b": {
+      "pass_rate": 0.931,
+      "mrr": 0.99
+    }
+  },
+  "floor_margin": 0.01,
+  "n_items": 51,
   "summary": {
     "overall": {
-      "n": 34,
+      "n": 51,
       "pass_rate": 0.941,
-      "mrr": 0.938
+      "mrr": 1.0
     },
     "by_kind": {
       "crosslingual": {
@@ -12,31 +21,31 @@
         "pass_rate": 1.0
       },
       "identifier": {
-        "n": 8,
+        "n": 10,
         "pass_rate": 1.0
       },
       "misroute": {
-        "n": 2,
+        "n": 5,
         "pass_rate": 1.0
       },
       "multidoc": {
-        "n": 2,
-        "pass_rate": 0.5
+        "n": 5,
+        "pass_rate": 0.8
       },
       "name": {
-        "n": 3,
-        "pass_rate": 0.667
-      },
-      "negative": {
-        "n": 2,
+        "n": 5,
         "pass_rate": 1.0
       },
+      "negative": {
+        "n": 6,
+        "pass_rate": 0.667
+      },
       "semantic": {
-        "n": 12,
+        "n": 14,
         "pass_rate": 1.0
       },
       "temporal": {
-        "n": 2,
+        "n": 3,
         "pass_rate": 1.0
       }
     }
@@ -120,7 +129,7 @@
     {
       "id": "rq-name-003",
       "kind": "name",
-      "pass": false
+      "pass": true
     },
     {
       "id": "rq-xling-001",
@@ -140,7 +149,7 @@
     {
       "id": "rq-multi-001",
       "kind": "multidoc",
-      "pass": false
+      "pass": true
     },
     {
       "id": "rq-multi-002",
@@ -210,6 +219,91 @@
     {
       "id": "rq-route-002",
       "kind": "misroute",
+      "pass": true
+    },
+    {
+      "id": "rq-neg-003",
+      "kind": "negative",
+      "pass": true
+    },
+    {
+      "id": "rq-neg-004",
+      "kind": "negative",
+      "pass": false
+    },
+    {
+      "id": "rq-neg-005",
+      "kind": "negative",
+      "pass": true
+    },
+    {
+      "id": "rq-neg-006",
+      "kind": "negative",
+      "pass": false
+    },
+    {
+      "id": "rq-multi-003",
+      "kind": "multidoc",
+      "pass": true
+    },
+    {
+      "id": "rq-multi-004",
+      "kind": "multidoc",
+      "pass": false
+    },
+    {
+      "id": "rq-multi-005",
+      "kind": "multidoc",
+      "pass": true
+    },
+    {
+      "id": "rq-route-003",
+      "kind": "misroute",
+      "pass": true
+    },
+    {
+      "id": "rq-route-004",
+      "kind": "misroute",
+      "pass": true
+    },
+    {
+      "id": "rq-route-005",
+      "kind": "misroute",
+      "pass": true
+    },
+    {
+      "id": "rq-name-004",
+      "kind": "name",
+      "pass": true
+    },
+    {
+      "id": "rq-name-005",
+      "kind": "name",
+      "pass": true
+    },
+    {
+      "id": "rq-id-009",
+      "kind": "identifier",
+      "pass": true
+    },
+    {
+      "id": "rq-id-010",
+      "kind": "identifier",
+      "pass": true
+    },
+    {
+      "id": "rq-temp-003",
+      "kind": "temporal",
+      "pass": true
+    },
+    {
+      "id": "rq-sem-013",
+      "kind": "semantic",
+      "pass": true
+    },
+    {
+      "id": "rq-sem-014",
+      "kind": "semantic",
       "pass": true
     }
   ]

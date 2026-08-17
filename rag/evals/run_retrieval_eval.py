@@ -1,9 +1,17 @@
 """检索质量评估跑批（数据架构采纳波 R1）：防负优化基线。
 
 用法（rag venv）：
-  .venv/bin/python evals/run_retrieval_eval.py [--save-baseline] [--keep]
+  .venv/bin/python evals/run_retrieval_eval.py
+      [--save-baseline] [--keep] [--floor-margin F]
+      [--no-enforce-floor] [--allow-floor-drop --reason "…"]
+**退出码**：0 = 不低于地板且无逐题由过转败；1 = 判为回归 / 档位解析不出 /
+拒绝把回归钉成新基线。调用方请检查 `$?`（目前尚无 CI 或 devctl 入口调它，
+见 EXECUTION_LEDGER「存量缺陷修正收案」块记的后续项）。
 
-机制：隔离数据根（临时目录）+ 融合模式 0.6b 档拉起真实 rag_server（部署同款 HTTP 面），
+机制：隔离数据根（临时目录）+ 融合模式拉起真实 rag_server（部署同款 HTTP 面），
+档位解析与服务端同源：仓库根 `.rag-tier-selection` 指针 → `config.yaml
+rag.active_tier`（指针在 .gitignore 里，新克隆没有它，只读指针会让棘轮自我关闭；
+2026-08-17 为 vl-2b。此前这里写死「0.6b 档」是陈旧注释，实现从 R1 起就是复制指针），
 灌入 corpus.jsonl 夹具语料（强制分类保证确定性），跑 items.jsonl 固定题集，按命中
 文档 title 判分（Recall / MRR / 分形态通过率）。产物 results/<时间戳>.json（不入库），
 与 BASELINE.json（入库）对比打印增减——**任何检索侧改动后先跑这个**，变差即回退或解释。
@@ -11,7 +19,10 @@
 判分词汇（items.jsonl expect）：
   hit_any        列表内至少一篇进 top-k
   hit_all        全部进 top-k（可带 top_k 放宽名额）
-  empty_ok       允许空结果；miss_all 列表内的文档出现即失败（库外问题不该硬凑）
+  empty_ok       允许空结果（软判据）
+  require_empty  **必须**返回空——库外问题返回任何文档都算硬凑（negative 一律用它；
+                 miss_all 是枚举式的，只列作者想得到的干扰项，天然会漏）
+  miss_all       列表内的文档出现即失败（作为 require_empty 的补充说明保留）
   stale_not_top1 该文档若排第 1 即失败（时效裁决探针：旧事实不应压过新事实）
 临时服务端口 14967；用完即收（CHARTER 部署纪律）。
 """
@@ -24,6 +35,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Optional
 
 import requests
 import yaml
@@ -165,6 +177,13 @@ def run_item(item: dict) -> dict:
         if missing:
             ok = False
             why.append(f"hit_all 缺 {sorted(missing)}（实际 {titles}）")
+    if expect.get("require_empty") and titles:
+        # 闭世界判据：库外问题**返回任何文档**都算硬凑。`miss_all` 是枚举式的（只列作者
+        # 想得到的几个干扰项），在 39 篇语料里天然会漏——实测 rq-neg-004 问「宽带套餐
+        # 多少钱」硬凑出《小区停车月卡续费》却因不在名单里而判过。故 negative 一律用
+        # 本键，`miss_all` 退化为「即便将来放宽也绝不能出现的那几篇」的补充说明。
+        ok = False
+        why.append(f"库外问题应返回空，实际硬凑出 {titles}")
     if expect.get("miss_all"):
         bad = set(titles) & set(expect["miss_all"])
         if bad:
@@ -194,12 +213,173 @@ def summarize(rows: list) -> dict:
     return out
 
 
+# ── 棘轮（OSS 扫描 §6.4，2026-08-17）────────────────────────────────────────────
+# 此前这里只 print 增减、无条件 return 0：**守卫还在，但它不再判定任何东西**
+# （worldmonitor 词汇里的 Vacuous Guard）。叠加基线陈旧（stamp 20260730 的 0.941，
+# 而 vl-2b 定档标定后实测已到 1.0），一次真回归会被读成「与基线持平」。
+#
+# 纪律（借 addyosmani 的 rank-1 棘轮）：**地板只准随检索能力改善往上抬，绝不为了让
+# 一次回归通过而下调**。要下调必须是题集本身变难/换档位，且在台账里写明理由。
+# 地板相对实测的下浮余量。取 0.01 而非更松的值：两次跑批的 summary 与失败题集**逐字
+# 复现**，没有需要吸收的抖动；而 51 题下 0.03 恰好放行「掉一道题」（48/51=0.941 仍在
+# 0.931 之上），MRR 侧同样放行一道——一次真回归可以同时躲过两条地板。真正的灵敏度
+# 来自逐题对账（_row_flips），比率地板只做粗筛。
+FLOOR_MARGIN = 0.01
+
+
+def _current_tier() -> Optional[str]:
+    """当前生产档，解析链必须与服务端**同源**：指针 → `config.yaml rag.active_tier`。
+
+    只读指针是不够的：`.rag-tier-selection` 在 .gitignore 里（新克隆 / 另一台机器 /
+    没跑过 `devctl rag-model` 的检出都没有它），而 `compute_core` 此时会回落到
+    config.yaml 的 active_tier 照常起服——于是跑批本身完全有效，档位判定却报「未知」，
+    棘轮走「档位不同」分支自我关闭。一个 pass 0.50 的跑批照样绿灯：**守卫被它自己
+    的输入静默缩小掉**，正是本波要消灭的那类失效原样重建。
+    解析不出返回 None，由调用方 fail-closed（绝不当成「跳过判定」）。
+    """
+    sel = REPO_ROOT / ".rag-tier-selection"
+    if sel.exists():
+        try:
+            tier = json.loads(sel.read_text(encoding="utf-8")).get("tier")
+            if tier:
+                return str(tier)
+        except Exception:
+            pass                      # 指针坏了就往下走 config，不静默当成「没档位」
+    try:
+        cfg = yaml.safe_load((REPO_ROOT / "config.yaml").read_text(encoding="utf-8"))
+        return str(cfg["rag"]["active_tier"])
+    except Exception as e:
+        print(f"[评估] 档位解析失败（指针与 config 都读不到）: {e}")
+        return None
+
+
+def _baseline_floor(base: dict, tier: Optional[str]) -> Optional[dict]:
+    """取本档位的地板。`floors` 按档位分键——单一地板会被「评一个候选档顺手 --save-baseline」
+    整个覆盖掉，生产档的保护从此静默消失（此后每次生产跑批都走「档位不同」跳过）。
+    兼容旧格式的单个 `floor` 字段（视为 base['tier'] 那一档的地板）。"""
+    floors = base.get("floors")
+    if isinstance(floors, dict):
+        return floors.get(tier)
+    if base.get("floor") and base.get("tier") in (None, tier):
+        return base["floor"]
+    return None
+
+
+def _row_flips(base: dict, rows: list) -> list:
+    """逐题对账：列出由 pass 变 fail 的题。
+
+    只看总分会漏「A 退步、B 进步」这种互相抵消的回归——而抵消所需的数据本来就已经
+    写在基线的 `rows` 里，此前从没有人读它。这是比总分地板更灵敏的信号。
+    """
+    was = {r["id"]: r.get("pass") for r in (base.get("rows") or [])}
+    return [r["id"] for r in rows if was.get(r["id"]) is True and not r["pass"]]
+
+
+def _check_floor(base: dict, summary: dict, tier: Optional[str], disabled: bool,
+                 rows: list) -> int:
+    """低于地板即返回非零。**只对当前生产档强制**——评估别的档位时只打印。
+
+    理由（对抗审查修正）：l0_eval / model_eval 那类选型工具里各档位水位天差地别，
+    一个全局地板会让「评一个新候选」恒红，久而久之地板必被删——正是棘轮要防的失效。
+    本评估虽是单档回归工具，同样按档位锁键，免得换档重测时误判。
+    """
+    if disabled:
+        print("SKIP: 地板判定已被 --no-enforce-floor 关闭，只打印")
+        return 0
+    if tier is None:
+        print("❌ 档位解析不出（指针与 config 都读不到）——fail-closed 判为不通过。"
+              "绝不把「不知道跑的是哪档」当成「跳过判定」。")
+        return 1
+
+    floor = _baseline_floor(base, tier)
+    if not floor:
+        print(f"SKIP: 基线里没有档位 {tier} 的地板，本次只打印"
+              f"（确认水位后 --save-baseline 钉上即可启用棘轮）")
+        return 0
+
+    bad_keys = [k for k in floor if k not in summary["overall"]]
+    if bad_keys:
+        print(f"❌ 基线地板含未知指标 {bad_keys}（可选：{sorted(summary['overall'])}）——"
+              "拼错的地板键会永远红，先修基线文件。")
+        return 1
+
+    fails = []
+    below = [f"{k} {summary['overall'][k]} < 地板 {v}"
+             for k, v in floor.items() if summary["overall"][k] < v]
+    if below:
+        fails.append("低于地板：" + "；".join(below))
+
+    n_base = base.get("n_items")
+    if n_base is not None and n_base != summary["overall"]["n"]:
+        fails.append(f"题集规模变了（基线 {n_base} → 本次 {summary['overall']['n']}）——"
+                     "比率型地板下题集是自由变量：加几道易题就能把总分抬过地板，"
+                     "删掉失败题更是直接满分。必须重钉基线并在台账写明理由")
+    else:
+        flips = _row_flips(base, rows)
+        if flips:
+            fails.append(f"逐题对账发现由过转败：{flips}（总分可能被别的题的进步抵消）")
+
+    if fails:
+        print("❌ 判为回归：\n   - " + "\n   - ".join(fails))
+        print("   要么修回检索能力，要么在台账写明「题集变难/换档」的理由后重钉基线——"
+              "绝不为让本次通过而下调地板。")
+        return 1
+    print(f"✅ 不低于地板（{tier}: {floor}），且无逐题由过转败")
+    return 0
+
+
+def _next_floor(base, summary: dict, tier: str, margin: float, allow_drop: bool):
+    """算出要写进基线的新地板；判定为「拿回归洗白」时返回 None（调用方退非零）。
+
+    棘轮的**核心性质是地板只增不减**。没有这一条，`--save-baseline` 就是一键洗白：
+    跑出回归、顺手带上这个开关，地板反而被压低到新水位，守卫从此守在更低的地方——
+    正是 addyosmani 那条「绝不为让回归通过而降低」要防的失效，也是本仓 §6.4 之所以
+    发生的同型故事（基线陈旧到守不住任何东西）。
+    故：
+    - 实测**低于旧地板** = 这是一次回归，拒绝钉基线（除非显式 --allow-floor-drop
+      并在台账写明「题集变难/换档」的理由）；
+    - 实测高于旧地板但算出的新地板更低（水位小幅回落，仍在地板之上）→ 取两者较大，
+      地板不动，不声不响地保住既有保护。
+    """
+    measured = {"pass_rate": summary["overall"]["pass_rate"], "mrr": summary["overall"]["mrr"]}
+    new = {k: round(max(0.0, v - margin), 3) for k, v in measured.items()}
+    old = _baseline_floor(base or {}, tier)
+    if not old:
+        return new
+
+    regressed = {k: (measured[k], old[k]) for k in new if measured[k] < old.get(k, 0)}
+    if regressed and not allow_drop:
+        print("❌ 拒绝把一次回归钉成新基线：" +
+              "；".join(f"{k} 实测 {m} < 现地板 {f}" for k, (m, f) in regressed.items()))
+        print("   棘轮只准往上抬。确因题集变难/换档需要下调，加 --allow-floor-drop "
+              "并在台账写明理由。")
+        return None
+    if allow_drop:
+        return new
+    kept = {k: max(v, old.get(k, 0)) for k, v in new.items()}
+    if kept != new:
+        print(f"== 地板保持不降：{kept}（本次算出 {new}，取较高者）")
+    return kept
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--save-baseline", action="store_true",
                     help="把本次结果写入 BASELINE.json（接受当前水平为基线）")
     ap.add_argument("--keep", action="store_true", help="保留临时数据根（调试）")
+    ap.add_argument("--floor-margin", type=float, default=FLOOR_MARGIN,
+                    help=f"--save-baseline 时地板相对实测的下浮余量（默认 {FLOOR_MARGIN}）")
+    ap.add_argument("--no-enforce-floor", action="store_true",
+                    help="只打印不判定（调试/评估非生产档时用）")
+    ap.add_argument("--allow-floor-drop", action="store_true",
+                    help="允许本次 --save-baseline 下调地板（仅限题集变难/换档，须带 --reason）")
+    ap.add_argument("--reason", default="", help="下调地板的书面理由（写进基线做审计痕）")
     args = ap.parse_args()
+    if not 0.0 <= args.floor_margin <= 0.1:
+        # 余量既能调松到永远绿（1.0 → 地板归零），也能调紧到自我打红（负值 → 地板高于实测）
+        ap.error(f"--floor-margin 必须在 [0.0, 0.1] 内，收到 {args.floor_margin}")
+    if args.allow_floor_drop and not args.reason.strip():
+        ap.error("--allow-floor-drop 必须同时给 --reason：下调地板要留得下审计痕")
 
     corpus = _load_jsonl(HERE / "corpus.jsonl")
     items = _load_jsonl(HERE / "items.jsonl")
@@ -245,8 +425,11 @@ def main() -> int:
     print("== 分形态:", json.dumps(summary["by_kind"], ensure_ascii=False))
 
     baseline_path = HERE / "BASELINE.json"
-    if baseline_path.exists():
-        base = json.loads(baseline_path.read_text(encoding="utf-8"))
+    tier = _current_tier()
+    base = json.loads(baseline_path.read_text(encoding="utf-8")) if baseline_path.exists() else None
+    exit_code = 0
+    print(f"== 本次档位: {tier or '解析失败'}")
+    if base:
         b = base["summary"]
         print(f"== 对比基线（{base.get('stamp')}）: "
               f"pass {b['overall']['pass_rate']} → {summary['overall']['pass_rate']}  "
@@ -255,14 +438,40 @@ def main() -> int:
             bv = (b["by_kind"].get(k) or {}).get("pass_rate")
             if bv is not None and v["pass_rate"] != bv:
                 print(f"   {k}: {bv} → {v['pass_rate']}")
+        exit_code = _check_floor(base, summary, tier, args.no_enforce_floor, rows)
+    else:
+        print("SKIP: 无基线文件，仅打印本次结果（首次跑批用 --save-baseline 钉基线）")
+
     if args.save_baseline:
-        baseline_path.write_text(json.dumps({"stamp": stamp, "summary": summary,
-                                             "rows": [{k: r[k] for k in ("id", "kind", "pass")}
-                                                      for r in rows]},
-                                            ensure_ascii=False, indent=2) + "\n",
+        if tier is None:
+            print("❌ 档位解析不出，拒绝钉基线（否则地板会挂到一个不知道是什么的档上）")
+            return 1
+        # 余量沿用基线里记的那个：否则一次刻意收紧过的余量，会在下次重钉时静默弹回默认值
+        margin = args.floor_margin
+        if base and "floor_margin" in base and \
+                not any(a.startswith("--floor-margin") for a in sys.argv[1:]):
+            margin = float(base["floor_margin"])
+            if margin != args.floor_margin:
+                print(f"== 沿用基线记录的地板余量 {margin}（未显式指定 --floor-margin）")
+        floor = _next_floor(base, summary, tier, margin, args.allow_floor_drop)
+        if floor is None:
+            return 1             # 拿回归当新基线 = 一键洗白，拒绝（见 _next_floor）
+        floors = dict((base or {}).get("floors") or {})
+        if not floors and (base or {}).get("floor") and (base or {}).get("tier"):
+            floors[base["tier"]] = base["floor"]      # 旧格式迁移：单地板归到它自己那档
+        floors[tier] = floor                          # 只动本档，别的档位的地板原样留着
+        payload = {"stamp": stamp, "tier": tier, "floors": floors,
+                   "floor_margin": margin, "n_items": len(rows),
+                   "summary": summary,
+                   "rows": [{k: r[k] for k in ("id", "kind", "pass")} for r in rows]}
+        if args.allow_floor_drop:
+            payload["floor_drop_reason"] = args.reason   # 下调地板必须留审计痕
+        baseline_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
                                  encoding="utf-8")
-        print(f"== 基线已更新: {baseline_path}")
-    return 0
+        print(f"== 基线已更新: {baseline_path}（档位 {tier}，地板 {floor}；"
+              f"其余档位地板保留 {sorted(set(floors) - {tier}) or '无'}）")
+        exit_code = 0            # 刚钉的基线不自我判定
+    return exit_code
 
 
 if __name__ == "__main__":

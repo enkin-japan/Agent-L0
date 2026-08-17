@@ -26,7 +26,7 @@
 - **自动分类入库**：文档插入时根据向量相似度自动路由到对应的分类库，无法匹配的流入未分类库兜底
 - **多库并发检索**：查询时按意图分类软路由到最相关的若干分类库，线程池并发查询
 - **三路候选并集检索**：向量召回 + 标识符 contains 预取 + **FTS5 关键词腿**（CJK bigram 预分词，`fts_index.py`）——三路只扩池不定序，Reranker（yes/no 概率打分）终局裁决，低置信度结果自动过滤。FTS 跨全库不受软路由约束（路由漏路兜底），一切操作 fail-open，索引可删可重建（删 `fts_index.sqlite3` + reembed）
-- **检索质量评估集**：`evals/`（夹具语料 + 34 条固定题集，八类形态，含误路由 misroute）——任何检索侧改动先跑 `evals/run_retrieval_eval.py` 对比 `BASELINE.json` 防负优化
+- **检索质量评估集**：`evals/`（夹具语料 + 51 条固定题集，八类形态，含误路由 misroute）——任何检索侧改动先跑 `evals/run_retrieval_eval.py` 对比 `BASELINE.json` 防负优化
 - **Token 感知切块**：按行累积切块，块间保留 token 级重叠（overlap），保证上下文连续性
 - **原始文件备份**：每篇入库文档在 `storage/` 下保留原文备份，支持按路径整篇删除；也是换档全量重建的数据源
 - **离线数据治理**：新增分类后可触发重分拣，将未分类库中的文档重新归位
@@ -284,7 +284,7 @@ rag/
 ├── scripts/
 │   ├── reembed.py                # 换档/升级用的全量重建（dump-categories / wipe / rebuild）
 │   └── migrate_source_paths.py   # 数据根搬迁后 source_path 前缀一次性修正（B2c 拓扑切换用）
-├── evals/                 # 检索质量评估集：夹具语料 + 34 条固定题集（八类形态）+ run_retrieval_eval.py + BASELINE.json
+├── evals/                 # 检索质量评估集：夹具语料 + 51 条固定题集（八类形态）+ run_retrieval_eval.py + BASELINE.json
 ├── requirements.txt       # Python 依赖（配置见仓库根 config.yaml，部署/启动走根 devctl.sh）
 ├── models/                # 本地模型权重（首次运行按档位自动下载）
 │   ├── Qwen3-Embedding-0.6B/  Qwen3-Reranker-0.6B/

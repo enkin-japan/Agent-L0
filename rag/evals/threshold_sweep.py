@@ -2,7 +2,7 @@
 
 背景：config.yaml rag.tiers 各档的 thresholds 只有 text-0.6b 是实测标定值，
 其余档位为占位继承——vl-2b 定档（2026-08-08）后生产档实际跑着 0.6B 的阈值。
-本工具在当前指针档位（.rag-tier-selection）上对三阈值做网格扫参，用 34 题
+本工具在当前指针档位（.rag-tier-selection）上对三阈值做网格扫参，用 51 题
 固定题集选出该档余弦空间的实测最优组合，写回 config 注释（标定日期+依据）。
 
 用法（rag venv，GPU 机上跑——档位模型要真装载）：

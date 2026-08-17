@@ -228,6 +228,10 @@ def test_qwen_delta_tool_observation_matches_full_render_shape(qb):
 
 
 def test_qwen_delta_refuses_assistant_and_env_change(qb, monkeypatch):
+    # 两端都必须钉住日期。原写法用**真实**当天算 tail、再冻到硬编码的 2026-08-18，
+    # 于是这一天真的到来时「日期变了」不再成立、测试自己红掉——时间炸弹，
+    # 与 gemma 那条同型写法（先冻 A 再冻 B）对齐即可根除。
+    _freeze_day(monkeypatch, q_mod, "2026-08-17")
     tail = qb.tail_state(include_env=False)
     assert qb.build_prompt_delta([{"role": "assistant", "content": "x"}],
                                  include_env=False, prev_tail=tail) is None

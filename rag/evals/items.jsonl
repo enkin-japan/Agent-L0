@@ -26,8 +26,8 @@
 {"id": "rq-multi-002", "kind": "multidoc", "query": "家里跟路由器有关的设置都有哪些记录", "category": "家庭网络", "optimized_query": "路由器 配置 固件 访客网络 白名单", "expect": {"hit_all": ["路由器断网维修记录", "访客网络说明"], "top_k": 5}}
 {"id": "rq-temp-001", "kind": "temporal", "query": "我们现在住在哪里，快递该发哪", "category": "家庭事务", "optimized_query": "现住址 快递地址", "expect": {"hit_any": ["现住址与快递偏好"], "stale_not_top1": ["旧住址档案"]}}
 {"id": "rq-temp-002", "kind": "temporal", "query": "以前梧桐巷的房子是什么时候退租的", "category": "家庭事务", "optimized_query": "梧桐巷 旧住址 退租 时间", "expect": {"hit_any": ["旧住址档案"]}}
-{"id": "rq-neg-001", "kind": "negative", "query": "我持有的特斯拉股票买入价是多少", "category": "投资", "optimized_query": "特斯拉 股票 买入价", "expect": {"empty_ok": true, "miss_all": ["车辆保养记录", "开发机网络配置"]}}
-{"id": "rq-neg-002", "kind": "negative", "query": "钢琴调音师上次来是什么时候", "category": "家庭事务", "optimized_query": "钢琴 调音 记录", "expect": {"empty_ok": true, "miss_all": ["咖啡机除垢操作", "幼儿园接送安排"]}}
+{"id": "rq-neg-001", "kind": "negative", "query": "我持有的特斯拉股票买入价是多少", "category": "投资", "optimized_query": "特斯拉 股票 买入价", "expect": {"empty_ok": true, "require_empty": true, "miss_all": ["车辆保养记录", "开发机网络配置"]}}
+{"id": "rq-neg-002", "kind": "negative", "query": "钢琴调音师上次来是什么时候", "category": "家庭事务", "optimized_query": "钢琴 调音 记录", "expect": {"empty_ok": true, "require_empty": true, "miss_all": ["咖啡机除垢操作", "幼儿园接送安排"]}}
 {"id": "rq-sem-008", "kind": "semantic", "query": "合同到期前想搬走要提前多久说", "category": "租房合同", "optimized_query": "退租 提前 通知 天数", "expect": {"hit_any": ["房租合同要点"]}}
 {"id": "rq-sem-009", "kind": "semantic", "query": "周三接孩子是几点来着", "category": "孩子教育", "optimized_query": "周三 放学 接送 时间 兴趣班", "expect": {"hit_any": ["幼儿园接送安排"]}}
 {"id": "rq-sem-010", "kind": "semantic", "query": "备份的移动硬盘多久换一次放哪里", "category": "数据备份", "optimized_query": "移动硬盘 轮换 存放", "expect": {"hit_any": ["NAS 备份策略"]}}
@@ -37,3 +37,24 @@
 {"id": "rq-sem-012", "kind": "semantic", "query": "旅馆的家族汤要怎么预约", "category": "旅行", "optimized_query": "温泉 家族汤 预约", "expect": {"hit_any": ["京都旅行订房信息"]}}
 {"id": "rq-route-001", "kind": "misroute", "query": "PICC-88213-X 是什么来着", "category": "设备固件版本", "optimized_query": "PICC-88213-X", "expect": {"hit_any": ["家庭保险单摘要"]}}
 {"id": "rq-route-002", "kind": "misroute", "query": "王秀兰的联系方式记在哪", "category": "健康记录", "optimized_query": "王秀兰 联系方式", "expect": {"hit_any": ["房租合同要点"]}}
+# ── 补题（OSS 扫描 §6.4，2026-08-17）：薄形态补到 ≥5 + 加难题恢复判别力 ──────
+# 补题原则：全部锚在既有 39 篇语料上，**不动 corpus.jsonl**（改语料会让整条基线失效）。
+# 难度来源不是生僻，而是干扰项：同域异事实（血压 vs 血糖）、同词异主体（孩子疫苗 vs
+# 宠物疫苗）、跨文档否定式（哪些明说不能用钢丝球/酒精）、同类标识符互扰（CR2450 vs 1 号电池）。
+{"id": "rq-neg-003", "kind": "negative", "query": "上次体检的血糖和血脂结果是多少", "category": "健康记录", "optimized_query": "血糖 血脂 体检 结果", "expect": {"empty_ok": true, "require_empty": true, "miss_all": ["血压晨测记录摘要", "家庭药箱清单"]}}
+{"id": "rq-neg-004", "kind": "negative", "query": "家里宽带套餐每月多少钱、什么时候到期", "category": "家庭开销", "optimized_query": "宽带 套餐 资费 到期", "expect": {"empty_ok": true, "require_empty": true, "miss_all": ["路由器断网维修记录", "访客网络说明"]}}
+{"id": "rq-neg-005", "kind": "negative", "query": "洗碗机的滤网怎么拆下来洗", "category": "家电维护", "optimized_query": "洗碗机 滤网 拆洗", "expect": {"empty_ok": true, "require_empty": true, "miss_all": ["洗衣机筒自洁", "客厅空调滤网清洗", "咖啡机除垢操作"]}}
+{"id": "rq-neg-006", "kind": "negative", "query": "猫的疫苗打到第几针了", "category": "健康记录", "optimized_query": "猫 宠物 疫苗 针次", "expect": {"empty_ok": true, "require_empty": true, "miss_all": ["孩子疫苗接种提醒"]}}
+{"id": "rq-multi-003", "kind": "multidoc", "query": "改了访客 WiFi 密码之后还有哪些东西要跟着更新", "category": "家庭网络", "optimized_query": "访客 WiFi 密码 更换 二维码 便签", "expect": {"hit_all": ["访客网络说明", "路由器访客二维码打印"], "top_k": 5}}
+{"id": "rq-multi-004", "kind": "multidoc", "query": "咖啡从买豆到冲煮都有哪些要注意的", "category": "生活", "optimized_query": "咖啡豆 采购 研磨 咖啡机 除垢", "expect": {"hit_all": ["咖啡豆采购渠道", "咖啡机除垢操作"], "top_k": 5}}
+{"id": "rq-multi-005", "kind": "multidoc", "query": "家里哪些东西明确说了不能用钢丝球或者酒精擦", "category": "家电维护", "optimized_query": "钢丝球 酒精 涂层 键帽 清洁禁忌", "expect": {"hit_all": ["电饭煲预约煮饭", "键盘轴体清洁"], "top_k": 5}}
+{"id": "rq-route-003", "kind": "misroute", "query": "ERR_5023 是什么问题来着", "category": "家庭开销", "optimized_query": "ERR_5023", "expect": {"hit_any": ["路由器断网维修记录"]}}
+{"id": "rq-route-004", "kind": "misroute", "query": "BK-99182 这个编号是订的什么", "category": "设备维护", "optimized_query": "BK-99182", "expect": {"hit_any": ["京都旅行订房信息"]}}
+{"id": "rq-route-005", "kind": "misroute", "query": "0W-20 是给什么用的", "category": "厨房用品", "optimized_query": "0W-20", "expect": {"hit_any": ["车辆保养记录"]}}
+{"id": "rq-name-004", "kind": "name", "query": "花筏那家旅馆的取消政策是什么", "category": "旅行", "optimized_query": "花筏 旅馆 取消 政策", "expect": {"hit_any": ["京都旅行订房信息"]}}
+{"id": "rq-name-005", "kind": "name", "query": "Guest-Chou 的密码写在哪里", "category": "家庭网络", "optimized_query": "Guest-Chou 密码", "expect": {"hit_any": ["访客网络说明"]}}
+{"id": "rq-id-009", "kind": "identifier", "query": "CR2450 这个电池是给哪个东西用的", "category": "家庭事务", "optimized_query": "CR2450 电池", "expect": {"hit_any": ["窗帘轨道保养"]}}
+{"id": "rq-id-010", "kind": "identifier", "query": "M4x10 的螺丝用在哪", "category": "设备维护", "optimized_query": "M4x10 螺丝", "expect": {"hit_any": ["显示器支架安装"]}}
+{"id": "rq-temp-003", "kind": "temporal", "query": "搬家之后还有哪些地址没更新", "category": "家庭事务", "optimized_query": "搬家 地址 尚未更新", "expect": {"hit_any": ["现住址与快递偏好"], "stale_not_top1": ["旧住址档案"]}}
+{"id": "rq-sem-013", "kind": "semantic", "query": "面包整形的时候老是瘫掉是不是水放多了", "category": "烘焙", "optimized_query": "面包 水粉比 含水量 整形 瘫", "expect": {"hit_any": ["天然酵母面包配方"]}}
+{"id": "rq-sem-014", "kind": "semantic", "query": "爸爸血压高到什么程度就该去复诊", "category": "健康记录", "optimized_query": "血压 复诊 阈值 调药", "expect": {"hit_any": ["血压晨测记录摘要"]}}
