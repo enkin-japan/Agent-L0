@@ -1,0 +1,13 @@
+⚠️  --smoke：负载已改为四腿等权 + 秒级空闲，本次产物**不构成长稳判决**
+== 长稳起跑：0.34h，产物 ../benchmarks/data/soak-26b4bit-smoke-20260818
+Traceback (most recent call last):
+  File "/Volumes/enkin/project/Agent/backend/scripts/soak_longrun.py", line 626, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/Volumes/enkin/project/Agent/backend/scripts/soak_longrun.py", line 622, in main
+    return soak.run()
+           ~~~~~~~~^^
+  File "/Volumes/enkin/project/Agent/backend/scripts/soak_longrun.py", line 456, in run
+    self._req(**rec)
+    ~~~~~~~~~^^^^^^^
+TypeError: __main__.Soak._req() argument after ** must be a mapping, not tuple

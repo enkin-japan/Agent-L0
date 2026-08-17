@@ -1,0 +1,1 @@
+{"t": 0.1, "wired_mb": 3717, "compressed_mb": 1379, "swapins": 10462061, "swapouts": 12374612, "server_pid": "61226", "server_rss_mb": 15715, "health_ms": 0.6, "metrics": {"generations_total": 0, "cancelled_total": 0, "errors_total": 0, "cache_count": 0, "active_generations": 0}, "note": "t0 基线"}

@@ -1,0 +1,2 @@
+{"i": 1, "t": 1.8, "kind": "tool", "ok": true, "ttft": 1.5275638103485107, "wall": 1.734, "tps": 90.08914691067451, "peak_mem": 15.570085432, "constrained_steps": 17, "called": true, "error": null}
+{"i": 2, "t": 18.63, "kind": "longchain", "ok": true, "ttft": 4.3314759731292725, "wall": 13.536, "prompt_tok": 6132, "gen_tok": 768, "peak_mem": 17.431379264, "tps": 83.42398465373404}

@@ -1,0 +1,146 @@
+{"i": 1, "t": 0.54, "kind": "tool", "ok": true, "ttft": 0.26891589164733887, "wall": 0.473, "tps": 92.59874101841861, "peak_mem": 17.431379264, "constrained_steps": 17, "called": true, "error": null}
+{"i": 2, "t": 17.28, "kind": "longchain", "ok": true, "ttft": 4.238642930984497, "wall": 13.438, "prompt_tok": 6132, "gen_tok": 768, "peak_mem": 17.58194826, "tps": 83.46723018511096}
+{"i": 3, "t": 22.77, "kind": "chat", "ok": true, "turn": 1, "ttft": 0.2544698715209961, "wall": 1.938, "gen_tok": 160, "tps": 94.87671424045983, "prompt_tok": 46, "peak_mem": 17.58194826, "reused": 0, "cache_rotated": false, "error": null}
+{"i": 4, "t": 27.09, "kind": "tool", "ok": true, "ttft": 0.29561328887939453, "wall": 0.486, "tps": 93.81808308785595, "peak_mem": 17.58194826, "constrained_steps": 16, "called": true, "error": null}
+{"i": 5, "t": 30.85, "kind": "tool", "ok": true, "ttft": 0.30567288398742676, "wall": 0.494, "tps": 89.19436501821284, "peak_mem": 17.58194826, "constrained_steps": 15, "called": true, "error": null}
+{"i": 6, "t": 43.03, "kind": "longchain", "ok": true, "ttft": 4.259520053863525, "wall": 9.917, "prompt_tok": 6133, "gen_tok": 470, "peak_mem": 17.733123432, "tps": 83.0458551605786}
+{"i": 7, "t": 51.05, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.01, "error": null}
+{"i": 8, "t": 58.08, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 9, "t": 61.7, "kind": "tool", "ok": true, "ttft": 0.3089101314544678, "wall": 0.51, "tps": 93.1209359372456, "peak_mem": 17.733123432, "constrained_steps": 17, "called": true, "error": null}
+{"i": 10, "t": 64.43, "kind": "tool", "ok": true, "ttft": 0.29493188858032227, "wall": 0.484, "tps": 94.4217923785278, "peak_mem": 17.733123432, "constrained_steps": 16, "called": true, "error": null}
+{"i": 11, "t": 73.6, "kind": "chat", "ok": true, "turn": 2, "ttft": 0.21156096458435059, "wall": 1.9, "gen_tok": 160, "tps": 94.6513437803871, "prompt_tok": 224, "peak_mem": 17.733123432, "reused": 206, "cache_rotated": false, "error": null}
+{"i": 12, "t": 91.73, "kind": "longchain", "ok": true, "ttft": 4.249106168746948, "wall": 10.612, "prompt_tok": 6115, "gen_tok": 551, "peak_mem": 17.758813472, "tps": 86.56759769777811}
+{"i": 13, "t": 100.5, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.0, "error": null}
+{"i": 14, "t": 104.72, "kind": "tool", "ok": true, "ttft": 0.29752612113952637, "wall": 0.486, "tps": 94.37441159327294, "peak_mem": 17.758813472, "constrained_steps": 16, "called": true, "error": null}
+{"i": 15, "t": 111.41, "kind": "tool", "ok": true, "ttft": 0.30013489723205566, "wall": 0.478, "tps": 94.86185823890568, "peak_mem": 17.758813472, "constrained_steps": 15, "called": true, "error": null}
+{"i": 16, "t": 130.98, "kind": "longchain", "ok": true, "ttft": 4.257667064666748, "wall": 13.292, "prompt_tok": 6122, "gen_tok": 768, "peak_mem": 17.764662588, "tps": 84.98464840323933}
+{"i": 17, "t": 138.88, "kind": "chat", "ok": true, "turn": 3, "ttft": 0.2075328826904297, "wall": 1.89, "gen_tok": 160, "tps": 94.95069981606945, "prompt_tok": 403, "peak_mem": 17.764662588, "reused": 384, "cache_rotated": false, "error": null}
+{"i": 18, "t": 144.06, "kind": "chat", "ok": true, "turn": 4, "ttft": 0.20227599143981934, "wall": 1.992, "gen_tok": 160, "tps": 89.2826709543138, "prompt_tok": 582, "peak_mem": 17.764662588, "reused": 563, "cache_rotated": false, "error": null}
+{"i": 19, "t": 165.55, "kind": "longchain", "ok": true, "ttft": 4.299097061157227, "wall": 13.934, "prompt_tok": 6128, "gen_tok": 768, "peak_mem": 17.849204052, "tps": 79.69182920611553}
+{"i": 20, "t": 175.38, "kind": "chat", "ok": true, "turn": 5, "ttft": 0.23902487754821777, "wall": 2.225, "gen_tok": 160, "tps": 80.47827061336643, "prompt_tok": 761, "peak_mem": 17.849204052, "reused": 742, "cache_rotated": false, "error": null}
+{"i": 21, "t": 182.93, "kind": "tool", "ok": true, "ttft": 0.3174011707305908, "wall": 0.521, "tps": 87.13503618705539, "peak_mem": 17.849204052, "constrained_steps": 16, "called": true, "error": null}
+{"i": 22, "t": 190.86, "kind": "tool", "ok": true, "ttft": 0.3029181957244873, "wall": 0.513, "tps": 84.90484297081846, "peak_mem": 17.849204052, "constrained_steps": 16, "called": true, "error": null}
+{"i": 23, "t": 194.21, "kind": "tool", "ok": true, "ttft": 0.3256552219390869, "wall": 0.54, "tps": 87.82764657713813, "peak_mem": 17.849204052, "constrained_steps": 17, "called": true, "error": null}
+{"i": 24, "t": 211.39, "kind": "longchain", "ok": true, "ttft": 4.381336688995361, "wall": 13.435, "prompt_tok": 6121, "gen_tok": 768, "peak_mem": 17.849204052, "tps": 84.80703345425421}
+{"i": 25, "t": 220.27, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.01, "error": null}
+{"i": 26, "t": 226.16, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 27, "t": 234.61, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 28, "t": 241.67, "kind": "chat", "ok": true, "turn": 1, "ttft": 0.273500919342041, "wall": 1.902, "gen_tok": 160, "tps": 98.08282558128954, "prompt_tok": 46, "peak_mem": 17.849204052, "reused": 0, "cache_rotated": false, "error": null}
+{"i": 29, "t": 248.87, "kind": "chat", "ok": true, "turn": 2, "ttft": 0.2371659278869629, "wall": 1.88, "gen_tok": 160, "tps": 97.26876647466183, "prompt_tok": 225, "peak_mem": 17.849204052, "reused": 206, "cache_rotated": false, "error": null}
+{"i": 30, "t": 261.63, "kind": "longchain", "ok": true, "ttft": 4.256813049316406, "wall": 10.279, "prompt_tok": 6111, "gen_tok": 531, "peak_mem": 17.849204052, "tps": 88.14317439387074}
+{"i": 31, "t": 275.45, "kind": "longchain", "ok": true, "ttft": 4.280719041824341, "wall": 10.59, "prompt_tok": 6126, "gen_tok": 557, "peak_mem": 18.197986636, "tps": 88.25886998256907}
+{"i": 32, "t": 281.44, "kind": "tool", "ok": true, "ttft": 0.3347892761230469, "wall": 0.526, "tps": 92.93710288331575, "peak_mem": 18.197986636, "constrained_steps": 16, "called": true, "error": null}
+{"i": 33, "t": 288.25, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.0, "error": null}
+{"i": 34, "t": 293.49, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.01, "error": null}
+{"i": 35, "t": 298.42, "kind": "tool", "ok": true, "ttft": 0.33606505393981934, "wall": 0.525, "tps": 93.97367693210761, "peak_mem": 18.197986636, "constrained_steps": 16, "called": true, "error": null}
+{"i": 36, "t": 318.77, "kind": "longchain", "ok": true, "ttft": 4.276403903961182, "wall": 12.994, "prompt_tok": 6130, "gen_tok": 768, "peak_mem": 18.201574748, "tps": 88.07546045059374}
+{"i": 37, "t": 324.6, "kind": "tool", "ok": true, "ttft": 0.33466100692749023, "wall": 0.525, "tps": 93.73946211146223, "peak_mem": 18.201574748, "constrained_steps": 16, "called": true, "error": null}
+{"i": 38, "t": 330.1, "kind": "tool", "ok": true, "ttft": 0.34305596351623535, "wall": 0.555, "tps": 93.46400379145766, "peak_mem": 18.201574748, "constrained_steps": 18, "called": true, "error": null}
+{"i": 39, "t": 335.75, "kind": "chat", "ok": true, "turn": 3, "ttft": 0.25479888916015625, "wall": 1.915, "gen_tok": 160, "tps": 96.2187653698401, "prompt_tok": 404, "peak_mem": 18.201574748, "reused": 385, "cache_rotated": false, "error": null}
+{"i": 40, "t": 344.28, "kind": "chat", "ok": true, "turn": 4, "ttft": 0.25068116188049316, "wall": 1.935, "gen_tok": 160, "tps": 94.84097687357284, "prompt_tok": 583, "peak_mem": 18.201574748, "reused": 564, "cache_rotated": false, "error": null}
+{"i": 41, "t": 351.51, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 42, "t": 368.4, "kind": "longchain", "ok": true, "ttft": 4.276327848434448, "wall": 10.042, "prompt_tok": 6121, "gen_tok": 507, "peak_mem": 18.706955576, "tps": 87.90319922659712}
+{"i": 43, "t": 388.72, "kind": "longchain", "ok": true, "ttft": 4.269468784332275, "wall": 13.128, "prompt_tok": 6112, "gen_tok": 768, "peak_mem": 18.706955576, "tps": 86.67420047254427}
+{"i": 44, "t": 395.52, "kind": "chat", "ok": true, "turn": 5, "ttft": 0.24545001983642578, "wall": 2.118, "gen_tok": 160, "tps": 85.31682736993035, "prompt_tok": 762, "peak_mem": 18.706955576, "reused": 743, "cache_rotated": false, "error": null}
+{"i": 45, "t": 401.11, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 46, "t": 404.9, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 47, "t": 409.85, "kind": "chat", "ok": true, "turn": 1, "ttft": 0.2858750820159912, "wall": 1.923, "gen_tok": 160, "tps": 97.63673588473016, "prompt_tok": 46, "peak_mem": 18.706955576, "reused": 0, "cache_rotated": false, "error": null}
+{"i": 48, "t": 429.22, "kind": "longchain", "ok": true, "ttft": 4.276177883148193, "wall": 13.156, "prompt_tok": 6140, "gen_tok": 768, "peak_mem": 18.706955576, "tps": 86.46492867673268}
+{"i": 49, "t": 448.65, "kind": "longchain", "ok": true, "ttft": 4.265723943710327, "wall": 12.036, "prompt_tok": 6091, "gen_tok": 674, "peak_mem": 18.706955576, "tps": 86.72014473218766}
+{"i": 50, "t": 453.07, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 51, "t": 460.1, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.01, "error": null}
+{"i": 52, "t": 465.32, "kind": "chat", "ok": true, "turn": 2, "ttft": 0.24402189254760742, "wall": 1.905, "gen_tok": 160, "tps": 96.16102881655162, "prompt_tok": 225, "peak_mem": 18.706955576, "reused": 206, "cache_rotated": false, "error": null}
+{"i": 53, "t": 474.74, "kind": "chat", "ok": true, "turn": 3, "ttft": 0.2504539489746094, "wall": 1.925, "gen_tok": 160, "tps": 95.43383639988087, "prompt_tok": 404, "peak_mem": 18.706955576, "reused": 385, "cache_rotated": false, "error": null}
+{"i": 54, "t": 479.99, "kind": "tool", "ok": true, "ttft": 0.34000182151794434, "wall": 0.53, "tps": 93.9674627470596, "peak_mem": 18.706955576, "constrained_steps": 16, "called": true, "error": null}
+{"i": 55, "t": 498.32, "kind": "longchain", "ok": true, "ttft": 4.266898155212402, "wall": 13.207, "prompt_tok": 6100, "gen_tok": 768, "peak_mem": 18.73475914, "tps": 85.88617548802688}
+{"i": 56, "t": 505.65, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 57, "t": 513.1, "kind": "chat", "ok": true, "turn": 4, "ttft": 0.2508060932159424, "wall": 1.941, "gen_tok": 160, "tps": 94.50125734827014, "prompt_tok": 582, "peak_mem": 18.73475914, "reused": 564, "cache_rotated": false, "error": null}
+{"i": 58, "t": 528.42, "kind": "longchain", "ok": true, "ttft": 4.289807081222534, "wall": 13.195, "prompt_tok": 6124, "gen_tok": 768, "peak_mem": 18.792906052, "tps": 86.22313735269917}
+{"i": 59, "t": 545.2, "kind": "longchain", "ok": true, "ttft": 4.271369934082031, "wall": 12.328, "prompt_tok": 6090, "gen_tok": 692, "peak_mem": 18.792906052, "tps": 85.86869291914809}
+{"i": 60, "t": 549.2, "kind": "chat", "ok": true, "turn": 5, "ttft": 0.25281691551208496, "wall": 1.966, "gen_tok": 160, "tps": 93.26241697839916, "prompt_tok": 761, "peak_mem": 18.792906052, "reused": 742, "cache_rotated": false, "error": null}
+{"i": 61, "t": 557.45, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 62, "t": 560.5, "kind": "tool", "ok": true, "ttft": 0.34572267532348633, "wall": 0.524, "tps": 94.08910543047107, "peak_mem": 18.792906052, "constrained_steps": 15, "called": true, "error": null}
+{"i": 63, "t": 565.2, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.01, "error": null}
+{"i": 64, "t": 572.74, "kind": "tool", "ok": true, "ttft": 0.34441375732421875, "wall": 0.533, "tps": 94.06047305245158, "peak_mem": 18.792906052, "constrained_steps": 16, "called": true, "error": null}
+{"i": 65, "t": 581.94, "kind": "chat", "ok": true, "turn": 1, "ttft": 0.29425597190856934, "wall": 1.941, "gen_tok": 160, "tps": 97.02531011445069, "prompt_tok": 46, "peak_mem": 18.792906052, "reused": 0, "cache_rotated": false, "error": null}
+{"i": 66, "t": 590.25, "kind": "chat", "ok": true, "turn": 2, "ttft": 0.25870299339294434, "wall": 1.941, "gen_tok": 160, "tps": 94.99107603570468, "prompt_tok": 225, "peak_mem": 18.792906052, "reused": 206, "cache_rotated": false, "error": null}
+{"i": 67, "t": 598.12, "kind": "chat", "ok": true, "turn": 3, "ttft": 0.2531712055206299, "wall": 1.933, "gen_tok": 160, "tps": 95.14843816879743, "prompt_tok": 403, "peak_mem": 18.792906052, "reused": 385, "cache_rotated": false, "error": null}
+{"i": 68, "t": 615.5, "kind": "longchain", "ok": true, "ttft": 4.2775187492370605, "wall": 12.848, "prompt_tok": 6109, "gen_tok": 736, "peak_mem": 19.176865032, "tps": 85.85695749667927}
+{"i": 69, "t": 618.2, "kind": "tool", "ok": true, "ttft": 0.34946727752685547, "wall": 0.551, "tps": 93.4486358466125, "peak_mem": 19.176865032, "constrained_steps": 17, "called": true, "error": null}
+{"i": 70, "t": 624.48, "kind": "tool", "ok": true, "ttft": 0.35247206687927246, "wall": 0.541, "tps": 94.63946308994412, "peak_mem": 19.176865032, "constrained_steps": 16, "called": true, "error": null}
+{"i": 71, "t": 634.22, "kind": "chat", "ok": true, "turn": 4, "ttft": 0.2679867744445801, "wall": 1.972, "gen_tok": 160, "tps": 93.7173544930213, "prompt_tok": 581, "peak_mem": 19.176865032, "reused": 563, "cache_rotated": false, "error": null}
+{"i": 72, "t": 641.11, "kind": "tool", "ok": true, "ttft": 0.35543322563171387, "wall": 0.544, "tps": 94.35944602153137, "peak_mem": 19.176865032, "constrained_steps": 16, "called": true, "error": null}
+{"i": 73, "t": 646.57, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.01, "error": null}
+{"i": 74, "t": 653.36, "kind": "tool", "ok": true, "ttft": 0.35715198516845703, "wall": 0.547, "tps": 93.77810462767066, "peak_mem": 19.176865032, "constrained_steps": 16, "called": true, "error": null}
+{"i": 75, "t": 661.74, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.0, "error": null}
+{"i": 76, "t": 666.68, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.0, "error": null}
+{"i": 77, "t": 675.5, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 78, "t": 679.86, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.0, "error": null}
+{"i": 79, "t": 686.06, "kind": "chat", "ok": true, "turn": 5, "ttft": 0.2662830352783203, "wall": 1.987, "gen_tok": 160, "tps": 92.83767265940817, "prompt_tok": 759, "peak_mem": 19.176865032, "reused": 741, "cache_rotated": false, "error": null}
+{"i": 80, "t": 693.67, "kind": "tool", "ok": true, "ttft": 0.3557288646697998, "wall": 0.546, "tps": 93.45616503405148, "peak_mem": 19.176865032, "constrained_steps": 16, "called": true, "error": null}
+{"i": 81, "t": 702.76, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.0, "error": null}
+{"i": 82, "t": 708.01, "kind": "chat", "ok": true, "turn": 1, "ttft": 0.29726099967956543, "wall": 1.954, "gen_tok": 160, "tps": 96.42953332159311, "prompt_tok": 45, "peak_mem": 19.176865032, "reused": 0, "cache_rotated": false, "error": null}
+{"i": 83, "t": 710.92, "kind": "tool", "ok": true, "ttft": 0.311356782913208, "wall": 0.5, "tps": 94.35585945533894, "peak_mem": 19.176865032, "constrained_steps": 16, "called": true, "error": null}
+{"i": 84, "t": 714.53, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.01, "error": null}
+{"i": 85, "t": 722.1, "kind": "tool", "ok": true, "ttft": 0.3467988967895508, "wall": 0.536, "tps": 94.09554827078256, "peak_mem": 19.176865032, "constrained_steps": 16, "called": true, "error": null}
+{"i": 86, "t": 729.71, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.01, "error": null}
+{"i": 87, "t": 733.23, "kind": "tool", "ok": true, "ttft": 0.3535468578338623, "wall": 0.544, "tps": 93.13074506845362, "peak_mem": 19.176865032, "constrained_steps": 16, "called": true, "error": null}
+{"i": 88, "t": 737.99, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.01, "error": null}
+{"i": 89, "t": 741.96, "kind": "tool", "ok": true, "ttft": 0.3457927703857422, "wall": 0.537, "tps": 93.12359827842715, "peak_mem": 19.176865032, "constrained_steps": 16, "called": true, "error": null}
+{"i": 90, "t": 750.9, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 91, "t": 756.29, "kind": "tool", "ok": true, "ttft": 0.35209012031555176, "wall": 0.541, "tps": 94.01353561764454, "peak_mem": 19.176865032, "constrained_steps": 16, "called": true, "error": null}
+{"i": 92, "t": 765.36, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.01, "error": null}
+{"i": 93, "t": 768.48, "kind": "tool", "ok": true, "ttft": 0.35460925102233887, "wall": 0.533, "tps": 93.78001718617475, "peak_mem": 19.176865032, "constrained_steps": 15, "called": true, "error": null}
+{"i": 94, "t": 777.34, "kind": "chat", "ok": true, "turn": 2, "ttft": 0.26558780670166016, "wall": 1.952, "gen_tok": 160, "tps": 94.74113192557877, "prompt_tok": 224, "peak_mem": 19.176865032, "reused": 205, "cache_rotated": false, "error": null}
+{"i": 95, "t": 783.8, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.0, "error": null}
+{"i": 96, "t": 802.74, "kind": "longchain", "ok": true, "ttft": 4.294405221939087, "wall": 13.333, "prompt_tok": 6118, "gen_tok": 768, "peak_mem": 19.909344556, "tps": 84.95541819865754}
+{"i": 97, "t": 810.73, "kind": "chat", "ok": true, "turn": 3, "ttft": 0.2643308639526367, "wall": 1.958, "gen_tok": 160, "tps": 94.36676143111511, "prompt_tok": 402, "peak_mem": 19.909344556, "reused": 384, "cache_rotated": false, "error": null}
+{"i": 98, "t": 820.04, "kind": "chat", "ok": true, "turn": 4, "ttft": 0.2721071243286133, "wall": 1.974, "gen_tok": 160, "tps": 93.87756209511637, "prompt_tok": 581, "peak_mem": 19.909344556, "reused": 562, "cache_rotated": false, "error": null}
+{"i": 99, "t": 829.44, "kind": "chat", "ok": true, "turn": 5, "ttft": 0.27460193634033203, "wall": 1.998, "gen_tok": 160, "tps": 92.68783723080473, "prompt_tok": 760, "peak_mem": 19.909344556, "reused": 741, "cache_rotated": false, "error": null}
+{"i": 100, "t": 835.14, "kind": "tool", "ok": true, "ttft": 0.3609740734100342, "wall": 0.56, "tps": 94.3858041998715, "peak_mem": 19.909344556, "constrained_steps": 17, "called": true, "error": null}
+{"i": 101, "t": 849.1, "kind": "longchain", "ok": true, "ttft": 4.294007062911987, "wall": 9.928, "prompt_tok": 6122, "gen_tok": 485, "peak_mem": 20.384562492, "tps": 86.05658879229313}
+{"i": 102, "t": 852.53, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.01, "error": null}
+{"i": 103, "t": 859.66, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 104, "t": 880.3, "kind": "longchain", "ok": true, "ttft": 4.300168991088867, "wall": 13.11, "prompt_tok": 6116, "gen_tok": 768, "peak_mem": 20.384562492, "tps": 87.1577780486036}
+{"i": 105, "t": 883.38, "kind": "tool", "ok": true, "ttft": 0.3635997772216797, "wall": 0.554, "tps": 92.9134163151965, "peak_mem": 20.384562492, "constrained_steps": 16, "called": true, "error": null}
+{"i": 106, "t": 888.4, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.01, "error": null}
+{"i": 107, "t": 909.39, "kind": "longchain", "ok": true, "ttft": 4.310449838638306, "wall": 13.102, "prompt_tok": 6132, "gen_tok": 768, "peak_mem": 20.476771684, "tps": 87.34327102827878}
+{"i": 108, "t": 916.67, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 109, "t": 920.13, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 110, "t": 939.88, "kind": "longchain", "ok": true, "ttft": 4.303295135498047, "wall": 13.102, "prompt_tok": 6122, "gen_tok": 768, "peak_mem": 20.476771684, "tps": 87.26764078912653}
+{"i": 111, "t": 946.59, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 112, "t": 953.82, "kind": "chat", "ok": true, "turn": 1, "ttft": 0.30937910079956055, "wall": 1.945, "gen_tok": 160, "tps": 97.67087767926245, "prompt_tok": 46, "peak_mem": 20.476771684, "reused": 0, "cache_rotated": false, "error": null}
+{"i": 113, "t": 958.66, "kind": "tool", "ok": true, "ttft": 0.3616948127746582, "wall": 0.575, "tps": 93.33328119378552, "peak_mem": 20.476771684, "constrained_steps": 18, "called": true, "error": null}
+{"i": 114, "t": 964.26, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 115, "t": 978.07, "kind": "longchain", "ok": true, "ttft": 4.307830095291138, "wall": 11.091, "prompt_tok": 6123, "gen_tok": 591, "peak_mem": 20.536393024, "tps": 87.10524294851628}
+{"i": 116, "t": 986.59, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 117, "t": 990.61, "kind": "chat", "ok": true, "turn": 2, "ttft": 0.26846885681152344, "wall": 1.94, "gen_tok": 160, "tps": 95.57475686304021, "prompt_tok": 224, "peak_mem": 20.536393024, "reused": 206, "cache_rotated": false, "error": null}
+{"i": 118, "t": 994.61, "kind": "tool", "ok": true, "ttft": 0.36645984649658203, "wall": 0.557, "tps": 93.63622614346556, "peak_mem": 20.536393024, "constrained_steps": 16, "called": true, "error": null}
+{"i": 119, "t": 1002.72, "kind": "chat", "ok": true, "turn": 3, "ttft": 0.26571083068847656, "wall": 1.942, "gen_tok": 160, "tps": 95.2896158944638, "prompt_tok": 403, "peak_mem": 20.536393024, "reused": 384, "cache_rotated": false, "error": null}
+{"i": 120, "t": 1010.76, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 121, "t": 1018.32, "kind": "chat", "ok": true, "turn": 4, "ttft": 0.2741246223449707, "wall": 1.965, "gen_tok": 160, "tps": 94.49214862421442, "prompt_tok": 582, "peak_mem": 20.536393024, "reused": 563, "cache_rotated": false, "error": null}
+{"i": 122, "t": 1025.77, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 123, "t": 1032.63, "kind": "chat", "ok": true, "turn": 5, "ttft": 0.2724578380584717, "wall": 1.986, "gen_tok": 160, "tps": 93.21147389335941, "prompt_tok": 761, "peak_mem": 20.536393024, "reused": 742, "cache_rotated": false, "error": null}
+{"i": 124, "t": 1041.93, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.01, "error": null}
+{"i": 125, "t": 1049.31, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 126, "t": 1056.67, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.0, "error": null}
+{"i": 127, "t": 1062.3, "kind": "chat", "ok": true, "turn": 1, "ttft": 0.30866479873657227, "wall": 1.948, "gen_tok": 160, "tps": 97.46461543665859, "prompt_tok": 45, "peak_mem": 20.536393024, "reused": 0, "cache_rotated": false, "error": null}
+{"i": 128, "t": 1070.77, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.01, "error": null}
+{"i": 129, "t": 1076.35, "kind": "chat", "ok": true, "turn": 2, "ttft": 0.2699167728424072, "wall": 1.928, "gen_tok": 160, "tps": 96.35293110966776, "prompt_tok": 224, "peak_mem": 20.536393024, "reused": 205, "cache_rotated": false, "error": null}
+{"i": 130, "t": 1082.13, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.01, "error": null}
+{"i": 131, "t": 1098.68, "kind": "longchain", "ok": true, "ttft": 4.289371967315674, "wall": 13.092, "prompt_tok": 6091, "gen_tok": 768, "peak_mem": 20.779121856, "tps": 87.22727656822832}
+{"i": 132, "t": 1106.99, "kind": "chat", "ok": true, "turn": 3, "ttft": 0.2752361297607422, "wall": 1.945, "gen_tok": 160, "tps": 95.64340311836386, "prompt_tok": 403, "peak_mem": 20.779121856, "reused": 384, "cache_rotated": false, "error": null}
+{"i": 133, "t": 1121.71, "kind": "longchain", "ok": true, "ttft": 4.320786952972412, "wall": 10.987, "prompt_tok": 6131, "gen_tok": 581, "peak_mem": 20.856847712, "tps": 87.12458358079253}
+{"i": 134, "t": 1126.36, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.01, "error": null}
+{"i": 135, "t": 1134.41, "kind": "tool", "ok": true, "ttft": 0.36763906478881836, "wall": 0.558, "tps": 93.3170922671999, "peak_mem": 20.856847712, "constrained_steps": 16, "called": true, "error": null}
+{"i": 136, "t": 1139.15, "kind": "chat", "ok": true, "turn": 4, "ttft": 0.27109503746032715, "wall": 1.962, "gen_tok": 160, "tps": 94.50463888406864, "prompt_tok": 581, "peak_mem": 20.856847712, "reused": 563, "cache_rotated": false, "error": null}
+{"i": 137, "t": 1143.18, "kind": "chat", "ok": true, "turn": 5, "ttft": 0.2768239974975586, "wall": 1.988, "gen_tok": 160, "tps": 93.35613785792795, "prompt_tok": 760, "peak_mem": 20.856847712, "reused": 741, "cache_rotated": false, "error": null}
+{"i": 138, "t": 1149.91, "kind": "chat", "ok": true, "turn": 1, "ttft": 0.32110095024108887, "wall": 1.964, "gen_tok": 160, "tps": 97.24956695784795, "prompt_tok": 46, "peak_mem": 20.856847712, "reused": 0, "cache_rotated": false, "error": null}
+{"i": 139, "t": 1167.71, "kind": "longchain", "ok": true, "ttft": 4.309598207473755, "wall": 13.125, "prompt_tok": 6116, "gen_tok": 768, "peak_mem": 21.11124202, "tps": 87.10650686492365}
+{"i": 140, "t": 1176.08, "kind": "chat", "ok": true, "turn": 2, "ttft": 0.2799348831176758, "wall": 1.955, "gen_tok": 160, "tps": 95.39891293356212, "prompt_tok": 225, "peak_mem": 21.11124202, "reused": 206, "cache_rotated": false, "error": null}
+{"i": 141, "t": 1183.2, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 142, "t": 1195.41, "kind": "longchain", "ok": true, "ttft": 4.301586389541626, "wall": 9.817, "prompt_tok": 6104, "gen_tok": 482, "peak_mem": 21.142502644, "tps": 87.35904367061063}
+{"i": 143, "t": 1200.18, "kind": "cancel", "via": "endpoint", "ok": true, "chunks_before": 8, "cancelled": true, "settle_s": 1.01, "error": null}
+{"i": 144, "t": 1205.76, "kind": "chat", "ok": true, "turn": 3, "ttft": 0.27767205238342285, "wall": 1.954, "gen_tok": 160, "tps": 95.30784583108203, "prompt_tok": 404, "peak_mem": 21.142502644, "reused": 385, "cache_rotated": false, "error": null}
+{"i": 145, "t": 1213.86, "kind": "chat", "ok": true, "turn": 4, "ttft": 0.28123974800109863, "wall": 1.988, "gen_tok": 160, "tps": 93.6094555315263, "prompt_tok": 582, "peak_mem": 21.142502644, "reused": 564, "cache_rotated": false, "error": null}
+{"i": 146, "t": 1218.88, "kind": "cancel", "via": "disconnect", "ok": true, "chunks_before": 8, "cancelled": null, "settle_s": 1.01, "error": null}
