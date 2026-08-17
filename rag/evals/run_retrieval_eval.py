@@ -27,6 +27,7 @@ rag.active_tier`（指针在 .gitignore 里，新克隆没有它，只读指针�
 临时服务端口 14967；用完即收（CHARTER 部署纪律）。
 """
 import argparse
+import hashlib
 import json
 import os
 import signal
@@ -104,8 +105,20 @@ def start_server(tmp: Path) -> subprocess.Popen:
         _wait(lambda: requests.get(f"{BASE}/health", timeout=2).json().get("status") == "healthy",
               timeout=240, what="rag_server /health（含模型加载）")
     except Exception:
-        proc.terminate()
+        # 起服失败也必须彻底收干净：只 terminate 不 wait 会留下孤儿 rag_server 抱着
+        # 嵌入/重排权重和 :14967 不放（本文件 finally 处的注释自陈「真实推理后的服务端
+        # 在 SIGTERM 下可能 >30s 才退」——terminate 完就抛正是最不可靠的场景），
+        # 下一个真模型任务会撞上单 GPU 纪律。与主收尾同款的 SIGTERM→短等→SIGKILL。
         print((tmp / "server.log").read_text(encoding="utf-8")[-3000:], file=sys.stderr)
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                proc.wait(timeout=10)
+            except Exception:
+                pass
         raise
     return proc
 
@@ -265,18 +278,32 @@ def _baseline_floor(base: dict, tier: Optional[str]) -> Optional[dict]:
     return None
 
 
-def _row_flips(base: dict, rows: list) -> list:
-    """逐题对账：列出由 pass 变 fail 的题。
+def _items_digest(items: list) -> str:
+    """题集内容摘要：题目一改（含增删改判据），基线就必须重钉。
+
+    只校验题数挡不住「删掉一道失败题、补一道必过题」——数量不变、`_row_flips` 也看不见
+    （它只看基线里有而本次失败的 id，**从基线消失的 id 完全不可见**），于是总分被抬高、
+    地板还跟着往上焊。比率型地板下题集是自由变量，摘要是把它钉住的最省事办法。
+    """
+    blobs = sorted(json.dumps(it, sort_keys=True, ensure_ascii=False) for it in items)
+    return hashlib.sha256("\n".join(blobs).encode("utf-8")).hexdigest()[:16]
+
+
+def _row_flips(base: dict, rows: list) -> tuple:
+    """逐题对账，返回 (由过转败的 id, 基线有而本次缺席的 id)。
 
     只看总分会漏「A 退步、B 进步」这种互相抵消的回归——而抵消所需的数据本来就已经
     写在基线的 `rows` 里，此前从没有人读它。这是比总分地板更灵敏的信号。
+    缺席那一半同样要报：题目被悄悄删掉时，它在这里现形而不是在总分里消失。
     """
     was = {r["id"]: r.get("pass") for r in (base.get("rows") or [])}
-    return [r["id"] for r in rows if was.get(r["id"]) is True and not r["pass"]]
+    now = {r["id"] for r in rows}
+    return ([r["id"] for r in rows if was.get(r["id"]) is True and not r["pass"]],
+            sorted(i for i in was if i not in now))
 
 
 def _check_floor(base: dict, summary: dict, tier: Optional[str], disabled: bool,
-                 rows: list) -> int:
+                 rows: list, items: list) -> int:
     """低于地板即返回非零。**只对当前生产档强制**——评估别的档位时只打印。
 
     理由（对抗审查修正）：l0_eval / model_eval 那类选型工具里各档位水位天差地别，
@@ -310,14 +337,22 @@ def _check_floor(base: dict, summary: dict, tier: Optional[str], disabled: bool,
         fails.append("低于地板：" + "；".join(below))
 
     n_base = base.get("n_items")
+    d_base = base.get("items_digest")
+    d_now = _items_digest(items)
     if n_base is not None and n_base != summary["overall"]["n"]:
         fails.append(f"题集规模变了（基线 {n_base} → 本次 {summary['overall']['n']}）——"
                      "比率型地板下题集是自由变量：加几道易题就能把总分抬过地板，"
                      "删掉失败题更是直接满分。必须重钉基线并在台账写明理由")
+    elif d_base and d_base != d_now:
+        fails.append(f"题集内容变了（摘要 {d_base} → {d_now}，题数没变）——"
+                     "换题同样能洗白：删一道失败题、补一道必过题，题数与逐题对账都看不见。"
+                     "必须重钉基线并在台账写明理由")
     else:
-        flips = _row_flips(base, rows)
+        flips, gone = _row_flips(base, rows)
         if flips:
             fails.append(f"逐题对账发现由过转败：{flips}（总分可能被别的题的进步抵消）")
+        if gone:
+            fails.append(f"基线里有、本次缺席的题：{gone}（题目被删会让总分失去可比性）")
 
     if fails:
         print("❌ 判为回归：\n   - " + "\n   - ".join(fails))
@@ -367,7 +402,7 @@ def main() -> int:
     ap.add_argument("--save-baseline", action="store_true",
                     help="把本次结果写入 BASELINE.json（接受当前水平为基线）")
     ap.add_argument("--keep", action="store_true", help="保留临时数据根（调试）")
-    ap.add_argument("--floor-margin", type=float, default=FLOOR_MARGIN,
+    ap.add_argument("--floor-margin", type=float, default=None,
                     help=f"--save-baseline 时地板相对实测的下浮余量（默认 {FLOOR_MARGIN}）")
     ap.add_argument("--no-enforce-floor", action="store_true",
                     help="只打印不判定（调试/评估非生产档时用）")
@@ -375,7 +410,7 @@ def main() -> int:
                     help="允许本次 --save-baseline 下调地板（仅限题集变难/换档，须带 --reason）")
     ap.add_argument("--reason", default="", help="下调地板的书面理由（写进基线做审计痕）")
     args = ap.parse_args()
-    if not 0.0 <= args.floor_margin <= 0.1:
+    if args.floor_margin is not None and not 0.0 <= args.floor_margin <= 0.1:
         # 余量既能调松到永远绿（1.0 → 地板归零），也能调紧到自我打红（负值 → 地板高于实测）
         ap.error(f"--floor-margin 必须在 [0.0, 0.1] 内，收到 {args.floor_margin}")
     if args.allow_floor_drop and not args.reason.strip():
@@ -385,7 +420,15 @@ def main() -> int:
     items = _load_jsonl(HERE / "items.jsonl")
     tmp = Path(tempfile.mkdtemp(prefix="rag-eval-"))
     print(f"== 隔离数据根 {tmp}，拉起融合模式评估实例 :{PORT} …")
-    proc = start_server(tmp)
+    try:
+        proc = start_server(tmp)
+    except Exception:
+        # 起服失败时下面的 finally 还没进，临时数据根会留在 /var/folders 里（含权重缓存
+        # 与 chroma 目录，不小）。进程侧由 start_server 自己收；这里收盘。
+        if not args.keep:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+        raise
     try:
         print(f"== 灌入夹具语料 {len(corpus)} 篇 …")
         seed(corpus)
@@ -438,20 +481,35 @@ def main() -> int:
             bv = (b["by_kind"].get(k) or {}).get("pass_rate")
             if bv is not None and v["pass_rate"] != bv:
                 print(f"   {k}: {bv} → {v['pass_rate']}")
-        exit_code = _check_floor(base, summary, tier, args.no_enforce_floor, rows)
+        exit_code = _check_floor(base, summary, tier, args.no_enforce_floor, rows, items)
+    elif args.save_baseline:
+        print("SKIP: 无基线文件，本次自举钉基线")
     else:
-        print("SKIP: 无基线文件，仅打印本次结果（首次跑批用 --save-baseline 钉基线）")
+        # 与 tier 解析不出同样 fail-closed：删掉基线文件是唯一一条「删个文件就关掉守卫
+        # 且退 0」的路径，而脚本自陈要防的正是「久而久之地板必被删」。自举请显式带
+        # --save-baseline（基线入库，误删会在 diff 里现形）。
+        print("❌ 无基线文件且未指定 --save-baseline——判为不通过（自举请显式钉基线）")
+        return 1
 
     if args.save_baseline:
         if tier is None:
             print("❌ 档位解析不出，拒绝钉基线（否则地板会挂到一个不知道是什么的档上）")
             return 1
-        # 余量沿用基线里记的那个：否则一次刻意收紧过的余量，会在下次重钉时静默弹回默认值
+        # 已判回归却顺手 --save-baseline = 一键洗白。地板那一维由 _next_floor 拦，但
+        # 逐题由过转败与题集变更两维原先无人设防：打印了 ❌ 仍退 0，且基线 rows 被覆盖，
+        # 下次再也对不出这次的由过转败（复审 M1）。故此处统一要求显式放行。
+        if exit_code != 0 and not args.allow_floor_drop:
+            print("❌ 本次已判为回归，拒绝把它钉成新基线。确属题集变难/换档，"
+                  "请显式 --allow-floor-drop --reason \"…\"。")
+            return exit_code
+        # 余量沿用基线里记的那个：否则一次刻意收紧过的余量，会在下次重钉时静默弹回默认值。
+        # 判据用 sentinel 而非扫 sys.argv——argparse 允许前缀缩写（`--floor-marg 0.05`
+        # 能解析成功却被 startswith 探测漏掉，于是静默丢弃显式入参还打印一句假话）。
         margin = args.floor_margin
-        if base and "floor_margin" in base and \
-                not any(a.startswith("--floor-margin") for a in sys.argv[1:]):
-            margin = float(base["floor_margin"])
-            if margin != args.floor_margin:
+        if margin is None:
+            margin = float(base["floor_margin"]) if base and "floor_margin" in base \
+                else FLOOR_MARGIN
+            if base and "floor_margin" in base:
                 print(f"== 沿用基线记录的地板余量 {margin}（未显式指定 --floor-margin）")
         floor = _next_floor(base, summary, tier, margin, args.allow_floor_drop)
         if floor is None:
@@ -462,6 +520,7 @@ def main() -> int:
         floors[tier] = floor                          # 只动本档，别的档位的地板原样留着
         payload = {"stamp": stamp, "tier": tier, "floors": floors,
                    "floor_margin": margin, "n_items": len(rows),
+                   "items_digest": _items_digest(items),
                    "summary": summary,
                    "rows": [{k: r[k] for k in ("id", "kind", "pass")} for r in rows]}
         if args.allow_floor_drop:

@@ -56,7 +56,10 @@ def test_items_reference_existing_titles():
             + (exp.get("miss_all") or []) + (exp.get("stale_not_top1") or [])
         for t in referenced:
             assert t in corpus_titles, f"{it['id']} 引用了不存在的文档 title: {t!r}"
-        assert referenced or exp.get("empty_ok"), f"{it['id']} expect 没有任何判分锚点"
+        # 锚点必须同时认 require_empty：负例的正式判据已换成它，只认 empty_ok 会让
+        # 「按文档只写 require_empty」的新负例被报成「没有判分锚点」——与文档反向的陷阱
+        assert referenced or exp.get("empty_ok") or exp.get("require_empty"), \
+            f"{it['id']} expect 没有任何判分锚点"
         assert it["query"] and it["category"] and it["optimized_query"]
 
 
@@ -87,7 +90,7 @@ def test_negative_items_use_closed_world_judgement():
 
 
 def test_runner_judgement_vocabulary_pinned():
-    """判分词汇钉死：expect 只认这五个键（拼错静默放行=没判）。"""
+    """判分词汇钉死：expect 只认下列键（拼错静默放行=没判）。"""
     allowed = {"hit_any", "hit_all", "miss_all", "empty_ok", "require_empty",
                "stale_not_top1", "top_k"}
     for it in _load_jsonl("items.jsonl"):

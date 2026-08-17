@@ -1,5 +1,5 @@
 {
-  "stamp": "20260818-000648",
+  "stamp": "20260818-003946",
   "tier": "vl-2b",
   "floors": {
     "vl-2b": {
@@ -9,6 +9,7 @@
   },
   "floor_margin": 0.01,
   "n_items": 51,
+  "items_digest": "fc8415e1dcb3e705",
   "summary": {
     "overall": {
       "n": 51,
@@ -282,12 +283,12 @@
       "pass": true
     },
     {
-      "id": "rq-id-009",
+      "id": "rq-ident-009",
       "kind": "identifier",
       "pass": true
     },
     {
-      "id": "rq-id-010",
+      "id": "rq-ident-010",
       "kind": "identifier",
       "pass": true
     },
@@ -306,5 +307,6 @@
       "kind": "semantic",
       "pass": true
     }
-  ]
+  ],
+  "floor_drop_reason": "阶段复审 M2：新增 items_digest 校验 + 题目 id 前缀归一（rq-id-00x → rq-ident-00x），题集内容摘要变更需重钉；水位未变（0.941）"
 }

@@ -190,8 +190,12 @@
 GET /api/v1/chat/{sid}/events?after={seq}        (Accept: text/event-stream)
 ```
 
-- 首帧固定:`stream_attached`,data = `{"v": 1, "last_seq": <当前账本最新 seq>}`
+- 首帧固定:`stream_attached`,data = `{"v": 1, "last_seq": <当前账本游标>}`
   (信封 `seq`/`turn_id` 为 0/null——它是流控制帧,不入账本)。
+  ⚠️ 「游标」不等于「账本里最后一条记录的 seq」:重启直后(以及冷会话的只读实例)
+  它是**号段水位** = 已落盘最大 seq + `SEQ_RESTART_RESERVE`,账本里并不存在这个号的
+  记录(见 §3)。作为 `after` 游标语义完全成立(下一条新事件必然大于它),但不要把它
+  当成「最后一条事件的编号」去做算术。
 - 随后按序重放 `seq > after` 的全部**可重放**事件(journal 里程碑 + 活跃轮内存环,
   按 seq 归并去重),然后转入实时续播。
 - `after` 省略或 0 = 从账本起点重放;`after = last_seq` = 只要新事件。
@@ -232,7 +236,7 @@ GET /api/v1/chat/{sid}/turn
     "task": {TaskSnapshot 或 null},
     "first_seq": 118, "last_seq": 143 // 本轮在账本中的 seq 区间(重放定位)
   },
-  "last_seq": 143                    // 账本最新 seq(attach 游标)
+  "last_seq": 143                    // 账本游标(attach 用);重启直后是号段水位,见 §2.4 与 §3
 }
 ```
 

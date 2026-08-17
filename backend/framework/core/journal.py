@@ -152,7 +152,10 @@ class TurnJournal:
                 if is_new:
                     f.write(json.dumps({"kind": "journal_header", "v": 1}) + "\n")
                 f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
-            self._persist_failed = False
+            if self._persist_failed:
+                # 恢复也要说一声：水位余量的不变量重新成立了，这件事值得在日志里留痕
+                self._persist_failed = False
+                print("[Journal] 里程碑落盘已恢复（seq 水位余量的不变量重新成立）")
         except Exception as e:
             # 落盘失败会悄悄侵蚀水位余量的不变量(last_persisted 冻住、self.seq 继续爬,
             # 爬过 SEQ_RESTART_RESERVE 后下次重启照样回退),故首次失败必须响亮——

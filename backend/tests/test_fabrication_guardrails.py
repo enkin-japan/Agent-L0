@@ -67,8 +67,8 @@ def test_swallowed_failure_nudged_then_warning(make_session):
     notes3 = " ".join(engine.calls[3]["tail_notes"])
     assert "FAILED" in notes2
     assert "claims you performed actions" in notes3
-    types = ring_types(session)
-    assert "failure_swallow_nudge" in str(types) or True  # 事件经 events 面，账本外发
+    # 注：failure_swallow_nudge 走 events 面而非账本，故不在 ring 里断言它
+    # （原先这里写的是 `... or True`，恒真、等于没断言）。推回的证据是上面的 tail_notes。
 
 
 def test_failure_then_recovery_is_clean_success(make_session):
@@ -116,6 +116,11 @@ def test_benign_mark_is_not_failure_cross_module_contract():
     assert not _resp_failed(f"exit_code: 1{_BENIGN_EXIT1_MARK}\n(no output)")
     # 同一位置去掉标记就必须命中——证明上一条的绿不是因为正则整体失效
     assert _resp_failed("exit_code: 1\n(no output)")
+    # 多位退出码不得靠回溯绕过负向断言：`\d+` 退让成 "1"、断言只看到 "2" 就会放行。
+    # 今天走不到（标记只在 exit 1 时打），但收第二个良性码时这条会救命——阶段复审
+    # 实测：删掉正则里的 `\b`，整套金测试无一条红，只有本断言能挡。
+    assert not _resp_failed(f"exit_code: 12{_BENIGN_EXIT1_MARK}\n(no output)")
+    assert _resp_failed("exit_code: 12\n(no output)")
 
 
 def test_is_benign_exit1_four_way_and():
