@@ -2433,11 +2433,10 @@ spec_drafted=56（短生成 gtps 30.2 vs off 基线 ~16.5）；e4b 缺省档无�
 qmv_mma 补丁是否带进生产构建（见新任务流程）。
 
 **新任务流程（D.21 后重排，2026-08-17）——**
-**第一优先：「prompt 字节流只增不改」上位解**（用户拍板 e4b 等它）：装配层把
-历史轮尾块（env 锚点/生成头）按当时字节原样回放，使跨轮 excess==0 走 T8 门的
-纯追加快路——两家族前缀复用**无损全额恢复**（量级：qwen38 t5 ttft 23s→5s；
-e4b 缺省档多轮首字延迟同解；qwen38 上 drafter 与复用自此共存）。涉两方言
-prompt_builder + 引擎历史管理，走双门 + 复用命中回归。
+**第一优先：「prompt 字节流只增不改」上位解**〔**已收案**（2026-08-17 夜，
+commit 909300b/1690d45/a9006cc）：A 案落地 + token 级增量喂入根修，五臂实测
+验收全过——qwen38 t5 ttft 23s→4.60s、e4b 旋转态五轮 ttft 0.8s 平线、drafter
+与复用共存。收案纪实见文末「上位解收案」块；第二梯队自此解锁。〕
 **第二梯队**：26b-4bit 12h 长稳（用户既定：架构完善后测，上位解落地即解锁）；
 §7 连续批处理接线与并发格；阶段三 KV 量化；阶段四收口/Q14。
 **搭车项**：CUDA 侧重画像（下次 colab 场搭车；**前置：Drive 正主 colab.env 的
@@ -2468,6 +2467,47 @@ turn N-1 全流）；引擎级 reused_prefix == 上轮全流长且无 reuse_bloc
 framework/core/engine.py（历史组装）、backend prompt_cache_state 消费面、
 tests/（组装字节前缀金测试 + test_prefix_reuse_trim 联动）。走双门 + 复用命中
 回归；落地后解锁 26b-4bit 12h 长稳与 qwen38 MTP 口径重画像班车。
+
+**上位解收案（2026-08-17 夜，commits 909300b → 1690d45 → a9006cc）——**
+**拍板**：A 案（引擎记录会话字节流 + 方言只渲染增量段）。B 案纯形态不可行
+（组装器无状态，冻结历史尾块必须有会话侧记录，「改动小」优势不存在）；破坏者④
+（回复回放逐位一致）只有 A 能构造性免疫（回放模型自己的生成字节，不做
+parse→重渲染的 §S.17 打地鼠）；旧日期滞留两案等价，「变了才追加」缓解（同日
+多轮 env 块零重复，跨天才追加——历史轮的日期戳本来就是当时的日期，语义更对）。
+**架构**：core/prompt_stream.py（流生命周期：内容指纹/占位 assistant 角色校验/
+expected_text（门面路防客户端改写）/提交）；两方言 build_prompt_delta+tail_state
+（增量段恒以收口符开头——停止符已喂/未喂两种缓存情形配合 _fed_length 记录截断
+（取 min offset，fail-safe 方向）都归零 excess）；引擎 _assemble_prompt 接线 +
+门面 /v1/chat/completions 同机制（组装-生成-提交进 gen_sem 临界区）；
+/v1/generate 的 prompt 由客户端引擎构建，自动覆盖。
+**首过评审 2C/11M 全处置**（择要）：一次性尾注与解析失败调用不提交且旧流作废；
+任务块快照「变了才追加+撤销声明+堆积≥6 退全量收拢」（Budget 行逐迭代变化）；
+freeze/rebuild 释放流；qwen build 工具声明改只随首条 system（旧写法每条 system
+后都发一遍）；prewarm 在流有效时 no-op。
+**实测暴露的两根因与终局**：
+① **BPE 再分词漂移**（评审 M1 预言全中）：模型采样出非规范切分（诊断实锤
+'资料的' 记录 [97560,118392] vs 重分词 [117995]），字节级匹配天然漏，qwen CJK
+~20% 轮次中招 → **token 级增量喂入**根修（prompt_delta_offset：token 序列 =
+缓存记录 + 只分词增量段，历史段永不重分词；网络入参校验、停止符去重、
+extra.delta_feed 仪表防静默自关、reuse_diag 三元组分辨漂移与悬垂）。
+② **MTP 缓存悬垂**：停止符后同块已接受 token 留在缓存（prefix==record 全额命中
+仍 excess>0）。上游 rollback_speculative_cache 块内回滚完备（dense trim + SSM
+状态恢复逐块执行），悬垂 token 是**合法喂入**且线性层状态已含之——门拒正确、
+冷回退自愈，**绝不裁齐掩盖**（裁 offset = 线性层静默污染）。
+**验收终跑（a8-20260817-v3.jsonl，五臂全过硬断言：增量路+delta_feed+复用
+期望±1+悬垂签名 max_offset>prefix）**：e4b-8bit 旋转态五轮复用 ttft 0.77-0.86s
+平线（prompt 1.1k→6.6k）；qwen38-8bit off t5 ttft 23s（v2）→**4.60s**；
+4bit off（字节口径曾崩臂）五轮全绿；两 drafter 臂复用与投机共存（8bit t2、
+4bit t3/t5 悬垂轮合法冷回退，其余轮 ttft ~4.3s）。字节口径首跑三臂败档留档
+a8-20260817-v3-run1-bytemode.*（诊断价值）。longchain e4b 引擎路质量 1.0/1.0
+与画像持平（M9 观测轮形态无损伤）。全量 1016 tests。
+**残留已知限制（后续项，不阻塞第二梯队）**：gemma 工具调用轮以幽灵
+<|tool_response>（或 eos）收尾——已喂入缓存但不在文本、与增量收口符不可衔接、
+旋转态不可裁 → **gemma 工具循环跨轮复用维持冷**（既有现状非回归，质量 1.0；
+解法候选：上游旋转态裁尾、guard 对调用块收口策略、模板对表）。qwen38 drafter
+悬垂轮冷回退频率随停止符落点波动（本测 8 复用轮 3 次），可观测（reuse_diag）。
+台架 v3 数据中 e4b/8bit-off 两臂为字节口径脚本所测（raw_out 口径修正在后），
+其复用值逐 token 精确、数据有效。
 
 ---
 
