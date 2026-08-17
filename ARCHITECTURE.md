@@ -21,7 +21,7 @@
 | 组件 | 端口 | 绑定 | 技术栈 | 角色 |
 |---|---|---|---|---|
 | frontend | 5173 | 0.0.0.0 | React 19 + Vite + Zustand | 用户交互界面（唯一对外入口） |
-| backend | 14159 | 127.0.0.1 | FastAPI + MLX (gemma-4-e4b 4bit) | Agent 主体：推理/编排/工具/会话 |
+| backend | 14159 | 127.0.0.1 | FastAPI + MLX (gemma-4-e4b 8bit) | Agent 主体：推理/编排/工具/会话 |
 | inference-server | 14161 | 按 `inference.remote.host` | FastAPI + MLX/CUDA | 推理服务化（`mode: remote` 时算力端承载） |
 | rag 数据面 | 14160 | 127.0.0.1 | FastAPI + ChromaDB | 分类路由向量库：数据/路由/治理（用户数据只落这里） |
 | rag 计算面 | 14162 | 按 `rag.compute.host` | FastAPI + PyTorch(MPS/CUDA) | 嵌入/重排/分词（无状态；`compute.host` 空=融合进数据面） |
@@ -292,7 +292,7 @@ Agent/                           （monorepo 根）
 │   │                            assets/(图表PNG/PDF) deck/deck.json(PPT真相)
 │   ├── schedules/{id}/          schedule.json(定义) runs.jsonl(运行历史)
 │   ├── static/webapp/           deck 打印页自托管包（devctl bundle-print 生成，gitignored）
-│   └── models/                  gemma-4-e4b-it-4bit / whisper-large-v3-turbo
+│   └── models/                  gemma-4-e4b-it-8bit / whisper-large-v3-turbo
 ├── rag/
 │   ├── chroma_data/             ChromaDB 持久化（每分类一个 collection + meta 库）
 │   ├── storage/raw_files/{类}/  入库文档原文备份；unclassified_raw/ 未分类池

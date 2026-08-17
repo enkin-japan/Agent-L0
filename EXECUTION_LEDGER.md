@@ -2348,7 +2348,7 @@ pgrep 验活自己的循环）。纪律从"仅新脚本磨合期分钟级盯"改
 64G 级别或以上。D.20 收口后"注册表最小档 e4b-8bit 在 16G 机可行性"待办随之销案。
 **① gemma tool_call 架构锅取证定性（已实锤）**：08-16 画像 gemma 系 7 档 0.72/
 12 例解析失败**全部**是带点号工具名（BFCL 命名空间风格 `country_info.capital`
-等），调用语义完好——`gemma4/response_parser.py:56` 工具名正则字符集
+等），调用语义完好——`gemma4/response_parser.py` 工具名正则（修后落 :61）字符集
 `[a-zA-Z0-9_-]+` 缺 `.`，匹配失败掉 JSON 兜底报 "Severely malformed"。而声明侧
 （dsl.format_function_declaration）与约束语法侧（tool_grammar 把 `call:名字{`
 做成 Lark 字面量）都对带点名原样放行/强制——三方脱锚，正是 §S.17 故障类。
@@ -2366,12 +2366,15 @@ pgrep 验活自己的循环）。纪律从"仅新脚本磨合期分钟级盯"改
 仅 e4b 参数小偏）。PROFILES.md 加 08-17 重测节、config.yaml 四档 profile 已按
 新 run 回填（longchain/vision 列仍 08-16 run）。
 **④ qwen35 方言假设复核（完成，假设成立）**：Qwen3.8-27B 官方模板（4 目录件
-md5 同字节）实读差分——(a) **「思考恒回放」升格为官方默认**：Qwen3.8 模板新增
+md5 同字节 = `519239a4908bb1f805bbce5fa8c8a242`；依据件在 gitignored 的
+backend/models/ 下，凭 config 钉扎 revision 可重下核对）实读差分——
+(a) **「思考恒回放」升格为官方默认**：Qwen3.8 模板新增
 `preserve_thinking` 开关且缺省 true（恒回放全部 <think>），方言当年取的 Ornith
 口径如今正是官方缺省，不再是偏离；(b) XML 调用体/参数 tojson 规则/生成头字节
 （`<think>\n` 与空块预填）/声明块形态全部与方言锚定一致；(c) 唯一新发现：
 Qwen3.8 新增 `reasoning_effort` 旋钮（xhigh 缺省/medium/low，开思考时向 system
-注入一句效率指令），方言未实现——可选旋钮非缺陷，待 Qwen3.8 转正评估时一并拍板。
+注入一句效率指令；medium 不注入——阶段复审 m8 补正），方言未实现——可选旋钮
+非缺陷，待 Qwen3.8 转正评估时一并拍板。
 **③ T8 根修 + T9 记档（commit fbacb96，双门过）**：T8 定性两级跳——A8 脚本首过
 评审（C1）实锤 qwen3_5 线性注意力 ArraysCache（递归状态、无回滚接口）被前缀复用
 裁剪循环整个跳过：全注意力层回滚、线性层带上一轮尾巴且重喂段被其状态二次消化；
@@ -2380,8 +2383,11 @@ qwen38（env 尾块每轮 excess>0）两家族的生产多轮前缀复用此前�
 修法=回滚能力门：任何一层无法无损回滚即整轮放弃复用退冷预填（响亮日志 +
 `extra.reuse_blocked` 可观测），可裁则 Rotating 走 §S.15 时序化 trim。正确性换
 速度是自觉决策；**08-13 bench v1「26B 复用后瞬间 EOS」悬案形态与此完全吻合**
-（挂钩待复现确证）。回归测试 14 条；T8 修的首过评审 2 Critical（全组无 offset
-时 fail-open、稠密分支按物理缓冲判）+ 9 Major 全数处置。**遗留跟进（未立项）**：
+（挂钩待复现确证）。⚠️ 缺省档 e4b-8bit（滑窗 512）的多轮首字延迟代价未量化
+（qwen38 同型实测 t5 ttft 5s→23s），列用户知情面（阶段复审 M4）。回归测试
+14 条（fbacb96 时点 13，收官修正补 1；该 commit 文案「14」系笔误）；T8 修的
+首过评审 2 Critical（全组无 offset 时 fail-open、稠密分支按物理缓冲判）+
+9 Major 全数处置。**遗留跟进（未立项）**：
 (a) 装配层把历史轮尾块按当时字节原样回放（prompt 字节流只增不改）→ excess==0
 走纯追加快路，两家族复用可无损全放行（评审提出的上位解；A8 v2 实测 t5 冷预填
 ttft ~23s vs 带复用 ~5s，即此项的收益量级）；(b) A8 前提修正：「drafter 丢前缀
@@ -2389,12 +2395,23 @@ ttft ~23s vs 带复用 ~5s，即此项的收益量级）；(b) A8 前提修正�
 **② A8 实测收案（v2，`benchmarks/data/a8-multiturn/a8-20260817-v2.jsonl`）**：
 T8 修后两臂同冷预填口径，5 轮对话（历史至 ~5.8k tok，temp=0，热身弃）总墙钟
 8bit off 132.3s → drafter **102.1s（1.30×）**、4bit 100.5s → **89.8s（1.12×）**；
-两臂 ttft 逐轮相等（冷预填对称性自证）；t1/t2 贪心逐字节等价（sha 同）、t3 起
-投机数值漂移（内容均合理）。**T8 门行为证据**：全臂 turn≥2 均 `reuse_blocked`
+ttft 累计 67-69s 两臂近持平（4bit 前两轮严格受控；8bit 自 t2 两臂 prompt 已
+分叉，对称为近似——阶段复审 M1 修正口径）。投机数值漂移：**8bit 首轮即分叉**
+（同 prompt 贪心 215 vs 187 tok、首段措辞已不同）、4bit t1/t2 逐字节等价 t3 起
+漂移——内容均合理但不逐位等价，列用户知情面。**T8 门行为证据**：全臂 turn≥2 均 `reuse_blocked`
 （ArraysCache 拒绝）+ `reused_prefix=0`，可观测链路端到端生效。四臂零失败、
 零截断异常；v1 修复前数据同目录留档作对照（勿引用其口径）。**待用户拍板**：
 是否对 qwen38 档开生产 MTP（8bit b5 / 4bit b3）——数据面建议开，漂移需知情；
-gemma 系维持不开。第一梯队①②③④至此全部收官。
+gemma 系维持不开。第一梯队①②③④至此全部收官。**用量记账：零 unit，全本地**
+（GPU 实跑：四档 tool_call 重测 5.5 分钟 + A8 两轮四臂 ×2）。
+**阶段复审（stage-reviewer，range 439382a..23002c7）**：0 Critical / 4 Major /
+12 Minor，全部核实处置于收官修正 commit——M1 A8 漂移口径改写（8bit 首轮即分叉）、
+M2 config 投机注释过时前提改写、M3 修复前取证 transcripts ×4 补入归档、M4 缺省档
+冷预填代价列知情面；minors：测试计数 13→14 笔误记档、PROFILES「全面压过」改口、
+§6.0 现场表更新、ARCHITECTURE 缺省档漂移、vision 口径警告回补、重测归档补调用
+记录、行号指针、模板 md5 入档、ANALYSIS 回指、死 import 清除、unit 记账、
+门快路 fail-closed 收紧（+1 测试）。复审确认无问题面：四档重测/A8 全部数字
+独立重算吻合、密扫零命中、计费路（daily_serve_chain 锚点）未被收口打断。
 
 ---
 

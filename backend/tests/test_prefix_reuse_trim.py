@@ -186,3 +186,11 @@ def test_rotating_trim_then_concat_refeed_matches_reference():
     end = prefix + 5
     assert vals == [float(i) for i in range(end - len(vals), end)]
     assert vals[-1] == float(end - 1)
+
+
+def test_prefix_beyond_stream_position_refused():
+    """prefix_len 超过缓存流位置：不是纯追加而是异常态，门必须拒绝（阶段复审 m12）。"""
+    c = KVCache()
+    _feed(c, 0, 20)
+    blocker = _prefix_reuse_blocker([c], 25)
+    assert blocker is not None and "流状态异常" in blocker

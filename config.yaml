@@ -158,6 +158,10 @@ inference:
     # 但条目均未设 suppress_ghost_thinking——即 CUDA 侧一直在无抑制口径下运行，
     # 已回填的 A100 画像（tool/long/vision/tps）亦是该口径。补 flag 会使画像作废
     # 且复测要烧付费算力 → **交用户拍板，不擅自改**（见账本 §7-0 待决项）。
+    # ⚠️ vision 口径警告（阶段复审 m5 回补）：下方两条 CUDA 档的 vision: 1.0 是
+    # 2026-08-08 旧小题库（15/20 题）口径；MLX 各档已是 n=212 扩容题库口径
+    # （0.84~0.958），**不可直接对表**。inference.endpoints 启用（现全注释）前
+    # 须统一口径重测，否则 vision 路由会拿两把不同的尺互比、恒切 CUDA 档。
     - repo: "google/gemma-4-31B-it"
       revision: "842da3794eaa0b77d5f08bae87a17459d91ff475"
       dialect: "gemma4"
@@ -222,8 +226,10 @@ inference:
     # Agent 负载已判死（加速比随 ctx 单调跌穿 1.0，26b ≤4k 即净亏；MTP_PROJECT
     # §6.3-a），草稿件与逐档调参档案见 git 历史与 MTP_PROJECT §6.2/6.3-b。
     # **在册唯一路线 = Qwen3.8-27B 内建 MTP 头**（全 ctx 段净赚：8bit 1.70→1.27×、
-    # 4bit 1.54→1.21×）。开启前置：A8（drafter 模式丢前缀复用、每轮冷预填，多轮
-    # 净收益未测）实测 + 用户拍板。留空 = 不启用。
+    # 4bit 1.54→1.21×）。A8 已实测收案（2026-08-17 v2）：qwen38 上 drafter **不丢**
+    # 前缀复用（缓冲转换只认 gemma RotatingKVCache）；T8 门后两模式同为冷预填，
+    # 多轮墙钟 drafter 净赚（8bit 1.30×/4bit 1.12×，MTP_PROJECT §3.1 A8）。
+    # 开启前置只剩**用户拍板**（知情项：投机数值漂移，8bit 首轮即可见）。留空 = 不启用。
     # 装不上或与目标件不兼容一律**抛错不降级**：静默退回非投机会把配置错误
     # 伪装成"怎么没变快"的性能玄学（§S.3）。
     draft_model: ""             # 草稿件 HF id 或本地路径。按目标件配对：
@@ -238,8 +244,8 @@ inference:
                                 #   gemma 各档旧调参（瓦片断崖机理、排序补丁最优点）随路线判死归档，
                                 #   见 MTP_PROJECT §6.3-b 与 git 历史。
                                 # 本键仅在 mode=drafter 时生效，mode=off 时完全无作用。
-                                # ⚠️ 开 drafter 的已知代价：该会话此后放弃前缀复用（缓冲缓存形态），
-                                # 多轮对话净收益未测（MTP_PROJECT.md §3.1 A8）——扳开关前先测 A8。
+                                # 「开 drafter 丢前缀复用」只对 gemma 系成立（缓冲缓存形态）；
+                                # qwen38 不触发，A8 v2 已收案（MTP_PROJECT.md §3.1 A8）。
                                 # 详见 MTP_PROJECT.md §1.4/§1.6/§1.8/§6.3。
     num_draft_tokens: 8         # 单轮草稿长度 k 上限（无命中时自然退化为普通 decode）
                                 # ⚠️ 该键在 mlx_vlm 中**无任何读取点**（grep 零命中），

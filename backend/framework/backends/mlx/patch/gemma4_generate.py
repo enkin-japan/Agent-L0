@@ -10,11 +10,6 @@ from mlx_lm.sample_utils import make_logits_processors, make_sampler
 from mlx_vlm.models import cache
 from mlx_vlm.utils import ThinkingBudgetCriteria, StoppingCriteria
 
-# 量化缓存类型：前缀复用裁剪时需与稠密缓存区分对待（无稠密 keys 张量，用自身 trim/offset）
-try:
-    from mlx_vlm.turboquant import TurboQuantKVCache
-except Exception:  # pragma: no cover - 老版本 mlx_vlm 无此模块时降级为稠密路径
-    TurboQuantKVCache = ()
 from .gemma4_utils import prepare_inputs
 from .rotating_cache_trim import install as _install_rotating_trim
 try:  # 纯性能补丁：mlx_vlm 挪走 switch_layers 时降级为不装，不拖垮后端
@@ -576,8 +571,16 @@ def _prefix_reuse_blocker(kv_cache, prefix_len: int) -> Optional[str]:
         # 整组缓存都不暴露流位置：分叉尾存在与否不可判。fail-open 正是本门
         # 要消灭的缺陷形态（首过评审 C1），此处必须拒绝而不是放行
         return "缓存组无任何 offset 承载层，流位置不可判"
-    if max(offsets) - prefix_len <= 0:
+    stream_excess = max(offsets) - prefix_len
+    if stream_excess == 0:
         return None          # 纯追加：无需回滚，任何缓存类型都安全
+    if stream_excess < 0:
+        # 缓存比声称的前缀还短：不是纯追加而是流状态异常——放行会让
+        # [offset, prefix_len) 的 token 一个都不进模型（阶段复审 m12：
+        # find_prefix_length 以 len(token_ids) 封顶、正常路径不可达，
+        # 但本门的自我声明是 fail-closed，不留唯一一个不判定的放行口）
+        return (f"缓存流位置 {max(offsets)} 短于公共前缀 {prefix_len}，"
+                "流状态异常")
     for i, c in enumerate(kv_cache):
         if c is None:
             continue
