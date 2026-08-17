@@ -517,6 +517,7 @@
 | **D.16** | **可写数据经 `AGENT_DATA_DIR` 旋钮分家**（Q7 定案，选项 B）：dev 默认仓库内（保住「数据随手可见可删」的手感），app 注入 `~/Library/Application Support/dev.enkin.macagent/`。**不选「一律搬 App Support、dev 也用」**——dev 时数据离开仓库会让排查与清库都变绕。代价是两套路径都得测。与 D.13 要求的「启动逻辑对仓库布局 vs bundle 布局参数化」**是同一个旋钮**，不是第二个 | 2026-07-16 用户 | 归档 §3.5 R5-4 |
 | **D.17** | **R2b（skill 自主发现）全开**（用户二次拍板改全开，非半开）：撤 skill_invoke「只认用户点名」禁令，工具描述内嵌剧本索引（装配期生成），任务明确匹配即**自主调用**、点名照常必调。依据：#77 口测=31B 未点名守禁✓且手工自发复刻 chart-report 步骤。回退开关=恢复旧描述（git 可查）；误配风险由 26B/31B 真机行为验证把关（L4 测试任务在册） | 2026-08-09 用户 | #77 口测；D.9 触发条件达成 |
 | **D.18** | **DEFERRED§4 完整版（对话式工具/剧本注册）建**。红线照旧：①密钥只引变量名（31B 起草实测已自发遵守）；②声明落「待用户确认」态、不可静默生效（待确认状态机+设置页审批队列=主要工程量） | 2026-08-09 用户 | #77 能力评估达标 |
+| **D.23** | **OSS 扫描存量缺陷 5 处全部核实属实，修正四波插队排在 26b-4bit 12h 长稳之前**（波一 6.1+6.2 失败判据修真 / 波二 6.3 seq 止血 / 波三 6.5 语法解耦 / 波四 6.4 RAG 评估补题重钉+棘轮）；6.3 根治（代际围栏，动协议+三端）为独立后续项不阻塞长稳；扫描的 19 条存活建议（增量面）留待第二梯队收官后盘点 | 2026-08-17 用户 | `AGENT-L0-OSS-SCAN-20260817.md` §6 + 主会话逐条真码链路复核（纪实见文末「OSS 存量缺陷核实」块） |
 | **D.22** | **T6b 否决**：无巨额收益之前不考虑自建 mlx（生产恒 stock wheel）。qmv_mma 内核/补丁/数据留档不删（`.venv-mlxsrc` + `benchmarks/patches/t6b_qmv_mma.patch` + `benchmarks/data/t6b-qmv-mma/`）；其入生产前置欠账（P5 第二分句两臂输出比对、2bit 壁钟）随否决免除；重启条件=出现「巨额收益」的新证据（现有 +5~30% 系 gemma-31B 形状、qwen38 端到端未测，不构成） | 2026-08-17 用户 | 长期自养税（每次 mlx 升级 rebase+重编+重验）vs 未量化的端到端增益；T7 上游化路径已死 |
 | **D.21** | **qwen38 生产 MTP 开**（Qwen3.8-27B 8bit→drafter b5 / 4bit→b3），实现为**注册表条目级 speculative**（选中 qwen38 自动配对内建 MTP 头、gemma 档天然 off；merge_entry_speculative 两消费方共用，env 强制 > 条目 > 全局）；**e4b 多轮首字延迟不单测、等「prompt 字节流只增不改」上位解**（覆盖两家族复用恢复） | 2026-08-17 用户 | A8 v2 收案数据（多轮 1.30×/1.12×、无复用不对称）+ 漂移知情（8bit 首轮即分叉）+ T8 门冷预填代价量级（qwen38 t5 ttft 5s→23s） |
 | **D.19** | **生产起服 `max_model_len` 调 64K**（config cuda 段 32768→65536）。依据：8 页 deck 单轮 ~33k 撞顶实案；L4 fp8 KV 池实测 114,963 token、A100 档 KV bf16 65536≈3.7GiB 均有余量 | 2026-08-09 用户 | #77 新架构发现；L4 站实测 |
@@ -2437,8 +2438,14 @@ qmv_mma 补丁是否带进生产构建（见新任务流程）。
 commit 909300b/1690d45/a9006cc）：A 案落地 + token 级增量喂入根修，五臂实测
 验收全过——qwen38 t5 ttft 23s→4.60s、e4b 旋转态五轮 ttft 0.8s 平线、drafter
 与复用共存。收案纪实见文末「上位解收案」块；第二梯队自此解锁。〕
-**第二梯队**：26b-4bit 12h 长稳（用户既定：架构完善后测，上位解落地即解锁）；
-§7 连续批处理接线与并发格；阶段三 KV 量化；阶段四收口/Q14。
+**第二梯队**〔2026-08-17 D.23 重排：OSS 存量缺陷修正四波插队长稳之前〕：
+①存量缺陷修正四波（施工顺序：波一 6.1+6.2 失败判据修真 → 波二 6.3 seq 止血
+→ 波三 6.5 catalog 语法解耦 → 波四 6.4 RAG 评估补题→生产档实跑→重钉基线→
+棘轮；波一~三纯 CPU 金测试可验，波四实跑需占 RAG 计算面真模型数分钟；
+详见文末「OSS 存量缺陷核实」块）；②26b-4bit 12h 长稳（用户既定：架构完善后
+测）；§7 连续批处理接线与并发格；阶段三 KV 量化；阶段四收口/Q14。
+6.3 根治（代际围栏+崩溃轮补发 turn_ended，动协议 §2.4/2.5+三端 store）为独立
+后续项，不阻塞长稳；OSS 扫描 19 条存活建议（增量面）留待第二梯队收官后盘点。
 **搭车项**：CUDA 侧重画像（下次 colab 场搭车；**前置：Drive 正主 colab.env 的
 INFER 钥未同步，进场先补**）；reasoning_effort 旋钮透传（qwen38 已是生产 MTP
 档，转正评估时一并）；qwen38 MTP 口径重画像（tps profile 现为 off 口径，路由
@@ -2508,6 +2515,64 @@ a8-20260817-v3-run1-bytemode.*（诊断价值）。longchain e4b 引擎路质量
 悬垂轮冷回退频率随停止符落点波动（本测 8 复用轮 3 次），可观测（reuse_diag）。
 台架 v3 数据中 e4b/8bit-off 两臂为字节口径脚本所测（raw_out 口径修正在后），
 其复用值逐 token 精确、数据有效。
+
+---
+
+**OSS 存量缺陷核实（2026-08-17，D.23）——`AGENT-L0-OSS-SCAN-20260817.md` §6
+五处缺陷主会话逐条真码链路复核，5/5 全部属实**（含两处原为「读码推断」的
+6.3/6.5 已补齐实证）。核实证据与修正方案定案：
+**6.1 Critical（属实）**：`grep`/`diff`/`cmp`/`test` 全在只读白名单
+（shell_exec.py:52）自动放行；无命中 exit 1 无输出 → 响应恰为
+`"exit_code: 1\n(no output)"`（:216,:224）→ `_FAILED_RESP_RE`
+（orchestrator.py:211）命中 → 收尾撞 failure_swallow_nudge（:823）白烧一次
+生成逼报不存在的错误，坚持则整轮降 warning（:894）。
+**6.2 High（属实）**：正则带 `re.M` 匹配任意行首，且失败扫描对全部工具响应
+无差别执行（orchestrator.py:700-706）——read_file/tail 读到含行首
+`System Error:` 或 `exit_code: N` 的日志即误置位；注释自陈「只认硬信号」
+实现未兑现。
+**6.3 High（属实，升实证）**：四环坐实——token/thinking_delta 占 seq 不入
+`MILESTONE_TYPES`（journal.py:26）；重启 `_load_last_seq` 只回里程碑水位、
+seq 回退；SSE 直播循环 `seq <= last` 即丢（routes.py:1078）**服务端静默弃
+全部新事件**；两端客户端游标只增不钳、均忽略 stream_attached.last_seq
+（useChatStore.ts:311-314、AgentStore.swift:554-560）。另证
+recover_inflight_turns 只补 history 不发账本事件（session.py:601-636）——
+崩溃轮无 turn_ended，客户端卡 generating。触发者=devctl restart/监护重启。
+**6.4 High（属实）**：BASELINE.json stamp 20260730、0.941/0.938，账本 08-09
+站 A 已记标定后 1.0/1.0——基线陈旧到真回归读成零回归；34 题天花板顶死；
+runner 对比只 print 无条件 return 0（run_retrieval_eval.py:247-265）。
+标准 Vacuous Guard。
+**6.5 Medium（属实，升实证；潜伏）**：catalog 声明仅 {name, description 首行}
+（orchestrator.py:330-333），同份声明经 engine.py:419 直喂 tool_call_grammar
+→ 无 properties 条目只生成空实参分支（tool_grammar.py:183-189）——catalog
+模式约束采样把带参工具钳成 `call:name{}`。现役 full 模式故属潜伏，但稳定
+前缀 11337/12000 仅余 663 token，逃生口拨不动是现实风险。
+**修正方案四波（施工顺序，均走双评审门；波一涉 D2 护栏语义须重点核对
+「真失败仍被拦」反向用例）**：
+**波一（S，6.1+6.2 合并 diff）**：良性非零码判定在 shell_exec 内做完（白名单
+{grep,rg,diff,cmp,test}∧exit==1∧stderr 空∧无元字符，复用既有 shlex+
+`_SHELL_METACHARS` 判定），首行改 `exit_code: 1 (benign: no match)`，
+orchestrator 正则加负向断言，两侧注释互相点名；**不收 find**（无命中返 0），
+fd 待验退出码语义再议。失败判据换结构化事实：物理执行层在 System Error 异常
+路径与非良性非零码处给响应挂 `_failed: True` 内存元数据（照 `_safe`/`_target`
+规矩 append_log 自动剥离，零协议零夹具），扫描优先读标记、会话重载 resume 路
+回落正则（写明已知欠账）。金测试进 test_fabrication_guardrails.py 正反两向
+（grep 无命中不触发 / exit 2 仍触发 / stderr 非空仍触发 / 含管道不套用 /
+read_file 读含 System Error 行日志不置位 / heredoc 既有红线不变）。
+**波二（S，6.3 止血）**：`TurnJournal.__init__` seq 取 `last_milestone +
+1_000_000` 水位余量，单文件零协议零客户端；同 diff 修 PROTOCOL.md:310 措辞
+消矛盾。根治（进程级 boot_id 代际围栏 + 崩溃轮补发 turn_ended；行为锁
+frontend vitest store 级用例 + run_e2e.sh，夹具不覆盖 store 层）独立后续项。
+**波三（S/M，6.5）**：病根=prompt 渲染面瘦身错误连带瘦了语法源。修法：
+catalog 模式下语法恒建于 registry 全量 schema（orchestrator 另传语法专用
+清单或 engine 按名取全量），prompt 照旧渲染目录；金测试断言 catalog 模式
+带参工具语法收合法实参、拒空实参外非法形状。
+**波四（M，6.4，顺序铁律=先补题）**：补题（negative/multidoc/misroute 各 2、
+name 3 → 每形态 ≥5 并加难样本恢复判别力）→ 生产档实跑（占 RAG 计算面
+vl-2b 8bit，数分钟，遵单 GPU 纪律）→ `--save-baseline` 重钉 → 对比升棘轮
+（floor 入 BASELINE.json、仅对 config.yaml 生产档强制、低于地板 return 1）。
+先重钉不补题=换一个假绿。
+**排期（D.23）**：四波全部在 26b-4bit 12h 长稳之前；6.3 根治与 19 条增量
+建议不阻塞长稳。
 
 ---
 
