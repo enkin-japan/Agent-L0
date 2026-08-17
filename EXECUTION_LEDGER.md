@@ -2707,6 +2707,122 @@ name 3→5），temporal 2→3、crosslingual 维持 3（这两类没进「≥5�
   在此订正）；`PROTOCOL.md` §2.4/§2.5 的 `last_seq` 定义因水位余量而失准，已补
   「游标 ≠ 账本最后一条记录的 seq」的说明。
 
+**26b-4bit 12h 长稳开工准备（2026-08-18 记，供下一会话直接起跑）——**
+**工装状况**：上次（2026-08-08，26B on Colab CLI 40G）那套长稳工装**从未入库**，只活在
+Colab VM 上、随实例销毁——全分支 git 历史（`git log --all -S"longrun"`）与 Drive
+（`gdrive:AgentColab` 递归）双向搜索均无，台账只留下结论与负载形态描述。故本次按那份
+描述**重写并入库**：`backend/scripts/soak_longrun.py`（下次不必再写第三遍）。
+**换平台必须换的口径**：Apple Silicon 没有 VRAM，统一内存的等价观测量是
+进程 RSS + 系统 wired + **compressor 页数与 swapouts**——后者才是 MLX 超售换页崩塌的
+先兆（单 GPU 纪律里那条 page-thrash cliff），上次「VRAM 平线」在这里对应「compressed
+不涨、swapouts 不增」。
+**负载**沿用上次已验证的生活节律仿真非饱和形态，权重按上次 313 请求的实际构成归一
+（chat 0.70 / tool 0.21 / longchain 0.06 / cancel 0.03），含短空闲窗与每 40 请求一次的
+15-45min「离开」窗；全合成语料（产物要入库留档，不得含真实用户数据）。
+**两处自查修掉的静默空转**（写完自测时发现，正是「跑了但什么都没测到」那类）：
+① `bench_baseline` 的 SSE 客户端只捞 `cache_id`、**丢掉 `gen_id`**，取消端点无从寻址
+→ 取消腿会退化成一次普通长生成（已让它一并交出 gen_id）；② 纯断连腿若复用
+`Client.generate` 会把整条流读完、**根本没断连**（已改为自带的半路停读器，读满 8 个
+chunk 即停，endpoint 腿先取消再断、disconnect 腿直接断）。拿不到 gen_id 时**响亮报错**
+而非静默跳过。
+**前置检查（已逐条实核）**：① 权重在位——`backend/models/gemma-4-26b-a4b-it-4bit`
+14G 且带 `.download_complete` 完整标记（注意**别去 `~/.cache/huggingface` 找**，那里只有
+静态校验时抓的 config.json；本项目按 `path_resolver._models_root` 把权重收敛在数据根内，
+这是 CHARTER「权重收敛在项目内」的落地形态）；② 物理内存 64G，`iogpu.wired_limit_mb`
+已是 57344，**无需再调、不必 sudo**；③ 磁盘余 624G；④ :14159/14160/14161/14967/8080
+全空、无真模型进程。
+**起跑口令**（服务须先由用户/devctl 拉起并就绪）：
+`cd backend && PYTHONUNBUFFERED=1 .venv/bin/python scripts/soak_longrun.py --hours 12
+--outdir ../benchmarks/data/soak-26b4bit-<日期>`
+**盯梢**：12h 远超 10 分钟阈值 → 必挂 `task-sentinel`（3 分钟级），并在起跑同一动作序列里
+挂上；工装自身另有 5min 系统采样与 20 请求一次的心跳。
+**判决口径**：不自动下 PASS/FAIL——收官 `summary.json` 给三分段（tps/TTFT/时长与
+RSS/wired/compressed），**只有单调劣化才算漂移，方差不算**；另看 `cache_count` 与
+`active_generations` 是否归零（上次的 PASS 正是人读三段 + 双零得出的）。
+
+**边界修复任务册（2026-08-18 用户拍板立项；口径：尽量根治，不因工作量潦草打补丁。
+④「给纪律装执行器」本属增量面，用户**破格**列入，且仅此一条破格）——**
+
+**F1 ★ 代际围栏：让客户端游标不再跨进程误用**（根治 ①②，顺带 ⑦；影响最大的一条）
+*病根一句话*：客户端游标只在**一个服务进程的编号空间内**有意义，而没有任何东西告诉
+它这个空间什么时候换了。波二的水位余量只是让编号不回退，没有解决「凭什么信这个
+游标」。
+*根治设计*：① 进程级 `generation`（boot id，进程启动算一次，journal 与 feed 共用
+单一来源）；② 三处首帧带上它——会话 SSE 的 `stream_attached`、`/turn` 响应、全局
+feed 的 `stream_attached`；③ 客户端存 `(generation, cursor)` 二元组，附着时比对首帧
+代际，**不一致即弃用游标重锚**（会话流按 `/turn` 语义重定位，feed 按 `last_feed_seq`），
+一致才续用；④ **崩溃轮补发终态**：`recover_inflight_turns` 目前只补写 history、不发
+任何账本事件，故客户端永远等不到 `turn_ended`——改为同时向该会话账本 emit 一条
+`turn_ended(status=fail)`（里程碑，落盘，后到的客户端重放即见终态）；⑤ 顺带把
+`public_turn` 改成递归剥离嵌套 `_` 键（⑦），与本波共用一次夹具更新。
+*为什么这是根治而非补丁*：修完之后，正确性**不再依赖 `SEQ_RESTART_RESERVE` 够不够
+大**——这正好也消掉了阶段复审 M2 那条隐患（`_persist` 吞掉写失败会静默侵蚀余量的
+不变量）。余量保留为纵深防御。
+*涉改面*：`core/journal.py`、`core/feed.py`、`memory/session.py`
+（`recover_inflight_turns`）、`api/routes.py`（三处首帧）、`core/turn_runner.py`
+（`public_turn`）、`PROTOCOL.md` §2.4/§2.5/§2.7、前端 store、apple-app store。
+*验收*：行为锁在**前端 vitest 的 store 级用例**与 `run_e2e.sh`——协议夹具只喂纯归约器，
+而游标比对与重锚全在 store 层（两端 dispatch 首行就 return 掉 `stream_attached`），
+夹具证不了这条；`fixtures/README.md` 注明该契约不在夹具覆盖面内。真机验收：起服
+→ 轮次执行中 `devctl restart` → 客户端应自动重锚、转圈消失、终态可见。
+*成本*：M–L（唯一同时动协议与三端的一条）。
+
+**F2 ★ catalog 逃生口全面可用**（根治 ③⑧）
+*病根*：波三只修掉了语法闸。`get_tool_schema` 仍返回 `json.dumps(schema)` 的裸 JSON
+Schema，而模型见过的每一条声明都是官方紧凑 DSL——递自造 JSON 正是 §7-8/§S.17 消灭掉
+的失效类（12B 递 JSON 进 `<|channel>thought` 无限循环、e4b 幻觉「已获取」）。
+*根治设计*：① 元工具改用方言渲染——在 `ModelDialect` 上开一条
+`render_tool_declaration(schema) -> str` 的缝（编排层只调协议、不认某个方言的函数），
+`get_tool_schema` 经它输出；② **先验语法余量再谈启用**：用真分词器对全量 catalog 语法
+构一次 `LLMatcher`（CPU-only、不加载权重），确认不撞 `ParserTooComplex`——catalog 只在
+工具规模撑爆 full 时才启用，届时编译的语法严格大于至今跑过的任何一份，而
+`constrained.py` 自陈有过「matcher 撑爆后毒化同进程后续全部调用」的事故；③ 真机端到端
+验收：catalog 模式下模型先 `get_tool_schema` 取详情、再发带参调用并通过约束采样。
+*引信长度*：生产现为 full 模式，今天影响为零。稳定前缀独立静态复算 ≈ **10622 est
+token**（59 个工具类；扫描口径记 11337，差在元工具等），离 D4 的 12000 阈值余
+**约 1378**，按均值 ~180 token/工具算**还剩 3–7 件工具的跑道**。三件事要打包做完，
+不能等撞墙那天临时补。
+*成本*：S（代码）+ M（验证，②③ 要占 GPU）。
+
+**F3 ★ 给纪律装执行器**（④，用户破格列入的增量项）
+*病根*：本仓有大量验证物（金测试、三端夹具、RAG 棘轮），但**没有任何东西会去执行
+它们**——棘轮刚上电就已经处于「退出码没人读」的状态。
+*根治设计*：① `devctl check` 子命令，聚合今天要手敲的三条（backend pytest / 前端
+vitest / apple-app 夹具），退出码按**三值纪律**：`0=过 / 3=不过 / 2=用法错 /
+1=内部错`——「门跑不起来」永远不能塌缩成「门说是」，这是整个设计里唯一不可省的语义；
+② 三行 `.git/hooks/pre-commit` 调它，docs/台账-only 的 diff 走 `--skip` 白名单；
+③ **RAG 棘轮不进 pre-commit**（它要占 GPU 几分钟，塞进提交路径必然被绕过）——另开
+`devctl eval-rag` 跑它并透传退出码，并在台账写死「任何检索侧改动后必须跑它」。
+*为什么第一版刻意不加新校验器*：只做聚合与退出码合并。加校验器是另一件事，混在一起
+会让这条也变成「写下来了但没人跑」。
+*成本*：S–M。
+
+**F4 ☆ 工具失败带外化**（根治 ⑤ 的机理；**优先级低**）
+*病根*：工具的失败约定是**文本前缀**（响应 0 位打 `System Error:`），与「文件内容恰好
+以该串开头」在文本层不可分。
+*根治设计*：`registry.execute_tool` 的返回契约从 `(text, render)` 扩为携带结构化失败
+标志；`BaseTool` 给一个 `fail(msg)` 出口，工具按批迁移；`_resp_failed` 退化为纯历史
+回落层。
+*为什么排低*：逐路径复核后残留近乎不可达（见上文订正的⑤）。**列它是为了记住机理，
+不是为了明天就做**——真要做也应等 F1 那类协议波之后，避免同时动两处返回契约。
+*成本*：M（面广：30 个工具文件）。
+
+**F5 ☆ 检索侧三道失败题**（评估恢复判别力后暴露的真实弱点，非本波修法的残留）
+① `rq-neg-004`/`rq-neg-006`：重排地板分不开「同词异主体」（问猫的疫苗捞回孩子疫苗、
+问宽带资费捞回停车月卡）；② `rq-multi-004`：多意图查询只捞回一个意图的文档。
+*⚠️ 不要当成调参题*：阶段复审已指出二者对同一个阈值旋钮施加**相反压力**（负例要靠
+严阈值返回空才过，多文档要松阈值才捞得全），单纯调 `rerank_min_score` 只会在两头之间
+搬运失败。根治方向是**结构性**的：多意图查询做分解后分别检索再合并，负例侧引入主体/
+实体一致性判据，而不是继续拧同一个旋钮。
+*另注*：地板现为零余量（51 题下再掉一道即红），下一次检索侧改动大概率会让评估变红，
+届时要判断是真回归还是题集该重钉——这是刻意的灵敏度，不是误设。
+*成本*：M–L（属检索架构改动，建议与 Q11 实体链接层的 badcase 积累一起看）。
+
+**不立项（是取舍不是缺陷，记录以免后人当回归「修」回去）**：⑥ §6.1 放行了模型自检
+惯用手法（`grep -q` / `test -f` / `diff expected actual`）的失败推回——换来的是每次
+「确认某物不存在」不再白烧一轮生成，后者频率高得多，且写后未复查另有 T1-4 verify 门
+覆盖。
+
 **修正过程中新发现的问题（均已核实，按纪律只记录不扩波）——**
 ① **catalog 逃生口还有第二道闸**（评审发现，主会话核实）：`get_tool_schema` 返回
 `json.dumps(schema)` 的裸 JSON Schema，而模型见过的每一条工具声明都是
@@ -2727,11 +2843,17 @@ LLMatcher（CPU-only、不加载权重），列为启用 catalog 前的前置检
 `_safe`/`_target`（既有）与 `_failed`（本次新增）都会到客户端。实测确认，值无敏感
 内容、夹具全绿、模型 prompt 面另有白名单挡着（KV 前缀不变量不受影响）。既有形态，
 不在本波扩修——改 `public_turn` 递归会动客户端载荷形状，该走自己的 diff。
-⑤ **§6.2 的已知边界**：观察的**首个非空白字符起**是 `System Error:` 时仍判失败
-（不只是「首行」——`errored` 用 `lstrip().startswith`，故以空行开头、第二行才是该串的
-日志同样中招；这是刻意的 fail-safe 方向，缩进过的真错误不能漏）。工具的失败约定就是
-「响应 0 位打该串」，与「文件内容以该串开头」在文本层不可分。根治要工具带外结构化
-报错（`registry.execute_tool` 返回失败标志而非文本前缀）。已用一条金测试把边界钉住，
+⑤ **§6.2 的已知边界（2026-08-18 逐路径复核后订正，此前的写法把它说重了）**：
+判据是「观察的**首个非空白字符起**是 `System Error:`」——不只是「首行」，`errored` 用
+`lstrip().startswith`，故以空行开头、第二行才是该串的日志同样中招。这是刻意的
+fail-safe 方向（缩进过的真错误不能漏）。
+**但主流读取路径全都自带前缀，残留实际近乎不可达**：`run_shell_command` 的响应恒以
+`exit_code:` 开头；`file_extract` 读文本/代码走 `text.read_text_range`，**每行都带
+行号前缀**（`f"{lineno:>5} | {line}"`）；读 PDF 走 `pdf` 解析器，开头是
+`[PDF: N pages …]`。唯一裸返回正文的是 `document.parse_document`（docx/html 类），
+即要触发得是「一份 Word/HTML 文档的正文头一句正好是字面量 `System Error:`」。
+机理仍在（工具的失败约定是文本前缀，与文件内容在文本层不可分），根治要工具带外
+结构化报错（见修复任务 F4），但**优先级据此判为低**。已用一条金测试把边界钉住，
 防止后人误以为 §6.2 全覆盖。
 ⑥ **§6.1 的知情取舍**：名单里那几个命令也是模型自检的惯用手法（`grep -q` /
 `test -f` / `diff expected actual`），放行后 D2 失败推回不再覆盖这类自检。取舍理由

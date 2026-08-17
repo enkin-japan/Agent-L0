@@ -210,7 +210,7 @@ class Client:
 
     def generate(self, prompt: str, *, cache_id=None, sampling=None, features=None,
                  first_chunk_budget: float = 300.0, cache_out: dict = None,
-                 raw_out: dict = None):
+                 raw_out: dict = None, done_out: dict = None):
         """SSE 消费 /v1/generate。返回 (chunks 末件, 全文, ttft, cache_id, wall)。
         看门狗：首 chunk 前按 prefill 预算，之后逐 chunk INTER_CHUNK_TIMEOUT。
         cache_out：meta 事件一到就把 cache_id 写进去——异常路径（超时/error/EOF/坏 JSON）
@@ -245,8 +245,13 @@ class Client:
                 kind, event = event, ""  # 消费即清：野 data 行不许挂到上一事件名下
                 if kind == "meta":
                     got_cache = payload.get("cache_id", got_cache)
-                    if cache_out is not None and got_cache:
-                        cache_out["cache_id"] = got_cache
+                    if cache_out is not None:
+                        if got_cache:
+                            cache_out["cache_id"] = got_cache
+                        # gen_id 一并交出去：取消端点按它寻址，调用方拿不到就只能
+                        # 眼睁睁看生成跑完（长稳工装的取消腿曾因此静默空转）
+                        if payload.get("gen_id"):
+                            cache_out["gen_id"] = payload["gen_id"]
                 elif kind == "chunk":
                     if ttft is None:
                         ttft = time.time() - t0
@@ -265,6 +270,10 @@ class Client:
                     raise RuntimeError(f"engine error: {payload}")
                 elif kind == "done":
                     done = True
+                    # done 载荷是 constrained_steps 等收尾仪表的**唯一**出口（末 chunk
+                    # 里没有），调用方要它就得在这里接走——否则约束是否真跑过无从判断
+                    if done_out is not None:
+                        done_out.update(payload if isinstance(payload, dict) else {})
                     break
             if not done:
                 # socket EOF 早于 done 事件 = 生成被腰斩，不是正常收尾：
