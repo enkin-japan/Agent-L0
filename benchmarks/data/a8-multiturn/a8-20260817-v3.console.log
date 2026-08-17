@@ -1,0 +1,34 @@
+== 臂 gemma-4-e4b-it-8bit × off
+  [gemma-4-e4b-it-8bit off] turn 1: ttft 0.77s wall 5.20s prompt 1117 gen 320 extra {'reused_prefix': 0}
+  [gemma-4-e4b-it-8bit off] turn 2: ttft 0.78s wall 5.26s prompt 2523 gen 320 extra {'reused_prefix': 1437}
+  [gemma-4-e4b-it-8bit off] turn 3: ttft 0.83s wall 5.44s prompt 3944 gen 320 extra {'reused_prefix': 2843}
+  [gemma-4-e4b-it-8bit off] turn 4: ttft 0.84s wall 2.46s prompt 5384 gen 114 extra {'reused_prefix': 4264}
+  [gemma-4-e4b-it-8bit off] turn 5: ttft 0.86s wall 5.49s prompt 6626 gen 320 extra {'reused_prefix': 5498}
+== 臂 Qwen3.8-27B-8bit × off
+  [Qwen3.8-27B-8bit off] turn 1: ttft 4.36s wall 17.61s prompt 985 gen 215 extra {'reused_prefix': 0}
+  [Qwen3.8-27B-8bit off] turn 2: ttft 4.21s wall 17.56s prompt 2164 gen 215 extra {'reused_prefix': 1200}
+  [Qwen3.8-27B-8bit off] turn 3: ttft 4.42s wall 21.26s prompt 3351 gen 262 extra {'reused_prefix': 2379}
+  [Qwen3.8-27B-8bit off] turn 4: ttft 4.54s wall 7.92s prompt 4613 gen 56 extra {'reused_prefix': 3613}
+  [Qwen3.8-27B-8bit off] turn 5: ttft 4.60s wall 12.18s prompt 5671 gen 121 extra {'reused_prefix': 4669}
+== 臂 Qwen3.8-27B-8bit × drafter（draft=Qwen3.8-27B-MTP-8bit b5）
+  [Qwen3.8-27B-8bit drafter] turn 1: ttft 4.14s wall 9.71s prompt 985 gen 187 extra {'spec_drafted': 240, 'spec_accepted': 126, 'reused_prefix': 0}
+  [Qwen3.8-27B-8bit drafter] turn 2: ttft 8.86s wall 20.57s prompt 2136 gen 320 extra {'spec_drafted': 515, 'spec_accepted': 191, 'reused_prefix': 0, 'reuse_blocked': '层 0 ArraysCache 是递归状态缓存，无回滚接口', 'reuse_diag': {'prefix_len': 1172, 'record_len': 1172, 'max_offset': 1174}}
+  [诊断] turn 2 缓存悬垂门拒（合法冷回退）：{'prefix_len': 1172, 'record_len': 1172, 'max_offset': 1174}
+  [Qwen3.8-27B-8bit drafter] turn 3: ttft 4.29s wall 12.80s prompt 3429 gen 320 extra {'spec_drafted': 384, 'spec_accepted': 223, 'reused_prefix': 2456}
+  [Qwen3.8-27B-8bit drafter] turn 4: ttft 4.39s wall 6.53s prompt 4749 gen 53 extra {'spec_drafted': 92, 'spec_accepted': 30, 'reused_prefix': 3748}
+  [Qwen3.8-27B-8bit drafter] turn 5: ttft 4.42s wall 9.35s prompt 5804 gen 116 extra {'spec_drafted': 216, 'spec_accepted': 63, 'reused_prefix': 4802}
+== 臂 Qwen3.8-27B-4bit × off
+  [Qwen3.8-27B-4bit off] turn 1: ttft 4.13s wall 11.71s prompt 985 gen 218 extra {'reused_prefix': 0}
+  [Qwen3.8-27B-4bit off] turn 2: ttft 4.21s wall 11.58s prompt 2167 gen 212 extra {'reused_prefix': 1203}
+  [Qwen3.8-27B-4bit off] turn 3: ttft 4.20s wall 15.30s prompt 3351 gen 320 extra {'reused_prefix': 2379}
+  [Qwen3.8-27B-4bit off] turn 4: ttft 4.37s wall 6.64s prompt 4672 gen 65 extra {'reused_prefix': 3671}
+  [Qwen3.8-27B-4bit off] turn 5: ttft 4.41s wall 7.82s prompt 5739 gen 96 extra {'reused_prefix': 4737}
+== 臂 Qwen3.8-27B-4bit × drafter（draft=Qwen3.8-27B-MTP-4bit b3）
+  [Qwen3.8-27B-4bit drafter] turn 1: ttft 4.10s wall 8.57s prompt 985 gen 218 extra {'spec_drafted': 182, 'spec_accepted': 126, 'reused_prefix': 0}
+  [Qwen3.8-27B-4bit drafter] turn 2: ttft 4.16s wall 7.98s prompt 2167 gen 212 extra {'spec_drafted': 154, 'spec_accepted': 136, 'reused_prefix': 1202}
+  [Qwen3.8-27B-4bit drafter] turn 3: ttft 13.29s wall 19.60s prompt 3351 gen 290 extra {'spec_drafted': 254, 'spec_accepted': 162, 'reused_prefix': 0, 'reuse_blocked': '层 0 ArraysCache 是递归状态缓存，无回滚接口', 'reuse_diag': {'prefix_len': 2379, 'record_len': 2379, 'max_offset': 2380}}
+  [诊断] turn 3 缓存悬垂门拒（合法冷回退）：{'prefix_len': 2379, 'record_len': 2379, 'max_offset': 2380}
+  [Qwen3.8-27B-4bit drafter] turn 4: ttft 4.34s wall 5.53s prompt 4641 gen 51 extra {'spec_drafted': 44, 'spec_accepted': 30, 'reused_prefix': 3640}
+  [Qwen3.8-27B-4bit drafter] turn 5: ttft 22.61s wall 26.49s prompt 5694 gen 149 extra {'spec_drafted': 152, 'spec_accepted': 74, 'reused_prefix': 0, 'reuse_blocked': '层 0 ArraysCache 是递归状态缓存，无回滚接口', 'reuse_diag': {'prefix_len': 4692, 'record_len': 4692, 'max_offset': 4693}}
+  [诊断] turn 5 缓存悬垂门拒（合法冷回退）：{'prefix_len': 4692, 'record_len': 4692, 'max_offset': 4693}
+A8_ALL_DONE

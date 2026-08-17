@@ -1,0 +1,31 @@
+INFO:     Started server process [11756]
+INFO:     Waiting for application startup.
+[Server] 投机配置被环境覆盖：{'mode': 'off'}
+🚀 [Server] loading model: mlx-community/gemma-4-e4b-it-8bit (backend=mlx)
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/transformers/audio_utils.py:723: UserWarning: At least one mel filter has all zero values. The value for `num_mel_filters` (128) may be set too high. Or, the value for `num_frequency_bins` (257) may be set too low.
+  warnings.warn(
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:59811 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59812 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59813 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59814 - "DELETE /v1/cache/92c81f91c36f425ab8d08e34c94168a4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59815 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59816 - "POST /v1/generate HTTP/1.1" 200 OK
+[Memory] token 级增量喂入：记录 1437 + 增量 1086 tokens
+INFO:     127.0.0.1:59817 - "POST /v1/generate HTTP/1.1" 200 OK
+[Memory] token 级增量喂入：记录 2843 + 增量 1101 tokens
+INFO:     127.0.0.1:59820 - "POST /v1/generate HTTP/1.1" 200 OK
+[Memory] token 级增量喂入：记录 4264 + 增量 1120 tokens
+INFO:     127.0.0.1:59821 - "POST /v1/generate HTTP/1.1" 200 OK
+[Memory] token 级增量喂入：记录 5498 + 增量 1128 tokens
+INFO:     127.0.0.1:59826 - "DELETE /v1/cache/a29afad430e4439198368447b9270c8b HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [11756]

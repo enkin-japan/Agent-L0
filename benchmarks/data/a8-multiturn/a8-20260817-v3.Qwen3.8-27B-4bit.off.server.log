@@ -1,0 +1,30 @@
+INFO:     Started server process [14624]
+INFO:     Waiting for application startup.
+[Server] 投机配置被环境覆盖：{'mode': 'off'}
+[Server] 注册表条目 speculative 被 INFER_SPEC_MODE='off' 压制（条目声明 mode='drafter'）
+🚀 [Server] loading model: mlx-community/Qwen3.8-27B-4bit (backend=mlx)
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:59980 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59981 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59982 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59983 - "DELETE /v1/cache/9d2b31ac803544499679d27da9129db4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59984 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59985 - "POST /v1/generate HTTP/1.1" 200 OK
+[Memory] token 级增量喂入：记录 1203 + 增量 964 tokens
+INFO:     127.0.0.1:59986 - "POST /v1/generate HTTP/1.1" 200 OK
+[Memory] token 级增量喂入：记录 2379 + 增量 972 tokens
+INFO:     127.0.0.1:59989 - "POST /v1/generate HTTP/1.1" 200 OK
+[Memory] token 级增量喂入：记录 3671 + 增量 1001 tokens
+INFO:     127.0.0.1:59990 - "POST /v1/generate HTTP/1.1" 200 OK
+[Memory] token 级增量喂入：记录 4737 + 增量 1002 tokens
+INFO:     127.0.0.1:59995 - "DELETE /v1/cache/8308135aef62402d839181c7cba47df5 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [14624]

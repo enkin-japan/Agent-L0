@@ -1,0 +1,46 @@
+INFO:     Started server process [14650]
+INFO:     Waiting for application startup.
+[Server] 投机配置被环境覆盖：{'mode': 'drafter', 'draft_model': '/Volumes/enkin/project/Agent/backend/models/Qwen3.8-27B-MTP-4bit', 'draft_block_size': 3}
+[Server] 注册表条目 speculative 被 INFER_SPEC_MODE='drafter' 压制（条目声明 mode='drafter'）
+[Server] 投机生效配置：mode=drafter draft=/Volumes/enkin/project/Agent/backend/models/Qwen3.8-27B-MTP-4bit block=3
+🚀 [Server] loading model: mlx-community/Qwen3.8-27B-4bit (backend=mlx)
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+[Engine] 已禁用 LanguageModel.speculative_argmax_from_hidden（融合采样绕过 logits 处理器；改走 hidden+批量投影走查路，与 gemma 同形态）
+[Engine] 已禁用 LanguageModel.speculative_verify_logits（融合采样绕过 logits 处理器；改走 hidden+批量投影走查路，与 gemma 同形态）
+[Engine] 草稿深度上限已解锁：采纳请求值 draft_block_size=3（否则被草稿件 config 缺省值 4 顶死）
+[Engine] 投机草稿件已装载：/Volumes/enkin/project/Agent/backend/models/Qwen3.8-27B-MTP-4bit（kind=mtp）
+[Engine] 投机采样启用：{'mode': 'drafter', 'draft_model': '/Volumes/enkin/project/Agent/backend/models/Qwen3.8-27B-MTP-4bit', 'draft_kind': '', 'draft_block_size': 3, 'num_draft_tokens': 8, 'ngram_max': 3, 'ngram_min': 2}
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:60001 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60002 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60003 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60004 - "DELETE /v1/cache/fe4f5f3852c34d0899941db54bad7147 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60005 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60006 - "POST /v1/generate HTTP/1.1" 200 OK
+[Memory] token 级增量喂入：记录 1202 + 增量 965 tokens
+INFO:     127.0.0.1:60007 - "POST /v1/generate HTTP/1.1" 200 OK
+[Memory] token 级增量喂入：记录 2379 + 增量 972 tokens
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=2379 记录长=2379 新长=3351
+  记录[2375:2383]=[100752, 114706, 188395, 248046] '众多物种。）<|im_end|>'
+  新　[2375:2383]=[100752, 114706, 188395, 248046, 198, 248045, 846, 198] '众多物种。）<|im_end|>\n<|im_start|>user\n'
+INFO:     127.0.0.1:60010 - "POST /v1/generate HTTP/1.1" 200 OK
+[Memory] token 级增量喂入：记录 3640 + 增量 1001 tokens
+INFO:     127.0.0.1:60011 - "POST /v1/generate HTTP/1.1" 200 OK
+[Memory] token 级增量喂入：记录 4692 + 增量 1002 tokens
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=4692 记录长=4692 新长=5694
+  记录[4688:4696]=[103805, 96280, 1710, 248046] '新增信息。<|im_end|>'
+  新　[4688:4696]=[103805, 96280, 1710, 248046, 198, 248045, 846, 198] '新增信息。<|im_end|>\n<|im_start|>user\n'
+INFO:     127.0.0.1:60012 - "DELETE /v1/cache/aa826c46b4fb4d9389ac0c88ce2166b1 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [14650]
+/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/multiprocessing/resource_tracker.py:277: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown: {'/loky-14650-8xhvnpy5'}
+  warnings.warn(
