@@ -309,6 +309,7 @@ class AgentEngine:
     async def generate_once(self,
                             session: ChatSession,
                             tools: Optional[List[Dict[str, Any]]] = None,
+                            grammar_tools: Optional[List[Dict[str, Any]]] = None,
                             task_block: Optional[str] = None,
                             temperature: float = 0.2,
                             min_p: float = 0.05,
@@ -323,6 +324,13 @@ class AgentEngine:
         执行一次完整生成并解析输出。
 
         - tools: 工具声明（稳定前缀的一部分，由 Orchestrator 启动时构建并保持不变）
+        - grammar_tools: **约束采样的语法源**，与上面的 prompt 声明解耦（§6.5）。
+          catalog 模式下 tools 是瘦目录（省前缀 token），语法却必须建在完整 schema 上，
+          否则带参工具被钳成只能发空实参。为 None 即沿用 tools（直调路径语义不变）；
+          传空列表则与「无工具」同义、直接关掉约束（`is not None` 判据，非笔误）。
+          它不参与 prompt 组装，故不影响会话字节流「只增不改」的不变量。
+          调用方有责任让它与 tools 同名同集——语法允许一个 prompt 里没声明的工具，
+          等于放模型去调用一个它看不见的东西。
         - task_block: 任务状态块（可变区，追加在 prompt 最尾部，见前缀分层设计）
         - 取消：逐 token 段检查 session.cancel_requested，命中即中断生成返回
           cancelled=True（丢弃的部分生成由下次推理的 KV 前缀匹配自动裁剪）
@@ -379,7 +387,11 @@ class AgentEngine:
 
         # [Phase 2] 工具调用段约束采样：每次生成一个新 guard（纯逻辑状态机），
         # 经 features 交由后端挂载进它的 logits 处理协议；未启用时零开销。
-        guard = self._tool_guard(tools)
+        # 语法源与 prompt 声明解耦（§6.5）：catalog 模式下 `tools` 是瘦目录（省稳定
+        # 前缀 token），语法却必须建在完整 schema 上，否则带参工具被钳成只能发空实参。
+        # 调用方不传 grammar_tools 就沿用 tools——沙箱/摘要器/审计等直调路径语义不变。
+        gtools = grammar_tools if grammar_tools is not None else tools
+        guard = self._tool_guard(gtools)
 
         sampling = {
             "temperature": temperature,
@@ -408,7 +420,7 @@ class AgentEngine:
             # 工具声明随行（B1）：纯逻辑 guard 无法跨网逐 token 驱动，远程后端改发
             # 声明、由服务端约束引擎重建 guard 并把 constrained_steps 回填本地仪表；
             # 进程内后端忽略此键（直接驱动 tool_guard），语义单一来源
-            features["tool_specs"] = tools
+            features["tool_specs"] = gtools
             # 声明式约束规格：引擎原生结构化输出的后端（cuda/vLLM structural-tag）
             # 吃这个——**进程内路径也必须带**（2026-08-08 26B 评测案：只有 server 附
             # 此键，引擎直连评测全场无约束，bfcl-multiple 成批裸格式调用，架构缺口
@@ -416,7 +428,7 @@ class AgentEngine:
             # 在 _tool_guard 内已 fail-open，走不到这里。MLX 逐 token 后端忽略此键。
             # kind 随行（§7-8）：后端据此判断自己能不能表达该语法——vLLM 的
             # structural-tag 只吃 JSON schema，拿 lark 语法必须拒而不是硬塞。
-            _tc_grammar = self.dialect.tool_call_grammar(tools)
+            _tc_grammar = self.dialect.tool_call_grammar(gtools)
             features["tool_constraint"] = {
                 "kind": _tc_grammar.kind,
                 "body": _tc_grammar.body,

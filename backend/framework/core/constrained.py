@@ -21,6 +21,8 @@
   §7-8 之前这里写死 JSON schema：gemma-4 迁到官方紧凑 DSL 后调用体不再是 JSON
   （裸键、`<|"|>` 定界的原文串），schema 表达不了，故改为按 kind 分派。
 """
+import hashlib
+import json
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
@@ -49,10 +51,27 @@ class ToolConstraintEngine:
         self.stc_id = stc_id
         self.etc_id = etc_id
         self._grammar_builder = grammar_builder
-        self._matchers: Dict[tuple, Any] = {}  # 工具名元组 -> LLMatcher（复用，reset 后重入）
+        self._matchers: Dict[str, Any] = {}  # 声明内容摘要 -> LLMatcher（复用，reset 后重入）
+
+    @staticmethod
+    def _tools_key(tools: List[Dict[str, Any]]) -> str:
+        """缓存键取工具声明的**内容**摘要，不是名字集合。
+
+        名字做键会在「同名不同 schema」时静默命中错的语法。这个组合自 §6.5 解耦后
+        才真实存在：catalog 模式下 prompt 面的瘦目录与语法面的完整 schema 名字完全
+        相同。进程内只有完整 schema 会走到这里，但 `inference/server.py` 的同款缓存
+        是**跨客户端共享**的——版本歪斜的旧客户端捎带瘦目录，就会毒化后续所有客户端
+        的语法，且既不报错也不 fail-open（拿到的是一份合法但错误的语法）。
+
+        逐条规范化后**排序**再摘要：既对内容敏感，又保持旧键（名字集合）的顺序无关性，
+        免得声明顺序一变就白白重编译一份等价语法。
+        """
+        blobs = sorted(json.dumps(t, sort_keys=True, ensure_ascii=False, default=str)
+                       for t in tools)
+        return hashlib.sha256("\n".join(blobs).encode("utf-8")).hexdigest()
 
     def matcher_for(self, tools: List[Dict[str, Any]]):
-        key = tuple(sorted(t.get("name", "") for t in tools))
+        key = self._tools_key(tools)
         m = self._matchers.get(key)
         if m is not None:
             m.reset()

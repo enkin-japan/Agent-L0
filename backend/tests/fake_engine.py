@@ -49,13 +49,14 @@ class FakeEngine:
         self.calls: List[Dict[str, Any]] = []  # 每次生成收到的关键参数(断言用)
         self.backend = FakeBackend()           # 缓存面(沙箱/审计替身经此取全新缓存)
 
-    async def generate_once(self, session, tools=None, task_block=None,
+    async def generate_once(self, session, tools=None, grammar_tools=None, task_block=None,
                             tail_notes=None, on_text_delta=None, **kwargs):
         self.calls.append({
             "kwargs": dict(kwargs),
             "tail_notes": list(tail_notes or []),
             "task_block": task_block,
             "n_tools": len(tools or []),
+            "grammar_tools": grammar_tools,   # 约束语法源（与 prompt 声明解耦，§6.5）
             # 最后一条消息内容（截断）：审计类一次性会话替身的输入可断言（goal_verify 金测试用）
             "last_user": str((session.history[-1] or {}).get("content", ""))[:200]
                          if getattr(session, "history", None) else "",

@@ -349,21 +349,51 @@ class Orchestrator:
         前缀 token 估算：后端无 tokenizer，用 chars/4（对本声明 JSON 实测 4.02 字/token）；
         catalog 模式下声明变小，估算与阈值随之自动收紧。"""
         self._tools_decl = self._build_tools_declaration()
+        # 约束采样的语法源与 prompt 声明**解耦**：前者恒用完整 schema，后者可瘦身。
+        # 二者在 full 模式下逐字相同，只有 catalog 模式才分叉（见 _build_grammar_tools）。
+        self._grammar_tools = self._build_grammar_tools()
         self.stable_prefix_tokens_est = sum(
             len(json.dumps(t, ensure_ascii=False)) for t in self._tools_decl) // 4
         self.summary_high_threshold = self._summary_high_base + self.stable_prefix_tokens_est
         self.summary_low_threshold = self._summary_low_base + self.stable_prefix_tokens_est
 
     # ---------- 工具目录（两级可见性） ----------
+    def _meta_schemas(self) -> List[Dict[str, Any]]:
+        """随模式变化的编排层元工具集合（catalog 模式多一个 get_tool_schema）。
+
+        声明面与语法面共用这一份：两边对「本模式下有哪些工具可调」必须同口径，
+        否则语法会允许（或禁止）一个声明里不存在（或存在）的工具。
+        元工具即便在 catalog 模式也保留完整 schema——它们本来就要带参调用。
+        """
+        metas = [UPDATE_PLAN_SCHEMA, COMPLETE_STEP_SCHEMA, REMEMBER_SCHEMA]
+        return (metas + [GET_TOOL_SCHEMA_SCHEMA]) if self.tool_schema_mode == "catalog" else metas
+
     def _build_tools_declaration(self) -> List[Dict[str, Any]]:
+        """**prompt 面**的工具声明（进稳定前缀、算 token 预算的那一份）。"""
         if self.tool_schema_mode == "catalog":
             catalog = [
                 {"name": s.get("name"), "description": str(s.get("description", "")).split("\n")[0]}
                 for s in self.registry.get_all_schemas()
             ]
-            return catalog + [UPDATE_PLAN_SCHEMA, COMPLETE_STEP_SCHEMA, REMEMBER_SCHEMA, GET_TOOL_SCHEMA_SCHEMA]
+            return catalog + self._meta_schemas()
         # full 模式：全部工具完整 schema 常驻（当前工具规模下更省 token 且缓存更稳）
-        return list(self.registry.get_all_schemas()) + [UPDATE_PLAN_SCHEMA, COMPLETE_STEP_SCHEMA, REMEMBER_SCHEMA]
+        return list(self.registry.get_all_schemas()) + self._meta_schemas()
+
+    def _build_grammar_tools(self) -> List[Dict[str, Any]]:
+        """**约束采样面**的语法源：恒为完整 schema，与 prompt 面的瘦身解耦。
+
+        prompt 面在 catalog 模式下刻意只留名字+一行描述（省稳定前缀 token），但语法
+        面不能跟着瘦：目录条目没有 `parameters` → `tool_grammar` 只生成
+        `call:name{}` 这一条分支 → **约束采样物理上只允许空实参，全部带参工具被钳死**
+        （OSS 扫描 §6.5；实测 `run_shell_command` 的语法坍缩成
+        `start: c1 / c1: "call:run_shell_command{" "}"`）。
+        而 catalog 模式的设计本就是「模型先 get_tool_schema 取详情，再带参调用」——
+        语法必须允许它这么做，否则整个逃生口拨不动。
+        full 模式下本函数与 `_build_tools_declaration` 逐字同值（无行为变化）。
+        注意两面**别名同一批 schema dict**（registry 与模块级元工具常量都不复制）：
+        今天没有任何就地改写 schema 的人，一旦出现，改动会同时出现在两面。
+        """
+        return list(self.registry.get_all_schemas()) + self._meta_schemas()
 
     async def prewarm_base_cache(self) -> bool:
         """T3：以真实轮次同款入参（默认系统提示 + 当前工具声明）预填基座前缀缓存。
@@ -530,7 +560,8 @@ class Orchestrator:
                 "n": iterations + 1, "thinking": bool(call_kwargs["enable_thinking"]),
             })
             result = await self.engine.generate_once(
-                session=session, tools=self._tools_decl, task_block=task_block,
+                session=session, tools=self._tools_decl,
+                grammar_tools=self._grammar_tools, task_block=task_block,
                 tail_notes=pending_tail_notes or None, **call_kwargs
             )
             pending_tail_notes = []  # 一次性提醒已被本次生成消费，清空（T3-c）
