@@ -282,7 +282,10 @@ class AgentEngine:
                          env_extra: Optional[List[str]]):
         """本轮 prompt 组装：优先「已记录字节流 + 方言增量段」（跨轮 token 纯追加，
         T8 门对全部缓存类型放行复用），流失效/方言不支持则退全量重渲染。
-        返回 (prompt, 尾块快照 tail_state 或 None, 是否走了增量路)。
+        返回 (prompt, 尾块快照 tail_state 或 None, 增量偏移或 None)。
+        增量偏移 = 流字节长（prompt[:offset] 即上轮已喂+已生成的字节）——后端据此
+        走 token 级增量喂入（历史段取缓存记录、永不重分词，根除采样出非规范 BPE
+        序列时的再分词错位）。None = 走了全量路。
         tail_state is None 表示方言不支持流机制——本轮不提交流。"""
         ps = getattr(session, "prompt_stream", None)
         delta_fn = getattr(self.dialect, "build_prompt_delta", None)
@@ -293,7 +296,7 @@ class AgentEngine:
                            env_extra=env_extra, prev_tail=ps.tail)
             if out is not None:
                 delta, tail = out
-                return ps.stream + delta, tail, True
+                return ps.stream + delta, tail, len(ps.stream)
         prompt = self.dialect.build_prompt(
             messages=session.history, tools=tools, enable_thinking=enable_thinking,
             task_block=task_block, tail_notes=tail_notes,
@@ -301,7 +304,7 @@ class AgentEngine:
         tail_fn = getattr(self.dialect, "tail_state", None)
         tail = (tail_fn(task_block=task_block, include_env=include_env,
                         env_extra=env_extra) if tail_fn is not None else None)
-        return prompt, tail, False
+        return prompt, tail, None
 
     async def generate_once(self,
                             session: ChatSession,
@@ -336,7 +339,7 @@ class AgentEngine:
         if getattr(session, "inject_env_context", False):
             self._prepare_session_cache(session)
 
-        formatted_prompt, _stream_tail, _stream_delta = self._assemble_prompt(
+        formatted_prompt, _stream_tail, _delta_offset = self._assemble_prompt(
             session, tools,
             enable_thinking=enable_thinking,
             task_block=task_block,
@@ -388,6 +391,12 @@ class AgentEngine:
         features: Dict[str, Any] = {
             "enable_thinking": enable_thinking,
             "thinking_budget": thinking_budget,
+            # token 级增量喂入（上位解）：增量路且纯文本会话才下发——多模态占位符
+            # 的展开在 processor，增量分词覆盖不了，后端亦有同向守门
+            "prompt_delta_offset": (_delta_offset
+                                    if _delta_offset is not None
+                                    and not session.images and not session.audios
+                                    else None),
             # 预算锚点：本方言的频道 token（详见后端对预算裁决的说明）
             "thinking_start_token": self.dialect.markers.soc,
             "thinking_end_token": self.dialect.markers.eoc,
@@ -468,7 +477,7 @@ class AgentEngine:
         metrics = outcome["metrics"] or metrics
         cancelled = outcome["cancelled"]
 
-        if _stream_delta and not cancelled:
+        if _delta_offset is not None and not cancelled:
             metrics["stream_delta"] = True
 
         # [Phase 3] 投机采样仪表：后端经 GenChunk.extra 回吐接受率统计
@@ -502,15 +511,24 @@ class AgentEngine:
         parsed = self.dialect.parse_response(generated_text)
 
         # 上位解流提交：成功生成后记录「实际喂入 prompt + 实际生成原始字节」。
-        # 三种情形不提交（详见 prompt_stream.commit docstring）：取消（上面已
-        # return）、带一次性尾注（冻结进流会把只此一轮的提醒变成永久指令，评审
-        # C1）、产出含解析失败调用（全量渲染刻意不回放 error 调用，评审 M4）——
-        # 后两者本轮照常吃增量提速，只是下一轮退全量、坏字节/尾注不进流。
+        # 两种「完成但不提交」情形（详见 prompt_stream.commit docstring）：带一次性
+        # 尾注（冻结进流会把只此一轮的提醒变成永久指令，评审 C1）、产出含解析失败
+        # 调用（全量渲染刻意不回放 error 调用，评审 M4）——本轮照常吃增量提速。
+        # 但此时**必须把旧流作废**而不是留着（二过评审 C1）：后端记录已随本轮前进，
+        # 陈旧流在「编排器不追加消息就重试」（runaway 重试/max_tokens 升级）的路径
+        # 上仍会通过 stream_valid，token 级喂入会把本想丢弃的坏产出按记录原样喂回
+        # ——纯追加下门不响、无痕。置 None 强制下一轮全量重渲染。
+        # （取消不同：消费方 break 让后端 update 未执行、记录未前进，旧流与记录
+        # 仍一致，保留即可——残局由前缀匹配 + T8 门消化。）
         # 方言不支持（tail_state 缺位 → _stream_tail is None）则全程走全量路。
-        if _stream_tail is not None and not tail_notes \
-                and not any(c.get("type") == "error" for c in parsed["tool_calls"]):
-            session.prompt_stream = prompt_stream.commit(
-                formatted_prompt, outcome["text"], session.history, tools, _stream_tail)
+        if _stream_tail is not None:
+            if not tail_notes \
+                    and not any(c.get("type") == "error" for c in parsed["tool_calls"]):
+                session.prompt_stream = prompt_stream.commit(
+                    formatted_prompt, outcome["text"], session.history, tools,
+                    _stream_tail)
+            else:
+                session.prompt_stream = None
         # 截断检测（供上层 max_tokens 恢复用）：底层生成流遇 EOS/停止符会 break、
         # 生成 token 数 < max_tokens；撞上 max_tokens 上限则是生成器自然耗尽、恰好产满
         # max_tokens 个 token。故 generation_tokens >= max_tokens 即判定本次生成被长度截断。

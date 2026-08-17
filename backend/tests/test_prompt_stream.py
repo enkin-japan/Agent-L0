@@ -278,15 +278,17 @@ def test_stream_invalid_cases():
 # ---------- 引擎级接线（真方言 + 假后端） ----------
 
 class _FakeBackend:
-    """最小后端：捕获喂入的 prompt，回吐固定生成文本。"""
+    """最小后端：捕获喂入的 prompt 与 features，回吐固定生成文本。"""
 
     def __init__(self, gen_text="Hello!"):
         self.processor = _FakeProcessor()
         self.prompts = []
+        self.features = []
         self.gen_text = gen_text
 
     def stream_generate(self, prompt, **kwargs):
         self.prompts.append(prompt)
+        self.features.append(dict(kwargs.get("features") or {}))
         yield SimpleNamespace(text=self.gen_text, delta=None, prompt_tokens=3,
                               generation_tokens=2, prompt_tps=1.0,
                               generation_tps=1.0, peak_memory=0.0, extra={})
@@ -321,6 +323,9 @@ def test_engine_second_turn_uses_stream_delta():
     assert be.prompts[1].startswith(be.prompts[0] + "Hi from model")
     assert r2["metrics"].get("stream_delta") is True
     assert s.prompt_stream.stream == be.prompts[1] + "Hi from model"
+    # token 级增量喂入偏移（评审 S9）：turn1 无、turn2 == 上轮流字节长
+    assert be.features[0].get("prompt_delta_offset") is None
+    assert be.features[1].get("prompt_delta_offset") == len(ps1.stream)
 
 
 def test_engine_falls_back_on_history_rewrite_and_recovers():
@@ -394,13 +399,19 @@ def test_qwen_task_appends_cap(qb):
 
 
 def test_engine_no_commit_with_tail_notes():
-    """一次性尾注不冻结进流（评审 C1）：注当轮照渲染，但该轮不提交。"""
+    """一次性尾注不冻结进流（评审 C1）：注当轮照渲染，但该轮不提交，
+    且**旧流必须作废**（二过评审 C1：后端记录已前进，陈旧流在「不追加消息就
+    重试」的编排路径上会把想丢弃的产出经 token 级喂入原样喂回，无痕污染）。"""
     be = _FakeBackend()
     eng = _mk_engine(be)
     s = _mk_session()
+    asyncio.run(eng.generate_once(s, tools=None))
+    assert s.prompt_stream is not None
+    s.history.append({"role": "assistant", "content": "Hello!"})
+    s.history.append({"role": "user", "content": "next"})
     asyncio.run(eng.generate_once(s, tools=None, tail_notes=["one-shot note"]))
-    assert "one-shot note" in be.prompts[0]   # 本轮照常喂给模型
-    assert s.prompt_stream is None            # 但不进流：下一轮退全量、注不复现
+    assert "one-shot note" in be.prompts[1]   # 本轮照常喂给模型（还吃了增量提速）
+    assert s.prompt_stream is None            # 旧流作废：下一轮强制退全量
 
 
 def test_engine_no_commit_on_parse_error_calls():

@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """A8 实测：多轮对话下 Qwen3.8 off vs drafter 的端到端净收益（MTP_PROJECT §3.1 A8）。
 
+口径沿革（v3，2026-08-17，上位解验收）：客户端组装改为**流式**（镜像引擎
+_assemble_prompt/commit：turn1 全量、turn2+ 记录流+方言增量段，prompt 字节只增
+不改）——v2 的全量重渲染口径里 env 块逐轮后移，测不到上位解要验的纯追加快路。
+新增 e4b-8bit 臂验旋转态滑窗放行；turn2+ 硬断言：走增量路 + 门不拒 +
+reused_prefix 非零，任一不满足整臂作废。
+
 口径沿革（v2，2026-08-17，首过评审 C1/C2/C3 后改写）：
 - 原前提「drafter 丢前缀复用、每轮退冷预填」对 Qwen3.8 **不成立**（评审 C2）：
   缓冲缓存转换只认 gemma 系 RotatingKVCache，qwen3_5 是 KVCache+ArraysCache，
@@ -45,6 +51,7 @@ sys.path.insert(0, str(BACKEND_DIR / "scripts"))
 from bench_baseline import (                                    # noqa: E402
     Client, FILLER_SENTENCES, SAMPLING_BASE, drop_cache, make_dialect,
     read_env_key, start_server, stop_server, wait_health)
+from framework.core import prompt_stream as pstream             # noqa: E402
 from framework.utils.model_selection import model_options       # noqa: E402
 from framework.utils.path_resolver import resolve_model_path    # noqa: E402
 
@@ -54,6 +61,9 @@ PORT = 14161              # bench 专用口（与生产 :14159/:14160 隔离）
 
 ARMS = [
     # (registry repo, mode, draft 目录名, block_size)
+    # e4b 臂（v3 增，上位解验收）：滑窗 512/1024 在五轮长填充下必然旋转——
+    # 验的是「旋转态缓存在纯追加口径下不再被 T8 门拒」（修复前超窗即整段冷预填）
+    ("mlx-community/gemma-4-e4b-it-8bit", "off",  None,                  None),
     ("mlx-community/Qwen3.8-27B-8bit", "off",     None,                  None),
     ("mlx-community/Qwen3.8-27B-8bit", "drafter", "Qwen3.8-27B-MTP-8bit", 5),
     ("mlx-community/Qwen3.8-27B-4bit", "off",     None,                  None),
@@ -120,15 +130,35 @@ def run_arm(repo: str, mode: str, draft_dir, block_size, out_fh, run_id: str) ->
         messages = [{"role": "system", "content": "你是一个耐心细致的资料分析助手。"}]
         cache_id = None
         cache_box = {}
+        # v3（上位解验收口径）：镜像引擎 _assemble_prompt/commit 的流式组装——
+        # turn1 全量渲染，turn2+ 走「记录流+方言增量段」，prompt 字节只增不改。
+        # v2 的客户端全量重渲染口径测不到新机制（env 块逐轮后移正是被修掉的破坏者）。
+        ps = None
+        prev_total = None      # 上轮 prompt_tokens + generation_tokens（复用期望值）
+        overhang_falls = 0     # drafter 臂「停止符后同块已接受 token」的合法门拒次数
         for turn in range(len(_QUESTIONS)):
             messages.append({"role": "user",
                              "content": f"{_filler(turn)}\n\n{_QUESTIONS[turn]}"})
-            prompt = dialect.build_prompt(messages=messages, tools=None,
-                                          include_env=False)
+            used_delta, tail = False, None
+            if ps is not None and pstream.stream_valid(ps, messages, None):
+                d_out = dialect.build_prompt_delta(messages[ps.seen + 1:],
+                                                   prev_tail=ps.tail)
+                if d_out is not None:
+                    prompt, tail = ps.stream + d_out[0], d_out[1]
+                    used_delta = True
+            if not used_delta:
+                prompt = dialect.build_prompt(messages=messages, tools=None,
+                                              include_env=False)
+                tail = dialect.tail_state()
+            raw_box = {}   # 原始字节口径（评审 C2）：流提交与引擎同源，不用展示 delta
             last, text, ttft, cache_id, wall = cli.generate(
                 prompt, cache_id=cache_id,
+                # token 级增量喂入：历史段取服务端缓存记录、永不重分词（根除
+                # 采样出非规范 BPE 序列时的再分词错位——v3 首跑三臂败因之一）
+                features=({"prompt_delta_offset": len(ps.stream)}
+                          if used_delta else None),
                 sampling={**SAMPLING_BASE, "max_tokens": MAX_TOKENS},
-                cache_out=cache_box)
+                cache_out=cache_box, raw_out=raw_box)
             gen_tokens = (last or {}).get("generation_tokens") or 0
             if gen_tokens <= 2:
                 raise RuntimeError(
@@ -143,6 +173,7 @@ def run_arm(repo: str, mode: str, draft_dir, block_size, out_fh, run_id: str) ->
                 raise RuntimeError(
                     f"turn {turn + 1} 出现 spec_drafted：off 臂被投机接管，"
                     "疑似串臂/旧 spec 残留，整臂作废（评审 M10）")
+            ps = pstream.commit(prompt, raw_box.get("text", ""), messages, None, tail)
             messages.append({"role": "assistant", "content": text})
             ptok = (last or {}).get("prompt_tokens")
             reused = extra.get("reused_prefix")
@@ -158,6 +189,7 @@ def run_arm(repo: str, mode: str, draft_dir, block_size, out_fh, run_id: str) ->
                    "generation_tps": (last or {}).get("generation_tps"),
                    "peak_memory": (last or {}).get("peak_memory"),
                    "truncated": gen_tokens >= MAX_TOKENS,
+                   "assembly": "stream" if used_delta else "full",
                    "extra": extra,
                    "prompt_sha16": _sha(prompt), "text_sha16": _sha(text),
                    "text_head": text[:120], "text_chars": len(text)}
@@ -166,6 +198,52 @@ def run_arm(repo: str, mode: str, draft_dir, block_size, out_fh, run_id: str) ->
             print(f"  [{Path(repo).name} {mode}] turn {turn + 1}: "
                   f"ttft {ttft:.2f}s wall {wall:.2f}s "
                   f"prompt {ptok} gen {gen_tokens} extra {extra}", flush=True)
+
+            # v3 验收断言（上位解金标准）——行已落盘再断言（首过评审 C2：断言先炸
+            # 会把肇事轮的全部数据一起带走，排障就得重烧 GPU）。turn2+：
+            #  · 必须走增量路（组装侧回归）；reused_prefix 仪表必须在（缺仪表≠漂移）；
+            #  · 门拒里唯一放行 drafter 臂的「缓存悬垂」（reuse_diag.prefix_len==
+            #    record_len：MTP 停止符后同块已接受 token 污染线性层状态，门拒正确、
+            #    冷回退自愈）；其余门拒与命中不足（期望 上轮总量±1，停止符喂入与否
+            #    差一枚）一律整臂作废。
+            if turn >= 1:
+                diag = extra.get("reuse_diag") or {}
+                if not used_delta:
+                    raise RuntimeError(f"turn {turn + 1} 未走流增量路（stream_valid/"
+                                       f"delta 拒了）：上位解组装回归，整臂作废")
+                if not extra.get("delta_feed"):
+                    # 后端静默退字节路（评审 S10/C3 配套仪表）：即便本轮分词恰好
+                    # 规范、复用照常命中，也必须被看见——否则失效无痕
+                    raise RuntimeError(f"turn {turn + 1} 后端未走 token 级喂入"
+                                       f"（extra 无 delta_feed），整臂作废")
+                if "reused_prefix" not in extra:
+                    raise RuntimeError(f"turn {turn + 1} extra 缺 reused_prefix：前缀"
+                                       f"命中仪表缺失（非漂移），整臂作废")
+                if extra.get("reuse_blocked"):
+                    # 悬垂签名（评审 C3）：token 级喂入下 prefix_len==record_len
+                    # 恒真，不能作判据——悬垂的本质是缓存流位置超出公共前缀
+                    _mo = diag.get("max_offset")
+                    if mode == "drafter" and _mo is not None \
+                            and diag.get("prefix_len") == diag.get("record_len") \
+                            and _mo > (diag.get("prefix_len") or 0):
+                        overhang_falls += 1
+                        print(f"  [诊断] turn {turn + 1} 缓存悬垂门拒（合法冷回退）："
+                              f"{diag}", flush=True)
+                    else:
+                        raise RuntimeError(
+                            f"turn {turn + 1} 复用被门拒：{extra['reuse_blocked']} "
+                            f"diag={diag}——纯追加+token 级喂入下即记录错位，整臂作废")
+                else:
+                    rp = extra.get("reused_prefix") or 0
+                    if prev_total is not None \
+                            and not (prev_total - 1 <= rp <= prev_total):
+                        raise RuntimeError(
+                            f"turn {turn + 1} 复用不足：reused_prefix={rp}，期望 "
+                            f"{prev_total}±1（上轮 prompt+gen），整臂作废")
+            prev_total = (ptok or 0) + gen_tokens
+        if overhang_falls:
+            print(f"  [臂小结] {Path(repo).name}×{mode} 悬垂冷回退 {overhang_falls} 次"
+                  f"（合法门拒，MTP 停止符后同块已接受 token）", flush=True)
         drop_cache(cli, cache_box)
     finally:
         stop_server(proc, lf)
@@ -198,14 +276,18 @@ def main() -> int:
                 continue                     # SIGKILL 截断的残行：丢弃
             if r.get("kind") != "header" and "run_id" not in r:
                 continue                 # v1 旧 schema 行：不认领、重写时丢弃（评审 M9）
+            if r.get("kind") is None and "assembly" not in r:
+                continue                 # v2 全量重渲染口径行：与 v3 不可混档，丢弃
             rows.append((line, r))
             if r.get("kind") in ("header", "arm_failed"):
                 continue
             arms_seen.setdefault(_arm_key(r), set()).add(r.get("turn"))
         done = {k for k, turns in arms_seen.items()
                 if turns >= set(range(1, len(_QUESTIONS) + 1))}
+        # arm_failed 行恒保留（v3 评审 C3）：失败证据不能被下一次续跑抹掉
         kept_lines = [l for l, r in rows
-                      if r.get("kind") == "header" or _arm_key(r) in done]
+                      if r.get("kind") in ("header", "arm_failed")
+                      or _arm_key(r) in done]
         dropped = len(rows) - len(kept_lines)
         out.write_text("\n".join(kept_lines) + ("\n" if kept_lines else ""),
                        encoding="utf-8")
@@ -219,7 +301,7 @@ def main() -> int:
 
     with out.open("a", encoding="utf-8") as fh:
         # 环境头：每次真正开跑的进程一行，自描述产物
-        header = {"kind": "header", "run_id": run_id,
+        header = {"kind": "header", "caliber": "v3-stream", "run_id": run_id,
                   "date": time.strftime("%Y-%m-%d %H:%M:%S"),
                   "machine": platform.platform(),
                   "mlx": _pkg_version("mlx"), "mlx_vlm": _pkg_version("mlx-vlm"),

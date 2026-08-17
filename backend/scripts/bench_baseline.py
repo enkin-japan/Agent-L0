@@ -209,7 +209,8 @@ class Client:
             return False
 
     def generate(self, prompt: str, *, cache_id=None, sampling=None, features=None,
-                 first_chunk_budget: float = 300.0, cache_out: dict = None):
+                 first_chunk_budget: float = 300.0, cache_out: dict = None,
+                 raw_out: dict = None):
         """SSE 消费 /v1/generate。返回 (chunks 末件, 全文, ttft, cache_id, wall)。
         看门狗：首 chunk 前按 prefill 预算，之后逐 chunk INTER_CHUNK_TIMEOUT。
         cache_out：meta 事件一到就把 cache_id 写进去——异常路径（超时/error/EOF/坏 JSON）
@@ -253,6 +254,13 @@ class Client:
                     last = payload
                     n_chunk += 1
                     text += payload.get("delta") or ""
+                    # 原始字节口径（A8 v3 评审 C2）：payload["text"] 是引擎侧
+                    # chunk.text（last_segment 分段），累计=引擎 gen_text 同源；
+                    # delta 是展示口径（SPM 快路做 ▁ 归一/重排跳段），二者对
+                    # gemma 家族不逐字节等价，流提交必须用本口径
+                    if raw_out is not None:
+                        raw_out["text"] = raw_out.get("text", "") \
+                            + (payload.get("text") or "")
                 elif kind == "error":
                     raise RuntimeError(f"engine error: {payload}")
                 elif kind == "done":

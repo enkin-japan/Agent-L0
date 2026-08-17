@@ -870,6 +870,9 @@ def stream_generate(
     resize_shape = normalize_resize_shape(kwargs.pop("resize_shape", None))
     image_token_index = getattr(model.config, "image_token_index", None)
     vision_cache = kwargs.pop("vision_cache", None)
+    # token 级增量喂入（上位解 v3 排障定案）：prompt 的字符偏移，之前是上一轮
+    # 已喂+已生成的字节流、之后是本轮增量段。在 prepare_inputs 之前弹出防下渗。
+    prompt_delta_offset = kwargs.pop("prompt_delta_offset", None)
 
     if kwargs.get("input_ids", None) is not None:
         input_ids = kwargs.pop("input_ids")
@@ -912,6 +915,57 @@ def stream_generate(
     reused_prefix_len = 0
     full_input_ids_list = input_ids.flatten().tolist()
 
+    # token 级增量喂入（上位解，A8 v3 拒绝诊断定案）：字节级组装无法根除
+    # 「模型采样出非规范 BPE 序列」——同字节不同切分（'资料的'/'输送带' 类合并差）
+    # 让历史段重分词与缓存记录错位，qwen CJK 文本 ~20% 轮次撞上。调用方给出
+    # 增量偏移时，token 序列直接取「缓存记录 + 只分词增量段」，历史段**永不
+    # 重分词**，prefix 命中由构造保证。守则：
+    # - 仅纯文本路（多模态的占位符展开在 processor，增量分词覆盖不了）；
+    # - 记录以停止符收尾（已喂情形）时增量段首 token 就是它，去重一枚；
+    #   收尾停止符与增量收口符不同（如 eos vs eot）则整体退字节路（语义存疑，
+    #   宁可冷也不喂 eos 后接 eot 的畸形序列）；
+    # - 后面的 T8 回滚能力门照常运行：记录与缓存错位（取消残局/MTP 停止符后
+    #   同块已接受 token 的悬垂）仍会被门拒退冷，本路只消再分词漂移这一类。
+    if prompt_cache_state is not None:
+        prompt_cache_state.delta_feed = False    # 仪表：本轮是否真走了 token 级喂入
+    _pdo_valid = (isinstance(prompt_delta_offset, int)
+                  and 0 <= prompt_delta_offset <= len(prompt))
+    if prompt_delta_offset is not None and not _pdo_valid:
+        # 网络入参（/v1/generate features 原样透传）：非法值忽略退字节路，
+        # 负偏移的 prompt[off:] 会把尾部字节当增量拼进上下文——静默污染
+        print(f"[Memory] prompt_delta_offset 非法（{prompt_delta_offset!r}），退字节路")
+    if (_pdo_valid and prompt_delta_offset is not None
+            and prompt_cache_state is not None
+            and prompt_cache_state.token_ids
+            and pixel_values is None and audio is None):
+        _rec = prompt_cache_state.token_ids
+        _d_ids = list(tokenizer.encode(prompt[prompt_delta_offset:],
+                                       add_special_tokens=False))
+        _stop_ids = set(getattr(tokenizer.stopping_criteria, "eos_token_ids", []) or [])
+        _delta_ok = bool(_d_ids)         # 空增量段=整段冷预填还不如退字节路
+        if _delta_ok and _rec and _rec[-1] in _stop_ids:
+            if _d_ids[0] == _rec[-1]:
+                _d_ids = _d_ids[1:]      # 停止符已在缓存里：增量段的收口符去重
+                _delta_ok = bool(_d_ids)
+            else:
+                _delta_ok = False
+        if _delta_ok:
+            full_input_ids_list = list(_rec) + _d_ids
+            input_ids = mx.array([full_input_ids_list])
+            # 文本路的 mask 在本函数不参与前缀裁剪（下方 input_ids 截断从不同步
+            # 裁 mask；ar.py 里 mask 只流向 get_input_embeddings），长度已变即
+            # 弃用。注意由此产生一处不对称：门拒退冷时 delta 路喂 None、字节路
+            # 喂全 1——两者在单序列全注意力语义下等价。
+            mask = None
+            prompt_cache_state.delta_feed = True
+        else:
+            # 静默自关是最难排障的失效形态（每轮变慢/门拒变多而无痕）：响亮记录。
+            # 已知会走到这里的真实形态：gemma 工具调用轮以 <eos> 收尾（≠轮收口
+            # 符 <turn|>），无法去重亦不可裁（旋转态），退字节路后由门拒退冷。
+            print(f"[Memory] token 级增量喂入退回字节路：记录尾 "
+                  f"{_rec[-1] if _rec else None} 与增量首 "
+                  f"{_d_ids[0] if _d_ids else None} 不可衔接")
+
     # 前缀命中可观测性（T4R）：挂在 state 上供后端读走进 GenChunk.extra——
     # 命中退化（装配层把易变段挪到了前面）只有被看见才会被修。先记 0，命中时更新。
     # reuse_blocked 同理（T8 门）：被门拒和压根没命中在 reused_prefix=0 上同貌，
@@ -919,6 +973,7 @@ def stream_generate(
     if prompt_cache_state is not None:
         prompt_cache_state.last_reused_prefix = 0
         prompt_cache_state.reuse_blocked = None
+        prompt_cache_state.reuse_diag = None
 
     # [MTP] 缓冲缓存形态一律不复用前缀。MTP 跑过一轮后，上游
     # `_buffer_mtp_target_cache` 会把 RotatingKVCache **就地**换成
@@ -941,7 +996,28 @@ def stream_generate(
             _blocker = _prefix_reuse_blocker(prompt_cache_state.cache, prefix_len)
             if _blocker is not None:
                 print(f"[Memory] 前缀复用放弃（退冷预填，慢但正确）：{_blocker}")
+                # 拒绝诊断（上位解 v3 验收排障）：分歧点前后各 4 个 token 的
+                # 记录/新 prompt 对照——纯追加口径下唯一的合法拒因是取消残局，
+                # 其余都是「记录与再分词的错位」，位置与内容是定性的全部证据。
+                # 只打 token id 不打解码文本：会话字节不进日志（隐私口径；
+                # 首过评审 S7——decode 内容会随 server 日志落盘）
+                _rec = prompt_cache_state.token_ids or []
+                _lo, _hi = max(0, prefix_len - 4), prefix_len + 4
+                print(f"[Memory] 拒绝诊断：prefix_len={prefix_len} 记录长={len(_rec)} "
+                      f"新长={len(full_input_ids_list)} "
+                      f"记录[{_lo}:{_hi}]={_rec[_lo:_hi]} "
+                      f"新[{_lo}:{_hi}]={full_input_ids_list[_lo:_hi]}")
                 prompt_cache_state.reuse_blocked = _blocker
+                # 结构化诊断随 extra 外露（验收侧据此分辨「再分词漂移」
+                # （prefix_len<record_len）与「缓存悬垂」（prefix_len==record_len、
+                # max_offset 超出——MTP 停止符后同块已接受 token，门拒正确）
+                _offs = [o for o in (_offset_int(c)
+                                     for c in prompt_cache_state.cache if c is not None)
+                         if o is not None]
+                prompt_cache_state.reuse_diag = {
+                    "prefix_len": prefix_len,
+                    "record_len": len(prompt_cache_state.token_ids or []),
+                    "max_offset": max(_offs) if _offs else None}
                 _reusable = False
         if _reusable:
             reused_prefix_len = prefix_len

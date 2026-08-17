@@ -628,17 +628,18 @@ def _facade_assemble(msgs):
     （prompt_stream 指纹校验：已覆盖段逐字节未改 + 新首条是我们生成的 assistant
     占位）则走「已记录字节流 + 方言增量段」——跨轮 token 纯追加，T8 门对全部
     缓存类型放行前缀复用。否则（新会话/多客户端交错/方言不支持）退全量渲染。
-    返回 (prompt, 尾块快照或 None, 是否走了增量路)。"""
+    返回 (prompt, 尾块快照或 None, 增量偏移或 None)——偏移供后端走 token 级
+    增量喂入（历史段取缓存记录、永不重分词）。门面无多模态入口，恒可下发。"""
     ps = S.facade_stream
     delta_fn = getattr(S.dialect, "build_prompt_delta", None)
     if delta_fn is not None and pstream.stream_valid(ps, msgs, None):
         out = delta_fn(msgs[ps.seen + 1:], prev_tail=ps.tail)
         if out is not None:
             delta, tail = out
-            return ps.stream + delta, tail, True
+            return ps.stream + delta, tail, len(ps.stream)
     prompt = S.dialect.build_prompt(messages=msgs, tools=None, include_env=False)
     tail_fn = getattr(S.dialect, "tail_state", None)
-    return prompt, (tail_fn() if tail_fn is not None else None), False
+    return prompt, (tail_fn() if tail_fn is not None else None), None
 
 
 def _facade_commit(prompt: str, raw_text: str, msgs, tail, visible_text: str) -> None:
@@ -671,10 +672,11 @@ async def oai_chat_completions(request: Request):
     if not bool(body.get("stream")):
         filt = _facade_streamer()
 
-        def _run(prompt):
+        def _run(prompt, delta_off):
             last, parts, raw = None, [], []
-            for ch in S.backend.stream_generate(prompt, cache=S.facade_cache,
-                                                sampling=sampling, features={}):
+            for ch in S.backend.stream_generate(
+                    prompt, cache=S.facade_cache, sampling=sampling,
+                    features={"prompt_delta_offset": delta_off}):
                 last = ch
                 raw.append(ch.text)   # 原始字节（含思考/工具块）——门面流提交用
                 v = filt.feed(ch.text)
@@ -687,12 +689,12 @@ async def oai_chat_completions(request: Request):
 
         async with S.gen_sem:
             # 组装-生成-提交整组进临界区（评审 M6，_facade_commit docstring）
-            prompt, stream_tail, used_delta = _facade_assemble(dialect_msgs)
-            if used_delta:
+            prompt, stream_tail, delta_off = _facade_assemble(dialect_msgs)
+            if delta_off is not None:
                 S.metrics["facade_stream_delta_total"] = \
                     S.metrics.get("facade_stream_delta_total", 0) + 1
             text, last, raw_text = await loop.run_in_executor(
-                S.executor, lambda: _run(prompt))
+                S.executor, lambda: _run(prompt, delta_off))
             _facade_commit(prompt, raw_text, dialect_msgs, stream_tail, text)
         pt = last.prompt_tokens if last else 0
         gt = last.generation_tokens if last else 0
@@ -710,8 +712,9 @@ async def oai_chat_completions(request: Request):
     def _blocking():
         last, raw, vis = None, [], []
         try:
-            for ch in S.backend.stream_generate(asm["prompt"], cache=S.facade_cache,
-                                                sampling=sampling, features={}):
+            for ch in S.backend.stream_generate(
+                    asm["prompt"], cache=S.facade_cache, sampling=sampling,
+                    features={"prompt_delta_offset": asm["delta_off"]}):
                 last = ch
                 raw.append(ch.text)   # 原始字节——门面流提交用（仅完整走完才提交）
                 v = filt.feed(ch.text)
@@ -742,9 +745,9 @@ async def oai_chat_completions(request: Request):
         task = None
         try:
             yield oai.stream_line(S.model_name, cid, role="assistant")
-            asm["prompt"], asm["tail"], asm["used_delta"] = \
+            asm["prompt"], asm["tail"], asm["delta_off"] = \
                 _facade_assemble(dialect_msgs)
-            if asm["used_delta"]:
+            if asm["delta_off"] is not None:
                 S.metrics["facade_stream_delta_total"] = \
                     S.metrics.get("facade_stream_delta_total", 0) + 1
             task = loop.run_in_executor(S.executor, _blocking)

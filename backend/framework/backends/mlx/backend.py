@@ -538,6 +538,9 @@ class MLXBackend:
             audio=audios,
             temperature=sampling.get("temperature", 0.2),
             prompt_cache_state=cache.state,
+            # token 级增量喂入（上位解）：调用方（引擎/门面/台架）给出增量偏移时，
+            # 历史段 token 直接取缓存记录、永不重分词（补丁层守则见彼处）
+            prompt_delta_offset=features.get("prompt_delta_offset"),
             enable_thinking=features.get("enable_thinking", False),
             max_tokens=sampling.get("max_tokens", 4096),
             min_p=sampling.get("min_p", 0.05),
@@ -568,6 +571,13 @@ class MLXBackend:
             rb = getattr(cache.state, "reuse_blocked", None)
             if rb:
                 extra["reuse_blocked"] = rb
+            rd = getattr(cache.state, "reuse_diag", None)
+            if rd:
+                extra["reuse_diag"] = rd
+            # token 级喂入是否真的生效（评审 S10）：客户端 used_delta 只是组装
+            # 口径，后端静默退字节路（如 gemma 工具轮 eos 尾）必须对外可见
+            if getattr(cache.state, "delta_feed", None):
+                extra["delta_feed"] = True
             yield GenChunk(
                 text=result.text,
                 delta=delta,
