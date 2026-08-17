@@ -77,6 +77,62 @@ _SHELL_METACHARS = set(";|&<>`$(){}\n!")
 # 解释器直接执行代码的参数：内容不可知，需审批
 _CODE_EXEC_FLAGS = {"-e", "-c", "--eval", "--exec"}
 
+# ── 良性非零退出码（OSS 扫描 §6.1 实案，2026-08-17）──────────────────────────
+# 下列命令的 exit 1 是「正常的否定答案」而非错误：grep/rg 无命中、diff/cmp 有差异、
+# test 条件为假。而编排层的 D2 谎报围堵（orchestrator.py `_FAILED_RESP_RE`）按退出码
+# 判失败——不区分就会把「确认某物不存在」这类高频只读答案当成硬失败，推回一次
+# failure_swallow_nudge **逼模型向用户报告一个不存在的错误**，白烧一整次生成。
+# 判定必须在本工具内做完：编排层只拿得到响应文本、拿不到命令，绝不可从文本反推
+# 命令语义（那是两处真相）。命中即在首行打 `_BENIGN_EXIT1_MARK` 供编排层识别。
+# 名单刻意不含：find（无命中返回 0，非零一律是真错）、fd（本机未安装，无命中退出码
+# 语义无法实证——宁可漏判成失败，不可误判成良性）。
+# 证据分级（刻意标清，勿混为一谈）：grep/diff/cmp/test 四条为**本机实测**
+# （2026-08-17）——否定答案均为 exit 1 + stderr 空，真错误（路径不存在等）均为
+# exit 2 + stderr 非空，故「exit 恰为 1 且 stderr 空」能干净分开两者；`rg` 一条按
+# **ripgrep 官方文档**的 0/1/2 约定收入，本机 PATH 上没有 rg 二进制（非交互 zsh 看不到
+# 它），无法实测。未装时该命令返回 127 + stderr，四条与门本就不放行，收入无风险。
+_BENIGN_EXIT1_COMMANDS = {"grep", "rg", "diff", "cmp", "test"}
+
+# 良性标记：与 orchestrator.py `_FAILED_RESP_RE` 的负向断言对应（两侧注释互指）。
+# test_fabrication_guardrails.py 有一条跨模块契约测试钉死「本标记不被判为失败」——
+# 它能挡住把标记改成不再被断言认出的漂移（真正会坏事的那种）；同前缀内的措辞微调
+# 仍会通过，那种漂移不破坏契约。标记长度也是模型可读性与 UI 行宽的折中：它会成为
+# 步骤卡的首行摘要（orchestrator 取 `splitlines()[0]`）。
+_BENIGN_EXIT1_MARK = " (benign: negative result, not an error)"
+
+
+def _is_benign_exit1(command: str, returncode: int, stderr: str) -> bool:
+    """判定「本次 exit 1 是正常否定答案」。四条与门，任一不成立即当作真失败。
+
+    方向是 fail-safe：判不准一律不打标（退回既有的「非零即失败」行为），
+    宁可多推回一次，也不可把真失败标成良性——后者会让 D2 护栏漏掉真事故。
+
+    知情取舍（评审提出，确认接受）：名单里这几个命令也正是模型**自检**的惯用手法
+    （`grep -q pat out` / `test -f path` / `diff expected actual`），那里的 exit 1
+    意思是「自检没通过」。放行后 D2 的失败推回不再覆盖这类自检——它在文本层与
+    「没找到就是答案」不可分，而后者是桌面 agent 的高频正常路径，误报代价（每次白烧
+    一整轮生成 + 逼模型报告不存在的错误）远大于此。写后未复查另有 T1-4 verify 门
+    覆盖；「搜不到说明我写失败了」属语义级判断，本就归模型不归正则。
+    """
+    if returncode != 1 or stderr.strip():   # strip：只有空白的 stderr 等同于没有
+        return False
+    # 元字符复用 `_is_readonly` 的同一份常量（单一来源，不另立一份免得漂移）：管道/
+    # 子命令的退出码归属最后一段，无法归因给首命令。
+    # 代价（已知）：该集合是为「能否静态保证只读」设计的，比归因所需更宽——含
+    # `( ) { } $ !`，于是 `grep 'x{2}' f`、`grep '\$V' f` 这类**引号内**带正则元字符的
+    # 命令也会落到「不打标」，仍吃一次误报推回。方向安全（漏判成失败），故接受。
+    # ⚠️ 若将来为审批面放宽 `_SHELL_METACHARS`，本判定会随之放宽——那是不安全方向
+    # （可能把管道的退出码误归给首命令），届时必须在这里另立一份更窄的集合。
+    if any(ch in _SHELL_METACHARS for ch in command):
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+    return os.path.basename(tokens[0]) in _BENIGN_EXIT1_COMMANDS
+
 
 def _is_readonly(command: str) -> bool:
     """静态判定命令是否为「确定的只读操作」；任何不确定都返回 False（→ 需审批）。"""
@@ -212,8 +268,11 @@ class ShellExecTool(BaseTool):
         except Exception as e:
             return f"System Error: failed to run command: {str(e)}"
 
-        # 组装对模型友好的结构化结果
-        parts = [f"exit_code: {proc.returncode}"]
+        # 组装对模型友好的结构化结果。良性非零码在首行随退出码打标：模型据此知道
+        # 「没找到」是答案不是错误，编排层的失败判据据此放行（见 _is_benign_exit1）。
+        mark = (_BENIGN_EXIT1_MARK
+                if _is_benign_exit1(command, proc.returncode, proc.stderr or "") else "")
+        parts = [f"exit_code: {proc.returncode}{mark}"]
         stdout = (proc.stdout or "").rstrip()
         stderr = (proc.stderr or "").rstrip()
         if stdout:

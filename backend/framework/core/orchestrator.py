@@ -208,7 +208,20 @@ _FILE_WRITE_TOOLS = {"edit_file", "write_file"}
 # ── D2 谎报围堵（#84，2026-08-10 26B 档实案）────────────────────────────────
 # 失败判据：工具层显式错误，或 shell 响应头部的非零退出码。只认硬信号——语义级
 # 失败（"没找到"之类正常结果）不算，误报会把正常轮次推进无谓的自纠循环。
-_FAILED_RESP_RE = re.compile(r"^System Error:|^exit_code: (?!0\b)\d+", re.M)
+# 判据的**单一入口是 `_obs_failed`**（结构化事实优先），本正则只是它的回落层。
+#
+# 两处修正（OSS 扫描 §6.1/§6.2，2026-08-17）——上面这句「只认硬信号」原先并未兑现：
+# ① 去掉 `re.M`：两个锚点必须是「整段开头」。带 re.M 时匹配的是任意一行的行首，
+#    read_file 读日志、tail/grep 命中含 `System Error:` 或 `exit_code: N` 的行，
+#    都会把 unresolved_failure 误置位 → 收尾白烧一次生成。
+# ② 负向断言排除良性非零码：grep 无命中 / diff 有差异 / test 条件为假的 exit 1 是
+#    正常否定答案，由 `shell_exec._is_benign_exit1` 就地判定并在首行打标
+#    （标记字面量 `mcp/tools/shell_exec.py:_BENIGN_EXIT1_MARK`，两侧注释互指，
+#    跨模块契约由 test_fabrication_guardrails.py 钉死）。不打标的非零码照旧算失败。
+# `\d+\b` 里的 `\b` 不可省：没有它，多位退出码会靠回溯绕过负向断言——`exit_code: 12
+# (benign…)` 里 `\d+` 退让成 "1"、断言只看到 "2" 便放行，整条判成失败。今天走不到
+# （标记只在 returncode==1 时打），但第二个良性码一旦出现就是静默陷阱。
+_FAILED_RESP_RE = re.compile(r"^System Error:|^exit_code: (?!0\b)\d+\b(?! \(benign\b)")
 # 动作声明判据：收尾文本声称完成了变更类动作（创建/安装/启动/写入…，中英）。
 # 只在「本轮零成功变更调用」时参与判定；推回文案允许模型改写为"此前完成/建议你执行"，
 # 改写后不再命中 = 自愈放行（防误伤对历史工作的转述）。
@@ -222,6 +235,23 @@ _ACTION_CLAIM_RE = re.compile(
 
 def _resp_failed(resp: Any) -> bool:
     return bool(_FAILED_RESP_RE.search(str(resp or "")))
+
+
+def _obs_failed(obs: Any) -> bool:
+    """失败判据的单一入口：优先读物理执行层挂的结构化事实 `_failed`。
+
+    `_failed` 由 `_invoke_tool` 单点判定并随观察挂上（在观察截断**之前**算，且能纳入
+    只有那一层知道的事实——超时熔断）。收尾护栏读它，而不是把响应文本再解析一遍：
+    「这次调用失败了没有」是执行层的事实，不是文本模式匹配的推断结果。
+
+    缺键只有一种活路径：`_execute_physical` 就地生成的「Duplicate call blocked」响应
+    （没真执行，本就不算物理失败，回落正则同样判 False）。解析错误响应虽也缺键，但两个
+    消费点都在调用本函数**之前**按 `type == "error"` 跳过了它；会话重载后的历史观察
+    （`_` 前缀不落盘）根本不流经这两个消费点——不要据此以为存在读旧观察的消费者。
+    """
+    if isinstance(obs, dict) and "_failed" in obs:
+        return bool(obs["_failed"])
+    return _resp_failed(obs.get("response") if isinstance(obs, dict) else obs)
 
 
 def _last_user_text(history: List[Dict[str, Any]]) -> str:
@@ -700,7 +730,7 @@ class Orchestrator:
                     if c.get("type") == "error":
                         continue
                     rtext = str(r.get("response") or "")
-                    if _resp_failed(rtext):
+                    if _obs_failed(r):
                         unresolved_failure = True
                         continue
                     unresolved_failure = False
@@ -1191,6 +1221,19 @@ class Orchestrator:
             events.emit("tool_error", session=session.session_id, tool=name,
                         timeout=timed_out, msg=str(result_text)[:160])
 
+        # [D2 谎报围堵] 失败事实在此单点判定，随观察以 `_failed` 挂出（见 _obs_failed）。
+        # 必须在下面的观察截断**之前**算：截断会改写文本，判据不能建在被改写的文本上。
+        # 三个来源取并：工具层显式报错（errored，比正则多容忍前导空白——缩进过的真错误
+        # 不能漏）、超时熔断（只有本层知道）、shell 非零退出码（正则，良性码已由
+        # shell_exec 打标排除）。
+        #
+        # 已知边界（§6.2 修不到的那一半）：工具的失败约定就是「响应 0 位打 System
+        # Error:」，因此**观察首行恰好就是该串**时仍判失败——read_file 读到一份以这行
+        # 开头的日志，与工具自己报错，在文本层不可分。根治要工具带外结构化报错
+        # （registry.execute_tool 返回失败标志而非文本前缀），另立项。去掉 re.M 已经
+        # 消掉了发生率高得多的那一半（错误行在第 2 行及以后）。
+        failed = errored or timed_out or _resp_failed(result_text)
+
         # [观察截断] 保护每步延迟与上下文（护栏参数，见 config agent.observation_max_chars）
         # 注：截断只作用于给模型的文本。渲染载荷由工具在结构尚在时另行产出（ToolOutput），
         # 从不经过这里——故不存在"从半截文本里投影出坏图表"的可能。
@@ -1214,10 +1257,13 @@ class Orchestrator:
                                      "response": result_text,
                                      "status": "timeout" if timed_out else "ok"})
         # 挂上压缩层用的内存元数据（T3-a/b）：_safe=只读可取代、_target=取代键（同工具同目标去重）。
-        # 均为 `_` 前缀，落盘时被 append_log 剥离，仅存内存（与 _compacted 同规矩）。
+        # 均为 `_` 前缀，落盘时被 append_log 剥离（与 _compacted 同规矩）；`_failed` 同规矩。
+        # 注意「剥离」只保证**持久化**面：`public_turn` 只剥顶层 `_` 键、不递归，故这几个
+        # 键仍随 turn_ended 帧下发给客户端（既有形态，值无敏感内容，客户端忽略未知键）。
+        # 模型 prompt 面另有白名单（方言 `_MODEL_VISIBLE_KEYS`）挡着，不影响 KV 前缀字节。
         # 判据用 is_read_only（而非 is_concurrency_safe）：read_ui_tree 这类「只读但不可并发」
         # 的观察最大、最需要取代去重，不能因退出并发批而失去 _safe。
-        obs = {"name": name, "response": result_text}
+        obs = {"name": name, "response": result_text, "_failed": failed}
         # 渲染格：只在工具真跑成功时挂——超时/报错时没有载荷可言。
         # `render` **不带 `_` 前缀**：它要随 append_log 落盘，重载会话后还得在
         # （`_` 前缀会被 _strip_internal_meta 剥掉 → 刷新即退回灰框，且退得很安静）。
@@ -1301,7 +1347,7 @@ class Orchestrator:
                 if c.get("type") == "error":
                     continue
                 rtext = str(r.get("response") or "")
-                if _resp_failed(rtext):
+                if _obs_failed(r):
                     resume_failure = True
                     continue
                 resume_failure = False
