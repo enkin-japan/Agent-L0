@@ -1541,7 +1541,7 @@ B5 实测 γ=4 接受率仅 **39.5%**（AL 2.581），而台账拟合的 8bit �
 | 本机 GPU | ✅ 空闲（08-17 夜战实跑过：gemma 四档 tool_call 重测、e4b-8bit smoke、A8 两轮四臂起服——均已收摊验停） |
 | 工作树 | ✅ 干净。08-17 第一梯队波 6 个 commit（6e21652→23002c7）**已入库已推送** |
 | 生产开关 | ✅ **已开（D.21，2026-08-17 用户拍板）**：实现为注册表**条目级 speculative**——Qwen3.8-27B-8bit→drafter b5、4bit→b3（draft_revision 钉扎，merge_entry_speculative 两消费方共用，env 强制 > 条目 > 全局）；全局 `speculative.mode` 保持 `off`（条目级是唯一开启面），gemma 档天然不受影响（解码净亏 + 缓冲转换真丢复用）。实机冒烟：qwen38-8bit 零 env 起服即 spec_drafted、e4b 无投机。拍板依据：A8 v2（多轮 1.30×/1.12×）+ 漂移知情（8bit 首轮即分叉） |
-| 自建 MLX | `backend/.venv-mlxsrc`（**非生产**）装的是 **qmv_mma 混合派发内核**（T6b）；`/Volumes/enkin/project/mlx-src` 在分支 **`t6b-qmv-mma`@74ed440**（不再是 pristine main）。⚠️ dist-info 版本串写 `+b1c292d`（构建时源码未 commit，指纹滞后一位）——已用两个行为判据（M≤12 上界、空串 env 语义）判明实体是 74ed440，见 `benchmarks/data/t6b-qmv-mma/README.md`。生产 `.venv` 仍 stock wheel 0.32.0；**读上游源码要对齐 v0.32.0**（`git show v0.32.0:<path>`） |
+| 自建 MLX | **T6b 已否决（D.22，2026-08-17）：无巨额收益不自建 mlx，生产恒 stock wheel**。`backend/.venv-mlxsrc`（**非生产**，留档）装的是 **qmv_mma 混合派发内核**（T6b）；`/Volumes/enkin/project/mlx-src` 在分支 **`t6b-qmv-mma`@74ed440**（不再是 pristine main）。⚠️ dist-info 版本串写 `+b1c292d`（构建时源码未 commit，指纹滞后一位）——已用两个行为判据（M≤12 上界、空串 env 语义）判明实体是 74ed440，见 `benchmarks/data/t6b-qmv-mma/README.md`。生产 `.venv` 仍 stock wheel 0.32.0；**读上游源码要对齐 v0.32.0**（`git show v0.32.0:<path>`） |
 | Colab A100 | ✅ 无活动会话（补格场 08-15 夜已验停） |
 
 ### 6.1 一句话结论（修正版）
@@ -1663,6 +1663,10 @@ Agent 常驻区间跌穿 1.0 变净亏（26b 三档 ≤4k 即穿越）；Qwen3.8
 > b5 验证步 M=6 落在 MMA 收益段；gemma 外挂路线判死后这是内核唯一潜在消费方）。
 > 条件不齐则欠账与内核一并留 `.venv-mlxsrc` 归档，不入活跃队列。T5（12B）随
 > 12B 舍弃归历史档。〕
+> 〔**2026-08-17 终局（台账 D.22）**：D.21 点亮了触发条件之一后，用户拍板
+> **T6b 否决**——无巨额收益之前不考虑自建 mlx，生产恒 stock wheel。内核/补丁/
+> 数据留档不删；P5 第二分句与 2bit 壁钟欠账随否决免除。重启条件=「巨额收益」
+> 新证据（现有 +5~30% 系 gemma-31B 形状、qwen38 端到端未测，不构成）。〕
 
 | # | 事项 | 值多少 | 备注 |
 |---|---|---|---|

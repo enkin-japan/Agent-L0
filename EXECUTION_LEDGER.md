@@ -517,6 +517,7 @@
 | **D.16** | **可写数据经 `AGENT_DATA_DIR` 旋钮分家**（Q7 定案，选项 B）：dev 默认仓库内（保住「数据随手可见可删」的手感），app 注入 `~/Library/Application Support/dev.enkin.macagent/`。**不选「一律搬 App Support、dev 也用」**——dev 时数据离开仓库会让排查与清库都变绕。代价是两套路径都得测。与 D.13 要求的「启动逻辑对仓库布局 vs bundle 布局参数化」**是同一个旋钮**，不是第二个 | 2026-07-16 用户 | 归档 §3.5 R5-4 |
 | **D.17** | **R2b（skill 自主发现）全开**（用户二次拍板改全开，非半开）：撤 skill_invoke「只认用户点名」禁令，工具描述内嵌剧本索引（装配期生成），任务明确匹配即**自主调用**、点名照常必调。依据：#77 口测=31B 未点名守禁✓且手工自发复刻 chart-report 步骤。回退开关=恢复旧描述（git 可查）；误配风险由 26B/31B 真机行为验证把关（L4 测试任务在册） | 2026-08-09 用户 | #77 口测；D.9 触发条件达成 |
 | **D.18** | **DEFERRED§4 完整版（对话式工具/剧本注册）建**。红线照旧：①密钥只引变量名（31B 起草实测已自发遵守）；②声明落「待用户确认」态、不可静默生效（待确认状态机+设置页审批队列=主要工程量） | 2026-08-09 用户 | #77 能力评估达标 |
+| **D.22** | **T6b 否决**：无巨额收益之前不考虑自建 mlx（生产恒 stock wheel）。qmv_mma 内核/补丁/数据留档不删（`.venv-mlxsrc` + `benchmarks/patches/t6b_qmv_mma.patch` + `benchmarks/data/t6b-qmv-mma/`）；其入生产前置欠账（P5 第二分句两臂输出比对、2bit 壁钟）随否决免除；重启条件=出现「巨额收益」的新证据（现有 +5~30% 系 gemma-31B 形状、qwen38 端到端未测，不构成） | 2026-08-17 用户 | 长期自养税（每次 mlx 升级 rebase+重编+重验）vs 未量化的端到端增益；T7 上游化路径已死 |
 | **D.21** | **qwen38 生产 MTP 开**（Qwen3.8-27B 8bit→drafter b5 / 4bit→b3），实现为**注册表条目级 speculative**（选中 qwen38 自动配对内建 MTP 头、gemma 档天然 off；merge_entry_speculative 两消费方共用，env 强制 > 条目 > 全局）；**e4b 多轮首字延迟不单测、等「prompt 字节流只增不改」上位解**（覆盖两家族复用恢复） | 2026-08-17 用户 | A8 v2 收案数据（多轮 1.30×/1.12×、无复用不对称）+ 漂移知情（8bit 首轮即分叉）+ T8 门冷预填代价量级（qwen38 t5 ttft 5s→23s） |
 | **D.19** | **生产起服 `max_model_len` 调 64K**（config cuda 段 32768→65536）。依据：8 页 deck 单轮 ~33k 撞顶实案；L4 fp8 KV 池实测 114,963 token、A100 档 KV bf16 65536≈3.7GiB 均有余量 | 2026-08-09 用户 | #77 新架构发现；L4 站实测 |
 | **D.15** | **内嵌运行时选 `python-build-standalone`**（R5-3 选型，三条判据全部实测）。**否决 PyInstaller**——与本仓库「文件系统即真相源」的约定直接相冲：`mcp/registry.py:26` 扫目录找 `.py` 发现工具、`skill_registry.py:58` 与 `memory/notes.py:86` 扫 `*.md`，冻结后统统扫不到；且 `:21-23` 目录不存在时**静默建空目录后 return** → **零工具注册且不报错**。**否决「venv 拷进 bundle」**——`backend/.venv/bin/python3.13` 是指向 `/Library/Frameworks/Python.framework` 的**绝对路径符号链接**（venv 里没有解释器本体），而该 framework 的 install-name 也是绝对路径、本身搬不动，净体积 307M 且签的是 PSF 的 Developer ID | 2026-07-16 实测 | 归档 §3.5 R5-3；`scripts/build-runtime.sh` |
@@ -2442,10 +2443,31 @@ prompt_builder + 引擎历史管理，走双门 + 复用命中回归。
 **搭车项**：CUDA 侧重画像（下次 colab 场搭车；**前置：Drive 正主 colab.env 的
 INFER 钥未同步，进场先补**）；reasoning_effort 旋钮透传（qwen38 已是生产 MTP
 档，转正评估时一并）；qwen38 MTP 口径重画像（tps profile 现为 off 口径，路由
-`_tps` 排序对 qwen38 低估 ~1.3×——D.21 评审 M7，重测班车搭上位解后的回归测）。**等用户拍板**：T6b——条件已半触发，是否把 qmv_mma
-补丁带进生产构建（若带，qwen38-8bit b5 的验证步 M=6 落在 MMA 收益段 +5~30%）。
+`_tps` 排序对 qwen38 低估 ~1.3×——D.21 评审 M7，重测班车搭上位解后的回归测）。
+**已裁决**：T6b 否决（D.22，2026-08-17）——无巨额收益不自建 mlx，内核留档结案。
 **无行动项**：gemma tool_call 残余失败（multiple_21 类写散文不调用）系真模型
 行为，不立项。
+
+**上位解开工准备（2026-08-17 记，供下一会话直接起步）——**
+**目标不变量**：同一会话内 prompt 字节流**只增不改**——第 N 轮 prompt 以第 N-1
+轮「prompt+实际生成字节」为严格前缀 ⇒ 跨轮 excess==0 ⇒ T8 门纯追加快路对全部
+缓存类型（含旋转态滑窗 / ArraysCache）无损放行复用。
+**现有破坏者（两方言同构）**：①env 锚点 system 块（Current date 等）每轮追加在
+历史**之后**、下一轮整段后移（A8 实测 turn1 985 tok / turn2 复用只到 957，差值
+即此块）；②生成头（assistant 起始 + think 种子）逐轮重渲染；③task_block/
+tail_notes 可变尾部；④assistant 回复回放须与实际生成字节含收尾标记逐位一致。
+**设计方向（两案，开工首日拍一个）**：A=引擎记录会话级已喂/已生成 token 流，
+组装器只渲染增量段（历史段按记录字节回放，不再从 messages 重渲染）；
+B=组装器保持重渲染但历史轮的尾块「冻结原位」（env 块留在它当轮出现的位置，
+只有最新轮带活动尾部）。A 改引擎历史管理（更彻底、KV 语义天然对齐），B 只动
+两个 prompt_builder（更小但历史 env 块会滞留旧日期——语义可接受性需确认）。
+**验收（写死为金测试）**：两方言多轮组装的字节前缀性（turn N startswith
+turn N-1 全流）；引擎级 reused_prefix == 上轮全流长且无 reuse_blocked；A8 式
+行为回归（qwen38 多轮 ttft 回落 ~5s 档、gemma 超窗会话复用不再被门拒）。
+**涉改面**：framework/dialects/{gemma4,qwen35}/prompt_builder.py、
+framework/core/engine.py（历史组装）、backend prompt_cache_state 消费面、
+tests/（组装字节前缀金测试 + test_prefix_reuse_trim 联动）。走双门 + 复用命中
+回归；落地后解锁 26b-4bit 12h 长稳与 qwen38 MTP 口径重画像班车。
 
 ---
 
