@@ -11,11 +11,74 @@
 变更命令才弹窗。
 """
 import os
+import re
 import shlex
 import subprocess
 from typing import Any, Dict
 
 from ..base import BaseTool
+from ...utils.config_loader import load_section
+
+
+# ── 内层超时必须先于外层熔断触发（波 F2 前半）────────────────────────────────
+# 病根：编排层对每次工具调用有 `agent.tool_timeout_seconds`（现 180s）的外层熔断，
+# 到点**放弃等待**但被放弃的线程仍在后台跑；而本工具允许模型自报 timeout 到 600s 且
+# 自身不声明 `timeout_seconds`。两者一减，实测存在**最长 420s 的孤儿窗口**：用户看到
+# 「工具超时已放弃」，而那条命令还在机器上跑着，直到它自己的 600s 到点。
+#
+# 修法只有一行的量：把模型自报的 timeout 钳到「外层预算 − 余量」，让 subprocess 的
+# 超时**先**触发——`subprocess.run` 超时时会 kill 掉子进程。
+# **如实的说法**：直接子进程的孤儿窗口归零，**孙进程的不归零**（见下方边界）。
+# 原注释写「孤儿窗口归零」是把收益说大了（首审 #11）。
+#
+# 余量要覆盖「外层 wait_for 已开始计时、而本函数还没进 subprocess」的那段：
+# `_user_env()` 首次调用要起一个交互式 zsh 探 PATH（自带 5s 熔断），加上线程调度与
+# 结果回传。取 15s。
+#
+# 已知边界（明写，不假装没有）：`subprocess.run` 的超时只 kill 直接子进程
+# （`/bin/zsh -c ...`），**孙进程不受影响**——而钳位针对的恰恰是 `npm install` / `make`
+# 这类会派生 worker 的命令，它们的孙进程仍会跑满原时长。另：`run()` 在 kill 后的
+# `wait()` 无超时，卡在 D 状态的子进程照样会冲破外层预算。
+# 要连坐整个进程组得换 `Popen(start_new_session=True)` + `os.killpg`——那是本条的
+# **加强版（F2 后半）**，不是前置件；本波按 OSS 扫描的分工只做前半。
+# ⚠️ 回落值必须与 `core/orchestrator.py` 里 `tool_timeout_seconds` 的回落值**逐字相同**
+# （两侧注释互指，仿 `_BENIGN_EXIT1_MARK` 的跨模块契约）。此前两侧一个 180 一个 120：
+# config 里缺这个键时外层是 120、内层上限却按 180 算成 165，**孤儿窗口以 45s 悄悄回来**
+# ——而当时那条「内层 < 外层」的金测试比的是本模块自己重新推导的值，**永远看不见这个
+# 漂移**（首审 Critical 2）。`test_shell_exec_timeout_clamp.py` 里有一条跨模块契约测试
+# 钉死两侧同值。
+_OUTER_BUDGET_FALLBACK_S = 180
+def _derive_outer_budget(raw: Any) -> int:
+    """把 config 里的原始值化成外层预算秒数；任何不成形的输入都回落到约定值。
+
+    **import 期不许抛**：本模块此前零 config 依赖，而 `registry.py` 对工具导入失败只
+    print 一行——配置里写成 `"180s"`、写成列表、或写成 0，都会让 agent 悄悄少了主力
+    工具而没有任何别的信号（首审 #4）。
+    单独成函数是为了能拿坏输入直接喂它：不这样的话，「防御性」这件事在本仓的真实
+    config 下永远走不到，变异体也就杀不死（第一轮就是这么活下来的）。
+    """
+    # bool 单独挡：YAML 里的 `true` 会被 `int()` 悄悄化成 1，于是外层预算变 1 秒、
+    # 内层上限跟着塌到 1 秒——全产品的 shell 命令等于被禁掉，而没有任何报错。
+    # 与 `_clamp_timeout` 里那处是同一个坑（`int(True) == 1`）。
+    if isinstance(raw, bool):
+        return _OUTER_BUDGET_FALLBACK_S
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return _OUTER_BUDGET_FALLBACK_S
+    return v if v > 0 else _OUTER_BUDGET_FALLBACK_S
+
+
+try:
+    _OUTER_BUDGET_S = _derive_outer_budget(load_section("agent").get("tool_timeout_seconds"))
+except Exception:                       # load_section 本身炸了（config 缺失/坏了）
+    _OUTER_BUDGET_S = _OUTER_BUDGET_FALLBACK_S
+_CLAMP_MARGIN_S = 15
+# ⚠️ 不设下限：下限一旦大于「外层 − 余量」就会把不变量顶破，而不变量比可用性优先。
+# 代价如实写明——`agent.tool_timeout_seconds` 现在是**双向承重**的：把它调到 30s 以下，
+# 全产品的 shell 命令上限会跟着塌到十几秒甚至 1 秒（首审 #3）。
+_MAX_INNER_TIMEOUT_S = max(1, _OUTER_BUDGET_S - _CLAMP_MARGIN_S)
+_DEFAULT_TIMEOUT_S = min(60, _MAX_INNER_TIMEOUT_S)
 
 
 # ── 用户环境 PATH 注入（#84 随案架构缺口，2026-08-10 实案）────────────────────
@@ -99,6 +162,108 @@ _BENIGN_EXIT1_COMMANDS = {"grep", "rg", "diff", "cmp", "test"}
 # 仍会通过，那种漂移不破坏契约。标记长度也是模型可读性与 UI 行宽的折中：它会成为
 # 步骤卡的首行摘要（orchestrator 取 `splitlines()[0]`）。
 _BENIGN_EXIT1_MARK = " (benign: negative result, not an error)"
+
+
+def _clamp_timeout(requested: Any) -> "tuple[int, int]":
+    """把模型自报的 timeout 钳到「外层预算 − 余量」。返回 (生效值, 被钳前的值或 0)。
+
+    单独成函数是为了**可被秒级测试**：不这样的话，验钳位就得真 sleep 到上限
+    （实测让这份测试跑了 8 分钟）。而这份测试在 pre-commit 里——每次提交多花九分钟的
+    门，最终一定会被绕过、然后被删掉。
+    """
+    # bool 单独挡掉：`int(True) == 1`，于是 JSON 里的 "timeout": true 会变成
+    # **1 秒超时**而不是回落到默认值（首审 #14）。
+    if isinstance(requested, bool):
+        req = _DEFAULT_TIMEOUT_S
+    else:
+        try:
+            req = max(1, int(requested))
+        except (TypeError, ValueError):
+            req = _DEFAULT_TIMEOUT_S
+    eff = min(req, _MAX_INNER_TIMEOUT_S)
+    return eff, (req if req > eff else 0)
+
+
+# ── 参数用错的指路（波 F10）────────────────────────────────────────────────
+# 只认**明确是「参数不对」**的措辞，故意窄：漏报优于误报。挂在结果组装处而非异常
+# 分支——首行必须仍是 `exit_code: N`（编排层的良性码判据与前端步骤卡都读它）。
+#
+# 「invalid option」收进来（首审 #10）：BSD/macOS 自带的 grep/sudo 正是用这个措辞报
+# 参数错（`grep: invalid option -- Q`），排掉它会丢掉本机最主要的一类真阳性。
+# 但**不收裸 "invalid"**：`grep: invalid pattern` 是数据问题，指去 man 没用。
+#
+# **只扫 stderr，不扫 stdout**（首审 #18）：`cat README missing` 这类命令会把文件正文
+# 送进 stdout，正文里恰好有一行 "unknown option" 就会误触发。usage 走 stdout 的 CLI
+# 确实存在，那部分按「漏报优于误报」放弃。
+_USAGE_ERROR_RE = re.compile(
+    r"(?im)^\s*(?:usage:"
+    r"|.*\b(?:illegal option|unknown option|unrecognized option|invalid option)\b)")
+
+# 透明包裹层：真正出错的是它们后面那个命令。`sudo apt instal` 指去 `man sudo` 是纯误导。
+_CMD_WRAPPERS = {"sudo", "env", "time", "nohup", "nice", "command", "stdbuf", "xargs", "doas"}
+
+# 有子命令体系的 CLI：`git lgo` 的正解是 `man git-log`，不是 `man git`。
+_SUBCOMMAND_CLIS = {"git", "brew", "docker", "npm", "yarn", "pnpm", "cargo", "kubectl",
+                    "apt", "apt-get", "systemctl", "gcloud", "aws", "gh", "pip", "pip3"}
+
+_USAGE_HINT = ("\nhint: this looks like a wrong flag, not a wrong idea. "
+               "Check the real flag before re-issuing — do not retry with another guessed "
+               "flag. {how} (man pages are long and get truncated in the middle, so grep "
+               "the part you need rather than reading the whole page).")
+
+
+def _hint_target(command: str):
+    """这条命令的报错该指向哪个命令名；判不准返回 None，否则返回 (命令名, 子命令或 None)。
+
+    ⚠️ 含 shell 元字符一律放弃归因：`echo hi | grep -Q x` 的失败是 grep 的，而首 token
+    是 echo——指去 `man echo` **比不指更坏**（首审 Critical 1，实测复现）。这一条与
+    `_is_benign_exit1` 复用同一份 `_SHELL_METACHARS`，理由也同一个：管道/子命令的
+    退出码与报错都归属最后一段，无法归因给首命令。
+    """
+    if any(ch in _SHELL_METACHARS for ch in command):
+        return None
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    # 剥掉 VAR=VAL 前缀与透明包裹层
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if "=" in t and not t.startswith("-") and t.split("=", 1)[0].isidentifier():
+            i += 1
+            continue
+        if os.path.basename(t) in _CMD_WRAPPERS:
+            i += 1
+            continue
+        break
+    if i >= len(tokens):
+        return None
+    head = os.path.basename(tokens[i])
+    # 首 token 不像个命令名（路径片段、变量展开残留…）就别硬编一条 man 指令出来
+    if not head or not head.replace("-", "").replace("_", "").replace(".", "").isalnum():
+        return None
+    return head, next((a for a in tokens[i + 1:] if not a.startswith("-")), None)
+
+
+def _usage_hint(command: str, returncode: int, stderr: str) -> str:
+    """命中「参数用错」的措辞时给一行指路；判不准就不给（漏报优于误报）。"""
+    if returncode == 0:
+        return ""
+    if not _USAGE_ERROR_RE.search(stderr or ""):
+        return ""
+    target = _hint_target(command)
+    if target is None:
+        return ""
+    head, sub = target
+    # 子命令体系的 CLI：`man git` 讲不到 `git log` 的旗标。刻意**不**编 `man git-lgo`
+    # 这种页名——子命令本身就是打错的那一半时它根本不存在，而「No manual entry」
+    # 只会再浪费一轮（首审 #6 提的 `man git-log` 只在子命令拼对时才成立）。
+    if head in _SUBCOMMAND_CLIS and sub:
+        how = f"Run `{head} {sub} --help`"
+    else:
+        how = f"Run `man {head}`"
+    return _USAGE_HINT.format(how=how)
 
 
 def _is_benign_exit1(command: str, returncode: int, stderr: str) -> bool:
@@ -185,7 +350,18 @@ class ShellExecTool(BaseTool):
         "call the tool directly, do NOT ask the user for permission in words. The tool response "
         "reports stdout, stderr and the exit code (and tells you if the user denied it). "
         "To create or modify FILES, use the write_file / edit_file tools instead — never shell "
-        "heredocs (cat <<EOF) or echo redirection."
+        "heredocs (cat <<EOF) or echo redirection.\n"
+        # 波 F10：CLI 参数的先验记忆不可信，本地 4bit 模型尤甚。横切行为规范挂在工具
+        # 描述上（本仓既有归宿），不新建剧本——剧本的 requires 只有本工具，会永远探活
+        # 通过、永远挂在索引里稀释预算，且规范只在载入它的那一轮生效。
+        "Your memory of CLI flags is often stale or invented. Before using a flag you are "
+        "not certain about, check the authoritative source on this machine: `man <cmd>` is "
+        "read-only and never prompts the user. `<cmd> --help` is free only when <cmd> itself "
+        "is a read-only command (ls, grep, git...); for anything else (brew, docker, an "
+        "unfamiliar binary) it costs the user one extra approval — which is exactly the case "
+        "where you needed it. If a command fails with a usage/unknown-option error, do not "
+        "retry with another guessed flag; read the manual first, and grep it rather than "
+        "dumping the whole page (long man output gets truncated in the middle)."
     )
     requires_approval = False  # 默认放行；实际是否弹窗由 needs_approval 按命令内容动态决定
     parameters = {
@@ -200,7 +376,14 @@ class ShellExecTool(BaseTool):
             },
             "timeout": {
                 "type": "integer",
-                "description": "Optional per-command timeout in seconds (default 60, max 600)."
+                # 原写 "max 600" —— 钳位落地后这句就成了对模型说的假话。上限现算。
+                "description": (
+                    f"Optional per-command timeout in seconds "
+                    f"(default {_DEFAULT_TIMEOUT_S}, max {_MAX_INNER_TIMEOUT_S}). "
+                    f"Larger values are capped: the orchestrator abandons any tool after "
+                    f"{_OUTER_BUDGET_S}s, so a longer inner timeout would only leave the "
+                    f"command running unattended."
+                ),
             }
         },
         "required": ["command"]
@@ -241,10 +424,7 @@ class ShellExecTool(BaseTool):
         if not os.path.isdir(workdir):
             return f"System Error: working directory does not exist: {workdir}"
 
-        try:
-            timeout = max(1, min(int(timeout), 600))
-        except (TypeError, ValueError):
-            timeout = 60
+        timeout, clamped_from = _clamp_timeout(timeout)
 
         try:
             proc = subprocess.run(
@@ -258,7 +438,16 @@ class ShellExecTool(BaseTool):
                 env=_user_env(),
             )
         except subprocess.TimeoutExpired:
-            return f"System Error: command timed out after {timeout}s (partial output discarded)."
+            # 被钳过就明说，否则模型只会看到「我要了 600s 却 165s 就超时」而无从理解，
+            # 多半会原样重试一次同样注定被钳的调用。
+            extra = ("" if not clamped_from else
+                     f" (your requested {clamped_from}s was capped at {timeout}s: the "
+                     f"orchestrator abandons any tool after {_OUTER_BUDGET_S}s, so a longer "
+                     f"inner timeout would only leave the command running unattended). "
+                     f"Split the work into steps that each finish within {timeout}s, or run it "
+                     f"in the background and poll for results.")
+            return (f"System Error: command timed out after {timeout}s "
+                    f"(partial output discarded).{extra}")
         except UnicodeDecodeError:
             # cat/head 二进制文件（PDF/图片/音频）的典型死路——给可行动出路而不是
             # 裸抛解码错误（实机事故：file_extract 失败后模型退化 cat PDF，两头碰壁）
@@ -281,4 +470,5 @@ class ShellExecTool(BaseTool):
             parts.append(f"stderr:\n{stderr}")
         if not stdout and not stderr:
             parts.append("(no output)")
-        return "\n".join(parts)
+        # 参数用错的指路（F10）：追加在末尾，首行仍是 exit_code
+        return "\n".join(parts) + _usage_hint(command, proc.returncode, stderr)

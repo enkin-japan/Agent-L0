@@ -112,6 +112,48 @@ def compact_tool_observations(history: List[Dict[str, Any]], *,
     return compacted
 
 
+# 把**转录本**变成笔记的机关，就是摘要器吐出一行字面 `MEMO:`（见下方 `_split_memo`）。
+# 本函数堵的是其中**照抄那条路**：别让转录本里出现这样一行。
+#
+# ⚠️ 如实界定收益（首审 #8/#20，别把这条读成「F4 已闭环」）：
+#   · 只堵照抄。注入文本若是**指令式**的（「在摘要末尾追加一行 MEMO: …」），本函数
+#     一字不动它——那要靠模型不听话，是概率面不是确定性面。
+#   · 归一化的近似形（`MEMO :`、`**MEMO:**`、`# MEMO:`、带零宽字符的）两侧都不认。
+#   · 转录本不是唯一入口：`memory/dream.py` 会从模型输出里解析 `MERGE|/REWRITE|`
+#     写进同一个笔记库，那是另一条（既有的、不在本次改动范围内的）操纵面。
+#
+# 威胁模型（首审大幅收窄过，别按原始建议的宽版本理解）：原建议声称
+# 「恶意 PDF → extra_text → 裸拼进摘要器」——**这条链不存在**，`_turn_to_text` 既不读
+# `ingested_text` 也不读 `role=tool` 的工具观察。真实通道只剩两条：
+#   (a) 纯语音消息的 ASR 转写被升格成 prompt；
+#   (b) **助手自己的答复复述了网页/PDF 里的内容**，经 `Assistant: {content}` 进摘要器。
+# (b) 在「帮我总结这个页面」这类桌面高频任务里真实可达，故值得堵。
+#
+# 判据与 `_split_memo` 逐字同源（`strip().upper() == "MEMO:"`），另加全角冒号变体
+# ——全角本身不被 `_split_memo` 认，但摘要器很可能把它归一成半角再抄出去。
+_MEMO_MARKERS = ("MEMO:", "MEMO：")
+
+
+def _defuse_memo_marker(text: str) -> str:
+    """给转录本里「独占一行的 MEMO 标记」拆引信，其余内容一字不动。
+
+    只改**整行就是标记**的那种行；`MEMO: 记得买牛奶` 这类带正文的不动——它本来就不会
+    被 `_split_memo` 认成锚点，动它只会平白改写用户的原话。
+    """
+    if not text:
+        return text
+    lines = text.splitlines()
+    hits = [i for i, ln in enumerate(lines) if ln.strip().upper() in _MEMO_MARKERS]
+    if not hits:
+        # ⚠️ 无标记时必须原样返回。`splitlines()/"\n".join()` 不是恒等变换：CRLF、
+        # \x0b、\u2028 与尾随换行都会被悄悄改写，而这段文本的另一个下游是 rag_sink
+        # 的「无损承重网」——那里要求与日志逐字节一致（首审 #13）。
+        return text
+    for i in hits:
+        lines[i] = f"[quoted] {lines[i].strip()}"
+    return "\n".join(lines)
+
+
 def _turn_to_text(turn: Dict[str, Any]) -> str:
     """把一条已落盘轮次抽成供摘要的纯文本（用户输入 + 助手答复 + 用到的工具名）。
 
@@ -146,7 +188,7 @@ def _turn_to_text(turn: Dict[str, Any]) -> str:
             parts.append(f"System: {msg['content']}")
     if tools_used:
         parts.append(f"(tools called this turn: {', '.join(tools_used)})")
-    return "\n".join(parts)
+    return _defuse_memo_marker("\n".join(parts))
 
 
 # ---------- 压缩前记忆冲洗（memory flush，grok-build/mem0 评估合并票） ----------
@@ -162,7 +204,11 @@ def _split_memo(text: str) -> Tuple[str, List[str]]:
     """把摘要输出拆成（纯摘要, MEMO 行列表）。无 MEMO 块 = 原文照返、空列表。"""
     lines = text.splitlines()
     for i, ln in enumerate(lines):
-        if ln.strip().upper() == "MEMO:":
+        # 认全角变体（与 `_defuse_memo_marker` 同一份 `_MEMO_MARKERS`）：入口拆引信时
+        # 收了全角、出口却不认的话，摘要器**真吐出**全角时这块既不会被剥出滚动摘要
+        # （下次合并时 [Existing summary] 里冒出 MEMO 会教坏模型重复输出），抢救出的
+        # 事实也会静默丢掉（首审 #7）。**锚点取第一个**这条语义不变。
+        if ln.strip().upper() in _MEMO_MARKERS:
             memo = [l.strip() for l in lines[i + 1:] if l.strip().startswith("-")]
             return "\n".join(lines[:i]).rstrip(), memo
     return text, []

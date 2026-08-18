@@ -298,7 +298,11 @@ class Orchestrator:
         self.max_total_iterations = int(cfg.get("max_total_iterations", 40))  # 一次任务总熔断
         self.replan_max = int(cfg.get("replan_max", 3))
         self.observation_max_chars = int(cfg.get("observation_max_chars", 4000))
-        self.tool_timeout_seconds = int(cfg.get("tool_timeout_seconds", 120))  # 单次工具执行熔断
+        # ⚠️ 回落值必须与 `mcp/tools/shell_exec.py` 的 `_OUTER_BUDGET_FALLBACK_S` 逐字
+        # 相同：那边按本值反推 shell 命令的内层上限，两侧不一致时孤儿窗口会悄悄回来
+        # （曾是 120 vs 180 = 45s 窗口）。跨模块契约由
+        # `test_shell_exec_timeout_clamp.py` 钉死。
+        self.tool_timeout_seconds = int(cfg.get("tool_timeout_seconds", 180))  # 单次工具执行熔断
         self.max_parse_retries = int(cfg.get("max_parse_retries", 3))  # 工具格式解析错误的断环阈值
         self.tool_schema_mode = str(cfg.get("tool_schema_mode", "full"))   # full | catalog
         # 思考位置策略：把前端二值思考开关翻译成逐迭代策略（_thinking_for_iteration）。

@@ -512,6 +512,10 @@ agent:
   max_total_iterations: 40    # 一轮任务的总推理次数熔断
   replan_max: 3               # 整体重规划（推翻已有计划）次数上限
   observation_max_chars: 4000 # 单条工具观察截断上限（保护每步延迟与上下文）
+  # ⚠️ 本值**双向承重**：既是「工具跑多久算超时」，也被 shell_exec 反过来用作
+  # 「命令内层超时的上限 = 本值 − 15s」（否则被放弃的命令会变成孤儿继续跑，
+  # 见 mcp/tools/shell_exec.py 顶部）。调小它会同步压低全产品的 shell 命令上限；
+  # 调到 30s 以下基本等于禁掉长命令。
   tool_timeout_seconds: 180   # 单次工具执行熔断：超时则放弃等待并反馈模型改路
                               # （120→180：math_research 沙箱需 3~5 次内部生成，e4b 上 110s 不够收束）
   max_parse_retries: 3        # 工具格式反复解析失败的断环阈值（同一坏调用重复≥此值即优雅终止）

@@ -3299,6 +3299,64 @@ C1 流式 BPE 乱码）。
 *遗留（明写）*：TSV 契约无转义，值里含换行会静默错行（含制表符则会响亮报错）；
 `campaign.pid` 只扫一层 glob；`process_scan` 截断到 5 条。三者都朝安全方向失败。
 
+**第 1 层前三条交付（2026-08-18）——`F2` 前半 / `F10` / `F4`**
+
+**`F2` 前半｜孤儿命令窗口**（`mcp/tools/shell_exec.py`）
+*病根*：编排层对每次工具调用有 `agent.tool_timeout_seconds`（180s）外层熔断，到点
+**放弃等待**但被放弃的线程仍在后台跑；而 `shell_exec` 允许模型自报 timeout 到 600s、
+自身又不声明 `timeout_seconds`。两者一减 = **最长 420s 的孤儿窗口**。
+*修法*：把内层钳到「外层预算 − 15s」，让 `subprocess.run` 的超时先触发（它超时会 kill
+子进程）。schema 里「max 600」同步改成现算真值——钳位一落地那就是对模型说的假话。
+*如实界定收益*：**直接子进程**的孤儿窗口归零，**孙进程的不归零**（`npm install` /
+`make` 派生的 worker 仍会跑满原时长）。`Popen(start_new_session)` + `killpg` 是
+**F2 后半**，本波按 OSS 扫描分工不做。原注释写「孤儿窗口归零」已订正。
+
+**`F10`｜CLI 反幻觉**（同文件）
+规范写进工具描述（本仓横切规范的既有归宿），**刻意不新建剧本**。失败时在结果末尾追加
+一行指路，首行仍是 `exit_code: N`。**`--help` 的成本取决于首命令**：`_is_readonly` 只看
+第一个 token，故 `ls/grep/git --help` 免审批，而 `brew/docker --help` 要弹一次——恰是
+「命令不熟」这个唯一需要它的场景。文案如实写这个条件，不写死。
+
+**`F4`｜转录本 MEMO 注入边界**（`memory/compactor.py`）
+在 `_turn_to_text` 出口给「整行就是 MEMO 标记」的行拆引信。威胁模型经首审大幅收窄：
+原建议那条「恶意 PDF → `extra_text`」的链**根本不存在**，真实通道只剩 ASR 升格与
+**助手复述网页内容**两条。`_split_memo` 认第一个锚点的语义**不改**（认最后一个严格
+更不安全），另加钉子测试。收益如实界定：**只堵照抄那条路**，指令式注入与归一化近似形
+都不在射程；`memory/dream.py` 是另一条既有的、不在本次范围内的操纵面。
+
+*金测试 1264 → **1298**（+84 项两份），**18 个变异体全部被抓**。*
+
+*reviewer 首审 21 条，2 条 Critical 全部实测坐实并修*：
+- **C1 ★ 指路会指错 man**：按首 token 归因，忽略管道与包裹层。实测
+  `echo hi | grep -Q foo` 指向 `man echo`、`sudo apt instal` 指向 `man sudo`——
+  而测试的 docstring 里就写着「乱指一条 man 比不指更坏」，我自己违反了它。
+  已复用 `_is_benign_exit1` 同一份 `_SHELL_METACHARS` 放弃归因，并剥掉
+  `sudo/env/time/nohup/xargs` 与 `VAR=VAL` 前缀。子命令 CLI 指向 `<cmd> <sub> --help`，
+  **刻意不编** `man git-lgo` 这种不存在的页名。
+- **C2 ★ 两侧回落值不同，而我那条 ★ 断言永远看不见**：`orchestrator` 回落 120、
+  `shell_exec` 回落 180——config 缺这个键时外层 120、内层上限却按 180 算成 165，
+  **孤儿窗口以 45s 悄悄回来**。而「内层 < 外层」那条比的是 shell_exec 自己重新推导的
+  值，跨不过模块边界。已对齐回落值（两侧注释互指，仿 `_BENIGN_EXIT1_MARK` 的跨模块
+  契约）并补两条**真去构造 `Orchestrator` 比对**的契约测试。
+- 另修：`invalid option` 收进正则（BSD/macOS 的 grep/sudo 正是这个措辞，排掉它丢掉
+  本机主要真阳性）／指路只扫 stderr（`cat README missing` 的文件正文会误触发）／
+  `_derive_outer_budget` 抽成可测纯函数并防御坏配置（`registry.py` 对工具导入失败只
+  print 一行，配置写坏 = agent 悄悄少了主力工具）／`bool` 单独挡两处
+  （`int(True)==1`，`timeout: true` 会变成 1 秒、`tool_timeout_seconds: true` 会让
+  全产品 shell 上限塌到 1 秒——**后者是补测试时才发现的我自己的新 bug**）／
+  `_split_memo` 同步认全角（入口拆了出口不认时，摘要器真吐出全角会把伪块留在滚动摘要
+  且静默丢掉抢救事实）／无标记时逐字节原样返回（`splitlines/join` 会改写 CRLF、
+  `\x0b`、` ` 与尾随换行，而下游 rag_sink 要求与日志逐字节一致）／
+  `config.yaml` 加回指注释（该值现在**双向承重**）。
+- 另修三条**恒真或名不副实的断言**：「非法 timeout 回落在上限内」原先只断言
+  `echo ok` 回 0（对任何 ≥1s 的回落值都成立）；「超时真的掐掉命令」原先只证明
+  `execute()` 在 15s 内返回（在「放弃等待但进程还在跑」的实现下照样成立，恰好放过了
+  本条要防的形态），已改为事后 `pgrep` 真去找；「转录本逐字节一致」原先只用 `\n`。
+
+*另修一条我自己造的问题*：钳位测试原先真 `sleep 165` 三次，整份跑 **8 分 18 秒**——
+而它在 pre-commit 里，等于每次提交多花九分钟，那种门最终一定被绕过并删掉。抽出纯函数
+`_clamp_timeout` + monkeypatch 伪造 `TimeoutExpired` 后降到 **1.5 秒**。
+
 ---
 
 **全账重排（D.24，2026-08-18 用户拍板）——判据：① 缺陷修复优先 ② Mac 端优先——**
