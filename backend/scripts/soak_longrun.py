@@ -1,4 +1,4 @@
-"""本机长稳测试工装（26b-4bit 12h 门禁，2026-08-18）。
+"""本机长稳测试工装（26b-4bit 长稳门禁，2026-08-18；口径 8h，见 LONGRUN_HOURS）。
 
 **为什么是重写**：2026-08-08 那次 26B 12h 长稳的工装只活在 Colab VM 上、从未入库，
 随实例销毁（全分支 git 历史与 Drive 双向搜索均无）。台账只留下结论与负载形态描述。
@@ -32,7 +32,7 @@ swapouts**——后者才是 MLX 超售换页崩塌的先兆（单 GPU 纪律里
 
 用法（backend venv，服务须已就绪）：
   cd backend && PYTHONUNBUFFERED=1 .venv/bin/python scripts/soak_longrun.py \
-      --hours 12 --outdir ../benchmarks/data/soak-26b4bit-<日期>
+      --outdir ../benchmarks/data/soak-26b4bit-<日期>        # 缺省 8h，见 LONGRUN_HOURS
 密钥只走 `INFER_API_KEY` 环境变量或 `.env.local`——**刻意不提供 --api-key**，命令行参数
 会把钥匙暴露在 `ps` 输出里长达 12 小时。
 
@@ -81,7 +81,11 @@ HEARTBEAT_INTERVAL = 300.0       # 心跳按**墙钟**——按请求数计会�
 MAX_CONSEC_FAIL = 5              # 连续失败熔断：服务死了不该空转到 12h
 CHAT_TURNS = 5                   # 一段会话的轮数（多轮才吃得到前缀复用）
 SMOKE_MAX_HOURS = 1.0            # --smoke 的时长上限：等权+秒级空闲是高压档，
-                                 # 忘带 --hours 就会拿缺省 12.0 跑一整夜的高压跑
+                                 # 忘带 --hours 就会拿缺省时长跑一整夜的高压跑
+# 长稳口径：12h → 8h（用户 2026-08-18 拍板）。理由是形态而非妥协——本系统很长一段时间
+# 只自用、不商用，**实战使用本身就是持续的长稳测试**，专门的门禁只需覆盖「一个完整工作日
+# 的连续使用」这个尺度；再往上的时长交给日常使用去磨，比再烧 4 小时 GPU 划算。
+LONGRUN_HOURS = 8.0
 
 
 def _server_cache_ttl_s() -> float:
@@ -1179,7 +1183,7 @@ def main() -> int:
         print("⚠️  --smoke：负载已改为四腿等权 + 秒级空闲，本次产物**不构成长稳判决**",
               flush=True)
     elif args.hours is None:
-        args.hours = 12.0
+        args.hours = LONGRUN_HOURS
     # 钥匙只走 env / .env.local——命令行参数会在 ps 里挂 12 小时。
     # 且**不挂到 args 上**：args 是被序列化进 profile.json 的那个对象，钥匙坐在上面，
     # 离「某次重构写成 **vars(args)」只差一步，那一步的代价是钥匙进了入库产物。
