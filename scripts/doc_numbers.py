@@ -2,8 +2,10 @@
 """文档里的规模数字改为从仓库派生（波 A3 ≡ OSS 扫描 §3 A3）。
 
 病根：`CHARTER.md` 是每个新会话的第一读物，而它第一页的规模判断是错的——写「600+
-金测试」「mcp/ 27 文件 55 类」，而 2026-08-18 实测是 **1163 项 / 31 文件 / 67 类**
-（低估约一倍）。散文里的数字没有任何机制会去更新它，只会越放越旧。
+金测试」「mcp/ 27 文件 55 类」，而实际值高出一大截（金测试那项差了两倍有余）。
+散文里的数字没有任何机制会去更新它，只会越放越旧。
+**本文件里刻意不复述任何具体数字**——一个专门消灭写死数字的工具，自己写死一份就是
+笑话（首审 #11：这里原本硬编了三个数，而它们已经过期）。当前真值见台账 §2 那张表。
 
 **口径分两类，这是本设计的要点**（首审订正：不分类的话，这条会把漂移从一处搬到
 另一处）：
@@ -19,10 +21,10 @@
       **venv 不在就输出 unknown，绝不回落到上次的数**。回落即是把一个假绿换成另一个
       假绿——正是本脚本要消灭的那类失效。
 
-金测试项数在文档里刻意用**档位下限**形式（`1000+`）而非精确值：精确值每加一条测试
-就过期，而 `CHARTER.md` 按宪章纪律每次修改都要用户同意——那会造出一个天天红、
-最终必被删掉的门。档位取「不超过实测值的最大整档」（100/200/500/1000/2000/5000…），
-跨档才需要改文档。
+打点宿主是 `EXECUTION_LEDGER.md` §2 的「当前规模」表——**不是 `CHARTER.md`**。
+2026-08-18 用户拍板把精确数字整个挪出宪章、只留指向台账的指针：宪章是每个新会话的
+第一读物，而它每改一次都要用户显式同意，把易变的数字放在那里等于造一道天天要拍板
+的门。宿主可写之后，`--write` 一条命令即可刷新，不必再为「加了几条测试」惊动用户。
 
 退出码（与 `devctl check` 同一套三值纪律）：
     0 = 全部一致 ／ 3 = 有漂移 ／ 2 = 用法错 ／ 1 = 跑不起来（派生不出或锚点失配）
@@ -43,27 +45,16 @@ REPO = Path(__file__).resolve().parent.parent
 
 RC_PASS, RC_INTERNAL, RC_USAGE, RC_DRIFT = 0, 1, 2, 3
 
-# 宪章的任何改动都要用户显式同意（CLAUDE.md 红线），故本脚本**永不**写任何文档，
-# 尤其是它。也不提供「强制写」的旗标——给了就迟早会被用掉。
+# 宪章的任何改动都要用户显式同意（CLAUDE.md 红线）。
+# ⚠️ 如实说明现状（首审 Critical 4 + #9）：本脚本**会**就地改写 `EXECUTION_LEDGER.md`
+# （`--write`），只是**永不**改写下面这张名单里的文件。而今天所有锚点都落在台账上，
+# 所以这张名单**当前没有活路径会命中**——它是**回归网**，不是正在生效的执法：
+# 将来若有人把锚点又指回宪章，`--write` 会在这里被挡住，而不是默默写下去。
 NEVER_WRITE = {"CHARTER.md"}
 
-BANDS = (100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000)
-
-
-def band_floor(n: int) -> int:
-    """不超过 n 的最大整档。1138 → 1000；跨档才需要改文档。
-
-    **不变量：返回值恒 ≤ n。** 初值刻意是 0 而不是 BANDS[0]——写成 BANDS[0] 的话
-    n=50 会返回 100，即文档上声称的下限**高于实际值**，那是一句假声明。
-    档位机制的全部意义就是「这句话不会因为数字长大而变假」，方向反了就全废。
-    """
-    picked = 0
-    for b in BANDS:
-        if b <= n:
-            picked = b
-    return picked
-
-
+# 档位下限（`1000+`）那套机制已随宿主一起退休：它是**宪章时期的妥协**——精确值每加
+# 一条测试就过期，而宪章每改一次都要用户同意，只好写成一个跨档才变的近似。宿主换成
+# 台账后精确值可由 `--write` 一条命令刷新，档位就成了看着像活着的死代码，故删除。
 # ---------------- 甲类：纯文本派生 ----------------
 # 每一项的口径都写死在这里。口径可以商量，但必须只有一处，且改口径要改这里。
 
@@ -189,42 +180,94 @@ def derive_golden_tests() -> tuple[int | None, str]:
 # 正则**必须唯一命中**：命中 0 次 = 文档被改写、锚点失效；命中多次 = 口径有歧义。
 # 两种都记「跑不起来」而不是「无漂移」。
 
+# 锚点全部落在 `EXECUTION_LEDGER.md` 的「当前规模」表上。
+# **不再打点 CHARTER.md**：2026-08-18 用户拍板把精确数字整个挪出宪章、只留指向台账
+# §2 的指针——宪章是每个新会话的第一读物，而它每改一次都要用户显式同意，把易变的
+# 数字放在那里等于造一道天天要拍板的门。
+_LEDGER = "EXECUTION_LEDGER.md"
+
+# (派生值键, 表格里的行名)。行名必须与台账里逐字一致。
+_ROWS = [
+    ("golden_tests", "金测试项数"),
+    ("test_files", "测试文件数"),
+    ("mcp_files", "mcp 文件数"),
+    ("tool_classes", "BaseTool 子类"),
+    ("sandboxes", "物理隔离沙箱"),
+    ("skills", "剧本"),
+    ("fixtures", "协议夹具"),
+    ("model_registry", "model_registry 档位"),
+    ("rag_tiers", "rag.tiers 档位"),
+]
+
+
 def anchors(q: dict[str, int], golden: int | None) -> list[dict]:
-    gold_band = f"{band_floor(golden)}+" if golden is not None else None
-    return [
-        {
-            "file": "CHARTER.md",
-            "re": r"mcp/（(\d+) 文件 (\d+) 类）\+ agents/（(\d+) 沙箱",
-            "want": [str(q["mcp_files"]), str(q["tool_classes"]), str(q["sandboxes"])],
-            "keys": ["mcp_files", "tool_classes", "sandboxes"],
-            "what": "mcp 文件数 / BaseTool 类数 / 沙箱数",
-        },
-        {
-            "file": "CHARTER.md",
-            "re": r"跑 `backend/tests/`（(\d+\+) 项金测试",
-            "want": [gold_band],
-            "keys": ["golden_tests"],
-            "what": "金测试项数（档位下限）",
-        },
-        {
-            "file": "CHARTER.md",
-            "re": r"`backend/tests/`（\*\*(\d+\+)\*\* 金测试）",
-            "want": [gold_band],
-            "keys": ["golden_tests"],
-            "what": "金测试项数（档位下限）",
-        },
-    ]
+    """每行一个锚点：`| <行名> | <数> | <口径…> |`。
+
+    金测试项数在这里用**精确值**而非档位下限——宿主换成台账后它可写了，`--write`
+    一条命令就能刷新，不必再为「加了几条测试」去惊动用户。档位下限那套是宪章时期的
+    妥协，随宿主一起退休。
+    """
+    out = []
+    values = dict(q)
+    values["golden_tests"] = golden
+    for key, label in _ROWS:
+        v = values.get(key)
+        out.append({
+            "file": _LEDGER,
+            # 行名两侧的 `|` 与空格逐字钉住，免得匹配到正文里同名的字
+            "re": rf"^\| {re.escape(label)} \| (\d+) \|",
+            "want": [None if v is None else str(v)],
+            "keys": [key],
+            "what": label,
+        })
+    return out
+
+
+def rewrite(path: Path, drift_specs: list[tuple[str, str, str]]) -> "int | None":
+    """按 (正则, 旧值, 新值) 就地改写；全部命中返回改动数，**任一项对不上返回 None
+    且一个字都不写**。
+
+    只替换**捕获组那一段**，不重排整行——口径列是人写的散文，绝不能被机器覆盖掉。
+
+    三条首审订正（#12）：
+      ① `old` 此前收了却从不用，于是「即将覆盖的文本还是不是校验时看到的那个值」
+         这道保险**根本不存在**。现在逐条核对，对不上就整体放弃。
+      ② 命中不到时此前静默 `continue`，`n` 少算而调用方照样打「已刷新 N 处」。
+      ③ 零命中时此前也会 `write_text` 一遍：无谓的 mtime 抖动，且 CRLF 会被
+         read/write 往返归一成 LF。
+    """
+    text = path.read_text(encoding="utf-8")
+    pending = []
+    for pattern, old, new in drift_specs:
+        m = re.search(pattern, text, re.M)
+        if not m or m.group(1) != old:
+            return None                      # 文本已不是校验时的样子：整体放弃
+        pending.append((m.span(1), new))
+    if not pending:
+        return 0                             # 无事可做时不碰文件
+    # 从后往前替换：前面的替换会让后面已算好的 span 失效
+    for (lo, hi), new in sorted(pending, key=lambda x: x[0][0], reverse=True):
+        text = text[:lo] + new + text[hi:]
+    path.write_text(text, encoding="utf-8")
+    return len(pending)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="文档规模数字的派生与校验（波 A3）")
-    # `--check` 是目前唯一的模式（默认也是它）。**刻意没有 `--write`**：
-    # 首批三处锚点全在 CHARTER.md，而它永不被自动改写——那样的 `--write` 可证明
-    # 什么都不做，宣传一个不干活的旗标是同一个病的缩微版。等出现第一个可写文档的
-    # 锚点时再加，连同它的金测试一起。
     ap.add_argument("--check", action="store_true",
-                    help="校验并按三值退出码报告（默认行为，给不给都一样）")
-    ap.parse_args()
+                    help="只校验并按三值退出码报告（默认行为）")
+    # `--write` 此前刻意不存在：那时锚点全在 CHARTER.md，而它永不被自动改写，
+    # 那样的旗标可证明什么都不做。宿主换成台账后它才有活干（2026-08-18）。
+    ap.add_argument("--write", action="store_true",
+                    help=f"就地把漂移的数字刷成实际值（只改数字，不动口径说明）。"
+                         f"{'/'.join(sorted(NEVER_WRITE))} 永不改写。")
+    args = ap.parse_args()
+    # ★ `--check` 此前被解析却从不读，于是 `--check --write` 会照样改写治理文档，
+    # 而用户以为自己要的是只读校验（首审 #5）。两者互斥，**只读的一方赢**。
+    if args.check and args.write:
+        print("[doc-numbers] --check 与 --write 互斥（只读的一方赢，什么都不会被改写）",
+              file=sys.stderr)
+        return RC_USAGE
 
     q = derive_text_quantities()
     golden, gold_note = derive_golden_tests()
@@ -232,26 +275,42 @@ def main() -> int:
     all_anchors = anchors(q, golden)
     consumed = {k for a in all_anchors for k in a["keys"]}
 
-    # 派生 ≠ 校验。首批锚点只落在 CHARTER 三处，其余派生值今天**没有任何锚点在消费**
-    # ——逐行标出来，别让这份输出读起来像「这些都核对过了」（首审 #4）。
-    print("── 派生值 ──（✓ = 有锚点在校验它；其余只是备用原料）")
+    # 派生 ≠ 校验：曾经只有四项被锚点消费，而输出的口吻像是都核对过（首审 #4）。
+    # 换宿主后九项全部被消费，故今天这一列**应当全是 ✓**——留着它不是装饰，而是
+    # 将来新增派生值却忘了给它加锚点时，那一行会缺 ✓ 而被
+    # `test_every_derived_value_is_now_consumed_by_an_anchor` 当场抓住。
+    print("── 派生值 ──（✓ = 有锚点在校验它；缺 ✓ = 派生了但没人核对）")
     for k, v in q.items():
         print(f"  {'✓' if k in consumed else ' '} {k:<16} {v}")
     tag = "✓" if "golden_tests" in consumed else " "
     if golden is None:
         print(f"  {tag} {'golden_tests':<16} {gold_note}")
     else:
-        print(f"  {tag} {'golden_tests':<16} {golden}  → 文档写 {band_floor(golden)}+（{gold_note}）")
+        print(f"  {tag} {'golden_tests':<16} {golden}  （{gold_note}）")
 
     rc = RC_PASS
     drift, broken = [], []
+    drift_specs: list[tuple[str, str, str, str]] = []
     for a in all_anchors:
         path = REPO / a["file"]
         if not path.exists():
             broken.append(f"{a['file']}：文件不存在")
             continue
         text = path.read_text(encoding="utf-8")
-        hits = list(re.finditer(a["re"], text))
+        # 锚点限定在「当前规模」小节之内。不限定的话，别处任何一张恰好有同名行的
+        # 表格都会被认成锚点——重复会被「命中 != 1」拦下（fail-safe），但「本表被删、
+        # 另一张表恰好有同名行」会**静默改指错的行**（首审 #18）。
+        sec = re.search(r"^### 当前规模", text, re.M)
+        if not sec:
+            # ⚠️ **不回落到全文搜索**：小节不在就是打点面没了。回落的话，别处任何一张
+            # 恰好有同名行的表都会被认成锚点，然后报「全部一致」——一次彻底的假绿
+            # （首审 #18；实测：删掉本节后代码确实去认了另一张表并报一致）。
+            broken.append(f"{a['file']}：找不到「### 当前规模」小节——打点面没了，"
+                          f"这不是「没有漂移」")
+            continue
+        scope = text[sec.start():]
+        offset = sec.start()
+        hits = list(re.finditer(a["re"], scope, re.M))
         if len(hits) != 1:
             broken.append(f"{a['file']}：锚点命中 {len(hits)} 次（应为 1）— {a['what']}\n"
                           f"            正则 {a['re']}")
@@ -261,9 +320,10 @@ def main() -> int:
             continue
         got = list(hits[0].groups())
         if got != a["want"]:
-            line = text[: hits[0].start()].count("\n") + 1
+            line = text[: offset + hits[0].start()].count("\n") + 1
             drift.append(f"{a['file']}:{line}  {a['what']}\n"
                          f"            文档写 {got} → 实际 {a['want']}")
+            drift_specs.append((a["file"], a["re"], got[0], a["want"][0]))
 
     print("\n── 校验 ──")
     if broken:
@@ -277,11 +337,34 @@ def main() -> int:
     if not broken and not drift:
         print("  ✅ 全部一致")
 
-    if drift:
-        skipped = sorted({d.split(":")[0] for d in drift} & NEVER_WRITE)
-        if skipped:
-            print(f"\n[doc-numbers] {'、'.join(skipped)} 按宪章纪律**永不自动改写**——"
+    # ★ 判据不可信时不许动文件：只要有一项锚点失配或派生不出真值，这份校验整体就
+    # 不可信，此时改写别的行等于「在一份读不准的图纸上照着改」。宁可什么都不做。
+    if broken and args.write:
+        print("\n[doc-numbers] 有项目跑不起来（见上），**不改写任何文件**——"
+              "判据不可信时动文件比不动更坏。先修好上面那几条。")
+    elif drift and args.write:
+        blocked = sorted({d.split(":")[0] for d in drift} & NEVER_WRITE)
+        if blocked:
+            print(f"\n[doc-numbers] {'、'.join(blocked)} 按宪章纪律**永不自动改写**——"
                   f"上面的 diff 须交用户确认后手改。")
+        writable = [sp for sp in drift_specs if sp[0] not in NEVER_WRITE]
+        n = 0
+        for f in sorted({sp[0] for sp in writable}):
+            got = rewrite(REPO / f, [(sp[1], sp[2], sp[3]) for sp in writable if sp[0] == f])
+            if got is None:
+                print(f"\n[doc-numbers] {f} 的文本已不是校验时的样子——**一个字都没改**。"
+                      f"重跑 --check 再试。", file=sys.stderr)
+                return RC_INTERNAL
+            n += got
+        print(f"\n[doc-numbers] 已就地刷新 {n} 处（共 {len(writable)} 处漂移）。"
+              f"**请复跑 --check 确认归零**——改写自己说改成功了不算数。")
+        # 刷完了就别再报「有漂移」：那既让 `--write && …` 永远走不下去，也让人以为
+        # 什么都没修成（首审 #13）。但**刻意不回 0**——回 0 等于替一次未经复核的改写
+        # 背书，而本文件通篇的规矩就是「自己说成功不算数」。留 3 表示「动过、待复核」。
+        if n == len(writable):
+            print("[doc-numbers] rc 仍为 3 = 「已改写、待复核」，不是「失败」。")
+    elif drift:
+        print("\n[doc-numbers] 用 `--write` 就地刷新（只改数字，不动口径说明）。")
     return rc
 
 

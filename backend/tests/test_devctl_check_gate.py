@@ -21,6 +21,7 @@ tmp_path 临时 ROOT，三条门各换成一个按环境变量退出的桩：
 bash / npm / 真 backend venv 任一缺席即跳过（最小镜像兜底）。
 """
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -59,10 +60,22 @@ done
 case "${1:-}" in
     # eval-rag 的透传取证：把收到的每个参数各打一行，好数清楚有没有被词分割拆开
     *run_retrieval_eval.py) shift; for a in "$@"; do echo "ARG:<$a>"; done; exit "${FAKE_RAG_RC:-0}" ;;
+    # docs 门：本桩既冒充 backend venv 的解释器、又被 do_doc_numbers 拿去跑
+    # doc_numbers.py。不单列这一支的话它会落进下面的「回 0」兜底，**docs 门恒绿**。
+    *doc_numbers.py)
+        printf '%s' "${FAKE_SECRET_KEY:-}" > "$LEAK_DIR/docs"
+        echo "stub doc-numbers"; exit "${FAKE_DOCS_RC:-0}" ;;
 esac
 cat >/dev/null 2>&1
 exit 0
 """
+
+# docs 门（第四道）由 `_PY_STUB` 的 `*doc_numbers.py)` 分支驱动——`do_doc_numbers`
+# 是用 `$py "$script"` 跑它的，那个 `$py` 就是这里的 bash 桩，脚本正文根本不会被解释。
+# 所以**不需要**另写一份 python 桩，只需要那个文件存在（`[ -f ]` 前置检查）。
+# 首审 #14：此前另写了一份 python 桩并在注释里说它驱动 FAKE_DOCS_RC，那是死脚手架，
+# 两份桩恰好读同一个变量把这个误解盖住了。
+_DOCS_PLACEHOLDER = "# 占位：真正决定退出码的是 _PY_STUB 的 *doc_numbers.py) 分支\n"
 
 _APPLE_STUB = """\
 #!/bin/bash
@@ -110,6 +123,7 @@ def _scaffold(tmp_path, *, backend=True, node_modules=True, apple=True, patch=No
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir()
     shutil.copy(_LIB_EDGE_SRC, scripts_dir / "lib_edge.sh")
+    (scripts_dir / "doc_numbers.py").write_text(_DOCS_PLACEHOLDER, encoding="utf-8")
     (tmp_path / "config.yaml").write_text(_CONFIG_YAML, encoding="utf-8")
 
     # rag venv 的解释器也给一份桩：lib_edge 的 _read_cfg_hosts 在 backend 桩缺席时会借它
@@ -175,14 +189,30 @@ def _out(r):
 
 # ---- 全过 ----
 
-def test_all_three_gates_pass_rc0(tmp_path):
+def test_all_gates_pass_rc0(tmp_path):
     devctl = _scaffold(tmp_path)
-    r = _run(devctl, ["check"], tmp_path, FAKE_PYTEST_RC=0, FAKE_WEB_RC=0, FAKE_APPLE_RC=0)
+    r = _run(devctl, ["check"], tmp_path,
+             FAKE_PYTEST_RC=0, FAKE_WEB_RC=0, FAKE_APPLE_RC=0, FAKE_DOCS_RC=0)
     assert r.returncode == 0, _out(r)
     combined = _out(r)
     assert "全过" in combined
-    for gate in ("backend", "web", "apple"):
+    for gate in ("backend", "web", "apple", "docs"):
         assert gate in combined
+
+
+def test_docs_gate_failure_is_rc3(tmp_path):
+    """第四道门：文档规模数字与仓库实际不符。"""
+    devctl = _scaffold(tmp_path)
+    r = _run(devctl, ["check", "--only", "docs"], tmp_path, FAKE_DOCS_RC=3)
+    assert r.returncode == 3, _out(r)
+    assert "--write" in _out(r)          # 报错要给出可执行的下一步
+
+
+def test_docs_gate_internal_error_is_rc1(tmp_path):
+    devctl = _scaffold(tmp_path)
+    r = _run(devctl, ["check", "--only", "docs"], tmp_path, FAKE_DOCS_RC=1)
+    assert r.returncode == 1, _out(r)
+    assert "跑不起来" in _out(r)
 
 
 # ---- 判否 = 3 ----
@@ -265,13 +295,14 @@ def test_internal_error_outranks_plain_failure(tmp_path):
     """backend 判否(3) + apple 跑不起来(1) → 合并必须是 1：
     这套门整体不可信，比「某条红了」更需要人介入。"""
     devctl = _scaffold(tmp_path, apple=False)
-    r = _run(devctl, ["check"], tmp_path, FAKE_PYTEST_RC=1, FAKE_WEB_RC=0)
+    r = _run(devctl, ["check"], tmp_path, FAKE_PYTEST_RC=1, FAKE_WEB_RC=0, FAKE_DOCS_RC=0)
     assert r.returncode == 1, _out(r)
 
 
 def test_failure_outranks_pass(tmp_path):
     devctl = _scaffold(tmp_path)
-    r = _run(devctl, ["check"], tmp_path, FAKE_PYTEST_RC=0, FAKE_WEB_RC=1, FAKE_APPLE_RC=0)
+    r = _run(devctl, ["check"], tmp_path,
+             FAKE_PYTEST_RC=0, FAKE_WEB_RC=1, FAKE_APPLE_RC=0, FAKE_DOCS_RC=0)
     assert r.returncode == 3, _out(r)
 
 
@@ -287,7 +318,7 @@ def test_unknown_gate_name_is_usage_error(tmp_path):
 
 def test_skipping_every_gate_is_usage_error_not_pass(tmp_path):
     devctl = _scaffold(tmp_path)
-    r = _run(devctl, ["check", "--skip", "backend,web,apple"], tmp_path)
+    r = _run(devctl, ["check", "--skip", "backend,web,apple,docs"], tmp_path)
     assert r.returncode == 2, _out(r)
     assert "一门都没有真跑" in _out(r)
 
@@ -304,7 +335,7 @@ def test_explicit_skip_is_loudly_reported_and_does_not_run_the_gate(tmp_path):
     """显式跳过是人的决定，允许；但必须在汇总里留痕，且被跳的门不许影响判决。"""
     devctl = _scaffold(tmp_path)
     r = _run(devctl, ["check", "--skip", "backend"], tmp_path,
-             FAKE_PYTEST_RC=1, FAKE_WEB_RC=0, FAKE_APPLE_RC=0)
+             FAKE_PYTEST_RC=1, FAKE_WEB_RC=0, FAKE_APPLE_RC=0, FAKE_DOCS_RC=0)
     assert r.returncode == 0, _out(r)
     assert "跳过" in _out(r)
 
@@ -517,7 +548,11 @@ def test_gates_do_not_inherit_secrets_from_env_local(tmp_path):
 
     r = _run(devctl, ["check"], tmp_path)
     assert r.returncode == 0, _out(r)
-    for gate in ("backend", "web", "apple"):
+    # ★ docs 必须在列。首审 Critical 2：这条曾被加上 `--skip docs` 让新门避开检查
+    # ——**把安全金测试改窄到不覆盖新增面，比它从来没覆盖过更坏**，因为整套测试
+    # 仍然读起来像是在为这条不变量作证。docs 门尤其要紧：它会起
+    # `pytest --collect-only`，等于把全仓测试模块带着真密钥 import 一遍。
+    for gate in ("backend", "web", "apple", "docs"):
         leaked = _leak_seen_by(tmp_path, gate)
         assert leaked == "", f"{gate} 门的子进程看到了密钥：{leaked!r}"
 
@@ -560,3 +595,22 @@ def test_dash_h_is_a_usage_error_everywhere(tmp_path, cmd):
     r = _run(devctl, [cmd, "-h"], tmp_path)
     assert r.returncode == 2, _out(r)
     assert "--help" in _out(r)
+
+
+def test_no_gate_is_exempt_from_the_secret_scrub(tmp_path):
+    """★ 反漂移：**每一条**门都必须留下取证文件。将来新加一门却忘了摘密钥（或忘了
+    给它加取证），这条会立刻红——而不是靠上面那条的清单被人悄悄改窄。
+
+    清单从 devctl.sh 的 `CHECK_GATES` 现读，不在测试里另抄一份。
+    """
+    devctl = _scaffold(tmp_path)
+    (tmp_path / ".env.local").write_text('FAKE_SECRET_KEY="x"\n', encoding="utf-8")
+    gates = re.search(r'^CHECK_GATES="([^"]+)"',
+                      devctl.read_text(encoding="utf-8"), re.M).group(1).split()
+    assert len(gates) >= 4, gates
+
+    assert _run(devctl, ["check"], tmp_path).returncode == 0
+    for g in gates:
+        probe = tmp_path / _LEAK_SUBDIR / g
+        assert probe.exists(), f"{g} 门没有留下取证文件——它是不是绕过了 check_drop_secrets？"
+        assert probe.read_text(encoding="utf-8") == "", f"{g} 门的子进程看到了密钥"

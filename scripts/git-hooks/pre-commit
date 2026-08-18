@@ -8,8 +8,8 @@
 # .git/hooks 不受版本控制——正身放那里就等于「新克隆天生没有钩子」。
 #
 # 白名单纪律：**只有**当本次暂存的每一个路径都是 `.md`、或 `benchmarks/data/` 下的
-# **数据扩展名**时，才整体跳过三门。判不出来的路径（含引号转义的非 ASCII 文件名）
-# 一律落到「要跑门」那一边。
+# **数据扩展名**时，才走轻量路径（只跑 docs 门，不跑 backend/web/apple 三门）。
+# 判不出来的路径（含引号转义的非 ASCII 文件名）一律落到「跑全部门」那一边。
 # ⚠️ 白名单一度写成整个 `benchmarks/data/*` 并注明「原始数据，无可执行内容」——
 # 而该目录下**实际躺着** `mtp-t4-divergence/t4_divergence_probe.py` 与 `t4_verdict.py`
 # 两个真脚本（首审 #15）。放宽一格，守卫就会在某类改动上静默关掉自己：那正是本设计
@@ -57,9 +57,20 @@ done <<EOF
 $files
 EOF
 
+# ⚠️ 文档-only **不是**「什么都不用查」：`docs` 门守的那张「当前规模」表就住在
+# `EXECUTION_LEDGER.md` 里，也是个 `.md`。整体跳过的话，**手改那张表恰好是唯一
+# 保证不被拦下的改法**——而台账里就写着「别手改本表」（首审 Critical 3）。
+# 故文档-only 走「只跑 docs 门」（约 3s），而不是全跳。
 if [ "$need_check" -eq 0 ]; then
-    echo "[pre-commit] 本次只动文档/档案（.md 与 benchmarks/data/）→ 跳过三门"
-    exit 0
+    echo "[pre-commit] 本次只动文档/档案 → 只跑 docs 门（规模表守在 .md 里，不能整体跳过）"
+    "$ROOT/devctl.sh" check --only docs
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "" >&2
+        echo "[pre-commit] docs 门没过（rc=${rc}）→ 提交已中止。" >&2
+        echo "             ./devctl.sh doc-numbers --write 可就地刷新台账 §2 的规模表。" >&2
+    fi
+    exit "$rc"
 fi
 
 "$ROOT/devctl.sh" check

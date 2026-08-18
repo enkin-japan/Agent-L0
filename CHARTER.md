@@ -203,7 +203,7 @@
         │ 方言   dialects/（R0）         prompt 模板 / 输出反序列化 / 标记 / schema │
         │ 承载   backends/（P0/B1）      mlx（进程内）/ remote（inference-server） │
         │ 记忆   memory/                 冷热会话 / 三层压缩 / inflight 防丢       │
-        │ 工具   mcp/（27 文件 55 类）+ agents/（3 沙箱，物理隔离）               │
+        │ 工具   mcp/ + agents/（物理隔离沙箱）——规模见台账 §2                    │
         │ 剧本   skills/*.md（主轮次提示词，经 skill_invoke 取用）              │
         └──────────────────────────────────────────────────────────────────────┘
               │ rag_search        │ web_research（受限沙箱）   │ deck PDF 导出
@@ -300,11 +300,11 @@ RAG 沉淀（原文可召回）。全量日志永远保留在 `history.jsonl`。
 
 **加一个功能**：
 1. 若涉及新协议行为 → 先落 `protocol/fixtures/` 夹具（铁律 5）；
-2. 后端改动 → 跑 `backend/tests/`（600+ 项金测试，FakeEngine 无模型毫秒级）
+2. 后端改动 → 跑 `backend/tests/`（FakeEngine 无模型毫秒级；项数见台账 §2）
    必须全绿；动 TurnRunner/编排/账本前**先读金测试**知道它守着哪些不变量；
 3. 两端归约器改动 → 跑夹具回放（web `npm run test` + Swift
    `Tests/run_reducer_fixtures.sh`）双绿；
-4. 涉及真实行为的改动 → 起本地后端跑 E2E（原生 `Tests/run_e2e.sh` 20 项）
+4. 涉及真实行为的改动 → 起本地后端跑 E2E（原生 `Tests/run_e2e.sh`）
    或 Playwright；**实机测试前先 `lsof -ti :14159 | xargs kill`**
    （旧进程占端口会静默连到旧后端，新代码全不生效——曾误判 3 个功能坏）；
 5. 起后端调试用 `PYTHONUNBUFFERED=1`（print 块缓冲会吞日志）；真环境在
@@ -352,7 +352,7 @@ macOS app 内建执行层（sidecar，R5-4）按设计自启/监护 backend，�
 | 渲染格 | `mcp/base.py` 的 `render_hint` + `ToolOutput`（R3） | `chat-message.tsx` 的 `renderByHint` | 随 R5 |
 | 长期记忆 | `memory/notes.py` + `backend/notes/`（R4，gitignore） | — | — |
 | 契约 | `PROTOCOL.md` + `protocol/fixtures/`（三端共享） | | |
-| 回归网 | `backend/tests/`（**600+** 金测试） | `lib/turn-reducer.test.ts` | `Tests/run_reducer_fixtures.sh` + `run_e2e.sh` |
+| 回归网 | `backend/tests/`（金测试，项数见台账 §2） | `lib/turn-reducer.test.ts` | `Tests/run_reducer_fixtures.sh` + `run_e2e.sh` |
 
 单配置：仓库根 `config.yaml`。单启动器：仓库根 `devctl.sh`。
 
