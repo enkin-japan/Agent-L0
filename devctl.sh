@@ -667,6 +667,44 @@ do_eval_rag() {
     return "$rc"
 }
 
+# ---- doc-numbers：文档规模数字的派生与校验（波 A3）----
+# 退出码与 check 同一套三值纪律（0=一致 / 3=有漂移 / 2=用法错 / 1=跑不起来）。
+# **刻意暂不并入 `check` 的默认门**：今天 CHARTER.md 三处确有漂移，而宪章的任何改动
+# 都要用户显式同意——现在挂上去就是一道天天红的门，而天天红的门最终一定被删掉
+# （这正是 A4 复审点名要防的失效）。等用户认过那三处、漂移归零后再并入。
+do_doc_numbers() {
+    local py="$BACKEND_DIR/.venv/bin/python" script="$ROOT/scripts/doc_numbers.py" rc a
+    [ -f "$script" ] || { fail "doc-numbers 跑不起来：找不到 ${script}"; return 1; }
+    # ⚠️ 帮助必须在这里就地拦下，**不能透传给 argparse**：argparse 打完 --help 会
+    # exit 0，而下面的 case 会把这个 0 翻译成「doc-numbers 一致」——一次什么都没核对
+    # 的绿灯（首审 Critical 1，实测复现）。这正是本波要消灭的那类失效，出现在本波
+    # 自己新写的代码里。
+    for a in "$@"; do
+        case "$a" in
+            --help) echo "用法: $0 doc-numbers [--check]"
+                    echo "      比对文档里的规模数字与仓库实际值。"
+                    echo "      退出码: 0=一致 / 3=有漂移 / 2=用法错 / 1=跑不起来（含锚点失配）"
+                    echo "      CHARTER.md 永不被自动改写，有漂移只打 diff。"
+                    return 0 ;;
+            -h) fail "doc-numbers: 本脚本里 -h 表 host 不表 help；要帮助请用 --help"; return 2 ;;
+        esac
+    done
+    # 甲类是纯 stdlib、任何 python3 都能算；**乙类（金测试项数）另说**——脚本内部固定
+    # 去调 `backend/.venv/bin/python -m pytest --collect-only`，与这里用哪个解释器无关。
+    # 所以这条回落只救得了甲类，乙类照样会是 unknown（原注释说反了，首审 #6）。
+    [ -x "$py" ] || py="$(command -v python3 2>/dev/null)"
+    [ -n "$py" ] && [ -x "$py" ] || { fail "doc-numbers 跑不起来：找不到可用的 python3"; return 1; }
+    "$py" "$script" "$@"
+    rc=$?
+    case "$rc" in
+        0) info "doc-numbers 一致（rc=0）" ;;
+        3) fail "doc-numbers 有漂移（rc=3）" ;;
+        2) fail "doc-numbers 用法错（rc=2）" ;;
+        *) fail "doc-numbers 跑不起来（rc=${rc}）——这不是「一致」" ;;
+    esac
+    return "$rc"
+}
+
 # ---- git 钩子安装：把 check 接到提交路径上 ----
 # 钩子正文入库在 scripts/git-hooks/pre-commit（.git/hooks 不受版本控制，新克隆天生
 # 没有钩子——所以正身必须入库）。.git/hooks/pre-commit 只放一个三行 shim。
@@ -1010,6 +1048,7 @@ case "$CMD" in
     logs)   do_logs "$TARGET" ;;
     check)  do_check ${RAW_ARGS[@]+"${RAW_ARGS[@]}"}; exit $? ;;
     eval-rag) do_eval_rag ${RAW_ARGS[@]+"${RAW_ARGS[@]}"}; exit $? ;;
+    doc-numbers) do_doc_numbers ${RAW_ARGS[@]+"${RAW_ARGS[@]}"}; exit $? ;;
     install-hooks) install_git_hooks; exit $? ;;
     *)
         echo "用法: $0 setup                                   # 首次部署（venv/依赖/node_modules，末尾自动 keygen）"
@@ -1025,6 +1064,7 @@ case "$CMD" in
         echo "                                                 #   退出码 0=过 3=不过 2=用法错 1=跑不起来（缺前置不会自动跳过）"
         echo "      $0 eval-rag [...]                          # RAG 检索棘轮（占 GPU 数分钟，故不进 pre-commit）"
         echo "                                                 #   ⚠️ 任何检索侧改动后必须手动跑它；退出码原样透传"
+        echo "      $0 doc-numbers [--check]                   # 文档规模数字 vs 仓库实际（暂不并入 check，见脚本头）"
         echo "      $0 install-hooks                           # 装 .git/hooks/pre-commit（三行 shim，转调入库的 scripts/git-hooks/pre-commit）"
         echo "      $0 status"
         echo "      $0 logs [rag|rag-compute|searx|infer|backend|front]"
