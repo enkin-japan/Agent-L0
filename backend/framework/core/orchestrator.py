@@ -28,6 +28,7 @@ from .task_state import TaskState, call_fingerprint
 from ..memory.session import ChatSession
 from ..memory.compactor import compact_tool_observations
 from ..mcp.registry import MCPRegistry
+from .spill import spill_observation, truncate_observation
 
 # 会话资产的 markdown 链接（图表图片 ![..](/api/v1/files/..)、导出 PDF [..](/api/v1/files/..)）
 _ASSET_LINK_RE = re.compile(r"!?\[[^\]\n]*\]\((/api/v1/files/[^)\s]+)\)")
@@ -1274,17 +1275,13 @@ class Orchestrator:
         # 从不经过这里——故不存在"从半截文本里投影出坏图表"的可能。
         # 保头 2/3 + 尾 1/3（grok-build 评估采纳）：shell/日志类输出的错误行多在尾部，
         # 只保头会把最有用的部分砍掉；中缝标注原始体积 + 收窄取回的出路（S.3：给路）。
-        if len(result_text) > self.observation_max_chars:
-            total = len(result_text)
-            head_n = self.observation_max_chars * 2 // 3
-            tail_n = self.observation_max_chars - head_n
-            result_text = (
-                result_text[:head_n]
-                + f"\n...[observation truncated: {total} chars total, showing first {head_n} "
-                  f"and last {tail_n}; re-fetch a narrower slice (page/start/end/limit args) "
-                  f"if you need the omitted middle]...\n"
-                + result_text[-tail_n:]
-            )
+        if len(result_text) > self.observation_max_chars > 0:
+            # 落盘走线程：最坏 4M 字符（CJK 编码后约 12MB）的同步写会卡住事件循环，
+            # 而上面工具执行本身就是 to_thread 出去的——同一处不该一半在循环里写盘。
+            spill = await asyncio.to_thread(
+                spill_observation, session, call_id, result_text)
+            result_text = truncate_observation(
+                result_text, self.observation_max_chars, spill)
         # 实时反馈：记录一条已完成的工具步骤（结果取首行摘要）
         summary = result_text.strip().splitlines()[0] if result_text.strip() else ""
         session.push_activity("tool", name, summary)

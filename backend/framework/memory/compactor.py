@@ -36,12 +36,50 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import rag_sink
+from ..core.spill import _SPILL_CALL_RE, _SPILL_TOTAL_RE  # 句柄正则同源，见该模块
 from .notes import NOTE_TYPES
 
 # 模块级默认（与 config.yaml agent 段默认保持一致；编排层按 config 覆盖，其余调用方用默认）
 DEFAULT_KEEP_RECENT = 6
 DEFAULT_DIGEST_CHARS = 200
 DEFAULT_BUDGET_CHARS = 20000  # 机械层观察总预算（保守偏大：越过才驱逐旧大观察，不越则保留原文）
+
+
+def _spill_meta(tr: Dict[str, Any]) -> Tuple[Optional[str], Optional[int]]:
+    """取这条观察的回取句柄与原始体积，返回 (调用串, 原始字符数)。
+
+    **唯一来源是观察正文里那段中缝**，不另读内存元数据：`_` 前缀的内存键落盘时会被
+    `_strip_internal_meta` 剥掉，冷恢复后就没有了，于是「有元数据时读元数据」这条捷径
+    在重启后必然退化成读正文——那就只留读正文这一条，省掉一个会分家的真相源。
+    （单行载荷的中缝里刻意没有 `file_extract(...)`，故这里自然返回 None，不会给出
+    一条按行取不回来的路。）
+    """
+    resp = str(tr.get("response", ""))
+    m = _SPILL_CALL_RE.search(resp)
+    if not m:
+        return None, None
+    t = _SPILL_TOTAL_RE.search(resp)
+    return m.group(0), (int(t.group(1)) if t else None)
+
+
+def _spill_hint(tr: Dict[str, Any]) -> str:
+    """两个压缩桩共用的「原文在这」尾巴。**只对真落过盘的观察给路径**（波 C1）。
+
+    没落过盘的观察（体量没越过 `observation_max_chars`，只是被预算驱逐削成 digest）
+    根本没有文件——给它一个路径等于让模型去调一次注定 not found 的 `file_extract`，
+    **比不给更毒**。故判据是这条观察自己的句柄，不是「凡是被压过的都给」。
+    句柄**逐字**沿用编排层中缝算好的那一串（含具体行号与 max_chars），不在这里另拼一份：
+    模型面只容忍一种回取方式，两处各拼各的迟早分家。
+    """
+    call, _ = _spill_meta(tr)
+    return f"; the full output is still on disk — read it with {call}" if call else ""
+
+
+def _spill_orig_chars(tr: Dict[str, Any]) -> int:
+    """桩里报的「原始体积」。落过盘的取**落盘前**的真实体积——`len(response)` 只是截断后
+    的那 4000 多字，紧挨着一条指向十万字文件的路径，两个数会互相打脸。"""
+    _, total = _spill_meta(tr)
+    return int(total) if total else len(str(tr.get("response", "")))
 
 
 def compact_tool_observations(history: List[Dict[str, Any]], *,
@@ -80,10 +118,11 @@ def compact_tool_observations(history: List[Dict[str, Any]], *,
                 pi, po = prev[0], observations[prev[0]]
                 # 较旧那条（pi）在可压缩区且尚未压过 → 削成取代桩（新副本已在后面，内容不丢）
                 if pi < cutoff and not po.get("_compacted"):
-                    orig = len(str(po.get("response", "")))
+                    orig = _spill_orig_chars(po)
                     po["response"] = (f"[Observation superseded: the result of {po.get('name')} "
                                       f"reading \"{target}\" was superseded by a later read of the "
-                                      f"same target; originally {orig} chars]")
+                                      f"same target; originally {orig} chars"
+                                      + _spill_hint(po) + "]")
                     po["_compacted"] = True
                     compacted += 1
             last_seen[key] = (i, epoch)
@@ -106,7 +145,8 @@ def compact_tool_observations(history: List[Dict[str, Any]], *,
                     break
                 resp = str(tr.get("response", ""))
                 head = resp.strip()[:digest_chars].rstrip()
-                tr["response"] = head + f" …[Observation compacted; originally {len(resp)} chars]"
+                tr["response"] = (head + f" …[Observation compacted; originally "
+                                  f"{_spill_orig_chars(tr)} chars" + _spill_hint(tr) + "]")
                 tr["_compacted"] = True
                 compacted += 1
                 total -= (len(resp) - len(tr["response"]))

@@ -1051,6 +1051,28 @@ class SessionManager:
         })
         return result
 
+    def _relink_spill(self, line: str, parent_dir: Path, new_dir: Path) -> str:
+        """把一条历史行里父会话的 spill 路径搬到分支目录（硬链接 + 文本前缀替换）。
+
+        只在这条行真的提到父会话 spill 目录时才动手；替换的是**完整绝对路径前缀**，
+        误伤面为零。搬不动（父文件已不在、跨设备）就原样留着：一条陈旧路径不比一次
+        分支失败更糟，而这里抛异常会让整个分支创建失败。
+        """
+        old_prefix = f"{parent_dir}/spill/"
+        if old_prefix not in line:
+            return line
+        new_spill = new_dir / "spill"
+        for name in set(re.findall(re.escape(old_prefix) + r"([A-Za-z0-9._-]+)", line)):
+            try:
+                self._relink_media(str(parent_dir / "spill" / name), new_spill)
+            except Exception:
+                pass
+        try:
+            os.chmod(new_spill, 0o700)
+        except OSError:
+            pass
+        return line.replace(old_prefix, f"{new_spill}/")
+
     def _clamp_sediment_watermark(self, session_id: str, session, line_count: int) -> None:
         """日志被截断后把沉淀水位线夹回行数以内。热会话改内存并落盘，冷会话直接改文件。
 
@@ -1194,7 +1216,15 @@ class SessionManager:
                     for a in turn["attachments"]:
                         if isinstance(a, dict) and a.get("path"):
                             a["path"] = self._relink_media(str(a["path"]), new_attach_dir)
-                out.write(json.dumps(turn, ensure_ascii=False) + "\n")
+                line = json.dumps(turn, ensure_ascii=False)
+                # 超长观察的落盘路径（波 C1）只活在观察**正文**里（中缝那句
+                # `file_extract(path="…")`），不是结构化字段，故这里只能做前缀替换。
+                # 不搬的话：父会话被回收或被用户删掉之后，分支手里就是一条指向虚空的
+                # 路径——旁边还写着「不要重跑这个工具」。那正是本波要消灭的死路，
+                # 只不过换到了分支上复发。硬链接复用与多模态文件同纪律（零拷贝，
+                # 父会话删了也不影响分支）。
+                line = self._relink_spill(line, parent_dir, new_dir)
+                out.write(line + "\n")
 
     async def branch_session(self, parent_session_id: str, node_index: int,
                              new_session_id: Optional[str] = None) -> Dict[str, Any]:
