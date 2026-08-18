@@ -275,8 +275,10 @@ cd frontend && npm run test; cd ..
   的变异体**照样全绿**，即断言毫无意义。原因：`turn_ended` 的 payload 自带**完整** response，
   终态是从它整个重建的，中途状态被冲掉也照样收敛。改建在 002（`awaiting_approval`，
   状态全靠逐事件累积、无 turn_ended 可兜底）之上，同一变异体立刻被 006 抓红。
-  **纪律：新夹具落地前先跑一次变异测试（故意改坏实现，确认它会红）——不会红的夹具是装饰。**
-  已写进 `protocol/fixtures/README.md`。
+  **纪律：落地前先跑一次变异测试（故意改坏实现，确认它会红）——不会红的断言是装饰。**
+  唯一出处已挪到 `CLAUDE.md` 的「Mutation proof」节，且适用面从「新夹具」外推为
+  **「守卫类改动」全域**（金测试 / 护栏分支 / fail-closed 判定 / 协议夹具）——两次实证
+  失效恰好都发生在后端守卫域，不在夹具域。本处与 `protocol/fixtures/README.md` 只留指针。
 - 2026-07-15 / B2b / **换档护栏首次被"真实换档"触发**（B2a 只用篡改戳测过）：vl-2b 建的库
   （dim2048）在选回 text-0.6b（dim1024）后启动 → lifespan 抛 RuntimeError 拒启，报错同时点名
   两个档位/维度并指向 reembed。配套实跑 `reembed.py` 全流程（dump-categories → stop → wipe →

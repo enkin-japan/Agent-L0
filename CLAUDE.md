@@ -102,6 +102,29 @@ change). Docs-only and ledger-only diffs are exempt.
 - Beyond reporting test results, do not instruct subagents to re-verify their own
   work. Redundant verification instructions cost tokens without adding quality.
 
+### Mutation proof — required for guard-type changes (single source of truth)
+A guard that cannot fail is not a guard. Before a guard-type change lands,
+inject a mutant the guard is supposed to catch and confirm the intended test
+actually goes red. "This test would catch it" is reasoning, not evidence; a red
+test is evidence.
+- **Scope is narrow on purpose: guard-type changes only** — golden tests,
+  guardrail branches, fail-closed decisions, protocol fixtures. Ordinary feature
+  code and refactors are out of scope. A proof obligation on every diff turns
+  into sessions spent fighting the gate, and gates that are fought get deleted.
+- **This applies repo-wide, not just to protocol fixtures.** It was written down
+  for fixtures first (`protocol/fixtures/README.md`), but both observed failures
+  since were in the backend guard domain: `_load_drafter`'s mock sat so deep that
+  no mutant could be killed through it, and the C1 streaming-BPE defect that
+  stage-reviewer caught on its first run.
+- Restore the source byte-for-byte afterwards and verify the restore. A mutation
+  run that leaves the tree modified is worse than not running one.
+- **If a mutant survives, suspect the mutant before the assertion.** A mutant
+  that does not faithfully reproduce the defect proves nothing. Only once it is
+  confirmed faithful does a survivor mean the assertion is vacuous.
+- Record the proof in that wave's `EXECUTION_LEDGER.md` entry (which mutants,
+  which tests went red). **There is no separate mutation ledger** — a second
+  place to keep the same numbers in sync is just a third source of drift.
+
 ### Stage review — mandatory after every completed stage (user decision, 2026-08-16)
 - Trigger: a stage/station/wave has closed out — its commits are pushed and the
   closeout is being (or has just been) reported to the user. Before declaring
