@@ -197,6 +197,9 @@ do_setup() {
     fi
     [ -f "$ROOT/.env.local" ] || warn "未发现 .env.local——如需启用后端鉴权，请: cp .env.example .env.local 并填写 AGENT_API_KEY"
     do_keygen
+    # 钩子在 setup 装一次：.git/hooks 不入库，新克隆天生没有它——不在这里自动装，
+    # 「装执行器」这件事本身就会退化成「写下来了但没人跑」。
+    install_git_hooks || warn "pre-commit 钩子未装成（可稍后单跑: ./devctl.sh install-hooks）"
     info "setup 完成。启动: ./devctl.sh start"
 }
 
@@ -418,6 +421,297 @@ do_logs() {
     esac
 }
 
+# =======================================================
+# check — 验证物的执行器（波 A0 ≡ 台账 F3）
+#
+# 病根：本仓有大量验证物（金测试、三端夹具、RAG 棘轮），但**没有任何东西会去执行
+# 它们**——棘轮刚上电就已经处于「退出码没人读」的状态。本子命令只做一件事：把今天
+# 要手敲的三条命令聚合起来，并把它们的退出码按纪律合并。
+#
+# 三值退出码纪律（整个设计里唯一不可省的语义）：
+#   0 = 全过 ／ 3 = 有门判否 ／ 2 = 用法错 ／ 1 = 有门跑不起来（内部错）
+# **「门跑不起来」永远不能塌缩成「门说是」。** 任何一门的前置缺失（venv / npm /
+# swiftc 不在）一律记 1——自动跳过就是守卫自己把自己关掉。要跳只能人显式 --skip，
+# 且跳了会在汇总里逐条打出来。
+#
+# 合并优先级 2 > 1 > 3 > 0：用法错时全部结果无意义；「跑不起来」意味着这套门整体
+# 不可信，比「某条测试红了」更需要人介入（后者在日志正文里本来就看得见）。
+#
+# 反空守卫：`--only` 解析后若一门都不剩、或 `--skip` 把三门全跳掉，一律 rc=2 而非 0
+# ——「一门都没跑」被记成「过」正是本仓反复得的那个病。
+#
+# 第一版**刻意不加任何新校验器**，只做聚合与退出码合并。加校验器是另一件事，混在
+# 一起会让这条也变成「写下来了但没人跑」。
+# =======================================================
+CHECK_GATES="backend web apple"
+
+# ---- 门的子进程不继承密钥（首审 #14）----
+# 把门接到提交路径上 = 每次 `git commit` 都会把 `.env.local` 里的东西经本脚本顶部的
+# `set -a` 交给 pytest / npm / xcrun 的子进程；`npm run test` 还会连带执行
+# node_modules 带来的任何 lifecycle 脚本。实读 `.env.local` 的键名：五把 Bearer 钥匙
+# （AGENT / INFER / RAG / RAG_COMPUTE / CLOUD_OPENAI）+ 两个 App Store Connect 标识。
+# 三条门**一把都不需要**（backend 金测试是 FakeEngine、前端是夹具回放、apple 是 Swift
+# 编译），故在门的子 shell 里逐个摘掉。这是本次改动**新引入**的暴露面——虽无已知泄漏
+# 路径，但无声扩大暴露面本身就不该默认发生。
+# 键名从 env 文件现读（不另立一张会漂移的清单）；运行必需项走安全名单排除。
+CHECK_ENV_KEEP=" PATH HOME LANG LC_ALL SHELL TMPDIR TMP USER LOGNAME TERM PWD PYTHONUNBUFFERED DEVELOPER_DIR SDKROOT "
+CHECK_SECRET_KEYS=""
+
+check_collect_secret_keys() {
+    local f k out=""
+    for f in "$ROOT/.env" "$ROOT/.env.local"; do
+        [ -f "$f" ] || continue
+        for k in $(sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$f" | sort -u); do
+            case "$CHECK_ENV_KEEP" in
+                *" ${k} "*) ;;
+                *) case " $out " in *" ${k} "*) ;; *) out="${out} ${k}" ;; esac ;;
+            esac
+        done
+    done
+    echo "$out"
+}
+
+# 在门的子 shell 里调用：把上面收集到的键逐个 unset。
+check_drop_secrets() {
+    local k
+    for k in $CHECK_SECRET_KEYS; do unset "$k"; done
+}
+
+# 退出码合并（2 > 1 > 3 > 0）。
+# ⚠️ 认不出的码**必须归 1，不能归 0**：写成「都不匹配就 echo 0」时，门函数返回 127
+# （函数名拼错、不存在）会让汇总打「跑不起来」而退出码是 0——汇总说不可信、退出码说过，
+# 正是本仓那个病的教科书形态。
+check_merge() {
+    local a="$1" b="$2" want x
+    for x in "$a" "$b"; do
+        case "$x" in 0|1|2|3) ;; *) echo 1; return 0 ;; esac
+    done
+    for want in 2 1 3; do
+        if [ "$a" = "$want" ] || [ "$b" = "$want" ]; then echo "$want"; return 0; fi
+    done
+    echo 0
+}
+
+# backend 金测试（FakeEngine、CPU-only，不碰 GPU，可与用户日常使用并行）。
+# pytest 自己的退出码本就分语义，照搬即可：0=过 1=测试红 2=中断 3=内部错 4=用法错
+# 5=一条都没收集到。**5 必须记内部错**——「一条都没跑」记成过就是空守卫。
+check_gate_backend() {
+    local py="$BACKEND_DIR/.venv/bin/python" rc
+    if [ ! -x "$py" ]; then
+        fail "backend 门跑不起来：找不到 ${py}（仓库根 .venv 是死符号链接，真身只有 backend/.venv）。先跑 ./devctl.sh setup"
+        return 1
+    fi
+    # `( cd X && cmd )` 是个陷阱形态：cd 失败时 && 短路，子 shell 回 0 = 「门说过」。
+    # 一律写成 `cd X || exit 97`，让 cd 失败落进「跑不起来」而不是「过」或「不过」。
+    # 97 不与 pytest 的 0–5 冲突，故可当哨兵。
+    ( check_drop_secrets; cd "$BACKEND_DIR" || exit 97; PYTHONUNBUFFERED=1 "$py" -m pytest tests -q )
+    rc=$?
+    case "$rc" in
+        0) return 0 ;;
+        1) return 3 ;;
+        5) fail "backend 门跑不起来：pytest 一条测试都没收集到（rc=5）——这不是「过」"; return 1 ;;
+        97) fail "backend 门跑不起来：进不去 ${BACKEND_DIR}"; return 1 ;;
+        *) fail "backend 门跑不起来：pytest rc=${rc}（2=中断 3=内部错 4=用法错）"; return 1 ;;
+    esac
+}
+
+# 前端协议夹具回放（vitest；与 apple 侧消费同一批 protocol/fixtures）。
+# 夹具为空的空跑由 turn-reducer.test.ts 里的「发现夹具」一条自己拦（已在测），
+# 此处不重造。残留口径：node_modules 齐备但 vitest 二进制损坏时 npm 也回 1，
+# 会被记成「不过」而非「跑不起来」——方向安全（不塌缩成过），故不为它加脆弱的输出解析。
+check_gate_web() {
+    local rc
+    command -v npm >/dev/null 2>&1 || { fail "web 门跑不起来：PATH 里没有 npm（PATH=${PATH}）"; return 1; }
+    [ -d "$FRONT_DIR/node_modules" ] || { fail "web 门跑不起来：缺 frontend/node_modules。先跑 ./devctl.sh setup"; return 1; }
+    # 97 哨兵在这一侧的依据弱于 backend：npm **会原样透传被执行脚本的退出码**，
+    # 理论上 package.json 的 test 脚本可以自己回 97 而被误读成「进不去目录」。
+    # 本仓的 test 脚本是 `vitest run`（0/1），故今天不冲突——如实记，不假装无风险。
+    ( check_drop_secrets; cd "$FRONT_DIR" || exit 97; npm run test )
+    rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    [ "$rc" -eq 97 ] && { fail "web 门跑不起来：进不去 ${FRONT_DIR}"; return 1; }
+    return 3
+}
+
+# apple-app 归约器夹具回放（Swift）。夹具目录为空由 reducer_fixtures_test.swift 自己
+# 拦（`guard !names.isEmpty`），此处不重造。
+# 没装 Xcode/CLT **不是「跳过」而是「跑不起来」**——想跳必须人显式 --skip apple。
+check_gate_apple() {
+    local sh="$ROOT/apple-app/Tests/run_reducer_fixtures.sh" rc
+    [ -x "$sh" ] || { fail "apple 门跑不起来：找不到可执行的 ${sh}"; return 1; }
+    command -v xcrun >/dev/null 2>&1 || { fail "apple 门跑不起来：PATH 里没有 xcrun（非 macOS 或未装 Command Line Tools）。要跳过须显式 --skip apple"; return 1; }
+    if ! xcrun --find swiftc >/dev/null 2>&1; then
+        fail "apple 门跑不起来：xcrun 找不到 swiftc（装 Xcode / CLT，或 DEVELOPER_DIR 指向可用的 Xcode）。要跳过须显式 --skip apple"
+        return 1
+    fi
+    ( check_drop_secrets; exec "$sh" )
+    rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    return 3
+}
+
+check_usage() {
+    echo "用法: $0 check [--only <门>] [--skip <门>]"
+    echo "      门 = ${CHECK_GATES}（逗号或空格分隔，可重复给）"
+    echo "      退出码: 0=全过 / 3=有门判否 / 2=用法错 / 1=有门跑不起来"
+    echo "      --skip 是人的显式决定，会在汇总里逐条打出来；缺前置**不会**自动跳过"
+}
+
+do_check() {
+    local skip_list="" only_list="" g rc worst=0 summary="" t0 t1 ran=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --skip)   [ $# -ge 2 ] || { fail "check: --skip 缺少参数"; check_usage >&2; return 2; }
+                      skip_list="${skip_list} $(echo "$2" | tr ',' ' ')"; shift 2 ;;
+            --skip=*) skip_list="${skip_list} $(echo "${1#--skip=}" | tr ',' ' ')"; shift ;;
+            --only)   [ $# -ge 2 ] || { fail "check: --only 缺少参数"; check_usage >&2; return 2; }
+                      only_list="${only_list} $(echo "$2" | tr ',' ' ')"; shift 2 ;;
+            --only=*) only_list="${only_list} $(echo "${1#--only=}" | tr ',' ' ')"; shift ;;
+            --help) check_usage; return 0 ;;
+            # 本脚本全局约定「-h 表 host 不表 help」，外层参数期会把它吃成 HOST_ARG
+            # （值为空，故那道「只对 start|restart 有意义」的拦截并不会触发——首审揪出
+            # 我原先的注释在这里断言反了）。而 `-h` 是所有人对 help 的第一反应，
+            # 故在这里显式给出指引，而不是落进「未知参数」。
+            -h) fail "check: 本脚本里 -h 表 host 不表 help；要帮助请用 --help"; return 2 ;;
+            *) fail "check: 未知参数 ${1}"; check_usage >&2; return 2 ;;
+        esac
+    done
+
+    # 门名打错必须当场报用法错。放过它 = `--only bakend` 一门都不跑却回 0。
+    for g in $skip_list $only_list; do
+        case " ${CHECK_GATES} " in
+            *" ${g} "*) ;;
+            *) fail "check: 未知的门名 '${g}'（可选：${CHECK_GATES}）"; return 2 ;;
+        esac
+    done
+
+    CHECK_SECRET_KEYS="$(check_collect_secret_keys)"
+    t0=$(date +%s)
+    info "check：三值退出码（0=过 / 3=不过 / 2=用法错 / 1=跑不起来）"
+    for g in $CHECK_GATES; do
+        if [ -n "$only_list" ]; then
+            case " ${only_list} " in *" ${g} "*) ;; *) continue ;; esac
+        fi
+        case " ${skip_list} " in
+            *" ${g} "*)
+                warn "▷ ${g}：显式跳过（--skip）——这一门本次没有判定任何东西"
+                summary="${summary}
+  ${g}\t跳过(--skip)"
+                continue ;;
+        esac
+        info "▷ ${g} …"
+        "check_gate_${g}"
+        rc=$?
+        ran=$((ran + 1))
+        # 门只允许回 0/3；其余（含函数不存在的 127）一律归「跑不起来」。
+        # 这一行与 check_merge 里的兜底互为双保险，两处都不能省。
+        case "$rc" in 0|3) ;; *) rc=1 ;; esac
+        case "$rc" in
+            0) summary="${summary}
+  ${g}\t过" ;;
+            3) summary="${summary}
+  ${g}\t不过" ;;
+            *) summary="${summary}
+  ${g}\t跑不起来" ;;
+        esac
+        worst=$(check_merge "$worst" "$rc")
+    done
+    t1=$(date +%s)
+
+    # 反空守卫：一门都没真跑（--only 全被跳 / --skip 跳光）不是「过」。
+    if [ "$ran" -eq 0 ]; then
+        fail "check: 本次一门都没有真跑（--only/--skip 把门全排除了）——这不是一次通过"
+        return 2
+    fi
+
+    printf '%b\n' "${GREEN}[devctl]${NC} ── check 汇总（$((t1 - t0))s）──${summary}"
+    case "$worst" in
+        0) info "check 全过 ✅（rc=0）" ;;
+        3) fail "check 不过 ❌（rc=3）——有门判否" ;;
+        # 构造上不可达（用法错在进入本循环前就 return 2 了）；留着是防守：
+        # 万一将来有门返回 2，它得有个说法，而不是掉进下面的「跑不起来」。
+        2) fail "check 用法错（rc=2）" ;;
+        *) fail "check 不可信 ⚠️（rc=1）——有门跑不起来；这不是「过」" ;;
+    esac
+    return "$worst"
+}
+
+# ---- eval-rag：RAG 检索棘轮（波 A0 ③）----
+# **刻意不进 pre-commit**：它要加载检索模型、占 GPU 数分钟，塞进提交路径必然被绕过，
+# 而绕过一次就会永远绕过。台账写死的纪律是：**任何检索侧改动后必须手动跑它**。
+# 退出码**原样透传** run_retrieval_eval.py（其自身口径：0=不低于地板且无逐题由过转败；
+# 1=判为回归/档位解析不出/拒绝把回归钉成新基线；argparse 用法错为 2）。不重映射成
+# check 的三值——同一件事两套口径比一套含糊更危险。
+# ⚠️ 如实声明两条口径缺陷（首审 #12，不修但不假装没有）：
+#   ① **rc=1 是二义的**——「检索判为回归」与「devctl 侧前置缺失」都回 1，调用方分不开。
+#      要分开只能读 stderr 文案（前者由 python 打，后者由本函数以 `[devctl]` 前缀打）。
+#   ② 97 被本函数当作「进不去 rag 目录」的哨兵。实读 run_retrieval_eval.py 的退出码
+#      空间是 {0,1,2}，故今天不冲突；下游若哪天真回 97 会被误读成「跑不起来」。
+do_eval_rag() {
+    local py="$RAG_DIR/.venv/bin/python" script="$ROOT/rag/evals/run_retrieval_eval.py" rc
+    # 目录判在解释器判**之前**：反过来写的话，`-x .venv/bin/python` 成立已蕴含目录存在，
+    # 目录那条就成了恒真的死分支（首审 #11）。
+    [ -d "$RAG_DIR" ] || { fail "eval-rag 跑不起来：找不到 ${RAG_DIR}"; return 1; }
+    [ -x "$py" ] || { fail "eval-rag 跑不起来：找不到 ${py}。先跑 ./devctl.sh setup"; return 1; }
+    [ -f "$script" ] || { fail "eval-rag 跑不起来：找不到 ${script}"; return 1; }
+    warn "RAG 棘轮要加载检索模型（占 GPU 数分钟）——单 GPU 纪律：先确认此刻没有别的真模型进程在跑"
+    # 同样避开 `( cd X && cmd )`：cd 失败会让子 shell 回 0，把「压根没跑」报成「棘轮过」。
+    ( cd "$RAG_DIR" || exit 97; "$py" "$script" "$@" )
+    rc=$?
+    [ "$rc" -eq 97 ] && { fail "eval-rag 跑不起来：进不去 ${RAG_DIR}"; return 1; }
+    if [ "$rc" -eq 0 ]; then
+        info "eval-rag 过（rc=0）"
+    else
+        fail "eval-rag 不过（rc=${rc}，原样透传 run_retrieval_eval.py）"
+    fi
+    return "$rc"
+}
+
+# ---- git 钩子安装：把 check 接到提交路径上 ----
+# 钩子正文入库在 scripts/git-hooks/pre-commit（.git/hooks 不受版本控制，新克隆天生
+# 没有钩子——所以正身必须入库）。.git/hooks/pre-commit 只放一个三行 shim。
+#
+# **刻意不用软链**：软链要么钉死绝对路径（仓库一搬家就成悬空链接），要么钉死相对层级
+# （worktree/submodule 下 hooks 目录不在 <root>/.git/hooks）。而 git 对「执行不了的
+# 钩子」是**静默跳过**的——那就又变成守卫自己把自己关掉。shim 每次运行现算仓库根，
+# 搬家、worktree 都不受影响；正身缺失时 exec 失败回非零，方向也是挡住提交。
+HOOK_SHIM_MARK="# managed-by: devctl install-hooks"
+
+install_git_hooks() {
+    local src="$ROOT/scripts/git-hooks/pre-commit" hooks_dir dest
+    [ -f "$src" ] || { fail "找不到 ${src}"; return 1; }
+    hooks_dir="$(cd "$ROOT" && git rev-parse --git-path hooks 2>/dev/null)" || hooks_dir=""
+    # 不在 git 仓库里回 **1 不是 0**：没装成就不能说装成了（tarball 部署的宽容由调用方
+    # 决定——do_setup 那边是 `|| warn`，不阻断 setup）。
+    [ -n "$hooks_dir" ] || { fail "钩子未装：这里不是 git 仓库"; return 1; }
+    case "$hooks_dir" in /*) ;; *) hooks_dir="$ROOT/$hooks_dir" ;; esac
+    mkdir -p "$hooks_dir" || return 1
+    dest="$hooks_dir/pre-commit"
+    # 悬空软链（本工具早期版本装的绝对路径软链，仓库搬家后即悬空）：`-e` 跟随软链，
+    # 判不出它；不先摘掉就会被下面的 `cat >` **写穿到软链目标那个仓外路径**上去，
+    # 造出一个野文件、而钩子本身仍然是悬空的。
+    if [ -L "$dest" ]; then
+        if [ "$(readlink "$dest")" = "$src" ]; then
+            rm -f "$dest"          # 是本工具装的，就地升级成 shim
+        else
+            warn "已存在非本工具管理的软链 ${dest} → $(readlink "$dest")——不覆盖。"
+            return 1
+        fi
+    fi
+    # 别人的钩子不许静默覆盖；自己上次装的（认标记行）可以就地更新。
+    if [ -e "$dest" ] && ! grep -qF "$HOOK_SHIM_MARK" "$dest" 2>/dev/null; then
+        warn "已存在非本工具管理的 ${dest}——不覆盖。备份并删掉它再重跑 ./devctl.sh install-hooks"
+        return 1
+    fi
+    cat > "$dest" <<SHIM
+#!/bin/bash
+${HOOK_SHIM_MARK}
+exec "\$(git rev-parse --show-toplevel)/scripts/git-hooks/pre-commit" "\$@"
+SHIM
+    chmod +x "$dest" || { fail "钩子安装失败：${dest}"; return 1; }
+    info "pre-commit 钩子已装 → ${dest}（转调入库的 scripts/git-hooks/pre-commit）"
+}
+
 # ---- 模型选择：从 config.yaml 注册表交互选择，写仓库根 .model-selection 指针 ----
 # 注册表条目全部钉死 revision（与 mlx-vlm 同代，见 config.yaml 注释），选择后重启 backend 生效。
 # 非 TTY（ssh 脚本化）只打印当前状态不阻塞——自动化路径永远沿用上次选择。
@@ -543,6 +837,13 @@ PY
 CMD="${1:-}"
 shift 2>/dev/null || true
 
+# 参数期之前留一份**原始 argv**：下面的 -p/-h 解析用 `set -- $_args` 重排位置参数，
+# 那一步会做词分割与通配展开——`--reason "两个 词"` 会被打散成两个参数。服务类命令
+# 的参数都是单词，不受影响；但 check / eval-rag 要把参数**原样**递给下游（eval-rag
+# 更是承诺了「退出码与参数都原样透传」），必须走这份没被动过的副本。
+# bash 3.2 下 `"${ARR[@]}"` 在数组为空且 set -u 时会报 unbound，故一律用 `${ARR[@]+...}`。
+RAW_ARGS=("$@")
+
 # --profile edge|gpu（HETERO_COMPUTE B3）：把 all-in-one 拆成两台设备的角色。
 #   （无 profile）= 现状 all-in-one，永不破坏——不传旗标时下面的分发与改动前逐字等价。
 #   edge = 设备 B（用户 Mac）：backend + 前端；推理/RAG 在设备 A（config 的 host 指过去）。
@@ -552,16 +853,23 @@ HOST_ARG=""
 _args=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        -p|--profile) PROFILE="${2:-}"; shift 2 || true ;;
+        # ⚠️ `shift 2 || true` 在只剩 1 个参数时**不移位**（bash：n>$# 则 shift 失败且
+        # 原地不动），`|| true` 又把错吞了 —— 循环条件永远成立 = 死循环。
+        # 实证：`./devctl.sh start -p` 与 `./devctl.sh check -h` 都会挂死不返回；在
+        # 提交路径/CI 上等价于永久阻塞。一律改成「先移一格，还有才再移一格」。
+        -p|--profile) PROFILE="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
         --profile=*) PROFILE="${1#--profile=}"; shift ;;
         -p=*)        PROFILE="${1#-p=}"; shift ;;
         # -h 表 host 不表 help（mysql/psql 先例；本脚本的帮助本就是「未知命令打用法」）
-        -h|--host)   HOST_ARG="${2:-}"; shift 2 || true ;;
+        -h|--host)   HOST_ARG="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
         --host=*)    HOST_ARG="${1#--host=}"; shift ;;
         -h=*)        HOST_ARG="${1#-h=}"; shift ;;
         *) _args="$_args $1"; shift ;;
     esac
 done
+# ⚠️ 无引号展开（且没开 set -f）：这一步会做词分割**和通配展开**，
+# `./devctl.sh logs '*'` 之类会被当前目录的文件名污染。既有问题，本次未引入也未修；
+# check / eval-rag 已改走上面的 RAW_ARGS，不经过这里。
 # shellcheck disable=SC2086
 set -- $_args
 TARGET="${1:-all}"
@@ -700,6 +1008,9 @@ case "$CMD" in
         ;;
     status) do_status ;;
     logs)   do_logs "$TARGET" ;;
+    check)  do_check ${RAW_ARGS[@]+"${RAW_ARGS[@]}"}; exit $? ;;
+    eval-rag) do_eval_rag ${RAW_ARGS[@]+"${RAW_ARGS[@]}"}; exit $? ;;
+    install-hooks) install_git_hooks; exit $? ;;
     *)
         echo "用法: $0 setup                                   # 首次部署（venv/依赖/node_modules，末尾自动 keygen）"
         echo "      $0 keygen [--rotate] [--show]              # 生成/补全四把强随机 Bearer 密钥（写 .env.local，600）"
@@ -710,6 +1021,11 @@ case "$CMD" in
         echo "      $0 start|stop|restart -p edge [-h <算力端IP>]   # 工作端：RAG 数据面(若本机)+backend+前端"
         echo "      $0 start|stop|restart -p gpu  [-h <本机IP>]     # 算力端：inference-server + RAG 计算面/融合RAG"
         echo "      （-p = --profile；-h/--host 一次落盘 .env.local 两键 INFER_REMOTE_HOST/RAG_COMPUTE_HOST，后续免传）"
+        echo "      $0 check [--only <门>] [--skip <门>]  # 跑全部验证物（backend/web/apple 三门）"
+        echo "                                                 #   退出码 0=过 3=不过 2=用法错 1=跑不起来（缺前置不会自动跳过）"
+        echo "      $0 eval-rag [...]                          # RAG 检索棘轮（占 GPU 数分钟，故不进 pre-commit）"
+        echo "                                                 #   ⚠️ 任何检索侧改动后必须手动跑它；退出码原样透传"
+        echo "      $0 install-hooks                           # 装 .git/hooks/pre-commit（三行 shim，转调入库的 scripts/git-hooks/pre-commit）"
         echo "      $0 status"
         echo "      $0 logs [rag|rag-compute|searx|infer|backend|front]"
         echo "      $0 bundle-print                            # 构建 deck 打印包进 backend（前端不跑也能导 PDF）"

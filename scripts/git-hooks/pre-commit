@@ -1,0 +1,74 @@
+#!/bin/bash
+# =======================================================
+# pre-commit — 把 `devctl check` 接到提交路径上（波 A0 ≡ 台账 F3）
+#
+# 正身入库在这里；`.git/hooks/pre-commit` 是一个由 `./devctl.sh install-hooks` 写入的
+# **三行 shim**（每次现算仓库根后转调本文件；刻意不用软链，理由见 devctl.sh 的
+# install_git_hooks）。`devctl setup` 末尾会自动装一次。
+# .git/hooks 不受版本控制——正身放那里就等于「新克隆天生没有钩子」。
+#
+# 白名单纪律：**只有**当本次暂存的每一个路径都是 `.md`、或 `benchmarks/data/` 下的
+# **数据扩展名**时，才整体跳过三门。判不出来的路径（含引号转义的非 ASCII 文件名）
+# 一律落到「要跑门」那一边。
+# ⚠️ 白名单一度写成整个 `benchmarks/data/*` 并注明「原始数据，无可执行内容」——
+# 而该目录下**实际躺着** `mtp-t4-divergence/t4_divergence_probe.py` 与 `t4_verdict.py`
+# 两个真脚本（首审 #15）。放宽一格，守卫就会在某类改动上静默关掉自己：那正是本设计
+# 要防的事，所以这里只认扩展名，不认目录。
+#
+# ⚠️ 口径边界（首审 #13，如实声明）：门跑的是**工作树**，不是即将入库的 index。
+# `git add -p` 部分暂存、或暂存 A 文件而工作树另有 B 的破坏性改动时，「门说过」并不
+# 等价于「这次提交的内容是好的」。不做 `stash --keep-index`（它自身的失败面更大），
+# 而是把这条边界写在这里，别让人读成比实际更强的保证。
+#
+# 退出码：原样透传 devctl check（0=过 / 3=不过 / 2=用法错 / 1=跑不起来）。
+# git 只看零/非零，透传是为了让人和脚本都能读出「是红了还是根本没跑成」。
+# =======================================================
+set -u
+
+ROOT="$(git rev-parse --show-toplevel)" || exit 1
+
+# 首次提交没有 HEAD：对空树取差，别让钩子在初始提交上崩掉。
+if git rev-parse --verify HEAD >/dev/null 2>&1; then
+    against=HEAD
+else
+    against=$(git hash-object -t tree /dev/null)
+fi
+
+files=$(git diff --cached --name-only "$against")
+
+# 空暂存（`--allow-empty`）显式放行：它不改任何文件，跑门无意义。写成显式判断，
+# 而不是让它落进「所有文件都命中白名单」那个空真分支——空真分支正是本仓的病。
+if [ -z "$files" ]; then
+    echo "[pre-commit] 无暂存文件（--allow-empty?）→ 放行，本次没有判定任何东西"
+    exit 0
+fi
+
+need_check=0
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in
+        *.md) ;;                                        # 文档
+        # 跑批档案：只认数据扩展名。该目录下有真 .py 脚本，整目录放行会漏门。
+        benchmarks/data/*.jsonl|benchmarks/data/*.json|benchmarks/data/*.csv) ;;
+        benchmarks/data/*.log|benchmarks/data/*.txt|benchmarks/data/*.png) ;;
+        *) need_check=1; break ;;
+    esac
+done <<EOF
+$files
+EOF
+
+if [ "$need_check" -eq 0 ]; then
+    echo "[pre-commit] 本次只动文档/档案（.md 与 benchmarks/data/）→ 跳过三门"
+    exit 0
+fi
+
+"$ROOT/devctl.sh" check
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "" >&2
+    echo "[pre-commit] 门没过（rc=${rc}）→ 提交已中止。" >&2
+    echo "             rc=3 有门判否 / rc=1 有门跑不起来（后者不是「过」，先修门）。" >&2
+    echo "             要单跑某一门：./devctl.sh check --only backend" >&2
+    echo "             --no-verify 不是解法：它把整套执行器一键关掉，正是本设计要防的那件事。" >&2
+fi
+exit "$rc"
