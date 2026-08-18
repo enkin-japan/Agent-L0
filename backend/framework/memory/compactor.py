@@ -32,6 +32,7 @@ import asyncio
 import json
 import time
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import rag_sink
@@ -191,6 +192,166 @@ def _turn_to_text(turn: Dict[str, Any]) -> str:
     return _defuse_memo_marker("\n".join(parts))
 
 
+# ---------- 零 LLM 沉淀：第二水位线 sedimented_turns（波 F5） ----------
+# 病根：折叠曾是沉淀的**唯一**入口，而折叠要两个条件同时成立——上下文越过 token 阈值、
+# 且日志行数 > keep_tail_turns（默认 4）。桌面 agent 的主导形态恰是 ≤4 轮的短会话：
+# 两条都不满足 → 永不折叠 → 既不沉淀也不冲洗 → 30 天后整目录删除，**长期记忆产出恒为零**。
+# 修法：沉淀本来就不需要模型（原样文本入 RAG），把它从折叠里解耦出来、单挂一条水位线。
+# 冲洗（MEMO 抢救）确实要一次生成，故**不在本层**（审查已砍掉预热层）。
+#
+# 两条水位线的关系：`summarized_turns`「已并入滚动摘要」（要模型），`sedimented_turns`
+# 「原文已进 RAG」（不要模型）。互不从属：沉淀通常跑在折叠前面，但配置关过沉淀再打开时
+# 也可能落在后面。两条路径都以 `sedimented_turns` 为**唯一**权威，故同一段原文不会入库两次。
+
+# 整条会话短到不值得占一条长期记忆（「你好」级）。**只在水位线还在 0 时管**：门槛是拿来
+# 挡整条琐碎会话的，不是拿来卡实质会话的小尾巴——对后者卡住等于让「谢谢」那一轮永远沉不下去，
+# 而且每个空闲回合都要为一次注定的空转重读整份日志（首审 #7）。
+_SEDIMENT_MIN_CHARS = 200
+# 单次沉淀的字符预算：积压很久（RAG 掉线过 / 沉淀关过再打开）时不许攒成一个巨型 POST，
+# 那种请求在 10s 超时下大概率永远失败，水位线永远不推进，于是每 120s 重发一次整个积压
+# （首审 #5）。分片让进度单调向前，代价只是多几个空闲回合。
+_SEDIMENT_MAX_CHARS_PER_PASS = 100_000
+
+
+def _read_log_lines(history_log: Path) -> Optional[List[str]]:
+    """读历史日志的非空行。**读不动返回 None**，与「日志是空的」严格区分。
+
+    两者绝不能混：调用方拿 `len(lines)` 去夹水位线，一次读盘失败若被当成「0 行」，
+    水位线会被夹到 0——整条会话的原文随后重沉一遍。文件不存在才是真的 0 行。
+    """
+    if not history_log.exists():
+        return []
+    try:
+        with open(history_log, "r", encoding="utf-8") as f:
+            return [line for line in f if line.strip()]
+    except Exception:      # OSError 之外还有 UnicodeDecodeError（坏行/半截写入）
+        return None
+
+
+def _collect_turn_texts(lines: List[str]) -> List[str]:
+    """日志行切片 → 可入记忆的文本块。作废轮次（fail/cancelled）与空块剔除。
+
+    作废轮次本就不进记忆（与折叠同一口径）：它们没产出，存进 RAG 只是污染召回。
+    """
+    out: List[str] = []
+    for line in lines:
+        try:
+            turn = json.loads(line)
+        except Exception:
+            continue
+        if turn.get("status") in ("fail", "cancelled"):
+            continue
+        text = _turn_to_text(turn)
+        if text.strip():
+            out.append(text)
+    return out
+
+
+def _sediment_title(session_id: str, start: int, end: int) -> str:
+    """两条沉淀路径共用一种标题格式——检索面只容忍一种句柄。"""
+    return (f"{session_id} · turns {start}-{end} · "
+            f"{time.strftime('%Y-%m-%d')} · {int(time.time())}")
+
+
+async def _sediment_range(session, lines: List[str], start: int, end: int,
+                          *, min_chars: int = 0) -> bool:
+    """沉淀日志行 [start, end) 的原文，**成功后**才推进第二水位线。返回是否推进。
+
+    失败不推进（下次空闲回合原样重试）：这一层的存在理由就是「长期记忆产出不许静默为零」，
+    RAG 掉线一小时就永久丢掉这段，等于把要修的病换个地方复发。代价是「已插入但响应丢失」
+    时会留下一份重复——只增史料里的重复是噪声，静默丢失是缺陷，两害相权取噪声。
+    """
+    batch = _collect_turn_texts(lines[start:end])
+    text = "\n\n---\n\n".join(batch)
+    if not text.strip():
+        # 区间内全是作废轮次：没有可存的原文，直接推进水位线（否则每回合都重扫同一段）
+        session.sedimented_turns = end
+        session.save_memory()
+        return True
+    if min_chars and len(text) < min_chars:
+        return False
+    if not await asyncio.to_thread(rag_sink.sediment, text,
+                                   _sediment_title(session.session_id, start, end)):
+        return False
+    session.sedimented_turns = end
+    session.save_memory()
+    return True
+
+
+def _budgeted_end(lines: List[str], start: int, max_chars: int) -> int:
+    """在字符预算内挑本次沉淀的终点。至少含一行——否则超大单轮会把进度卡死。"""
+    total = 0
+    for i in range(start, len(lines)):
+        total += len(lines[i])
+        if total >= max_chars:
+            return i + 1
+    return len(lines)
+
+
+async def sediment_pending_turns(session, *, enabled: bool = True,
+                                 min_chars: int = _SEDIMENT_MIN_CHARS) -> int:
+    """零 LLM 沉淀：把第二水位线之后的已落盘轮次原文送进 RAG。返回新沉淀的日志行数。
+
+    不改 model-facing 上下文、不占生成位，故**无须保留尾部**（沉淀只是复制一份进 RAG，
+    与折叠削上下文是两回事）。需在会话锁内调用（要写 memory.json）。
+    """
+    if not enabled:
+        return 0
+    lines = _read_log_lines(session.history_log)
+    if lines is None:
+        return 0                      # 日志读不动：什么都别做，尤其别夹水位线
+    start = session.sedimented_turns
+    if start > len(lines):
+        # 水位线越过日志末尾：分支只带前缀（fork）、删末轮截断、或日志被重写。必须向下
+        # 修复——否则后续新轮次一直落在水位线之下，这条会话从此再不沉淀（静默失效）。
+        start = len(lines)
+        session.sedimented_turns = start
+        session.save_memory()
+    if start >= len(lines):
+        return 0
+    end = _budgeted_end(lines, start, _SEDIMENT_MAX_CHARS_PER_PASS)
+    # 门槛只挡「整条会话都琐碎」，故仅在水位线还在 0 时生效
+    gate = min_chars if start == 0 else 0
+    if not await _sediment_range(session, lines, start, end, min_chars=gate):
+        return 0
+    return end - start
+
+
+def last_chance_sediment(session_dir: Path, session_id: str,
+                         *, min_chars: int = _SEDIMENT_MIN_CHARS) -> Optional[bool]:
+    """TTL 过期回收前的最后一次沉淀（同步、只读会话目录，不拉起 ChatSession）。
+
+    **刻意只挂在 TTL 过期这一条路，不挂 delete_session**：用户手动删除会话是「忘掉它」的
+    明确信号，在那条路上沉淀等于把用户刚删掉的东西搬进长期记忆。而 TTL 回收是磁盘回收策略，
+    长会话早已把折叠掉的原文留在了 RAG 里，短会话在这里补齐只是把两者拉齐。
+
+    返回 None=无事可做，True=已沉淀，False=沉淀失败（RAG 不可达）。不写回水位线——
+    目录马上就要 rmtree；万一删除失败，下一轮至多多一份重复。
+    """
+    memo_start = 0
+    mem_file = session_dir / "memory.json"
+    if mem_file.exists():
+        try:
+            with open(mem_file, "r", encoding="utf-8") as f:
+                mem = json.load(f)
+            # 与 Session.load_memory 同一口径：老存档没有 sedimented_turns 键，取摘要
+            # 水位线兜底。回落 0 会让每条老会话在过期时把已折叠部分整段重沉一遍。
+            memo_start = int(mem.get("sedimented_turns",
+                                     mem.get("summarized_turns", 0)))
+        except Exception:
+            memo_start = 0
+    lines = _read_log_lines(session_dir / "history.jsonl")
+    if lines is None or memo_start >= len(lines):
+        return None
+    text = "\n\n---\n\n".join(_collect_turn_texts(lines[memo_start:]))
+    # 与 sediment_pending_turns 同一口径：门槛只挡整条琐碎会话。已沉淀过的会话
+    # （memo_start > 0）说明它有实质内容，剩下的尾巴再短也要带走——这是最后一次机会。
+    # 这里刻意不分片：目录马上 rmtree，分片只会让后面几片永远没机会。
+    if not text.strip() or (memo_start == 0 and len(text) < min_chars):
+        return None
+    return bool(rag_sink.sediment(text, _sediment_title(session_id, memo_start, len(lines))))
+
+
 # ---------- 压缩前记忆冲洗（memory flush，grok-build/mem0 评估合并票） ----------
 # 摘要调用一次双产出：摘要正文 + 尾部 MEMO 抢救块（≤3 行「name | type | 事实句」）。
 # 理念：折叠原文已由 rag_sink 无损沉淀（承重网），flush 的增量价值是把耐久事实
@@ -263,23 +424,14 @@ async def maybe_summarize_context(session, engine, *, threshold_tokens: int,
         return 0
     if not session.history_log.exists():
         return 0
-    with open(session.history_log, "r", encoding="utf-8") as f:
-        lines = [line for line in f if line.strip()]
+    lines = _read_log_lines(session.history_log)
+    if lines is None:
+        return 0
     fold_until = len(lines) - keep_tail_turns
     if fold_until - session.summarized_turns < batch_min:
         return 0  # 尾部保留够多，暂无足够旧轮次可折叠
 
-    batch: List[str] = []
-    for line in lines[session.summarized_turns:fold_until]:
-        try:
-            turn = json.loads(line)
-        except Exception:
-            continue
-        if turn.get("status") in ("fail", "cancelled"):
-            continue  # 作废轮次本就不进记忆，无需摘要
-        text = _turn_to_text(turn)
-        if text.strip():
-            batch.append(text)
+    batch = _collect_turn_texts(lines[session.summarized_turns:fold_until])
 
     old_watermark = session.summarized_turns
     if not batch:
@@ -305,10 +457,10 @@ async def maybe_summarize_context(session, engine, *, threshold_tokens: int,
 
     # 沉淀（Stage 3）：把被折叠掉的对话原文存入 RAG 长期记忆（无损承重网），
     # 供日后 rag_search（agent_memory 类目）召回。fail-open、在线程里做，绝不阻塞或影响压缩。
-    if sediment:
-        title = (f"{session.session_id} · turns {old_watermark}-{fold_until} · "
-                 f"{time.strftime('%Y-%m-%d')} · {int(time.time())}")
-        await asyncio.to_thread(rag_sink.sediment, batch_text, title)
+    # 起点取**第二水位线**而非摘要水位线：空闲回合的零 LLM 沉淀（F5）可能已经跑在前面，
+    # 那段原文早就在库里了，照 old_watermark 重发一遍就是平白多一份重复。
+    if sediment and session.sedimented_turns < fold_until:
+        await _sediment_range(session, lines, session.sedimented_turns, fold_until)
 
     # 压缩前记忆冲洗落笔（fail-open，线程里做：写文件 + 重建索引 + RAG 镜像）
     if memo_lines:

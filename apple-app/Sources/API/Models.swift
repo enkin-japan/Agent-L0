@@ -311,6 +311,7 @@ struct MemoryStatusResponse: Codable {
     let lastPromptTokens: Int?
     let totalTurns: Int?
     let summarizedTurns: Int?
+    let sedimentedTurns: Int?
     let hasSummary: Bool?
     let summaryChars: Int?
     let highThreshold: Int?
@@ -323,6 +324,7 @@ struct MemoryStatusResponse: Codable {
         case lastPromptTokens = "last_prompt_tokens"
         case totalTurns = "total_turns"
         case summarizedTurns = "summarized_turns"
+        case sedimentedTurns = "sedimented_turns"
         case hasSummary = "has_summary"
         case summaryChars = "summary_chars"
         case highThreshold = "high_threshold"

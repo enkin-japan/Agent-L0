@@ -23,7 +23,7 @@ from framework.memory.session import SessionManager
 from framework.ingestion import Ingestion
 from framework.utils.file_handler import FileHandler
 from framework.utils.path_resolver import resolve_model_path, resolve_tokenizer_only_path
-from framework.memory.compactor import maybe_summarize_context
+from framework.memory.compactor import maybe_summarize_context, sediment_pending_turns
 from framework.memory import dream as notes_dream
 from framework.maintenance import drift_patrol
 from framework.api.routes import router, _maybe_summarize_active
@@ -66,6 +66,42 @@ async def _idle_maintenance_loop(session_manager, scheduler, orchestrator, inter
                         # 复位抢占取消标志（ClassPolicy 抢占后台摘要时置位），防止污染下一轮
                         session.cancel_requested = False
                         await scheduler.release(sid)
+
+            # 零 LLM 沉淀（波 F5）：把还没进 RAG 的已落盘轮次原文补进长期记忆。
+            # **刻意不带 token 阈值**——上面那遍摘要压缩要越过低阈值才动，而短会话
+            # （≤keep_tail_turns 轮）永远越不过，长期记忆产出因此恒为零，那正是本层要修的病。
+            # 不占生成位、不改 model-facing 上下文，只有一次 RAG 写入；但要写 memory.json，
+            # 故仍进会话锁（沿用上面那遍的纪律：拿锁后复检）。
+            # 沉淀总开关关掉时连遍历都不做——否则每条空闲会话都要上一次锁，只为调一个
+            # 第一行就返回 0 的函数（首审 #9）
+            sediment_targets = (list(session_manager._all_sessions.items())
+                                if orchestrator.sediment_to_rag else [])
+            for sid, session in sediment_targets:
+                if session.is_cold or scheduler.is_active(sid) or session.lock.locked():
+                    continue
+                if now - session.last_access_time < idle_before:
+                    continue
+                # 无事可做就**别碰锁**：稳态下（水位线正好追平落盘轮数）这一遍是纯读盘的
+                # 空转。判据必须是**恰好相等**，不能写成 `>=`——水位线**高于**行数正是
+                # 「分支只带前缀 / 删末轮截断」留下的越界态，那种会话恰恰需要进去修复；
+                # 用 `>=` 会把它们永久挡在门外，修复分支从此在生产里跑不到，而守它的
+                # 那条金测试也就成了「守一条产品进不去的路」（首审 #2，是我自审时加的）。
+                if session.sedimented_turns == session.disk_turn_count():
+                    continue
+                async with session.lock:
+                    # 拿锁后复检——**含空闲判定**：上面那个 lock.locked() 是 await 之前
+                    # 看的，等锁期间用户完全可能已经发了新消息。持锁期间有一次网络写
+                    # （最坏 ~15s），不复检就等于在用户打字时把会话锁住（首审 #4）。
+                    if session.is_cold or scheduler.is_active(sid):
+                        continue
+                    if time.time() - session.last_access_time < idle_before:
+                        continue
+                    try:
+                        n = await sediment_pending_turns(session)
+                        if n:
+                            print(f"[Maintenance] 零 LLM 沉淀 {sid}：{n} 轮原文入长期记忆")
+                    except Exception as e:
+                        print(f"[Maintenance] 零 LLM 沉淀失败（下一回合重试）: {e}")
 
             # dream 式笔记整理（评估采纳）：全系统安静时才做（任何会话在忙/在调度即让路——
             # 整理梦占一次生成，不能顶到用户轮次前面）。闸门（时限+变动数）在 dream 内部。
@@ -117,7 +153,7 @@ async def _idle_maintenance_loop(session_manager, scheduler, orchestrator, inter
             print(f"[Maintenance] 空闲维护回合异常（已忽略，继续）: {e}")
 
 
-async def _session_cleanup_loop(session_manager, cfg: dict):
+async def _session_cleanup_loop(session_manager, cfg: dict, sediment_on_expire: bool = False):
     """确定性磁盘回收（session_cleanup）：周期性回收过期会话（pin/调度活跃/进行中一律跳过）。
     先 sleep 再扫——启动不被拖慢，且 recover_inflight_turns 已在装配阶段先行完成。
     单目录异常在 delete_session 内隔离，整轮异常在此隔离，绝不掀翻循环。"""
@@ -127,7 +163,8 @@ async def _session_cleanup_loop(session_manager, cfg: dict):
     while True:
         try:
             await asyncio.sleep(interval)
-            reaped = await session_manager.prune_expired_sessions(retention_days, empty_ttl_hours)
+            reaped = await session_manager.prune_expired_sessions(
+                retention_days, empty_ttl_hours, sediment_on_expire)
             if reaped:
                 shown = ", ".join(reaped[:8]) + (" …" if len(reaped) > 8 else "")
                 print(f"🧹 [Cleanup] 回收 {len(reaped)} 个过期会话: {shown}")
@@ -510,7 +547,8 @@ async def lifespan(app: FastAPI):
     cleanup_cfg = config.get("session_cleanup") or {}
     cleanup_task = None
     if cleanup_cfg.get("enabled", True):
-        cleanup_task = asyncio.create_task(_session_cleanup_loop(session_manager, cleanup_cfg))
+        cleanup_task = asyncio.create_task(_session_cleanup_loop(
+            session_manager, cleanup_cfg, orchestrator.sediment_to_rag))
         app.state.cleanup_task = cleanup_task
         print(f"🧹 [System] 会话自动清理已启用（保留 {cleanup_cfg.get('retention_days', 30)} 天 / "
               f"空壳 {cleanup_cfg.get('empty_ttl_hours', 24)} 小时 / "

@@ -238,7 +238,7 @@ function MemoryTab({ sessionId }: { sessionId: string }) {
 
       {/* RAG 沉淀 */}
       <p className="text-[11px] leading-relaxed text-muted-foreground/75">
-        {data.sediment_to_rag ? t.inspector.memSediment : t.inspector.memNoSediment}
+        {data.sediment_to_rag ? t.inspector.memSediment(data.sedimented_turns ?? 0) : t.inspector.memNoSediment}
       </p>
     </div>
   )

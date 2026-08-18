@@ -301,6 +301,7 @@ export interface MemoryStatusResponse {
   total_turns: number
   /** 已并入滚动摘要的前导历史水位线。 */
   summarized_turns: number
+  sedimented_turns: number
   has_summary: boolean
   summary_chars: number
   /** 活跃期折叠阈值（prompt token 越过即折叠旧轮）。 */

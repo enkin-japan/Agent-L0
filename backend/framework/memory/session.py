@@ -161,6 +161,10 @@ class ChatSession:
         # [system] + [摘要块] + [水位线之后的尾部轮次]，从而有界。
         self.rolling_summary: str = ""
         self.summarized_turns: int = 0
+        # 第二水位线（波 F5）：已把原文送进 RAG 长期记忆的前导日志行数。与 summarized_turns
+        # 相互独立——沉淀不需要模型，折叠需要。短会话（≤keep_tail_turns 轮）永远够不着折叠，
+        # 此前因此**长期记忆产出恒为零**；这条水位线让沉淀独立于折叠推进。
+        self.sedimented_turns: int = 0
         # 最近一次生成的 prompt token 数（上下文规模估计，摘要压缩阈值判定用；空闲维护回合亦读它）
         self.last_prompt_tokens: int = 0
 
@@ -428,27 +432,38 @@ class ChatSession:
 
     # --- 摘要式压缩旁挂的落盘与恢复（方案A） ---
     def save_memory(self):
-        """滚动摘要与水位线落盘到 memory.json（无摘要则清除，保证磁盘与内存一致）。"""
-        if self.rolling_summary.strip() or self.summarized_turns > 0:
+        """滚动摘要与两条水位线落盘到 memory.json（全空则清除，保证磁盘与内存一致）。
+
+        清除条件必须带上 sedimented_turns：短会话只有第二水位线（永远没有摘要），
+        漏掉它就等于每次落盘都把水位线抹回 0——同一段原文会被反复沉淀进 RAG。
+        """
+        if self.rolling_summary.strip() or self.summarized_turns > 0 \
+                or self.sedimented_turns > 0:
             with open(self.memory_file, "w", encoding="utf-8") as f:
                 json.dump({
                     "summary": self.rolling_summary,
                     "summarized_turns": self.summarized_turns,
+                    "sedimented_turns": self.sedimented_turns,
                     "updated_at": time.time(),
                 }, f, ensure_ascii=False)
         else:
             self.memory_file.unlink(missing_ok=True)
 
     def load_memory(self):
-        """从 memory.json 恢复滚动摘要与水位线；损坏或缺失则视为无摘要。"""
+        """从 memory.json 恢复滚动摘要与两条水位线；损坏或缺失则视为无摘要。"""
         self.rolling_summary = ""
         self.summarized_turns = 0
+        self.sedimented_turns = 0
         if self.memory_file.exists():
             try:
                 with open(self.memory_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 self.rolling_summary = str(data.get("summary", ""))
                 self.summarized_turns = int(data.get("summarized_turns", 0))
+                # 旧存档没有这个键：缺省 0 会让老会话把历史原文重沉一遍。取摘要水位线
+                # 兜底——那部分原文在折叠时确已入库，是有据可依的下界。
+                self.sedimented_turns = int(
+                    data.get("sedimented_turns", self.summarized_turns))
             except Exception as e:
                 print(f"[Memory] 摘要旁挂恢复失败（按无摘要处理）: {e}")
                 self.memory_file.unlink(missing_ok=True)
@@ -839,7 +854,8 @@ class SessionManager:
         out.sort(key=lambda m: (m.get("last_updated") or 0), reverse=True)
         return out
 
-    async def prune_expired_sessions(self, retention_days: float, empty_ttl_hours: float) -> List[str]:
+    async def prune_expired_sessions(self, retention_days: float, empty_ttl_hours: float,
+                                     sediment_on_expire: bool = False) -> List[str]:
         """确定性磁盘回收：pin / 调度活跃 / 进行中 一律跳过；有内容会话按最后更新时间过期，
         空壳（无历史/0 轮）按创建时间过期。复用 delete_session（并发安全）。返回被回收的 id 列表。
         先物化候选再删除——避免边遍历边 rmtree。"""
@@ -894,7 +910,25 @@ class SessionManager:
             candidates.append(sid)
 
         reaped: List[str] = []
+        # 回收前的最后一次沉淀（波 F5）：目录一 rmtree，原文就再没有第二处可取。
+        # 一次失败即本轮不再尝试——RAG 不可达时不让磁盘回收被 N×10s 超时拖住
+        # （「回收不动」比「少沉淀一条」严重得多）。只挂 TTL 过期这条路，不挂手动删除。
+        sediment_live = sediment_on_expire
+        if sediment_live:
+            from .compactor import last_chance_sediment  # 惰性导入，避开 memory 内部环
         for sid in candidates:
+            if sediment_live:
+                try:
+                    ok = await asyncio.to_thread(
+                        last_chance_sediment, self.sessions_dir / sid, sid)
+                except Exception as e:
+                    # 单条会话自己炸（坏日志/坏 memory.json）只跳过它。止损针对的是
+                    # 「RAG 不可达」这一种全局故障，别让一条坏数据关掉整轮沉淀（首审 #6）。
+                    print(f"[Cleanup] 回收前沉淀异常（跳过这条，继续回收）{sid}: {e}")
+                    ok = None
+                if ok is False:
+                    sediment_live = False
+                    print("[Cleanup] 回收前沉淀失败（RAG 不可达），本轮剩余会话不再尝试")
             try:
                 res = await self.delete_session(sid)
                 if res.get("status"):
@@ -991,6 +1025,12 @@ class SessionManager:
         with open(history_log, "w", encoding="utf-8") as f:
             f.writelines(line if line.endswith("\n") else line + "\n" for line in lines)
 
+        # 2.1 日志缩短了，沉淀水位线要跟着夹回来（首审 #3）：不夹的话，用户重发的那条
+        # **替代轮**正好落在旧水位线之下，从此再没人沉淀它——一条用户可见的消息静默
+        # 缺席长期记忆，且全程无任何报错。（已入库的那份不回收：agent_memory 是只增
+        # 史料，与折叠路径同一口径。）摘要水位线不在本波射程内，语义另说。
+        self._clamp_sediment_watermark(session_id, session, len(lines))
+
         # 3. 清除跨轮任务状态：被删轮次可能是任务的一部分，回退后任务上下文已失效
         if session is not None:
             session.clear_task()
@@ -1010,6 +1050,31 @@ class SessionManager:
             "response": f"✅ 已删除会话 {session_id} 的最后一轮（剩余 {len(lines)} 轮）",
         })
         return result
+
+    def _clamp_sediment_watermark(self, session_id: str, session, line_count: int) -> None:
+        """日志被截断后把沉淀水位线夹回行数以内。热会话改内存并落盘，冷会话直接改文件。
+
+        失败只打印不抛：空闲回合的沉淀里还有一层向下修复兜底，这里夹不住不至于丢数据，
+        但让删末轮因为一次写盘失败而整体失败就太过了。
+        """
+        if session is not None:
+            if session.sedimented_turns > line_count:
+                session.sedimented_turns = line_count
+                session.save_memory()
+            return
+        mem_file = self.sessions_dir / session_id / "memory.json"
+        if not mem_file.exists():
+            return
+        try:
+            with open(mem_file, "r", encoding="utf-8") as f:
+                mem = json.load(f)
+            if int(mem.get("sedimented_turns", 0)) <= line_count:
+                return
+            mem["sedimented_turns"] = line_count
+            with open(mem_file, "w", encoding="utf-8") as f:
+                json.dump(mem, f, ensure_ascii=False)
+        except Exception as e:
+            print(f"[Memory] 沉淀水位线夹回失败（空闲回合的向下修复会兜底）: {e}")
 
     # ==========================================
     # 会话分支能力（复制对话窗口 / 复用 KV Cache 与历史文本）
@@ -1082,8 +1147,21 @@ class SessionManager:
             try:
                 with open(src_memory, "r", encoding="utf-8") as f:
                     mem = json.load(f)
+                # 沉淀水位线**两条路都要夹**进分支窗口。父会话若从未折叠过
+                # （短会话恒如此，summarized_turns 永远是 0），走的就是下面这条复制路；
+                # 原样带走一个越界的水位线，分支自己的新轮次会全部落在它之下、永不沉淀
+                # ——正是本波要修的那个静默跳段，换到分支上复发（首审 #1）。
+                sed = min(int(mem.get("sedimented_turns", 0)), len(kept_lines))
                 if int(mem.get("summarized_turns", 0)) <= len(kept_lines):
-                    shutil.copy2(src_memory, new_dir / "memory.json")
+                    mem["sedimented_turns"] = sed
+                else:
+                    # 摘要覆盖了分支点之后的内容，不能用；但沉淀水位线仍然可用
+                    #（那段原文确已入库），带上它免得分支把整个前缀重沉一遍。
+                    mem = {"summary": "", "summarized_turns": 0,
+                           "sedimented_turns": sed, "updated_at": time.time()}
+                if mem.get("summary") or mem.get("summarized_turns") or sed:
+                    with open(new_dir / "memory.json", "w", encoding="utf-8") as f:
+                        json.dump(mem, f, ensure_ascii=False)
             except Exception as e:
                 print(f"[Memory] 分支复制摘要旁挂失败（分支将全量重放）: {e}")
 

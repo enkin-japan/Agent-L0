@@ -74,6 +74,7 @@ class MemoryStatusResponse(BaseModel):
     last_prompt_tokens: int = 0        # 当前 model-facing 上下文规模（prompt token）
     total_turns: int = 0               # 全量落盘历史轮次
     summarized_turns: int = 0          # 已并入滚动摘要的前导历史水位线
+    sedimented_turns: int = 0          # 原文已进 RAG 长期记忆的前导历史水位线（零 LLM，独立推进）
     has_summary: bool = False          # 是否已有滚动摘要（发生过折叠）
     summary_chars: int = 0             # 滚动摘要字符数
     high_threshold: int = 0            # 活跃期折叠阈值（prompt token 越过即折叠旧轮）

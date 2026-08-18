@@ -67,8 +67,11 @@ struct MemoryPanelView: View {
                 LabeledContent(L("保留尾部"), value: "\(s.keepTailTurns ?? 0) \(L("轮不折叠"))")
             }
             Section(L("长期沉淀")) {
-                LabeledContent(L("折叠原文入 RAG"),
+                // 「折叠原文入 RAG」这个说法自零 LLM 沉淀（波 F5）起就不准了：沉淀走
+                // 自己的水位线，短会话（够不着折叠）同样入库。
+                LabeledContent(L("原文入 RAG"),
                                value: s.sedimentToRag == true ? L("开启（可被检索召回）") : L("关闭"))
+                LabeledContent(L("已沉淀"), value: "\(s.sedimentedTurns ?? 0) \(L("轮"))")
             }
         }
         .formStyle(.grouped)

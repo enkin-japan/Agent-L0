@@ -662,6 +662,7 @@ async def get_memory_status(session_id: str, request: Request):
             "last_prompt_tokens": session.last_prompt_tokens,
             "total_turns": session.disk_turn_count(),  # 统一口径:落盘轮数(原为消息条数,冷热不一致)
             "summarized_turns": session.summarized_turns,
+            "sedimented_turns": session.sedimented_turns,
             "has_summary": bool(summary.strip()),
             "summary_chars": len(summary),
         }
@@ -669,6 +670,7 @@ async def get_memory_status(session_id: str, request: Request):
     # 冷会话/未加载：读盘快照，不拉起会话（memory.json + 历史行数）
     summary = ""
     summarized_turns = 0
+    sedimented_turns = 0
     mem_file = session_manager.sessions_dir / session_id / "memory.json"
     if mem_file.exists():
         try:
@@ -676,6 +678,8 @@ async def get_memory_status(session_id: str, request: Request):
                 data = json.load(f)
             summary = str(data.get("summary", ""))
             summarized_turns = int(data.get("summarized_turns", 0))
+            # 与 load_memory 同一口径：旧存档缺这个键时以摘要水位线兜底
+            sedimented_turns = int(data.get("sedimented_turns", summarized_turns))
         except Exception:
             pass
     try:
@@ -688,6 +692,7 @@ async def get_memory_status(session_id: str, request: Request):
         "last_prompt_tokens": 0,   # 冷会话无 model-facing 上下文（KV 已释放）
         "total_turns": total_turns,
         "summarized_turns": summarized_turns,
+        "sedimented_turns": sedimented_turns,
         "has_summary": bool(summary.strip()),
         "summary_chars": len(summary),
     }

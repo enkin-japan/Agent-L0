@@ -171,8 +171,9 @@ const en = {
       `${turns} earlier ${turns === 1 ? "turn" : "turns"} folded into a summary (${chars.toLocaleString()} chars).`,
     memNoSummary: "Nothing folded yet — the whole conversation is still in live context.",
     memTotalTurns: (n: number) => `${n} total ${n === 1 ? "turn" : "turns"} on disk`,
-    memSediment: "Folded originals sediment into RAG — recallable later via memory search.",
-    memNoSediment: "Sedimentation off — folded detail lives only in the summary.",
+    memSediment: (turns: number) =>
+      `${turns} ${turns === 1 ? "turn" : "turns"} sedimented into RAG — recallable later via memory search. Runs on its own watermark, no model call, short sessions included.`,
+    memNoSediment: "Sedimentation off — originals live only in the session directory and go when it is reaped.",
 
     ctxSystemPrompt: "System prompt",
     ctxSourceSession: "in use",
@@ -444,8 +445,9 @@ const zh: Dict = {
       `已把 ${turns} 个较早轮次折叠进摘要（${chars.toLocaleString()} 字）。`,
     memNoSummary: "尚未折叠——整段对话仍在在用上下文中。",
     memTotalTurns: (n: number) => `落盘共 ${n} 轮`,
-    memSediment: "被折叠的原文会沉淀进 RAG，日后可经记忆检索召回。",
-    memNoSediment: "沉淀已关闭——被折叠的细节仅存在于摘要中。",
+    memSediment: (turns: number) =>
+      `已有 ${turns} 轮原文沉淀进 RAG，日后可经记忆检索召回。走独立水位线、不占生成，短会话同样沉淀。`,
+    memNoSediment: "沉淀已关闭——原文只留在会话目录，随目录回收一并消失。",
 
     ctxSystemPrompt: "系统提示词",
     ctxSourceSession: "会话在用",
@@ -712,8 +714,9 @@ const ja: Dict = {
       `${turns} 個の古いターンを要約に折り畳みました（${chars.toLocaleString()} 文字）。`,
     memNoSummary: "まだ折り畳みなし——会話全体が使用中コンテキストに収まっています。",
     memTotalTurns: (n: number) => `ディスク上に計 ${n} ターン`,
-    memSediment: "折り畳まれた原文は RAG に沈殿し、後で記憶検索から呼び戻せます。",
-    memNoSediment: "沈殿はオフ——折り畳まれた詳細は要約にのみ残ります。",
+    memSediment: (turns: number) =>
+      `${turns} ターン分の原文が RAG に沈殿済み。後で記憶検索から呼び戻せます。独立した水位線で動き、生成は使わず、短い会話も対象です。`,
+    memNoSediment: "沈殿はオフ——原文はセッションディレクトリにのみ残り、回収と同時に消えます。",
 
     ctxSystemPrompt: "システムプロンプト",
     ctxSourceSession: "使用中",
