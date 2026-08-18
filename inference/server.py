@@ -328,7 +328,11 @@ async def health():  # 免鉴权探活：lifespan 完成（模型已加载）后
 
 @app.get("/metrics", dependencies=[Depends(verify_api_key)])
 async def metrics():
-    return {**S.metrics, "cache_count": len(S.registry), "active_generations": len(S.gens)}
+    # cache_ttl_seconds：客户端（长稳工装）据此校验「我读的 config」与「正在跑的服务」
+    # 是不是同一个 TTL。CACHE_TTL_SECONDS 在 import 时绑定，改了 config 不重启服务，
+    # 两边就悄悄分家——而工装的「离开」冷档窗宽正是按 TTL 算的，分家即冷重建零样本。
+    return {**S.metrics, "cache_count": len(S.registry), "active_generations": len(S.gens),
+            "cache_ttl_seconds": CACHE_TTL_SECONDS}
 
 
 @app.post("/v1/cache", dependencies=[Depends(verify_api_key)])

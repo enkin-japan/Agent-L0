@@ -61,6 +61,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
+from typing import Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bench_baseline import (BACKEND_DIR, REPO_ROOT, Client,  # noqa: E402
@@ -75,7 +76,17 @@ REPO = "mlx-community/gemma-4-26b-a4b-it-4bit"
 MIX = [("chat", 0.70), ("tool", 0.21), ("longchain", 0.06), ("cancel", 0.03)]
 
 IDLE_SHORT = (20, 90)            # 秒
-IDLE_LONG = (15 * 60, 45 * 60)   # 「离开」窗：磨 TTL 回收与冷启动重建
+IDLE_LONG = (15 * 60, 30 * 60)   # 「离开」温档：够不着 TTL，验的是「回来缓存还热着」
+# 服务端 TTL 扫描周期（`inference/server.py` `_sweep_loop` 的 `asyncio.sleep(300)`）。
+# 一份缓存的实际寿命因此是 [TTL, TTL+扫描周期)。这个数在本文件有**两个**消费方，
+# 必须同源：泄漏判据的宽限窗、以及下面冷档余量的下界。
+SERVER_SWEEP_PERIOD_S = 300.0
+# 「离开」冷档 = 服务端 TTL + 这个余量。**必须真的越过实际寿命上界**（TTL + 扫描周期），
+# 否则「冷档」只是名字冷。上一轮写死 uniform(15,45)min，上界正好**等于**配置里的 TTL，
+# 于是 8 个窗最大只到 37.3min、`cache_rotated` 全程 0 次——冷重建路径零样本，那条腿
+# 等于白跑了 8 小时。下界取「扫描周期 + 1 分钟」而不是「扫描周期」：恰好相等就是又一次
+# 「结构上到不了」，边界值取不到的概率为 0 这件事上一轮已经吃过一次亏了。
+IDLE_LONG_COLD_MARGIN = (SERVER_SWEEP_PERIOD_S + 60, SERVER_SWEEP_PERIOD_S + 300)
 LONG_IDLE_EVERY = 40
 SAMPLE_INTERVAL = 300.0          # sys.jsonl 采样间隔
 HEARTBEAT_INTERVAL = 300.0       # 心跳按**墙钟**——按请求数计会在长空闲窗里静默一小时，
@@ -87,7 +98,95 @@ SMOKE_MAX_HOURS = 1.0            # --smoke 的时长上限：等权+秒级空闲
 # 长稳口径：12h → 8h（用户 2026-08-18 拍板）。理由是形态而非妥协——本系统很长一段时间
 # 只自用、不商用，**实战使用本身就是持续的长稳测试**，专门的门禁只需覆盖「一个完整工作日
 # 的连续使用」这个尺度；再往上的时长交给日常使用去磨，比再烧 4 小时 GPU 划算。
+# **「一个完整工作日」指的是墙钟跨度，不是满载**：上一轮 8.87h 里 3.65h（41%）在「离开」
+# 窗中，生成占空比约 2.5%——这正是真人用法的形状（人不会连着敲 8 小时），但读结论时必须
+# 带着它，否则「8 小时无劣化」会被读成「连续满载 8 小时无劣化」。故占空比现在由
+# `_duty_cycle` 算进每份 summary，不再只活在这段注释里。
 LONGRUN_HOURS = 8.0
+
+
+def _idle_window(n: int, ttl_s: float) -> tuple:
+    """挑本次的空闲窗，返回 (lo, hi, 档位标签)。
+
+    抽成纯函数是为了**能被判据看见**：上一轮那个「上界正好等于 TTL」的缺陷，正是因为
+    它藏在主循环的一行三元表达式里，没有任何测试够得着它，于是一整轮 8 小时的冷重建
+    路径零样本，事后才在读数据时发现。
+
+    「离开」窗分两档**交替**：温档（喝杯咖啡，回来缓存还热）与冷档（午饭/会议，缓存已被
+    TTL 回收）。冷档从 TTL 往上取余量，随 config 的 TTL 走，不写死。交替而非随机——
+    随机意味着一次跑仍可能一个冷样本都抽不到，而「零样本」正是这里要修的那件事。
+    冷档排在**第一个**「离开」窗，好让被提前中止的跑也有机会拿到冷样本。**只是机会**：
+    冷样本真正出现要等窗后同一条会话上的下一个 chat 轮，而下一个请求可能抽到别的腿。
+    保证冷样本的做法是单开一条显式冷重建腿（NOTES.md:168），不在本次射程内——故收官
+    另有一条零冷样本的判据阻断兜着，别让「没测到」再一次伪装成「测过了」。
+    """
+    if n <= 0 or LONG_IDLE_EVERY <= 0 or n % LONG_IDLE_EVERY != 0:
+        return IDLE_SHORT[0], IDLE_SHORT[1], "short"
+    if (n // LONG_IDLE_EVERY) % 2 == 1:
+        return ttl_s + IDLE_LONG_COLD_MARGIN[0], ttl_s + IDLE_LONG_COLD_MARGIN[1], "away_cold"
+    return IDLE_LONG[0], IDLE_LONG[1], "away_warm"
+
+
+def _clamp_nap(nap: float, deadline: float, now: float) -> float:
+    """把空闲窗夹进剩余时限。抽成纯函数才有判据够得着它（同 `_idle_window` 的理由）。
+
+    冷档把最坏超时从 45min 抬到 TTL+25min：一个 8h 的跑会在 8.6h 才收，而收官那条
+    「实跑不足目标」的阻断只看下限、看不见超出。夹短的那次冷窗大概率拿不到冷样本，
+    但跑本来也就到点了。
+    """
+    return min(nap, max(0.0, deadline - now))
+
+
+def _cold_sample_blocker(cold_samples, elapsed: float, hours_target: float,
+                         smoke: bool) -> Optional[str]:
+    """跑满了时限却一个冷重建样本都没有 → 一条判据阻断。抽成纯函数同上。
+
+    这是本轮修正的**检测器**那一半：光把冷档窗口调对不够，冷档哪天又失效（TTL 改了、
+    窗后没落到 chat 轮、服务端扫描周期变了）时，产物必须自己喊出来。上一轮就是没人喊。
+    冒烟档不设「离开」窗，本就不在射程内，故不判。
+    """
+    if smoke or elapsed < hours_target * 3600 * 0.99:
+        return None
+    if cold_samples:
+        return None
+    return "冷重建零样本——「离开」冷档没生效，冷启动重建路径这一轮没有数据支撑"
+
+
+def _ttl_verdict(served_ttl, config_ttl: float) -> Tuple[bool, str]:
+    """服务端运行态 TTL vs 本工装读到的 config。返回 (可起跑, 记进产物的一行)。
+
+    `CACHE_TTL_SECONDS` 在服务 import 时绑定：服务起于改 config 之前的话，两边悄悄分家，
+    而「离开」冷档窗宽与泄漏判据都按 TTL 算。老服务的 /metrics 没有这个键——如实记
+    「未核验」，不默认相符（把「没测到」写成「没问题」是本仓的老毛病）。
+    """
+    if isinstance(served_ttl, bool) or not isinstance(served_ttl, (int, float)):
+        return True, (f"未核验：服务端 /metrics 无 cache_ttl_seconds（旧版服务）；"
+                      f"本次按 config 的 {config_ttl}s 排窗")
+    if abs(float(served_ttl) - config_ttl) > 1.0:
+        return False, (f"不符：服务端运行态 {served_ttl}s ≠ config {config_ttl}s"
+                       f"（服务起于改 config 之前？）")
+    return True, f"服务端 {served_ttl}s＝config {config_ttl}s"
+
+
+def _duty_cycle(rows: list, t_end: float):
+    """生成占空比 = Σ 请求墙钟 / 窗口秒。判据之外的**读数前提**，不是判据本身。
+
+    为什么必须进产物：上一轮 8.87h 里有 3.65h（41%）在「离开」窗中，实际生成占空比约
+    2.5%，而台账把那次跑说成「一个完整工作日的连续使用」——两者差一个量级。占空比由
+    负载档决定、不由被测系统决定，故它不是门禁；但没有它，「8 小时无劣化」会被读成
+    「连续满载 8 小时无劣化」。本波把这句口径从散文改成产物里的一个数。
+    分子是**记了 wall 的行**之和。cancel 腿不记 wall，故它整条不进分子——但它确实占着
+    服务端（腰斩前的 chunk、drain、`_settle` 轮询），所以这个数是**生成墙钟占比的下界**，
+    不是服务端占用率。口径随产物落盘（`占空比口径`），不靠读代码才知道。
+    `wall` 用 isinstance 挡而不是 `or 0`：手改过或半截写入的行里 `wall` 可能是字符串，
+    `float()` 会抛，而 measure() 在 finish() 里是无保护调用——一份 8 小时的 summary
+    会因为一行坏数据整个写不出来。
+    """
+    if not t_end or t_end <= 0:
+        return None
+    busy = sum(r["wall"] for r in rows
+               if isinstance(r.get("wall"), (int, float)) and not isinstance(r.get("wall"), bool))
+    return round(busy / t_end, 4)
 
 
 def _server_cache_ttl_s() -> float:
@@ -349,15 +448,27 @@ def measure(rows: list, sysrows: list, t_end: float, spec: dict = None):
     has_exp = [r for r in chat2 if isinstance(r.get("reuse_expect"), int)]
     cancels = [r for r in rows if r.get("kind") == "cancel"]
     tools = [r for r in rows if r.get("kind") == "tool"]
+    # 冷重建轮（TTL 回收后重建）：既被「turn2+ 热」剔除、又不满足「turn1 冷」的 turn==1，
+    # 于是它在 drift 三段里**一个格子都不属于**——「离开」冷档辛苦等出来的唯一测量物
+    # 造出来就被丢掉了。单开一格，冷预填 TTFT 才有去处。
+    def _rebuilt(r):
+        return r.get("kind") == "chat" and bool(r.get("cache_rotated"))
     return {
         "窗口秒": round(t_end, 1),
+        "生成占空比": _duty_cycle(rows, t_end),   # 读判据的前提，不是判据本身，见 _duty_cycle
+        "占空比口径": "Σ(记了 wall 的行).wall / 窗口秒；cancel 腿不记 wall 故不进分子 → 这是下界",
         "requests": len(rows),
         "errors": sum(1 for r in rows if not r.get("ok")),
+        # 冷重建样本数：「离开」冷档存在的唯一理由。它必须**出现在产物里**——上一轮
+        # `cache_rotated` 全程 0 次，而 summary 里没有任何一个字段提到它，于是那份
+        # summary 与一份真的测过冷重建的跑长得一模一样，只能靠事后 grep req.jsonl 发现。
+        "冷重建样本": sum(1 for r in rows if _rebuilt(r)),
         "by_kind": {k: sum(1 for r in rows if r.get("kind") == k) for k, _ in mix},
         "drift_三段": {
             "chat_turn1_冷": drift(lambda r: r.get("kind") == "chat" and r.get("turn") == 1,
                                    ("ttft", "tps", "wall")),
             "chat_turn2+_热": drift(_hot, ("ttft", "tps", "wall")),
+            "chat_冷重建": drift(_rebuilt, ("ttft", "tps", "wall")),
             "tool": drift(lambda r: r.get("kind") == "tool", ("ttft", "tps")),
             "longchain": drift(lambda r: r.get("kind") == "longchain", ("ttft", "tps")),
         },
@@ -885,7 +996,15 @@ class Soak:
             "model_repo": REPO, "smoke": bool(getattr(self.args, "smoke", False)),
             "hours_target": self.args.hours, "seed": self.args.seed,
             "port": self.args.port, "mix": MIX,
-            "idle_short_s": list(IDLE_SHORT), "idle_long_s": list(IDLE_LONG),
+            # 键名从 `idle_long_s` 改成 `idle_long_warm_s`：它的含义变了（原来是整个
+            # 「离开」窗，现在只是温档）。改名而不是留原名——profile.json 的用处就是让
+            # 一次被 SIGKILL 的跑能自证身份，一个静默改了含义的同名键会让跨版本对拍读错。
+            "idle_short_s": list(IDLE_SHORT),
+            "idle_long_warm_s": list(IDLE_LONG),
+            "idle_long_cold_margin_s": list(IDLE_LONG_COLD_MARGIN),
+            "idle_long_cold_s": [self.cache_ttl_s + IDLE_LONG_COLD_MARGIN[0],
+                                 self.cache_ttl_s + IDLE_LONG_COLD_MARGIN[1]],
+            "server_sweep_period_s": SERVER_SWEEP_PERIOD_S,
             "long_idle_every": LONG_IDLE_EVERY,
             "sample_interval_s": SAMPLE_INTERVAL, "heartbeat_s": HEARTBEAT_INTERVAL,
             "chat_turns": CHAT_TURNS, "cache_ttl_s": self.cache_ttl_s,
@@ -922,6 +1041,19 @@ class Soak:
                   f"（整场数据会被记到错的模型头上）")
             return False
         self.preflight["served_model"] = ids
+
+        # ②' 服务端**运行态** TTL 与本工装读到的 config 是否同一个数。
+        # 这条属于「配置层面的失效」那一类：服务在改 config 之前就起来了的话，
+        # `CACHE_TTL_SECONDS` 还是旧值，而「离开」冷档的窗宽是按新值算的——窗口于是
+        # 够不着真实寿命，冷重建又一次零样本。老服务没有这个键：如实记「未核验」而不是
+        # 默认相符（本仓的老毛病就是把「没测到」写成「没问题」）。
+        ttl_ok, ttl_note = _ttl_verdict(
+            self.base_metrics.get("cache_ttl_seconds"), self.cache_ttl_s)
+        self.preflight["TTL 核验"] = ttl_note
+        if not ttl_ok:
+            print(f"❌ {ttl_note}，拒绝起跑"
+                  f"——「离开」冷档与泄漏判据都按 TTL 算，两边分家则结论不成立")
+            return False
 
         # ③ 系统采样三量（只验，不落 t0 行：t0 要在自检**之后**才起算，见 run()）
         base_sample = self._sample_once()
@@ -1092,11 +1224,14 @@ class Soak:
                 return 2
             last_beat = self._beat(last_beat)
 
-            long_idle = self.n % LONG_IDLE_EVERY == 0
-            lo, hi = (IDLE_LONG if long_idle else IDLE_SHORT)
+            lo, hi, idle_kind = _idle_window(self.n, self.cache_ttl_s)
+            long_idle = idle_kind != "short"
             nap = self.rng.uniform(lo, hi)
+            nap = _clamp_nap(nap, self.deadline, time.time())
             if long_idle:
-                print(f"[空闲] 进入「离开」窗 {nap/60:.1f}min", flush=True)
+                print(f"[空闲] 进入「离开」窗 {nap/60:.1f}min（"
+                      f"{'冷档：越过 TTL，验冷重建' if idle_kind == 'away_cold' else '温档：不到 TTL'}）",
+                      flush=True)
             # 心跳必须按**墙钟**：长空闲窗一睡 15-45 分钟，只在请求边界打心跳的话
             # 日志会静默大半小时，把 3 分钟级的 task-sentinel 骗成停滞告警——文件头
             # 承诺过这一点，初版没落实。故把长空闲切成心跳间隔的片来睡。
@@ -1214,7 +1349,7 @@ class Soak:
         now = time.time()
         # 服务端 TTL 扫描每 300s 一轮（server.py `_sweep_loop`），故一份缓存的实际寿命
         # 是 [TTL, TTL+300)。窗口不给这段宽限，末态就必然偶尔多出一两份 → 假 FAIL。
-        SWEEP_GRACE = 300.0
+        SWEEP_GRACE = SERVER_SWEEP_PERIOD_S      # 与冷档余量同源，见模块头
         expect_alive = sum(1 for t in self.ttl_marks
                            if now - t < self.cache_ttl_s + SWEEP_GRACE)
         base_cc = self.base_metrics.get("cache_count")
@@ -1279,6 +1414,11 @@ class Soak:
         if elapsed < self.args.hours * 3600 * 0.99:
             self.verdict_blockers.append(
                 f"实跑 {elapsed/3600:.2f}h 不足目标 {self.args.hours}h——长稳结论不成立")
+        cold_blocker = _cold_sample_blocker(
+            m.get("冷重建样本"), elapsed, self.args.hours,
+            bool(getattr(self.args, "smoke", False)))
+        if cold_blocker:
+            self.verdict_blockers.append(cold_blocker)
         summary["起跑自检"] = self.preflight
         summary["判据阻断"] = list(self.verdict_blockers)   # 拷贝，不靠别名的巧合
         summary["运行态"] = {0: "跑到时限", 2: "熔断中止", 3: "异常中止",

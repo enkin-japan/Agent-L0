@@ -126,9 +126,18 @@ test is evidence.
   stage-reviewer caught on its first run.
 - Restore the source byte-for-byte afterwards and verify the restore. A mutation
   run that leaves the tree modified is worse than not running one.
-- **If a mutant survives, suspect the mutant before the assertion.** A mutant
-  that does not faithfully reproduce the defect proves nothing. Only once it is
-  confirmed faithful does a survivor mean the assertion is vacuous.
+- **If a mutant survives, suspect the mutant — and the fixture — before the
+  assertion.** A mutant that does not faithfully reproduce the defect proves
+  nothing, and neither does one the test harness never actually loaded. Only
+  once both are confirmed does a survivor mean the assertion is vacuous.
+- **Clear `__pycache__` between injection and test run.** Bytecode caching keys
+  on `(mtime seconds, source size)`, and mutants are routinely the same size and
+  land inside the same second (`== 1` → `== 0`). The run then executes
+  pre-mutation bytecode and the mutant "survives" for a reason that has nothing
+  to do with the assertion. Observed 2026-08-18 in the soak-harness wave; the
+  loader-side fix in one test file does not generalize, so the clearing belongs
+  in the ritual: `find . -name __pycache__ -type d -not -path "./.venv/*" -exec
+  rm -rf {} +` before each mutant's test run.
 - Record the proof in that wave's `EXECUTION_LEDGER.md` entry (which mutants,
   which tests went red). **There is no separate mutation ledger** — a second
   place to keep the same numbers in sync is just a third source of drift.
