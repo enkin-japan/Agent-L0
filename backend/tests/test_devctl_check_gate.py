@@ -530,3 +530,33 @@ def test_dropping_secrets_does_not_strip_what_the_gates_need(tmp_path):
         'FAKE_SECRET_KEY="x"\nAGENT_API_KEY="y"\nASC_KEY_ID="z"\n', encoding="utf-8")
     r = _run(devctl, ["check"], tmp_path)
     assert r.returncode == 0, _out(r)
+
+
+# ---- ★ 横切：所有「透传下游退出码」的子命令都不许把帮助当成绿灯 ----
+
+@pytest.mark.parametrize("cmd", ["check", "eval-rag", "doc-numbers", "preflight"])
+def test_help_never_reads_as_a_successful_run(tmp_path, cmd):
+    """★ `--help` 打完就 exit 0，而封装层若照着这个 0 打结论，就会宣布一次**从未跑过**
+    的检查「过了」。
+
+    这个坑在本波里出现了两次：A3 的 `doc-numbers --help` 被首审抓到；`eval-rag --help`
+    则是**在 A0 就写下的**，过了首审也过了主会话签核，直到把全部子命令的 `--help`
+    拉齐排查才现形（当时它真的打印「eval-rag 过（rc=0）」）。
+    所以这条按**子命令清单**参数化，而不是只钉出事的那一个——新加子命令会自动进来。
+    """
+    devctl = _scaffold(tmp_path)
+    r = _run(devctl, [cmd, "--help"], tmp_path)
+    assert r.returncode == 0, _out(r)
+    out = _out(r)
+    for green in ("过（rc=0）", "全过 ✅", "一致（rc=0）", '"status"'):
+        assert green not in out, f"{cmd} --help 打出了绿灯结论 {green!r}：\n{out}"
+    assert "用法" in out
+
+
+@pytest.mark.parametrize("cmd", ["check", "eval-rag", "doc-numbers", "preflight"])
+def test_dash_h_is_a_usage_error_everywhere(tmp_path, cmd):
+    """本脚本全局约定「-h 表 host 不表 help」，各子命令要给一致的指路而非各自为政。"""
+    devctl = _scaffold(tmp_path)
+    r = _run(devctl, [cmd, "-h"], tmp_path)
+    assert r.returncode == 2, _out(r)
+    assert "--help" in _out(r)

@@ -648,7 +648,23 @@ do_check() {
 #   ② 97 被本函数当作「进不去 rag 目录」的哨兵。实读 run_retrieval_eval.py 的退出码
 #      空间是 {0,1,2}，故今天不冲突；下游若哪天真回 97 会被误读成「跑不起来」。
 do_eval_rag() {
-    local py="$RAG_DIR/.venv/bin/python" script="$ROOT/rag/evals/run_retrieval_eval.py" rc
+    local py="$RAG_DIR/.venv/bin/python" script="$ROOT/rag/evals/run_retrieval_eval.py" rc a
+    # ⚠️ 帮助必须就地拦下，不能透传给下游 argparse：它打完帮助 exit 0，而下面的
+    # `[ "$rc" -eq 0 ]` 会把这个 0 翻译成「eval-rag 过」——**一次从未跑过的 RAG 棘轮
+    # 被判绿**。这与 A3 首审抓到的 doc-numbers 那条是同一个缺陷，只是它在 A0 就写下了、
+    # 且当时过了首审也过了主会话签核；直到把全部子命令的 --help 拉齐排查才现形。
+    # 教训：凡「透传退出码给下游」的封装，都要先问「下游有没有 exit 0 却什么都没做的路径」。
+    for a in "$@"; do
+        case "$a" in
+            --help) echo "用法: $0 eval-rag [run_retrieval_eval.py 的参数]"
+                    echo "      跑 RAG 检索棘轮并**原样透传**它的退出码（0=不低于地板 / 1=判为回归等）。"
+                    echo "      ⚠️ 要加载检索模型、占 GPU 数分钟，故刻意不进 pre-commit。"
+                    echo "      纪律：任何检索侧改动后必须手动跑它。"
+                    echo "      下游自身的参数说明： $py $script --help"
+                    return 0 ;;
+            -h) fail "eval-rag: 本脚本里 -h 表 host 不表 help；要帮助请用 --help"; return 2 ;;
+        esac
+    done
     # 目录判在解释器判**之前**：反过来写的话，`-x .venv/bin/python` 成立已蕴含目录存在，
     # 目录那条就成了恒真的死分支（首审 #11）。
     [ -d "$RAG_DIR" ] || { fail "eval-rag 跑不起来：找不到 ${RAG_DIR}"; return 1; }
@@ -667,6 +683,223 @@ do_eval_rag() {
     return "$rc"
 }
 
+# =======================================================
+# preflight — 开工事实包（波 A1）
+#
+# 用途：`CLAUDE.md` 的「Delegation contract」要求每次委托都写清环境事实。人手抄就会
+# 抄错——实证：那条规则一直写着「仓库根 `.venv` 是死符号链接」，而 2026-08-18 仓库根
+# **根本没有 `.venv`**。本子命令把事实一次性打成 JSON，委托时整段粘贴。
+#
+# 四条硬纪律（缺一条这份事实包就会骗人）：
+#
+# ① **只转述，不重写既有的门。** 端口三态由 `managed_or_report` 判、密钥由
+#    `probe_auth` 判——这两道在 `start` 时刻已硬执行。preflight 复用同两个函数。
+#
+# ② **绝不说出自己其实不知道的事。** `probe_auth` 只在 401/403 时返回 1；**不可达、
+#    连接被重置、404/500、以及权重还在加载中，它一律返回 0**（它自陈「可达性由
+#    is_ready 门负责，这里只裁决鉴权」）。所以 rc=0 只能读作「这道门没判否」，
+#    **绝不能写成「钥匙对」**。本函数因此根本不输出 `ok` 这个词，只输出
+#    `not_rejected`——首审 Critical 1：原先只堵了「没监听」一种情形，其余全漏成 ok。
+#
+# ③ **GPU 占用不许按 pidfile 取数。** `bench_mlx_tile.py` 这类脚本在进程内加载 MLX，
+#    既不占端口也没有 pidfile。故只认正信号（:14161 / :14967 有监听、**存活的**
+#    campaign.pid），**没有正信号一律 `unknown` 而非 `free`**。
+#    campaign.pid 必须 `kill -0` 验活：仓库里就躺着一个已结束战役的残留。
+#
+# ④ **事实流必须自证完整。** 采集函数末尾打一行 `meta complete true` 哨兵；拼装侧
+#    没见到它就报「跑不起来」。否则采集半途死掉（`set -u` 下任一未定义变量即可）
+#    会拼出一份只有半截 facts 的 `status: ready`——首审 Critical 2 实证。
+#
+# 值的格式：**`TOKEN：中文说明`**。拼装侧只认冒号前那个 ASCII token，中文随便改
+# 都不会让判据失效（首审 #9：原先靠中文前缀判阻断，改个措辞就会把阻断降级成通过）。
+#
+# 密钥面：只报「在不在」与「那道门判没判否」，**绝不输出值、指纹、或任何完整命令行**。
+# =======================================================
+PF_SENTINEL_KEY="complete"
+
+pf_emit() {  # 段 键 值 类型——统一在这里洗掉制表符与换行，保住 TSV 契约
+    printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$(printf '%s' "$3" | tr '\t\n' '  ')" "$4"
+}
+
+# 本机是不是该跑这个服务：remote 形态下 host 指向别的机器，本机没监听是**正常**的，
+# 不能报 free（那会让人以为「端口空着，可以起」）。
+pf_is_local() {  # $1: host
+    case "$(probe_host "${1:-}")" in 127.0.0.1|localhost) return 0 ;; *) return 1 ;; esac
+}
+
+pf_port_state() {  # $1: 端口  $2: pidfile  $3: stop 目标名  $4: 该服务的 host（可空=本机）
+    local owners
+    owners="$(listen_pids "$1")"
+    if [ -z "$owners" ]; then
+        if [ -n "${4:-}" ] && ! pf_is_local "$4"; then
+            echo "not_local：服务按配置在远端（${4}），本机无监听是正常的"
+        else
+            echo "free：本机无监听"
+        fi
+        return
+    fi
+    # 复用 start 时刻那道门本身（stderr 是给人看的诊断，这里丢掉）
+    if managed_or_report "preflight" "$1" "$2" "$3" >/dev/null 2>&1; then
+        echo "managed：本脚本起的"
+    else
+        echo "foreign：被本脚本管不着的进程占用，start 会硬失败"
+    fi
+}
+
+pf_gpu() {  # 打印 "状态<TAB>证据"
+    local ev="" pids campaign cpid
+    pids="$(listen_pids "$INFER_PORT")"
+    [ -n "$pids" ] && ev="inference-server 在 :${INFER_PORT} 监听"
+    # :14967 是 RAG 检索评估服务，它会把嵌入/重排模型装进 GPU——同样是正信号。
+    # 端口做成可覆盖，金测试才能与宿主真栈彻底隔离（首审 Critical 3：`listen_pids`
+    # 是 `lsof -ti tcp:<port>`，全局作用于宿主，与临时 ROOT 无关；不隔离的话
+    # dev 栈一起来这些用例就红，而它们在 pre-commit 里 → **卡死全部提交**）。
+    [ -n "$(listen_pids "${RAG_EVAL_PORT:-14967}")" ] && ev="${ev}${ev:+；}RAG 评估服务在 :${RAG_EVAL_PORT:-14967} 监听"
+    for campaign in "$ROOT"/benchmarks/baseline/*/campaign.pid; do
+        [ -f "$campaign" ] || continue
+        cpid="$(cat "$campaign" 2>/dev/null)"
+        # ⚠️ 必须验活：已结束战役会留下 campaign.pid，光看文件在不在会反向误报 busy
+        [ -n "$cpid" ] && kill -0 "$cpid" 2>/dev/null || continue
+        ev="${ev}${ev:+；}战役 pid ${cpid} 存活"
+    done
+    if [ -n "$ev" ]; then
+        printf 'busy\t%s\n' "$ev"
+    else
+        printf 'unknown\t%s\n' "无正信号——但这**推不出空闲**：bench_mlx_tile.py 这类脚本在进程内加载 MLX，既不占端口也无 pidfile。开跑真模型前须人工确认"
+    fi
+}
+
+# 参考性进程扫描：**只打 pid 与可执行名，绝不打完整命令行**——命令行是无界文本，
+# 可能带上 --api-key/--hf-token 之类，而这份 JSON 的用途正是被粘进对话（首审 Critical 4）。
+# 也不用来把 unknown 升格成 free。
+pf_model_procs() {
+    local p out=""
+    for p in $(pgrep -f 'bench_.*\.py|inference/server\.py|mlx_lm|mlx_vlm|soak_longrun' 2>/dev/null); do
+        [ "$p" = "$$" ] && continue
+        out="${out}${out:+ }${p}:$(ps -o comm= -p "$p" 2>/dev/null | sed 's|.*/||')"
+    done
+    echo "$out"
+}
+
+preflight_facts() {
+    # 全部 local：`key` / `v` 持有密钥值，绝不让它们在函数返回后留在全局。
+    local py ver st ev gpu_line pair k v name port url key host dirty
+    local infer_host="${INFER_HOST:-}" rag_host="${RAG_HOST:-}"
+
+    pf_emit repo root "$ROOT" str
+    pf_emit repo branch "$(cd "$ROOT" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)" str
+    pf_emit repo head "$(cd "$ROOT" && git rev-parse --short HEAD 2>/dev/null || echo unknown)" str
+    # dirty 是唯一一个「问不出来」会被答成「没问题」的字段：git 不在/不是仓库时
+    # `[ -n "$(...)" ]` 恒假 → false → 读成「干净」。必须分出 unknown（首审 #5）。
+    if ! (cd "$ROOT" && git rev-parse --git-dir >/dev/null 2>&1); then
+        dirty="unknown：这里不是 git 仓库或 git 不可用"
+    elif [ -n "$(cd "$ROOT" && git status --porcelain 2>/dev/null)" ]; then
+        dirty="true：工作树有未提交改动"
+    else
+        dirty="false：工作树干净"
+    fi
+    pf_emit repo dirty "$dirty" str
+
+    for pair in "backend:$BACKEND_DIR" "rag:$RAG_DIR"; do
+        py="${pair#*:}/.venv/bin/python"
+        if [ -x "$py" ]; then
+            ver="$("$py" -c 'import sys;print("%d.%d.%d"%sys.version_info[:3])' 2>/dev/null || echo unknown)"
+            pf_emit venv "${pair%%:*}" "ok：${py} (python ${ver})" str
+        else
+            pf_emit venv "${pair%%:*}" "missing：${py} 不存在，先跑 ./devctl.sh setup" str
+        fi
+    done
+    # 仓库根的 .venv：这条曾被手抄进 CLAUDE.md 当作「死符号链接」，而实测早已不是。
+    # 现在一律现算，不写死任何结论。
+    if [ -L "$ROOT/.venv" ] && [ ! -e "$ROOT/.venv" ]; then
+        pf_emit venv repo_root "dangling：死符号链接，**不要用**；唯一真身是 backend/.venv" str
+    elif [ -e "$ROOT/.venv" ]; then
+        pf_emit venv repo_root "present：存在（用前先确认它指向哪）" str
+    else
+        pf_emit venv repo_root "absent：不存在" str
+    fi
+    pf_emit venv test_cmd "cd backend && PYTHONUNBUFFERED=1 .venv/bin/python -m pytest tests -q" str
+
+    pf_emit ports "backend_${BACKEND_PORT}" "$(pf_port_state "$BACKEND_PORT" "$LOG_DIR/backend.pid" backend "")" str
+    pf_emit ports "rag_${RAG_PORT}" "$(pf_port_state "$RAG_PORT" "$LOG_DIR/rag.pid" rag "$rag_host")" str
+    pf_emit ports "infer_${INFER_PORT}" "$(pf_port_state "$INFER_PORT" "$LOG_DIR/infer.pid" infer "$([ "${INFER_MODE:-}" = remote ] && echo "$infer_host")")" str
+    pf_emit ports "searx_${SEARX_PORT}" "$(pf_port_state "$SEARX_PORT" "$LOG_DIR/searx.pid" searx "")" str
+    pf_emit ports "frontend_${FRONT_PORT}" "$(pf_port_state "$FRONT_PORT" "$LOG_DIR/front.pid" front "")" str
+    pf_emit ports "rag_eval_${RAG_EVAL_PORT:-14967}" "$([ -n "$(listen_pids "${RAG_EVAL_PORT:-14967}")" ] && echo 'busy：RAG 评估服务在跑（占 GPU）' || echo 'free：本机无监听')" str
+
+    gpu_line="$(pf_gpu)"
+    pf_emit gpu status "${gpu_line%%	*}" str
+    pf_emit gpu evidence "${gpu_line#*	}" str
+    pf_emit gpu process_scan "$(pf_model_procs)" str
+    pf_emit gpu rule "单 GPU 无抢占：任一时刻最多一个真模型进程（bench / :14161 / devctl 真模型测试三者互斥）" str
+
+    for k in AGENT_API_KEY INFER_API_KEY RAG_API_KEY RAG_COMPUTE_API_KEY; do
+        eval "v=\${$k:-}"
+        pf_emit keys "$k" "$([ -n "${v:-}" ] && echo 'present：已配置' || echo 'absent：未配置')" str
+    done
+    # ⚠️ 见纪律 ②：这里给出的**永远不是「钥匙对」**，只可能是「那道门没判否」。
+    # 钥匙不参与任何字符串手术：按名字取，不拼进待切分的串（URL 与钥匙都可能含冒号）。
+    for name in INFER RAG; do
+        eval "port=\${${name}_PORT:-}"
+        eval "url=\${${name}_AUTH_URL:-}"
+        eval "key=\${${name}_API_KEY:-}"
+        eval "host=\${${name}_HOST:-}"
+        if [ -z "${key:-}" ]; then
+            st="no_key：未配置钥匙，探测无意义"
+        elif [ -z "$(listen_pids "${port:-0}")" ] && pf_is_local "${host:-}"; then
+            st="not_running：本机没监听、服务也不在远端，测不了鉴权（不报 ok）"
+        elif probe_auth "$name" "${url:-}" "$key" >/dev/null 2>&1; then
+            st="not_rejected：那道门没判否。**这不等于钥匙对**——probe_auth 对不可达、连接重置、404/500 也返回 0"
+        else
+            st="FAIL：401/403，start 会当场拒启"
+        fi
+        pf_emit keys "${name}_verified" "$st" str
+    done
+    pf_emit keys manual_only "AGENT_API_KEY 与 RAG_COMPUTE_API_KEY 无自动比对（INFER/RAG 两把 start 时由 probe_auth 真认证）" str
+
+    pf_emit selection model "$([ -f "$ROOT/.model-selection" ] && tr -d '\n' < "$ROOT/.model-selection" || echo 'unselected：未选，回落 config.yaml 缺省')" str
+    pf_emit selection rag_tier "$([ -f "$ROOT/.rag-tier-selection" ] && sed -n 's/.*"tier"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/.rag-tier-selection" 2>/dev/null | head -1 || echo 'unselected：未选，回落 config.yaml rag.active_tier')" str
+    pf_emit selection inference_mode "${INFER_MODE:-unknown}" str
+    # remote 形态而地址为空 = start 必被 require_host 拒（新克隆的 config 就是空模板）
+    if [ "${INFER_MODE:-}" = remote ] && [ -z "$(printf '%s' "${INFER_HOST:-}" | tr -d '[:space:]')" ]; then
+        pf_emit selection infer_host "empty_but_remote：mode=remote 而地址为空，start 会被 require_host 拒" str
+    else
+        pf_emit selection infer_host "ok：${INFER_HOST:-（本机）}" str
+    fi
+
+    pf_emit policy real_model_execution "默认不允许——委托里要显式授予才可跑" str
+    pf_emit policy safe_concurrently "backend/tests（FakeEngine、CPU-only）与 ./devctl.sh check 随时可跑" str
+
+    # ④ 完整性哨兵：必须是最后一行。采集半途死掉就见不到它。
+    pf_emit meta "$PF_SENTINEL_KEY" true bool
+}
+
+do_preflight() {
+    local a rc
+    for a in "$@"; do
+        case "$a" in
+            --help) echo "用法: $0 preflight"
+                    echo "      打印开工事实包 JSON（委托时整段粘进 CLAUDE.md 的 Delegation contract）。"
+                    echo "      退出码: 0=可开工（可能含须人工确认项）/ 3=有阻断项 / 2=用法错 / 1=跑不起来"
+                    return 0 ;;
+            -h) fail "preflight: 本脚本里 -h 表 host 不表 help；要帮助请用 --help"; return 2 ;;
+            *) fail "preflight: 未知参数 ${a}"; return 2 ;;
+        esac
+    done
+    [ -f "$ROOT/scripts/preflight_json.py" ] || { fail "preflight 跑不起来：找不到 scripts/preflight_json.py"; return 1; }
+    command -v python3 >/dev/null 2>&1 || { fail "preflight 跑不起来：找不到 python3（仅用于把事实拼成 JSON）"; return 1; }
+    preflight_facts | python3 "$ROOT/scripts/preflight_json.py"
+    rc=$?
+    # python3 自身的退出码（缺模块=1、用法错=2…）会与本脚本的三值表撞车。
+    # 只认 0 与 3，其余一律归「跑不起来」——绝不让 2 被读成「用法错」（首审 #15）。
+    case "$rc" in
+        0) ;;
+        3) fail "preflight: 有阻断项（rc=3）——见 blockers" ;;
+        *) fail "preflight 跑不起来（rc=${rc}）——这不是「可开工」"; rc=1 ;;
+    esac
+    return "$rc"
+}
+
 # ---- doc-numbers：文档规模数字的派生与校验（波 A3）----
 # 退出码与 check 同一套三值纪律（0=一致 / 3=有漂移 / 2=用法错 / 1=跑不起来）。
 # **刻意暂不并入 `check` 的默认门**：今天 CHARTER.md 三处确有漂移，而宪章的任何改动
@@ -674,7 +907,6 @@ do_eval_rag() {
 # （这正是 A4 复审点名要防的失效）。等用户认过那三处、漂移归零后再并入。
 do_doc_numbers() {
     local py="$BACKEND_DIR/.venv/bin/python" script="$ROOT/scripts/doc_numbers.py" rc a
-    [ -f "$script" ] || { fail "doc-numbers 跑不起来：找不到 ${script}"; return 1; }
     # ⚠️ 帮助必须在这里就地拦下，**不能透传给 argparse**：argparse 打完 --help 会
     # exit 0，而下面的 case 会把这个 0 翻译成「doc-numbers 一致」——一次什么都没核对
     # 的绿灯（首审 Critical 1，实测复现）。这正是本波要消灭的那类失效，出现在本波
@@ -689,6 +921,9 @@ do_doc_numbers() {
             -h) fail "doc-numbers: 本脚本里 -h 表 host 不表 help；要帮助请用 --help"; return 2 ;;
         esac
     done
+    # 前置检查排在帮助**之后**：`--help` 不该因为下游脚本缺失就不给（那会在最需要
+    # 看用法的时候闭嘴），但真要跑的时候仍然要先拦。
+    [ -f "$script" ] || { fail "doc-numbers 跑不起来：找不到 ${script}"; return 1; }
     # 甲类是纯 stdlib、任何 python3 都能算；**乙类（金测试项数）另说**——脚本内部固定
     # 去调 `backend/.venv/bin/python -m pytest --collect-only`，与这里用哪个解释器无关。
     # 所以这条回落只救得了甲类，乙类照样会是 unknown（原注释说反了，首审 #6）。
@@ -1049,6 +1284,7 @@ case "$CMD" in
     check)  do_check ${RAW_ARGS[@]+"${RAW_ARGS[@]}"}; exit $? ;;
     eval-rag) do_eval_rag ${RAW_ARGS[@]+"${RAW_ARGS[@]}"}; exit $? ;;
     doc-numbers) do_doc_numbers ${RAW_ARGS[@]+"${RAW_ARGS[@]}"}; exit $? ;;
+    preflight) do_preflight ${RAW_ARGS[@]+"${RAW_ARGS[@]}"}; exit $? ;;
     install-hooks) install_git_hooks; exit $? ;;
     *)
         echo "用法: $0 setup                                   # 首次部署（venv/依赖/node_modules，末尾自动 keygen）"
@@ -1064,6 +1300,7 @@ case "$CMD" in
         echo "                                                 #   退出码 0=过 3=不过 2=用法错 1=跑不起来（缺前置不会自动跳过）"
         echo "      $0 eval-rag [...]                          # RAG 检索棘轮（占 GPU 数分钟，故不进 pre-commit）"
         echo "                                                 #   ⚠️ 任何检索侧改动后必须手动跑它；退出码原样透传"
+        echo "      $0 preflight                               # 开工事实包 JSON（委托时整段粘贴；0=可开工 3=有阻断）"
         echo "      $0 doc-numbers [--check]                   # 文档规模数字 vs 仓库实际（暂不并入 check，见脚本头）"
         echo "      $0 install-hooks                           # 装 .git/hooks/pre-commit（三行 shim，转调入库的 scripts/git-hooks/pre-commit）"
         echo "      $0 status"

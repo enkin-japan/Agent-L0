@@ -81,11 +81,19 @@
 ### Delegation contract
 - Every delegation must include: the specific file paths involved, and explicit
   acceptance criteria (which tests must pass).
-- Include the environment facts the agent cannot discover and will get wrong:
-  the venv is `backend/.venv` (the repo-root `.venv` is a dead symlink), test
-  runs use `PYTHONUNBUFFERED=1`, and whether the GPU / inference ports are
-  currently occupied by a running bench. State explicitly whether real-model
-  execution is allowed (default: it is not).
+- Include the environment facts the agent cannot discover and will get wrong.
+  **Do not hand-copy them — run `./devctl.sh preflight` and paste the JSON.**
+  It reports venv paths and the exact test command, port tri-states, GPU
+  occupancy, which keys are auto-verified vs manual, and the active model / RAG
+  tier. Hand-copied facts go stale silently: this rule used to state that the
+  repo-root `.venv` is a dead symlink, and by 2026-08-18 there was no
+  repo-root `.venv` at all.
+  Two things preflight cannot decide for you, so state them yourself:
+  - **whether real-model execution is allowed** (default: it is not);
+  - what you do about each entry in `needs_confirmation` — GPU occupancy reads
+    `unknown` rather than `free` whenever there is no positive signal, because
+    an in-process MLX bench holds neither a port nor a pidfile. Confirm it
+    yourself and record the decision in `waived`.
 - Hand over the complete specification up front rather than feeding it in
   stages.
 - A task whose acceptance criteria you cannot write is not ready to delegate.
