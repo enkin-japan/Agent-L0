@@ -1,0 +1,39 @@
+{
+  "started_at": "2026-08-18T13:01:38+0900",
+  "model_repo": "mlx-community/gemma-4-26b-a4b-it-4bit",
+  "smoke": true,
+  "hours_target": 0.16,
+  "seed": 20260818,
+  "port": 14161,
+  "mix": [
+    [
+      "chat",
+      0.25
+    ],
+    [
+      "tool",
+      0.25
+    ],
+    [
+      "longchain",
+      0.25
+    ],
+    [
+      "cancel",
+      0.25
+    ]
+  ],
+  "idle_short_s": [
+    10,
+    25
+  ],
+  "idle_long_s": [
+    10,
+    25
+  ],
+  "long_idle_every": 1000000000,
+  "sample_interval_s": 60.0,
+  "heartbeat_s": 60.0,
+  "chat_turns": 5,
+  "cache_ttl_s": 2700.0
+}

@@ -1,0 +1,352 @@
+⚠️  --smoke：负载已改为四腿等权 + 秒级空闲，本次产物**不构成长稳判决**
+== 长稳起跑：0.16h，产物 ../benchmarks/data/soak-26b4bit-smoke4-20260818
+  [自检] chat turn1 ok=True assembly=full reused=0
+  [自检] chat turn2 ok=True assembly=delta reused=205
+  [自检] tool ok=True constrained_steps=17 called=True
+  [自检] longchain ok=True prompt_tok=6130
+  [自检] cancel#0 via=endpoint ok=True race=False drained={'ended': True, 'how': 'eof', 'waited_s': 0.01}
+✅ 起跑自检全过：{'chat': True, 'tool': True, 'longchain': True, 'cancel': True}，服务端模型 ['mlx-community/gemma-4-26b-a4b-it-4bit']
+[心跳] 0.02h/0.16h 请求 2 错误 0 采样 2 空闲窗中
+[心跳] 0.04h/0.16h 请求 4 错误 0 采样 3 空闲窗中
+[心跳] 0.06h/0.16h 请求 6 错误 0 采样 4 空闲窗中
+[心跳] 0.07h/0.16h 请求 10 错误 0 采样 5 空闲窗中
+[心跳] 0.09h/0.16h 请求 13 错误 0 采样 6 空闲窗中
+[心跳] 0.11h/0.16h 请求 16 错误 0 采样 7 空闲窗中
+[心跳] 0.13h/0.16h 请求 19 错误 0 采样 9 空闲窗中
+[心跳] 0.15h/0.16h 请求 22 错误 0 采样 10 空闲窗中
+== 收官 == {
+ "smoke": true,
+ "hours": 0.16,
+ "窗口秒": 584.3,
+ "requests": 24,
+ "errors": 0,
+ "by_kind": {
+  "chat": 4,
+  "tool": 6,
+  "longchain": 7,
+  "cancel": 7
+ },
+ "drift_三段": {
+  "chat_turn1_冷": {
+   "ttft": {
+    "三段": [
+     null,
+     null,
+     null
+    ],
+    "n": [
+     1,
+     0,
+     0
+    ]
+   },
+   "tps": {
+    "三段": [
+     null,
+     null,
+     null
+    ],
+    "n": [
+     1,
+     0,
+     0
+    ]
+   },
+   "wall": {
+    "三段": [
+     null,
+     null,
+     null
+    ],
+    "n": [
+     1,
+     0,
+     0
+    ]
+   }
+  },
+  "chat_turn2+_热": {
+   "ttft": {
+    "三段": [
+     null,
+     null,
+     null
+    ],
+    "n": [
+     0,
+     2,
+     1
+    ]
+   },
+   "tps": {
+    "三段": [
+     null,
+     null,
+     null
+    ],
+    "n": [
+     0,
+     2,
+     1
+    ]
+   },
+   "wall": {
+    "三段": [
+     null,
+     null,
+     null
+    ],
+    "n": [
+     0,
+     2,
+     1
+    ]
+   }
+  },
+  "tool": {
+   "ttft": {
+    "三段": [
+     null,
+     null,
+     null
+    ],
+    "n": [
+     1,
+     2,
+     3
+    ]
+   },
+   "tps": {
+    "三段": [
+     null,
+     null,
+     null
+    ],
+    "n": [
+     1,
+     2,
+     3
+    ]
+   }
+  },
+  "longchain": {
+   "ttft": {
+    "三段": [
+     null,
+     null,
+     null
+    ],
+    "n": [
+     4,
+     2,
+     1
+    ]
+   },
+   "tps": {
+    "三段": [
+     null,
+     null,
+     null
+    ],
+    "n": [
+     4,
+     2,
+     1
+    ]
+   }
+  }
+ },
+ "mem_三段_静默态": {
+  "server_rss_mb": [
+   6346.0,
+   6346.5,
+   6346.333
+  ],
+  "wired_mb": [
+   10924.0,
+   10796.0,
+   10864.667
+  ],
+  "compressed_mb": [
+   2539.0,
+   2462.0,
+   2458.667
+  ]
+ },
+ "mem_三段_静默态_n": {
+  "server_rss_mb": [
+   2,
+   2,
+   3
+  ],
+  "wired_mb": [
+   2,
+   2,
+   3
+  ],
+  "compressed_mb": [
+   2,
+   2,
+   3
+  ]
+ },
+ "mem_三段_全部": {
+  "server_rss_mb": [
+   6345.5,
+   6346.667,
+   6346.333
+  ],
+  "wired_mb": [
+   14769.0,
+   15794.333,
+   10864.667
+  ],
+  "compressed_mb": [
+   2530.0,
+   2466.0,
+   2458.667
+  ]
+ },
+ "静默态行数": {
+  "静默": 7,
+  "有效": 10,
+  "总": 10
+ },
+ "rss_跨度_mb_静默态": [
+  6346,
+  6347
+ ],
+ "rss_跨度_mb_全部": [
+  6343,
+  6347
+ ],
+ "wired_跨度_mb_静默态": [
+  10759,
+  10952
+ ],
+ "口径": {
+  "QUIET_AFTER_REQ_S": 3.0,
+  "MIX": [
+   [
+    "chat",
+    0.25
+   ],
+   [
+    "tool",
+    0.25
+   ],
+   [
+    "longchain",
+    0.25
+   ],
+   [
+    "cancel",
+    0.25
+   ]
+  ],
+  "SAMPLE_INTERVAL": 60.0,
+  "来源": "运行期模块常量"
+ },
+ "peak_mem_高水位": {
+  "max": 17.837653292,
+  "末值": 17.837653292,
+  "首小时后增量": null,
+  "台阶次数(不含首次建立)": 2
+ },
+ "swap_首末": [
+  12374612,
+  12374612
+ ],
+ "前缀复用": {
+  "turn≥2 非冷轮样本": 3,
+  "增量组装占比": 1.0,
+  "token级喂入占比": 1.0,
+  "命中达期望占比": 1.0,
+  "无期望值行数": 0,
+  "失败明细": []
+ },
+ "工具腿": {
+  "样本": 6,
+  "发出调用占比": 1.0
+ },
+ "取消腿": {
+  "总数": 7,
+  "按路": {
+   "endpoint": 4,
+   "disconnect": 3
+  },
+  "生成先自然结束": 0,
+  "取消到达时已结束(竞态)": 0,
+  "未测到(信号中止)": 0,
+  "失败": 0
+ },
+ "健康探针": {
+  "失败次数": 0,
+  "最差 ms": 1.0
+ },
+ "缓存删除腿": {
+  "发起": 18,
+  "成功": 18,
+  "交给 TTL 累计": 3,
+  "_备注": "起跑自检的强删不计入本行"
+ },
+ "采样健康": {
+  "有效行": 10,
+  "总行": 10,
+  "工装计数": 10,
+  "应有约": 10,
+  "线程死于": null,
+  "坏行": {
+   "req": 0,
+   "sys": 0
+  }
+ },
+ "metrics_首末": {
+  "errors_total": [
+   0,
+   0
+  ],
+  "generations_total": [
+   5,
+   29
+  ],
+  "cancelled_total": [
+   1,
+   5
+  ]
+ },
+ "final_metrics": {
+  "generations_total": 29,
+  "cancelled_total": 5,
+  "errors_total": 0,
+  "cache_count": 3,
+  "active_generations": 0
+ },
+ "泄漏判据": {
+  "末态 cache_count": 3,
+  "TTL 窗内未到期": 3,
+  "起跑基线 cache_count": 0,
+  "基线计入": 0,
+  "允许上限": 3,
+  "交给 TTL 累计": 3,
+  "TTL 秒": 2700.0,
+  "扫描宽限秒": 300.0,
+  "active_generations": 0,
+  "判定": "无泄漏"
+ },
+ "起跑自检": {
+  "served_model": [
+   "mlx-community/gemma-4-26b-a4b-it-4bit"
+  ],
+  "自检时 server_pid": "70935",
+  "自检时 rss_mb": 5811,
+  "legs": {
+   "chat": true,
+   "tool": true,
+   "longchain": true,
+   "cancel": true
+  }
+ },
+ "判据阻断": [],
+ "运行态": "跑到时限"
+}

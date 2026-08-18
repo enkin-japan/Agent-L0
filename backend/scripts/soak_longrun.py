@@ -21,9 +21,9 @@ v2 首过评审（5 Critical / 15 Major）补掉的是同一类的**判据侧**�
 的退化态下同样是 100%（它防不住它唯一要防的那件事）；取消腿把服务端 error 事件记成
 「生成先自然结束」的通过。判据写得不可能失败，等于没有判据。
 
-**起跑自检**（`_preflight`）：12 小时押上去之前先证明该测的都测得到——鉴权、服务端
+**起跑自检**（`_preflight`）：把整场时长押上去之前先证明该测的都测得到——鉴权、服务端
 模型身份、三个系统采样量、四条腿各跑一次且关键仪表真出数。任一不过即拒绝起跑。
-没有它，一个配置层面的失效（比如约束采样被服务端关掉）会烧满 12 小时才在 summary
+没有它，一个配置层面的失效（比如约束采样被服务端关掉）会烧满整场才在 summary
 里看见。自检产物走 `preflight.jsonl`，不混进 `req.jsonl` 的统计口径。
 
 与 Colab 那次的口径差异（换平台必须换的）：Apple Silicon 没有 VRAM，统一内存的等价
@@ -34,22 +34,24 @@ swapouts**——后者才是 MLX 超售换页崩塌的先兆（单 GPU 纪律里
   cd backend && PYTHONUNBUFFERED=1 .venv/bin/python scripts/soak_longrun.py \
       --outdir ../benchmarks/data/soak-26b4bit-<日期>        # 缺省 8h，见 LONGRUN_HOURS
 密钥只走 `INFER_API_KEY` 环境变量或 `.env.local`——**刻意不提供 --api-key**，命令行参数
-会把钥匙暴露在 `ps` 输出里长达 12 小时。
+会把钥匙暴露在 `ps` 输出里长达整场。
 
 产物：`req.jsonl`（每请求一行）/ `sys.jsonl`（系统采样）/ `preflight.jsonl`（起跑自检）/
-`profile.json`（起跑即落：模型、是否冒烟、负载档位——12h 跑被 SIGKILL 时 summary 不会
+`profile.json`（起跑即落：模型、是否冒烟、负载档位——长跑被 SIGKILL 时 summary 不会
 写，没有它两个 jsonl 再也无法自证身份）/ `summary.json`（收官判据）。
 
 退出码是**运行态**信号，不是质量判决：0=跑完且无错、无泄漏、判据齐全 /
 1=有错误或缓存泄漏或**判据不可用**（末态读不到、采样残缺、服务中途换过进程——
 这些一律不许静默走成绿灯）/ 2=连续失败熔断提前中止 / 3=主循环异常中止（收官照常写）/
-4=收到 SIGINT/SIGTERM 提前中止（**不与「跑到时限」同码**，否则一次被 kill 的 12h
+4=收到 SIGINT/SIGTERM 提前中止（**不与「跑到时限」同码**，否则一次被 kill 的
 门禁会带着 exit 0 进台账）。
 漂移的 PASS/FAIL 要人读 summary 的三分段表（见上「无漂移」）；三段按**墙钟**切，
-`mem_三段_空闲态` 才是内存判据（生成在飞时 wired 会瞬时抬高一个量级）。
+`mem_三段_静默态` 才是内存判据（生成在飞、或刚跑完几秒内，wired 会瞬时抬高一个量级）。
 """
 import argparse
+import bisect
 import json
+import re
 import os
 import random
 import signal
@@ -78,7 +80,7 @@ LONG_IDLE_EVERY = 40
 SAMPLE_INTERVAL = 300.0          # sys.jsonl 采样间隔
 HEARTBEAT_INTERVAL = 300.0       # 心跳按**墙钟**——按请求数计会在长空闲窗里静默一小时，
                                  # 把 3 分钟级的 task-sentinel 骗成停滞告警
-MAX_CONSEC_FAIL = 5              # 连续失败熔断：服务死了不该空转到 12h
+MAX_CONSEC_FAIL = 5              # 连续失败熔断：服务死了不该空转到收官
 CHAT_TURNS = 5                   # 一段会话的轮数（多轮才吃得到前缀复用）
 SMOKE_MAX_HOURS = 1.0            # --smoke 的时长上限：等权+秒级空闲是高压档，
                                  # 忘带 --hours 就会拿缺省时长跑一整夜的高压跑
@@ -112,14 +114,22 @@ def _apply_smoke_profile() -> None:
     长空闲窗要磨的是 45min 缓存 TTL，短程磨不到，故退化为短空闲（不是「跳过检查」，
     是这项本来就不在短程的射程内——summary 的 smoke 标记会把这点带进产物）。
     """
-    global MIX, IDLE_SHORT, IDLE_LONG, LONG_IDLE_EVERY
+    global MIX, IDLE_SHORT, IDLE_LONG, LONG_IDLE_EVERY, QUIET_AFTER_REQ_S
     global SAMPLE_INTERVAL, HEARTBEAT_INTERVAL
     MIX = [("chat", 0.25), ("tool", 0.25), ("longchain", 0.25), ("cancel", 0.25)]
-    IDLE_SHORT = (2, 8)
+    # 空闲窗**必须长于** QUIET_AFTER_REQ_S，否则采样几乎永远落在「上一请求刚跑完」的
+    # 窗口里、静默态行数恒为个位数，`mem_三段_静默态` 那条阻断就成了**恒不可过**的判据
+    # ——冒烟是每次长稳前必跑的一关，一条永远失败的阻断会训练操作者无视「判据阻断」，
+    # 与本工装第一原则背道而驰。实测（旧档 2-8s）：三份冒烟静默行只有 1/2/4 行。
+    IDLE_SHORT = (10, 25)
     IDLE_LONG = IDLE_SHORT
     LONG_IDLE_EVERY = 10 ** 9
     SAMPLE_INTERVAL = 60.0
     HEARTBEAT_INTERVAL = 60.0
+    # 短程档把静默门槛从 5s 放到 3s：实测被污染的采样都落在请求结束后 0.08–0.9s 内，
+    # 3s 仍有三倍余量，而 20 分钟只有 21 个采样点，5s 会把静默样本压到不足以分段。
+    # 这个值随产物落盘（summary 的 `口径`），不是暗改。
+    QUIET_AFTER_REQ_S = 3.0
 
 
 TOPICS = ["周末露营装备", "阳台种菜浇水", "旧笔记本装 Linux", "咖啡手冲参数",
@@ -199,19 +209,6 @@ def _rss_mb(pid: "str | None") -> "int | None":
         return None
 
 
-def _idle_rows(sysrows: list) -> list:
-    """只保留「采样瞬间没有生成在飞」的行。wired 在生成中会瞬时抬高一个量级，
-    混采下的三段均值取决于碰巧采到几次生成中，不是内存漂移。"""
-    out = []
-    for r in sysrows:
-        m = r.get("metrics")
-        # 必须是**取到了这个键且为 0**：`or 0` 会把「键没了」也算成空闲，正是 C3/C4
-        # 那条 or-零 的老毛病。
-        if isinstance(m, dict) and m.get("active_generations") == 0:
-            out.append(r)
-    return out
-
-
 def _peak_max(rows: list) -> "float | None":
     vals = [r["peak_mem"] for r in rows if isinstance(r.get("peak_mem"), (int, float))]
     return max(vals) if vals else None
@@ -222,6 +219,18 @@ def _peak_last(rows: list) -> "float | None":
         if isinstance(r.get("peak_mem"), (int, float)):
             return r["peak_mem"]
     return None
+
+
+def _peak_steps(rows: list) -> int:
+    """peak_memory 抬升次数，**不含首次建立**（第一条请求把高水位从 0 抬到 17.5GB
+    不是「抬升」，把它算进去会让「8 次抬升」这种叙述比实际多一次）。"""
+    prev, n = 0.0, -1
+    for r in rows:
+        pm = r.get("peak_mem")
+        if isinstance(pm, (int, float)) and pm > prev + 1e-9:
+            n += 1
+            prev = pm
+    return max(n, 0)
 
 
 def _first_last(rows: list, key: str) -> list:
@@ -245,6 +254,182 @@ def _peak_step(rows: list) -> "float | None":
     return round(max(later) - max(first), 4)
 
 
+QUIET_AFTER_REQ_S = 5.0   # 见 _quiet_rows
+
+def _quiet_rows(sysrows: list, rows: list, quiet_s: float = None) -> list:
+    """内存判据可用的采样行：既要「采样瞬间没有生成在飞」，**还要离上一次请求结束
+    足够久**。
+
+    只看 `active_generations == 0` 是不够的——wired 的回落有**秒级滞后**，而
+    active_generations 在生成一结束就归零。实测本次跑：4 行「空闲态」样本的 wired 是
+    18358–19220MB，而真实空闲基线是 3066–3327MB，这 4 行的共同点全是「上一条请求在
+    0.1–0.9 秒前刚刚结束」。混进去之后，三段均值就变成「每段碰巧摊到几个刚跑完的样本」
+    的函数，而不是内存趋势——smoke3 的同一张表因此读出过 8981/6184/2824 的假单调下降。
+    """
+    ends = sorted(r["t"] for r in rows if isinstance(r.get("t"), (int, float)))
+    out = []
+    for r in sysrows:
+        mt = r.get("metrics")
+        if not (isinstance(mt, dict) and mt.get("active_generations") == 0):
+            continue
+        if not isinstance(r.get("server_rss_mb"), (int, float)):
+            continue
+        i = bisect.bisect_right(ends, r["t"])
+        # **没有已知的前一次请求 ≠ 静默**，而是「无从判定」，必须排除。
+        # `t0 基线` 那一行正是这个坑：它写在起跑自检（含一次 768 token 长链）刚跑完
+        # 之后、t≈0.1，req.jsonl 里没有任何更早的请求，于是「prev 为空就放行」会把
+        # **全文件污染最重的一行**当成静默态——实测它 wired=18511 而真实静默基线是
+        # 3066–3327，单这一行就把干净窗第一段从 3086.9 抬到 3568.9，凭空造出
+        # 「第一段高、后面走平」的假象，正是本过滤器要杀的那个形态。
+        if i == 0 or r["t"] - ends[i - 1] < (QUIET_AFTER_REQ_S if quiet_s is None
+                                              else quiet_s):
+            continue
+        out.append(r)
+    return out
+
+
+def measure(rows: list, sysrows: list, t_end: float, spec: dict = None):
+    """把「从原始 jsonl 算出判据」这件事做成**纯函数**，收官与事后重算共用同一份实现。
+
+    为什么必须是纯函数：本站曾把「干净窗口径」的三段数写进台账与 commit，而那组数出自
+    一次未入库的临时分析——换个人重算，第三段边界含不含某一行、n≥5 规则、剔不剔
+    `cache_rotated`，任一取法不同就是另一组数。判据必须能被别人用同一段代码复现出来。
+    `--reanalyze` 走的就是这里。
+
+    `spec` 是本次判据的**口径**（`mix` / `sample_interval` / `quiet_after_req_s`），
+    必须由调用方传入而不是读模块全局——`_apply_smoke_profile()` 会在运行期改写那几个
+    全局量，而 `--reanalyze` 不会调用它：读全局就会给一份冒烟产物盖上生产权重的
+    `口径`，**记下一份假的出处比不记更糟**（对着它核 `by_kind` 会得出「负载配错了」）。
+    返回 `(判据 dict, 有效采样行)`——有效行不再夹带在 dict 里让每个调用方去 pop。
+    """
+    spec = spec or {}
+    mix = spec.get("mix") or MIX
+    sample_interval = spec.get("sample_interval") or SAMPLE_INTERVAL
+    quiet_s = spec.get("quiet_after_req_s")
+    quiet_s = QUIET_AFTER_REQ_S if quiet_s is None else quiet_s
+    def seg(rs, i):
+        lo, hi = t_end * i / 3, t_end * (i + 1) / 3
+        return [r for r in rs
+                if isinstance(r.get("t"), (int, float))
+                and (lo <= r["t"] < hi or (i == 2 and r["t"] >= lo))]
+
+    def avg(rs, k):
+        v = [r[k] for r in rs if isinstance(r.get(k), (int, float))]
+        if not v:
+            return None
+        # ttft/wall 是亚秒量，3 位小数会把 0.3692/0.3774 压成 0.369/0.377——引用方
+        # 一旦写了 4 位就再也复现不出来（台账里正好有这么一处）。
+        return round(sum(v) / len(v), 4 if k in ("ttft", "wall") else 3)
+
+    def drift(pred, keys):
+        """按同质分组做三分段——四类负载混在一起平均，段间构成的随机波动会被
+        读成漂移（或把真漂移稀释掉）。n<5 的格子标 null，不给不可用的数。"""
+        sel = [r for r in rows if pred(r)]
+        out = {}
+        for k in keys:
+            cells, ns = [], []
+            for i in range(3):
+                sg = seg(sel, i)
+                ns.append(len(sg))
+                cells.append(avg(sg, k) if len(sg) >= 5 else None)
+            out[k] = {"三段": cells, "n": ns}
+        return out
+
+    # 采样有效性按**含 server_rss_mb 的行**算，不按行数：`_listener_pid`/`_rss_mb`
+    # 失败时返回 None 而不抛，行照写、sampler_died 照样是 None，于是「采样健康」
+    # 全绿而 mem_三段 是 [null,null,null]。sampler_error 行同理不能算进分子。
+    valid_sys = [r for r in sysrows if isinstance(r.get("server_rss_mb"), (int, float))]
+    quiet_sys = _quiet_rows(sysrows, rows, quiet_s)
+    # 冷轮（缓存被 TTL 回收后的重建）要从「turn2+ 热」里剔除：一次冷预填的 TTFT
+    # 比热轮高一个量级，随机落段足以在均值上造出假的单调劣化。
+    def _hot(r):
+        return (r.get("kind") == "chat" and (r.get("turn") or 0) >= 2
+                and not r.get("cache_rotated"))
+    chat2 = [r for r in rows if _hot(r)]
+    has_exp = [r for r in chat2 if isinstance(r.get("reuse_expect"), int)]
+    cancels = [r for r in rows if r.get("kind") == "cancel"]
+    tools = [r for r in rows if r.get("kind") == "tool"]
+    return {
+        "窗口秒": round(t_end, 1),
+        "requests": len(rows),
+        "errors": sum(1 for r in rows if not r.get("ok")),
+        "by_kind": {k: sum(1 for r in rows if r.get("kind") == k) for k, _ in mix},
+        "drift_三段": {
+            "chat_turn1_冷": drift(lambda r: r.get("kind") == "chat" and r.get("turn") == 1,
+                                   ("ttft", "tps", "wall")),
+            "chat_turn2+_热": drift(_hot, ("ttft", "tps", "wall")),
+            "tool": drift(lambda r: r.get("kind") == "tool", ("ttft", "tps")),
+            "longchain": drift(lambda r: r.get("kind") == "longchain", ("ttft", "tps")),
+        },
+        # 内存三段只用**静默态**采样行（无生成在飞，且离上一请求结束 ≥5s）：wired 在有
+        # 生成在飞或刚跑完时会瞬时抬高一个量级，混采下的三段均值取决于「碰巧采到几个」。
+        "mem_三段_静默态": {k: [avg(seg(quiet_sys, i), k) for i in range(3)]
+                         for k in ("server_rss_mb", "wired_mb", "compressed_mb")},
+        # 每段 n 必须给：`mem_三段` 没有 drift 那条 n≥5 规则，静默行若挤在某一段，
+        # 表会读成 [3086, null, null] 而总数阈值照样放行——内存判据于是只覆盖三分之一。
+        "mem_三段_静默态_n": {k: [sum(1 for r in seg(quiet_sys, i)
+                                     if isinstance(r.get(k), (int, float)))
+                                 for i in range(3)]
+                             for k in ("server_rss_mb", "wired_mb", "compressed_mb")},
+        "mem_三段_全部": {k: [avg(seg(valid_sys, i), k) for i in range(3)]
+                       for k in ("server_rss_mb", "wired_mb", "compressed_mb")},
+        "静默态行数": {"静默": len(quiet_sys), "有效": len(valid_sys), "总": len(sysrows)},
+        # server_rss_mb 是整数 MB，三段均值恰好相等常常只是 ±1 对消的巧合，故一并给出
+        # 原始取值跨度——「一动不动」这种话要有原始分布撑着才敢说。跨度必须按**静默态**
+        # 口径算：拿全量行的跨度去佐证静默态的三段，是在用另一个总体说话。
+        "rss_跨度_mb_静默态": ([min(r["server_rss_mb"] for r in quiet_sys),
+                            max(r["server_rss_mb"] for r in quiet_sys)] if quiet_sys else None),
+        "rss_跨度_mb_全部": ([min(r["server_rss_mb"] for r in valid_sys),
+                          max(r["server_rss_mb"] for r in valid_sys)] if valid_sys else None),
+        "wired_跨度_mb_静默态": ([min(r["wired_mb"] for r in quiet_sys
+                                 if isinstance(r.get("wired_mb"), (int, float))),
+                             max(r["wired_mb"] for r in quiet_sys
+                                 if isinstance(r.get("wired_mb"), (int, float)))]
+                            if any(isinstance(r.get("wired_mb"), (int, float))
+                                   for r in quiet_sys) else None),
+        # 口径常量随产物走：不记下来，后人就还是只能靠钉住 commit 才复现得出这张表
+        # ——那正是 M6 那条缺陷换个层级复发。
+        "口径": {"QUIET_AFTER_REQ_S": quiet_s, "MIX": mix,
+               "SAMPLE_INTERVAL": sample_interval,
+               "来源": spec.get("来源") or "运行期模块常量"},
+        # peak_memory 是 MLX 的**进程级高水位**，永不复位，做分段平均必然单调上升。
+        # max 与末值要分开报：服务若中途重启过，高水位会归零重来。
+        "peak_mem_高水位": {"max": _peak_max(rows), "末值": _peak_last(rows),
+                         "首小时后增量": _peak_step(rows),
+                         "台阶次数(不含首次建立)": _peak_steps(rows)},
+        "swap_首末": _first_last(sysrows, "swapouts"),
+        # 「reused>0 占比」证明不了任何事（每轮全量重渲染 + 同 cache_id 时同样是
+        # 100%）。真正的判据是逐行硬断言，这里报的是它的通过率与失败明细。
+        "前缀复用": {
+            "turn≥2 非冷轮样本": len(chat2),
+            "增量组装占比": (round(sum(1 for r in chat2 if r.get("assembly") == "delta")
+                              / len(chat2), 3) if chat2 else None),
+            "token级喂入占比": (round(sum(1 for r in chat2 if r.get("delta_feed"))
+                                / len(chat2), 3) if chat2 else None),
+            # 分母必须剔掉 reuse_expect 为空的行：`0 >= (None or 0) - 2` 恒真，
+            # 上一轮生成挂掉的会话会让这条占比在退化最严重时读出 100%。
+            "命中达期望占比": (round(sum(1 for r in has_exp
+                                   if (r.get("reused") or 0) >= r["reuse_expect"] - 2)
+                                / len(has_exp), 3) if has_exp else None),
+            "无期望值行数": len(chat2) - len(has_exp),
+            "失败明细": [r.get("error") for r in chat2 if not r.get("ok")][:10],
+        },
+        "工具腿": {"样本": len(tools),
+                 "发出调用占比": (round(sum(1 for r in tools if r.get("called"))
+                                / len(tools), 3) if tools else None)},
+        "取消腿": {"总数": len(cancels),
+                 "按路": {v: sum(1 for r in cancels if r.get("via") == v)
+                         for v in ("endpoint", "disconnect")},
+                 "生成先自然结束": sum(1 for r in cancels if r.get("skipped")),
+                 "取消到达时已结束(竞态)": sum(1 for r in cancels if r.get("race")),
+                 "未测到(信号中止)": sum(1 for r in cancels if r.get("settle_aborted")),
+                 "失败": sum(1 for r in cancels if not r.get("ok"))},
+        "健康探针": {"失败次数": sum(1 for r in sysrows if r.get("health_error")),
+                  "最差 ms": (max((r["health_ms"] for r in sysrows
+                                  if isinstance(r.get("health_ms"), (int, float))), default=None))},
+    }, valid_sys
+
+
 class Soak:
     def __init__(self, args, dialect, api_key: str):
         self.args = args
@@ -265,7 +450,7 @@ class Soak:
         self.sampler_died = None
         self.del_attempt = 0
         self.del_ok = 0
-        # 交给 TTL 的缓存**逐份记时刻**，不是记个累计数：累计数只增不减，12h 下会涨到
+        # 交给 TTL 的缓存**逐份记时刻**，不是记个累计数：累计数只增不减，长跑下会涨到
         # 几十上百，而末态真正还在册的只有最后一个 TTL 窗内交出去的那几份。拿累计数当
         # 阈值，等于把「泄漏 70 份以下」全部放行——三条头等判据之一结构性失灵。
         self.ttl_marks: list = []
@@ -279,7 +464,7 @@ class Soak:
         self.preflight = {}           # 起跑自检结论，进 summary
         self.verdict_blockers = []    # 判据不可用的响亮记录（非空即退非零）
         # 在途缓存登记处：超时/EOF/error 这些异常路径上，cache_id 会随异常一起丢，
-        # 那份 26B 的 KV 就泄到服务端 TTL 收摊为止——12h 里每次腰斩漏一份，既堆内存，
+        # 那份 26B 的 KV 就泄到服务端 TTL 收摊为止——长跑里每次腰斩漏一份，既堆内存，
         # 又会被工装自己的收官判据算成服务端泄漏（自己制造的假阳）。
         self._inflight = {}
 
@@ -471,11 +656,18 @@ class Soak:
         last, text, ttft, cid, wall = self.client.generate(
             prompt, sampling={"max_tokens": 768, "temperature": 0.6}, cache_out=cout)
         cid = cid or cout.get("cache_id")
-        return dict(kind="longchain", ok=bool(text), ttft=ttft, wall=round(wall, 3),
-                    prompt_tok=(last or {}).get("prompt_tokens"),
-                    gen_tok=(last or {}).get("generation_tokens"),
+        gen_tok = (last or {}).get("generation_tokens") or 0
+        prompt_tok = (last or {}).get("prompt_tokens") or 0
+        # 与 chat 腿同口径：只判 bool(text) 会让「首 token 即 EOT」（§S.14 那类回归）
+        # 伪装成一次 tps 正常的通过；预填规模也要判，否则填充配平坏掉、这条腿退化成
+        # 一次普通短生成时同样全绿。
+        ok = bool(text) and gen_tok > 2 and prompt_tok > 1000
+        return dict(kind="longchain", ok=ok, ttft=ttft, wall=round(wall, 3),
+                    prompt_tok=prompt_tok, gen_tok=gen_tok,
                     peak_mem=(last or {}).get("peak_memory"),
-                    tps=(last or {}).get("generation_tps")), cid
+                    tps=(last or {}).get("generation_tps"),
+                    error=(None if ok else
+                           f"长链退化 gen_tok={gen_tok} prompt_tok={prompt_tok}")), cid
 
     def _stream_partial(self, prompt: str, n_chunks: int):
         """开一条 /v1/generate 流，读到第 n_chunks 个 chunk 就**停在半路**，把
@@ -568,7 +760,12 @@ class Soak:
         while time.time() - t0 < timeout:
             try:
                 m = self.client.json_call("GET", "/metrics", timeout=10)
-                if (m.get("active_generations") or 0) <= baseline:
+                ag = m.get("active_generations")
+                # 必须是**取到了这个键**才算数：`or 0` 会把「键没了」当成 0，于是首轮
+                # 轮询即 `0 <= baseline` 成立、settled=True。断连腿**只有这一条判据**
+                # （endpoint 腿还有 drain + cancelled_total 兜底），一旦键缺失，
+                # 「断连全部落停」就是零证据的绿灯——正是本文件别处点名批过的 or-零。
+                if isinstance(ag, int) and ag <= baseline:
                     return round(time.time() - t0, 2), True
             except Exception:
                 pass
@@ -576,7 +773,9 @@ class Soak:
             # wait 会立刻返回，若不 break 就成了对 /metrics 的紧循环——每次 json_call
             # 都新开一条 TCP，正好在服务收摊那一刻给它上千条连接。
             if self.stop.wait(1.0):
-                break
+                # 因信号退出 ≠ 没落停。不分开的话，SIGINT 恰好落在取消腿的轮询里就会
+                # 伪造一条「active_generations 未回落」的失败，混进收官报表的错误数。
+                return round(time.time() - t0, 2), None
         return round(time.time() - t0, 2), False
 
     def _cancel_turn(self):
@@ -622,7 +821,7 @@ class Soak:
                 drained = {"ended": ended, "how": how, "waited_s": waited}
         finally:
             conn.close()      # endpoint 腿到这里流已自行终止，close 只是收句柄
-        settle_s, settled = self._settle(base)
+        settle_s, settled = self._settle(base)   # settled 三态：True/False/None(信号中止)
         after_cancels = None
         if via == "endpoint":
             try:
@@ -636,9 +835,12 @@ class Soak:
         #              不算失败，但要单独记数：若大多数行都是竞态，这条腿其实没测到取消。
         #  disconnect —— 服务端对断连不发终态事件、也不计 cancelled_total，只能判落停。
         race = (via == "endpoint" and cancelled is False)
+        aborted = settled is None
         whys = []
-        if not settled:
+        if settled is False:
             whys.append(f"active_generations {settle_s}s 未回落")
+        # 只有「未落停」这条需要三态保护——drain 与 cancelled_total 都是在 _settle
+        # **之前**取到的，信号中止不该把已经拿到手的失败证据一起丢掉。
         if via == "endpoint" and not race:
             # 失败原因收集成**列表**：漏读与未落停同时发生时，只留一条会让另一条的证据
             # 在失败明细里彻底消失。
@@ -649,29 +851,35 @@ class Soak:
                 whys.append(f"cancelled_total 未进位 {base_cancels}→{after_cancels}")
         return dict(kind="cancel", via=via, ok=(not whys), chunks_before=seen,
                     cancelled=cancelled, race=race, drained=drained,
+                    settle_aborted=aborted,
                     cancelled_total=[base_cancels, after_cancels],
                     settle_s=settle_s, error=("；".join(whys) or None)), cid
 
     # ---------- 缓存生命周期（删除 70% / TTL 30% 双路磨）----------
-    def _retire_cache(self, cache_id, force_delete: bool = False) -> None:
+    def _retire_cache(self, cache_id, force_delete: bool = False,
+                      count: bool = True) -> None:
+        """count=False：起跑自检的强删不计进「缓存删除腿」——文件头承诺过自检产物
+        不混进主循环的统计口径，计数器也在那条承诺里面。"""
         if not cache_id or cache_id in self.retired:
             return
         self.retired.add(cache_id)
         if not force_delete and self.rng.random() >= 0.7:
-            self.ttl_marks.append(time.time())   # 记时刻，收官只放行还没到期的那几份
+            if count:      # 不计数的退休也不该撑大泄漏容差（今天 count=False 恒配
+                self.ttl_marks.append(time.time())   # force_delete=True，但别留这个坑）
             return
-        self.del_attempt += 1
+        if count:
+            self.del_attempt += 1
         try:
             r = self.client.json_call("DELETE", f"/v1/cache/{cache_id}", timeout=15)
-            if r.get("released"):
+            if r.get("released") and count:
                 self.del_ok += 1
         except Exception:
             pass                        # 计数差值会在 summary 里暴露删除腿整体失效
 
     def _write_profile(self) -> None:
-        """起跑就落一份 profile.json。12h 跑若被 SIGKILL，summary.json 根本不会写，
+        """起跑就落一份 profile.json。长跑若被 SIGKILL，summary.json 根本不会写，
         留下的两个 jsonl 就再也无法自证是哪个模型、哪档负载、是不是冒烟——一份 20 分钟
-        的高压冒烟产物于是完全可能被当成 12h 门禁结论引用。"""
+        的高压冒烟产物于是完全可能被当成长稳门禁结论引用。"""
         (self.out / "profile.json").write_text(json.dumps({
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "model_repo": REPO, "smoke": bool(getattr(self.args, "smoke", False)),
@@ -685,14 +893,14 @@ class Soak:
 
     # ---------- 起跑自检 ----------
     def _preflight(self) -> bool:
-        """把 12 小时押上去之前，先证明「该测的都测得到」。
+        """把整场时长押上去之前，先证明「该测的都测得到」。
 
         这是本工装第一原则成本最低的实现。没有它，一个配置层面的失效——比如服务端
         `constrained_tool_calls` 关着、或 llguidance 不可用（server 会永久禁用并只在
         **服务端日志**里打印）——会让工具腿 21% 的负载全程 `ok=False`，而其它腿不断把
-        `consec_fail` 清零、熔断永不触发，于是烧满 12 小时才在 summary 里看见。
+        `consec_fail` 清零、熔断永不触发，于是烧满整场才在 summary 里看见。
         逐项：① 鉴权可用（打需鉴权的 /metrics；/health 免鉴权，钥匙错时照样绿）；
-        ② 服务端跑的确实是本工装声明的模型（否则 12h 数据会被记到错的模型头上）；
+        ② 服务端跑的确实是本工装声明的模型（否则整场数据会被记到错的模型头上）；
         ③ 系统采样三个量都取得到（取不到就是「无泄漏」这条结论根本没有数据）；
         ④ 四条腿各跑一次，各自的关键仪表必须真出数。
         """
@@ -711,7 +919,7 @@ class Soak:
             return False
         if not any(i and (i == REPO or str(i).endswith(REPO.split("/")[-1])) for i in ids):
             print(f"❌ 服务端模型 {ids} 与本工装声明的 {REPO} 不符，拒绝起跑"
-                  f"（12h 数据会被记到错的模型头上）")
+                  f"（整场数据会被记到错的模型头上）")
             return False
         self.preflight["served_model"] = ids
 
@@ -747,9 +955,15 @@ class Soak:
             rec, cid = self._tool_turn()
             self._write(pf_f, {"leg": "tool", **rec})
             born.append(cid)
-            checks["tool"] = bool(rec.get("ok") and (rec.get("constrained_steps") or 0) > 0)
+            # 也要看 called：约束采样跑过 ≠ 模型真发出了工具调用。只看 steps 的话，
+            # 「约束在跑但模型从不调用」这种服务端形态会通过自检，然后烧满整场才在
+            # summary 里看见——正是 _preflight 存在的理由。
+            checks["tool"] = bool(rec.get("ok")
+                                  and (rec.get("constrained_steps") or 0) > 0
+                                  and rec.get("called"))
             print(f"  [自检] tool ok={rec.get('ok')} "
-                  f"constrained_steps={rec.get('constrained_steps')}", flush=True)
+                  f"constrained_steps={rec.get('constrained_steps')} "
+                  f"called={rec.get('called')}", flush=True)
 
             rec, cid = self._longchain_turn()
             self._write(pf_f, {"leg": "longchain", **rec})
@@ -760,7 +974,7 @@ class Soak:
 
             # 取消腿要的是**一次真取消**：`skipped`（8 chunk 前自然收尾）与 `race`
             # （取消到达时已结束）都只说明这次没测到，不能当通过——否则取消端点整个坏掉
-            # 时每行都是 race=ok，自检照样放行，12 小时的 endpoint 臂一次都没验过。
+            # 时每行都是 race=ok，自检照样放行，整场的 endpoint 臂一次都没验过。
             # 二者都是低概率事件（max_tokens 900），重试三次仍拿不到干净的一次才判失败。
             for attempt in range(3):
                 rec, cid = self._cancel_turn()
@@ -783,7 +997,7 @@ class Soak:
             # 自检造的缓存一律**真删**、不走 TTL 那条腿：它们必须在重取判据基线之前
             # 从服务端消失，否则会同时被算进 base_cc 与 ttl_marks，给泄漏容差重复计数。
             for _cid in born + [sess.get("cache_id"), self._inflight.get("cache_id")]:
-                self._retire_cache(_cid, force_delete=True)
+                self._retire_cache(_cid, force_delete=True, count=False)
             self.retired.clear()   # 自检的 id 不该占用正式跑的去重表
         self.preflight["legs"] = checks
         bad = [k for k, v in checks.items() if not v]
@@ -816,7 +1030,7 @@ class Soak:
         self.sampler_thread = threading.Thread(target=self.sampler, daemon=True)
         self.sampler_thread.start()
         # 主循环任何一处非预期异常（初版就是 `_req(**rec)` 抛 TypeError 直接冲出去的），
-        # 都不该把 12 小时的收官整个丢掉：summary 不写、句柄不关、判据全无。
+        # 都不该把整场的收官整个丢掉：summary 不写、句柄不关、判据全无。
         # 收官只在这里发生一次，`_loop` 只负责跑并交回运行态。
         try:
             status = self._loop()
@@ -873,8 +1087,8 @@ class Soak:
                 history, sess = [], {"ps": None, "cache_id": None}
 
             if self.consec_fail >= MAX_CONSEC_FAIL:
-                print(f"❌ 连续 {self.consec_fail} 次失败，熔断中止（不空转到 12h）",
-                      flush=True)
+                print(f"❌ 连续 {self.consec_fail} 次失败，熔断中止"
+                      f"（不空转到 {self.args.hours}h）", flush=True)
                 return 2
             last_beat = self._beat(last_beat)
 
@@ -899,7 +1113,7 @@ class Soak:
             if long_idle:
                 print("[空闲] 「离开」窗结束", flush=True)
         self._retire_cache(sess["cache_id"])   # 收官前退休在手的会话缓存（否则必报假泄漏）
-        # 被信号打断的跑**不能**和跑满时限返回同一个码：否则一次 t=2h 被 kill 的 12h 门禁
+        # 被信号打断的跑**不能**和跑满时限返回同一个码：否则一次中途被 kill 的门禁
         # 会带着 exit 0 和「跑到时限」进台账，读的人无从分辨。
         return 4 if self.stop.is_set() else 0
 
@@ -938,46 +1152,10 @@ class Soak:
         if not isinstance(final, dict) or "error" in final:
             self.verdict_blockers.append(f"收官 /metrics 读不到：{final}")
 
-        def seg_by_time(rs, i, t_end):
-            """**按墙钟**三等分，不按序号。请求速率随长空闲窗与负载类型抖动，按序号切
-            会让「tps 第三段」和「RSS 第三段」覆盖不同的时间窗，而分析时一定会交叉引用
-            这两张表——那样得出的因果是错的。两个文件的行都带 `t`，切时间是几行的事。"""
-            lo, hi = t_end * i / 3, t_end * (i + 1) / 3
-            return [r for r in rs
-                    if isinstance(r.get("t"), (int, float))
-                    and (lo <= r["t"] < hi or (i == 2 and r["t"] >= lo))]
-
-        def avg(rs, key):
-            vals = [r[key] for r in rs if isinstance(r.get(key), (int, float))]
-            return round(sum(vals) / len(vals), 3) if vals else None
-
         elapsed = time.time() - self.t0
         elapsed_h = elapsed / 3600
-
-        def drift(pred, keys):
-            """按同质分组做三分段——四类负载混在一起平均，段间构成的随机波动会被
-            读成漂移（或把真漂移稀释掉）。n<5 的格子标 null，不给不可用的数。"""
-            sel = [r for r in rows if pred(r)]
-            out = {}
-            for k in keys:
-                cells, ns = [], []
-                for i in range(3):
-                    s = seg_by_time(sel, i, elapsed)
-                    ns.append(len(s))
-                    cells.append(avg(s, k) if len(s) >= 5 else None)
-                out[k] = {"三段": cells, "n": ns}
-            return out
-
-        # 采样有效性按**含 server_rss_mb 的行**算，不按行数：`_listener_pid`/`_rss_mb`
-        # 失败时返回 None 而不抛，行照写、sampler_died 照样是 None，于是「采样健康」
-        # 全绿而 mem_三段 是 [null,null,null]。sampler_error 行同理不能算进分子。
-        valid_sys = [r for r in sysrows if isinstance(r.get("server_rss_mb"), (int, float))]
+        m, valid_sys = measure(rows, sysrows, elapsed)
         expect_samples = int(elapsed / SAMPLE_INTERVAL) + 1
-        # 冷轮（缓存被 TTL 回收后的重建）要从「turn2+ 热」里剔除：一次冷预填的 TTFT
-        # 比热轮高一个量级，12h 约 10 次随机落段，足以在均值上造出假的单调劣化。
-        chat2 = [r for r in rows if r.get("kind") == "chat"
-                 and (r.get("turn") or 0) >= 2 and not r.get("cache_rotated")]
-        _has_expect = [r for r in chat2 if isinstance(r.get("reuse_expect"), int)]
         cancels = [r for r in rows if r.get("kind") == "cancel"]
         pids = {r.get("server_pid") for r in valid_sys if r.get("server_pid")}
         # 服务中途被外部重启，会给出一条从头开始的完美 RSS 平线 + 归零的 errors_total
@@ -989,77 +1167,47 @@ class Soak:
             self.verdict_blockers.append(f"generations_total 回退 {g0}→{g1}（服务重启过）")
         summary = {
             # 产物必须自报是不是冒烟：等权负载与秒级空闲下的三段读起来和长稳一模一样，
-            # 没有这个标记，一份 20 分钟的冒烟产物完全可能被当成 12h 门禁结论引用。
+            # 没有这个标记，一份 20 分钟的冒烟产物完全可能被当成长稳门禁结论引用。
             "smoke": bool(getattr(self.args, "smoke", False)),
-            "hours": round(elapsed_h, 2), "requests": len(rows),
-            "errors": sum(1 for r in rows if not r.get("ok")),
-            "by_kind": {k: sum(1 for r in rows if r.get("kind") == k) for k, _ in MIX},
-            "drift_三段": {
-                "chat_turn1_冷": drift(lambda r: r.get("kind") == "chat" and r.get("turn") == 1,
-                                       ("ttft", "tps", "wall")),
-                # 与 chat2 同一判据：冷重建轮（TTL 回收后）不能混进「热」表——一次冷预填
-                # 的 TTFT 高一个量级，12h 约 10 次随机落段，足以造出或掩盖单调劣化。
-                "chat_turn2+_热": drift(lambda r: r.get("kind") == "chat"
-                                        and (r.get("turn") or 0) >= 2
-                                        and not r.get("cache_rotated"),
-                                        ("ttft", "tps", "wall")),
-                "tool": drift(lambda r: r.get("kind") == "tool", ("ttft", "tps")),
-                "longchain": drift(lambda r: r.get("kind") == "longchain", ("ttft", "tps")),
-            },
-            # 内存三段只用**空闲态**采样行：wired 在有生成在飞时会瞬时抬高一个量级
-            # （实测同一次跑里 3763MB → 21680MB → 3709MB，中间那行 active_generations=1），
-            # 混采下的三段均值取决于「碰巧采到几次生成中」，不是漂移。
-            "mem_三段_空闲态": {k: [avg(seg_by_time(_idle_rows(valid_sys), i, elapsed), k)
-                                for i in range(3)]
-                             for k in ("server_rss_mb", "wired_mb", "compressed_mb")},
-            "mem_三段_全部": {k: [avg(seg_by_time(valid_sys, i, elapsed), k) for i in range(3)]
-                           for k in ("server_rss_mb", "wired_mb", "compressed_mb")},
-            # peak_memory 是 MLX 的**进程级高水位**，永不复位，做分段平均必然单调上升，
-            # 按「起步一档上抬后走平」去读会永远读出「还在涨」。故只给末值与台阶。
-            # max 与末值要分开报：服务若中途重启过，MLX 的高水位会归零重来，
-            # 这时 max 仍是旧进程的峰值、末值才反映当前进程（正是 pid 断言要抓的那种）。
-            "peak_mem_高水位": {"max": _peak_max(rows), "末值": _peak_last(rows),
-                             "首小时后增量": _peak_step(rows)},
-            "swap_首末": _first_last(sysrows, "swapouts"),
-            # 「reused>0 占比」证明不了任何事（每轮全量重渲染 + 同 cache_id 时同样是
-            # 100%）。真正的判据是逐行硬断言，这里报的是它的通过率与失败明细。
-            "前缀复用": {
-                "turn≥2 非冷轮样本": len(chat2),
-                "增量组装占比": (round(sum(1 for r in chat2 if r.get("assembly") == "delta")
-                                  / len(chat2), 3) if chat2 else None),
-                "token级喂入占比": (round(sum(1 for r in chat2 if r.get("delta_feed"))
-                                    / len(chat2), 3) if chat2 else None),
-                # 分母必须剔掉 reuse_expect 为空的行：`0 >= (None or 0) - 2` 恒真，
-                # 上一轮生成挂掉的会话会让这条占比在退化最严重时读出 100%。
-                "命中达期望占比": (round(sum(1 for r in _has_expect
-                                       if (r.get("reused") or 0) >= r["reuse_expect"] - 2)
-                                    / len(_has_expect), 3) if _has_expect else None),
-                "无期望值行数": len(chat2) - len(_has_expect),
-                "失败明细": [r.get("error") for r in chat2 if not r.get("ok")][:10],
-            },
-            "取消腿": {"总数": len(cancels),
-                     "按路": {v: sum(1 for r in cancels if r.get("via") == v)
-                             for v in ("endpoint", "disconnect")},
-                     "生成先自然结束": sum(1 for r in cancels if r.get("skipped")),
-                     "取消到达时已结束(竞态)": sum(1 for r in cancels if r.get("race")),
-                     "失败": sum(1 for r in cancels if not r.get("ok"))},
+            "hours": round(elapsed_h, 2),
+            **m,
             "缓存删除腿": {"发起": self.del_attempt, "成功": self.del_ok,
-                        "交给 TTL 累计": len(self.ttl_marks)},
+                        "交给 TTL 累计": len(self.ttl_marks),
+                        "_备注": "起跑自检的强删不计入本行"},
             "采样健康": {"有效行": len(valid_sys), "总行": len(sysrows),
                        "工装计数": self.samples,
                        "应有约": expect_samples, "线程死于": self.sampler_died,
                        "坏行": {"req": bad_lines, "sys": bad_sys}},
-            "健康探针": {"失败次数": sum(1 for r in sysrows if r.get("health_error")),
-                      "最差 ms": max((r.get("health_ms") or 0) for r in sysrows) if sysrows else None},
             "metrics_首末": {k: [self.base_metrics.get(k), (final or {}).get(k)]
                             for k in ("errors_total", "generations_total", "cancelled_total")},
             "final_metrics": final,
         }
+        # 「健康探针全绿」是文件头列明的头等判据，此前只统计从不断言：/health 全程 503 而
+        # /metrics 仍通时，失败次数会是满额，而判据阻断仍为空、退出码仍为 0。
+        hp = (m.get("健康探针") or {}).get("失败次数") or 0
+        # 不做零容忍：/health 的 10s 预算要和一次 26B 生成抢资源，单次瞬时超时在 8 小时
+        # 里是可能的，一次就把整场判红分辨不出「偶发」与「全程 503」。容一次或 1%，
+        # 原始次数无论如何都进 summary。
+        probed = sum(1 for r in sysrows
+                     if ("health_ms" in r) or ("health_error" in r))
+        hp_tol = max(1, int(0.01 * probed))
+        if hp > hp_tol:
+            self.verdict_blockers.append(
+                f"健康探针失败 {hp} 次（容差 {hp_tol}／共探测 {probed} 次）")
+        # 工具腿：约束采样跑过 ≠ 模型真发出了工具调用。called 占比过低说明这条 21% 的
+        # 负载没在测它该测的东西。
+        tl = m.get("工具腿") or {}
+        if not tl.get("样本"):
+            # 零样本不是「通过」：工具腿占 21%，一次都没跑到说明这条腿的结论没有依据
+            self.verdict_blockers.append("工具腿零样本——这条腿的判据没有数据支撑")
+        elif tl["发出调用占比"] < 0.9:
+            self.verdict_blockers.append(
+                f"工具腿发出调用占比 {tl['发出调用占比']}（约束在跑但模型没真调用）")
 
         # ---- 泄漏判据 ----
         # 期望值只算**还没到期的那几份**：`ttl_marks` 记的是逐份交出去的时刻，而不是
         # 一个只增不减的累计数。拿累计数当阈值等于把「泄漏几十份以下」全部放行——
-        # 12h 下累计能涨到上百，而末态真正在册的只有最后一个 TTL 窗内的那几份。
+        # 长跑下累计能涨到上百，而末态真正在册的只有最后一个 TTL 窗内的那几份。
         # 起跑时服务端就已经在册的那些不是本次跑造出来的（上一次跑留下的、别的客户端的），
         # 不减掉就是一次**必然的假 FAIL**：冒烟实测 t0 已有 2 份，末态 36 = 34 + 2，
         # 不减基线就会把一次零泄漏的跑判成泄漏。
@@ -1072,7 +1220,7 @@ class Soak:
         base_cc = self.base_metrics.get("cache_count")
         base_cc = base_cc if isinstance(base_cc, int) else 0
         # 起跑基线只在**第一个 TTL 窗内**计入。那些缓存从 t0 起就没人碰，服务端必然在
-        # 一个 TTL 窗内把它们扫掉；把它们的额度留在整场 12h 里，等于给真泄漏留了一条
+        # 一个 TTL 窗内把它们扫掉；把它们的额度留在整场里，等于给真泄漏留了一条
         # base_cc 宽的口子——冒烟实测 t0 有 36 份，那就是「漏 36 份 26B KV 仍判无泄漏」。
         base_credit = base_cc if elapsed < self.cache_ttl_s else 0
         cc = (final or {}).get("cache_count")
@@ -1096,17 +1244,34 @@ class Soak:
             self.verdict_blockers.append(
                 f"服务端 errors_total 增量 {e1 - e0}（判据要求为零）")
         # M10：endpoint 腿若几乎全是竞态，说明取消端点其实没被验到（每行都 ok）。
-        endp = [r for r in cancels if r.get("via") == "endpoint"]
+        # 「未测到（信号中止）」的行不该进分母：它既不是竞态也不是成功，计进去会稀释
+        # 竞态占比这条阻断。
+        # 分母只留「真的走到取消这一步」的行：未测到（信号中止）、生成先自然结束、
+        # 以及 error/eof 早退的行都不是竞态也不是成功，计进去只会把竞态占比稀释、
+        # 让阻断更难触发（假阴），方向正好反了。
+        endp = [r for r in cancels
+                if r.get("via") == "endpoint" and not r.get("settle_aborted")
+                and not r.get("skipped") and r.get("finish") is None]
         races = sum(1 for r in endp if r.get("race"))
         if endp and races / len(endp) > 0.3:
             self.verdict_blockers.append(
                 f"取消端点竞态占比 {races}/{len(endp)}——endpoint 腿多半没真取消到")
         # M8：内存判据用的是空闲态那张表；它可以在「采样健康全绿」的同时全是 null。
-        idle_n = len(_idle_rows(valid_sys))
+        idle_n = (m.get("静默态行数") or {}).get("静默", 0)
+        seg_n = m.get("mem_三段_静默态_n") or {}
+        # 分段下限随规模缩放：固定 3 对 8h 跑太松（实测 31/30/33），对一小时的
+        # 生产权重试跑（约 13 个采样、每段 4）又只差一个倒霉样本就误阻断。
+        seg_floor = max(2, expect_samples // 15)
         if idle_n < max(3, int(0.2 * expect_samples)):
             self.verdict_blockers.append(
-                f"空闲态采样仅 {idle_n} 行（应有约 {expect_samples} 的两成以上）"
-                f"——mem_三段_空闲态 这条内存判据没有数据支撑")
+                f"静默态采样仅 {idle_n} 行（应有约 {expect_samples} 的两成以上）"
+                f"——mem_三段_静默态 这条内存判据没有数据支撑")
+        # 不与上面 elif：两条同时成立时只报一条会把分段证据从档案里抹掉
+        thin = {k: v for k, v in seg_n.items() if min(v) < seg_floor}
+        if thin:
+            self.verdict_blockers.append(
+                f"静默态分段不足（下限 {seg_floor}）：{thin}"
+                f"——mem_三段_静默态 对应的格只覆盖了部分时段")
         if self.sampler_died or len(valid_sys) < expect_samples * 0.8:
             self.verdict_blockers.append(
                 f"采样不完整（有效 {len(valid_sys)} / 应有约 {expect_samples}，"
@@ -1123,7 +1288,7 @@ class Soak:
             (self.out / "summary.json").write_text(
                 json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         except Exception as e:
-            # 落盘失败（磁盘满、序列化撞到意外类型）不该让 12 小时的产物一起消失：
+            # 落盘失败（磁盘满、序列化撞到意外类型）不该让整场的产物一起消失：
             # 先把能落的落下去，再把失败本身记成判据阻断。
             self.verdict_blockers.append(f"summary.json 落盘失败：{type(e).__name__}: {e}")
             try:
@@ -1146,7 +1311,7 @@ class Soak:
 
     @staticmethod
     def _read_jsonl(p: Path):
-        """逐行容错：被 SIGKILL 打断留下的半行不该让 12h 的判决整个丢掉。"""
+        """逐行容错：被 SIGKILL 打断留下的半行不该让整场的判决整个丢掉。"""
         rows, bad = [], 0
         try:
             for line in p.read_text(encoding="utf-8").splitlines():
@@ -1161,18 +1326,149 @@ class Soak:
         return rows, bad
 
 
+def reanalyze(d: Path, t_end, tag: str) -> int:
+    """只读重算：把某个窗口的判据用**与收官同一段代码**重新算一遍并入库。
+
+    为什么要有它：本站曾把「干净窗口径」的三段数写进台账与 commit，而那组数出自一次
+    未入库的临时分析——换个人重算，边界含不含某一行、n≥5 规则、剔不剔冷轮，任一取法
+    不同就是另一组数，结论甚至会翻（longchain 在两套窗口下一个升一个降）。判据必须
+    可复现，故重算走 `measure()` 同一实现，产物一并入库。
+    不起服务、不加载模型、不碰 GPU；只读 jsonl。
+    **退出码语义独立于长稳那套**（文件头那份是运行态信号）：0=已重算 / 1=无法重算。
+    """
+    if not d.is_dir():
+        print(f"❌ {d} 不是一个目录")
+        return 1
+
+    def rd(name):
+        out = []
+        fp = d / name
+        if not fp.exists():
+            return out
+        for line in fp.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                try:
+                    out.append(json.loads(line))
+                except Exception:
+                    pass
+        return out
+    rows, sysrows = rd("req.jsonl"), rd("sys.jsonl")
+    ts = [r["t"] for r in rows if isinstance(r.get("t"), (int, float))]
+    if not ts:
+        print(f"❌ {d} 里没有带数值 t 的 req.jsonl 行，无法重算")
+        return 1
+    orig, prof = {}, {}
+    for name, holder in (("summary.json", "orig"), ("profile.json", "prof")):
+        fp = d / name
+        if fp.exists():
+            try:
+                val = json.loads(fp.read_text(encoding="utf-8"))
+                if holder == "orig":
+                    orig = val
+                else:
+                    prof = val
+            except Exception:
+                pass
+    sys_ts = [r["t"] for r in sysrows if isinstance(r.get("t"), (int, float))]
+    last_row = max(ts + sys_ts)
+    # 缺省窗口必须复现 `finish()` 用的那个窗口，而 `finish()` 用的是 elapsed（含收官
+    # 开销），不是「最后一条请求的 t」。若跑正好结束在长空闲窗里，两者能差到 45 分钟，
+    # 三段边界随之整体平移，重算表会与 summary.json 悄悄对不上。故优先用 summary 记的
+    # hours；没有才回落到最后一行 + 余量。
+    if t_end is not None:
+        t_end = float(t_end)
+        src = "显式 --t-end"
+    elif isinstance(orig.get("窗口秒"), (int, float)):
+        # `窗口秒` 是 finish() 当场记下的**精确**右边界，**无条件优先**：不要拿它和
+        # last_row 比大小再决定用不用——采样线程可能在 finish() 算完窗口之后才把最后
+        # 一行写进 sys.jsonl（join 最长等 60s），那时 last_row > 窗口秒，一比就悄悄
+        # 退回 hours 的近似窗口，恰好是精确来源存在时最不该退的场合。
+        t_end, src = float(orig["窗口秒"]), "summary.json 的 窗口秒（精确复现收官口径）"
+    elif isinstance(orig.get("hours"), (int, float)) and orig["hours"] * 3600 >= last_row:
+        t_end, src = orig["hours"] * 3600, "summary.json 的 hours（近似，精度 ±18s）"
+    else:
+        t_end, src = last_row + 1e-6, "最后一行 t（summary.json 不可用）"
+    if t_end <= 0:
+        print(f"❌ 窗口右边界 {t_end} 非正，无法重算")
+        return 1
+    rows = [r for r in rows if isinstance(r.get("t"), (int, float)) and r["t"] < t_end]
+    sysrows = [r for r in sysrows if isinstance(r.get("t"), (int, float)) and r["t"] < t_end]
+    if not rows:
+        print(f"❌ 窗口 t<{t_end} 内没有请求行")
+        return 1
+    # 口径必须取自被重算的那次跑（profile.json），不能读当前模块常量——见 measure()
+    spec = {}
+    if prof:
+        spec = {"mix": [tuple(x) for x in (prof.get("mix") or [])] or None,
+                "sample_interval": prof.get("sample_interval_s"),
+                "来源": "profile.json"}
+        spec = {k: v for k, v in spec.items() if v is not None}
+    m, _valid = measure(rows, sysrows, t_end, spec=spec or None)
+    dropped = sum(1 for t in ts + sys_ts if t >= t_end)
+    out = {"重算窗口": {"t_end 秒": round(t_end, 1), "来源": src,
+                    "t_end/末行": round(t_end / last_row, 4) if last_row else None,
+                    "全程末行 t": round(last_row, 1),
+                    "窗外丢弃行数": dropped, "tag": tag},
+           "说明": "本文件只是同一批原始数据在指定窗口下的重算；泄漏/判据阻断/运行态"
+                   "等运行态字段仍以 summary.json 为准（它们不是窗口的函数）。",
+           # 产物必须自报身份；两边都没有标记时**明说不知道**，不要留一个 null
+           # 让读者当成「不是冒烟」。
+           "smoke": (orig.get("smoke") if isinstance(orig.get("smoke"), bool)
+                     else prof.get("smoke") if isinstance(prof.get("smoke"), bool)
+                     else "未知（summary/profile 均无标记）"), **m}
+    (d / f"summary-{tag}.json").write_text(
+        json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(out, ensure_ascii=False, indent=1, default=str))
+    print(f"\n→ 已写 {d / f'summary-{tag}.json'}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--hours", type=float, default=None)   # 缺省按档位解析，见下
-    ap.add_argument("--outdir", required=True)
+    ap.add_argument("--outdir")   # 跑长稳时必填；--reanalyze 只读重算时不需要
     ap.add_argument("--port", type=int, default=int(os.environ.get("INFER_PORT", 14161)))
     ap.add_argument("--seed", type=int, default=20260818)
     ap.add_argument("--smoke", action="store_true",
                     help="短程冒烟：四腿等权 + 秒级空闲 + 分钟级采样；验仪表不产判决")
+    ap.add_argument("--reanalyze", metavar="DIR",
+                    help="只读事后重算：读 DIR 的 jsonl 重算判据，不起服务、不碰 GPU")
+    ap.add_argument("--t-end", type=float,
+                    help="--reanalyze 的窗口右边界（秒）；缺省=收官窗口（见 reanalyze）")
+    ap.add_argument("--tag",
+                    help="--reanalyze 产物名后缀，落 summary-<tag>.json；"
+                         "缺省按是否给了 --t-end 取 clean/full")
+    ap.add_argument("--force", action="store_true",
+                    help="--reanalyze 允许覆盖已存在的 summary-<tag>.json")
     args = ap.parse_args()
+    if args.reanalyze is not None:      # 空串也算给了 --reanalyze，别静默落到长跑路径
+        for name, val in (("--outdir", args.outdir), ("--hours", args.hours)):
+            if val is not None:
+                print(f"❌ {name} 与 --reanalyze 不能同用（重算是只读的）")
+                return 1
+        if args.smoke:
+            print("❌ --smoke 与 --reanalyze 不能同用（重算的口径取自 profile.json）")
+            return 1
+        if args.t_end is not None and args.t_end <= 0:   # 早于产物存在性检查，
+            print(f"❌ --t-end {args.t_end} 必须为正")    # 否则报错报的是另一件事
+            return 1
+        # tag 缺省不能固定成 clean：那样最自然的 `--reanalyze DIR`（全程窗口）会写出一份
+        # 标着 clean 的**全程**结果，并直接覆盖掉已入库的干净窗产物。
+        tag = args.tag or ("clean" if args.t_end is not None else "full")
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,32}", tag):
+            print(f"❌ --tag {tag!r} 只允许 [A-Za-z0-9._-]，长度 1-32")
+            return 1
+        target = Path(args.reanalyze) / f"summary-{tag}.json"
+        if target.exists() and not args.force:
+            print(f"❌ {target} 已存在——重算产物是入库档案，覆盖要显式 --force"
+                  f"（或换个 --tag）")
+            return 1
+        return reanalyze(Path(args.reanalyze), args.t_end, tag)
+    if not args.outdir:
+        ap.error("--outdir 是必填的（除非用 --reanalyze 做只读重算）")
     if args.smoke:
-        # 缺省按档位解析：`--hours` 若也缺省成 12.0，那么 `--smoke --outdir X` 这个最自然
-        # 的写法会被自己的护栏拒掉——护栏该拦的是**显式**写了超长时长，不是拦缺省值。
+        # 缺省按档位解析：`--hours` 若也有个固定缺省值，`--smoke --outdir X` 这个最自然
+        # 的写法就会被自己的护栏拒掉——护栏该拦的是**显式**写了超长时长，不是拦缺省值。
         if args.hours is None:
             args.hours = SMOKE_MAX_HOURS
         elif args.hours > SMOKE_MAX_HOURS:
@@ -1184,7 +1480,7 @@ def main() -> int:
               flush=True)
     elif args.hours is None:
         args.hours = LONGRUN_HOURS
-    # 钥匙只走 env / .env.local——命令行参数会在 ps 里挂 12 小时。
+    # 钥匙只走 env / .env.local——命令行参数会在 ps 里挂整场。
     # 且**不挂到 args 上**：args 是被序列化进 profile.json 的那个对象，钥匙坐在上面，
     # 离「某次重构写成 **vars(args)」只差一步，那一步的代价是钥匙进了入库产物。
     try:
