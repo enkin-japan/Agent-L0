@@ -49,11 +49,19 @@ _PERSIST_TRUNCATE = 2000
 # (磁盘满/只读),那时 last_persisted 冻住而 self.seq 继续爬,爬过 1e6 后下次重启仍会回退。
 # 故落盘失败必须响亮可见(见 _persist 的一次性告警),而不是每条事件打一行 print 淹掉。
 # 彻底闭合要在 __init__ 落一条持久高水位线,那会引入新的账本记录类型,超出止血范围。
-# ⚠️ 这只是止血,治不了另一半:进程死时那一轮没有 `turn_ended`
-# (SessionManager.recover_inflight_turns 只补写 history、不发任何账本事件),客户端仍会
-# 停在 generating。那一半要代际围栏(后续项;全局 feed 的 feed_seq 进程内归零是同源
-# 缺陷,但它无持久层,修法不同源,一并归入该项)。
+# 另一半——进程死时那一轮没有 `turn_ended`,客户端停在 generating——已由启动恢复补发
+# 收敛(2026-08-22 B2:SessionManager.emit_recovery_events,PROTOCOL §3);全局 feed 的
+# feed_seq 进程内归零是同源缺陷,无持久层走客户端按 BOOT_ID 重锚(§2.7)。
 SEQ_RESTART_RESERVE = 1_000_000
+
+# ── 进程代际（B2 代际围栏）─────────────────────────────────────────────────────
+# 每次进程启动一个新值,经 stream_attached 首帧与 /turn 下发。**必须是模块级**而非
+# TurnJournal 实例属性:/turn 对冷会话会另 new 一个只读实例,实例级值会让同一会话的
+# 两个端点报出不同代际。
+# 语义(PROTOCOL §2.4/§2.7):代际 = seq 编号命名空间的纪元。会话流的 seq 因
+# SEQ_RESTART_RESERVE 跨代际单调,旧游标仍然有效——会话流客户端**不需要**因代际变化
+# 重锚;全局 feed 无持久层、feed_seq 每代归零,代际变化即游标作废,客户端必须清零重锚。
+BOOT_ID = uuid.uuid4().hex[:16]
 
 # 轮次状态(PROTOCOL.md §1)
 TURN_NONE = "none"

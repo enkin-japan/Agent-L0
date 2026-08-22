@@ -449,7 +449,10 @@ async def lifespan(app: FastAPI):
     #     按残留的 inflight.json 补 fail 轮存档——用户输入不蒸发、会话窗口可见死因。
     recovered = await asyncio.to_thread(session_manager.recover_inflight_turns)
     if recovered:
-        print(f"🩹 [System] 恢复 {recovered} 个被进程中断的轮次存档（输入已保留）")
+        print(f"🩹 [System] 恢复 {len(recovered)} 个被进程中断的轮次存档（输入已保留）")
+    # 3.0b 的补发挪到 7.5 之后（首审 H1）：GlobalFeed.publish 只推给发布时刻在场的
+    #     订阅者且 dispatcher 不回放环——在这里发,APNs 读者(7.5 才订阅)一条也收不到,
+    #     「后台轮次死了」的 iOS 推送恰好丢在本波要修的那条通知路径上。见下方 7.5 末尾。
 
     # 3.1 调度层：全局单 worker 任务调度器（默认 FIFO、不抢占；策略可后续热替换为自动调度）。
     #     注入会话管理器：驱逐器据此避免冻结掉排队/运行/挂起中任务的内存 KV。
@@ -595,6 +598,13 @@ async def lifespan(app: FastAPI):
     push_dispatcher.start()
     app.state.push_registry = push_registry
     app.state.push_dispatcher = push_dispatcher
+
+    # 崩溃轮补发 turn_ended（B2 代际围栏的另一半；清单来自 3.0 的恢复扫描）：
+    # 只补 history 不发账本事件的话,纯事件流消费者永远停在 generating——重附着的
+    # 客户端因水位余量游标仍有效,补发事件经重放送达即收敛。**必须在循环线程调用**
+    # （磁盘扫描在 to_thread,emit 不许跟过去）,且必须在 dispatcher 订阅(上方 start)
+    # 之后——feed 只推给在场订阅者,不回放环(首审 H1:早发一步,iOS 推送就真丢)。
+    session_manager.emit_recovery_events(recovered)
 
     if AUTH_DEVICES:
         print(f"🔐 [System] API 鉴权已启用（设备级票据 ×{len(AUTH_DEVICES)}"

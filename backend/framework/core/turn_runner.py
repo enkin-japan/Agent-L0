@@ -32,8 +32,22 @@ class TurnConflict(Exception):
 
 
 def public_turn(response_data: Dict[str, Any]) -> Dict[str, Any]:
-    """剥掉内部账目键(_rollback_idx / _task_snapshot / _history_start_idx)得到可下发的轮次数据。"""
-    return {k: v for k, v in response_data.items() if not k.startswith("_")}
+    """剥掉内部账目键(`_` 前缀)得到可下发的轮次数据。
+
+    **递归**剥离(B2 搭车⑦):内部键不止长在顶层——嵌套 dict/list 里的 `_` 前缀键
+    (如工具响应内的 _safe/_target/_compacted)原先原样下发给客户端。落盘侧的
+    `_strip_internal_meta`(session.py)同一意图但只外科手术式清 tool_responses
+    (要保内存原 dict 不动);本函数是下发投影,整棵新建,可以全剥。
+    代价如实记:工具**参数**里若有正当的 `_` 前缀键(如 ES 的 _source),投影里
+    也会被剥——只影响展示,不影响执行与落盘。
+    """
+    def _strip(v: Any) -> Any:
+        if isinstance(v, dict):
+            return {k: _strip(x) for k, x in v.items() if not str(k).startswith("_")}
+        if isinstance(v, list):
+            return [_strip(x) for x in v]
+        return v
+    return _strip(response_data)
 
 
 def _restore_task(session, snapshot):
@@ -134,8 +148,10 @@ class TurnRunner:
             task_snapshot = session.task_state.snapshot() if session.task_state else None
             session.add_user_message(prompt, images, audios, extra_text=ingested_text)
             history_start_idx = len(session.history)
-            # 轮次预写标记(write-ahead):进程死亡时启动恢复补 fail 轮,用户输入不蒸发
-            await asyncio.to_thread(session.write_inflight, prompt, gen)
+            # 轮次预写标记(write-ahead):进程死亡时启动恢复补 fail 轮,用户输入不蒸发。
+            # turn_id 先于标记诞生并写入(B2):崩溃补发的 turn_ended 才有正主
+            tid = new_turn_id()
+            await asyncio.to_thread(session.write_inflight, prompt, gen, tid)
 
             env = journal.emit("turn_queued", {
                 "prompt": prompt,
@@ -145,7 +161,7 @@ class TurnRunner:
                     for a in (attachments or [])
                 ],
                 "gen": dict(gen), "origin": origin,
-            }, turn_id=new_turn_id())
+            }, turn_id=tid)
 
         return {
             "turn_id": env["turn_id"], "seq": env["seq"],

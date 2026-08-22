@@ -37,7 +37,7 @@ from .schemas import (
     SkillsResponse,
     ToolsResponse,
 )
-from ..core.journal import TurnJournal
+from ..core.journal import BOOT_ID, TurnJournal
 from ..core.turn_runner import TurnConflict, public_turn
 from ..memory.compactor import maybe_summarize_context
 
@@ -987,7 +987,7 @@ async def get_turn_state(session_id: str, request: Request):
     else:
         sdir = session_manager.sessions_dir / session_id
         if not sdir.exists():
-            return {"status": True, "turn": None, "last_seq": 0}
+            return {"status": True, "turn": None, "last_seq": 0, "generation": BOOT_ID}
         # 只读实例：冷会话无活跃轮,仅取账本游标。注意它返回的 last_seq 已含
         # SEQ_RESTART_RESERVE（构造即加），不是磁盘上的最大 seq——这是本仓唯一一处
         # 对「非重启」场景加余量的地方。无害且必须如此：稍后 get_or_create 建的真
@@ -1005,7 +1005,9 @@ async def get_turn_state(session_id: str, request: Request):
                 if t["status"] == "queued" and t["waiting_seconds"] > mine["waiting_seconds"])
             if mine else 0
         )
-    return {"status": True, "turn": snap, "last_seq": journal.seq}
+    # generation:与 stream_attached 同源（模块级 BOOT_ID——冷会话只读实例与真账本
+    # 天然同值,实例级 uuid 会让同一会话的两个端点报出不同代际,PROTOCOL §2.5）
+    return {"status": True, "turn": snap, "last_seq": journal.seq, "generation": BOOT_ID}
 
 
 @router.get("/api/v1/events")
@@ -1023,7 +1025,9 @@ async def attach_global_feed(request: Request, after: int = 0):
         try:
             yield _sse("stream_attached", {
                 "feed_seq": 0, "type": "stream_attached",
-                "data": {"v": 1, "last_feed_seq": feed.seq},
+                # generation（B2 代际围栏）:feed_seq 纯内存、每次进程启动归零,而客户端
+                # 游标跨重连保留——代际变化即游标作废,客户端须清零重锚(PROTOCOL §2.7)
+                "data": {"v": 1, "last_feed_seq": feed.seq, "generation": BOOT_ID},
             })
             last = after
             for item in feed.replay(after):
@@ -1071,7 +1075,10 @@ async def attach_events(session_id: str, request: Request, after: int = 0):
         try:
             yield _sse("stream_attached", {
                 "seq": 0, "turn_id": None, "ts": round(time.time(), 3),
-                "type": "stream_attached", "data": {"v": 1, "last_seq": journal.seq},
+                # generation（B2）:会话流的 seq 因水位余量跨代际单调,旧游标仍有效——
+                # 本字段供客户端感知重启(诊断/对账),不要求据此重锚(PROTOCOL §2.4)
+                "type": "stream_attached",
+                "data": {"v": 1, "last_seq": journal.seq, "generation": BOOT_ID},
             })
             last = after
             for env in await asyncio.to_thread(journal.replay, after):

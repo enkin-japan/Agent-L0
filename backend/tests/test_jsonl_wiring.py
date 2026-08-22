@@ -114,7 +114,8 @@ def test_recover_inflight_repairs_the_torn_tail_before_appending(tmp_path):
         json.dumps({"prompt": "崩溃前的输入", "gen": {}}), encoding="utf-8")
 
     mgr = SessionManager(tmp_path / "sessions")
-    assert mgr.recover_inflight_turns() == 1
+    recovered = mgr.recover_inflight_turns()
+    assert len(recovered) == 1 and recovered[0]["session_id"] == "b1-recover"
 
     recs = list(iter_records(sdir / "history.jsonl"))
     assert len(recs) == 3                      # 2 条原有 + 1 条补档,断尾没把补档粘坏

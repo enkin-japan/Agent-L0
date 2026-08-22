@@ -798,17 +798,42 @@ final class AgentStore: ObservableObject {
 
             var backoff: UInt64 = 1_000_000_000
             var cursor = 0
+            var generation: String? = nil
             while !Task.isCancelled {
                 do {
+                    var reanchor = false
                     for try await item in try client.attachGlobalFeed(after: cursor) {
                         backoff = 1_000_000_000
+                        if item.type == "stream_attached" {
+                            // 代际围栏（B2，PROTOCOL §2.7）：feed_seq 纯内存、后端重启归零,
+                            // 旧游标不清零的话新代事件全撞上 `<= cursor` 被静默丢弃——
+                            // 通知(轮次完结/待审批)真丢。代际变化 = 游标作废,清零重连;
+                            // 重启后环里只有新代事件,after=0 重放不会重复通知。
+                            // 会话事件流不适用(其 seq 有水位余量,跨重启单调)。
+                            let gen = item.str("generation")
+                            if !gen.isEmpty {
+                                if let known = generation, known != gen {
+                                    generation = gen
+                                    cursor = 0
+                                    reanchor = true
+                                    break
+                                }
+                                generation = gen
+                            }
+                            continue
+                        }
                         if item.feedSeq > 0 {
                             if item.feedSeq <= cursor { continue }
                             cursor = item.feedSeq
                         }
-                        guard item.type != "stream_attached" else { continue }
                         await self?.refreshGlobalSnapshot()
                         await self?.handleFeedLifecycle(item)
+                    }
+                    if reanchor {
+                        // 重锚限速(首审 M8):两个活后端轮流应答/崩溃循环时,每次首帧都
+                        // 触发重锚——不加档就是无上限热重连环。1s 足以压到无害。
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        continue // 带新游标(0)重连,不是正常收流
                     }
                     return // 服务端正常收流
                 } catch {

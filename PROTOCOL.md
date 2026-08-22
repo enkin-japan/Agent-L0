@@ -190,8 +190,13 @@
 GET /api/v1/chat/{sid}/events?after={seq}        (Accept: text/event-stream)
 ```
 
-- 首帧固定:`stream_attached`,data = `{"v": 1, "last_seq": <当前账本游标>}`
-  (信封 `seq`/`turn_id` 为 0/null——它是流控制帧,不入账本)。
+- 首帧固定:`stream_attached`,data = `{"v": 1, "last_seq": <当前账本游标>,
+  "generation": <进程代际>}`(信封 `seq`/`turn_id` 为 0/null——它是流控制帧,不入账本)。
+  `generation`(2026-08-22 起,additive):后端进程每次启动的随机代际串,与 `/turn`
+  同源同值。**会话流的游标不因代际变化作废**——seq 因号段水位跨代际单调(见 §3),
+  旧游标照用;本字段供客户端感知重启(诊断/对账)。全局 feed 是另一回事,见 §2.7。
+  进程死时的崩溃轮由启动恢复**补发** `turn_ended`(status=fail,seq 必然大于任何
+  重启前游标),重附着经重放即送达——纯事件流消费者不再停在 generating。
   ⚠️ 「游标」不等于「账本里最后一条记录的 seq」:重启直后(以及冷会话的只读实例)
   它是**号段水位** = 已落盘最大 seq + `SEQ_RESTART_RESERVE`,账本里并不存在这个号的
   记录(见 §3)。作为 `after` 游标语义完全成立(下一条新事件必然大于它),但不要把它
@@ -236,7 +241,8 @@ GET /api/v1/chat/{sid}/turn
     "task": {TaskSnapshot 或 null},
     "first_seq": 118, "last_seq": 143 // 本轮在账本中的 seq 区间(重放定位)
   },
-  "last_seq": 143                    // 账本游标(attach 用);重启直后是号段水位,见 §2.4 与 §3
+  "last_seq": 143,                   // 账本游标(attach 用);重启直后是号段水位,见 §2.4 与 §3
+  "generation": "a1b2c3d4e5f60708"   // 进程代际(2026-08-22 起):与 stream_attached 同源
 }
 ```
 
@@ -278,17 +284,17 @@ resumed/turn_ended,信封加 `session_id` 字段)+ 定时任务运行事件。�
 后台通知的唯一数据源,替代 /tasks 差分轮询。`global_seq` 独立于会话 seq。
 (`GET /api/v1/tasks` 快照保留,作为低频对账与调试接口。)
 
-⚠️ **已知缺陷(未修,2026-08-17 记)**:`feed_seq` 纯内存(`core/feed.py` 的
-`GlobalFeed.seq`),**每次进程启动归零**,而两端客户端游标跨重连保留且不读首帧的
-`last_feed_seq`——于是后端一重启,新条目全部撞上 `feed_seq <= 游标` 被静默丢弃。
-它比 §3 已修的会话 seq 回退**更狠**:那个要攒够未落盘增量才回退,这个 100% 重启即
-回退。feed 无持久层,「加水位余量」的修法不适用,正解是客户端按首帧重锚(代际围栏),
-与 §3 末尾那半留待同一个后续项一并解决。
-当前缓解**只覆盖一半**:两端都另有 30s 级慢对账定时器(Swift `startGlobalMonitor` 的
-fallback 任务、前端 `schedulerTimer`),故任务中心的**状态**最终会收敛;但被丢弃的
-那些事件本身不会补发,依赖 feed 逐条触发的**通知**(轮次完结、待审批)是真丢的——
-注意 dispatch 循环里 `feed_seq <= 游标` 的 `continue` 发生在刷新与通知**之前**,
-不要误以为每条事件的刷新能兜住它。
+首帧 `stream_attached`,data = `{"v": 1, "last_feed_seq": <当前 feed 游标>,
+"generation": <进程代际>}`。**代际围栏(2026-08-22 修)**:`feed_seq` 纯内存
+(`core/feed.py`),每次进程启动归零,而客户端游标跨重连保留——不重锚的话,重启后的
+新条目全部撞上 `feed_seq <= 游标`(服务端直播循环与客户端 dispatch **双侧**都有这个
+判定,且发生在刷新与通知之前)被静默丢弃,依赖 feed 逐条触发的**通知**(轮次完结、
+待审批)真丢。feed 无持久层,§3 的「加水位余量」修法不适用,故约定:
+**`generation` 变化 = feed 游标作废,客户端清零重连(`after=0`)**。重启后环里只有
+新代事件,清零重放不会重复通知,反而恰好把启动恢复补发的崩溃轮 `turn_ended`(§2.4)
+送到。首帧无 `generation` 字段(旧后端)时维持既有行为。两端 30s 级慢对账定时器
+(Swift `startGlobalMonitor` fallback、前端 `schedulerTimer`)保留,作为深度断档的
+状态收敛兜底——围栏管事件,慢对账管状态,两层各管一半。
 
 ### 2.8 推送投影(additive,2026-07-12;不改既有事件语义,不升版本)
 
@@ -334,9 +340,12 @@ approval / approval_autodenied / schedule_start;Live Activity content-state 契�
   撞上服务端直播循环的 `seq <= 已发送最大号` 判定被当成重放丢弃,会话对用户表现为
   **永久静音**。(此前本行写作「取末行 seq 续增」,与 §2.4 直接矛盾,两端实现都照
   §2.4 办;OSS 扫描 §6.3 复现,2026-08-17 修。)
-  ⚠️ 余量只保证 seq 不回退。进程死时那一轮没有 `turn_ended`(恢复流程只补写
-  history、不发账本事件),客户端仍会停在 generating;这一半要代际围栏(后续项,
-  与 §2.7 全局 feed 的 `feed_seq` 进程内归零同源)。
+  余量只保证 seq 不回退;另一半——进程死时那一轮没有 `turn_ended`,客户端停在
+  generating——由**启动恢复补发**收敛(2026-08-22 修):`recover_inflight_turns`
+  补写 history 后,装配阶段对每条崩溃轮补发 `turn_ended`(status=fail,turn_id 取
+  inflight 预写标记里的值,旧标记无此键则为 null)。补发事件的 seq 落在新号段,
+  必然大于任何重启前游标,重附着经重放即送达。进程代际经 `stream_attached`/`/turn`
+  的 `generation` 字段下发(§2.4/§2.5);全局 feed 的同源缺陷走客户端重锚(§2.7)。
 - journal 随会话删除/清理(`session_cleanup`)一并回收;不设独立轮转(v1)。
 - `inflight.json` 语义收窄为**纯崩溃防丢**(write-ahead);客户端不再用它探测
   进行中轮次(用 `/turn`)。

@@ -1,4 +1,4 @@
-{"seq": 0, "turn_id": null, "ts": 1783601009.5, "type": "stream_attached", "data": {"v": 1, "last_seq": 8}}
+{"seq": 0, "turn_id": null, "ts": 1783601009.5, "type": "stream_attached", "data": {"v": 1, "last_seq": 8, "generation": "fixture-boot-1"}}
 {"seq": 1, "turn_id": "t_b7d8e9000002", "ts": 1783601000.0, "type": "turn_queued", "data": {"prompt": "把 ~/notes.txt 里的旧地址全部替换成新地址", "attachments": [], "gen": {"enable_thinking": false, "thinking_budget": 2048, "max_tokens": 4096, "temperature": 0.2, "min_p": 0.05}, "origin": "chat"}}
 {"seq": 2, "turn_id": "t_b7d8e9000002", "ts": 1783601000.1, "type": "turn_started", "data": {}}
 {"seq": 3, "turn_id": "t_b7d8e9000002", "ts": 1783601000.2, "type": "iteration_started", "data": {"n": 1, "thinking": true}}

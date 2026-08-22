@@ -15,7 +15,8 @@ from ..core.task_state import TaskState
 def _strip_internal_meta(response_data: dict) -> dict:
     """落盘前剥离工具观察里的 `_` 前缀内部元数据（_safe/_target/_compacted 等，仅供内存中的
     压缩层使用）。只浅拷贝需要改动的层级，不触碰内存中的原 dict（否则会破坏 KV 前缀与压缩状态）。
-    上层键（如 _rollback_idx）由 _public_turn 另行处理，这里只清理嵌套的 tool_responses。"""
+    下发投影由 turn_runner.public_turn 负责（B2 起递归全剥,整棵新建）;这里是**落盘侧**,
+    要保内存原 dict 不动,故只外科手术式清理嵌套的 tool_responses。两侧深度不同是有意的。"""
     resp = response_data.get("response")
     if not isinstance(resp, list):
         return response_data
@@ -560,10 +561,13 @@ class ChatSession:
     def inflight_path(self) -> Path:
         return self.session_dir / "inflight.json"
 
-    def write_inflight(self, prompt: str, gen: dict):
+    def write_inflight(self, prompt: str, gen: dict, turn_id: Optional[str] = None):
         if not self.session_dir.exists():
             return
-        payload = {"prompt": prompt, "gen": gen, "started_at": time.time()}
+        # turn_id（B2）:崩溃恢复补发的 turn_ended 要能指认正主——没有它,补发事件的
+        # turn_id 为 null,纯事件流消费者只能靠「会话级 turn_ended」语义收敛
+        payload = {"prompt": prompt, "gen": gen, "turn_id": turn_id,
+                   "started_at": time.time()}
         tmp = self.inflight_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         tmp.replace(self.inflight_path)
@@ -634,11 +638,15 @@ class SessionManager:
         self.scheduler = None
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
-    def recover_inflight_turns(self) -> int:
+    def recover_inflight_turns(self) -> List[Dict[str, Any]]:
         """启动时扫描各会话残留的轮次预写标记（inflight.json）：上次进程死亡时正在
         执行/待审批/已挂起的轮次，补一条 fail 轮存档（用户输入随 prompt 字段保留、
-        会话窗口可见死因），随后删除标记。纯磁盘操作，不拉起任何会话。"""
-        recovered = 0
+        会话窗口可见死因），随后删除标记。纯磁盘操作，不拉起任何会话。
+
+        返回补档清单 [{session_id, turn_id, turn_index, prompt}]——**补发账本事件不在
+        这里做**：本方法经 to_thread 在工作线程跑，而 journal.emit 必须在事件循环线程
+        调用（B2 补发由 app 装配阶段拿着清单在循环线程完成）。"""
+        recovered: List[Dict[str, Any]] = []
         for d in self.sessions_dir.iterdir():
             marker = d / "inflight.json"
             if not d.is_dir() or not marker.exists():
@@ -665,12 +673,47 @@ class SessionManager:
                 # 写前修尾（B1 的要害现场）：产生断尾的那次崩溃，重启后第一件事就是走到
                 # 这里往同一个文件追加 fail 轮——不修尾正好把残字节和新记录粘成一行垃圾
                 append_record(d / "history.jsonl", turn)
+                # turn_index 在 unlink **之前**算（首审 M5）:算不出来时标记还在,下次启动
+                # 重试(代价是一条重复 fail 轮);反过来的顺序会让存档成功却无人补发,
+                # 且 except 报「存档失败」——把真相说反
+                entry = {
+                    "session_id": d.name,
+                    "turn_id": data.get("turn_id"),        # 旧标记没有该键 → null
+                    "turn_index": count_records(d / "history.jsonl") - 1,
+                    "prompt": turn["prompt"],
+                }
                 marker.unlink(missing_ok=True)
-                recovered += 1
+                recovered.append(entry)
                 print(f"[Memory] 恢复中断轮次存档: {d.name}")
             except Exception as e:
                 print(f"[Memory] 中断轮次存档失败 {d.name}: {e}")
         return recovered
+
+    def emit_recovery_events(self, recovered: List[Dict[str, Any]]) -> None:
+        """给 recover_inflight_turns 的补档清单补发账本 turn_ended（B2 代际围栏另一半）。
+
+        **必须在事件循环线程调用**（journal.emit 的线程纪律）。用临时 TurnJournal
+        而非拉起会话：补发是纯账本动作,不该为它付一次冷恢复;会话稍后被拉起时,
+        自己的账本实例会从含补发记录的磁盘状态续号,水位余量保证单调。
+        重附着的客户端游标因 SEQ_RESTART_RESERVE 仍有效,这条补发事件必然大于
+        游标,经重放送达——「停在 generating」由此收敛。失败只打印:补发是收敛
+        加速器,history 里的 fail 轮才是真相本体。"""
+        from ..core.journal import SEQ_RESTART_RESERVE, TurnJournal
+        for r in recovered:
+            try:
+                j = TurnJournal(self.sessions_dir / r["session_id"], feed=self.feed)
+                # journal.jsonl 缺失/坏到读不出 seq 时账本从 0 起,补发 seq=1 越不过任何
+                # 保留游标(首审 L15)——垫底到水位余量。落盘持续失败令游标爬过余量的
+                # 极端形态本垫底救不了(journal.py 对那形态另有响亮告警),如实不揽。
+                if j.seq < SEQ_RESTART_RESERVE:
+                    j.seq = SEQ_RESTART_RESERVE
+                j.emit(
+                    "turn_ended",
+                    {"status": "fail", "turn_index": r["turn_index"],
+                     "prompt": r["prompt"]},
+                    turn_id=r["turn_id"])
+            except Exception as e:
+                print(f"[Memory] ⚠️ 崩溃轮补发 turn_ended 失败 {r['session_id']}: {e}")
 
     def get_or_create(self, session_id: str, system_prompt: str = "") -> ChatSession:
         """获取热状态的会话，如果不存在或已冷冻，则拉起并恢复数据"""

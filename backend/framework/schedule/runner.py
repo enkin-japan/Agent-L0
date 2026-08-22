@@ -165,16 +165,18 @@ class ScheduleRunner:
             full_prompt = preamble + task["prompt"]
             session.add_user_message(full_prompt)
             history_start_idx = len(session.history)
-            # 轮次预写标记：进程死亡时启动恢复补 fail 轮（对齐 routes._chat_turn）
-            await asyncio.to_thread(session.write_inflight, full_prompt, dict(_GEN))
+            # 轮次预写标记：进程死亡时启动恢复补 fail 轮（对齐 routes._chat_turn）。
+            # turn_id 先于标记诞生并写入(B2):崩溃补发的 turn_ended 才有正主
+            from ..core.journal import new_turn_id
+            tid = new_turn_id()
+            await asyncio.to_thread(session.write_inflight, full_prompt, dict(_GEN), tid)
 
             # 账本生命周期：定时轮与交互轮同一事件契约(origin=schedule),任务中心可见
             journal = session.journal
-            from ..core.journal import new_turn_id
             journal.emit("turn_queued", {
                 "prompt": full_prompt, "attachments": [], "gen": dict(_GEN),
                 "origin": "schedule",
-            }, turn_id=new_turn_id())
+            }, turn_id=tid)
 
             final_result = None
             denies = 0
@@ -251,8 +253,12 @@ class ScheduleRunner:
 
             await asyncio.to_thread(session.append_log, response_data)
             await asyncio.to_thread(session.save_task)
+            from ..core.turn_runner import public_turn
             journal.emit("turn_ended", {
-                **{k: v for k, v in response_data.items() if not k.startswith("_")},
+                # 与交互轮同一下发投影(首审 L12):原先这里顶层剥、交互轮递归剥,
+                # 同一 turn_ended 契约两种形状,定时轮会把 tool_responses 里的
+                # 内部键原样下发
+                **public_turn(response_data),
                 "turn_index": session.disk_turn_count() - 1,
             })
 

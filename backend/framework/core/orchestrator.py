@@ -1290,8 +1290,8 @@ class Orchestrator:
                                      "status": "timeout" if timed_out else "ok"})
         # 挂上压缩层用的内存元数据（T3-a/b）：_safe=只读可取代、_target=取代键（同工具同目标去重）。
         # 均为 `_` 前缀，落盘时被 append_log 剥离（与 _compacted 同规矩）；`_failed` 同规矩。
-        # 注意「剥离」只保证**持久化**面：`public_turn` 只剥顶层 `_` 键、不递归，故这几个
-        # 键仍随 turn_ended 帧下发给客户端（既有形态，值无敏感内容，客户端忽略未知键）。
+        # 注意「剥离」在两个面各自发生：持久化面由 `_strip_internal_meta` 清 tool_responses,
+        # 下发面由 `public_turn` **递归**全剥（B2 起）——这几个键不再随 turn_ended 帧下发。
         # 模型 prompt 面另有白名单（方言 `_MODEL_VISIBLE_KEYS`）挡着，不影响 KV 前缀字节。
         # 判据用 is_read_only（而非 is_concurrency_safe）：read_ui_tree 这类「只读但不可并发」
         # 的观察最大、最需要取代去重，不能因退出并发批而失去 _safe。

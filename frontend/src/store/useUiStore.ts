@@ -1,6 +1,7 @@
 import { create } from "zustand"
 
 import { attachGlobalFeed, getTasks, listSchedules } from "@/api/agent"
+import { feedFence, type FeedFenceState } from "@/lib/feed-fence"
 import { detectLang, getDict, type Dict, type Lang } from "@/lib/i18n"
 import type { ScheduleListResponse, TaskListResponse } from "@/types/agent-api"
 
@@ -63,15 +64,32 @@ function startFeed(onLifecycle: () => void) {
   void (async () => {
     let backoff = 1000
     let cursor = 0
+    const fence: FeedFenceState = { generation: null }
     while (!ctl.signal.aborted) {
       try {
+        let reanchor = false
         for await (const item of attachGlobalFeed(cursor, ctl.signal)) {
           backoff = 1000
+          if (item.type === "stream_attached") {
+            // 代际围栏（B2）：后端重启 → feed_seq 归零 → 旧游标作废，清零重连
+            if (feedFence(fence, item.data?.generation) === "reanchor") {
+              cursor = 0
+              reanchor = true
+              break
+            }
+            continue
+          }
           if (typeof item.feed_seq === "number" && item.feed_seq > 0) {
             if (item.feed_seq <= cursor) continue
             cursor = item.feed_seq
           }
-          if (item.type !== "stream_attached") refresh()
+          refresh()
+        }
+        if (reanchor) {
+          // 重锚限速(首审 M8):代理轮询打到两个活后端/后端崩溃循环时,每次连接首帧
+          // 都触发重锚——不加档就是无上限的热重连环。1s 足以把它压到无害。
+          await new Promise((r) => setTimeout(r, 1000))
+          continue // 带新游标(0)重连,不是正常收流
         }
         break // 服务端正常收流
       } catch {

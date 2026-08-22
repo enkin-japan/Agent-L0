@@ -565,8 +565,8 @@ R0–R5 各小项的打勾细分（含每步实测结果与计划外发现）已
 
 | 项 | 当前值 | 口径 |
 |---|---|---|
-| 金测试项数 | 1426 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
-| 测试文件数 | 98 | `backend/tests/` 下递归的 `test_*.py` |
+| 金测试项数 | 1435 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
+| 测试文件数 | 99 | `backend/tests/` 下递归的 `test_*.py` |
 | mcp 文件数 | 31 | `backend/framework/mcp/` 递归下的 `.py`，**不含** `__init__.py` |
 | BaseTool 子类 | 67 | 全 backend 内 `class X(BaseTool)` 的声明数（一个文件可有多个） |
 | 物理隔离沙箱 | 3 | `backend/framework/agents/*_sandbox.py` |
@@ -3664,6 +3664,65 @@ compactor `_read_log_lines`、advisor `spent_today_usd`、schedule `read_runs`�
 所有读者不可见，但这是一次不可逆清洗，评审 M10 提示记档）。`repair_tail` 的稳定性检查
 只窄化并发窗口不消除；两进程写同一文件是部署红线，不是模块能兜的（docstring 已如实降级）。
 `benchmarks/attention/driver.py` 直读护栏事件流的口径不一致，属基准脚本域，挂账不修。
+
+---
+
+**波 B2 交付（2026-08-22）——事件账本游标的代际围栏（第 2 层账本耐久性波 2/3，F1≡B2）**
+
+*病根（止血后剩下的那一半）*：`SEQ_RESTART_RESERVE`（08-17）只消灭了「永久静音」。
+①进程死时那一轮没有 `turn_ended`（恢复只补写 history、不发账本事件），纯事件流消费者
+永远停在 generating；②全局 feed 无持久层、`feed_seq` 每次启动归零，客户端游标跨重连
+保留——重启后新条目全撞上 `feed_seq <= 游标`（服务端与客户端**双侧**判定）被静默丢弃，
+依赖 feed 逐条触发的通知真丢。
+
+*修法*：进程代际 `BOOT_ID`（journal.py 模块级——/turn 对冷会话另 new 只读实例，实例级
+uuid 会让同一会话两个端点报出不同代际），经两条 SSE 首帧 + `/turn` 两个 return 共
+**四个下发点**同源下发。**会话流不重锚**（seq 因水位余量跨代际单调，旧游标照用——
+这正是 §3 设计的成果，PROTOCOL §2.4 写明）；「停在 generating」由**启动恢复补发**收敛：
+`recover_inflight_turns` 返回补档清单，`emit_recovery_events` 在事件循环线程域、
+**dispatcher 订阅之后**逐条补发 `turn_ended`（fail），seq 落新号段必然越过旧游标，
+重放即送达。**feed 走客户端重锚**（PROTOCOL §2.7）：代际变化 = 游标清零重连，重启后
+环里只有新代事件，`after=0` 不重复通知、恰好把补发条目送到。Web（`feed-fence.ts` 纯
+函数 + `useUiStore` 接线）与 Swift（`startGlobalMonitor`）同构，重锚限速 1s。
+搭车：`write_inflight` 携带 `turn_id`（两个调用点先生成再预写，补发有正主）；
+⑦ `public_turn` 递归剥离 `_` 键（定时轮同步改走它，两投影同形）。
+
+*验收（用户拍板路径 B，2026-08-22 实跑）*：临时切 `inference.mode: inprocess` 本机起
+e4b-8bit，**两遍演练**（`scripts/drill_restart_fence.py`）——基线在 B1 HEAD 上跑，
+**如实红**（28 deltas 真生成中重启，45s 窗口 `turn_ended` 永远不来，history 尾轮
+fail 在）；围栏落地后同一演练**绿**：会话流代际变化 + 补发 `turn_ended` 经旧游标重放
+到达，feed 代际变化 + 重锚后补发条目到达（六项观察全真）。收尾 `git diff --exit-code
+config.yaml` 验干净、GPU 释放。GPU 起模前人工核销 preflight 的 `unknown`（无 MLX 进程、
+双端口空）记为 waived。
+
+*金测试 1433 → **1443**（后端 fence 10 + 前端 vitest 4）；**7 个变异体逐个验红**
+（补发空壳/inflight 掉键/递归剥离回退/turn_index 偏移/前端围栏失效/端点删字段/
+seq 垫底撤除），注入间清 `__pycache__`、sha256 复原核验。夹具 005/006 首帧补
+`generation` 字段（同代际——归约器义务不变，双端夹具回放绿）。*
+
+*reviewer 首审 2 High / 7 Medium / 12 Low，High 全部处置*：
+- **H1 补发发在 dispatcher 订阅之前**：feed 只推给在场订阅者、不回放环——iOS 推送
+  （本波点名要救的那条通知路径）一条也收不到。补发挪到 7.5 之后。
+- **H2 四个 generation 下发点零测试覆盖**：删掉任何一处全套照绿，只有手动演练看得见。
+  补端点级金测试（直接驱动 routes 处理函数取 SSE 首帧——TestClient 收半开流会卡
+  心跳）+ 跨进程 BOOT_ID 差异测试；原 hasattr 断言（够不着被测物）删除。
+- M5 `turn_index` 挪到 unlink 前算（算不出时标记还在、下次重试，except 不再说反话）；
+  M6 不可观测的 `recovered` 标记删除；M8 重锚限速；L15 journal 缺失时补发 seq 垫底到
+  水位余量（否则 seq=1 越不过任何游标）；L12 定时轮投影统一走 `public_turn`；
+  L17 演练脚本 env 加载序对齐 devctl（.env.local 覆盖）、4xx 不再误报「后端没起」；
+  L16 演练补 feed 侧断言；L10/L11/L13 三处过时注释订正；M4 fixtures README 前提改写
+  （归约器看得见 stream_attached，义务只是无操作——围栏是游标管理，长在 store 层）。
+- 演练途中一次真实分叉：e4b 在 0.2 温度下偶走工具路停在 awaiting_approval，
+  只认 token_delta 会空等——判据放宽为 token+thinking 增量（崩溃砸在思考期与正文期
+  对恢复语义等价）。
+
+*有意为之/如实挂账（复审提示，未修）*：①`append_log` 撤标记与 `turn_ended` 发射之间
+的毫秒级窗口——崩在其间则 history 完整但无补发（标记已撤无从判别），PROTOCOL 措辞
+不承诺该窗口；②Swift 围栏是 `feed-fence.ts` 的语义同构手工实现，无自动化覆盖，
+README 已写明改任一侧须人工对照；③旧 inflight 标记无 turn_id → 补发 `turn_id: null`，
+iOS Live Activity 对那类崩溃轮不会被动收束（一次性过渡形态）；④崩溃恢复会话每次
+重启多烧一段水位余量（临时账本+会话账本各加一次，2e6/次），量级无害；⑤两端客户端
+暂不消费 `/turn.generation`（additive 字段，会话流本就不重锚）。
 
 ---
 
