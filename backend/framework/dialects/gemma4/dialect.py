@@ -33,6 +33,12 @@ class Gemma4Dialect:
     def create(cls, processor, *, options: Optional[Dict[str, Any]] = None,
                env: Optional[Dict[str, Any]] = None) -> "Gemma4Dialect":
         options = options or {}
+        if options.get("reasoning_effort"):
+            # qwen35 专属旋钮设到了 gemma 条目上：本方言无此概念，静默吞掉会把
+            # 配置错伪装成「怎么没生效」（评审 S16）——响亮提示但不拒启
+            print(f"[Dialect] ⚠️ gemma4 条目带 reasoning_effort="
+                  f"{options.get('reasoning_effort')!r}：本方言不支持该旋钮，忽略"
+                  f"（它是 qwen35 家族（Qwen3.8）的官方模板参数）")
         return cls(processor,
                    suppress_ghost_thinking=bool(options.get("suppress_ghost_thinking", False)),
                    env=env)

@@ -137,7 +137,11 @@ inference:
     # ── Qwen 家族（qwen35 方言）────────────────────────────────────────────
     # Qwen3.8-27B（2026-08-13 发布，08-15 起测）：28B 稠密混合注意力（linear attn
     # 混层，Qwen3-Next 系）+ 原生视觉，262k ctx，Apache 2.0。方言先验 qwen35
-    # （同家族 chat template；reasoning_effort 新旋钮方言暂不透传——评测首验项）。
+    # （同家族 chat template）。reasoning_effort 已透传（2026-08-22）：条目级键
+    # `reasoning_effort: xhigh|medium|low`——不设键=恒不注入（零行为变化）；
+    # 显式设值=效率指令恒注入首 system（与 enable_thinking 解耦，理由见
+    # dialects/qwen35/prompt_builder.py 模块头差异 4）。⚠️ 设键改变 prompt 字节：
+    # 下方 profile 数字是无键口径，设键后引用前须重画像。
     # 条目级 speculative（D.21，2026-08-17 用户拍板「qwen38 生产 MTP 开」）：
     # 投机配对是模型绑定事实——选中 qwen38 自动配对内建 MTP 头，gemma 档天然 off。
     # 消费方 = merge_entry_speculative（server 与 AgentEngine.create 共用），优先级

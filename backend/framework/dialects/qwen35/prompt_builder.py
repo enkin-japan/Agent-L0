@@ -13,6 +13,15 @@
      教学文案压缩为要点——官方全文近千 token，弱模型注意力稀释（D4 口径）。
   3. 环境锚点块/任务块/尾注放历史之后的独立 system 轮（官方模板无此概念，ChatML
      对多 system 轮天然宽容；置尾=变动只打掉尾部缓存，与 gemma4 同布局）。
+  4. **reasoning_effort 与 enable_thinking 解耦**（2026-08-22 透传波，首过评审
+     C1-C3 逼出的架构决策）：官方模板只在开思考时注入效率指令，但官方语境里
+     思考开关是会话级常量；本仓是**逐迭代动态**（thinking_mode dynamic 下每轮
+     iteration 0 恒开思考），而指令注入在首 system = 稳定前缀的头部——若随
+     思考开关翻转，每次翻转都打掉整条 KV 前缀（A8 实测过的 23s 级冷预填，
+     正是上位解要防的事）。故本 builder 只由注册表键驱动：**不设键 = 恒不注入
+     （官方 medium 同形，零行为变化）；显式设 xhigh/low = 恒注入、跨迭代字节
+     恒定**。代价：思考关闭的迭代也带着这句指令（语义无害，模型不思考时它是
+     一句闲话）；换取：前缀稳定性与 prompt_stream 全/增量渲染的一致性。
 
 调用体格式（**方言事实**，ResponseParser 按同一格式解析，两处锚定一致）：
   <tool_call>
@@ -55,14 +64,42 @@ _TOOL_FORMAT_GUIDE = (
 )
 
 
+# reasoning_effort 效率指令（Qwen3.8 官方模板逐字节移植，2026-08-22 透传波）：
+# xhigh 注长句、low 注短句、medium 不注；注入门控见模块头差异 4（只由注册表键
+# 驱动，与 enable_thinking 解耦）。句子字节不许改写——差分测试直接对官方模板
+# 渲染结果（backend/models/ 依据件）。两个名字都是被测契约（公开导出）。
+REASONING_EFFORTS = ("xhigh", "medium", "low")
+REASONING_INSTRUCTIONS = {
+    "xhigh": ("Reasoning effort is set to xhigh. Please think carefully through "
+              "the task, validate key assumptions, consider plausible "
+              "alternatives, and prioritize correctness, consistency, and "
+              "clarity in the final answer."),
+    "medium": "",
+    "low": ("Reasoning effort is set to low. Keep your thinking brief and "
+            "focused, moving directly to the conclusion without unnecessary "
+            "elaboration."),
+}
+
+
 class Qwen35PromptBuilder:
     """ChatML 组装器。构造后只读；同一实例可被多次生成共享。"""
 
-    def __init__(self, processor, env: Optional[Dict[str, Any]] = None):
+    def __init__(self, processor, env: Optional[Dict[str, Any]] = None, *,
+                 reasoning_effort: Optional[str] = None):
         # markers 是家族字面量事实（Qwen3.5/Ornith tokenizer 实测全部单 token），
         # 不经 special_tokens_map 取名——Qwen 的 map 里没有为这些起键名。
         self.env = env or {}
         self.static_env_lines = compute_static_env_lines(self.env)
+        # None = 注册表未设键 = 恒不注入（零行为变化；官方 medium 同形）。
+        # 给了值就必须合法：非法值装配期拒启，与官方模板 raise_exception 同语义
+        # ——静默取缺省会把配置拼写错伪装成「怎么没生效」。
+        if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORTS:
+            raise ValueError(
+                f"reasoning_effort 非法：{reasoning_effort!r}——支持 xhigh/"
+                f"medium/low（Qwen3.8 官方模板同款取值域），或不设键=不注入")
+        self.reasoning_effort = reasoning_effort
+        self.reasoning_instructions = (
+            REASONING_INSTRUCTIONS[reasoning_effort] if reasoning_effort else "")
 
     def _extract_text(self, item: Dict[str, Any]) -> str:
         text = item.get("text") or item.get("content") or ""
@@ -126,8 +163,17 @@ class Qwen35PromptBuilder:
         prompt = ""  # Qwen 家族无 BOS（tokenizer_config bos_token: null）
         tools_emitted = False   # 声明只发一次（评审 M3：旧写法跟在**每条** system
                                 # 之后——滚动摘要/中段护栏都是 system，声明会发多遍）
+        # reasoning_effort 效率指令：只由注册表键驱动、与 enable_thinking 解耦
+        # （模块头差异 4——随思考开关翻转会打掉整条 KV 前缀）。只进**开头的**
+        # system（messages[0]）；中段 system（滚动摘要/护栏，含增量路渲染的）
+        # 一律不带——官方模板对非开头 system 直接 raise，我方宽容布局下的等价
+        # 纪律就是"绝不中段注入"。
+        reasoning = self.reasoning_instructions
+        first_is_system = bool(messages) and messages[0].get("role") == "system" \
+            and "tool_responses" not in messages[0]
+        reasoning_emitted = False
 
-        for msg in messages:
+        for idx, msg in enumerate(messages):
             role = msg.get("role", "user")
 
             # tool 结果轮：官方以 user 轮 + <tool_response> 块承载，独立成段
@@ -167,6 +213,10 @@ class Qwen35PromptBuilder:
                 if calls:
                     body = (body.rstrip() + "\n\n" + calls) if body.strip() else calls
 
+            if idx == 0 and first_is_system and reasoning:
+                # 官方模板形态：指令在开头 system 内容之前，'\n\n' 相接
+                body = f"{reasoning}\n\n{body}"
+                reasoning_emitted = True
             prompt += f"{IM_START}{role}\n{body.rstrip()}{IM_END}\n"
 
             # 工具声明并入稳定前缀：紧跟首条 system（与 gemma4 同布局同纪律：
@@ -179,6 +229,10 @@ class Qwen35PromptBuilder:
             # 一条 system 消息都没有时声明单独成块、排在最前（gemma4 同兜底：
             # 声明整个丢掉的表现是「装作调用过了」的幻觉，极难归因）
             prompt = self._system_block(self._build_tools_declaration(tools)) + prompt
+        if reasoning and not reasoning_emitted:
+            # 无 system 消息：指令单独成块、排在一切之前（官方无 system 分支同义；
+            # 有工具时官方把指令放在工具 system 块**开头**，故须在工具兜底块之前）
+            prompt = self._system_block(reasoning) + prompt
 
         # 可变尾部：任务状态块 → 一次性护栏尾注 → 环境锚点（与 gemma4 同序同语义）
         if task_block:

@@ -26,11 +26,22 @@ class Qwen35Dialect:
     def create(cls, processor, *, options: Optional[Dict[str, Any]] = None,
                env: Optional[Dict[str, Any]] = None) -> "Qwen35Dialect":
         # 本家族无 suppress_ghost_thinking 之类开关：关思考的空 <think> 块预填
-        # 恒开（官方模板 enable_thinking=false 的固定形态），无模型级差异
-        return cls(processor, env=env)
+        # 恒开（官方模板 enable_thinking=false 的固定形态），无模型级差异。
+        # reasoning_effort（Qwen3.8 官方旋钮，2026-08-22 透传波）：注册表条目级。
+        # 不设键/空值 = 恒不注入（零行为变化，官方 medium 同形）；显式 xhigh/low
+        # 才注入且**跨迭代恒定**（与 enable_thinking 解耦——门控语义见
+        # prompt_builder 模块头差异 4，评审 C1-C3 的处置）。非法值在 builder
+        # 构造时装配期拒启（注意：装配在权重加载之后，配错仍要付一次装载，
+        # 评审 S6 已知代价——预检前移要动 model_selection 层，不为此扩面）。
+        raw = (options or {}).get("reasoning_effort")
+        effort = None if raw in (None, "") else str(raw)
+        return cls(processor, env=env, reasoning_effort=effort)
 
-    def __init__(self, processor, *, env: Optional[Dict[str, Any]] = None):
-        self._builder = Qwen35PromptBuilder(processor, env=env)
+    def __init__(self, processor, *, env: Optional[Dict[str, Any]] = None,
+                 reasoning_effort: Optional[str] = None):
+        self.reasoning_effort = reasoning_effort   # 观测面：评测/轨迹归因用
+        self._builder = Qwen35PromptBuilder(processor, env=env,
+                                            reasoning_effort=reasoning_effort)
         self._parser = Qwen35ResponseParser(processor)
         self._markers = DialectMarkers(soc=self._parser.soc, eoc=self._parser.eoc,
                                        stc=self._parser.stc, etc=self._parser.etc)
