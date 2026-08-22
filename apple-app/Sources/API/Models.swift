@@ -608,6 +608,8 @@ struct ChatParams {
     var maxTokens: Int = 4096
     var temperature: Double = 0.2
     var minP: Double = 0.05
+    /// 提交幂等键（B3）：响应回程丢失后的重发带同键 → 服务端 202 返回原轮,不重复执行。
+    var clientTurnId: String? = nil
 }
 
 /// 待上传的附件（文件/照片/录音统一形态）。

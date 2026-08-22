@@ -320,5 +320,7 @@ export interface ChatRequestParams {
   max_tokens?: number
   temperature?: number
   min_p?: number
+  /** 提交幂等键（B3）：响应回程丢失后的重发带同键 → 服务端 202 返回原轮,不重复执行。 */
+  client_turn_id?: string
   files?: File[]
 }

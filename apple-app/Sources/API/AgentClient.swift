@@ -56,7 +56,7 @@ final class AgentClient {
         let boundary = "macagent-\(UUID().uuidString)"
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        let fields: [(String, String)] = [
+        var fields: [(String, String)] = [
             ("prompt", params.prompt),
             ("enable_thinking", params.enableThinking ? "true" : "false"),
             ("thinking_budget", String(params.thinkingBudget)),
@@ -64,6 +64,9 @@ final class AgentClient {
             ("temperature", String(params.temperature)),
             ("min_p", String(params.minP)),
         ]
+        if let key = params.clientTurnId, !key.isEmpty {
+            fields.append(("client_turn_id", key))   // 提交幂等键(B3)
+        }
         req.httpBody = Multipart.body(fields: fields, files: files, boundary: boundary)
         return req
     }

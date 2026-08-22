@@ -57,6 +57,7 @@ function buildChatForm(params: ChatRequestParams): FormData {
   if (params.temperature !== undefined)
     form.append("temperature", String(params.temperature))
   if (params.min_p !== undefined) form.append("min_p", String(params.min_p))
+  if (params.client_turn_id) form.append("client_turn_id", params.client_turn_id)
   params.files?.forEach((f) => form.append("files", f))
   return form
 }

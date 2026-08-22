@@ -117,6 +117,7 @@ class TurnJournal:
         self.pending_tools: Optional[List[Dict[str, Any]]] = None
         self.task_snapshot: Optional[Dict[str, Any]] = None
         self.turn_first_seq: int = 0
+        self.turn_client_id: Optional[str] = None   # 本轮提交幂等键(B3,来自 turn_queued)
 
     # ---------- 落盘 ----------
     def _load_last_seq(self) -> Optional[int]:
@@ -213,6 +214,7 @@ class TurnJournal:
             self.turn_state = TURN_QUEUED
             self.state_since = now
             self.turn_prompt = str(data.get("prompt", ""))
+            self.turn_client_id = data.get("client_turn_id") or None
             self.partial_text = ""
             self.partial_thinking = ""
             self.pending_tools = None

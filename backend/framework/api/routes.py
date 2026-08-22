@@ -837,6 +837,22 @@ _SSE_HEARTBEAT = ": ping\n\n"
 
 # ---------- 旧事件契约翻译层(兼容至 Phase 4;映射表见 PROTOCOL.md §4) ----------
 
+# 提交幂等键的合法形状(B3,首审 M9):无界不洗的键会原样进 journal——多 MB 的键既
+# 撑爆账本又能单枪匹马吃光回查窗口;空白键 truthy 还能互相匹配。不合形状 = 当没带
+# (fail-open 走正常受理),不拒绝请求。
+_CLIENT_KEY_RE = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
+
+
+def _sanitize_client_key(raw: str) -> str:
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    if _CLIENT_KEY_RE.match(raw):
+        return raw
+    print(f"[Idem] 忽略不合形状的 client_turn_id(len={len(raw)})——按未带键受理")
+    return ""
+
+
 _CONFLICT_MSG = {
     "turn_active": "该会话已有正在进行的轮次，请等它完结后再发送。",
     "no_pending_approval": "当前会话没有等待审批的操作（可能已过期或已被处理）。",
@@ -914,20 +930,56 @@ async def submit_turn(
     max_tokens: int = Form(4096),
     temperature: float = Form(0.2),
     min_p: float = Form(0.05),
+    client_turn_id: str = Form(""),
     files: Optional[List[UploadFile]] = File(None)
 ):
     """提交一个新轮次：摄入完成即受理返回（202 {turn_id, seq}），执行在背景进行,
-    过程与终态经 GET /events 附着流观察。会话已有排队/运行中的轮次时 409。"""
-    _, _, session, io = await _prepare_turn(request, session_id, system, files)
+    过程与终态经 GET /events 附着流观察。会话已有排队/运行中的轮次时 409。
+    client_turn_id（B3 幂等键,可选）:响应回程丢失后的重发带同键 → 202 直接返回原轮
+    {turn_id, seq, duplicate: true},不重复执行、不重复摄入(判重在 _prepare_turn 之前)。"""
     runner = request.app.state.turn_runner
+    client_turn_id = _sanitize_client_key(client_turn_id)
+    if client_turn_id:
+        # 判重必须在摄入之前:_prepare_turn 已经落盘媒体/跑 ASR/解析文档,写在受理
+        # 内部的话重复提交照样付一遍摄入成本并留一份孤儿媒体。routes 只做「调属主、
+        # 透传结果」,判定逻辑归 TurnRunner。
+        sm = request.app.state.session_manager
+        target = sm._all_sessions.get(session_id)
+        if target is None and (sm.sessions_dir / session_id).exists():
+            # 冷会话:判重只需要账本文件,不为它付一次冷恢复(对齐 B2
+            # emit_recovery_events 的先例,首审 M8);冷会话必无活跃轮,状态机字段
+            # 按「无活跃」占位
+            from types import SimpleNamespace
+            target = SimpleNamespace(journal=SimpleNamespace(
+                path=sm.sessions_dir / session_id / "journal.jsonl",
+                turn_state="none", turn_client_id=None))
+        if target is not None:
+            # 尾窗回查是磁盘读,不占事件循环
+            dup = await asyncio.to_thread(runner.lookup_client_turn,
+                                          target, client_turn_id)
+            if dup is not None:
+                # 判重命中必须留痕(首审 M10):这是唯一让一条用户消息「不执行就消失」
+                # 的决定,无痕则键类缺陷无从诊断
+                print(f"[Idem] 会话 {session_id} 命中提交幂等键 → 202 原轮 "
+                      f"{dup['turn_id']}")
+                return JSONResponse(status_code=202, content={"status": True, **dup})
+    _, _, session, io = await _prepare_turn(request, session_id, system, files)
     gen = {"temperature": temperature, "min_p": min_p, "enable_thinking": enable_thinking,
            "thinking_budget": thinking_budget, "max_tokens": max_tokens}
     try:
         ctx = await runner.accept_turn(
             session, session_id, prompt=prompt, images=io["images"], audios=io["audios"],
             ingested_text=io["ingested_text"], attachments=io["attachments"], gen=gen,
-            voice_transcripts=io["voice_transcripts"])
+            voice_transcripts=io["voice_transcripts"], client_turn_id=client_turn_id or None)
     except TurnConflict as e:
+        # 真并发的同键双提交(首审 M7):两个请求都越过判重、都付了摄入,后到者在
+        # accept 撞 turn_active——若活跃轮正是同键的先到者,这不是冲突而是重试,
+        # 回 202 原轮;否则按 409 原语义
+        if e.reason == "turn_active" and client_turn_id:
+            dup = runner.lookup_client_turn(session, client_turn_id)
+            if dup is not None:
+                print(f"[Idem] 会话 {session_id} 并发同键提交 → 202 原轮 {dup['turn_id']}")
+                return JSONResponse(status_code=202, content={"status": True, **dup})
         return JSONResponse(status_code=409, content={"status": False, "reason": e.reason})
     runner.spawn(session_id, runner.run_accepted(session, session_id, ctx))
     return JSONResponse(status_code=202, content={

@@ -565,8 +565,8 @@ R0–R5 各小项的打勾细分（含每步实测结果与计划外发现）已
 
 | 项 | 当前值 | 口径 |
 |---|---|---|
-| 金测试项数 | 1435 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
-| 测试文件数 | 99 | `backend/tests/` 下递归的 `test_*.py` |
+| 金测试项数 | 1452 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
+| 测试文件数 | 100 | `backend/tests/` 下递归的 `test_*.py` |
 | mcp 文件数 | 31 | `backend/framework/mcp/` 递归下的 `.py`，**不含** `__init__.py` |
 | BaseTool 子类 | 67 | 全 backend 内 `class X(BaseTool)` 的声明数（一个文件可有多个） |
 | 物理隔离沙箱 | 3 | `backend/framework/agents/*_sandbox.py` |
@@ -3724,6 +3724,60 @@ iOS Live Activity 对那类崩溃轮不会被动收束（一次性过渡形态�
 重启多烧一段水位余量（临时账本+会话账本各加一次，2e6/次），量级无害；⑤两端客户端
 暂不消费 `/turn.generation`（additive 字段，会话流本就不重锚）。
 
+
+**波 B3 交付（2026-08-22）——提交路径幂等键（第 2 层账本耐久性波 3/3 收官）**
+
+*病根*：蜂窝网下 POST 完整抵达、202 回程丢失是常态;两端 catch 对网络错误一律清
+outbox + 删乐观气泡 + 报「无法连接」——用户手动重发就是一次货真价实的重复执行,
+可能带审批副作用(通知里点允许就真做两遍)。
+
+*修法*：可选 `client_turn_id`（PROTOCOL §2.6,形状 `[A-Za-z0-9._:-]{8,128}`）。
+判重在 `_prepare_turn`（multipart 摄入）**之前**短路——重复提交不付摄入、不留孤儿
+媒体;判定归 TurnRunner（`lookup_client_turn` 两级:活跃轮经账本状态机跟踪的
+`turn_client_id`;已完结轮经 journal turn_queued 里程碑——唯一持久真相——用
+`core/jsonl.iter_records_reversed` 反向块扫回查,命中即停,B1 依赖兑现）。窗口按
+**轮**计（近 64 轮）;**fail/cancelled 不算命中**（B2 恢复文案明说「可直接重发」,
+吞掉重发等于把收敛承诺变谎话）。同键撞活跃原轮回 202 引导附着而非 409;真并发双
+提交由受理冲突分支二次判重兜住。客户端:键随 outbox 持久,纯文本同文重发复用旧键;
+**带附件不复用不存键**(键只比对得了文本);网络失败不清 outbox、对账提示不清键
+(hinted 标记,web 另有 48h TTL);duplicate 命中即走统一恢复入口重新对账(原轮可能
+早已完结,干等事件永远转圈);Swift 补 turn_ended→outboxClear 对齐 web。
+
+*金测试 backend 1443 → **1452**（幂等 12 + 反向扫描 5,含「判重先于摄入」的时序证明:
+request 里刻意不放 orchestrator/ingestion,能拿到 202 本身即证据）;前端 vitest 16
+(outboxKeyFor 4)。**变异体 6 注入 4 验红 + 2 个存活者查明正法**:
+- I1 撤 fail 排除 / I2 窗口退化按里程碑计 / I3b 撤键消毒 / I6b 行界完整行误弃——验红;
+- **I6 初次存活,夹具病**:corpus.record 的 role 按奇偶交错(user/assistant 差 5 字节),
+  「窗口上限恰落行界」用它根本构造不出来,该分支从没被测过——重写为逐字节等长记录
+  并在夹具里自证等长;**I3 初次存活,判据病**:畸形键在账本里没有对应物,「被拒」与
+  「查无」不可分辨——改为预埋同键 success 轮,消毒不在就会命中 202,另配合法键阳性
+  对照。（「先怀疑变异体与夹具」两次都是夹具。）
+- I8（撤零预算护栏）**等价变异**:floor=max(0,size-0)=size 令扫描天然空转,护栏是
+  文档性冗余,留而不改。
+
+*reviewer 首审 1 Critical / 3 High / 8 Medium,全部处置*：
+- **C1 crypto.randomUUID 无降级**:内网 http(vite 绑 0.0.0.0 的既有形态)下是
+  undefined,键生成抛在 try 外——http 下发消息整个死掉;仓里 newSessionId 本就带
+  getRandomValues 降级,复用之。
+- **H2 窗口按里程碑计**:一个工具密集轮上百条里程碑会把自己的 turn_queued 挤出窗口,
+  刚完结一秒就判不了重(评审实测 70 工具轮复现)。tail_records 重写为反向块扫生成器,
+  配额在调用方按轮数。
+- **H3 对账路径清键**:reload 后 outbox 被清、按提示重发就换新键——跨刷新/杀 App 这条
+  移动端主路上幂等恰好失效。改为提示一次(hinted)不清键,「那句话已落盘」才清仓。
+- **H4 fail 轮判重命中**:崩溃轮 turn_queued 在账本里,重发被 202 吸走且永不执行——
+  与 B2 恢复文案直接矛盾。反向扫先见 turn_ended 后见 turn_queued,按 turn_id 记状态
+  排除 fail/cancelled;无终态记录同样放行(宁重复,不吞话)。
+- M5 超大记录撑爆窗口(预算 512KB→4MB+按轮早停);M6 同文换附件误判重(附件不进键);
+  M7 并发同键 409(冲突分支二次判重);M8 判重路径冷恢复整个会话(轻量占位对象+
+  to_thread,对齐 B2 emit_recovery_events 先例);M9 键无界不洗(形状校验,不合按未带);
+  M10 判重命中零留痕(`[Idem]` 日志);M11 客户端不消费 duplicate(两端 202 命中即重新
+  对账);L13/14/15/16/17/19 逐一修;L18 记入 PROTOCOL(键仅 /turns 端点)。
+*如实挂账*：①「网络失败不清 outbox」的客户端行为(两端)与 Swift outbox 旧格式迁移
+无自动化覆盖(Swift 无 store 级测试基建;web 的 sendMessage 层同理)——由 outboxKeyFor
+纯函数测试 + 评审 + 下个真机窗口人工过一遍兜住;②受理冲突分支的二次判重只被
+预检层测试覆盖(真并发时序单测造不出,代码是防御带);③journal 首行 header 与
+`_persist` 不瘦身 turn_queued 是判重的隐含前提,金测试已钉住后者。
+
 ---
 
 **全账重排（D.24，2026-08-18 用户拍板）——判据：① 缺陷修复优先 ② Mac 端优先——**
@@ -3777,10 +3831,10 @@ iOS Live Activity 对那类崩溃轮不会被动收束（一次性过渡形态�
 
 **第 2 层｜结构性缺陷**（M–L，动协议/多文件）
 
-1. **账本耐久性一波**（必须合并）：`B1` 追加型文件坏行纪律与断尾修复 →
-   **`B2`=F1 代际围栏**（★ 全册影响最大，动 `PROTOCOL.md` §2.4/2.5 + 前端 store +
-   apple-app store；顺带 ⑦ `public_turn` 递归剥离、崩溃轮补发 `turn_ended`）→ `B3` 幂等键。
-   **真机验收要 `devctl restart`（🟠 会掐断用户会话），须约窗口**
+1. ~~**账本耐久性一波**（必须合并）：`B1` 坏行纪律与断尾修复 → **`B2`=F1 代际围栏**
+   → `B3` 幂等键~~ **✅ 2026-08-22 三件全交付**（见上方「波 B1/B2/B3 交付」块;
+   B2 真机验收按用户拍板路径 B 完成——临时 inprocess 起 e4b,基线红/修后绿两遍闭环,
+   config 逐字节还原）
 2. `F6` 子沙箱用量归因回父轮 — metrics 系统性低估（自记「实测低估 8 倍」）、
    `max_total_iterations` **熔断形同虚设**；sink 挂 `EphemeralSession`（五处调用点唯一公共对象，
    **不改 `engine.py`**，避开铁律 1 sacred 面）

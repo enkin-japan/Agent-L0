@@ -334,3 +334,61 @@ def test_repair_lets_go_when_tail_changes_at_same_size(tmp_path, monkeypatch):
     assert calls["n"] >= 2                      # 干扰真的打进了 size2 快照点
     assert p.stat().st_size == size_before      # 没有任何截断发生
     assert repair_tail(p) > 0                   # 阳性对照:无干扰时同一断尾被截掉
+
+
+# ---- iter_records_reversed:文件尾反向扫描(B3 幂等键回查的依赖) ----
+
+def test_reversed_yields_newest_first_and_stops_on_break(tmp_path):
+    p = corpus.write_corpus(tmp_path / "tail.jsonl", [corpus.valid_lines(300)])
+    got = []
+    for obj in jsonl.iter_records_reversed(p):
+        got.append(obj["index"])
+        if len(got) == 5:
+            break                               # 命中即停是本函数存在的理由
+    assert got == [299, 298, 297, 296, 295]
+    assert [o["index"] for o in jsonl.iter_records_reversed(p)][:3] == [299, 298, 297]
+
+
+def test_reversed_skips_bad_lines_without_stats(tmp_path):
+    reset_stats()
+    p = corpus.write_corpus(tmp_path / "tail2.jsonl", [
+        corpus.valid_lines(3), corpus.non_dict_line(),
+        corpus.undecodable_line(), corpus.valid_lines(2, start=3),
+        corpus.truncated_multibyte(),
+    ])
+    assert [o["index"] for o in jsonl.iter_records_reversed(p)] == [4, 3, 2, 1, 0]
+    assert bad_line_stats == {}                 # 高频探询,不计坏行
+    assert count_records(p) == 5 and bad_line_stats[str(p)] >= 1   # 阳性对照
+
+
+def test_reversed_window_boundary(tmp_path):
+    """窗口上限切在行中间 → 半行丢弃;恰落在行界 → 该行完整,照常产出(首审 L14)。
+
+    ⚠️ 记录必须**逐字节等长**,否则「恰落行界」根本构造不出来——corpus.record 的 role
+    按奇偶交错(user/assistant 差 5 字节),初版夹具用它,上限永远切在行中,该分支从没
+    被测过(变异体存活揪出,2026-08-22)。"""
+    lines = [corpus.encode({"idx": i, "pad": "桁桁桁等长正文"}) + b"\n" for i in range(3)]
+    assert len({len(l) for l in lines}) == 1    # 等长前提自证,防夹具再犯
+    per = len(lines[0])
+    p = corpus.write_corpus(tmp_path / "tail3.jsonl", lines)
+    out = [o["idx"] for o in jsonl.iter_records_reversed(p, max_bytes=2 * per)]
+    assert out == [2, 1]                        # 上限恰落行界:第 1 行完整,照常产出
+    out2 = [o["idx"] for o in jsonl.iter_records_reversed(p, max_bytes=2 * per + 3)]
+    assert out2 == [2, 1]                       # 切中第 0 行中部:半行丢弃,不混残片
+
+
+def test_reversed_crosses_blocks_and_handles_huge_lines(tmp_path):
+    """>64KB 的记录跨反向块边界仍完整产出。"""
+    p = corpus.write_corpus(tmp_path / "tail4.jsonl", [
+        corpus.valid_lines(2), corpus.huge_valid_line(903), corpus.valid_lines(1, start=3)])
+    out = [o["index"] for o in jsonl.iter_records_reversed(p)]
+    assert out == [3, 903, 1, 0]
+
+
+def test_reversed_missing_empty_and_zero_budget(tmp_path):
+    assert list(jsonl.iter_records_reversed(tmp_path / "nope.jsonl")) == []
+    p = tmp_path / "empty.jsonl"
+    p.write_bytes(b"")
+    assert list(jsonl.iter_records_reversed(p)) == []
+    q = corpus.write_corpus(tmp_path / "z.jsonl", [corpus.valid_lines(2)])
+    assert list(jsonl.iter_records_reversed(q, max_bytes=0)) == []   # 0 预算=空,不是全量

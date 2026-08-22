@@ -88,7 +88,8 @@ class TurnRunner:
                           images: List[str], audios: List[str],
                           ingested_text: str, attachments: List[Any],
                           gen: Dict[str, Any], origin: str = "chat",
-                          voice_transcripts: Optional[List[Dict[str, Any]]] = None
+                          voice_transcripts: Optional[List[Dict[str, Any]]] = None,
+                          client_turn_id: Optional[str] = None
                           ) -> Dict[str, Any]:
         """
         受理一个新轮次(短临界区):放弃暂停态旧轮 → 提交用户消息 → inflight 预写 →
@@ -161,6 +162,9 @@ class TurnRunner:
                     for a in (attachments or [])
                 ],
                 "gen": dict(gen), "origin": origin,
+                # 提交幂等键(B3):随 turn_queued 落 journal,是重复提交判重的唯一持久真相
+                # (inflight.json 在 append_log 后即撤,不是已完结轮次的 durable 记录)
+                "client_turn_id": client_turn_id or None,
             }, turn_id=tid)
 
         return {
@@ -171,6 +175,58 @@ class TurnRunner:
             "_rollback_idx": rollback_idx, "_task_snapshot": task_snapshot,
             "_history_start_idx": history_start_idx,
         }
+
+    # 判重回查的轮次配额:按 turn_queued **轮**计,不按里程碑计——一个工具密集轮
+    # 上百条里程碑,按里程碑计窗口会把自己的 turn_queued 挤出去(首审 H2)
+    _IDEM_TURN_WINDOW = 64
+
+    def lookup_client_turn(self, session, client_turn_id: str) -> Optional[Dict[str, Any]]:
+        """提交幂等键判重(B3)。命中返回 {turn_id, seq, duplicate: True},未命中 None。
+
+        **必须在 `_prepare_turn` 之前调用**:摄入(落盘媒体/ASR/解析文档)发生在受理之前,
+        判重写在受理内部的话,重复提交照样付一遍摄入成本并留一份孤儿媒体(OSS 扫描的
+        审查修正点)。两级判定:
+        1. 活跃轮(queued/running/awaiting/suspended)的键由 journal 状态机跟踪——原本
+           这类重复会 409,带同键说明是同一次提交的重试,应回 202 引导客户端附着;
+        2. 已完结轮:唯一持久真相是 journal 的 turn_queued 里程碑,从文件尾反向扫
+           (core/jsonl.iter_records_reversed,B1 依赖),命中即停。窗口=近 64 **轮**
+           (幂等键防分钟级手动重发,不做无限期查重;越界旧键当新提交,只增不害)。
+        **fail/cancelled 的命中不算命中**(首审 H4):那一轮没有产出,B2 的恢复文案
+        明说「可直接重发」——吞掉这次重发等于把收敛承诺变成谎话。反向扫先见
+        turn_ended 后见 turn_queued,按 turn_id 记状态即可判。无 turn_ended 记录
+        (补发失败等罕见形态)同样放行重执行:宁重复,不吞话。
+        seq 返回该轮 turn_queued 的 seq(客户端拿它当 after 游标,与首次 202 同语义)。
+        """
+        if not client_turn_id:
+            return None
+        journal = session.journal
+        from .journal import TURN_NONE
+        if journal.turn_state != TURN_NONE and journal.turn_client_id == client_turn_id:
+            return {"turn_id": journal.current_turn_id,
+                    "seq": journal.turn_first_seq, "duplicate": True}
+        from .jsonl import iter_records_reversed
+        ended_status: Dict[Any, Any] = {}
+        turns_seen = 0
+        try:
+            for rec in iter_records_reversed(journal.path):
+                rtype = rec.get("type")
+                if rtype == "turn_ended":
+                    tid = rec.get("turn_id")
+                    if tid is not None and tid not in ended_status:
+                        ended_status[tid] = (rec.get("data") or {}).get("status")
+                elif rtype == "turn_queued":
+                    turns_seen += 1
+                    if (rec.get("data") or {}).get("client_turn_id") == client_turn_id:
+                        status = ended_status.get(rec.get("turn_id"))
+                        if status in ("fail", "cancelled", None):
+                            return None
+                        return {"turn_id": rec.get("turn_id"),
+                                "seq": rec.get("seq"), "duplicate": True}
+                    if turns_seen >= self._IDEM_TURN_WINDOW:
+                        return None
+        except OSError:
+            return None            # 账本读不动:当无记录,走正常受理(fail-open,不挡提交)
+        return None
 
     async def _abandon_paused_turn(self, session, sid: str) -> None:
         """暂停态旧轮的放弃收尾(须持 session.lock 调用):

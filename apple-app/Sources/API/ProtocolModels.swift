@@ -91,9 +91,11 @@ struct TurnAccepted: Codable {
     let status: Bool
     let turnId: String?
     let seq: Int?
+    /// B3 幂等键命中：202 返回的是既有轮（可能早已完结），客户端须重新对账而非等事件。
+    let duplicate: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case status, seq
+        case status, seq, duplicate
         case turnId = "turn_id"
     }
 }

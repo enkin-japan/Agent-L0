@@ -128,7 +128,7 @@ const optimistic = new Map<string, { userId: string; prompt: string }>()
 export const locallyAbandonedSuspended = new Set<string>()
 
 // ---- 发送暂存(outbox) ----
-function outboxAll(): Record<string, { text: string; ts: number }> {
+function outboxAll(): Record<string, { text: string; ts: number; key?: string; hinted?: boolean }> {
   try {
     return JSON.parse(localStorage.getItem(OUTBOX_KEY) ?? "{}")
   } catch {
@@ -136,10 +136,21 @@ function outboxAll(): Record<string, { text: string; ts: number }> {
   }
 }
 
-function outboxSet(sid: string, text: string) {
+function outboxSet(sid: string, text: string, key?: string, hinted?: boolean) {
   const all = outboxAll()
-  all[sid] = { text, ts: Date.now() }
+  all[sid] = { text, ts: Date.now(), key, hinted }
   try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(all)) } catch { /* 配额 */ }
+}
+
+/** 提交幂等键（B3）：同会话同文重发 = 上一次提交的重试,复用旧键让服务端判重;
+ *  换了内容才换键。键随 outbox 持久——蜂窝网下「请求已达、202 回程丢失」是常态,
+ *  用户看到「无法连接」后手动重发,不复用键就是一次货真价实的重复执行。 */
+export function outboxKeyFor(sid: string, text: string): string {
+  const pending = outboxAll()[sid]
+  if (pending?.key && pending.text === text) return pending.key
+  // crypto.randomUUID 仅安全上下文可用——内网 http 访问(vite 绑 0.0.0.0 的既有形态)
+  // 下是 undefined,必须走 getRandomValues 降级(首审 C1;实现复用 newSessionId)
+  return newSessionId()
 }
 
 function outboxClear(sid: string) {
@@ -807,18 +818,27 @@ export const useChatStore = create<ChatState>((set, get) => {
               : c,
           ),
         }))
-        // 发送暂存回收：上次刷新可能死在 multipart 上传途中——凭据仅剩 outbox
+        // 发送暂存回收：上次刷新可能死在 multipart 上传途中——凭据仅剩 outbox。
+        // **不清条目**（首审 H3）：清了键,用户按提示重发就换新键 = 服务端判不了重,
+        // 恰好在跨刷新这条主路上把幂等做没了。提示只出一次(hinted),条目留到
+        // 202/turn_ended 对账清仓;48h 后过期自清(防永久残留)。
         const pending = outboxAll()[id]
         if (pending) {
-          outboxClear(id)
-          const lastUser = [...(history.turns ?? [])].reverse()[0]?.prompt
-          if (lastUser !== pending.text) {
-            appendMessages(id, [{
-              id: nextMessageId(),
-              role: "system",
-              content: currentDict().store.outboxMaybeLost(pending.text),
-              variant: "warning",
-            }])
+          if (Date.now() - pending.ts > 48 * 3600 * 1000) {
+            outboxClear(id)
+          } else {
+            const lastUser = [...(history.turns ?? [])].reverse()[0]?.prompt
+            if (lastUser === pending.text) {
+              outboxClear(id)          // 那条话其实已落盘:凭据兑现,清仓
+            } else if (!pending.hinted) {
+              outboxSet(id, pending.text, pending.key, true)
+              appendMessages(id, [{
+                id: nextMessageId(),
+                role: "system",
+                content: currentDict().store.outboxMaybeLost(pending.text),
+                variant: "warning",
+              }])
+            }
           }
         }
       } catch (e) {
@@ -854,8 +874,11 @@ export const useChatStore = create<ChatState>((set, get) => {
 
       // 乐观用户气泡 + 发送暂存（202 受理即清；刷新致死时 outbox 是唯一凭据）
       const userId = nextMessageId()
+      // 键纪律(B3):纯文本同文重发复用旧键;**带附件不复用也不存键**——键只比对得了
+      // 文本,同文换附件若被判重,新附件会被静默丢弃(首审 M6)
+      const clientTurnId = files.length === 0 ? outboxKeyFor(convId, text) : newSessionId()
       optimistic.set(convId, { userId, prompt: text })
-      outboxSet(convId, text)
+      outboxSet(convId, text, files.length === 0 ? clientTurnId : undefined)
       appendMessages(convId, [
         {
           id: userId,
@@ -870,15 +893,28 @@ export const useChatStore = create<ChatState>((set, get) => {
       setGenerating(convId, true)
 
       try {
-        await submitTurn(convId, {
+        const res = await submitTurn(convId, {
           prompt: text,
           enable_thinking: get().thinkingEnabled,
+          client_turn_id: clientTurnId,
           files: files.length > 0 ? files : undefined,
         })
         outboxClear(convId)
+        if (res.duplicate) {
+          // 判重命中(首审 M11):返回的是既有轮,可能早已完结——干等事件会永远转圈。
+          // 撤乐观气泡,走统一恢复入口重新对账(/history + /turn + 重放)。
+          optimistic.delete(convId)
+          removeMessages(convId, [userId])
+          setGenerating(convId, false)
+          detach(convId)
+          void get().loadHistory(convId)
+          return
+        }
         ensureAttached(convId) // 首条消息后会话才在服务端存在（此前附着会 404 退出）
       } catch (e) {
-        outboxClear(convId)
+        // 网络类失败**不清 outbox**（B3）:请求可能已达、只是 202 回程丢了——键留着,
+        // 用户重发同文即复用,服务端判重不二次执行。真冲突(409)才清。
+        if (e instanceof TurnConflictError) outboxClear(convId)
         optimistic.delete(convId)
         removeMessages(convId, [userId])
         setGenerating(convId, false)

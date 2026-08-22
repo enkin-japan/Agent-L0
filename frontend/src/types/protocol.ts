@@ -41,4 +41,6 @@ export interface TurnAccepted {
   status: boolean
   turn_id: string
   seq?: number
+  /** B3 幂等键命中：202 返回的是既有轮（可能早已完结）,客户端须重新对账而非等事件。 */
+  duplicate?: boolean
 }

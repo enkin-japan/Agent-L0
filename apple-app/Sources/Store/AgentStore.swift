@@ -267,10 +267,15 @@ final class AgentStore: ObservableObject {
         guard selectedSessionId == sessionId else { return }
         // 发送暂存回收：上次 App 可能死在 multipart 上传途中——凭据仅剩 outbox
         if let pending = outboxRead(sessionId: sessionId) {
-            outboxClear(sessionId: sessionId)
+            // **不清条目**（首审 H3）：清了键,用户按提示重发就换新键 = 服务端判不了重,
+            // 恰好在「杀 App 后重开」这条移动端主路上把幂等做没了。提示只出一次
+            // (hinted 标记),条目留到 202/turn_ended 对账清仓。
             let lastPrompt = messages.last(where: { $0.kind == .user })?.text
-            if lastPrompt != pending {
-                messages.append(.system(L("上次可能有一条消息未送达：「") + pending + L("」——请确认后按需重发。")))
+            if lastPrompt == pending.prompt {
+                outboxClear(sessionId: sessionId)     // 那条话其实已落盘:凭据兑现
+            } else if !pending.hinted {
+                outboxMarkHinted(sessionId: sessionId)
+                messages.append(.system(L("上次可能有一条消息未送达：「") + pending.prompt + L("」——请确认后按需重发。")))
             }
         }
         ensureAttached(sessionId: sessionId)
@@ -353,17 +358,32 @@ final class AgentStore: ObservableObject {
         let bubbleId = userMessage.id
         messages.append(userMessage)
         optimisticPrompt = prompt
-        outboxWrite(sessionId: sid, prompt: prompt)
+        // 键纪律(B3):纯文本同文重发复用旧键;**带附件不复用也不存键**——键只比对得了
+        // 文本,同文换附件若被判重,新附件会被静默丢弃(首审 M6)
+        let clientTurnId = uploads.isEmpty ? outboxKeyFor(sessionId: sid, prompt: prompt)
+                                           : UUID().uuidString.lowercased()
+        outboxWrite(sessionId: sid, prompt: prompt,
+                    key: uploads.isEmpty ? clientTurnId : nil)
         resetPreview()
         isGenerating = true
 
         var params = ChatParams(prompt: prompt)
+        params.clientTurnId = clientTurnId
         params.enableThinking = thinking
         Task { [weak self] in
             do {
-                _ = try await client.submitTurn(sessionId: sid, params: params, files: uploads)
+                let accepted = try await client.submitTurn(sessionId: sid, params: params, files: uploads)
                 guard let self else { return }
                 self.outboxClear(sessionId: sid)
+                if accepted.duplicate == true {
+                    // 判重命中(首审 M11):返回的是既有轮,可能早已完结——干等事件会永远
+                    // 转圈。撤乐观气泡,走统一恢复入口重新对账。
+                    self.optimisticPrompt = nil
+                    self.messages.removeAll { $0.id == bubbleId }
+                    self.isGenerating = false
+                    await self.open(sessionId: sid)
+                    return
+                }
                 self.ensureAttached(sessionId: sid)  // 首条消息后会话才在服务端存在
                 if firstTurn {
                     let title = Self.autoTitle(from: prompt)
@@ -382,7 +402,8 @@ final class AgentStore: ObservableObject {
                 self.errorMessage = L("该会话已有正在进行的轮次，请等它完结后再发送。")
             } catch {
                 guard let self else { return }
-                self.outboxClear(sessionId: sid)
+                // 网络类失败**不清 outbox**（B3）:请求可能已达、只是 202 回程丢了——
+                // 键留着,用户重发同文即复用,服务端判重不二次执行。真冲突(409)才清。
                 self.optimisticPrompt = nil
                 self.messages.removeAll { $0.id == bubbleId }
                 self.isGenerating = false
@@ -626,6 +647,7 @@ final class AgentStore: ObservableObject {
             isGenerating = false
             isSuspended = true
         case "turn_ended":
+            outboxClear(sessionId: sessionId)   // 轮次权威完结:发送凭据兑现(对齐 web)
             onTurnEnded(env, sessionId: sessionId)
         case "location_request":
             // 客户端反查(get_location 工具):本端即"用户正在用的设备",取一次定位回 POST。
@@ -748,18 +770,44 @@ final class AgentStore: ObservableObject {
 
     // MARK: - 发送暂存（outbox）
 
-    private func outboxAll() -> [String: String] {
-        (UserDefaults.standard.dictionary(forKey: outboxKey) as? [String: String]) ?? [:]
+    private func outboxAll() -> [String: [String: String]] {
+        guard let raw = UserDefaults.standard.dictionary(forKey: outboxKey) else { return [:] }
+        var out: [String: [String: String]] = [:]
+        for (sid, v) in raw {
+            if let d = v as? [String: String] { out[sid] = d }
+            else if let s = v as? String { out[sid] = ["prompt": s] }  // 旧格式(纯文本)迁移
+        }
+        return out
     }
 
-    private func outboxWrite(sessionId: String, prompt: String) {
+    private func outboxWrite(sessionId: String, prompt: String, key: String? = nil) {
         var all = outboxAll()
-        all[sessionId] = prompt
+        var entry = ["prompt": prompt]
+        if let key { entry["key"] = key }
+        all[sessionId] = entry
         UserDefaults.standard.set(all, forKey: outboxKey)
     }
 
-    private func outboxRead(sessionId: String) -> String? {
-        outboxAll()[sessionId]
+    private func outboxRead(sessionId: String) -> (prompt: String, key: String?, hinted: Bool)? {
+        guard let e = outboxAll()[sessionId], let p = e["prompt"] else { return nil }
+        return (p, e["key"], e["hinted"] == "1")
+    }
+
+    private func outboxMarkHinted(sessionId: String) {
+        var all = outboxAll()
+        guard var e = all[sessionId] else { return }
+        e["hinted"] = "1"
+        all[sessionId] = e
+        UserDefaults.standard.set(all, forKey: outboxKey)
+    }
+
+    /// 提交幂等键（B3）:同会话同文重发 = 上一次提交的重试,复用旧键让服务端判重;
+    /// 换了内容才换键。蜂窝网下「请求已达、202 回程丢失」是常态,不复用键的重发
+    /// 就是一次货真价实的重复执行(可能带审批副作用)。
+    private func outboxKeyFor(sessionId: String, prompt: String) -> String {
+        if let pending = outboxRead(sessionId: sessionId), pending.prompt == prompt,
+           let k = pending.key { return k }
+        return UUID().uuidString.lowercased()
     }
 
     private func outboxClear(sessionId: String) {

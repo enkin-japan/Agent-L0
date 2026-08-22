@@ -13,7 +13,8 @@
    本仓记录正文里出现这些字符是常态——行界只有 b"\\n" 一个。二进制读、按 b"\\n" 切。
 
 坏行是仪表数据不是异常:跳过 + 每路径每类至多告警一次 + 计入 `bad_line_stats`
-(累计数始终准确,只是不重复刷屏)。`strict=True` 反过来——坏行抛 ValueError。
+(累计数始终准确,只是不重复刷屏;唯一例外是 `iter_records_reversed`——高频探询,
+不计数不告警,见其 docstring)。`strict=True` 反过来——坏行抛 ValueError。
 ⚠️ strict **只供离线校验与测试**,绝不进生产读者:各读者对异常的既有处置互不相同
 (吞成 None/0/上抛),strict 一开「口径唯一」当场破裂。故它只是显式参数,没有
 config 旋钮(首审 M7:全局旋钮会让四个读者四种行为)。
@@ -220,3 +221,58 @@ def append_record(path: PathArg, obj: Any, *, default=str) -> None:
     line = json.dumps(obj, ensure_ascii=False, default=default)
     with open(p, "ab") as f:
         f.write(line.encode("utf-8") + b"\n")
+
+
+def iter_records_reversed(path: PathArg, *, max_bytes: int = 4 * 1024 * 1024):
+    """从文件尾向前逐条产出有效记录对象(dict),**新在前**;消费方随时 break。
+
+    供「最近的记录里找某条」类回查(如提交幂等键对 turn_queued 判重):按块(64KB)向前
+    推进,典型用法命中即停,实际 IO 远小于 max_bytes 上限。扫满上限即止;上限处若切在
+    行中间,那半行丢弃(完整版不在窗口内,宁缺毋错)——切点恰落在行界(前一字节是
+    换行)时该行**完整,照常产出**(首审 L14)。坏行按本模块口径跳过但**不进
+    bad_line_stats**(高频探询,不该把同一条坏行反复计数;模块头的计数纪律对本函数
+    例外)。**不返回 Record**:反向窗口无从得知全局 index,造一个局部序号出去就是给
+    下标口径开第二个出处。文件不存在/NotADirectory → 空;其余 I/O 错误原样上抛。
+    """
+    if max_bytes <= 0:
+        return
+    p = Path(path)
+    try:
+        f = open(p, "rb")
+    except (FileNotFoundError, NotADirectoryError):
+        return
+
+    def _parse(seg: bytes):
+        if not seg.strip(b" \t\r"):
+            return None
+        try:
+            obj = json.loads(seg.decode("utf-8"))
+        except Exception:
+            return None
+        return obj if isinstance(obj, dict) else None
+
+    with f:
+        size = os.fstat(f.fileno()).st_size
+        floor = max(0, size - max_bytes)
+        pos = size
+        carry = b""                      # 当前块首段(其开头可能还在更前面的块里)
+        while pos > floor:
+            start = max(floor, pos - _BLOCK)
+            f.seek(start)
+            block = f.read(pos - start) + carry
+            pos = start
+            segs = block.split(b"\n")
+            carry = segs[0]
+            for seg in reversed(segs[1:]):
+                obj = _parse(seg)
+                if obj is not None:
+                    yield obj
+        if carry:
+            complete = pos == 0          # 到文件头:首段就是完整首行
+            if not complete:             # 到窗口上限:前一字节是换行才算完整行
+                f.seek(pos - 1)
+                complete = f.read(1) == b"\n"
+            if complete:
+                obj = _parse(carry)
+                if obj is not None:
+                    yield obj
