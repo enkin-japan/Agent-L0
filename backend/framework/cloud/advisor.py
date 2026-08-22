@@ -17,13 +17,13 @@
 顾问单发 = 纯文本进出——跨供应商兼容的真正难点（工具调用格式/流式状态机/KV
 语义）被铁律 6 天然裁掉，因此两家都做的代价只是两个小适配器。
 """
-import json
 import os
 import time
 from datetime import date
 from pathlib import Path
 from typing import Optional
 
+from ..core.jsonl import append_record, iter_records
 from ..utils.config_loader import data_dir, load_section
 
 _KINDS = ("openai_compat", "anthropic")
@@ -87,22 +87,25 @@ def record_egress(entry: dict) -> None:
     """无条件追加一行出网台账。写失败原样上抛——审计日志不是 best-effort。"""
     path = egress_log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    # 写前修尾（B1，core/jsonl 唯一口径）。default=None 保留原语义:
+    # 不可序列化的条目照旧上抛——审计日志宁可当场炸,不可静默降级成 str
+    append_record(path, entry, default=None)
 
 
 def spent_today_usd() -> float:
-    """从台账累计今日（本地日期）已花费。文件缺失 = 0；坏行跳过（台账只增不改）。"""
-    path = egress_log_path()
-    if not path.exists():
-        return 0.0
+    """从台账累计今日（本地日期）已花费。文件缺失 = 0；坏行按 core/jsonl 唯一口径跳过。
+
+    原实现 read_text+splitlines:一条断尾（崩溃写一半）会让本函数每次都抛
+    UnicodeDecodeError——而 consult() 先查预算后记账,自愈修尾永远够不着,
+    云端顾问从此永久 500（首审 H2）；splitlines 还把正文含 U+2028/U+0085 的
+    记录劈成两半,费用静默少计。
+    """
     today = date.today().isoformat()
     total = 0.0
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for rec in iter_records(egress_log_path()):
         try:
-            row = json.loads(line)
-            if str(row.get("ts", "")).startswith(today):
-                total += float(row.get("cost_usd") or 0.0)
+            if str(rec.obj.get("ts", "")).startswith(today):
+                total += float(rec.obj.get("cost_usd") or 0.0)
         except Exception:
             continue
     return total

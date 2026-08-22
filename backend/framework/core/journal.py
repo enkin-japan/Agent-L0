@@ -22,6 +22,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .jsonl import iter_records, repair_tail
+
 # 持久化进 journal.jsonl 的里程碑事件类型(增量与瞬时进度不落盘,见模块头)
 MILESTONE_TYPES = {
     "turn_queued", "turn_started", "awaiting_approval", "suspended", "resumed",
@@ -119,17 +121,9 @@ class TurnJournal:
             return None
         try:
             last = 0
-            with open(self.path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        rec = json.loads(line)
-                    except Exception:
-                        continue
-                    if isinstance(rec.get("seq"), int):
-                        last = max(last, rec["seq"])
+            for rec in iter_records(self.path):   # 坏行纪律唯一口径（core/jsonl）
+                if isinstance(rec.obj.get("seq"), int):
+                    last = max(last, rec.obj["seq"])
             return last
         except Exception as e:
             # 返回 0 而非 None:账本文件确实在,只是读不动——仍按「续跑」加余量起号
@@ -147,7 +141,11 @@ class TurnJournal:
             elif etype == "tool_result":
                 data = _truncated_copy(data, ["response"])
             rec = {**env, "data": data}
-            is_new = not self.path.exists()
+            # 写前修尾（B1）：崩溃残留的半截记录若不处理，本次追加会与它粘成一行垃圾。
+            # is_new 必须在修尾**之后**按大小判：首次写 header 写到一半就崩，文件「在」
+            # 但会被修尾截成 0 字节——按存在性判会跳过 header,首行契约永久缺失（首审 M9）
+            repair_tail(self.path)
+            is_new = not self.path.exists() or self.path.stat().st_size == 0
             with open(self.path, "a", encoding="utf-8") as f:
                 if is_new:
                     f.write(json.dumps({"kind": "journal_header", "v": 1}) + "\n")
@@ -244,22 +242,13 @@ class TurnJournal:
         ring_min = self.ring[0]["seq"] if self.ring else None
         out: List[Dict[str, Any]] = []
         try:
-            if self.path.exists():
-                with open(self.path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            rec = json.loads(line)
-                        except Exception:
-                            continue
-                        s = rec.get("seq")
-                        if not isinstance(s, int) or s <= after:
-                            continue
-                        if ring_min is not None and s >= ring_min:
-                            break  # 环覆盖区间:以环(含增量)为准
-                        out.append(rec)
+            for rec in iter_records(self.path):   # 坏行纪律唯一口径（core/jsonl）
+                s = rec.obj.get("seq")
+                if not isinstance(s, int) or s <= after:
+                    continue
+                if ring_min is not None and s >= ring_min:
+                    break  # 环覆盖区间:以环(含增量)为准
+                out.append(rec.obj)
         except Exception as e:
             print(f"[Journal] 账本重放读盘失败(退化为仅内存环): {e}")
         out.extend(e for e in self.ring if e["seq"] > after)

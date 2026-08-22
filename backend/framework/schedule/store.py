@@ -19,6 +19,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..core.jsonl import iter_records
+
 SPEC_TYPES = ("interval", "daily", "weekly", "once")
 _WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
@@ -260,9 +262,9 @@ class ScheduleStore:
             p = self._runs_path(schedule_id)
             if not p.parent.exists():
                 return  # 任务已被删除：运行记录无处可写，静默丢弃
-            lines = []
-            if p.exists():
-                lines = p.read_text(encoding="utf-8").splitlines()
+            # 唯一口径读回（B1）：原 read_text+splitlines 会把 summary 里含
+            # U+2028/U+0085 的记录劈成两半永久损毁，且把保留条数算错（首审 M8）
+            lines = [r.raw for r in iter_records(p)]
             lines.append(json.dumps(run, ensure_ascii=False, default=str))
             if len(lines) > self.run_history_keep:
                 lines = lines[-self.run_history_keep:]
@@ -274,17 +276,7 @@ class ScheduleStore:
         """最近的运行记录，新在前。"""
         with self._lock:
             p = self._runs_path(schedule_id)
-            if not p.exists():
-                return []
-            out = []
-            for line in p.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    out.append(json.loads(line))
-                except Exception:
-                    continue
+            out = [r.obj for r in iter_records(p)]   # 唯一口径（B1）
             return list(reversed(out))[: max(1, int(limit))]
 
 

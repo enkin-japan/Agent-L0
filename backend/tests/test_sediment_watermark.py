@@ -237,13 +237,21 @@ def test_an_oversized_single_turn_still_makes_progress(make_session, monkeypatch
     assert asyncio.run(sediment_pending_turns(session)) == 1
 
 
-def test_an_unreadable_log_never_moves_the_watermark(make_session, rag):
+def test_an_unreadable_log_never_moves_the_watermark(make_session, monkeypatch, rag):
     """★ 「读不动」与「日志是空的」严格区分：一次读盘失败若被当成 0 行，水位线会被
-    夹到 0，整条会话的原文随后重沉一遍。"""
+    夹到 0，整条会话的原文随后重沉一遍。
+
+    B1 起坏行/坏字节按行级跳过（不再把整份日志判成读不动——原语义下一条半截写入
+    就让沉淀永久停摆），「读不动」只剩真 I/O 失败一种含义，故此处用 OSError 模拟。"""
     session = make_session("f5-badlog")
     _write_turns(session, 3)
     asyncio.run(sediment_pending_turns(session))
-    session.history_log.write_bytes(b"\xff\xfe not utf-8 \xff")
+    assert len(rag.calls) == 1                 # 阳性对照：替身接得上、正常路真的走通
+
+    def _boom(path, **kw):
+        raise OSError("disk unplugged")
+        yield  # pragma: no cover  （保持生成器形态，与被替对象同构）
+    monkeypatch.setattr("framework.memory.compactor.iter_records", _boom)
     assert asyncio.run(sediment_pending_turns(session)) == 0
     assert session.sedimented_turns == 3       # 没被夹回 0
     assert len(rag.calls) == 1

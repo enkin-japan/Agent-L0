@@ -565,8 +565,8 @@ R0–R5 各小项的打勾细分（含每步实测结果与计划外发现）已
 
 | 项 | 当前值 | 口径 |
 |---|---|---|
-| 金测试项数 | 1389 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
-| 测试文件数 | 96 | `backend/tests/` 下递归的 `test_*.py` |
+| 金测试项数 | 1426 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
+| 测试文件数 | 98 | `backend/tests/` 下递归的 `test_*.py` |
 | mcp 文件数 | 31 | `backend/framework/mcp/` 递归下的 `.py`，**不含** `__init__.py` |
 | BaseTool 子类 | 67 | 全 backend 内 `class X(BaseTool)` 的声明数（一个文件可有多个） |
 | 物理隔离沙箱 | 3 | `backend/framework/agents/*_sandbox.py` |
@@ -3617,6 +3617,53 @@ RAG 索引（`rag.host` 可能非回环）；agent 的 `rag_search` 可能召回
 
 **第 1 层收官**：`F2` 前半 / `F5` / `F4` / `C1` / `F10` / 长稳工装遗留六件全交付。
 金测试 1214 → **1389**，本层累计 **78 个变异体逐个验红**。
+
+---
+
+**波 B1 交付（2026-08-22）——追加型 JSONL 的坏行纪律与断尾修复（第 2 层账本耐久性波 1/3）**
+
+*病根*：五处裸 `open(a)` 追加、七路读者至少三种互不相同的坏行策略。崩溃可在文件尾留下
+切在 UTF-8 多字节中间的半截 JSON；**产生断尾的那次崩溃，重启后第一件事就是
+`recover_inflight_turns` 往同一文件追加 fail 轮——残字节和新记录粘成一行垃圾**。一条坏行
+让「前端下标 / 内存重放 / turn_index / 两条水位线」互相错位，而分支克隆与删末轮按下标定位。
+
+*修法*：新模块 `core/jsonl.py` 为唯一口径——`iter_records`/`count_records`（0 起、只数
+有效 dict 记录；二进制读只按 `b"\n"` 切，绝不 splitlines；唯一被容忍的尾部异常是
+「完整记录缺尾随换行」）+ `repair_tail`（字节级切点=最后一个 0x0A 之后，0x0A 不出现在
+多字节序列内部故天然安全；尾片是完整记录只补换行零损失；截断前双读稳定性检查，并发写者
+让路）+ `append_record`（修尾+追加）。接线：写者五处+`runs.jsonl`（journal `_persist` /
+history `append_log` / `recover_inflight_turns` / 护栏事件 / 出网台账 / 调度运行记录）；
+读者九处（journal `_load_last_seq`+`replay`、`disk_turn_count`、`_replay_history_log`、
+`get_history`、`_scan_session_dir`、`_delete_last_turn_locked`、`branch_session`、
+compactor `_read_log_lines`、advisor `spent_today_usd`、schedule `read_runs`）。
+`_replay_history_log` 从整循环一个 try 改为**逐轮 try + 整轮回滚**。
+计划外收获：`get_history` 原实现文本模式迭代，遇坏字节会炸整个接口——已并入同口径。
+
+*金测试 1389 → **1426**（模块 21 + 接线 16；含「四读者同口径」「粘行时序复现+阳性对照」）。
+**15 个变异体逐个注入验红**（模块 4 / 接线 5 / 评审修正守卫 6），每次注入间清
+`__pycache__`、源码 sha256 逐字节复原核验。*
+
+*reviewer 首审 3 High / 7 Medium，High 全部先实测复现再修*：
+- **H1 整份日志坏成零有效记录被当成「0 行」**：向下修复把水位线夹到 0、`save_memory`
+  连带删掉 `memory.json`（实测复现）。修：`_read_log_lines` 对「文件非空却零有效记录」
+  返回 None（视同读不动）——B1 换口径时让出去的旧覆盖面，补回并钉测试。
+- **H2 出网台账的读者没接线**：`spent_today_usd` 仍是 read_text+splitlines，一条断尾让
+  预算检查每次必炸；而 `consult()` 先查预算后记账，自愈修尾永远够不着——云端顾问从此
+  永久 500（实测复现）。U+2028 正文还会劈行静默少计费用（实测 3.0→2.0）。已接线。
+- **H3 逐轮 try 非事务性**：半途炸掉留下孤悬 user 消息，打断 user/assistant 交替（实测
+  两条连续 user）。修：进 try 前记三个列表长度，except 整轮回滚。
+- M4 存量摘要水位线按旧口径偏大：载入时越界即夹回（带 H1 同款「读不动不夹」护栏）；
+  界内错位无从逆推，如实不动。M8 `runs.jsonl` 是计划外的第六写者/读者，已接线。
+  M9 `journal_header` 首行契约在「首次写崩在半途」下会永久缺失：`is_new` 改在修尾后按
+  大小判。M7 strict 旋钮从 config 摘除（全局旋钮下四个读者四种异常处置，「口径唯一」
+  当场破裂）——**计划里「留 config 开关」一条据此撤销**。
+- 自抓一条恒真断言：L19 竞态测试初版尾断言 `repair_tail(p) >= 0` 永真，重写为
+  「让路不截断 + 阳性对照无干扰时同一断尾被截」。
+
+*有意为之、如实记录*：删末轮/分支的整份重写只写有效记录——坏行随重写消失（它们本就对
+所有读者不可见，但这是一次不可逆清洗，评审 M10 提示记档）。`repair_tail` 的稳定性检查
+只窄化并发窗口不消除；两进程写同一文件是部署红线，不是模块能兜的（docstring 已如实降级）。
+`benchmarks/attention/driver.py` 直读护栏事件流的口径不一致，属基准脚本域，挂账不修。
 
 ---
 

@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import rag_sink
+from ..core.jsonl import iter_records
 from ..core.spill import _SPILL_CALL_RE, _SPILL_TOTAL_RE  # 句柄正则同源，见该模块
 from .notes import NOTE_TYPES
 
@@ -254,18 +255,28 @@ _SEDIMENT_MAX_CHARS_PER_PASS = 100_000
 
 
 def _read_log_lines(history_log: Path) -> Optional[List[str]]:
-    """读历史日志的非空行。**读不动返回 None**，与「日志是空的」严格区分。
+    """读历史日志的有效记录行（core/jsonl 唯一口径，B1）。**读不动返回 None**，
+    与「日志是空的」严格区分。
 
     两者绝不能混：调用方拿 `len(lines)` 去夹水位线，一次读盘失败若被当成「0 行」，
     水位线会被夹到 0——整条会话的原文随后重沉一遍。文件不存在才是真的 0 行。
+    坏行（含断尾）由 iter_records 按行跳过——它们同样不占 disk_turn_count 的号，
+    水位线口径两头一致；原实现一条半截写入就把**整份**日志判成「读不动」。
     """
-    if not history_log.exists():
-        return []
     try:
-        with open(history_log, "r", encoding="utf-8") as f:
-            return [line for line in f if line.strip()]
-    except Exception:      # OSError 之外还有 UnicodeDecodeError（坏行/半截写入）
+        lines = [rec.raw for rec in iter_records(history_log)]
+    except Exception:      # 真读不动（I/O 层)才走这里;坏内容已在行级被消化
         return None
+    if not lines:
+        # 「文件非空却读不出一条有效记录」视同读不动（首审 H1）:整份日志被外部
+        # 重写/还原坏掉时,若当成「0 行」,向下修复会把水位线夹到 0、save_memory
+        # 随之把 memory.json 清删——整条会话原文在日志恢复后重沉一遍。
+        try:
+            if history_log.exists() and history_log.stat().st_size > 0:
+                return None
+        except OSError:
+            return None
+    return lines
 
 
 def _collect_turn_texts(lines: List[str]) -> List[str]:

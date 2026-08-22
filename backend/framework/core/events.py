@@ -9,11 +9,12 @@
 设计：fire-and-forget——写入永不抛异常、永不阻塞主流程；单文件追加 + 线程锁
 （编排在事件循环线程、工具在 to_thread 线程、约束采样在推理线程，都会来写）。
 """
-import json
 import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
+
+from .jsonl import append_record
 
 _LOCK = threading.Lock()
 # 落盘在可写数据根而非代码树（R5-4/D.16）：dev 缺省两者相同（backend/），
@@ -46,8 +47,8 @@ def emit(event_type: str, session: Optional[str] = None, **detail: Any) -> None:
                 k: (v if isinstance(v, (int, float, bool)) or v is None else str(v)[:300])
                 for k, v in detail.items()
             }
-        line = json.dumps(rec, ensure_ascii=False)
-        with _LOCK, open(_PATH, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        with _LOCK:
+            # 写前修尾 + 追加（B1，core/jsonl 唯一口径）:崩溃残留的半截行不再污染下一条
+            append_record(_PATH, rec)
     except Exception:
         pass  # 事件流是仪表，绝不能反过来影响主流程

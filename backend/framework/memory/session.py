@@ -8,6 +8,7 @@ import uuid
 import shutil
 from typing import List, Dict, Any, Optional
 
+from ..core.jsonl import append_record, count_records, iter_records
 from ..core.task_state import TaskState
 
 
@@ -345,10 +346,17 @@ class ChatSession:
         """
         if self.history_log.exists():
             try:
-                with open(self.history_log, "r", encoding="utf-8") as f:
-                    lines = [line for line in f if line.strip()]
-                for line in lines[start_turn:]:
-                        resp = json.loads(line)
+                records = [r.obj for r in iter_records(self.history_log)]
+            except Exception as e:
+                print(f"[Memory] Session {self.session_id} 历史读取异常: {e}")
+                return
+            for resp in records[start_turn:]:
+                # 单轮重建失败只跳过该轮:原先整个 for 共用一个 try,一条坏轮次会让
+                # 其后所有轮次静默消失于 model-facing 上下文(B1)。
+                # 失败必须**整轮回滚**——重建是 history/images/audios 四次独立就地变更,
+                # 半途炸掉会留下孤悬的 user 消息,把 user/assistant 交替打断(首审 H3)
+                h0, i0, a0 = len(self.history), len(self.images), len(self.audios)
+                try:
                         # fail（引擎故障）与 cancelled（用户取消）轮次均不进内存记忆：
                         # 与在线路径的整轮回滚语义一致，仅保留落盘记录供前端展示
                         if resp.get("status") in ("fail", "cancelled"):
@@ -378,8 +386,9 @@ class ChatSession:
                         new_message = resp.get("response", [])
                         if new_message:
                             self.history.extend(new_message)
-            except Exception as e:
-                print(f"[Memory] Session {self.session_id} 历史读取异常: {e}")
+                except Exception as e:
+                    del self.history[h0:], self.images[i0:], self.audios[a0:]
+                    print(f"[Memory] Session {self.session_id} 轮次重放异常(已整轮回滚跳过): {e}")
 
     # --- 实时步骤反馈（编排循环与长耗时工具的进度钩子写入，/task 轮询与 SSE 读取；
     #     钩子可能从工具线程写：字典赋值在 GIL 下安全，快照浅拷贝，最后写入者为准） ---
@@ -464,6 +473,21 @@ class ChatSession:
                 # 兜底——那部分原文在折叠时确已入库，是有据可依的下界。
                 self.sedimented_turns = int(
                     data.get("sedimented_turns", self.summarized_turns))
+                # 存量摘要水位线是按旧口径（非空物理行，含坏行）记的，可能大于新口径的
+                # 有效记录数——越界态可证伪即修：不夹的话 _replay_history_log 的切片
+                # 会把落在越界区间里的真实轮次静默藏掉（磁盘在、前端可见、模型看不见，
+                # 首审 M4）。代价是下次折叠可能把已覆盖轮次重摘一遍——重复进摘要是
+                # 噪声，轮次从上下文消失是缺陷。界内的错位无从逆推，不动。
+                n = self.disk_turn_count()
+                # n==0 但文件非空 = 整份日志读不出有效记录，视同读不动、不夹
+                # ——与 compactor._read_log_lines 的 H1 护栏同一判据，防止外部
+                # 还原/重写坏掉日志时把水位线错误归零
+                readable = n > 0 or not (
+                    self.history_log.exists() and self.history_log.stat().st_size > 0)
+                if readable and self.summarized_turns > n:
+                    print(f"[Memory] Session {self.session_id} 摘要水位线越界"
+                          f"({self.summarized_turns} > {n})，夹回记录数")
+                    self.summarized_turns = n
             except Exception as e:
                 print(f"[Memory] 摘要旁挂恢复失败（按无摘要处理）: {e}")
                 self.memory_file.unlink(missing_ok=True)
@@ -511,21 +535,18 @@ class ChatSession:
         # 有意 setdefault 在**调用方的原 dict** 上——/chat 响应与 turn_end 事件
         # 在落盘之后引用同一 dict，三个面（响应/事件/历史）天然同值。
         response_data.setdefault("timestamp", time.time())
-        with open(self.history_log, "a", encoding="utf-8") as f:
-            # default=str 兜底：个别字段（如 Path）不可序列化时降级为字符串，
-            # 避免推理已成功却因落盘序列化失败导致整个请求 500
-            f.write(json.dumps(_strip_internal_meta(response_data),
-                               ensure_ascii=False, default=str) + "\n")
+        # 写前修尾 + 追加（B1，core/jsonl 唯一口径）；default=str 兜底：个别字段（如 Path）
+        # 不可序列化时降级为字符串，避免推理已成功却因落盘序列化失败导致整个请求 500
+        append_record(self.history_log, _strip_internal_meta(response_data))
         # 轮次已成为落盘事实 → 撤销预写标记（write-ahead 闭环，见 write_inflight）
         self.clear_inflight()
 
     def disk_turn_count(self) -> int:
-        """history.jsonl 的落盘轮数(行数)。turn_ended 事件的 turn_index 依据。"""
+        """history.jsonl 的落盘轮数(**有效记录数**,core/jsonl 唯一口径)。
+        turn_ended 事件的 turn_index 依据。原实现数物理行:一条坏行/空行就让它与
+        重放、水位线、前端下标各说各话(B1)。"""
         try:
-            if not self.history_log.exists():
-                return 0
-            with open(self.history_log, "rb") as f:
-                return sum(1 for _ in f)
+            return count_records(self.history_log)
         except Exception:
             return 0
 
@@ -641,8 +662,9 @@ class SessionManager:
                                          "您的输入已保留在上方，可直接重发。"}],
             }
             try:
-                with open(d / "history.jsonl", "a", encoding="utf-8") as f:
-                    f.write(json.dumps(turn, ensure_ascii=False, default=str) + "\n")
+                # 写前修尾（B1 的要害现场）：产生断尾的那次崩溃，重启后第一件事就是走到
+                # 这里往同一个文件追加 fail 轮——不修尾正好把残字节和新记录粘成一行垃圾
+                append_record(d / "history.jsonl", turn)
                 marker.unlink(missing_ok=True)
                 recovered += 1
                 print(f"[Memory] 恢复中断轮次存档: {d.name}")
@@ -812,16 +834,10 @@ class SessionManager:
         if has_content:
             try:
                 last_updated = hist.stat().st_mtime
-                with open(hist, "r", encoding="utf-8") as f:
-                    for line in f:
-                        if not line.strip():
-                            continue
-                        turn_count += 1
-                        if not title:
-                            try:
-                                title = str(json.loads(line).get("prompt", "")).strip()[:80]
-                            except Exception:
-                                pass
+                for rec in iter_records(hist):   # 坏行纪律唯一口径（core/jsonl，B1）
+                    turn_count += 1
+                    if not title:
+                        title = str(rec.obj.get("prompt", "")).strip()[:80]
             except Exception:
                 pass
         created_at = meta.get("created_at")
@@ -995,10 +1011,7 @@ class SessionManager:
             session.clear_task()  # 该轮任务上下文一并回退
             session.rebuild_from_log()
             self._delete_turn_media(session_id, pending)
-            remaining = 0
-            if history_log.exists():
-                with open(history_log, "r", encoding="utf-8") as f:
-                    remaining = sum(1 for line in f if line.strip())
+            remaining = count_records(history_log)   # 唯一口径（B1）
             result.update({
                 "status": True,
                 "remaining_turns": remaining,
@@ -1010,20 +1023,18 @@ class SessionManager:
         if not history_log.exists():
             result["response"] = f"❌ 会话 {session_id} 不存在或尚无历史记录"
             return result
-        with open(history_log, "r", encoding="utf-8") as f:
-            lines = [line for line in f if line.strip()]
-        if not lines:
+        # 唯一口径读取（B1）:「最后一轮」按有效记录定位——原先按物理行 pop,尾部若是
+        # 崩溃残留的断尾行,删掉的是垃圾而用户以为删的是最后一轮
+        records = list(iter_records(history_log))
+        if not records:
             result["response"] = f"❌ 会话 {session_id} 没有可删除的轮次"
             return result
 
-        last_line = lines.pop()
-        try:
-            deleted_turn = json.loads(last_line)
-        except Exception:
-            deleted_turn = {}
+        deleted_turn = records.pop().obj
+        lines = [r.raw for r in records]
 
         with open(history_log, "w", encoding="utf-8") as f:
-            f.writelines(line if line.endswith("\n") else line + "\n" for line in lines)
+            f.writelines(line + "\n" for line in lines)
 
         # 2.1 日志缩短了，沉淀水位线要跟着夹回来（首审 #3）：不夹的话，用户重发的那条
         # **替代轮**正好落在旧水位线之下，从此再没人沉淀它——一条用户可见的消息静默
@@ -1106,19 +1117,10 @@ class SessionManager:
         读取某会话落盘的历史节点列表（每个元素为一轮完整的 response_data）。
         供前端选取分支节点使用，节点下标即列表索引。
         """
-        turns: List[Dict[str, Any]] = []
+        # 唯一口径（B1）:节点下标 = 有效记录序号,与磁盘轮数/重放/水位线一致。
+        # 原实现文本模式逐行读,遇到无法 utf-8 解码的坏字节会直接炸整个接口。
         history_log = self.sessions_dir / session_id / "history.jsonl"
-        if not history_log.exists():
-            return turns
-        with open(history_log, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                try:
-                    turns.append(json.loads(line))
-                except Exception:
-                    continue
-        return turns
+        return [r.obj for r in iter_records(history_log)]
 
     def _relink_media(self, src_path_str: str, dest_dir: Path) -> str:
         """
@@ -1257,9 +1259,9 @@ class SessionManager:
         #    并持有其会话锁：等待正在进行的对话轮次完成后再做快照
         parent = self.get_or_create(parent_session_id)
         async with parent.lock:
-            # 3. 锁内读取历史并校验节点（保证读到的是完整落盘的轮次）
-            with open(parent_log, "r", encoding="utf-8") as f:
-                lines = [line for line in f if line.strip()]
+            # 3. 锁内读取历史并校验节点（保证读到的是完整落盘的轮次；
+            #    唯一口径（B1）——节点下标必须与 get_history/前端一致,否则分支切错位置）
+            lines = [r.raw for r in iter_records(parent_log)]
             total = len(lines)
             if total == 0:
                 result["response"] = f"❌ 源会话 {parent_session_id} 没有可分支的历史节点"
