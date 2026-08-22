@@ -77,6 +77,12 @@ class Qwen35Dialect:
             "qwen35 方言使用原生 XML 调用体（<function=…><parameter=…>），按设计不启用 "
             "约束采样——engine 将 fail-open 到自由采样 + 解析纠错闭环。")
 
+    def render_tool_declaration(self, tool: Dict[str, Any]) -> str:
+        # D0①(复审 S15):本方言前缀里工具声明是 <tools> 内每行一个 JSON 对象——
+        # 取详情按同形回喂(数组形 json.dumps(found) 连自家前缀都不像)
+        import json as _json
+        return _json.dumps(tool, ensure_ascii=False)
+
     def parse_error_retry_hint(self) -> str:
         # 与 prompt_builder._TOOL_FORMAT_GUIDE 的教学格式锚定一致：本方言调用体是 XML 非 JSON
         return (

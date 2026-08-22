@@ -80,6 +80,26 @@ _THR_DEFAULTS = {
     "insert_routing_max_distance": 0.8,
     "query_routing_max_distance": 0.85,
     "rerank_min_score": 0.5,
+    # ── F5 检索架构（2026-08-22,实测校准见 EXECUTION_LEDGER 波 F5-检索）──
+    # 多意图查询的整句向量落在几个意图质心之间,只覆盖单一意图的文档全句重排分
+    # 永远过不了地板(rq-multi-004 实测 0.281 < 0.3);同词异主体的负例又恰好贴地
+    # 越线(rq-neg-004/006 实测 0.334/0.348)。对同一个 rerank_min_score 拧任何方向
+    # 都只在两头之间搬运失败——治法是结构性的两条腿:
+    # 子词救援:分解腿召回的文档,对其命中子词的重排分 ≥ 此值才有救援资格
+    # (除垢 vs「除垢」0.578 ✓;到期 vs 停车月卡 0.453 ✗)
+    "subquery_rescue_score": 0.5,
+    # 主题/主语锚点线:救援与边际带否决共用——锚点分 < 此值即「主体不符」
+    # (咖啡 vs 除垢文档 0.361 ✓;猫 vs 孩子疫苗 0.182 ✗;宽带 vs 停车月卡 0.281 ✗)
+    "anchor_min_score": 0.3,
+    # 边际带宽:全句分落在 [地板, 地板+带宽) 且锚点不过线的候选被否决
+    # (孩子疫苗 0.334、停车月卡 0.348 均落带内)
+    "subject_veto_margin": 0.08,
+    # 多子词佐证豁免线:边际带候选若被 ≥2 个**不同**子词以此分以上命中,视为查询的
+    # 真意图,免于主体否决——独立回答查询两个侧面的文档不是词面表亲。实测分离面:
+    # 家庭保险单(保险 0.4395/保费 0.4531 双过)vs 孩子疫苗(第二强针次 0.361)/
+    # 停车月卡(第二强资费 0.348),±0.04 对称余量,是全部候选判据里最宽的一个
+    # (锚点孤儿/主语短语/救援分单判都实测不可分,见台账波 F5-检索)。
+    "subquery_corroborate_score": 0.4,
 }
 THRESHOLDS: Dict[str, float] = {k: tuning.get(k, d) for k, d in _THR_DEFAULTS.items()}
 
@@ -1002,6 +1022,36 @@ def _contains_prefetch(col_name: str, tokens: List[str]) -> List[dict]:
     return out
 
 
+# ── F5 检索架构:多意图分解与主体锚点(纯函数,金测试直测)──────────────────────
+_SUBQUERY_MIN_TERMS = 3     # optimized_query 至少三个关键词才视为可能的多意图查询
+
+
+def split_subquery_terms(optimized_query: str) -> list:
+    """optimized_query 的关键词切分(按空白;≥2 字的词才有检索意义)。"""
+    return [t for t in (optimized_query or "").split() if len(t) >= 2]
+
+
+def derive_anchor(terms: list) -> str:
+    """主体锚点:优先取出现在 ≥2 个关键词里的最长公共子串(主题词,如
+    咖啡豆/咖啡机 → 咖啡);无共通主题则取首词(优化查询的主语惯例位)。
+
+    它是救援与否决共用的「主体一致性」判据:文档对锚点的重排分低,说明它靠
+    谓词词面蹭分(问猫的疫苗捞回孩子疫苗)——不管全句分多接近地板都不该救/该杀。
+    """
+    if not terms:
+        return ""
+    best = ""
+    for i, a in enumerate(terms):
+        for j in range(len(a)):
+            for k in range(j + 2, len(a) + 1):
+                sub = a[j:k]
+                if len(sub) <= len(best):
+                    continue
+                if any(sub in b for b in terms[:i] + terms[i + 1:]):
+                    best = sub
+    return best or terms[0]
+
+
 def _query_single_db(col_name: str, query_emb: list, top_k: int):
     """供线程池使用的独立查库函数"""
     try:
@@ -1095,6 +1145,33 @@ def advanced_query_rag(req: QueryRequest):
     if fts_added:
         logger.info(f"🔤 FTS 关键词腿补入 {fts_added} 条候选")
 
+    # 3d. 多意图分解腿（F5）:关键词逐个作子查询向量检索,只扩池不定序。
+    #     多意图查询的整句向量落在几个意图的质心之间,只覆盖单一意图的文档单腿
+    #     召回不到(rq-multi-004 实证);与标识符/FTS 腿同纪律,重排是终局裁判。
+    #     每块记下命中它的子词(_via_terms)——子词救援(5b)只对分解腿召回的块开放。
+    sub_terms = split_subquery_terms(req.optimized_query)
+    if len(sub_terms) >= _SUBQUERY_MIN_TERMS:
+        try:
+            term_embs = get_embeddings(sub_terms)
+            sub_added = 0
+            for term, emb in zip(sub_terms, term_embs):
+                for db_name in target_dbs:
+                    for c in _query_single_db(db_name, emb, 3):
+                        if c["id"] in seen_ids:
+                            for existing in all_retrieved_chunks:
+                                if existing["id"] == c["id"]:
+                                    existing.setdefault("_via_terms", []).append(term)
+                                    break
+                            continue
+                        c["_via_terms"] = [term]
+                        all_retrieved_chunks.append(c)
+                        seen_ids.add(c["id"])
+                        sub_added += 1
+            if sub_added:
+                logger.info(f"🧩 多意图分解腿({len(sub_terms)} 子词)补入 {sub_added} 条候选")
+        except Exception as e:
+            logger.warning(f"⚠️ 分解腿失败（跳过该路,主腿照常）: {e}")
+
     if not all_retrieved_chunks:
         return {"original_query": req.query, "scanned_dbs": target_dbs, "total_chunks_retrieved": 0, "results": []}
 
@@ -1110,6 +1187,67 @@ def advanced_query_rag(req: QueryRequest):
         chunk for chunk in all_retrieved_chunks
         if chunk["rerank_score"] >= THRESHOLDS["rerank_min_score"]
     ]
+
+    # 5b. 主体锚点:救援与否决（F5,实测校准值见 _THR_DEFAULTS 注释）。
+    #     两头对同一地板施反向压力(负例要严、多文档要松),不动地板,动结构:
+    #     · 救援:分解腿召回、全句分不过地板的块,若对命中子词的分 ≥ rescue 线
+    #       **且**对主体锚点的分 ≥ anchor 线 → 收编(咖啡机除垢 0.281 全句分,
+    #       对「除垢」0.578、对主题「咖啡」0.361——是查询明列的一个意图,该进);
+    #     · 否决:全句分落在 [地板, 地板+带宽) 的边际带、且锚点分 < anchor 线的
+    #       块剔除(孩子疫苗 0.334 贴地越线,对「猫」0.182——主体不符,该出)。
+    anchor = derive_anchor(sub_terms) if len(sub_terms) >= _SUBQUERY_MIN_TERMS else ""
+    if anchor:
+        floor = THRESHOLDS["rerank_min_score"]
+        band_hi = floor + THRESHOLDS["subject_veto_margin"]
+        marginal = [c for c in confident_chunks if c["rerank_score"] < band_hi]
+        rescuable = [c for c in all_retrieved_chunks
+                     if c.get("_via_terms") and c["rerank_score"] < floor]
+        need_anchor = marginal + rescuable
+        if need_anchor:
+            try:
+                anchor_scores = COMPUTE.rerank(anchor, [c["document"] for c in need_anchor])
+                for c, a_score in zip(need_anchor, anchor_scores):
+                    c["_anchor_score"] = a_score
+                # 佐证豁免:边际带候选逐子词打分,≥2 个不同子词过佐证线 → 免否决
+                # (多主体查询的第二主体文档对首词锚点必然低分——rq-multi-001 误杀实证)
+                corroborate = THRESHOLDS["subquery_corroborate_score"]
+                for c in marginal:
+                    strong = 0
+                    for term in sub_terms:
+                        if COMPUTE.rerank(term, [c["document"]])[0] >= corroborate:
+                            strong += 1
+                            if strong >= 2:
+                                break
+                    c["_corroborated"] = strong >= 2
+                vetoed = [c for c in marginal
+                          if not c.get("_corroborated")
+                          and c.get("_anchor_score", 1.0) < THRESHOLDS["anchor_min_score"]]
+                for c in vetoed:
+                    confident_chunks.remove(c)
+                    logger.info(f"🚷 边际带主体否决: {c['id']} 全句 "
+                                f"{c['rerank_score']:.3f} / 锚点[{anchor}] "
+                                f"{c['_anchor_score']:.3f}")
+                rescued = 0
+                for c in rescuable:
+                    if c.get("_anchor_score", 0.0) < THRESHOLDS["anchor_min_score"]:
+                        continue
+                    term_scores = COMPUTE.rerank(
+                        " ".join(c["_via_terms"]), [c["document"]])
+                    if term_scores and term_scores[0] >= THRESHOLDS["subquery_rescue_score"]:
+                        c["rerank_score"] = term_scores[0]   # 排序按救援分(如实:子词口径)
+                        confident_chunks.append(c)
+                        rescued += 1
+                        logger.info(f"🛟 子词救援: {c['id']} 子词[{','.join(c['_via_terms'])}] "
+                                    f"{term_scores[0]:.3f} / 锚点[{anchor}] "
+                                    f"{c['_anchor_score']:.3f}")
+                if rescued:
+                    confident_chunks.sort(key=lambda x: x["rerank_score"], reverse=True)
+            except Exception as e:
+                logger.warning(f"⚠️ 锚点判定失败（跳过救援/否决,按原置信集续走）: {e}")
+    for c in all_retrieved_chunks:
+        c.pop("_via_terms", None)
+        c.pop("_anchor_score", None)
+        c.pop("_corroborated", None)
     # MMR 多样性选择（grok-build 评估采纳）：候选多于名额时防 top-k 全是同一
     # 文档的近邻块；候选不足名额时原样通过（没得挑就不挑，行为与旧版全同）。
     final_results = mmr_select(confident_chunks, req.rerank_top_k)

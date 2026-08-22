@@ -1,9 +1,9 @@
 {
-  "stamp": "20260818-003946",
+  "stamp": "20260822-201356",
   "tier": "vl-2b",
   "floors": {
     "vl-2b": {
-      "pass_rate": 0.931,
+      "pass_rate": 0.99,
       "mrr": 0.99
     }
   },
@@ -13,7 +13,7 @@
   "summary": {
     "overall": {
       "n": 51,
-      "pass_rate": 0.941,
+      "pass_rate": 1.0,
       "mrr": 1.0
     },
     "by_kind": {
@@ -31,7 +31,7 @@
       },
       "multidoc": {
         "n": 5,
-        "pass_rate": 0.8
+        "pass_rate": 1.0
       },
       "name": {
         "n": 5,
@@ -39,7 +39,7 @@
       },
       "negative": {
         "n": 6,
-        "pass_rate": 0.667
+        "pass_rate": 1.0
       },
       "semantic": {
         "n": 14,
@@ -230,7 +230,7 @@
     {
       "id": "rq-neg-004",
       "kind": "negative",
-      "pass": false
+      "pass": true
     },
     {
       "id": "rq-neg-005",
@@ -240,7 +240,7 @@
     {
       "id": "rq-neg-006",
       "kind": "negative",
-      "pass": false
+      "pass": true
     },
     {
       "id": "rq-multi-003",
@@ -250,7 +250,7 @@
     {
       "id": "rq-multi-004",
       "kind": "multidoc",
-      "pass": false
+      "pass": true
     },
     {
       "id": "rq-multi-005",
@@ -307,6 +307,5 @@
       "kind": "semantic",
       "pass": true
     }
-  ],
-  "floor_drop_reason": "阶段复审 M2：新增 items_digest 校验 + 题目 id 前缀归一（rq-id-00x → rq-ident-00x），题集内容摘要变更需重钉；水位未变（0.941）"
+  ]
 }

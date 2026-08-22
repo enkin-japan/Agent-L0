@@ -159,6 +159,16 @@ class ModelDialect(Protocol):
         """
         ...
 
+    def render_tool_declaration(self, tool: Dict[str, Any]) -> str:
+        """把单个工具 schema 渲染成**本方言 prompt 面的声明格式**（D0①）。
+
+        catalog 模式下 get_tool_schema 按名取详情回喂模型——回裸 JSON 的话,模型拿到
+        的形状与它在稳定前缀里见过的声明**不同形**,等于教它一种没见过的写法再要求
+        它照第三种格式发调用。回本方言的声明串,取详情与常驻声明同形。
+        方言未实现时协议层允许回退 JSON（调用方 getattr 兜底）——功能可用,只是次优。
+        """
+        ...
+
     def parse_error_retry_hint(self) -> str:
         """解析纠错反馈里的**格式教学段**（方言事实）。
 

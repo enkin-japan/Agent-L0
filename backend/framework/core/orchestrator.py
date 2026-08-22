@@ -1096,9 +1096,30 @@ class Orchestrator:
             by_name = {s.get("name"): s for s in self.registry.get_all_schemas()}
             found = [by_name[n] for n in names if n in by_name]
             missing = [n for n in names if n not in by_name]
+            # D0①:详情按**方言声明格式**回喂——回裸 JSON 是教模型一种它在稳定前缀里
+            # 没见过的形状,再要求它按第三种形状(调用 DSL)发实参。方言未实现渲染器时
+            # 回退 JSON(fail-open,功能可用只是次优)。
+            render = getattr(getattr(self.engine, "dialect", None),
+                             "render_tool_declaration", None)
             parts = []
             if found:
-                parts.append(json.dumps(found, ensure_ascii=False))
+                rendered = None
+                if callable(render):
+                    try:
+                        # 先整体渲染进局部列表再并入(复审 Critical):对着 parts 直接
+                        # extend 生成器,第 N 件渲染炸掉时前 N-1 件已经进了 parts,
+                        # 再补整段 JSON 就是「半 DSL 半 JSON 还重复」的观察
+                        rendered = [str(render(t)) for t in found]
+                    except Exception as e:
+                        # fail-open 也要留痕(复审):方言渲染器永久坏掉的话,每次取
+                        # 详情都在静默降级,无痕则永远查不到
+                        events.emit("tool_schema_render_fallback",
+                                    error=f"{type(e).__name__}: {e}")
+                        print(f"[Orchestrator] ⚠️ get_tool_schema 方言渲染失败,"
+                              f"回退 JSON: {e}")
+                        rendered = None
+                parts.extend(rendered if rendered is not None
+                             else [json.dumps(found, ensure_ascii=False)])
             if missing:
                 parts.append(f"Unknown tools (check the catalog for exact names): {missing}")
             return "\n".join(parts)

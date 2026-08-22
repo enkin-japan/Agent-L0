@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 from ...core.dialect_protocol import DialectMarkers, ToolCallGrammar
 from .prompt_builder import PromptBuilder
 from .response_parser import ResponseParser
+from .dsl import format_function_declaration
 from .tool_grammar import build_tool_call_grammar
 
 
@@ -84,6 +85,11 @@ class Gemma4Dialect:
 
     def tool_call_grammar(self, tools: List[Dict[str, Any]]) -> ToolCallGrammar:
         return ToolCallGrammar(kind="lark", body=build_tool_call_grammar(tools))
+
+    def render_tool_declaration(self, tool: Dict[str, Any]) -> str:
+        # D0①:get_tool_schema 取详情回本方言的 declaration DSL——与稳定前缀里的常驻
+        # 声明同形,模型不必在「目录看到的」「详情拿到的」「调用要发的」三种形状间换算
+        return format_function_declaration(tool)
 
     def parse_error_retry_hint(self) -> str:
         # 本方言调用体是官方紧凑 DSL（§7-8 迁移，2026-08-14）。迁移前这里教的是 JSON、
