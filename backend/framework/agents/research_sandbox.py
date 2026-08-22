@@ -15,7 +15,7 @@ import time
 from typing import List, Dict, Optional
 
 from . import web_tools
-from .sandbox_runtime import EphemeralSession, SandboxSpec, run_sandbox
+from .sandbox_runtime import EphemeralSession, SandboxSpec, note_usage, run_sandbox
 
 
 SANDBOX_SYSTEM_PROMPT = (
@@ -119,7 +119,8 @@ def _extract_urls(args: dict) -> List[str]:
 
 async def run_research(engine, query: str, cfg: dict,
                        timeout_s: Optional[float] = None,
-                       progress_cb=None) -> str:
+                       progress_cb=None,
+                       usage_sink: Optional[dict] = None) -> str:
     """
     沙箱主循环（协程，运行在主事件循环上）。返回沙箱形成的最终事实摘要文本。
     engine.generate_once 内部持有推理锁，与其他会话生成串行。
@@ -130,6 +131,9 @@ async def run_research(engine, query: str, cfg: dict,
 
     progress_cb(label)：可选进度上报（orchestrator 的钩子，见 runtime.report_progress）。
     在思考/搜索/阅读/收敛节点上报当前动作，前端 ActivityCard 实时可见。fire-and-forget。
+
+    usage_sink：父轮的用量回收槽（F6）。与 progress_cb 同款交接——包壳在工具线程取出后
+    作参数传入，投回主循环的协程不继承工具线程 ContextVar。None = 记账空转。
     """
     import asyncio
 
@@ -142,7 +146,7 @@ async def run_research(engine, query: str, cfg: dict,
             pass  # 进度是仪表，绝不影响调查本体
 
     sess = EphemeralSession(engine.backend, SANDBOX_SYSTEM_PROMPT, query,
-                            time_anchor=True)
+                            time_anchor=True, usage_sink=usage_sink)
     web_tools.reset_extraction_cache()  # 段落去重缓存按调查为界，防跨调查记仇（见函数注释）
     max_steps = int(cfg.get("max_steps", 6))
     deadline = (time.monotonic() + timeout_s) if timeout_s else None
@@ -214,6 +218,8 @@ async def run_research(engine, query: str, cfg: dict,
                                         "factual digest from the material collected above, honestly noting "
                                         "where evidence is insufficient.")})
         result = await engine.generate_once(sess, tools=_TOOLS, temperature=0.2, max_tokens=2048)
+        note_usage(usage_sink, generations=1,
+                   generation_tokens=(result.get("metrics") or {}).get("generation_tokens", 0) or 0)
         return (_finish((result.get("text", "") or "").strip())
                 or "[web_research: budget exhausted without a conclusion]")
 
@@ -223,6 +229,7 @@ async def run_research(engine, query: str, cfg: dict,
         tools=_TOOLS,
         max_steps=max_steps,
         max_tokens=2048,
+        usage_sink=usage_sink,
         dispatch=_dispatch,
         # 不再调工具即视为已得结论：摘要本就是文本产物，推回它等于逼它重说一遍。
         on_give_up=lambda text: _finish(text.strip()) or "[web_research: no conclusion reached]",
@@ -264,18 +271,24 @@ READER_SYSTEM_PROMPT = (
 )
 
 
-async def run_page_digest(engine, question: str, material: str, cfg: dict) -> str:
+async def run_page_digest(engine, question: str, material: str, cfg: dict,
+                          usage_sink: Optional[dict] = None) -> str:
     """
     web_read 的沙箱侧（协程，运行在主事件循环上）：与 run_research 同一隔离模型
     （一次性 KV、原文不外泄），但没有工具、只做一次生成——抓取已由包壳在工具线程完成。
     material 须是 wrap_untrusted 包好的页面正文。
+
+    usage_sink：父轮的用量回收槽（F6），同 run_research。
     """
     goal = (question or "").strip() or "General summary of the page(s)."
     sess = EphemeralSession(engine.backend, READER_SYSTEM_PROMPT,
-                            f"Reading goal: {goal}\n\n{material}", time_anchor=True)
+                            f"Reading goal: {goal}\n\n{material}", time_anchor=True,
+                            usage_sink=usage_sink)
     result = await engine.generate_once(
         sess, tools=None, temperature=0.2,
         max_tokens=int(cfg.get("max_summary_tokens", 2048)))
+    note_usage(usage_sink, generations=1,
+               generation_tokens=(result.get("metrics") or {}).get("generation_tokens", 0) or 0)
     if result.get("cancelled"):
         return "[web_read: generation cancelled]"
     return (result.get("text", "") or "").strip() or "[web_read: no digest produced]"

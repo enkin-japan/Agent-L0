@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from . import excel_tools
-from .sandbox_runtime import EphemeralSession, SandboxSpec, run_sandbox
+from .sandbox_runtime import EphemeralSession, SandboxSpec, note_usage, run_sandbox
 from ..excel import inspect_workbook, verify_workbook
 
 _REFERENCES_DIR = Path(__file__).parent.parent / "excel" / "references"
@@ -249,7 +249,8 @@ def _trim_report(report: dict) -> dict:
     return out
 
 
-async def _visual_qa(engine, pages: List[str], max_pages: int = 2) -> str:
+async def _visual_qa(engine, pages: List[str], max_pages: int = 2,
+                     usage_sink: Optional[dict] = None) -> str:
     """一次性单发视觉回读：每页一个全新 mini 会话（不污染主沙箱 KV）。
 
     视觉回读是**无状态单发**——经 model_router 按实测画像路由（主模型无 vision
@@ -272,8 +273,11 @@ async def _visual_qa(engine, pages: List[str], max_pages: int = 2) -> str:
         qa = EphemeralSession(
             qa_engine.backend, _VISUAL_QA_SYSTEM,
             f"Rendered page {i + 1} of the workbook you produced. Inspect it.",
-            images=[png])
+            images=[png], usage_sink=usage_sink)
         r = await qa_engine.generate_once(qa, tools=None, temperature=0.1, max_tokens=300)
+        # 视觉回读也是真金白银的子生成（且逐页一发），入父轮的账。
+        note_usage(usage_sink, generations=1,
+                   generation_tokens=(r.get("metrics") or {}).get("generation_tokens", 0) or 0)
         return (r.get("text") or "").strip()
 
     # 逐页并行（B1 并发落地）：页间会话独立，gather 齐发；并发度由引擎信号量钳制
@@ -347,9 +351,13 @@ def _format_digest(session_id: str, delivered: Optional[str], state: _GateState,
 
 async def run_excel_task(engine, task: str, input_file: Optional[str],
                          session_dir: Path, session_id: str, cfg: dict,
-                         progress: Optional[Callable] = None) -> str:
+                         progress: Optional[Callable] = None,
+                         usage_sink: Optional[dict] = None) -> str:
     """沙箱主循环（协程，运行在主事件循环上）。返回结果摘要文本。
-    engine.generate_once 内部持有推理锁，与其他会话生成串行。"""
+    engine.generate_once 内部持有推理锁，与其他会话生成串行。
+
+    usage_sink：父轮的用量回收槽（F6）。与 progress 同款交接——包壳在工具线程取出后作
+    参数传入，投回主循环的协程不继承工具线程 ContextVar。None = 记账空转。"""
     def _report(label: str, detail: str = ""):
         if progress is not None:
             try:
@@ -395,7 +403,8 @@ async def run_excel_task(engine, task: str, input_file: Optional[str],
         opening += ("No input file. Create the workbook in the current directory with a "
                     "descriptive bare filename (e.g. wb.save('report.xlsx')), then verify it.")
 
-    sess = EphemeralSession(engine.backend, EXCEL_SANDBOX_SYSTEM_PROMPT, opening)
+    sess = EphemeralSession(engine.backend, EXCEL_SANDBOX_SYSTEM_PROMPT, opening,
+                            usage_sink=usage_sink)
     visual_summary = ""
     budget_notice_sent = False
 
@@ -458,7 +467,8 @@ async def run_excel_task(engine, task: str, input_file: Optional[str],
         if do_visual_qa and report.get("preview_pages"):
             _report("视觉回读", "")
             try:
-                visual_summary = await _visual_qa(engine, report["preview_pages"])
+                visual_summary = await _visual_qa(engine, report["preview_pages"],
+                                                  usage_sink=usage_sink)
                 trimmed["visual_readback"] = visual_summary
             except Exception as e:
                 trimmed["visual_readback"] = f"(unavailable: {e})"
@@ -597,6 +607,7 @@ async def run_excel_task(engine, task: str, input_file: Optional[str],
             tools=_TOOLS,
             max_steps=max_steps,
             max_tokens=1536,
+            usage_sink=usage_sink,
             dispatch=_dispatch,
             on_give_up=lambda text: (
                 text.strip() + "\n\n[excel_research: the sub-module stopped "

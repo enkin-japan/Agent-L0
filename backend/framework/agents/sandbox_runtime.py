@@ -22,6 +22,34 @@ from datetime import datetime
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 
+# ==========================================================================
+# 用量归因（F6）：沙箱子生成回填父轮
+# ==========================================================================
+def note_usage(sink: Optional[dict], *, generations: int = 0,
+               generation_tokens: int = 0, bucket: str = "sub") -> None:
+    """把一次子生成的用量记进父轮的回收槽。sink 为 None（脚本直跑沙箱、无轮次上下文）
+    时静默空转——记账是仪表，绝不影响沙箱本体。
+
+    bucket 分桶：
+     · "sub"          —— 子 agent 沙箱（web/math/excel），计入 max_total_iterations 熔断；
+     · "goal_verify"  —— 收尾目标校验，它是护栏不是子 agent，单独成桶且**不计入熔断**
+       （否则护栏会把自己烧进保险丝）。
+
+    ⚠️ 类型闸不是洁癖：sink 是沙箱通向父轮的唯一出口，只准过数值。非 int（bool 属
+    int 子类，显式排除——True 会静默变成 1）一律丢弃；负值钳 0（用量不会是负的，
+    负值只可能来自算错或注入）。
+    """
+    if sink is None:
+        return
+    for key, value in ((f"{bucket}_generations", generations),
+                       (f"{bucket}_generation_tokens", generation_tokens)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        if value < 0:
+            value = 0
+        sink[key] = sink.get(key, 0) + value
+
+
 class EphemeralSession:
     """一次性会话替身：只暴露 generate_once 读取的字段，全新 KV、用完即弃。不落盘。
 
@@ -38,8 +66,12 @@ class EphemeralSession:
     prompt_stream = None
 
     def __init__(self, backend, system_prompt: str, opening: str,
-                 images: Optional[List[str]] = None, time_anchor: bool = False):
+                 images: Optional[List[str]] = None, time_anchor: bool = False,
+                 usage_sink: Optional[dict] = None):
         self.brain_memory_state = backend.new_cache()
+        #: 父轮的用量回收槽（F6）。刻意是**普通属性、不进 history、不进任何 prompt 面**
+        #: ——它只往外记数，绝不参与生成上下文（不落盘纪律不因它破例）。
+        self.usage_sink = usage_sink
 
         if time_anchor:
             _anchor = datetime.now().astimezone().strftime("%Y-%m-%d (%A) %H:%M %Z (UTC%z)")
@@ -116,6 +148,11 @@ class SandboxSpec:
     #: 附加到诊断行尾的沙箱自有状态（excel 的 repairs=N）。
     trace_extra: Optional[Callable[[], str]] = None
 
+    #: 父轮的用量回收槽（F6）。由工具包壳在工具线程 runtime.get_usage_sink() 取出、
+    #: 作参数传进沙箱协程——投回主循环的协程不继承工具线程 ContextVar，故必须显式传。
+    #: None = 无轮次上下文（脚本直跑），记账空转。
+    usage_sink: Optional[dict] = None
+
 
 async def run_sandbox(engine, spec: SandboxSpec) -> str:
     """沙箱 ReAct 循环（协程，运行在主事件循环上）。
@@ -141,6 +178,10 @@ async def run_sandbox(engine, spec: SandboxSpec) -> str:
 
         result = await engine.generate_once(sess, tools=spec.tools, temperature=0.2,
                                             max_tokens=spec.max_tokens)
+        # 用量归因（F6）：这一次子生成入父轮的账。记在取消判定**之前**——被取消的生成
+        # 同样烧了算力，账要如实。
+        note_usage(spec.usage_sink, generations=1,
+                   generation_tokens=(result.get("metrics") or {}).get("generation_tokens", 0) or 0)
         if result.get("cancelled"):
             return f"[{spec.tag}: generation cancelled]"
 

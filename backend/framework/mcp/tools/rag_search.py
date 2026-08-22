@@ -157,7 +157,27 @@ class RAGSearchTool(BaseTool):
 
             docs = result_dict.get("results", [])
             if not docs:
-                return f"No results were found in the database for '{query}' in category '{category}'."
+                # 空结果细分（F3 后半，复审修正后的口径）：total_chunks_retrieved 是
+                # **最近邻池**大小——无距离阈值,非空库上几乎恒 >0（rag_server 的
+                # _query_single_db 恒返回 top-k）。它能区分的不是「库里有没有这个主题」
+                # （那要看重排分,服务端不回传）,而是「扫到了库但全被相关性阈值筛掉」vs
+                # 「目标库是空的/不存在」。话术只许陈述这两件事实,**不许**据此宣称
+                # 「库里有料」——那是在制造对缺失内容的假信心,比不细分更糟。
+                try:
+                    retrieved = int(result_dict.get("total_chunks_retrieved") or 0)
+                except (TypeError, ValueError):
+                    retrieved = 0          # 脏值按空库口径降级,不许把良性空结果炸成 System Error
+                if retrieved > 0:
+                    return (f"No results for '{query}' in category '{category}': the "
+                            f"{retrieved} nearest chunk(s) all scored below the relevance "
+                            "cutoff after reranking. The topic is likely not covered here, "
+                            "or is phrased very differently. You may retry ONCE with "
+                            "different wording or another category; otherwise report the "
+                            "information as not found in the knowledge base.")
+                return (f"No results for '{query}' in category '{category}': the target "
+                        "store is empty or unavailable — nothing was retrieved at all. "
+                        "Pick a different category, or the material may need to be "
+                        "ingested first.")
             
             # 格式化检索结果供大模型阅读；渲染格载荷（R3）与格式化同源同循环——
             # 结构交给客户端排引文卡片，不必让谁再从格式化文本里解析回来。

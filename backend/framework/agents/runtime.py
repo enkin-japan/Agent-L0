@@ -62,6 +62,31 @@ def report_progress(label: str, detail: str = "") -> None:
         pass
 
 
+# 当前轮次的用量回收槽（dict，由 orchestrator.run_turn 持有并在轮末盖进 metrics）。
+# 与 _PROGRESS_HOOK 同一套惯例：编排层在轮内 set，asyncio.to_thread 把上下文拷进工具线程。
+# 为什么需要它：web_research / math_research / excel_research 在沙箱里跑的每一次
+# generate_once 此前完全不入父轮的账——history.jsonl 落盘的 metrics 因此系统性低估
+# （实测 8 倍），且 max_total_iterations 只数主循环迭代，一轮连调五次调研烧掉三十次
+# 生成却只计五次，保险丝形同虚设。沙箱把用量顺着这个槽回填父轮。
+# 注意：run_coroutine_threadsafe 投回主循环的协程【不继承】工具线程的 ContextVar
+# ——沙箱包壳须在工具线程先 get_usage_sink()，再把 sink 作参数显式传入协程
+# （与 progress_cb 同款交接）。
+# ⚠️ 槽里只准放数值（见 sandbox_runtime.note_usage 的类型闸）：它是沙箱通向父轮的
+# 唯一出口，任何非数值面都可能把沙箱上下文顺着它漏回父轮（inject_env_context=False
+# 的反方向）。
+_USAGE_SINK: "ContextVar[Optional[dict]]" = ContextVar("usage_sink", default=None)
+
+
+def set_usage_sink(sink: "Optional[dict]") -> None:
+    """轮次开始时登记用量回收槽（orchestrator.run_turn 内调用）。"""
+    _USAGE_SINK.set(sink)
+
+
+def get_usage_sink() -> "Optional[dict]":
+    """工具线程内取本轮的用量槽；非轮次上下文返回 None（此时记账静默空转）。"""
+    return _USAGE_SINK.get()
+
+
 def set_runtime(engine, loop: "asyncio.AbstractEventLoop") -> None:
     """启动时登记推理引擎与主事件循环（lifespan 内调用）。"""
     global _ENGINE, _LOOP

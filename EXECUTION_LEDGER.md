@@ -565,8 +565,8 @@ R0–R5 各小项的打勾细分（含每步实测结果与计划外发现）已
 
 | 项 | 当前值 | 口径 |
 |---|---|---|
-| 金测试项数 | 1452 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
-| 测试文件数 | 100 | `backend/tests/` 下递归的 `test_*.py` |
+| 金测试项数 | 1490 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
+| 测试文件数 | 102 | `backend/tests/` 下递归的 `test_*.py` |
 | mcp 文件数 | 31 | `backend/framework/mcp/` 递归下的 `.py`，**不含** `__init__.py` |
 | BaseTool 子类 | 67 | 全 backend 内 `class X(BaseTool)` 的声明数（一个文件可有多个） |
 | 物理隔离沙箱 | 3 | `backend/framework/agents/*_sandbox.py` |
@@ -3780,6 +3780,53 @@ request 里刻意不放 orchestrator/ingestion,能拿到 202 本身即证据）;
 
 ---
 
+**波 F6 + F3 后半交付（2026-08-22）——子沙箱用量归因 + rag_search 空结果细分（第 2 层收官）**
+
+*F6 病根三层*：①子沙箱（web/math/excel 调研）内部生成完全不入父轮账,history 落盘
+metrics 系统性低估（自记「实测低估 8 倍」）;②升级验收对「一次调研烧多少」是瞎的;
+③`max_total_iterations` 只数主循环——连调研的轮次保险丝形同虚设。
+
+*F6 修法*：`note_usage` 唯一写入口（非 int 含 bool 丢弃、负值钳 0——sink 是沙箱通向
+父轮的唯一出口,只收数值防上下文反向泄漏）;`runtime` 增 `_USAGE_SINK` ContextVar
+（与 `_PROGRESS_HOOK` 同惯例:orchestrator 在 run_turn 任务上下文 set → to_thread 拷进
+工具线程 → 包壳 get 后**作参数显式传入**沙箱协程）。六处生成点入账（run_sandbox 循环
++ math/research×2/excel-QA + 收尾目标校验;implementer 自行发现规格外第五个包壳
+`web_read` 并接上,`run_math` 无模型如实不接）。metrics 增 `sub_*`/`goal_verify_*`
+四字段（非零才出现,PROTOCOL §2.3 记 additive）;跨审批分段续算;取消的生成同样计费
+（烧了就入账）。**engine.py 未动**。
+
+*熔断口径（复审后的定案）*：子生成走**独立**保险丝 `max_sub_generations`（config 新键,
+default 80）——初版计进主分母,复审算账:一次 excel_research ≈16 次生成,研究型轮次的
+有效预算被压掉 5–16 倍,「原来能答的问题现在熔断」比低估更伤。两条丝各守各的,
+原病根「子生成无界」由独立丝闭合;goal_verify 桶两条都不计。
+
+*F3 后半（复审 Critical 后的定案）*：初版按计划书把 `total_chunks_retrieved>0` 读成
+「库里有料」——**前提是错的**:该字段是无阈值最近邻池,非空库上几乎恒 >0,那句话术
+会在几乎所有空结果上制造对缺失内容的假信心（比不细分更糟）。真实二分是「扫到了库但
+全被相关性阈值筛掉（话术:如实陈述 N 个最近邻低于阈值,换措辞重试一次或如实报告
+未找到）」vs「目标库空/不可用（换 category/先摄入）」;脏值安全降级不炸 System Error。
+**D.24 里 F3 这半的原设想（放宽 rerank_top_k 的建议）随之撤销**——复审证明它基本无效
+(results 空 ⟺ confident_chunks 空,rerank_top_k 只作用于已空的列表)。
+
+*复审(1 Critical/若干建议)其余处置*：主熔断返回路补 stamp（携带态越过阈值时 while 体
+一次不进,metrics 是空 dict——F6 亲手把这条路变成易达路径）;`resume_after_approval`
+先清过期 sink（定时轮 runner 同 Task 连跑两段,上一段的孤儿 dict 是活的）;熔断消息
+措辞去两义;goal-verify stamp 注释按实改。
+
+*金测试 1452 → **1490**（F6 归因 33 + F3 细分 5）。**变异体 7 注入 6 验红 + 1 存活者
+查明正法**:U1 主熔断 stamp 撤除首轮存活——夹具让循环跑了两轮,循环内 stamp 把账补上,
+改为「携带态进门即熔断」（keep_recent_calls=True + carried 越阈）后处决;U2 子丝撤除/
+U3 包壳删 kwarg/U4 记账换序到取消后/U5 假信心话术回潮/F3-M1 细分塌缩——均红。*
+
+*如实挂账*：①超时被弃的沙箱协程无法真取消,会继续往本轮 sink 记账直到自身软截止——
+落盘计到最后一次 stamp 为止,如实非全量;②`sub_generation_tokens` 是跨模型合计
+（excel 视觉 QA 可路由专职视觉端点）,是算力量级仪表不是单 tokenizer 口径（PROTOCOL
+已注明）;③`resume_after_approval` 的 sink 清零是防御带,无审批门控沙箱工具前不可达、
+无测试;④`cloud/egress_guard.py:139` 与 `ppt/deck_critique.py:147` 两处域外 generate_once
+仍未归因（域外,挂账不扩）;⑤Swift/web 客户端不消费新 metrics 字段（additive,忽略即可）。
+
+---
+
 **全账重排（D.24，2026-08-18 用户拍板）——判据：① 缺陷修复优先 ② Mac 端优先——**
 
 **这是当前唯一有效的施工顺序**，覆盖此前所有「下一件」写法。`第二梯队` 段已改为指回本块。
@@ -3835,11 +3882,10 @@ request 里刻意不放 orchestrator/ingestion,能拿到 202 本身即证据）;
    → `B3` 幂等键~~ **✅ 2026-08-22 三件全交付**（见上方「波 B1/B2/B3 交付」块;
    B2 真机验收按用户拍板路径 B 完成——临时 inprocess 起 e4b,基线红/修后绿两遍闭环,
    config 逐字节还原）
-2. `F6` 子沙箱用量归因回父轮 — metrics 系统性低估（自记「实测低估 8 倍」）、
-   `max_total_iterations` **熔断形同虚设**；sink 挂 `EphemeralSession`（五处调用点唯一公共对象，
-   **不改 `engine.py`**，避开铁律 1 sacred 面）
-3. `F3` 工具返回契约剩下的半条 — `rag_search` 的 `empty` 细分（`total_chunks_retrieved>0`
-   而 `results==[]`），**只改一个文件**，S
+2. ~~`F6` 子沙箱用量归因回父轮~~ **✅ 2026-08-22 交付**（见上方交付块;熔断定案为
+   独立子生成保险丝,不挤占主循环预算）
+3. ~~`F3` 工具返回契约剩下的半条~~ **✅ 2026-08-22 交付**（见上方交付块;
+   ⚠️ 原设想的字段语义经复审证伪,细分口径已改为「阈值筛空 vs 库空」）
 
 **第 3 层｜防患**（今天影响为零，撞墙那天补不及）
 

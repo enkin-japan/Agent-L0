@@ -150,6 +150,13 @@
 `append_log` 盖章——落盘是唯一漏斗,故 `/chat` 响应、`turn_ended` 事件与
 `history.jsonl` 三面同值。**可选**:旧历史行没有,客户端缺省不显示时间(§0.5)。
 
+`sub_generations` / `sub_generation_tokens` / `goal_verify_generations` /
+`goal_verify_generation_tokens`(additive,2026-08-22 F6;不升版本):子沙箱
+(web/math/excel 调研)与收尾目标校验在各自一次性会话里的生成次数与 token 数,
+按桶归因回父轮。**可选,只在非零时出现**;客户端按未知字段规矩忽略即可。
+注意 `sub_generation_tokens` 是跨模型合计(excel 的视觉 QA 可能路由到专职视觉端点),
+是算力量级仪表,不是单一 tokenizer 口径。
+
 #### 2.3.1 工具观察的渲染格 `render`(additive,2026-07-16;不升版本)
 
 `response` 里 `role:"tool"` 的 `tool_responses[]` 条目**可选**携带 `render`:

@@ -297,6 +297,9 @@ class Orchestrator:
         # 护栏配置（config.yaml 的 agent 段，用户可调）
         self.react_max_steps = int(cfg.get("react_max_steps", 4))          # 单步内自纠预算
         self.max_total_iterations = int(cfg.get("max_total_iterations", 40))  # 一次任务总熔断
+        # [F6] 子沙箱生成的独立保险丝:主熔断守编排失控,这条守调研失控（一次
+        # excel_research ≈16 次生成,计进主分母会把研究型轮次预算压掉一个量级）
+        self.max_sub_generations = int(cfg.get("max_sub_generations", 80))
         self.replan_max = int(cfg.get("replan_max", 3))
         self.observation_max_chars = int(cfg.get("observation_max_chars", 4000))
         # ⚠️ 回落值必须与 `mcp/tools/shell_exec.py` 的 `_OUTER_BUDGET_FALLBACK_S` 逐字
@@ -479,6 +482,17 @@ class Orchestrator:
         turn_spec = {"drafted": int((_carried.get("spec") or {}).get("drafted") or 0),
                      "accepted": int((_carried.get("spec") or {}).get("accepted") or 0)}
         carried_parse_errors = int(_carried.get("parse_errors") or 0)
+        # [F6 子沙箱用量归因] 本轮的用量回收槽：web/math/excel 沙箱与收尾目标校验在自己的
+        # 一次性会话里跑的每次生成，都往这里回填计数（见 agents/sandbox_runtime.note_usage）。
+        # 此前这些子生成完全不入父轮的账——落盘 metrics 系统性低估、熔断只数主循环迭代。
+        turn_usage: Dict[str, int] = dict(_carried.get("usage") or {})
+        # 沙箱包壳（无状态 MCP 工具）拿不到本方法的局部量，经 ContextVar 交接：在此处
+        # （run_turn 的任务上下文里）set，asyncio.to_thread 把上下文拷进工具线程，包壳在
+        # 那里 get 出来再作参数显式传进沙箱协程——投回主循环的协程不继承工具线程上下文。
+        # 刻意不放进 _invoke_tool：那里够不到 turn_usage，塞进 session 就是多一处可变状态。
+        # 惰性导入：core 不静态依赖 agents（与 _invoke_tool / _goal_alignment_check 同先例）。
+        from ..agents import runtime as _usage_runtime
+        _usage_runtime.set_usage_sink(turn_usage)
 
         def _stamp_turn_stats() -> None:
             metrics["token_breakdown"] = dict(turn_breakdown)
@@ -488,6 +502,12 @@ class Orchestrator:
             if turn_spec["drafted"]:
                 metrics["spec_drafted"] = turn_spec["drafted"]
                 metrics["spec_accepted"] = turn_spec["accepted"]
+            # [F6] 子沙箱/护栏用量按桶盖进落盘 metrics。只在非零时出现：不给存量轮次
+            # 凭空加字段（history.jsonl 是既有消费面）。
+            for k in ("sub_generations", "sub_generation_tokens",
+                      "goal_verify_generations", "goal_verify_generation_tokens"):
+                if turn_usage.get(k):
+                    metrics[k] = turn_usage[k]
         # 有界恢复计数（T2-5 地基，承载 T1-2/T1-3；到顶即放行，杜绝新增分支造成死循环）
         max_tokens_override: Optional[int] = None   # T1-3：非 None 时本轮后续生成用升档上限
         max_tokens_recoveries = 0                    # T1-3：多轮「接着写」已用次数
@@ -534,7 +554,26 @@ class Orchestrator:
             if n_compacted:
                 print(f"[Orchestrator] 上下文压缩：削减 {n_compacted} 条历史工具观察")
 
+        # [F6] 子沙箱生成走**独立**保险丝（复审修正）:计进主熔断分母会把研究型轮次的
+        # 有效预算压掉 5–16 倍（一次 excel_research ≈16 次生成），「原来能答的问题现在
+        # 熔断」比低估更伤。两条丝各守各的:主循环 40 防编排失控,子生成 max_sub_generations
+        # 防调研失控——原病根「子生成完全无界」由后者闭合。goal_verify 桶两条都不计
+        # （护栏不是子 agent,把护栏烧进保险丝等于让安全网自食其果）。
         while session.carried_iterations + iterations < self.max_total_iterations:
+            if turn_usage.get("sub_generations", 0) >= self.max_sub_generations:
+                _stamp_turn_stats()
+                events.emit("turn_abort", session=session.session_id,
+                            reason="max_sub_generations",
+                            sub_generations=turn_usage.get("sub_generations", 0))
+                return {
+                    "status": "warning",
+                    "response": (f"子调研生成已达预算上限（{self.max_sub_generations} 次），任务终止。"
+                                 f"本轮主循环 {session.carried_iterations + iterations} 次、"
+                                 f"子调研生成 {turn_usage.get('sub_generations', 0)} 次。"
+                                 "可以试试：①减少调研类工具的连续调用；②把任务拆小分别发起。"),
+                    "thoughts": ["System Warning: sandbox generation budget exceeded."],
+                    "metrics": metrics,
+                }
             # --- 取消检查点（迭代边界；token 级检查在 engine 内） ---
             if session.cancel_requested:
                 return {"status": "cancelled", "response": "任务已被用户取消。", "metrics": metrics}
@@ -744,6 +783,9 @@ class Orchestrator:
                         "gen_tokens": turn_gen_tokens,
                         "spec": dict(turn_spec),
                         "parse_errors": carried_parse_errors + sum(parse_errors.values()),
+                        # [F6] 子沙箱/护栏用量同样跨审批续算：否则续跑段的保险丝分母会
+                        # 把前几段烧掉的子生成忘个干净，「弹审批→续跑」又成了绕过路径。
+                        "usage": dict(turn_usage),
                     }
                     names = "、".join(c.get("name") for c in approval_needed)
                     session.set_activity(f"等待授权：{names}", phase="awaiting_approval")
@@ -932,9 +974,14 @@ class Orchestrator:
                     goal_src = (task.goal if plan_done_big
                                 else _last_user_text(session.history))
                     session.set_activity("正在核对结果与目标…")
-                    ok_goal, why = await self._goal_alignment_check(goal_src, text)
+                    ok_goal, why = await self._goal_alignment_check(goal_src, text,
+                                                                    usage_sink=turn_usage)
                     events.emit("goal_verify", session=session.session_id,
                                 passed=ok_goal, reason=why)
+                    # [F6] 审计那次生成刚记进 goal_verify 桶，立即刷进 metrics：放行
+                    # return 这条出路走不到别的 stamp 点（推回 continue 下一迭代会补上,
+                    # 但放行是常态路径）,不在这里刷,护栏的开销就落不了盘（病根 ②）。
+                    _stamp_turn_stats()
                     if not ok_goal:
                         _transition("goal_verify_pushback")
                         session.add_assistant_message(content=text, thoughts=thoughts)
@@ -982,10 +1029,19 @@ class Orchestrator:
             # 空输出：浪费一次迭代，靠总熔断兜底
 
         # --- 总迭代熔断 ---
-        events.emit("turn_abort", session=session.session_id, reason="max_iterations")
+        # 本路必须 stamp（复审 Critical）:携带态越过阈值时 while 体一次都不进,
+        # metrics 还是空 dict——恰恰是审批分段+子生成把这条路变成了易达路径,
+        # 不落账等于整轮口径在自己造出的路径上失守
+        _stamp_turn_stats()
+        _sub_gens = turn_usage.get("sub_generations", 0)
+        events.emit("turn_abort", session=session.session_id, reason="max_iterations",
+                    sub_generations=_sub_gens)
+        # 如实说明预算烧在哪：主循环之外另有多少子调研生成，用户据此才知道
+        # 该拆任务还是该少调研（子生成有自己的保险丝,这里只如实附注）。
+        _budget_detail = (f"（期间另有子调研生成 {_sub_gens} 次）" if _sub_gens else "")
         return {
             "status": "warning",
-            "response": (f"任务在 {self.max_total_iterations} 次迭代内未能收敛，已终止。"
+            "response": (f"任务在 {self.max_total_iterations} 次主循环迭代内未能收敛{_budget_detail}，已终止。"
                          "可以试试：①把任务拆成几个更小的目标分别发起；②缩小范围（只处理一部分）；"
                          "③告诉我可以跳过哪些环节。"),
             "thoughts": ["System Warning: orchestration loop threshold exceeded."],
@@ -1050,19 +1106,25 @@ class Orchestrator:
         return f"Unknown meta tool: {name}"
 
     # ---------- 收尾目标校验（想法3 完整版：任务级独立审计，串行、每轮最多一次） ----------
-    async def _goal_alignment_check(self, goal: str, answer: str) -> "tuple[bool, str]":
+    async def _goal_alignment_check(self, goal: str, answer: str,
+                                    usage_sink: Optional[Dict[str, int]] = None
+                                    ) -> "tuple[bool, str]":
         """一次无工具小生成审计「最终答复是否兑现原始目标」。返回 (通过?, 理由)。
 
         成本刻意收敛：只喂 goal+答复（不带全历史），max_tokens 小、思考关闭；
         engine.generate_once 内部持有推理锁，与主循环天然串行（不违反单 worker）。
         任何异常/歧义一律 fail-open 放行——审计是安全网，绝不能反过来卡死收尾。
+
+        usage_sink：本轮的用量槽，由调用处（run_turn）显式传入——本方法是 Orchestrator
+        的方法而非工具，走参数而不是全局/ContextVar。它记进 goal_verify 桶：**护栏的
+        开销要可见（口径 ②），但不计入熔断（口径 ③）**。
         """
         backend = getattr(self.engine, "backend", None)
         if backend is None:
             return True, "verifier unavailable"
 
         # 惰性导入：core 不静态依赖 agents（同 :989 的 agents.runtime 先例）。
-        from ..agents.sandbox_runtime import EphemeralSession
+        from ..agents.sandbox_runtime import EphemeralSession, note_usage
 
         audit = EphemeralSession(
             backend,
@@ -1082,6 +1144,8 @@ class Orchestrator:
             r = await self.engine.generate_once(audit, tools=None,
                                                 enable_thinking=False, temperature=0.1,
                                                 max_tokens=GOAL_VERIFY_MAX_TOKENS)
+            note_usage(usage_sink, generations=1, bucket="goal_verify",
+                       generation_tokens=(r.get("metrics") or {}).get("generation_tokens", 0) or 0)
             verdict_text = (r.get("text") or "").strip()
         except Exception as e:
             events.emit("goal_verify_error", error=f"{type(e).__name__}: {e}")
@@ -1364,6 +1428,14 @@ class Orchestrator:
         """
         pending_calls = session.pending_tool_calls or []
         session.pending_tool_calls = None
+
+        # [F6] 先清过期用量槽（复审）:本方法在 run_turn **之前**执行已批准的工具,而
+        # ContextVar 里可能还躺着同一 Task 上一段 run_turn 的 sink（定时轮 runner 在
+        # 一个 Task 里连跑 run_turn→resume_after_approval）——不清的话,这里执行的
+        # 沙箱工具会把用量记进上一段的孤儿 dict。今天没有审批门控的沙箱工具,这是
+        # 防御带;哪天有了,正确做法是把 carried 的 usage 在这里 set 而不是 None。
+        from ..agents import runtime as _usage_runtime
+        _usage_runtime.set_usage_sink(None)
 
         resume_mutated_ok = False
         resume_failure = False

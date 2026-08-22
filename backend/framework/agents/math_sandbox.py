@@ -15,7 +15,7 @@ import asyncio
 from typing import List, Optional, Tuple
 
 from . import math_tools
-from .sandbox_runtime import EphemeralSession, SandboxSpec, run_sandbox
+from .sandbox_runtime import EphemeralSession, SandboxSpec, note_usage, run_sandbox
 
 
 MATH_SANDBOX_SYSTEM_PROMPT = (
@@ -97,12 +97,17 @@ def _format_digest(answer_output: str, explanation: str,
     return "\n\n".join(parts)
 
 
-async def run_math_research(engine, problem: str, cfg: dict) -> str:
+async def run_math_research(engine, problem: str, cfg: dict,
+                            usage_sink: Optional[dict] = None) -> str:
     """
     沙箱主循环（协程，运行在主事件循环上）。返回结果摘要文本；其中 ANSWER 段
     为解释器输出原样嵌入。循环骨架见 sandbox_runtime.run_sandbox。
+
+    usage_sink：父轮的用量回收槽（F6）。包壳在工具线程取出后作参数传入——投回主循环的
+    协程不继承工具线程 ContextVar。None = 无轮次上下文，记账空转。
     """
-    sess = EphemeralSession(engine.backend, MATH_SANDBOX_SYSTEM_PROMPT, problem)
+    sess = EphemeralSession(engine.backend, MATH_SANDBOX_SYSTEM_PROMPT, problem,
+                            usage_sink=usage_sink)
     max_steps = int(cfg.get("max_steps", 8))
     exec_timeout = int(cfg.get("exec_timeout", math_tools.DEFAULT_TIMEOUT))
     ok_log: List[Tuple[str, str]] = []  # 成功执行的 (code, output)，供摘要核对与兜底
@@ -157,6 +162,8 @@ async def run_math_research(engine, problem: str, cfg: dict) -> str:
             "Step budget exhausted. Call submit_answer NOW with answer_code that recomputes and prints "
             "your best verified result. This is the final step.")})
         result = await engine.generate_once(sess, tools=_TOOLS, temperature=0.2, max_tokens=1024)
+        note_usage(usage_sink, generations=1,
+                   generation_tokens=(result.get("metrics") or {}).get("generation_tokens", 0) or 0)
         for c in result.get("tool_calls", []) or []:
             if c.get("type") != "error" and c.get("name") == "submit_answer":
                 args = c.get("arguments", {}) or {}
@@ -179,6 +186,7 @@ async def run_math_research(engine, problem: str, cfg: dict) -> str:
         # max_tokens 收紧到 1024：沙箱产物只该是短代码调用/短结论，实测 2048 预算下
         # 失控生成单次就能写掉近 2000 token，直接吃穿整体墙钟。
         max_tokens=1024,
+        usage_sink=usage_sink,
         dispatch=_dispatch,
         on_give_up=_give_up,
         on_exhausted=_exhausted,

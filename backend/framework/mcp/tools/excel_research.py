@@ -122,15 +122,16 @@ class ExcelResearchTool(BaseTool):
         loop = runtime.get_loop()
         total_timeout = int(_CFG.get("total_timeout", 540))
 
-        # 进度钩子必须在本工具线程取（ContextVar 随 to_thread 拷贝到此为止）：
+        # 进度钩子与用量槽都必须在本工具线程取（ContextVar 随 to_thread 拷贝到此为止）：
         # run_coroutine_threadsafe 投回主循环的协程不继承本线程上下文，须作参数显式传入。
         progress_cb = runtime.get_progress_hook()
+        usage_sink = runtime.get_usage_sink()
 
         try:
             fut = asyncio.run_coroutine_threadsafe(
                 run_excel_task(engine, task, file_path or None,
                                Path(session.session_dir), session.session_id,
-                               _CFG, progress=progress_cb),
+                               _CFG, progress=progress_cb, usage_sink=usage_sink),
                 loop)
         except Exception as e:
             return f"System Error: could not schedule the excel-research sandbox: {e}"

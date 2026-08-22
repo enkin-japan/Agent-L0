@@ -509,7 +509,10 @@ agent:
   tool_schema_mode: "full"    # full=全部工具 schema 常驻（工具少时更省且缓存更稳）
                               # catalog=目录常驻 + get_tool_schema 按名取详情（工具规模大后切换）
   react_max_steps: 4          # 单步内自纠预算：一步连续多少次迭代未完成即判定失败并路由
-  max_total_iterations: 40    # 一轮任务的总推理次数熔断
+  max_total_iterations: 40    # 一轮任务的总推理次数熔断（只数主循环迭代）
+  max_sub_generations: 80     # 子沙箱生成的独立熔断（F6）：web/math/excel 调研在一次性
+                              # 会话里的内部生成次数上限。独立于主熔断——计进主分母会把
+                              # 研究型轮次预算压掉一个量级（一次 excel_research ≈16 次生成）
   replan_max: 3               # 整体重规划（推翻已有计划）次数上限
   observation_max_chars: 4000 # 单条工具观察截断上限（保护每步延迟与上下文）
   # ⚠️ 本值**双向承重**：既是「工具跑多久算超时」，也被 shell_exec 反过来用作

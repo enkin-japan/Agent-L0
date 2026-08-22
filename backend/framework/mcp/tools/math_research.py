@@ -78,8 +78,13 @@ class MathResearchTool(BaseTool):
         loop = runtime.get_loop()
         total_timeout = int(_CFG.get("total_timeout", 110))  # 须 < agent.tool_timeout_seconds
 
+        # 用量槽必须在本工具线程取（ContextVar 随 to_thread 拷贝到此为止）：
+        # run_coroutine_threadsafe 投回主循环的协程不继承本线程上下文，须作参数显式传入。
+        usage_sink = runtime.get_usage_sink()
+
         try:
-            fut = asyncio.run_coroutine_threadsafe(run_math_research(engine, problem, _CFG), loop)
+            fut = asyncio.run_coroutine_threadsafe(
+                run_math_research(engine, problem, _CFG, usage_sink=usage_sink), loop)
         except Exception as e:
             return f"System Error: could not schedule the math-research sandbox: {e}"
 
