@@ -31,6 +31,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import queue
 import re
 import sys
 import time
@@ -65,6 +66,7 @@ from framework.backends import (AsrProviderUnavailable, get_asr_provider,
 from framework.core import prompt_stream as pstream
 from framework.core.stream_filter import VisibleTextStreamer
 
+import batch_lane as _bl     # 同目录：§7-0① 批处理泳道（import 期零 mlx/config 依赖）
 import openai_facade as oai  # 同目录纯逻辑层（T6 门面）
 
 MEDIA_DIR = Path(__file__).resolve().parent / "media"
@@ -159,6 +161,8 @@ class ServerState:
                                                   # 互斥语义；vLLM=cuda.max_concurrency，
                                                   # 引擎连续批处理白拿并发）
     gens: Dict[str, Dict[str, Any]] = {}          # gen_id → {"cancel": bool}（进行中的生成）
+    batch_lane = None                             # §7-0① 批处理泳道（MLX 旋钮>1 时武装）
+    single_busy: int = 0                          # 单流路在生成的计数：泳道据此让路（交互优先）
     constraint_engine = None                      # 懒建（LLTokenizer ~1s）
     constraint_disabled = _llg is None
     dialect = None                                # ModelDialect：按模型注册表条目装配（R0）
@@ -166,6 +170,21 @@ class ServerState:
 
 
 S = ServerState()
+
+
+def _unbusy(_f=None) -> None:
+    S.single_busy = max(0, S.single_busy - 1)
+
+
+def _busy_executor_call(loop, fn):
+    """在推理执行器上跑 GPU 工作并全程压住 single_busy（批泳道据此让路）。
+
+    递减挂在执行器任务**真正结束**上（评审 M6/M7）：协程在 await 处被取消时
+    线程还在跑，提前递减会让批泳道与单流路同时压 GPU——正是让路机制要防的事。"""
+    S.single_busy += 1
+    fut = loop.run_in_executor(S.executor, fn)
+    fut.add_done_callback(_unbusy)
+    return fut
 
 
 def _tool_guard(tool_specs) -> Optional[ToolCallGuard]:
@@ -286,6 +305,39 @@ async def lifespan(app: FastAPI):
     S.gen_sem = asyncio.Semaphore(n_concurrency)
     if n_concurrency > 1:
         print(f"[Server] 生成并发闸开到 {n_concurrency} 路（vLLM 连续批处理）")
+
+    # §7-0① 批处理泳道（MLX 引擎内连续批处理，上游 BatchGenerator 直驱）：
+    # 旋钮 = env INFER_MLX_MAX_CONCURRENCY（非空即赢，测量场用）> config
+    # inference.mlx.max_concurrency > 1。缺省 1 = 泳道不武装，行为与旧版逐字节一致。
+    # 只对 MLX 后端武装（cuda 走 gen_sem>1 的 vLLM 路，remote 不是 server 后端）。
+    _mlx_n_env = os.environ.get("INFER_MLX_MAX_CONCURRENCY", "").strip()
+    try:
+        _mlx_n = max(1, int(_mlx_n_env or (INFERENCE_CFG.get("mlx") or {})
+                            .get("max_concurrency") or 1))
+    except (TypeError, ValueError):
+        raise SystemExit(f"❌ [Server] INFER_MLX_MAX_CONCURRENCY / "
+                         f"inference.mlx.max_concurrency 不是整数："
+                         f"{_mlx_n_env!r}——修正后再启（拒启优于静默取 1）")
+    if backend_name in ("", "mlx") and _mlx_n > 1:
+        # wired limit 钉死在上游同款目标值（评审 M10）：BatchGenerator 与单流路
+        # 各自的 wired_limit(model) 上下文嵌套时，退出顺序会把限值来回拉扯
+        # （单流路先退 = 批中途掉回低限）。预先钉成同值让所有嵌套进出幂等。
+        # 只在泳道武装时钉——缺省档行为保持逐字节不变。
+        try:
+            import mlx.core as _mx
+            _rec = int(_mx.device_info()["max_recommended_working_set_size"])
+            _mx.set_wired_limit(_rec)
+            print(f"[Server] wired limit 预钉 {_rec / 2**30:.1f}G"
+                  f"（嵌套 wired_limit 上下文自此幂等）")
+        except Exception as _e:
+            print(f"[Server] wired limit 预钉失败（嵌套语义退回上游缺省）: {_e}")
+        S.batch_lane = _bl.BatchLane(
+            build_generator=_bl.build_upstream_context(S.backend, max_num_seqs=_mlx_n),
+            max_num_seqs=_mlx_n,
+            interactive_busy=lambda: S.single_busy > 0)
+        print(f"[Server] 批处理泳道武装：max_num_seqs={_mlx_n}"
+              f"（opt-in：features.batch_ok；交互恒优先）"
+              + ("" if _mlx_n_env == "" else f"［env 覆盖 {_mlx_n_env}］"))
     S.model_name = str(model)
     MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -312,6 +364,11 @@ async def lifespan(app: FastAPI):
 
     sweep_task.cancel()
     print("\n🛑 [Server] shutting down…")
+    if S.batch_lane is not None:
+        try:
+            S.batch_lane.shutdown()   # 先收泳道（驱动线程停在步边界）再放后端
+        except Exception as e:
+            print(f"[Server] 批泳道收摊异常: {e}")
     try:
         S.backend.shutdown()
     except Exception as e:
@@ -331,8 +388,18 @@ async def metrics():
     # cache_ttl_seconds：客户端（长稳工装）据此校验「我读的 config」与「正在跑的服务」
     # 是不是同一个 TTL。CACHE_TTL_SECONDS 在 import 时绑定，改了 config 不重启服务，
     # 两边就悄悄分家——而工装的「离开」冷档窗宽正是按 TTL 算的，分家即冷重建零样本。
-    return {**S.metrics, "cache_count": len(S.registry), "active_generations": len(S.gens),
-            "cache_ttl_seconds": CACHE_TTL_SECONDS}
+    out = {**S.metrics, "cache_count": len(S.registry), "active_generations": len(S.gens),
+           "cache_ttl_seconds": CACHE_TTL_SECONDS}
+    if S.batch_lane is not None:
+        out["batch_lane"] = {"active": S.batch_lane.active_count,
+                             # decoding ≠ active：后者含引擎内排队的行——
+                             # 「真同批共跑」的证据只能看 decoding（评审 C4）
+                             "decoding": S.batch_lane.decoding_count,
+                             "paused": S.batch_lane.paused,
+                             "steps_total": S.batch_lane.steps_total,
+                             "dead": S.batch_lane.dead,
+                             "max_num_seqs": S.batch_lane.max_num_seqs}
+    return out
 
 
 @app.post("/v1/cache", dependencies=[Depends(verify_api_key)])
@@ -348,7 +415,7 @@ async def cache_clone(cache_id: str):
     # 深拷贝在推理执行器线程内做（张量归属线程），并持生成锁防克隆到写一半的缓存
     async with S.gen_sem:
         loop = asyncio.get_running_loop()
-        cloned = await loop.run_in_executor(S.executor, S.backend.clone_cache, src)
+        cloned = await _busy_executor_call(loop, lambda: S.backend.clone_cache(src))
     if cloned is None:
         raise HTTPException(status_code=501, detail="后端不支持缓存克隆（客户端应冷启动回退）")
     return {"cache_id": S.registry.adopt(cloned)}
@@ -377,8 +444,8 @@ async def cache_persist(cache_id: str, request: Request):
         raise HTTPException(status_code=404, detail="缓存不存在或已被 TTL 回收")
     loop = asyncio.get_running_loop()
     async with S.gen_sem:
-        ok = await loop.run_in_executor(
-            S.executor, lambda: S.backend.persist_cache(handle, str(path)))
+        ok = await _busy_executor_call(
+            loop, lambda: S.backend.persist_cache(handle, str(path)))
     return {"persisted": bool(ok)}
 
 
@@ -389,8 +456,8 @@ async def cache_restore(request: Request):
     path = _kv_path(str(body.get("hint", "")))
     loop = asyncio.get_running_loop()
     async with S.gen_sem:
-        handle = await loop.run_in_executor(
-            S.executor, lambda: S.backend.restore_cache(str(path)))
+        handle = await _busy_executor_call(
+            loop, lambda: S.backend.restore_cache(str(path)))
     if handle is None:
         raise HTTPException(status_code=404, detail="无可恢复的 KV 产物")
     return {"cache_id": S.registry.adopt(handle)}
@@ -439,9 +506,11 @@ async def transcribe(request: Request):
     fn = get_asr_provider(resolve_local_asr_provider())
     loop = asyncio.get_running_loop()
     try:
-        text = await loop.run_in_executor(
-            S.executor, lambda: fn(str(p), model=model, language=language,
-                                   start=start, end=end))
+        # 转写是真 GPU 负载（whisper 装载+前向）：必须对批泳道可见（评审 M7），
+        # 否则批 decode 与转写同时压统一内存 = 单 GPU 纪律要防的形态
+        text = await _busy_executor_call(
+            loop, lambda: fn(str(p), model=model, language=language,
+                             start=start, end=end))
     except AsrProviderUnavailable as e:
         raise HTTPException(status_code=503, detail=f"ASR provider 不可用: {e}")
     except Exception as e:
@@ -473,8 +542,64 @@ async def generate_cancel(gen_id: str):
     if g is None:
         return {"cancelled": False}  # 已结束/不存在：幂等返回
     g["cancel"] = True
+    lane_req = g.get("lane_req")
+    if lane_req and S.batch_lane is not None:
+        S.batch_lane.cancel(lane_req)   # 批泳道行：驱动线程在步边界 remove
     S.metrics["cancelled_total"] += 1
     return {"cancelled": True}
+
+
+def _batch_generate_sse(lane, prompt: str, sampling, want_delta: bool
+                        ) -> StreamingResponse:
+    """批处理泳道的 SSE 面：与单流路同一事件形状（meta/chunk/done/error）。
+
+    submit 与 gens 登记都在生成器**体内**（评审 M14）：响应体若从未被迭代
+    （中间件炸/客户端已断），什么都不曾发生——不留孤儿行、不漏 gens 表项。
+    泳道输出是线程队列（驱动线程投递）；15s 无事件发一行 SSE 注释保活
+    （让路窗口内泳道零产出，中间层的空闲超时会掐连接，评审 m20）。
+    断连/取消统一收敛到 lane.cancel（幂等；驱动线程在步边界执行 remove）。"""
+
+    async def _sse():
+        req_id, gen_id = None, None
+        try:
+            req_id, out_q = lane.submit(prompt, sampling, want_delta=want_delta)
+            gen_id = uuid.uuid4().hex
+            S.gens[gen_id] = {"cancel": False, "lane_req": req_id}
+            S.metrics["generations_total"] += 1
+            yield ("event: meta\ndata: "
+                   + json.dumps({"gen_id": gen_id, "cache_id": None,
+                                 "lane": "batch"}) + "\n\n")
+            while True:
+                try:
+                    kind, payload = await asyncio.to_thread(out_q.get, True, 15.0)
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+                    continue
+                if kind == "chunk":
+                    yield ("event: chunk\ndata: "
+                           + json.dumps(payload, ensure_ascii=False) + "\n\n")
+                    continue
+                if kind == "error":
+                    S.metrics["errors_total"] += 1
+                    yield ("event: error\ndata: "
+                           + json.dumps(payload, ensure_ascii=False) + "\n\n")
+                else:
+                    yield ("event: done\ndata: "
+                           + json.dumps(payload, ensure_ascii=False) + "\n\n")
+                break
+        except RuntimeError as e:
+            # submit 撞上泳道下线/背压：以 error 事件收尾（客户端会重试或退避；
+            # 路由层的"回单流路"只覆盖流开始前，进了流就只能响亮结束）
+            yield ("event: error\ndata: "
+                   + json.dumps({"message": str(e)}, ensure_ascii=False) + "\n\n")
+        finally:
+            # 断连/正常收尾统一：向泳道投取消意图（已结束的行是无害幂等空操作）
+            if req_id is not None:
+                lane.cancel(req_id)
+            if gen_id is not None:
+                S.gens.pop(gen_id, None)
+
+    return StreamingResponse(_sse(), media_type="text/event-stream")
 
 
 @app.post("/v1/generate", dependencies=[Depends(verify_api_key)])
@@ -483,6 +608,23 @@ async def generate(request: Request):
     prompt = str(body.get("prompt", ""))
     sampling = body.get("sampling") or {}
     features = dict(body.get("features") or {})
+
+    # §7-0① 批处理泳道路由：显式 opt-in（features.batch_ok）且无单流路专属特性
+    # 才进泳道；其余一切走既有单流路（含 batch_ok 但判不合格的——fail-closed，
+    # 理由进日志，绝不静默把 guard/缓存语义丢进批路）。
+    if features.get("batch_ok"):
+        lane = S.batch_lane
+        # 投机在场即拒（drafter **或** prompt-lookup——批路静默退非投机 = 口径
+        # 分母污染）；其余单流路专属特性见 route_reason（fail-closed）
+        _spec_on = (getattr(S.backend, "draft_model", None) is not None
+                    or getattr(S.backend, "speculative", None) is not None)
+        reason = _bl.route_reason(
+            body, armed=(lane is not None and not lane.dead),
+            has_speculative=_spec_on)
+        if not reason:
+            return _batch_generate_sse(lane, prompt, sampling,
+                                       bool(features.get("want_delta")))
+        print(f"[Server] batch_ok 请求回单流路：{reason}")
 
     cache_id = body.get("cache_id")
     if cache_id:
@@ -563,6 +705,7 @@ async def generate(request: Request):
         # 生成互斥：底层共享单例不可并发。acquire 被取消（排队中客户端断连）时
         # 锁未持有、finally 不会走——语义正确
         await S.gen_sem.acquire()
+        S.single_busy += 1              # 批泳道据此让路（配对递减在 _finish）
         task = None
         try:
             S.gens[gen_id] = gen_state
@@ -599,6 +742,7 @@ async def generate(request: Request):
 
             def _finish(_fut=None):
                 S.gens.pop(gen_id, None)
+                S.single_busy = max(0, S.single_busy - 1)
                 S.gen_sem.release()
 
             if task is None:
@@ -692,13 +836,15 @@ async def oai_chat_completions(request: Request):
             return "".join(parts), last, "".join(raw)
 
         async with S.gen_sem:
-            # 组装-生成-提交整组进临界区（评审 M6，_facade_commit docstring）
+            # 组装-生成-提交整组进临界区（评审 M6，_facade_commit docstring）；
+            # single_busy 由 _busy_executor_call 托管——协程在 await 被取消时
+            # 线程还在生成，递减必须挂在线程真正结束上
             prompt, stream_tail, delta_off = _facade_assemble(dialect_msgs)
             if delta_off is not None:
                 S.metrics["facade_stream_delta_total"] = \
                     S.metrics.get("facade_stream_delta_total", 0) + 1
-            text, last, raw_text = await loop.run_in_executor(
-                S.executor, lambda: _run(prompt, delta_off))
+            text, last, raw_text = await _busy_executor_call(
+                loop, lambda: _run(prompt, delta_off))
             _facade_commit(prompt, raw_text, dialect_msgs, stream_tail, text)
         pt = last.prompt_tokens if last else 0
         gt = last.generation_tokens if last else 0
@@ -746,6 +892,7 @@ async def oai_chat_completions(request: Request):
 
     async def _sse():
         await S.gen_sem.acquire()
+        S.single_busy += 1              # 批泳道让路（配对递减在 _finish）
         task = None
         try:
             yield oai.stream_line(S.model_name, cid, role="assistant")
@@ -784,6 +931,7 @@ async def oai_chat_completions(request: Request):
             stop["flag"] = True
 
             def _finish(_f=None):
+                S.single_busy = max(0, S.single_busy - 1)
                 S.gen_sem.release()
 
             if task is None:

@@ -57,6 +57,14 @@ inference:
     enable_prefix_caching: true   # 引擎内自动前缀缓存 = 本后端 clone/复用的物理承载
     enforce_eager: false          # true 可跳 CUDA graph 编译省启动时间（调试用）
     trust_remote_code: false
+  # ── MLX 批处理泳道（§7-0①，2026-08-22）────────────────────────────────
+  # 1 = 泳道不武装（缺省，行为与旧版逐字节一致）；>1 = server 起批处理泳道
+  # （上游 BatchGenerator 引擎内连续批处理，仅收 features.batch_ok 显式 opt-in
+  # 的纯文本请求；交互轮次恒优先——单流路生成期间泳道在 decode 步边界让路）。
+  # 测量场用 env INFER_MLX_MAX_CONCURRENCY 覆盖（非空即赢），不必改本档。
+  # 生产放开与否 = Q14 宪章判定（阶段四受控实验过门才动此值）。
+  mlx:
+    max_concurrency: 1
   model: "mlx-community/gemma-4-e4b-it-8bit"
   # 钉死 HF 仓库 commit（2026-08-14 升钉的上游 7/6 重转换件）。缺省档 2026-08-16
   # 随 D.20 阵容收束由 e4b-4bit 改为 e4b-8bit（4bit 档舍弃）。

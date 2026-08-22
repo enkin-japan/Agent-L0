@@ -565,8 +565,8 @@ R0–R5 各小项的打勾细分（含每步实测结果与计划外发现）已
 
 | 项 | 当前值 | 口径 |
 |---|---|---|
-| 金测试项数 | 1504 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
-| 测试文件数 | 104 | `backend/tests/` 下递归的 `test_*.py` |
+| 金测试项数 | 1534 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
+| 测试文件数 | 105 | `backend/tests/` 下递归的 `test_*.py` |
 | mcp 文件数 | 31 | `backend/framework/mcp/` 递归下的 `.py`，**不含** `__init__.py` |
 | BaseTool 子类 | 67 | 全 backend 内 `class X(BaseTool)` 的声明数（一个文件可有多个） |
 | 物理隔离沙箱 | 3 | `backend/framework/agents/*_sandbox.py` |
@@ -3943,6 +3943,57 @@ reranker 分辨率的物理极限,换档(text-4b 等)须重校准(阈值随 tier
 
 ---
 
+**波 §7-0① 交付（2026-08-22，第 4 层开工首件）：MLX 批处理泳道——并发编排层接线**
+
+**形态拍板（主会话架构决策）：双泳道，增量式**。既有单流路（前缀复用/T8 门/上位解/
+guard/drafter/KV 持久化）一字不动；新增 `inference/batch_lane.py` 直驱上游 mlx-vlm
+0.6.13 `BatchGenerator`（generate/ar.py，纯引擎零 HTTP 耦合，与已装载模型共享权重
+零双载，真连续批处理：行中途加入/逐行退出/逐行处理器）。**显式 opt-in**
+（`features.batch_ok`）+ fail-closed 路由（guard/缓存/思考/投机/多模态任一在场即回
+单流路）；config `inference.mlx.max_concurrency: 1` 缺省不武装 = 行为逐字节不变，
+测量场走 env `INFER_MLX_MAX_CONCURRENCY`。**交互优先的机械保证**：单流路生成期间
+（含门面两路、转写、缓存三件套——busy 递减挂执行器任务真正结束）泳道在引擎步边界
+整体让路。生产放开与否 = Q14 阶段四受控实验的裁决，本波不改缺省。
+
+**上游侦察结论（设计的裁决性输入,Explore 代理实读 ar.py/generation.py/cache.py）**：
+高层 `ResponseGenerator` 自装模型（双载,弃）;低层 `BatchGenerator.insert/next/remove`
+可分离消费但彼此不线程安全 → 驱动线程独享,submit/cancel 只投意图。
+**首过评审（reviewer）4C/12M/7m 全数处置**,四条 Critical 均实锤：C1 有界行队列 +
+停读客户端=驱动线程卡死在 put（改无界,单行产出天然被 max_tokens 封顶）;C2 submit
+与 _die 竞态吞终态事件（入队后复查补终态）;**C3 上游准入门
+`completion−active >= prefill_batch_size`,两值同设 = 行只能在批排空后加入=静默退化
+串行**（prefill_batch_size 钉 1,源码锚测试防回改）;C4 `active` 含引擎内排队,拿它当
+「同批共跑」证据是假证（新增 `decoding` 仪表=真在 decode 批的行数）。Major 要点：
+remove 返回 False（行在多行预填批）须重试不许假装摘掉;wired_limit 嵌套退出互相拉扯
+→ 武装时预钉 `max_recommended_working_set_size` 令嵌套幂等;add_special_tokens 按
+模型族条件（写死 False 会让 qwen 档批路与单流路首 token 分家）;转写/缓存三件套的
+GPU 负载对让路机制不可见;背压（在途 4×max_num_seqs 封顶,超限退单流路）。
+
+**真机验收（e4b-8bit，drill_batch_lane.py 三轮）**：终轮 4/4——①双路 batch_ok 完结
+（63/64 tok,lane 标记在位）②同批共跑 decoding 峰值=2 ③交互让路 paused 实测观察到、
+交互「数到十」正确 ④单流路回归正常。**两条实锤来自演练本身**：首轮炸
+`There is no Stream(gpu,2) in current thread`——`mx.new_stream` 绑定创建线程,上游用
+的是 `new_thread_local_stream`（每线程私流）,已改并留 ⚠️;**C3 的行为证据**：修复前
+双路 121 引擎步（≈各自串行）,修复后 56 步（63+64 tok 真同批）。drill 首版还犯了
+裸 prompt 无模板的老毛病（§7-1 第一条,输出退化复读）,已改方言模板并留痕。
+**变异证明（守卫域,两轮）**：终版 M1 tool_specs 检查/M2 思考判定弱化/M3 _die 不摘
+牌/M4 remove 假摘/M5 背压移除,5/5 对应测试验红;其间一个非法变异体（`pass or True`
+编译不过=测试 error 非 fail）按「先怀疑变异体」甄别重注。字节还原 sha256 两轮确认。
+
+**入库**：`inference/batch_lane.py`（新）/ server 接线（路由/SSE/取消/仪表/收摊/
+busy 托管）/ `config.yaml` mlx 旋钮 / 金测试 `test_batch_lane.py` 30 例（假生成器
+驱动全状态机 + 源码锚）→ 金测试 **1504→1534**,四门全绿。测量架
+`bench_concurrent.py` 就位（26b-4bit MoE vs 31b-4bit dense × batch 1/2/4 + 批不变
+性哨 + decoding 共跑证据,run 级作废纪律）。
+**已知面（如实挂账）**：①BatchGenerator 绑定共享 `tokenizer.stopping_criteria`,单流
+路每次生成 reset 之——当前 gemma-4 的 config/tokenizer eos 集合同值故潜伏,换模型或
+改 eos 前须重审（评审 M15）;②批路 rep 惩罚上下文从生成 token 起算,与单流路 prompt
+播种不同（裸贪心测量口径 rep=None 不受影响,生产背景任务知情）;③泳道 v1 不收
+vision/audio/投机/带缓存请求（fail-closed 回单流路,非缺陷是边界）;④SSE 消费每流占
+一个 default-executor 线程,背压封顶后上限 ~4×max_num_seqs,可控。
+
+---
+
 **全账重排（D.24，2026-08-18 用户拍板）——判据：① 缺陷修复优先 ② Mac 端优先——**
 
 **这是当前唯一有效的施工顺序**，覆盖此前所有「下一件」写法。`第二梯队` 段已改为指回本块。
@@ -4017,9 +4068,10 @@ reranker 分辨率的物理极限,换档(text-4b 等)须重校准(阈值随 tier
 
 **第 4 层｜Mac 端能力与测量（§7）——🔴 整层须独占 GPU**
 
-`§7-0②` **mlx-vlm 升级手术**（0.5.0→0.6.13，铁律 1 单独成波；破坏面集中在 v0.6.4；
-顺手项：e4b 三件钉值升级、Gemma-4 版本评估）→ `§7-0①` 并发编排层接线（引擎侧上游
-0.6.12 已给）→ **阶段一并发格** → 阶段二 `A8` → 阶段三 KV 量化 → 阶段四定档 + `Q14` 进宪。
+~~`§7-0②` **mlx-vlm 升级手术**~~（✅ 早于本重排,2026-08-14 交付,0.5.0→0.6.13）→
+~~`§7-0①` 并发编排层接线~~ **✅ 2026-08-22 交付**（见上方「波 §7-0① 交付」块：
+批处理泳道,双泳道形态,交互恒优先,缺省不武装）→ **阶段一并发格** →
+~~阶段二 `A8`~~（✅ 2026-08-17 收案,D.21 已落地）→ 阶段三 KV 量化 → 阶段四定档 + `Q14` 进宪。
 搭车：`reasoning_effort` 透传、qwen38 MTP 口径重画像（🔴）、smoke2 残留 2 份追查（🔴，要干净服务）。
 **`Q14` 特别注意**：进宪门禁是「吞吐有提升 + 全程零并发事故」，而「事故」明确包含
 **「交互被后台挤占」**——用户手感是判据之一，故必须是**受控实验**（压批处理的同时量
