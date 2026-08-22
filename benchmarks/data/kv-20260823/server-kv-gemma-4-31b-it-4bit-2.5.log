@@ -1,0 +1,45 @@
+INFO:     Started server process [95191]
+INFO:     Waiting for application startup.
+[Server] 投机配置被环境覆盖：{'mode': 'off'}
+[Server] KV 量化被环境覆盖：kv_bits=2.5（scheme=turboquant）
+🚀 [Server] loading model: mlx-community/gemma-4-31b-it-4bit (backend=mlx)
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+/Volumes/enkin/project/Agent/backend/.venv/lib/python3.13/site-packages/transformers/audio_utils.py:723: UserWarning: At least one mel filter has all zero values. The value for `num_mel_filters` (128) may be set too high. Or, the value for `num_frequency_bins` (257) may be set too low.
+  warnings.warn(
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:57280 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57281 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57282 - "DELETE /v1/cache/54653d02f3d14cbba514f519e09d7fe7 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57283 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57284 - "DELETE /v1/cache/de70921b19c64490848069fd26211f1d HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57285 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57286 - "DELETE /v1/cache/a44ac35045664d8b9c16b9165e90f11d HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57287 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57288 - "DELETE /v1/cache/6f320b3800b240c48ae4fe20f7ae1b8f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57289 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57290 - "DELETE /v1/cache/0e184d0bf55e4452bd0217ac0d94a19e HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57291 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57292 - "DELETE /v1/cache/449ebe93909a4cb0bfd2f7aa5859f80b HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57293 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57294 - "DELETE /v1/cache/a5a6bc68f64c48749637cdc22a6e3dbf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57295 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57296 - "DELETE /v1/cache/73516721238b465296b5e22ecd5a2647 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57297 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57302 - "DELETE /v1/cache/6c58d88c476643fb886bfc70773f3a69 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57303 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57304 - "DELETE /v1/cache/b285c98ec3dd45ca84ed162c371b5e9d HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57305 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57308 - "DELETE /v1/cache/50494100b0544127b73e931872c8b9b7 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57309 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57312 - "DELETE /v1/cache/648c1da7e7ab42bf8c0df4ac35b54aec HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [95191]
+/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/multiprocessing/resource_tracker.py:277: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown: {'/loky-95191-my8l66aq'}
+  warnings.warn(

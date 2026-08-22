@@ -1,0 +1,23 @@
+[02:24:12] ✅ gemma-4-26b-a4b-it-4bit kv=dense ctx=8192: prefill 1463 / decode 109.2 tps / ttft 5.6s / peak 17.6G / 取针 A 3/3 B 3/3
+[02:26:00] ✅ gemma-4-26b-a4b-it-4bit kv=dense ctx=32768: prefill 1238 / decode 83.7 tps / ttft 26.5s / peak 19.8G / 取针 A 3/3 B 3/3
+[02:30:22] ✅ gemma-4-26b-a4b-it-4bit kv=dense ctx=65536: prefill 1015 / decode 64.6 tps / ttft 64.7s / peak 22.8G / 取针 A 3/3 B 3/3
+[02:30:56] ✅ gemma-4-26b-a4b-it-4bit kv=3.5 ctx=8192: prefill 1452 / decode 107.4 tps / ttft 5.7s / peak 17.5G / 取针 A 3/3 B 3/3
+[02:32:46] ✅ gemma-4-26b-a4b-it-4bit kv=3.5 ctx=32768: prefill 1214 / decode 85.4 tps / ttft 27.0s / peak 19.4G / 取针 A 3/3 B 3/3
+[02:37:14] ✅ gemma-4-26b-a4b-it-4bit kv=3.5 ctx=65536: prefill 990 / decode 68.6 tps / ttft 66.3s / peak 22.4G / 取针 A 3/3 B 3/3
+[02:37:48] ✅ gemma-4-26b-a4b-it-4bit kv=2.5 ctx=8192: prefill 1452 / decode 108.2 tps / ttft 5.7s / peak 17.4G / 取针 A 3/3 B 3/3
+[02:39:39] ✅ gemma-4-26b-a4b-it-4bit kv=2.5 ctx=32768: prefill 1215 / decode 86.8 tps / ttft 27.0s / peak 19.4G / 取针 A 3/3 B 3/3
+[02:44:07] ✅ gemma-4-26b-a4b-it-4bit kv=2.5 ctx=65536: prefill 990 / decode 70.3 tps / ttft 66.2s / peak 22.4G / 取针 A 3/3 B 3/3
+[02:47:34] ✅ gemma-4-31b-it-4bit kv=dense ctx=8192: prefill 197 / decode 23.4 tps / ttft 41.9s / peak 23.5G / 取针 A 3/3 B 3/3
+[03:00:04] ✅ gemma-4-31b-it-4bit kv=dense ctx=32768: prefill 177 / decode 19.8 tps / ttft 185.4s / peak 29.1G / 取针 A 3/3 B 3/3
+[03:28:25] ✅ gemma-4-31b-it-4bit kv=dense ctx=65536: prefill 155 / decode 16.4 tps / ttft 422.7s / peak 36.8G / 取针 A 3/3 B 3/3
+[03:31:51] ✅ gemma-4-31b-it-4bit kv=3.5 ctx=8192: prefill 196 / decode 22.9 tps / ttft 42.1s / peak 23.1G / 取针 A 3/3 B 3/3
+[03:44:29] ✅ gemma-4-31b-it-4bit kv=3.5 ctx=32768: prefill 175 / decode 19.4 tps / ttft 187.3s / peak 27.7G / 取针 A 3/3 B 3/3
+[04:13:18] ✅ gemma-4-31b-it-4bit kv=3.5 ctx=65536: prefill 153 / decode 16.1 tps / ttft 429.6s / peak 34.3G / 取针 A 3/3 B 3/3
+[04:16:44] ✅ gemma-4-31b-it-4bit kv=2.5 ctx=8192: prefill 196 / decode 23.1 tps / ttft 42.1s / peak 23.1G / 取针 A 3/3 B 3/3
+[04:29:21] ✅ gemma-4-31b-it-4bit kv=2.5 ctx=32768: prefill 175 / decode 19.7 tps / ttft 187.3s / peak 27.5G / 取针 A 3/3 B 3/3
+[04:58:12] ✅ gemma-4-31b-it-4bit kv=2.5 ctx=65536: prefill 153 / decode 16.4 tps / ttft 429.5s / peak 34.0G / 取针 A 3/3 B 3/3
+[05:01:17] ✅ Qwen3.8-27B-8bit kv=dense ctx=8192: prefill 248 / decode 28.4 tps / ttft 33.2s / peak 38.4G / 取针 A 3/3 B 3/3
+[05:11:03] ✅ Qwen3.8-27B-8bit kv=dense ctx=32768: prefill 227 / decode 22.1 tps / ttft 144.3s / peak 42.7G / 取针 A 3/3 B 3/3
+[05:12:22] ❌ mlx-community/Qwen3.8-27B-8bit kv=3.5 ctx=8192 失败: RuntimeError: engine error: {'message': "TypeError: '_QuantizedStateProxy' object is not subscriptable"}（日志 ../benchmarks/data/kv-20260823/server-kv-Qwen3.8-27B-8bit-3.5.log）
+[05:14:49] ❌ mlx-community/Qwen3.8-27B-8bit kv=3.5 ctx=32768 失败: RuntimeError: engine error: {'message': "TypeError: '_QuantizedStateProxy' object is not subscriptable"}（日志 ../benchmarks/data/kv-20260823/server-kv-Qwen3.8-27B-8bit-3.5.log）
+[05:14:52] 🏁 KV 量化格测量收官
