@@ -61,10 +61,14 @@ def test_outer_budget_fallback_matches_the_orchestrator_verbatim():
 
 
 def test_inner_cap_holds_against_the_orchestrator_not_just_our_own_copy():
-    """★ 不变量的真正形态：内层上限 < **编排层实际使用的**外层预算。"""
+    """★ 不变量的真正形态：内层上限 < **编排层实际使用的**外层预算。
+    畸形配置一并压测(阶段复审 L10):`tool_timeout_seconds: true` 若只有 shell_exec
+    侧防住,外层预算塌成 1s、内层 165s——孤儿窗口以反方向回归。"""
     from framework.core.orchestrator import Orchestrator
 
-    for cfg in ({}, {"tool_timeout_seconds": _OUTER_BUDGET_S}):
+    for cfg in ({}, {"tool_timeout_seconds": _OUTER_BUDGET_S},
+                {"tool_timeout_seconds": True}, {"tool_timeout_seconds": 0},
+                {"tool_timeout_seconds": "abc"}, {"tool_timeout_seconds": -5}):
         orch = Orchestrator(object(), _StubRegistry(), cfg)
         assert _MAX_INNER_TIMEOUT_S < orch.tool_timeout_seconds, cfg
 

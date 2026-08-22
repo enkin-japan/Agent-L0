@@ -306,7 +306,13 @@ class Orchestrator:
         # 相同：那边按本值反推 shell 命令的内层上限，两侧不一致时孤儿窗口会悄悄回来
         # （曾是 120 vs 180 = 45s 窗口）。跨模块契约由
         # `test_shell_exec_timeout_clamp.py` 钉死。
-        self.tool_timeout_seconds = int(cfg.get("tool_timeout_seconds", 180))  # 单次工具执行熔断
+        # 单次工具执行熔断。畸形配置防御与 shell_exec._derive_outer_budget 同一纪律
+        # (阶段复审 L10):bool 是 int 子类,`tool_timeout_seconds: true` 会把外层预算
+        # 塌成 1s,而 shell_exec 侧防住了自己 → 内层 165s > 外层 1s,孤儿窗口反向回归
+        _tts = cfg.get("tool_timeout_seconds", 180)
+        if isinstance(_tts, bool) or not isinstance(_tts, (int, float)) or int(_tts) <= 0:
+            _tts = 180
+        self.tool_timeout_seconds = int(_tts)
         self.max_parse_retries = int(cfg.get("max_parse_retries", 3))  # 工具格式解析错误的断环阈值
         self.tool_schema_mode = str(cfg.get("tool_schema_mode", "full"))   # full | catalog
         # 思考位置策略：把前端二值思考开关翻译成逐迭代策略（_thinking_for_iteration）。

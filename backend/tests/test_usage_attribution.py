@@ -110,12 +110,13 @@ def test_note_usage_bucket_name_is_the_only_difference():
 # ==========================================================================
 
 def test_usage_sink_never_reaches_the_prompt_face():
-    """记账口不是回流口：sink 的内容不得出现在沙箱 history（= 喂给模型的全部上下文）。"""
+    """记账口不是回流口：sink 的内容不得出现在沙箱 history（= 喂给模型的全部上下文）。
+    sink 不挂会话对象(复审 L5:真实路径是 SandboxSpec/显式参数)——这里驱动真实的
+    run_sandbox 记账路径,再查 prompt 面。"""
     sink = {"sub_generations": 7, "probe": "SINK-LEAK-CANARY"}
-    sess = EphemeralSession(FakeBackend(), "system prompt", "opening question",
-                            usage_sink=sink)
+    sess = EphemeralSession(FakeBackend(), "system prompt", "opening question")
 
-    assert sess.usage_sink is sink                      # 记账面在
+    assert not hasattr(sess, "usage_sink")              # 死字段不许回潮
     blob = json.dumps(sess.history, ensure_ascii=False, default=str)
     assert "SINK-LEAK-CANARY" not in blob               # prompt 面没有
     assert "sub_generations" not in blob
@@ -130,7 +131,7 @@ async def test_sandbox_history_stays_clean_after_accounting():
     sink = {"probe": "SINK-LEAK-CANARY"}
     eng = FakeEngine([_gen({"tool_calls": [call("noop")]}, 11),
                       _gen({"tool_calls": [call("noop", i=2)]}, 22)])
-    sess = EphemeralSession(eng.backend, "sys", "go", usage_sink=sink)
+    sess = EphemeralSession(eng.backend, "sys", "go")
     await run_sandbox(eng, _spec(sess, sink, max_steps=2))
 
     blob = json.dumps(sess.history, ensure_ascii=False, default=str)
@@ -165,7 +166,7 @@ async def test_run_sandbox_records_every_generation():
     eng = FakeEngine([_gen({"tool_calls": [call("noop", i=1)]}, 11),
                       _gen({"tool_calls": [call("noop", i=2)]}, 22),
                       _gen({"tool_calls": [call("noop", i=3)]}, 33)])
-    sess = EphemeralSession(eng.backend, "sys", "go", usage_sink=sink)
+    sess = EphemeralSession(eng.backend, "sys", "go")
 
     out = await run_sandbox(eng, _spec(sess, sink, max_steps=3))
 
@@ -179,7 +180,7 @@ async def test_run_sandbox_without_sink_still_runs():
     """无轮次上下文（sink=None）时沙箱行为一字不变。"""
     eng = FakeEngine([_gen({"tool_calls": [call("noop")]}, 11)])
     sess = EphemeralSession(eng.backend, "sys", "go")
-    assert sess.usage_sink is None
+    assert not hasattr(sess, "usage_sink")   # 死字段已除(复审 L5),不许回潮
     assert await run_sandbox(eng, _spec(sess, None, max_steps=1)) == "[exhausted]"
 
 

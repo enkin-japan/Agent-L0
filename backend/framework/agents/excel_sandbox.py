@@ -273,7 +273,7 @@ async def _visual_qa(engine, pages: List[str], max_pages: int = 2,
         qa = EphemeralSession(
             qa_engine.backend, _VISUAL_QA_SYSTEM,
             f"Rendered page {i + 1} of the workbook you produced. Inspect it.",
-            images=[png], usage_sink=usage_sink)
+            images=[png])
         r = await qa_engine.generate_once(qa, tools=None, temperature=0.1, max_tokens=300)
         # 视觉回读也是真金白银的子生成（且逐页一发），入父轮的账。
         note_usage(usage_sink, generations=1,
@@ -403,8 +403,7 @@ async def run_excel_task(engine, task: str, input_file: Optional[str],
         opening += ("No input file. Create the workbook in the current directory with a "
                     "descriptive bare filename (e.g. wb.save('report.xlsx')), then verify it.")
 
-    sess = EphemeralSession(engine.backend, EXCEL_SANDBOX_SYSTEM_PROMPT, opening,
-                            usage_sink=usage_sink)
+    sess = EphemeralSession(engine.backend, EXCEL_SANDBOX_SYSTEM_PROMPT, opening)
     visual_summary = ""
     budget_notice_sent = False
 

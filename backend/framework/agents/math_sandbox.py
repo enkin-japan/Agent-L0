@@ -106,8 +106,7 @@ async def run_math_research(engine, problem: str, cfg: dict,
     usage_sink：父轮的用量回收槽（F6）。包壳在工具线程取出后作参数传入——投回主循环的
     协程不继承工具线程 ContextVar。None = 无轮次上下文，记账空转。
     """
-    sess = EphemeralSession(engine.backend, MATH_SANDBOX_SYSTEM_PROMPT, problem,
-                            usage_sink=usage_sink)
+    sess = EphemeralSession(engine.backend, MATH_SANDBOX_SYSTEM_PROMPT, problem)
     max_steps = int(cfg.get("max_steps", 8))
     exec_timeout = int(cfg.get("exec_timeout", math_tools.DEFAULT_TIMEOUT))
     ok_log: List[Tuple[str, str]] = []  # 成功执行的 (code, output)，供摘要核对与兜底

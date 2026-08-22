@@ -58,8 +58,14 @@ SHORT_VALUE_FLAGS = set("mFcCtSu")
 
 
 def tokenize(cmd):
-    lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    # 换行是命令分隔符,不是空白(阶段复审 H1):shlex 缺省把 \n 当 whitespace 吃掉,
+    # SEPS 里的 "\n" 永远等不到 token——多行命令(cd …⏎git commit -n)被拼成一段,
+    # 第一段的 add/cd 就让守卫放行,整套 check 被一键关掉且无痕。punctuation_chars
+    # 是只读属性,须在构造时给显式字符集(缺省 True 即 "();<>|&");引号内换行
+    # (heredoc 提交信息)仍留在字符串 token 里不受影响。
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars="();<>|&\n")
     lex.whitespace_split = True
+    lex.whitespace = lex.whitespace.replace("\n", "")
     return list(lex)                      # 引号不闭合会抛 ValueError，由调用方上报
 
 

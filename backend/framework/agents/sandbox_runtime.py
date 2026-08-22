@@ -31,7 +31,7 @@ def note_usage(sink: Optional[dict], *, generations: int = 0,
     时静默空转——记账是仪表，绝不影响沙箱本体。
 
     bucket 分桶：
-     · "sub"          —— 子 agent 沙箱（web/math/excel），计入 max_total_iterations 熔断；
+     · "sub"          —— 子 agent 沙箱（web/math/excel），走独立保险丝 max_sub_generations（复审定案:不挤占主循环预算）；
      · "goal_verify"  —— 收尾目标校验，它是护栏不是子 agent，单独成桶且**不计入熔断**
        （否则护栏会把自己烧进保险丝）。
 
@@ -66,12 +66,11 @@ class EphemeralSession:
     prompt_stream = None
 
     def __init__(self, backend, system_prompt: str, opening: str,
-                 images: Optional[List[str]] = None, time_anchor: bool = False,
-                 usage_sink: Optional[dict] = None):
+                 images: Optional[List[str]] = None, time_anchor: bool = False):
+        # 用量回收槽刻意**不挂在会话上**（阶段复审 L5:挂了也没人读——真实路径是
+        # SandboxSpec.usage_sink 与各调用点显式传参）:少一个可变字段就少一条
+        # 「沙箱把东西顺着会话对象带回父轮」的想象空间。
         self.brain_memory_state = backend.new_cache()
-        #: 父轮的用量回收槽（F6）。刻意是**普通属性、不进 history、不进任何 prompt 面**
-        #: ——它只往外记数，绝不参与生成上下文（不落盘纪律不因它破例）。
-        self.usage_sink = usage_sink
 
         if time_anchor:
             _anchor = datetime.now().astimezone().strftime("%Y-%m-%d (%A) %H:%M %Z (UTC%z)")

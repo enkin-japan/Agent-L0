@@ -498,7 +498,7 @@ check_merge() {
 check_gate_backend() {
     local py="$BACKEND_DIR/.venv/bin/python" rc
     if [ ! -x "$py" ]; then
-        fail "backend 门跑不起来：找不到 ${py}（仓库根 .venv 是死符号链接，真身只有 backend/.venv）。先跑 ./devctl.sh setup"
+        fail "backend 门跑不起来：找不到 ${py}（真身在 backend/.venv；仓库根自 2026-08-18 起不再有 .venv）。先跑 ./devctl.sh setup"
         return 1
     fi
     # `( cd X && cmd )` 是个陷阱形态：cd 失败时 && 短路，子 shell 回 0 = 「门说过」。

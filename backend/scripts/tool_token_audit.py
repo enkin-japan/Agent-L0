@@ -93,9 +93,12 @@ def main() -> int:
     count, source = make_counter()
     print(f"[audit] 分词器: {source};工具 {len(schemas)} 件\n")
 
+    # full 口径与生产一致:get_tool_schema 只在 catalog 模式进声明
+    # (orchestrator._meta_schemas,阶段复审 L6——初版把它算进 full,高估 ~96 token)
+    full_schemas = [x for x in schemas if x["name"] != GET_TOOL_SCHEMA_SCHEMA["name"]]
     rows = []
     full_chars = 0
-    for s in schemas:
+    for s in full_schemas:
         decl = format_function_declaration(s)
         est = len(json.dumps(s, ensure_ascii=False)) // 4     # 生产估算的同款口径
         rows.append((s["name"], count(decl), est, len(decl)))

@@ -146,7 +146,7 @@ async def run_research(engine, query: str, cfg: dict,
             pass  # 进度是仪表，绝不影响调查本体
 
     sess = EphemeralSession(engine.backend, SANDBOX_SYSTEM_PROMPT, query,
-                            time_anchor=True, usage_sink=usage_sink)
+                            time_anchor=True)
     web_tools.reset_extraction_cache()  # 段落去重缓存按调查为界，防跨调查记仇（见函数注释）
     max_steps = int(cfg.get("max_steps", 6))
     deadline = (time.monotonic() + timeout_s) if timeout_s else None
@@ -282,8 +282,7 @@ async def run_page_digest(engine, question: str, material: str, cfg: dict,
     """
     goal = (question or "").strip() or "General summary of the page(s)."
     sess = EphemeralSession(engine.backend, READER_SYSTEM_PROMPT,
-                            f"Reading goal: {goal}\n\n{material}", time_anchor=True,
-                            usage_sink=usage_sink)
+                            f"Reading goal: {goal}\n\n{material}", time_anchor=True)
     result = await engine.generate_once(
         sess, tools=None, temperature=0.2,
         max_tokens=int(cfg.get("max_summary_tokens", 2048)))

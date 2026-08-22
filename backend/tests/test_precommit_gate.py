@@ -235,6 +235,12 @@ BLOCKED = [
     # core.hooksPath 与 --no-verify 等效（整套钩子消失），git config 那条更是永久性的
     ("git -c core.hooksPath=/dev/null commit -m x", "core.hooksPath"),
     ("git config core.hooksPath /dev/null", "core.hooksPath"),
+    # ★ 多行**命令序列**（阶段复审 H1）:shlex 缺省把换行当空白吃掉,SEPS 里的 "\n"
+    #   永远等不到 token——add/cd 起头的多行命令被拼成一段,首段无辜即整条放行。
+    #   这是本仓 agent 最常见的提交形态,曾整个漏过(引号内换行那条只护了另一半)。
+    ("git add -A\ngit commit -n -m wave", "-n"),
+    ("cd /Volumes/enkin/project/Agent\ngit commit --no-verify -m x", "--no-verify"),
+    ("git status\ngit add -A\ngit commit -nm x", "-nm"),
 ]
 
 ALLOWED = [
@@ -243,6 +249,7 @@ ALLOWED = [
     'git commit -m "add -n flag and --no-verify to the docs"',   # 引号内的假阳性
     'git commit -m"none"',                                       # -m 贴写值，含 n
     'git commit -am"cleanup"',                                   # 短旗标簇 + 贴写值
+    'git add -A\ngit commit -m "clean"',                         # 干净的多行序列:不许误拦
     "git log -n 5 --oneline",
     "git add . && git commit -m ok",
     "grep -rn commit devctl.sh",

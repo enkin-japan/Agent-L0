@@ -1,7 +1,8 @@
 """F3 后半:rag_search 空结果细分的金测试。
 
-「库里有料但重排后全被筛掉」与「库里根本没有」必须是两句不同的话——混成一句时
-模型只会反复换 query 空转:前者该放宽 rerank_top_k,后者该换 category 或先摄入。
+「扫到了库但全被相关性阈值筛掉」与「目标库空/不可用」必须是两句不同的话——混成
+一句时模型只会反复换 query 空转。(初版设想的「放宽 rerank_top_k」已被复审证伪并
+撤销:results 空 ⟺ confident_chunks 空,rerank_top_k 只作用于已空的列表。)
 """
 import pytest
 
@@ -77,11 +78,13 @@ def test_dirty_field_degrades_instead_of_erroring(stub_post):
 
 
 def test_nonempty_results_untouched(stub_post):
-    """阳性对照:有结果时走原格式化路径（真实字段形:document/metadata/rerank_score）,
-    细分话术一个字不出现。"""
+    """阳性对照:有结果时走原格式化路径,细分话术一个字不出现。夹具字段按
+    format_results 实读的键(title/source_path/created_at/seq——复审 L11 订正,
+    初版注释声称的「真实字段形」用的是它不读的键)。"""
     stub_post({"results": [{"document": "报销需 30 日内提交。",
-                            "metadata": {"source_identifier": "员工手册.md",
-                                         "source_path": "/kb/员工手册.md", "chunk_id": "c1"},
+                            "metadata": {"title": "员工手册", "seq": 3,
+                                         "source_path": "/kb/员工手册.md",
+                                         "created_at": "2026-08-01"},
                             "rerank_score": 0.9}],
                "total_chunks_retrieved": 5})
     out = _run()

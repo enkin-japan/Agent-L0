@@ -1040,12 +1040,21 @@ def derive_anchor(terms: list) -> str:
     """
     if not terms:
         return ""
+
+    def _meaningful(sub: str) -> bool:
+        # 公共子串要有语义单位资格才配当锚点(阶段复审 M3):CJK 两字即成词
+        # (咖啡),拉丁两三字符只是词素碎片——monthly/invoice/payment 的最长公共
+        # 子串是 "nt",拿它去重排任何真文档都 <0.3,边际带会被无差别否决。
+        # 拉丁要求 ≥4 字符才算,否则回落首词(首词至少是个完整词)。
+        has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in sub)
+        return len(sub) >= 2 if has_cjk else len(sub) >= 4
+
     best = ""
     for i, a in enumerate(terms):
         for j in range(len(a)):
             for k in range(j + 2, len(a) + 1):
                 sub = a[j:k]
-                if len(sub) <= len(best):
+                if len(sub) <= len(best) or not _meaningful(sub):
                     continue
                 if any(sub in b for b in terms[:i] + terms[i + 1:]):
                     best = sub
@@ -1211,14 +1220,17 @@ def advanced_query_rag(req: QueryRequest):
                 # 佐证豁免:边际带候选逐子词打分,≥2 个不同子词过佐证线 → 免否决
                 # (多主体查询的第二主体文档对首词锚点必然低分——rq-multi-001 误杀实证)
                 corroborate = THRESHOLDS["subquery_corroborate_score"]
-                for c in marginal:
-                    strong = 0
+                # 按子词**批量**打分(阶段复审 M4):逐(候选×子词)单发在拆分部署下是
+                # O(m×t) 次 HTTP 往返;批量后是 t 次,融合模式两者同价
+                strong_count = {id(c): 0 for c in marginal}
+                if marginal:
+                    m_docs = [c["document"] for c in marginal]
                     for term in sub_terms:
-                        if COMPUTE.rerank(term, [c["document"]])[0] >= corroborate:
-                            strong += 1
-                            if strong >= 2:
-                                break
-                    c["_corroborated"] = strong >= 2
+                        for c, sc in zip(marginal, COMPUTE.rerank(term, m_docs)):
+                            if sc >= corroborate:
+                                strong_count[id(c)] += 1
+                for c in marginal:
+                    c["_corroborated"] = strong_count[id(c)] >= 2
                 vetoed = [c for c in marginal
                           if not c.get("_corroborated")
                           and c.get("_anchor_score", 1.0) < THRESHOLDS["anchor_min_score"]]
