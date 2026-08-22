@@ -4075,16 +4075,37 @@ spec_drafted；峰值内存升序口径；秒停/截断逐 run 记账；断点�
 （d5f8fb7）→ 阶段三工装（e5d39db，未跑）。金测试 **1571**，四门全绿，全部已推送。
 **待用户指令后按序执行（全部 🔴 独占 GPU，均挂 task-sentinel）**：
 ~~① 阶段三 KV 量化格实跑~~（✅ 08-23 收官，ce82f24，见「阶段三收官」块）；
-② qwen38 MTP 口径重画像：config 两档 profile 现值是 mode=off 口径（run 20260815），
-   生产已是条目 drafter b5/b3——`run_eval.py --model Qwen3.8-27B-8bit --dims
-   tool_call,longchain,vision`（`--spec-mode` 留空=按部署配置），4bit 档视时长跟进；
-   回填 profile + PROFILES.md；
-③ smoke2 残留 2 份追查（要干净服务；出处 `benchmarks/data/soak-26b4bit-20260818/
-   NOTES.md` §5/§7-4：冒烟 #2 末态 72 > 上限 70 扣基线仍超 2 份未解释）；
-④ 阶段四定档收口 + Q14 受控实验（压批处理同时量交互延迟——批泳道 + 单流路的
-   drill_batch_lane ③ 形态扩成量化实验）；**Q14 进宪动作凭实验数据请用户最终
-   确认后才动 CHARTER**（宪章改动需用户明示同意，预审案文在 §7-6）。
+⛔ ② qwen38 MTP 口径重画像：**首题即撞引擎守卫，阻塞等用户拍板**（08-23，
+   见下「② 阻塞」块）——「部署口径」自身矛盾：D.21 生产 drafter × thinking_mode
+   dynamic（首轮恒思考）× turn_runner 预算缺省 2048 三方冲突，守卫（08-14 落的）
+   会在生产选 qwen38 后每 turn 首轮必炸；重画像口径须先定案；
+~~③ smoke2 残留 2 份追查~~（✅ 08-23 结案，ee2855f：磨合期未入账流量非泄漏，
+   现行代码三账归零，见 `soak-residue-repro-20260823/ANALYSIS.md`）；
+~~④ Q14 受控实验~~（✅ 08-23 判据 PASS，e58a460：配对 TTFT 中位 +54ms/最坏
+   +68ms、wall 比 1.039、解码打平；run1 实抓 tokenizer 借用冲突并修复复验，
+   见 `q14-20260823/ANALYSIS.md`）；**阶段四定档收口 + Q14 进宪 = 等用户
+   最终确认**（宪章改动需用户明示同意，预审案文在 §7-6）。
 第 5/6 层不动。推送纪律照旧：整波收官或阻塞才推。
+
+---
+
+**⛔ ② 阻塞详情：qwen38 生产口径的三方冲突（2026-08-23 发现，等用户拍板）**
+
+重画像首题即触 `gemma4_generate.py` 的守卫：`speculative.mode=drafter 与开思考态
+的 thinking_budget 不兼容`（上游草稿件投机路不消费 forced_token_id，预算到点不会
+强制收束——守卫 08-14 与 MTP 接线同批落地，防的是「预算承诺空转」）。时间线：
+D.21（08-17）把 qwen38 生产 MTP 转正时**没对表这道守卫**，而生产
+`thinking_mode: dynamic`（orchestrator `_thinking_for_iteration`：迭代 0 恒思考）
++ turn_runner `thinking_budget` 缺省 2048 ⇒ **生产选 qwen38 后每个 turn 首轮迭代
+必炸**。日常没炸只因生产缺省模型是 gemma；评测 executor 缺省（思考开+预算 1024）
+走的正是生产同路，故为忠实复现而非评测侧假象。KV 波交叉臂没撞是因为 bench
+harness 不带思考预算。候选解（都动生产口径，须用户拍板）：
+  a) 引擎补课：drafter 路实现预算强制收束（prompt_lookup 路已有同物，独立工作项）；
+  b) qwen38 条目思考预算置空（接受首轮思考无预算上限，dynamic 的成本控制失守）；
+  c) qwen38 走关思考口径（丢思考质量，重画像口径随之变）；
+  d) 编排层按迭代切投机：首轮（思考）非投机、后续迭代 drafter（丢首轮 1.30×，
+     机械上最干净，需 per-request 投机开关下发）。
+重画像在口径定案前不跑（跑「思考关+drafter」等于预支了 c 的决定）。
 
 ---
 
