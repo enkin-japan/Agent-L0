@@ -1,0 +1,29 @@
+[22:15:31] 🚀 mlx-community/gemma-4-26b-a4b-it-4bit server 就绪；warmup…
+[22:15:41] 🔎 批不变性：rows一致=False 对齐B1=False 退化=False
+[22:15:43]   mlx-community/gemma-4-26b-a4b-it-4bit b=1 run0: 路均 124.5 tps, 合计 111.6 tok/s
+[22:15:45]   mlx-community/gemma-4-26b-a4b-it-4bit b=1 run1: 路均 124.5 tps, 合计 111.5 tok/s
+[22:15:48]   mlx-community/gemma-4-26b-a4b-it-4bit b=1 run2: 路均 124.7 tps, 合计 111.1 tok/s
+[22:15:48] ✅ mlx-community/gemma-4-26b-a4b-it-4bit b=1: 路均中位 124.49334564863278 tps / 合计中位 111.48688914583417 tok/s（3 runs）
+[22:15:51]   mlx-community/gemma-4-26b-a4b-it-4bit b=2 run0: 路均 98.2 tps, 合计 175.3 tok/s
+[22:15:53]   mlx-community/gemma-4-26b-a4b-it-4bit b=2 run1: 路均 98.2 tps, 合计 176.4 tok/s
+[22:15:56]   mlx-community/gemma-4-26b-a4b-it-4bit b=2 run2: 路均 98.2 tps, 合计 174.8 tok/s
+[22:15:56] ✅ mlx-community/gemma-4-26b-a4b-it-4bit b=2: 路均中位 98.20655817733325 tps / 合计中位 175.34330586416982 tok/s（3 runs）
+[22:16:01]   mlx-community/gemma-4-26b-a4b-it-4bit b=4 run0: 路均 67.3 tps, 合计 233.4 tok/s
+[22:16:05]   mlx-community/gemma-4-26b-a4b-it-4bit b=4 run1: 路均 68.0 tps, 合计 234.6 tok/s
+[22:16:10]   mlx-community/gemma-4-26b-a4b-it-4bit b=4 run2: 路均 67.8 tps, 合计 233.2 tok/s
+[22:16:10] ✅ mlx-community/gemma-4-26b-a4b-it-4bit b=4: 路均中位 67.83970656129233 tps / 合计中位 233.42042305667866 tok/s（3 runs）
+[22:16:41] 🚀 mlx-community/gemma-4-31b-it-4bit server 就绪；warmup…
+[22:17:19] 🔎 批不变性：rows一致=False 对齐B1=False 退化=False
+[22:17:30]   mlx-community/gemma-4-31b-it-4bit b=1 run0: 路均 25.1 tps, 合计 24.0 tok/s
+[22:17:40]   mlx-community/gemma-4-31b-it-4bit b=1 run1: 路均 25.1 tps, 合计 24.0 tok/s
+[22:17:51]   mlx-community/gemma-4-31b-it-4bit b=1 run2: 路均 25.1 tps, 合计 24.0 tok/s
+[22:17:51] ✅ mlx-community/gemma-4-31b-it-4bit b=1: 路均中位 25.087210337228647 tps / 合计中位 24.024738632346853 tok/s（3 runs）
+[22:18:03]   mlx-community/gemma-4-31b-it-4bit b=2 run0: 路均 24.0 tps, 合计 44.5 tok/s
+[22:18:14]   mlx-community/gemma-4-31b-it-4bit b=2 run1: 路均 24.0 tps, 合计 44.6 tok/s
+[22:18:26]   mlx-community/gemma-4-31b-it-4bit b=2 run2: 路均 24.0 tps, 合计 44.7 tok/s
+[22:18:26] ✅ mlx-community/gemma-4-31b-it-4bit b=2: 路均中位 24.033632851975636 tps / 合计中位 44.56512301727791 tok/s（3 runs）
+[22:18:43]   mlx-community/gemma-4-31b-it-4bit b=4 run0: 路均 16.4 tps, 合计 59.9 tok/s
+[22:19:00]   mlx-community/gemma-4-31b-it-4bit b=4 run1: 路均 16.5 tps, 合计 60.4 tok/s
+[22:19:17]   mlx-community/gemma-4-31b-it-4bit b=4 run2: 路均 16.4 tps, 合计 59.8 tok/s
+[22:19:17] ✅ mlx-community/gemma-4-31b-it-4bit b=4: 路均中位 16.37491544177533 tps / 合计中位 59.87177773597951 tok/s（3 runs）
+[22:19:20] 🏁 并发格测量收官
