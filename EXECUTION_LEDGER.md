@@ -4013,6 +4013,60 @@ dense b=2 96% 几乎白拿、b=4 掉 65%，与 qmm 微基准（M≤2 摊薄好�
 
 ---
 
+**搭车件 reasoning_effort 透传交付（2026-08-22，commit d5f8fb7）**
+
+Qwen3.8 官方旋钮句子逐字节移植（差分测试直接对本机官方模板渲染）。**定稿语义由
+首过评审 3 条 Critical 逼出**：官方「开思考才注入」的门控在本仓不可用——生产
+`thinking_mode: dynamic` 下每轮 iteration 0 恒开思考，注入点又在首 system（稳定
+前缀头部），随思考门控 = 思考开关每翻转打掉整条 KV 前缀（A8 实测过的 23s 级
+冷预填）。故**注入与 enable_thinking 解耦，只由注册表键驱动**：不设键=恒不注入
+（真零行为变化，官方 medium 同形，qwen38 两档 profile 数字不受扰）；显式
+`reasoning_effort: xhigh|low` = 恒注入且跨思考开关字节恒定（专门钉子
+test_injection_stable_across_thinking_toggle）。与官方偏差进 prompt_builder
+docstring 差异清单第 4 条；gemma 条目误设该键响亮提示；变异证明 2/2 验红
+（域校验 / 门控倒退回 enable_thinking 的 C2 回归形态）。金测试 1534→1554。
+**设键前须知**：设键改变 prompt 字节 → 相应档 profile 须重画像（config 注释已写）。
+
+---
+
+**阶段三工装就绪（2026-08-23 凌晨，commit e5d39db；⚠️ 测量未跑，等用户指令开窗）**
+
+`bench_kv.py` + server `INFER_KV_BITS` 环境覆盖（非空即赢、启动期域校验半整数≥1、
+副本写不改全局——文本锚钉死 `INFERENCE_CFG[` 全 server 不得出现）。矩阵：
+{26b-4bit, 31b-4bit} × kv {dense,3.5,2.5} × ctx {8k,32k,64k} + qwen38-8bit MTP×KV
+交叉臂（kv {dense,3.5} × ctx {8k,32k}，条目投机 + rep 1.1 显式落账）。取针两枚
+（10% 行深=距尾部 query 最远的远召回针 + ~53%），宽容匹配 + 证据窗。首过评审
+4C+16S 全处置（要点：格级 error 记录反 13:57 型整臂静默零数据；交叉臂逐 run 校验
+spec_drafted；峰值内存升序口径；秒停/截断逐 run 记账；断点续跑键含 spec_mode；
+测量窗禁下载兜底）。变异证明 3/3。**已知限**：server 侧启动域校验无行为级测试
+（要真起服才可测，harness 侧 parse_kv_arms 白名单冗余保护）；`--kv 3,5` 型逗号
+误写会成两个合法臂（header 落 kv_arms 可见，语法上不可分辨）。
+预计跑长 ~1.5-2h（64k 预填为主），跑法：
+`cd backend && .venv/bin/python scripts/bench_kv.py --out ../benchmarks/data/kv-<日期>/kv.jsonl`
+（挂 task-sentinel；产物目录连同 server-kv-*.log 一起入库）。
+
+---
+
+**⏸ 第 4 层现场快照（2026-08-23 凌晨，供 /compact 后无漂移再入）**
+
+已完成并入库：§7-0① 批处理泳道（3dd30f3）→ 阶段一并发格（bd07547，MoE 并集税
+79% vs dense 96%、合计 2.09×/2.49×，Q14 吞吐证据就位）→ reasoning_effort 透传
+（d5f8fb7）→ 阶段三工装（e5d39db，未跑）。金测试 **1571**，四门全绿，全部已推送。
+**待用户指令后按序执行（全部 🔴 独占 GPU，均挂 task-sentinel）**：
+① 阶段三 KV 量化格实跑（工装就绪，命令见上块，~1.5-2h）→ 分析入库；
+② qwen38 MTP 口径重画像：config 两档 profile 现值是 mode=off 口径（run 20260815），
+   生产已是条目 drafter b5/b3——`run_eval.py --model Qwen3.8-27B-8bit --dims
+   tool_call,longchain,vision`（`--spec-mode` 留空=按部署配置），4bit 档视时长跟进；
+   回填 profile + PROFILES.md；
+③ smoke2 残留 2 份追查（要干净服务；出处 `benchmarks/data/soak-26b4bit-20260818/
+   NOTES.md` §5/§7-4：冒烟 #2 末态 72 > 上限 70 扣基线仍超 2 份未解释）；
+④ 阶段四定档收口 + Q14 受控实验（压批处理同时量交互延迟——批泳道 + 单流路的
+   drill_batch_lane ③ 形态扩成量化实验）；**Q14 进宪动作凭实验数据请用户最终
+   确认后才动 CHARTER**（宪章改动需用户明示同意，预审案文在 §7-6）。
+第 5/6 层不动。推送纪律照旧：整波收官或阻塞才推。
+
+---
+
 **全账重排（D.24，2026-08-18 用户拍板）——判据：① 缺陷修复优先 ② Mac 端优先——**
 
 **这是当前唯一有效的施工顺序**，覆盖此前所有「下一件」写法。`第二梯队` 段已改为指回本块。
