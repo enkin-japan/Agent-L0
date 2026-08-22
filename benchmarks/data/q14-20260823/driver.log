@@ -1,0 +1,48 @@
+[q14] 臂 A：16/16 ok
+[q14] 起 4 路批压力…
+[q14] 压力已建立 decoding=3
+[q14] 臂 B：16/16 ok
+[q14] 臂 A2：16/16 ok
+== Q14 判据 == {
+ "type": "verdict",
+ "passed": true,
+ "invalid": [],
+ "ttft_med_s": {
+  "A": [
+   0.1158,
+   16
+  ],
+  "B": [
+   0.1684,
+   16
+  ],
+  "A2": 0.1138,
+  "A2_drift_gt_10pct": false
+ },
+ "ttft_pair_delta_s": {
+  "med": 0.0541,
+  "max": 0.0678,
+  "n": 16
+ },
+ "wall_med_s": {
+  "A": 1.3933,
+  "B": 1.4478,
+  "ratio": 1.0391
+ },
+ "decode_tps_med": {
+  "A": 124.8937,
+  "B": 125.2215
+ },
+ "yield_seen_rate": 1.0,
+ "pressure_decoding_min": 2,
+ "batch_steps_in_window": 730,
+ "batch_rows_total": 60,
+ "batch_rows_failed": 0,
+ "batch_rows_done_in_window": 52,
+ "batch_tok_in_window_lower_bound": 2496,
+ "peak_mem_gb": 21.018993989,
+ "cache_count_t1": 0,
+ "swap_t1": "total = 0.00M  used = 0.00M  free = 0.00M  (encrypted)",
+ "errors_total_delta": 0
+}
+[q14] server 已收

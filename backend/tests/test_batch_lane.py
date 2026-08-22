@@ -453,6 +453,10 @@ def test_upstream_factory_source_anchors():
     assert "make_streaming_detokenizer(processor)" in src
     # add_special_tokens 按模型族条件（评审 M8），不许写死
     assert '"gemma4_unified"' in src
+    # 泳道 processor 必须是私有深拷（Q14 首跑实撞 `Already borrowed`：
+    # HF fast tokenizer 的 Rust RefCell 不许跨单流/批两线程共用一实例）
+    assert "_copy.deepcopy(backend.processor)" in src
+    assert "processor = backend.processor" not in src
 
 
 def test_server_wiring_anchors():

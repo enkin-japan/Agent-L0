@@ -444,7 +444,13 @@ def build_upstream_context(backend, *, max_num_seqs: int):
     from mlx_vlm.tokenizer_utils import (_ServerTokenStreamer,
                                          make_streaming_detokenizer)
 
-    model, processor = backend.model, backend.processor
+    model = backend.model
+    # 私有 processor（Q14 首跑实撞，2026-08-23）：HF fast tokenizer 是 Rust
+    # RefCell——单流路执行器线程与本泳道驱动线程共用同一实例会零星
+    # `RuntimeError: Already borrowed`（撞点=驱动线程准入 tokenize/步末 detok
+    # 与交互请求的 prompt encode 重叠）。装配期深拷一份：两个 Rust 对象无共享
+    # 借用，热路零锁；权重（model）照旧共享，深拷只复制分词面，内存忽略不计。
+    processor = _copy.deepcopy(backend.processor)
     tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else processor
     detok_template = make_streaming_detokenizer(processor)
     # add_special_tokens 按模型族条件（评审 M8）：与单流路/上游 _cpu_preprocess
