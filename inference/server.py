@@ -287,6 +287,34 @@ async def lifespan(app: FastAPI):
         print(f"[Server] 投机生效配置：mode={_eff_spec.get('mode')} "
               f"draft={_eff_spec.get('draft_model')} "
               f"block={_eff_spec.get('draft_block_size') or _eff_spec.get('block_size')}")
+
+    # INFER_KV_BITS：KV 缓存量化的环境覆盖（阶段三测量场；同 INFER_SPEC_* 惯例：
+    # env 非空即赢、构造副本不改全局）。"dense"/"off"/"null" 显式回稠密（压过
+    # config）；数值档全部经 float——注意 scheme 由 config kv_quant_scheme 决定
+    # （缺省 turboquant 时整数值也走 TurboQuant，不是均匀量化——评审实读
+    # turboquant_enabled 的结论，别按位宽形状臆断路径）。
+    # 非法/越域值**启动期**拒启（上游 _validate_bits 到首次生成才炸——那时一条
+    # 测量臂已静默空跑，评审「拒启优于静默跑错口径」的窗口就在这里）。
+    _kv_env = os.environ.get("INFER_KV_BITS", "").strip()
+    if _kv_env:
+        if _kv_env.lower() in ("dense", "off", "null"):
+            _inf_cfg = {**_inf_cfg, "kv_bits": None}
+            print("[Server] KV 量化被环境覆盖：稠密（kv_bits=None）")
+        else:
+            try:
+                _kv_val = float(_kv_env)
+            except ValueError:
+                raise SystemExit(f"❌ [Server] INFER_KV_BITS 不是数值/dense："
+                                 f"{_kv_env!r}——拒启优于静默跑错口径")
+            import math
+            if (not math.isfinite(_kv_val) or _kv_val < 1
+                    or round(_kv_val * 2) / 2 != _kv_val):
+                raise SystemExit(f"❌ [Server] INFER_KV_BITS 越域：{_kv_val!r}"
+                                 f"——须为 ≥1 的半整数（上游 _validate_bits 口径，"
+                                 f"启动期就拒，不等首次生成才炸）")
+            _inf_cfg = {**_inf_cfg, "kv_bits": _kv_val}
+            print(f"[Server] KV 量化被环境覆盖：kv_bits={_kv_val}"
+                  f"（scheme={_inf_cfg.get('kv_quant_scheme') or 'turboquant'}）")
     print(f"🚀 [Server] loading model: {model} (backend={backend_name or 'default'})")
 
     # T7 并发参数化：锁与执行器按后端能力开闸——MLX 共享单例不可并发（=1，旧语义
