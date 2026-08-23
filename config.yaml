@@ -187,6 +187,11 @@ inference:
       profile: { tool_call: 0.92, longchain: 1.00, vision: 0.958, tps: 48.9 }  # run 20260823-140448（生产口径：思考开+预算1024+drafter b3；质量与 mode=off 旧画像各维差 ≤1 题）
       note: "15GB | 定档静态位：思考/vision 特长位（2026-08-23，与 8bit 同位；质量打平而 tps 1.20×/内存 -41% = 本模型效率王）| 生产口径重画像 ✓（峰值内存 19.3G；tps 为 b3 生产实测=off 口径 1.75×）| D.21 生产 MTP b3"
     # ── CUDA 档（bf16 原件，backend: cuda / Colab A100 联调；2026-08-06 用户指定）──
+    # **角色边界（用户 2026-08-23 明确）：Colab 仅为开发测试用途，与实际生产
+    # 无关**。本段条目只服务 CUDA 特有形态对照与评测；生产的云端升级目标是
+    # 商用 API（CHARTER 数据流向边界：L0 脱敏单任务 payload、零保留选型），
+    # 不是这里的任何档。下文「主模型候选/优先选中资格」等措辞仅在 endpoints
+    # 显式启用的开发联调形态内有意义——endpoints 常年全注释即该边界的机械表达。
     # revision 已钉死（2026-08-06 HF API 主干 SHA；各仓 lastModified 均早于入库日，
     # 与 Drive 权重一致——凡常驻均应钉死的纪律）。
     # capabilities 按 mlx 同家族口径预填。〔2026-08-16 D.20：Qwen3.6 与 Ornith-35B
