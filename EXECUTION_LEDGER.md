@@ -565,8 +565,8 @@ R0–R5 各小项的打勾细分（含每步实测结果与计划外发现）已
 
 | 项 | 当前值 | 口径 |
 |---|---|---|
-| 金测试项数 | 1625 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
-| 测试文件数 | 109 | `backend/tests/` 下递归的 `test_*.py` |
+| 金测试项数 | 1656 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
+| 测试文件数 | 110 | `backend/tests/` 下递归的 `test_*.py` |
 | mcp 文件数 | 31 | `backend/framework/mcp/` 递归下的 `.py`，**不含** `__init__.py` |
 | BaseTool 子类 | 67 | 全 backend 内 `class X(BaseTool)` 的声明数（一个文件可有多个） |
 | 物理隔离沙箱 | 3 | `backend/framework/agents/*_sandbox.py` |
@@ -4390,6 +4390,65 @@ m9 **server 约束采样竞态修复**（S–M，单文件为主，guard-type �
    qwen38 0.943/0.958，ChartQA hard 差约 20 题）、长上下文×结构化（08-16
    矩阵弱信号，需补探针）、深推理（26b 无思考模式）；另设生产日志回流
    管道（journal 失败案例→目录候选）。🔴 探针补跑需 GPU + sentinel。
+   **✅ ⑤′-2 交付（2026-08-23 傍晚；GPU 两段探针共 ~25 min，单 GPU 手核独占）**：
+   - **谓词是代码**：新 `framework/cloud/boundary.py`——`RequestFacts`（文本/带图/上下文
+     token/显式深推理/附件字数，全部生成前可得）、`Boundary`（谓词+证据+探针+状态+动作）、
+     `CATALOG` 4 条、`match()` 缺省排除 `pending`（护栏不建在猜测上）。文档面
+     `backend/benchmarks/model_eval/BOUNDARY.md` 逐条对应，金测试钉 id 集合与状态字样一致。
+   - **B1 `vision_chart_numeric`（confirmed → 换 qwen38-4bit）**：零 GPU，从归档 transcripts
+     算逐题差分——**30 题 26b-4bit 错而 qwen38 两档全对**（全部 vi-chartqa），反向 10，
+     三档同错 3；清单 `benchmarks/data/boundary-probe-20260823/vision_diff.json`。
+   - **B2 `long_context_structured`（cleared）**：快照里的"08-16 矩阵弱信号"经追溯是 08-14
+     哨兵矩阵 26b-4bit tool@32k/64k ✗，而那是 **JSON 声明体旧口径，DSL 迁移后同格翻正**
+     （20260814-dsl-fullmatrix 翻正 24 格、回退 0）。真正没探过的是答复正文里的结构化产出：
+     新批 `items/text/longctx_struct.jsonl`（`gen_longctx_struct.py` seed 20260823 确定性重建，
+     12 条巡检记录散落百科体填充文，实测 prompt 7.8k/15.3k/30.3k/45.6k token）任务 A（JSON
+     提取）**26b-4bit 4/4、每档 12/12 记录全中；26b-8bit 同 4/4** → 不是弱项，留档防重立。
+   - **B3 `implicit_aggregation`（confirmed → 换 qwen38-4bit 且开思考）——探针意外揪出的真弱项**：
+     任务 B（按状态分组→条数+读数合计，Markdown 表）26b-4bit 关思考 **0/4 且 8k 即挂、分组
+     条数也错**（同文任务 A 12/12 → 不是没读到，是没有草稿的隐式多步计算）；对照：26b-8bit
+     0/4 同型错（量化不是变量）；26b-4bit 开思考 0/4 且 3/4 思考通道空产出、48k 正文进了思考
+     频道（本档开思考不产草稿）；**qwen38-4bit 关思考 0/4、开思考（预算 1024=其生产口径）4/4**，
+     思考 1.56–1.72k 字。代价：墙钟 47/75/134/200s vs 26b 6/12/25/41s（稠密 prefill 239 vs
+     MoE 1300 tps）。快照写的"深推理（26b 无思考模式）"口径据此校正为：26b 开思考在此类
+     任务上空产出。未探：编排层"先列后算"能否让 26b 档内自救（零换档代价，留 ⑤′-3 后可选）。
+   - **B4 `deep_reasoning`（weak → cloud_consult）**：无本地直接证据（longchain 测的是工具态机），
+     留 weak 等回流案例；谓词宁窄勿宽（显式证明/推导/严格推理或调用方 explicit_deep）。
+   - **回流管道** `scripts/boundary_harvest.py`：扫 `sessions/*/history.jsonl` 按确定性信号
+     （status fail/warning、解析错 ≥2、≥12 圈、工具错 ≥3、cloud_degraded、用户重发）出候选
+     + 目录谓词命中（含 pending 供对表）；产物 gitignored（含 prompt 片段）。首跑 dev 机
+     119 会话/122 轮：候选 23（fail 13/多圈 9/工具错 6/解析错 2/重发 2/warning 1），目录命中
+     0、**盲区候选 22**——多为架构调试期工具链路故障，待人工剔锅后归条。
+   - 档案 `benchmarks/data/boundary-probe-20260823/`（4 个 run 的 summary+transcripts，
+     transcripts 不含 prompt 故只有 KB 级）；config 26b-4bit note 改指向目录（文本，无功能值）；
+     model_eval README 补 text 维度行。金测试 `tests/test_boundary_catalog.py` 12 条
+     （谓词命中/不命中、cleared 恒不命中+原谓词保留、pending 门、文档↔代码一致、定档条目、
+     harvest 信号与命中、候选 gitignore、探针题确定性重建等）；全套 1625→**1637**。
+   - **评审（reviewer 首过 2C/9M/20m/11nit）与处置**：C1 `_DEEP_RE` 英文备选未锚定
+     （`prove`→improve/approve、`formal`→informal，实测 6 条日常问句全命中→会出网花钱）、
+     C2 `_AGG_RE` 的 `\bmean\b`/裸 `平均`/`total` 命中 "what do you mean"（→换档慢 5–8×）
+     → 全部英文备选改字母边界锚定（`_en()` 助手），中文搭配收窄，13 条实测误报入参数化
+     负测试；M3 关键词曾读粘贴材料（4 万字附件必含"合计"）→ `RequestFacts.text` 定义为
+     **指令**，材料只进长度信号，harvest 同步；M4 回流快照数字过时→重跑（命中
+     implicit_aggregation 2 / 盲区 21）；M5/M6/m12/m15/m21/m38 文档数字与归档不符→按
+     transcripts 逐格重算改写（8bit@32k 三组条数全对、合计偏 −8/+10/+477；qwen 关思考 8k
+     比 26b 还差等）；M7 任务 B 判分只钉合计不钉条数→matchers 加 `regex_all`，每组钉
+     「状态|条数|合计」同行，归档 4 个 run 按新口径离线重判结论不变（`rescore.json`）；
+     M9 换档须开思考只活在散文→`Boundary.action_gen` 代码字段；M10 cleared 仅靠 `_never`
+     →`match()` 直接跳过 cleared + 构造期不变量（cleared ⇒ _never，assert 改显式 raise）；
+     M11 `_CHART_RE` 的 `what is the` 过宽→收窄为图表/坐标/读数词 + "图中…多少"搭配；
+     m13/m14 vision_diff 无 run 戳、定义不对称→重建（run 戳、对称定义：两档 qwen 都错而
+     26b 对 = 5，宽口径 10）；m16–18 阈值换算/注释/统计窗口；m19/m20 生成器 assert 改重采样、
+     读数存在性不再作断言（编号值域重叠）；m22/23/25/26 测试：整条比对、只钉 tx-lcs 子集、
+     定档断言改 `★ 定档生产单档` 且全表唯一、按标题切段；m27–29 harvest：无时间戳不被
+     --since 丢、目录不存在=0 候选、`--out` 非 gitignored 路径拒绝；m30 任务 A max_tokens
+     2048；nit 清理。未采：m40 探针 JSONL 1 MB 入库（确定性重建 + 整条比对守漂移，评测可
+     复现优先于仓体积）；m41 weak 缺省可命中（改为 `include_weak` 由消费方筛，⑤′-3 自动档
+     只认 confirmed）。金测试 12→**31**，全套 **1656**。
+   - **变异证明**（两轮 9 只，`benchmarks/data/boundary-probe-20260823/mutants.log`）：首轮
+     A pending 照样触发→红 / B cleared 谓词复活→2 红 / C 聚合谓词恒假→3 红；复审后 D pending
+     →红 / E cleared 不跳过且去不变量→4 红 / F 英文锚定退回→4 红 / G 回流把材料并进关键词
+     →**首跑存活**（无 ingested 用例）→补测后红 / H 聚合恒假→3 红；sha256 核对还原。
 ⑤′-3 **升级策略**（M）：编排层确定性护栏（护栏是代码）——目录谓词命中 /
    本地 N 次失败 / 用户显式要求 → 触发 cloud_consult（按 config 决定
    自动或仅建议；审批闸与 L0 照旧）；铁律 6：云端只顾问。验收：金测试

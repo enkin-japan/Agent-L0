@@ -89,8 +89,9 @@ def match_args(spec: Dict[str, Dict[str, Any]], args: Dict[str, Any],
 
 
 def match_text(spec: Dict[str, List[str]], text: str) -> Tuple[bool, List[str]]:
-    """文本断言：must_all 全含 / must_any 至少一含 / must_not 全不含 / regex_any 任一中。"""
-    unknown = set(spec) - {"must_all", "must_any", "must_not", "regex_any"}
+    """文本断言：must_all 全含 / must_any 至少一含 / must_not 全不含 / regex_any 任一中 /
+    regex_all 逐条都中（⑤′-2 加：表格行"状态|条数|合计"要三段同行成对，子串 must_all 钉不住）。"""
+    unknown = set(spec) - {"must_all", "must_any", "must_not", "regex_any", "regex_all"}
     if unknown:
         raise ValueError(f"文本断言不认识的键: {sorted(unknown)}")
     fails: List[str] = []
@@ -103,6 +104,9 @@ def match_text(spec: Dict[str, List[str]], text: str) -> Tuple[bool, List[str]]:
     rx_list = spec.get("regex_any", [])
     if rx_list and not any(re.search(rx, text) for rx in rx_list):
         fails.append(f"regex_any 全不中: {rx_list!r}")
+    for rx in spec.get("regex_all", []):
+        if not re.search(rx, text):
+            fails.append(f"regex_all 不中: {rx!r}")
     for needle in spec.get("must_not", []):
         if needle in text:
             fails.append(f"must_not 出现 {needle!r}")

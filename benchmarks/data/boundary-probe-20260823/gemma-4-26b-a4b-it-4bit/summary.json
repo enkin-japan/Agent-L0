@@ -1,0 +1,38 @@
+{
+  "model": "mlx-community/gemma-4-26b-a4b-it-4bit",
+  "revision": "0d77464eeb233a2da68ebf9d7dc4edaac7db956d",
+  "dialect": "gemma4",
+  "speculative": {
+    "mode": "off"
+  },
+  "stamp": "20260823-165405",
+  "n_runs": 8,
+  "dimensions": {
+    "text": {
+      "n": 8,
+      "pass_rate": 0.5,
+      "aborted_rate": 0.0,
+      "final_ok_rate": 0.5,
+      "stray_calls_total": 0
+    }
+  },
+  "cot_purity": {},
+  "speed": {
+    "generation_tps": {
+      "mean": 89.58,
+      "median": 89.83,
+      "min": 71.98,
+      "max": 106.67,
+      "n": 8
+    },
+    "prompt_tps": {
+      "mean": 1308.47,
+      "median": 1321.8,
+      "min": 1137.47,
+      "max": 1470.47,
+      "n": 8
+    },
+    "peak_memory_max": 20.93,
+    "kv_prefix_hit_rate": {}
+  }
+}

@@ -1,0 +1,14 @@
+== ⑤′-2 mutants ==
+A pending 照样触发 → FAILED test_pending_entries_never_trigger_by_default 1 failed, 11 passed in 0.08s 
+B cleared 条目谓词复活 → FAILED test_long_context_structured_is_cleared_but_raw_predicate_kept_for_reprobe FAILED test_harvest_signals_and_catalog_hits 2 failed, 10 passed in 0.08s 
+C 聚合谓词恒假 → FAILED test_implicit_aggregation_predicate - ... FAILED test_match_preserves_catalog_order_and_can_multi_hit FAILED test_harvest_signals_and_catalog_hits 3 failed, 9 passed in 0.56s 
+restore: OK
+== ⑤′-2 mutants round 2 (post-review) ==
+D pending 照样触发 → FAILED test_pending_entries_never_trigger_by_default 1 failed, 29 passed in 0.48s 
+E cleared 不跳过(靠谓词) → FAILED test_catalog_ids_unique_and_statuses_legal FAILED test_boundary_invariants_raise_not_assert FAILED test_long_context_structured_is_cleared_but_raw_predicate_kept_for_reprobe FAILED test_harvest_signals_and_catalog_hits 
+F 英文锚定退回  → FAILED test_no_false_positive_on_ordinary_asks[improve this function please] FAILED test_no_false_positive_on_ordinary_asks[Can you improve the error message?] FAILED test_no_false_positive_on_ordinary_asks[the derived class overrides run()] FAILED test_no_false_positive_on_ordinary_asks[这是 approve 流程的说明] 
+G 回流把材料并进关键词 → 30 passed in 0.07s 
+H 聚合谓词恒假 → FAILED test_implicit_aggregation_predicate - ... FAILED test_match_preserves_catalog_order_and_can_multi_hit FAILED test_harvest_signals_and_catalog_hits 3 failed, 27 passed in 0.09s 
+restore2: OK
+G′ 回流把材料并进关键词（补测后） → FAILED test_harvest_keywords_ignore_ingested_material 1 failed, 30 passed in 0.08s 
+restore3: OK

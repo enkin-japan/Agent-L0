@@ -34,6 +34,7 @@ model_eval/
 | cot_purity | 任何开思考题顺带 | 控制标记泄漏 / thoughts↔正文复读 / 语种混杂 / 预算纪律 |
 | longchain | 专用题（mock 工具态机） | 终态断言成败 / 步数 / 回退次数 |
 | vision | 专用题（带图） | 关键词/精确匹配正确率 |
+| text | 专用题（纯文本，与 vision 共用 text_answer 打分） | 关键词/正则命中率。现存批：`items/text/longctx_struct.jsonl`（⑤′-2 边界探针，生成器确定性重建，见 BOUNDARY.md） |
 
 ## 题库 schema（JSONL 每行一题）
 

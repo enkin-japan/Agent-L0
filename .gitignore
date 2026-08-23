@@ -102,3 +102,4 @@ personal-agent-data-architecture.md
 local_agent_architecture.md
 .hf_token_tmp
 /reminder/
+backend/benchmarks/model_eval/boundary_candidates.jsonl
