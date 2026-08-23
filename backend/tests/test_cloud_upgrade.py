@@ -71,6 +71,19 @@ def _one(ds):
     return ds[0]
 
 
+@pytest.fixture
+def tier_entry(monkeypatch):
+    """目录现无 switch_tier 条目（B1 降 caveat，B3 改 tool_assist）；换档建议机制用临时条目守。"""
+    import framework.cloud.boundary as bd
+    from framework.cloud.boundary import Boundary, RequestFacts as RF
+    entry = Boundary(id="tmp_tier", title="临时换档条目", predicate=lambda f: "换档探针" in f.text,
+                     status="confirmed", action="switch_tier", action_target="mlx-community/Qwen3.8-27B-4bit",
+                     evidence="e", probes="p", action_gen={"enable_thinking": True, "thinking_budget": 1024},
+                     action_cost="该档在这类任务上约慢 5–8 倍（实测 4.9–7.8×）")
+    monkeypatch.setattr(bd, "CATALOG", bd.CATALOG + (entry,))
+    return entry
+
+
 def test_turn_start_decision_table():
     c = cloud()
     up = U.UpgradeConfig(mode="suggest")
@@ -94,18 +107,22 @@ def test_turn_start_decision_table():
     assert _one(D(f)).action == "consult_suggest"
     assert D(f, U.UpgradeConfig(mode="auto")) == []
     assert D(f, cc={"providers": []}) == []                # 目录命中但云端不可用 → 不打扰
-    # 目录 switch_tier → tier_suggest（无论云端是否可用；tier_notice=False 则无）
-    d = _one(D("按状态分组统计条数与读数合计", cc={"providers": []}, reg=False))
-    assert d.action == "tier_suggest" and d.tier_target.endswith("Qwen3.8-27B-4bit")
-    assert d.tier_gen == {"enable_thinking": True, "thinking_budget": 1024}
-    assert "implicit_aggregation" not in d.reason            # 用户面不露内部 id
-    assert "5–8" in d.tier_cost                              # B3 实测代价随决策带出
+    # 目录 caveat（B1）→ 只给用户提醒；与云端可用性、tier_notice 无关
     dv = _one(D("这张柱状图的峰值是多少", has_images=True, cc={"providers": []}, reg=False))
-    assert dv.action == "tier_suggest" and dv.tier_cost == ""   # B1 未测墙钟 → 不编数字
-    assert D("按状态分组统计条数与读数合计", U.UpgradeConfig(tier_notice=False)) == []
-    # consult 与 tier 并存：两条都出（评审 m16）
+    assert dv.action == "caveat" and "核对" in dv.notice and "vision_chart_numeric" not in dv.reason
+    assert U.user_notice(dv).startswith("—— 提示：图表数值读取是本档已知弱项") and U.model_hint(dv)
+    assert _one(D("这张柱状图的峰值是多少", U.UpgradeConfig(tier_notice=False), has_images=True)).action == "caveat"
+    # 目录 tool_assist → tool_hint（B3：算术交 run_math；与云端可用性无关；工具须已注册）
+    dt = _one(D("按状态分组统计条数与读数合计", cc={"providers": []}, reg=False))
+    assert dt.action == "tool_hint" and dt.tier_target == "run_math" and "run_math" in dt.hint
+    assert "run_math" in U.model_hint(dt) and U.user_notice(dt) == ""     # 只提醒模型，不打扰用户
+    assert D("按状态分组统计条数与读数合计", cc={"providers": []}, reg=False,
+             ) and U.decide_at_turn_start(RequestFacts(text="按状态分组统计条数与读数合计"), up,
+                                          cloud_cfg={"providers": []}, consult_registered=False,
+                                          registered_tools={"read_file"}) == []   # run_math 未注册 → 不出决策
+    # consult 与 tool_hint 并存：两条都出（评审 m16）
     ds = D("请严格证明各组合计的趋势")
-    assert [x.action for x in ds] == ["consult_suggest", "tier_suggest"]
+    assert [x.action for x in ds] == ["consult_suggest", "tool_hint"]
     # 无命中
     assert D("今天吃什么") == []
 
@@ -243,17 +260,95 @@ def test_budget_refusal_branch_degrades_once_and_annotates(make_session):
     assert len(ring_of(session, "upgrade_triggered")) == 1
 
 
-def test_tier_suggest_appends_user_notice_only(make_session):
-    engine = FakeEngine([{"text": "| 正常 | 3 | 1798 |"}])
+def test_tier_suggest_appends_user_notice_only(make_session, tier_entry):
+    engine = FakeEngine([{"text": "结果如下。"}])
     orch = make_orch(engine, FakeRegistry([consult_tool()]))
+    session = make_session()
+    session.add_user_message("换档探针")
+    begin_turn(session)
+    r = run(orch.run_turn(session, journal=session.journal, **GEN))
+    assert r["response"].startswith("结果如下。")
+    assert "Qwen3.8-27B-4bit" in r["response"] and "devctl.sh model" in r["response"] and "4.9–7.8×" in r["response"]
+    assert engine.calls[0]["tail_notes"] == []              # 换档不打扰模型
+    assert r["metrics"]["cloud_upgrade"][0]["action"] == "tier_suggest"
+    assert U.decide_at_turn_start(RequestFacts(text="换档探针"), U.UpgradeConfig(tier_notice=False),
+                                  cloud_cfg=cloud(), consult_registered=True) == []
+
+
+def test_caveat_appends_user_notice_only(make_session):
+    """B1（用户 08-23 拍板降为 caveat）：带图图表问法 → 答复末尾一行核对提醒；不换档、不出网、不扰模型。"""
+    engine = FakeEngine([{"text": "峰值约 42。"}])
+    registry = FakeRegistry([consult_tool()])
+    orch = make_orch(engine, registry, cloud_cfg=cloud("auto"))
+    session = make_session()
+    session.add_user_message("这张柱状图的峰值是多少", images=["chart.png"])
+    begin_turn(session)
+    r = run(orch.run_turn(session, journal=session.journal, **GEN))
+    assert r["status"] == "success" and r["response"].startswith("峰值约 42。")
+    assert "图表数值读取是本档已知弱项" in r["response"] and "核对" in r["response"]
+    assert engine.calls[0]["tail_notes"] == [] and registry.executed == []
+    assert r["metrics"]["cloud_upgrade"][0]["action"] == "caveat"
+
+
+def test_tool_hint_injects_model_note_without_user_notice(make_session):
+    engine = FakeEngine([
+        {"tool_calls": [call("run_math", code="sum([1,2])")]},
+        {"text": "| 正常 | 3 | 1798 |"},
+    ])
+    orch = make_orch(engine, FakeRegistry([consult_tool(), FakeTool("run_math", result="3", read_only=True)]))
     session = make_session()
     session.add_user_message("按状态分组统计条数与读数合计")
     begin_turn(session)
     r = run(orch.run_turn(session, journal=session.journal, **GEN))
-    assert r["response"].startswith("| 正常 | 3 | 1798 |")
-    assert "Qwen3.8-27B-4bit" in r["response"] and "devctl.sh model" in r["response"]
-    assert engine.calls[0]["tail_notes"] == []              # 换档不打扰模型
-    assert r["metrics"]["cloud_upgrade"][0]["action"] == "tier_suggest"
+    assert r["response"] == "| 正常 | 3 | 1798 |"            # 用户面无提示
+    assert any("run_math" in n for n in engine.calls[0]["tail_notes"])
+    assert engine.calls[1]["tail_notes"] == []                # 一次性：第二次生成不再注
+    assert not any("run_math tool" in str(m.get("content", "")) for m in session.history)   # 不进历史
+    assert r["metrics"]["cloud_upgrade"][0]["action"] == "tool_hint"
+
+
+def test_tool_hint_skipped_when_tool_not_registered(make_session):
+    engine = FakeEngine([{"text": "| 正常 | 3 | 1798 |"}])
+    orch = make_orch(engine, FakeRegistry([consult_tool()]))        # 无 run_math
+    session = make_session()
+    session.add_user_message("按状态分组统计条数与读数合计")
+    begin_turn(session)
+    r = run(orch.run_turn(session, journal=session.journal, **GEN))
+    assert engine.calls[0]["tail_notes"] == [] and "cloud_upgrade" not in r["metrics"]
+
+
+def test_tool_hint_does_not_block_failures_escalation(make_session):
+    """评审 M1：tool_hint 不占"本轮云端咨询"名额——之后连续失败仍可触发 consult_suggest。"""
+    engine = FakeEngine([
+        {"tool_calls": [call("flaky", n=1)]},
+        {"tool_calls": [call("flaky", n=2)]},
+        {"text": "done"},
+        {"text": "失败了。"},
+    ])
+    flaky = FakeTool("flaky", result="System Error: boom", read_only=True)
+    orch = make_orch(engine, FakeRegistry([consult_tool(), flaky, FakeTool("run_math", result="0", read_only=True)]))
+    session = make_session()
+    session.add_user_message("按状态分组统计条数与读数合计")
+    begin_turn(session)
+    run(orch.run_turn(session, journal=session.journal, **GEN))
+    assert [(e["trigger"], e["action"]) for e in ring_of(session, "upgrade_triggered")] == \
+        [("catalog", "tool_hint"), ("failures", "consult_suggest")]
+
+
+def test_auto_consult_then_tool_hint_both_recorded_and_replayed(make_session):
+    """评审 m3：显式要云端 + 聚合题：两条决策都入账；审批续跑后 run_math 尾注补注一次。"""
+    engine = FakeEngine([{"text": "结合建议，合计如下。"}])
+    registry = FakeRegistry([consult_tool(), FakeTool("run_math", result="0", read_only=True)])
+    orch = make_orch(engine, registry, cloud_cfg=cloud("auto"))
+    session = make_session()
+    session.add_user_message("问问云端导师：按状态分组统计条数与读数合计")
+    begin_turn(session)
+    p = run(orch.run_turn(session, journal=session.journal, **GEN))
+    assert p["status"] == "pending_approval"
+    assert [d["action"] for d in p["metrics"]["cloud_upgrade"]] == ["consult_auto", "tool_hint"]
+    r = run(orch.resume_after_approval(session, approved=True, journal=session.journal, **GEN))
+    assert [d["action"] for d in r["metrics"]["cloud_upgrade"]] == ["consult_auto", "tool_hint"]
+    assert any("run_math" in n for n in engine.calls[0]["tail_notes"])
 
 
 def test_explicit_request_but_cloud_unavailable_is_told(make_session):
@@ -268,12 +363,14 @@ def test_explicit_request_but_cloud_unavailable_is_told(make_session):
     assert "no_provider" not in r["response"]               # 用户面不露内部 kind
 
 
-@pytest.mark.parametrize("prompt", ["请严格证明这个不等式", "按状态分组统计条数与读数合计", "问问云端导师"])
-def test_off_mode_never_triggers(make_session, prompt):
+@pytest.mark.parametrize("prompt,images", [("请严格证明这个不等式", None), ("按状态分组统计条数与读数合计", None),
+                                           ("问问云端导师", None), ("这张柱状图的峰值是多少", ["chart.png"])])
+def test_off_mode_never_triggers(make_session, prompt, images):
     engine = FakeEngine([{"text": "ok"}])
-    orch = make_orch(engine, FakeRegistry([consult_tool()]), cloud_cfg=cloud("off"))
+    orch = make_orch(engine, FakeRegistry([consult_tool(), FakeTool("run_math", result="0", read_only=True)]),
+                     cloud_cfg=cloud("off"))
     session = make_session()
-    session.add_user_message(prompt)
+    session.add_user_message(prompt, images=images)
     begin_turn(session)
     r = run(orch.run_turn(session, journal=session.journal, **GEN))
     assert ring_of(session, "upgrade_triggered") == [] and "cloud_upgrade" not in r["metrics"]
@@ -373,7 +470,7 @@ def test_suspend_resume_does_not_retrigger(make_session):
 
 
 def test_tier_notice_survives_approval_resume(make_session):
-    """评审 M2：轮首 tier 决策经审批续跑后仍落提示与审计键。"""
+    """评审 M2：轮首决策（此处 B1 caveat）经审批续跑后仍落提示与审计键。"""
     engine = FakeEngine([
         {"tool_calls": [call("danger", x=1)]},
         {"text": "| 正常 | 3 | 1798 |"},
@@ -382,12 +479,12 @@ def test_tier_notice_survives_approval_resume(make_session):
                                                       read_only=False, concurrency_safe=False)])
     orch = make_orch(engine, registry)
     session = make_session()
-    session.add_user_message("按状态分组统计条数与读数合计")
+    session.add_user_message("这张柱状图的峰值是多少", images=["chart.png"])
     begin_turn(session)
     assert run(orch.run_turn(session, journal=session.journal, **GEN))["status"] == "pending_approval"
     r = run(orch.resume_after_approval(session, approved=True, journal=session.journal, **GEN))
     assert r["status"] == "success"
-    assert "Qwen3.8-27B-4bit" in r["response"] and r["metrics"]["cloud_upgrade"][0]["action"] == "tier_suggest"
+    assert "核对" in r["response"] and r["metrics"]["cloud_upgrade"][0]["action"] == "caveat"
     assert len(ring_of(session, "upgrade_triggered")) == 1
 
 

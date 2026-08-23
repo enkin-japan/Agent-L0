@@ -694,6 +694,7 @@ class Orchestrator:
         _fresh_turn = compact_history and not keep_recent_calls
         if _fresh_turn:
             session.carried_upgrade = []
+            session._tool_hint_replayed = False
         upgrade_decisions: List[Any] = list(getattr(session, "carried_upgrade", None) or [])
         session.carried_upgrade = upgrade_decisions
 
@@ -706,13 +707,19 @@ class Orchestrator:
         # 的轮中重入）都不是新轮——重入再判就是一轮两次提醒/两次代发起。
         # 用户已点取消/挂起的轮不判（先于代发起：取消了的轮不该再花钱出网，评审 M1）
         if _fresh_turn and not session.cancel_requested and not session.suspend_requested:
-            for _d in self._upgrade_at_turn_start(session, journal):
-                upgrade_decisions.append(_d)
-                if _d.action == "consult_suggest":
+            _new = self._upgrade_at_turn_start(session, journal)
+            upgrade_decisions.extend(_new)      # 先全部入账（审计面），再逐条处理——代发起挂起也不丢后面的决策
+            for _d in _new:
+                if _d.action in ("consult_suggest", "tool_hint"):
                     from ..cloud.upgrade import model_hint
                     pending_tail_notes.append(model_hint(_d))
                 elif _d.action == "consult_auto":
                     from ..cloud.upgrade import synthetic_consult_call
+                    # 排在后面的 tool_hint 尾注先入队（审批续跑重入时由下方"续跑补注"再补一次）
+                    for _later in _new[_new.index(_d) + 1:]:
+                        if _later.action in ("consult_suggest", "tool_hint"):
+                            from ..cloud.upgrade import model_hint as _mh
+                            pending_tail_notes.append(_mh(_later))
                     _calls = [synthetic_consult_call(self._last_user_facts(session).text)]
                     _verr = self.registry.validate_call(_calls[0]["name"], _calls[0]["arguments"])
                     if _verr:
@@ -729,6 +736,14 @@ class Orchestrator:
                     _resp = await self._execute_physical(session, _calls, _tracker, parse_errors,
                                                          journal=journal)
                     session.add_tool_message(_resp)
+        elif not _fresh_turn:
+            # 续跑补注：轮首的一次性尾注随挂起/审批作废了，重入后的第一次生成再给一次（只限 tool_hint：
+            # consult_suggest 重入时多半已经咨询过，由 _already_consulted 与 CONSULT_ACTIONS 守）
+            from ..cloud.upgrade import model_hint as _mh
+            for _d in upgrade_decisions:
+                if _d.action == "tool_hint" and not getattr(session, "_tool_hint_replayed", False):
+                    pending_tail_notes.append(_mh(_d))
+            session._tool_hint_replayed = True
         upgrade_failures = 0          # 本轮连续失败的**批次**数（一次迭代的物理调用批算一次）
 
 
@@ -1044,7 +1059,8 @@ class Orchestrator:
                     })
                 # ⑤′-3 失败触发：本地连续失败达阈 → 建议/代发起云端咨询（一轮一次，云端不可用不打扰）。
                 # 放在本分支末尾：验证门控状态、结构性提醒、观察落历史、解析断环都已照常走完
-                if (not any(d.trigger != "catalog" or d.action != "tier_suggest" for d in upgrade_decisions)
+                from ..cloud.upgrade import CONSULT_ACTIONS as _CONSULT_ACTIONS
+                if (not any(d.action in _CONSULT_ACTIONS for d in upgrade_decisions)
                         and not _already_consulted(session.history)):
                     from ..cloud.upgrade import (decide_on_failures, failure_context, model_hint,
                                                  synthetic_consult_call)
@@ -1296,8 +1312,10 @@ class Orchestrator:
         if _already_consulted(session.history):
             return []
         facts = self._last_user_facts(session)
+        names = getattr(self.registry, "tool_names", None)
         ds = decide_at_turn_start(facts, self._effective_upgrade_cfg(journal), cloud_cfg=self.cloud_cfg,
-                                  consult_registered=self._consult_registered())
+                                  consult_registered=self._consult_registered(),
+                                  registered_tools=set(names()) if callable(names) else None)
         for d in ds:
             events.emit("upgrade_triggered", session=session.session_id, **d.as_event())
             journal.emit("upgrade_triggered", d.as_event())

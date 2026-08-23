@@ -12,3 +12,15 @@ H 聚合谓词恒假 → FAILED test_implicit_aggregation_predicate - ... FAILED
 restore2: OK
 G′ 回流把材料并进关键词（补测后） → FAILED test_harvest_keywords_ignore_ingested_material 1 failed, 30 passed in 0.08s 
 restore3: OK
+== B3 tool_assist mutants ==
+V tool_hint 不进尾注 → FAILED test_tool_hint_injects_model_note_without_user_notice 1 failed, 79 passed in 0.27s 
+W tool_assist 条目不出决策 → FAILED test_turn_start_decision_table - Assertio... FAILED test_tool_hint_injects_model_note_without_user_notice 2 failed, 78 passed in 0.66s 
+X tool_assist 可无提示文案 → FAILED test_b3_action_is_tool_assist_with_run_math 1 failed, 79 passed in 0.25s 
+restore: OK
+== B1 caveat + B3 复审处置 mutants ==
+Y caveat 不落用户提示 → FAILED test_turn_start_decision_table - Assertio... FAILED test_caveat_appends_user_notice_only - As... FAILED test_tier_notice_survives_approval_resume 
+Z tool_hint 占咨询名额(M1 回退) → FAILED test_tool_hint_does_not_block_failures_escalation 1 failed, 84 passed in 0.26s 
+AA 工具未注册照发提醒(M2 回退) → FAILED test_turn_start_decision_table - assert (... FAILED test_tool_hint_skipped_when_tool_not_registered 2 failed, 83 passed in 0.70s 
+AB caveat 可无文案 → FAILED test_boundary_invariants_raise_not_assert 1 failed, 84 passed in 0.29s 
+AC 续跑不补注 tool_hint(m3 回退) → FAILED test_auto_consult_then_tool_hint_both_recorded_and_replayed 1 failed, 84 passed in 0.29s 
+restore: OK

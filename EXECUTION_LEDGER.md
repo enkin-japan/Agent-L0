@@ -565,7 +565,7 @@ R0–R5 各小项的打勾细分（含每步实测结果与计划外发现）已
 
 | 项 | 当前值 | 口径 |
 |---|---|---|
-| 金测试项数 | 1708 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
+| 金测试项数 | 1715 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
 | 测试文件数 | 111 | `backend/tests/` 下递归的 `test_*.py` |
 | mcp 文件数 | 31 | `backend/framework/mcp/` 递归下的 `.py`，**不含** `__init__.py` |
 | BaseTool 子类 | 67 | 全 backend 内 `class X(BaseTool)` 的声明数（一个文件可有多个） |
@@ -4549,6 +4549,43 @@ fix-up commit 走双门（本块之后不再触发阶段复审）。
 - 处置变异证明 5 只（Q 咨询当本地变更 / R parse_loop 不记审计 / S 咨询超时不按降级 / T 成功路
   台账失败顶替原因 / U 真工具重标只读——首跑存活→补钉后红）全红，记
   `benchmarks/data/cloud-upgrade-20260823/mutants.log` 末段。全套 1701→**1708**。
+
+---
+
+**⑤′ 收官后的用户裁决与 B3 先列后算探针（2026-08-23 晚）**：
+- 用户拍板：B2 认可（问了"具体说说"，已详解）；B3「先跑再修」；B4 升级策略缺省留 `suggest`，
+  有问题再反馈；**B1 要求按 64G 内存重新衡量成本收益**（26b 常驻 + qwen38 + 满上下文 KV ≈
+  50G+）——待答复后再动目录（本块只记数据，不改 B1）。
+- **B3「先列后算」探针**（26b-4bit 关思考 + 指令"先逐条列出再分组计算"，4 题，~2 min GPU，
+  run `boundary-probe-20260823/gemma-4-26b-a4b-it-4bit-listfirst/`）：**12/12 记录四档全部正确列出
+  （零错零漏），对着自己列出的清单做计数/求和仍 0/4**（8k 停机 6≠5；16k 正常合计差整 1000；
+  32k 三组各差 1–40；48k 告警 3≠4 / 停机 4≠5；按模型所列记录重算 = 题目真值）。病根收窄为
+  **关思考下对眼前清单的算术/计数不可靠**，不是提取。
+- **修**：目录动作新增 `tool_assist`（`Boundary.action_hint` 必填，构造期校验）；B3 动作由「换
+  qwen38 开思考」改为 `tool_assist → run_math`（本地离线 Python 沙箱：确定性、免审批、零换档
+  零出网），⑤′-3 决策新增 `tool_hint`（只进模型尾注，用户面无提示，与 mode 无关、off 除外），
+  qwen38 开思考降为文档后备。**未做端到端实跑**：模型是否听话调 run_math 是行为问题，待生产
+  回流看聚合类轮次里有无 `tool_started: run_math`。PROTOCOL action 联合补 `tool_hint`；
+  config note / BOUNDARY.md / ANALYSIS.md / rescore 同步。
+- **B1 按 64G 重算后用户拍板降为 `caveat`**（两档不共驻：26b-4bit 64k 峰值 22.8G + qwen38-4bit
+  45k 峰值 28.1G 超 48G wired 上限；换档 = 卸装重载、丢 KV 前缀、之后每轮生成 45 vs 90 tps /
+  prefill 慢 5.5×；收益 212 题差 30 题）：新动作 `caveat`（`action_notice` 必填）——答复末尾一行
+  「图表数值读取是本档已知弱项…关键数字请对照原图核对；成批看图可自行切 qwen38」，不换档不出网不
+  扰模型。目录现无活跃 `switch_tier` 条目（测试钉住，B2 cleared 记录位除外）；换档建议机制保留，
+  用临时条目守。
+- **B3 diff 的 per-diff 评审（reviewer 0C/2M/10m）**：M1 `tool_hint` 决策曾占"本轮云端咨询"名额
+  → 聚合题之后连续失败不再升级 → 改为只有 consult 类决策（`CONSULT_ACTIONS`）占名额；M2 提醒
+  点名 run_math 但未查注册 → 决策期按 `registry.tool_names()` 过滤，未注册不出提醒；m3 代发起
+  挂起后排在后面的决策丢失 → 先全部入账再处理 + 续跑补注一次 tool_hint；m4 各类各至多一条；m5
+  PROTOCOL 行补 tool_hint/caveat 语义（tier_target 在 tool_hint 下承载工具名）；m6 off 参数化的
+  vision 例漏带图 → 补；m7 16k 还有告警合计 5053≠5941 → 文档补；m8 ANALYSIS 写的 `--ids` 通配
+  不可复现 → 补 `probe_run3.sh` 逐 id；m9 "四个 run"→五个；m11 config 注明 off 连零出网的
+  tool_hint/caveat 一起关（评审两可，取"off = 编排层注入的总开关"，已钉）；m12 提示文案对多条
+  记录改为直接塞进 run_math、尊重"只要表格"，§B3 标明未测规模；nits：档案路径前缀、colab 检查
+  覆盖 action_hint/action_notice、尾注一次性/不进历史钉住、文档动作行与代码钉住。
+- 金测试 1708→**1715**；变异 8 只（V tool_hint 不进尾注 / W tool_assist 不出决策 / X tool_assist
+  可无提示 / Y caveat 不落用户提示 / Z tool_hint 占咨询名额 / AA 工具未注册照发 / AB caveat 可无文案 /
+  AC 续跑不补注）全红，记 boundary-probe-20260823/mutants.log 末段。
 
 ---
 

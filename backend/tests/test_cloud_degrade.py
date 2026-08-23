@@ -390,12 +390,12 @@ def test_audit_keys_recorded_on_parse_loop_exit(make_session):
     ])
     orch = make_orch(engine, FakeRegistry([_degraded_tool()]), max_parse_retries=3)
     session = make_session()
-    session.add_user_message("按状态分组统计条数与读数合计")
+    session.add_user_message("这张柱状图的峰值是多少", images=["chart.png"])
     begin_turn(session)
     r = run(orch.run_turn(session, journal=session.journal, **GEN))
     assert r["status"] == "warning" and "解析" in r["response"]
     assert r["metrics"]["cloud_degraded"] == ["budget_exhausted"]
-    assert r["metrics"]["cloud_upgrade"][0]["action"] == "tier_suggest"
+    assert r["metrics"]["cloud_upgrade"][0]["action"] == "caveat"
 
 
 def test_tool_level_timeout_of_consult_is_degradation(make_session):
@@ -476,9 +476,9 @@ def test_abandoned_pending_turn_metrics_carry_audit_keys(make_session):
                                                         read_only=False, concurrency_safe=False)])
     orch = make_orch(engine, registry)
     session = make_session()
-    session.add_user_message("按状态分组统计条数与读数合计")
+    session.add_user_message("这张柱状图的峰值是多少", images=["chart.png"])
     begin_turn(session)
     r = run(orch.run_turn(session, journal=session.journal, **GEN))
     assert r["status"] == "pending_approval"
     assert r["metrics"]["cloud_degraded"] == ["budget_exhausted"]
-    assert r["metrics"]["cloud_upgrade"][0]["action"] == "tier_suggest"
+    assert r["metrics"]["cloud_upgrade"][0]["action"] == "caveat"

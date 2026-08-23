@@ -140,6 +140,18 @@ def build():
                      "temperature": 0.0}
         tb["_meta"] = {**items[-1]["_meta"], "variant": "thinking_on"}
         items.append(tb)
+        # 任务 B″：关思考 + 「先列后算」指令（⑤′-2 B3 的档内自救探针，用户 08-23 拍板先跑再修）：
+        # 让模型先逐条列出记录再分组计算——把"没有草稿"这个病根用指令补上，看 26b 能不能自己过。
+        # 判分与 B 相同（表格行钉条数+合计）；列表段不判分。
+        tl = copy.deepcopy(items[-2])
+        tl["id"] = f"tx-lcs-{size}-table-list"
+        tl["task"] = {"user": (f"下面是一份内部文档。请分两步作答：第一步，**逐条列出**文档中全部「设备巡检记录」"
+                               f"（每条一行：设备编号、状态、读数）；第二步，根据你列出的记录，按状态"
+                               f"（正常/告警/停机）分组，输出一张 Markdown 表格，列为：状态、记录条数、读数合计。"
+                               f"两步都要输出，不要解释。\n\n<document>\n{doc}\n</document>")}
+        tl["gen"] = {"enable_thinking": False, "max_tokens": 1536, "temperature": 0.0}
+        tl["_meta"] = {**items[-2]["_meta"], "variant": "list_first"}
+        items.append(tl)
     return items
 
 

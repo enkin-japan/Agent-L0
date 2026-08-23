@@ -27,7 +27,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 PRODUCTION_TIER = "mlx-community/gemma-4-26b-a4b-it-4bit"
 
 STATUSES = ("confirmed", "weak", "pending", "cleared")
-ACTIONS = ("cloud_consult", "switch_tier")
+ACTIONS = ("cloud_consult", "switch_tier", "tool_assist", "caveat")
 
 
 @dataclass(frozen=True)
@@ -46,14 +46,16 @@ class Boundary:
     title: str
     predicate: Callable[[RequestFacts], bool]
     status: str                          # confirmed / weak / pending / cleared
-    action: str                          # cloud_consult / switch_tier
-    action_target: Optional[str]         # switch_tier 的目标档；cloud_consult 为 None
+    action: str                          # cloud_consult / switch_tier / tool_assist / caveat
+    action_target: Optional[str]         # switch_tier 的目标档；tool_assist 的工具名；cloud_consult/caveat 为 None
     evidence: str                        # 一句话证据 + 档案指针（详见 BOUNDARY.md）
     probes: str                          # 探针集指针
     rationale: str = ""
     action_gen: Optional[Dict[str, object]] = None   # 动作附带的生成参数（如换档须开思考）——
                                                      # 是动作的一半，不能只活在散文里（评审 M9）
     action_cost: str = ""                            # 换档代价的用户可读句（只写实测过的；没测就留空）
+    action_hint: str = ""                            # tool_assist：命中时给模型的一次性提醒（英文，进尾注不进历史）
+    action_notice: str = ""                          # caveat：收尾答复末尾给用户的一行提醒（中文；不换档不出网）
 
     def __post_init__(self):
         # 目录不变量用显式异常（assert 在 -O 下会被剥掉，护栏不能靠它）
@@ -61,8 +63,12 @@ class Boundary:
             raise ValueError(f"{self.id}: status {self.status!r} ∉ {STATUSES}")
         if self.action not in ACTIONS:
             raise ValueError(f"{self.id}: action {self.action!r} ∉ {ACTIONS}")
-        if (self.action_target is None) != (self.action == "cloud_consult"):
-            raise ValueError(f"{self.id}: switch_tier 必须带目标档、cloud_consult 不得带")
+        if (self.action_target is None) != (self.action in ("cloud_consult", "caveat")):
+            raise ValueError(f"{self.id}: switch_tier/tool_assist 必须带目标、cloud_consult/caveat 不得带")
+        if self.action == "tool_assist" and not self.action_hint:
+            raise ValueError(f"{self.id}: tool_assist 必须带给模型的提示文案 action_hint")
+        if self.action == "caveat" and not self.action_notice:
+            raise ValueError(f"{self.id}: caveat 必须带给用户的提醒文案 action_notice")
         if self.status == "cleared" and self.predicate is not _never:
             raise ValueError(f"{self.id}: cleared 条目谓词必须是 _never（探过没复现就不许触发）")
 
@@ -142,14 +148,19 @@ CATALOG: Tuple[Boundary, ...] = (
         title="图表数值读取（ChartQA 型）",
         predicate=_vision_chart,
         status="confirmed",
-        action="switch_tier",
-        action_target="mlx-community/Qwen3.8-27B-4bit",
+        action="caveat",
+        action_target=None,
         evidence=("08-16 横评 vision 212 题：26b-4bit 0.84 vs qwen38 4bit 0.958 / 8bit 0.943；"
                   "逐题差分 30 题 26b 错而两档 qwen38 全对（全部 vi-chartqa），对称反向（两档 qwen 都错而 "
                   "26b 对）5 题（宽口径 10），三档同错 3 题——见 BOUNDARY.md §B1 与 "
                   "benchmarks/data/boundary-probe-20260823/vision_diff.json"),
         probes="items/vision/chartqa_hard*.jsonl 中 vision_diff.json 列出的 30 题",
-        rationale="带图 + 图表/读数类问法。qwen38 为 vision 特长位（定档静态位），换档即解，不必出网。",
+        rationale="带图 + 图表/读数类问法。qwen38 为 vision 特长位（0.958），但 64G 上两档不共驻：换档 = "
+                  "卸 26b/装 qwen38（丢 KV 前缀、重载半分钟）+ 之后每轮生成 45 vs 90 tps、prefill 慢 5.5×——"
+                  "为一条图表问题换整个生产档不划算（用户 08-23 拍板降为 caveat）。成批看图时由用户自行切档。",
+        action_notice=("图表数值读取是本档已知弱项（212 题差分：26b 错而 qwen38 全对 30 题），关键数字请对照"
+                       "原图核对；若本段工作以图表读数为主，可自行 `./devctl.sh model` 切到 Qwen3.8-27B-4bit"
+                       "（需重载模型、整体吞吐约减半）。"),
     ),
     Boundary(
         id="long_context_structured",
@@ -171,17 +182,25 @@ CATALOG: Tuple[Boundary, ...] = (
         title="散落记录的隐式聚合（分组计数/求和，关思考）",
         predicate=_implicit_aggregation,
         status="confirmed",
-        action="switch_tier",
-        action_target="mlx-community/Qwen3.8-27B-4bit",
+        action="tool_assist",
+        action_target="run_math",
         evidence=("⑤′-2 探针任务 B（按状态分组 → 条数 + 读数合计）：26b-4bit 关思考 0/4（8k 即挂，"
                   "条数亦错）、26b-4bit 开思考 0/4（思考通道空产出）、26b-8bit 0/4；qwen38-4bit 关思考 "
-                  "0/4、**开思考（预算 1024）4/4**。同文任务 A 26b 12/12 → 不是没读到，是没有草稿的"
-                  "隐式多步计算。见 BOUNDARY.md §B3，档案 benchmarks/data/boundary-probe-20260823/"),
-        probes="items/text/longctx_struct.jsonl 的 tx-lcs-*-table 与 *-table-think",
+                  "0/4、开思考（预算 1024）4/4。同文任务 A 26b 12/12。**「先列后算」探针（08-23 用户"
+                  "拍板先跑再修）：26b-4bit 四档 12/12 全部正确列出，但对着自己列出的清单计数/求和仍 0/4**"
+                  "→ 病根是关思考下对眼前清单的算术不可靠，不是提取。故动作 = 列表交模型、算术交 run_math"
+                  "沙箱（确定性、免审批、零换档零出网）。见 BOUNDARY.md §B3，档案 benchmarks/data/boundary-probe-20260823/"),
+        probes="items/text/longctx_struct.jsonl 的 tx-lcs-*-table / *-table-think / *-table-list",
         rationale="任务要求对多条记录做聚合（合计/总和/平均/分组统计/条数…）。与上下文长度无关。"
-                  "换档目标须开思考（qwen38 生产口径本就思考开+预算 1024）；代价：该轮墙钟约 5–8×（实测 4.9–7.8×）。",
-        action_gen={"enable_thinking": True, "thinking_budget": 1024},
-        action_cost="该档在这类任务上约慢 5–8 倍（实测 4.9–7.8×）",
+                  "后备（文档记录、不作动作）：换 qwen38-4bit 并开思考 4/4，代价墙钟约 5–8×（实测 4.9–7.8×）。",
+        action_hint=("For counting / summing / averaging over many records: do NOT add or count in your "
+                     "head — the local model's arithmetic over a list is unreliable even when the list is "
+                     "correct. Extract the records into a Python list literal and compute the group counts "
+                     "and sums with the run_math tool (plain Python), then report the sandbox's numbers. "
+                     "For a handful of records you may also list them one per line first; for many records "
+                     "(dozens or more) put them straight into the run_math call instead of listing them in "
+                     "prose. If the user asked for only the final table, still use run_math but show only "
+                     "the table."),
     ),
     Boundary(
         id="deep_reasoning",

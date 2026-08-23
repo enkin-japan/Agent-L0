@@ -260,6 +260,48 @@
     "fails": [],
     "wall_s": 200.42
    }
+  ],
+  "gemma-4-26b-a4b-it-4bit-listfirst": [
+   {
+    "item_id": "tx-lcs-8k-table-list",
+    "old_pass": false,
+    "pass": false,
+    "fails": [
+     "regex_all 不中: '停机\\\\s*\\\\|\\\\s*5\\\\s*\\\\|\\\\s*7068(?!\\\\d)'"
+    ],
+    "wall_s": 7.91
+   },
+   {
+    "item_id": "tx-lcs-16k-table-list",
+    "old_pass": false,
+    "pass": false,
+    "fails": [
+     "regex_all 不中: '告警\\\\s*\\\\|\\\\s*7\\\\s*\\\\|\\\\s*5941(?!\\\\d)'",
+     "regex_all 不中: '正常\\\\s*\\\\|\\\\s*4\\\\s*\\\\|\\\\s*4195(?!\\\\d)'"
+    ],
+    "wall_s": 13.64
+   },
+   {
+    "item_id": "tx-lcs-32k-table-list",
+    "old_pass": false,
+    "pass": false,
+    "fails": [
+     "regex_all 不中: '告警\\\\s*\\\\|\\\\s*3\\\\s*\\\\|\\\\s*3838(?!\\\\d)'",
+     "regex_all 不中: '正常\\\\s*\\\\|\\\\s*4\\\\s*\\\\|\\\\s*5208(?!\\\\d)'",
+     "regex_all 不中: '停机\\\\s*\\\\|\\\\s*5\\\\s*\\\\|\\\\s*4747(?!\\\\d)'"
+    ],
+    "wall_s": 27.32
+   },
+   {
+    "item_id": "tx-lcs-48k-table-list",
+    "old_pass": false,
+    "pass": false,
+    "fails": [
+     "regex_all 不中: '停机\\\\s*\\\\|\\\\s*5\\\\s*\\\\|\\\\s*2129(?!\\\\d)'",
+     "regex_all 不中: '告警\\\\s*\\\\|\\\\s*4\\\\s*\\\\|\\\\s*3018(?!\\\\d)'"
+    ],
+    "wall_s": 43.89
+   }
   ]
  }
 }

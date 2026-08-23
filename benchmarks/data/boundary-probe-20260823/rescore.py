@@ -9,7 +9,8 @@ sys.path.insert(0, ".")
 from benchmarks.model_eval.matchers import match_text  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
-RUNS = ("gemma-4-26b-a4b-it-4bit", "gemma-4-26b-a4b-it-8bit", "gemma-4-26b-a4b-it-4bit-think", "Qwen3.8-27B-4bit")
+RUNS = ("gemma-4-26b-a4b-it-4bit", "gemma-4-26b-a4b-it-8bit", "gemma-4-26b-a4b-it-4bit-think", "Qwen3.8-27B-4bit",
+        "gemma-4-26b-a4b-it-4bit-listfirst")
 
 
 def main():

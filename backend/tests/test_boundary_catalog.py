@@ -20,8 +20,8 @@ def test_catalog_ids_unique_and_statuses_legal():
     assert len(set(B.ids())) == len(B.ids())
     for b in B.CATALOG:
         assert b.status in B.STATUSES and b.action in B.ACTIONS
-        assert (b.action_target is None) == (b.action == "cloud_consult")
-        assert "colab" not in (b.evidence + b.rationale + b.probes).lower()
+        assert (b.action_target is None) == (b.action in ("cloud_consult", "caveat"))
+        assert "colab" not in (b.evidence + b.rationale + b.probes + b.action_notice + b.action_hint).lower()
         if b.status == "cleared":
             assert b.predicate is B._never
 
@@ -38,12 +38,27 @@ def test_boundary_invariants_raise_not_assert():
         B.Boundary(id="x", status="cleared", action="switch_tier", action_target="m", **kw)
     B.Boundary(id="x", status="cleared", action="switch_tier", action_target="m",
                title="t", predicate=B._never, evidence="e", probes="p")
+    with pytest.raises(ValueError):      # caveat 必须带用户文案
+        B.Boundary(id="x", status="weak", action="caveat", action_target=None, **kw)
 
 
-def test_b3_action_carries_thinking_gen():
+def test_b1_action_is_caveat_not_tier_switch():
+    """用户 08-23 拍板：64G 上两档不共驻，为一题换整个生产档不划算 → B1 只提醒核对。"""
+    b = B.by_id("vision_chart_numeric")
+    assert b.action == "caveat" and b.action_target is None
+    assert "核对" in b.action_notice and "Qwen3.8-27B-4bit" in b.action_notice
+    assert not [x.id for x in B.CATALOG if x.action == "switch_tier" and x.status != "cleared"], \
+        "目录现无活跃换档条目（B2 cleared 的记录位除外）——若再加，先按 64G 算账"
+
+
+def test_b3_action_is_tool_assist_with_run_math():
+    """先列后算探针：列表 12/12 全对、算术仍 0/4 → 动作 = 算术交沙箱，不换档不出网。"""
     b = B.by_id("implicit_aggregation")
-    assert b.action == "switch_tier" and b.action_target.endswith("Qwen3.8-27B-4bit")
-    assert b.action_gen == {"enable_thinking": True, "thinking_budget": 1024}
+    assert b.action == "tool_assist" and b.action_target == "run_math"
+    assert "run_math" in b.action_hint and "do NOT add or count" in b.action_hint and "dozens" in b.action_hint
+    with pytest.raises(ValueError):          # tool_assist 必须带提示文案
+        B.Boundary(id="x", title="t", predicate=lambda f: True, status="weak", action="tool_assist",
+                   action_target="run_math", evidence="e", probes="p")
 
 
 def test_doc_and_code_list_the_same_entries():
@@ -57,6 +72,7 @@ def test_doc_and_code_list_the_same_entries():
         end = text.find("\n### ", m.end())
         sec = text[m.end(): end if end != -1 else len(text)]          # 按标题切段，不按首次出现
         assert f"状态：**{b.status}**" in sec, f"{b.id} 文档状态与代码不一致"
+        assert f"动作：`{b.action}`" in sec, f"{b.id} 文档动作与代码不一致"
 
 
 def test_production_tier_is_the_designated_one():
@@ -235,7 +251,7 @@ def test_longctx_struct_items_are_deterministic_and_valid():
     from benchmarks.model_eval.itemlib import discover_item_files, load_items
     items = [i for i in load_items(discover_item_files(REPO / "backend/benchmarks/model_eval/items", ["text"]))
              if i["id"].startswith("tx-lcs-")]
-    assert [i["id"] for i in items] == [f"tx-lcs-{s}-{k}" for s in ("8k", "16k", "32k", "48k") for k in ("json", "table", "table-think")]
+    assert [i["id"] for i in items] == [f"tx-lcs-{s}-{k}" for s in ("8k", "16k", "32k", "48k") for k in ("json", "table", "table-think", "table-list")]
     spec = importlib.util.spec_from_file_location(
         "gen", REPO / "backend/benchmarks/model_eval/items/text/gen_longctx_struct.py")
     gen = importlib.util.module_from_spec(spec); spec.loader.exec_module(gen)
