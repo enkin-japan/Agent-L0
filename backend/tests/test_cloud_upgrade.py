@@ -99,6 +99,9 @@ def test_turn_start_decision_table():
     assert d.action == "tier_suggest" and d.tier_target.endswith("Qwen3.8-27B-4bit")
     assert d.tier_gen == {"enable_thinking": True, "thinking_budget": 1024}
     assert "implicit_aggregation" not in d.reason            # 用户面不露内部 id
+    assert "5–8" in d.tier_cost                              # B3 实测代价随决策带出
+    dv = _one(D("这张柱状图的峰值是多少", has_images=True, cc={"providers": []}, reg=False))
+    assert dv.action == "tier_suggest" and dv.tier_cost == ""   # B1 未测墙钟 → 不编数字
     assert D("按状态分组统计条数与读数合计", U.UpgradeConfig(tier_notice=False)) == []
     # consult 与 tier 并存：两条都出（评审 m16）
     ds = D("请严格证明各组合计的趋势")
@@ -130,6 +133,10 @@ def test_user_notice_shapes():
                    {"enable_thinking": True, "thinking_budget": 1024}, "散落记录的隐式聚合")
     n = U.user_notice(d)
     assert "Qwen3.8-27B-4bit" in n and "devctl.sh model" in n and "开启思考" in n and "本回答仍由当前档完成" in n
+    assert "切换后响应会更慢" in n                       # 无实测代价句 → 通用措辞
+    d2 = U.Decision("catalog", "tier_suggest", ["implicit_aggregation"], "mlx-community/Qwen3.8-27B-4bit",
+                    None, "散落记录的隐式聚合", tier_cost="该档在这类任务上约慢 5–8 倍（实测 4.9–7.8×）")
+    assert "4.9–7.8×" in U.user_notice(d2)
     assert U.user_notice(U.Decision("explicit", "unavailable", reason="no_key: x")).startswith("—— 你要求的云端导师当前不可用")
     assert U.user_notice(U.Decision("catalog", "consult_suggest")) == ""
     assert "colab" not in (n + U.model_hint(d)).lower()
@@ -415,14 +422,43 @@ def test_unattended_turn_downgrades_auto_to_suggest(make_session):
     assert any("Cloud advisor suggested" in n for n in engine.calls[0]["tail_notes"])
 
 
-def test_cloud_consult_is_read_only_so_approval_keeps_fabrication_guard():
-    """评审 M3：批准一次咨询不得解除 D2 零变更守门。"""
-    from types import SimpleNamespace
-    from framework.mcp.tools.cloud_consult import CloudConsultTool
-    from framework.mcp.registry import MCPRegistry
-    assert CloudConsultTool.is_read_only is True
-    stub = SimpleNamespace(_tools={CLOUD_CONSULT_TOOL: CloudConsultTool.__new__(CloudConsultTool)})
-    assert MCPRegistry.is_read_only(stub, CLOUD_CONSULT_TOOL, {"question": "q"}) is True
+def test_approved_consult_does_not_disarm_fabrication_guard(make_session):
+    """评审 M3（行为版）：批准一次咨询 ≠ 本轮有成功变更；零工具却声称"已创建文件"仍被推回。"""
+    engine = FakeEngine([
+        {"text": "已经为您创建了文件 a.txt。"},     # 零变更声明 → 推回
+        {"text": "我没有创建任何文件；这是建议。"},   # 改口 → 放行
+    ])
+    registry = FakeRegistry([consult_tool()])
+    orch = make_orch(engine, registry, cloud_cfg=cloud("auto"))
+    session = make_session()
+    session.add_user_message("问问云端导师：这个方案可行吗")
+    begin_turn(session)
+    run(orch.run_turn(session, journal=session.journal, **GEN))
+    r = run(orch.resume_after_approval(session, approved=True, journal=session.journal, **GEN))
+    assert r["status"] == "success" and r["response"].startswith("我没有创建任何文件")
+    assert "claims you performed actions" in " ".join(engine.calls[1]["tail_notes"])
+
+
+def test_duplicate_paid_consult_still_blocked_after_a_write(make_session):
+    """阶段复审 M1：cloud_consult 不是只读——同参重复调用的指纹不得被写屏障清掉（付费重复出网）。"""
+    engine = FakeEngine([
+        {"tool_calls": [call(CLOUD_CONSULT_TOOL, question="q")]},
+        {"tool_calls": [call("write_file", path="/tmp/x", content="1")]},
+        {"tool_calls": [call(CLOUD_CONSULT_TOOL, question="q")]},       # 同参重发 → 拦
+        {"text": "done"},
+    ])
+    registry = FakeRegistry([consult_tool(approval=False),
+                             FakeTool("write_file", result="ok", read_only=False, concurrency_safe=False)])
+    orch = make_orch(engine, registry, cloud_cfg=cloud("off"))
+    session = make_session()
+    session.add_user_message("做这件事")
+    begin_turn(session)
+    r = run(orch.run_turn(session, journal=session.journal, **GEN))
+    assert [e["name"] for e in registry.executed] == [CLOUD_CONSULT_TOOL, "write_file"]
+    blocked = [tr for m in session.history if m.get("role") == "tool"
+               for tr in m.get("tool_responses", []) if str(tr.get("response", "")).startswith("Duplicate call blocked")]
+    assert len(blocked) == 1 and blocked[0]["name"] == CLOUD_CONSULT_TOOL
+    assert r["response"] == "done"
 
 
 def test_failures_count_batches_not_calls(make_session):
@@ -439,3 +475,14 @@ def test_failures_count_batches_not_calls(make_session):
     begin_turn(session)
     run(orch.run_turn(session, journal=session.journal, **GEN))
     assert ring_of(session, "upgrade_triggered") == []
+
+
+def test_real_cloud_consult_is_not_read_only():
+    """阶段复审 M1 的真钉：上面的行为测试跑在 FakeTool 上，真工具若再被标 is_read_only=True，
+    写屏障会清掉它的重复指纹（付费重复出网）而行为测试毫无反应——变异 U 首跑存活证明了这一点。"""
+    from types import SimpleNamespace
+    from framework.mcp.tools.cloud_consult import CloudConsultTool
+    from framework.mcp.registry import MCPRegistry
+    assert getattr(CloudConsultTool, "is_read_only", None) is not True
+    stub = SimpleNamespace(_tools={CLOUD_CONSULT_TOOL: CloudConsultTool.__new__(CloudConsultTool)})
+    assert MCPRegistry.is_read_only(stub, CLOUD_CONSULT_TOOL, {"question": "q"}) is False

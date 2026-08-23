@@ -53,6 +53,7 @@ class Boundary:
     rationale: str = ""
     action_gen: Optional[Dict[str, object]] = None   # 动作附带的生成参数（如换档须开思考）——
                                                      # 是动作的一半，不能只活在散文里（评审 M9）
+    action_cost: str = ""                            # 换档代价的用户可读句（只写实测过的；没测就留空）
 
     def __post_init__(self):
         # 目录不变量用显式异常（assert 在 -O 下会被剥掉，护栏不能靠它）
@@ -144,8 +145,9 @@ CATALOG: Tuple[Boundary, ...] = (
         action="switch_tier",
         action_target="mlx-community/Qwen3.8-27B-4bit",
         evidence=("08-16 横评 vision 212 题：26b-4bit 0.84 vs qwen38 4bit 0.958 / 8bit 0.943；"
-                  "逐题差分 30 题 26b 错而两档 qwen38 全对（全部 vi-chartqa），反向 10 题，"
-                  "三档同错 3 题——见 BOUNDARY.md §B1 与 benchmarks/data/boundary-probe-20260823/vision_diff.json"),
+                  "逐题差分 30 题 26b 错而两档 qwen38 全对（全部 vi-chartqa），对称反向（两档 qwen 都错而 "
+                  "26b 对）5 题（宽口径 10），三档同错 3 题——见 BOUNDARY.md §B1 与 "
+                  "benchmarks/data/boundary-probe-20260823/vision_diff.json"),
         probes="items/vision/chartqa_hard*.jsonl 中 vision_diff.json 列出的 30 题",
         rationale="带图 + 图表/读数类问法。qwen38 为 vision 特长位（定档静态位），换档即解，不必出网。",
     ),
@@ -177,8 +179,9 @@ CATALOG: Tuple[Boundary, ...] = (
                   "隐式多步计算。见 BOUNDARY.md §B3，档案 benchmarks/data/boundary-probe-20260823/"),
         probes="items/text/longctx_struct.jsonl 的 tx-lcs-*-table 与 *-table-think",
         rationale="任务要求对多条记录做聚合（合计/总和/平均/分组统计/条数…）。与上下文长度无关。"
-                  "换档目标须开思考（qwen38 生产口径本就思考开+预算 1024）；代价：该轮墙钟 5–8×。",
+                  "换档目标须开思考（qwen38 生产口径本就思考开+预算 1024）；代价：该轮墙钟约 5–8×（实测 4.9–7.8×）。",
         action_gen={"enable_thinking": True, "thinking_budget": 1024},
+        action_cost="该档在这类任务上约慢 5–8 倍（实测 4.9–7.8×）",
     ),
     Boundary(
         id="deep_reasoning",

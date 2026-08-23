@@ -77,6 +77,7 @@ class Decision:
     tier_target: Optional[str] = None
     tier_gen: Optional[Dict[str, Any]] = None
     reason: str = ""                     # 人/日志可读
+    tier_cost: str = ""                  # 换档代价句（目录 action_cost；没实测就空 → 通用措辞）
 
     def as_event(self) -> Dict[str, Any]:
         return {"trigger": self.trigger, "action": self.action, "boundaries": list(self.boundaries),
@@ -116,7 +117,8 @@ def decide_at_turn_start(facts: RequestFacts, cfg: UpgradeConfig, *,
     if tier_hits and cfg.tier_notice:
         b = tier_hits[0]
         out.append(Decision("catalog", "tier_suggest", boundaries=[x.id for x in tier_hits],
-                            tier_target=b.action_target, tier_gen=b.action_gen, reason=b.title))
+                            tier_target=b.action_target, tier_gen=b.action_gen, reason=b.title,
+                            tier_cost=b.action_cost))
     return out
 
 
@@ -178,8 +180,9 @@ def user_notice(d: Decision) -> str:
         think = ""
         if d.tier_gen and d.tier_gen.get("enable_thinking"):
             think = f"并开启思考（预算 {d.tier_gen.get('thinking_budget', 1024)}）"
+        cost = d.tier_cost or "切换后响应会更慢"
         return (f"—— 提示：本题属于已知边界「{d.reason}」，本机 `{_short(d.tier_target)}` 档更稳"
-                f"（`./devctl.sh model` 切换{think}）；本回答仍由当前档完成。")
+                f"（`./devctl.sh model` 切换{think}；{cost}）；本回答仍由当前档完成。")
     if d.action == "unavailable":
         # 只给用户可读的原因短语（不带 key_env 变量名等内部细节，评审 m20）
         return f"—— 你要求的云端导师当前不可用（{d.reason}）；本回答由本地模型完成。"

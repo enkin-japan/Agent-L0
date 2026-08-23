@@ -379,3 +379,106 @@ def test_fuse_exit_still_records_degradation_in_metrics(make_session):
     assert result["status"] == "warning" and "未能收敛" in result["response"]
     assert result["metrics"]["cloud_degraded"] == ["budget_exhausted"]
     assert "本回答由本地模型独立完成" not in result["response"]
+
+
+def test_audit_keys_recorded_on_parse_loop_exit(make_session):
+    """阶段复审 M2：parse_loop 出口也要落 cloud_degraded / cloud_upgrade 审计键。"""
+    from .fake_engine import bad_call
+    engine = FakeEngine([
+        {"tool_calls": [call("cloud_consult", question="q")]},
+        {"tool_calls": [bad_call()]}, {"tool_calls": [bad_call()]}, {"tool_calls": [bad_call()]},
+    ])
+    orch = make_orch(engine, FakeRegistry([_degraded_tool()]), max_parse_retries=3)
+    session = make_session()
+    session.add_user_message("按状态分组统计条数与读数合计")
+    begin_turn(session)
+    r = run(orch.run_turn(session, journal=session.journal, **GEN))
+    assert r["status"] == "warning" and "解析" in r["response"]
+    assert r["metrics"]["cloud_degraded"] == ["budget_exhausted"]
+    assert r["metrics"]["cloud_upgrade"][0]["action"] == "tier_suggest"
+
+
+def test_tool_level_timeout_of_consult_is_degradation(make_session):
+    """阶段复审 m8：cloud_consult 被工具级熔断 → 统一降级观察（timeout）+ 标注，不绕过 ⑤′-1。"""
+    import time as _t
+    engine = FakeEngine([
+        {"tool_calls": [call("cloud_consult", question="q")]},
+        {"text": "本地作答。"},
+    ])
+    slow = FakeTool("cloud_consult", result="never", read_only=False, concurrency_safe=False, timeout=0.2)
+    registry = FakeRegistry([slow])
+    _orig = registry.execute_tool
+
+    def _exec(name, arguments):
+        _t.sleep(0.5)
+        return _orig(name, arguments)
+    registry.execute_tool = _exec
+    orch = make_orch(engine, registry)
+    session = make_session()
+    session.add_user_message("分析一下")
+    begin_turn(session)
+    r = run(orch.run_turn(session, journal=session.journal, **GEN))
+    assert r["metrics"]["cloud_degraded"] == ["timeout"]
+    assert "本回答由本地模型独立完成" in r["response"] and "超时" in r["response"]
+    assert [e["kind"] for e in ring_of(session, "cloud_degraded")] == ["timeout"]
+
+
+def test_success_path_ledger_failure_is_ledger_error(tmp_path, monkeypatch):
+    """阶段复审 m3：发成功后台账写不进去 → ledger_error，不是「连接失败」。"""
+    monkeypatch.setenv("AGENT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("T_OA_KEY", "k1")
+
+    class _R:
+        def raise_for_status(self): pass
+        def json(self): return {"choices": [{"message": {"content": "advice"}}],
+                                "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+
+    class _T:
+        def post(self, *a, **k): return _R()
+    def _ro(entry):
+        raise OSError("read-only file system")
+    monkeypatch.setattr(advisor, "record_egress", _ro)
+    with pytest.raises(CloudAdvisorError) as ei:
+        advisor.consult("q", cfg=_cfg(), transport=_T())
+    assert ei.value.kind == "ledger_error_after_send" and "已发生" in str(ei.value)
+    assert "已发生并计费" in user_notice([ei.value.kind])            # 用户面不说"拒绝出网"
+    # 传输失败 + 台账失败：原因不被顶替（评审 m3′）
+    class _Boom:
+        def post(self, *a, **k): raise TimeoutError("slow")
+    with pytest.raises(CloudAdvisorError) as ei:
+        advisor.consult("q", cfg=_cfg(), transport=_Boom())
+    assert ei.value.kind == "ledger_error" and "TimeoutError" in str(ei.value)
+
+
+def test_consult_tool_timeout_tracks_config(monkeypatch):
+    from types import SimpleNamespace
+    from framework.mcp.tools.cloud_consult import CloudConsultTool
+    from framework.mcp.registry import MCPRegistry
+    import framework.utils.config_loader as cl
+    monkeypatch.setattr(cl, "load_section", lambda name: {"sanitize_timeout": 45, "timeout": 120} if name == "cloud" else {})
+    tool = CloudConsultTool.__new__(CloudConsultTool)
+    assert tool.timeout_seconds == 180
+    # 经注册表取（property 被正确解析，而不是类属性/None 回落全局值）
+    assert MCPRegistry.tool_timeout(SimpleNamespace(_tools={"cloud_consult": tool}), "cloud_consult") == 180
+    monkeypatch.setattr(cl, "load_section", lambda name: {"sanitize_timeout": 60, "timeout": 300} if name == "cloud" else {})
+    assert tool.timeout_seconds == 375
+    monkeypatch.setattr(cl, "load_section", lambda name: {"sanitize_timeout": 0, "timeout": 0} if name == "cloud" else {})
+    assert tool.timeout_seconds == 180                          # `or` 回落与 advisor 同口径
+
+
+def test_abandoned_pending_turn_metrics_carry_audit_keys(make_session):
+    """复审 M1′：审批挂起态的 metrics 也带审计键——用户改发新消息时它就是 turn_ended 的终态。"""
+    engine = FakeEngine([
+        {"tool_calls": [call("cloud_consult", question="q")]},
+        {"tool_calls": [call("danger", x=1)]},
+    ])
+    registry = FakeRegistry([_degraded_tool(), FakeTool("danger", result="done", approval=True,
+                                                        read_only=False, concurrency_safe=False)])
+    orch = make_orch(engine, registry)
+    session = make_session()
+    session.add_user_message("按状态分组统计条数与读数合计")
+    begin_turn(session)
+    r = run(orch.run_turn(session, journal=session.journal, **GEN))
+    assert r["status"] == "pending_approval"
+    assert r["metrics"]["cloud_degraded"] == ["budget_exhausted"]
+    assert r["metrics"]["cloud_upgrade"][0]["action"] == "tier_suggest"

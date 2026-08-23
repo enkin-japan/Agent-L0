@@ -216,11 +216,25 @@ def consult(question: str, context: str = "", provider: Optional[str] = None,
     try:
         out = call(p, payload_text, max_tokens, timeout, transport)
     except Exception as e:
-        record_egress({**base, "ok": False, "error": str(e)[:300], "cost_usd": 0.0})
+        try:
+            record_egress({**base, "ok": False, "error": str(e)[:300], "cost_usd": 0.0})
+        except Exception as le:
+            # 台账写不进去不得顶替真实原因（否则 OSError 被读成「连接失败」）：两件事都说清
+            raise CloudAdvisorError(
+                "ledger_error", f"出网台账写入失败（{type(le).__name__}: {le}）；原失败："
+                                f"{type(e).__name__}: {str(e)[:200]}") from e
         raise
     cost = _cost(p, out["in_tokens"], out["out_tokens"])
-    record_egress({**base, "in_tokens": out["in_tokens"], "out_tokens": out["out_tokens"],
-                   "cost_usd": round(cost, 6), "ok": True})
+    try:
+        record_egress({**base, "in_tokens": out["in_tokens"], "out_tokens": out["out_tokens"],
+                       "cost_usd": round(cost, 6), "ok": True})
+    except Exception as le:
+        # 钱已花、建议已取回，但审计日志写不进去：按 ledger_error 响亮失败，不伪装成「连接失败」
+        # （阶段复审 m3：拒发路修了、成功路漏了，同一只读 FS 触发）
+        raise CloudAdvisorError(
+            "ledger_error_after_send",
+            f"出网台账写入失败（{type(le).__name__}: {le}）；本次调用已发生"
+            f"（{p['name']}/{p['model']}，约 ${cost:.4f}），建议因审计失败作废") from le
     if not str(out["text"]).strip():
         # 推理型供应商（如 gpt-5.6-luna）会把 max_tokens 全花在隐藏推理上、正文空返
         # ——L4 站实测：392→2048 tok 满额零正文。空建议悄悄回填会误导本地决策，必须

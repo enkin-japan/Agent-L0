@@ -113,6 +113,19 @@ def _cloud_degraded_scan(history: List[Dict[str, Any]]) -> Tuple[List[str], bool
     return kinds, succeeded
 
 
+from ..cloud.degrade import CLOUD_CONSULT_TOOL as _CLOUD_CONSULT_TOOL   # 常量，无重依赖
+
+
+def _is_local_mutation(registry, call: Dict[str, Any]) -> bool:
+    """D2「成功的变更类调用」判据：非只读工具，且**不是云端咨询**——咨询出网花钱但不改本机
+    任何状态，批准一次咨询不得解除「零变更却声称已做」守门（⑤′-3 评审 M3）。不把 cloud_consult
+    标成只读来达到同一效果：只读指纹会被写屏障清掉，付费重复调用就拦不住了（阶段复审 M1）。"""
+    name = call.get("name")
+    if name == _CLOUD_CONSULT_TOOL:
+        return False
+    return not registry.is_read_only(name, call.get("arguments", {}))
+
+
 def _already_consulted(history: List[Dict[str, Any]]) -> bool:
     from ..cloud.upgrade import already_consulted_this_turn
     return already_consulted_this_turn(history)
@@ -588,6 +601,7 @@ class Orchestrator:
             }
             names = "、".join(c.get("name") for c in approval_needed_)
             session.set_activity(f"等待授权：{names}", phase="awaiting_approval")
+            _exit_audit()   # 挂起态也记：用户改发新消息时这份 metrics 会被当作 turn_ended 落盘
             print(f"[Orchestrator] 敏感工具调用挂起待审批: {[c.get('name') for c in approval_needed_]}")
             return {
                 "status": "pending_approval",
@@ -682,6 +696,12 @@ class Orchestrator:
             session.carried_upgrade = []
         upgrade_decisions: List[Any] = list(getattr(session, "carried_upgrade", None) or [])
         session.carried_upgrade = upgrade_decisions
+
+        def _exit_audit() -> None:
+            """⑤′-1/⑤′-3 审计键在**所有**收尾出口落 metrics（PROTOCOL §2.3 的承诺；阶段复审 M2：
+            runaway/parse_loop/cancelled 三类出口曾漏）。不追加用户文案——这些出口的 response 不是答复。"""
+            _finalize_cloud_degraded(session, metrics, "", append_notice=False)
+            _append_upgrade_notices("", metrics, upgrade_decisions)
         # 只在**新用户轮**判：审批续跑（keep_recent_calls）与挂起续跑（compact_history=False
         # 的轮中重入）都不是新轮——重入再判就是一轮两次提醒/两次代发起。
         # 用户已点取消/挂起的轮不判（先于代发起：取消了的轮不该再花钱出网，评审 M1）
@@ -711,14 +731,14 @@ class Orchestrator:
                     session.add_tool_message(_resp)
         upgrade_failures = 0          # 本轮连续失败的**批次**数（一次迭代的物理调用批算一次）
 
+
         while session.carried_iterations + iterations < self.max_total_iterations:
             if turn_usage.get("sub_generations", 0) >= self.max_sub_generations:
                 _stamp_turn_stats()
                 events.emit("turn_abort", session=session.session_id,
                             reason="max_sub_generations",
                             sub_generations=turn_usage.get("sub_generations", 0))
-                _finalize_cloud_degraded(session, metrics, "", append_notice=False)  # 审计面照记
-                _append_upgrade_notices("", metrics, upgrade_decisions)
+                _exit_audit()
                 return {
                     "status": "warning",
                     "response": (f"子调研生成已达预算上限（{self.max_sub_generations} 次），任务终止。"
@@ -730,6 +750,7 @@ class Orchestrator:
                 }
             # --- 取消检查点（迭代边界；token 级检查在 engine 内） ---
             if session.cancel_requested:
+                _exit_audit()
                 return {"status": "cancelled", "response": "任务已被用户取消。", "metrics": metrics}
 
             # --- 挂起检查点（迭代边界：上一步的生成与工具结果已提交进 history，
@@ -738,6 +759,7 @@ class Orchestrator:
             if session.suspend_requested:
                 session.suspend_requested = False
                 session.set_activity("已挂起（可恢复）", phase="suspended")
+                _exit_audit()   # 同 pending_approval：挂起轮被弃时这份 metrics 就是终态
                 return {"status": "suspended", "response": "任务已挂起，可稍后恢复。", "metrics": metrics}
 
             task = session.task_state  # 元工具可能在上一迭代创建/清除任务
@@ -777,6 +799,7 @@ class Orchestrator:
                 turn_spec["accepted"] += fresh_metrics.get("spec_accepted", 0) or 0
             if result.get("cancelled"):
                 _stamp_turn_stats()
+                _exit_audit()
                 return {"status": "cancelled", "response": "任务已被用户取消。", "metrics": metrics}
 
             iterations += 1
@@ -810,6 +833,7 @@ class Orchestrator:
                     if parse_errors[key] >= self.max_parse_retries:
                         session.set_activity("已终止（工具调用参数反复失控）", phase="done")
                         events.emit("turn_abort", session=session.session_id, reason="runaway_call")
+                        _exit_audit()
                         return {
                             "status": "warning",
                             "response": ("多次生成工具调用参数失控（超长复读），已终止本次任务。"
@@ -953,8 +977,7 @@ class Orchestrator:
                                                      "Operation cancelled",
                                                      "Operation DENIED",
                                                      "Denied-call blocked"))
-                    if executed and not self.registry.is_read_only(c.get("name"),
-                                                                   c.get("arguments", {})):
+                    if executed and _is_local_mutation(self.registry, c):
                         mutated_ok_this_turn = True
                 responses.extend(phys_responses)
                 # ⑤′-3 失败计数按**批次**（一次迭代 = 模型一次自纠机会）：批内有成功即归零
@@ -992,6 +1015,7 @@ class Orchestrator:
                 ):
                     session.set_activity("已终止（工具格式反复解析失败）", phase="done")
                     events.emit("turn_abort", session=session.session_id, reason="parse_loop")
+                    _exit_audit()
                     return {
                         "status": "warning",
                         "response": ("多次未能解析要调用的工具格式，已终止本次任务。"
@@ -1215,8 +1239,7 @@ class Orchestrator:
         # 如实说明预算烧在哪：主循环之外另有多少子调研生成，用户据此才知道
         # 该拆任务还是该少调研（子生成有自己的保险丝,这里只如实附注）。
         _budget_detail = (f"（期间另有子调研生成 {_sub_gens} 次）" if _sub_gens else "")
-        _finalize_cloud_degraded(session, metrics, "", append_notice=False)  # 审计面照记（评审 M5）
-        _append_upgrade_notices("", metrics, upgrade_decisions)
+        _exit_audit()
         return {
             "status": "warning",
             "response": (f"任务在 {self.max_total_iterations} 次主循环迭代内未能收敛{_budget_detail}，已终止。"
@@ -1567,6 +1590,11 @@ class Orchestrator:
                 "and was abandoned. Try a lighter operation, add a shorter timeout argument, "
                 "or take a different approach."
             )
+            if name == _CLOUD_CONSULT_TOOL:
+                # 云端咨询被工具级熔断 = 同样是降级（阶段复审 m8：否则绕过整条 ⑤′-1 标注路）
+                from ..cloud.degrade import degraded_observation
+                result_text = degraded_observation(
+                    "timeout", f"tool-level timeout after {timeout_s}s（L0 脱敏 + HTTP 串行超出熔断）")
 
         # [事件回流] 工具级错误反馈（含超时）也是涣散痕迹：参数马虎/路径不存在/匹配失败等
         # 由工具自身拦下的错误，与编排层护栏一起构成完整事件流（涣散度量的全部组分入流）。
@@ -1722,8 +1750,7 @@ class Orchestrator:
                 resume_failure = False
                 if not rtext.startswith(("Duplicate call blocked", "Operation cancelled",
                                          "Operation DENIED", "Denied-call blocked")) \
-                        and not self.registry.is_read_only(c.get("name"),
-                                                           c.get("arguments", {})):
+                        and _is_local_mutation(self.registry, c):
                     resume_mutated_ok = True
         else:
             responses = [

@@ -17,6 +17,16 @@ K 决策不随会话带过续跑 → FAILED test_tier_notice_survives_approval_r
 L 否定语不排除 → FAILED test_explicit_request_detection[别让云端插手-False] FAILED test_explicit_request_detection[don't ask the cloud advisor-False] 2 failed, 43 passed in 0.28s 
 M off 仍出换档提示 → FAILED test_turn_start_decision_table - Assertio... FAILED test_off_mode_never_triggers[请严格证明这个不等式] FAILED test_off_mode_never_triggers[按状态分组统计条数与读数合计] 
 N 无人值守不降档 → FAILED test_unattended_turn_downgrades_auto_to_suggest 1 failed, 44 passed in 0.27s 
-O cloud_consult 当变更类 → FAILED test_cloud_consult_is_read_only_so_approval_keeps_fabrication_guard 1 failed, 44 passed in 0.28s 
+O cloud_consult 当变更类 → FAILED test_cloud_consult_is_read_only_so_approval_keeps_fabrication_guard  ［该测试已在阶段复审处置中删除，由 Q 行为测试 + U′ 属性钉取代］ 1 failed, 44 passed in 0.28s 
 P 失败按调用计数 → FAILED test_failures_count_batches_not_calls - A... 1 failed, 44 passed in 0.27s 
 restore2: OK
+== 阶段复审处置 mutants ==
+Q 咨询当本地变更(M3 回退) → FAILED test_approved_consult_does_not_disarm_fabrication_guard 1 failed, 68 passed in 1.91s 
+R parse_loop 出口不记审计(M2 回退) → FAILED test_audit_keys_recorded_on_parse_loop_exit 1 failed, 68 passed in 1.94s 
+S 咨询超时不按降级(m8 回退) → FAILED test_tool_level_timeout_of_consult_is_degradation 1 failed, 68 passed in 2.54s 
+T 成功路台账失败顶替原因(m3 回退) → FAILED test_success_path_ledger_failure_is_ledger_error 1 failed, 68 passed in 1.95s 
+restore: OK
+U cloud_consult 重标只读(M1 回退) → 46 passed in 0.77s 
+restore: OK
+U′ cloud_consult 重标只读（补属性钉后） → FAILED test_real_cloud_consult_is_not_read_only 1 failed, 46 passed in 0.33s 
+restore: OK

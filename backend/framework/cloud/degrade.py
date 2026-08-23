@@ -31,7 +31,7 @@ DEGRADED_PREFIX = "System Error: [cloud advisor degraded:"
 
 KINDS = ("no_provider", "no_key", "unknown_provider", "budget_exhausted", "timeout",
          "connection_error", "http_error", "empty_reply", "bad_config", "ledger_error",
-         "unknown")
+         "ledger_error_after_send", "unknown")
 
 #: 用户可读的原因短语（中文，随最终答复落给用户）
 _REASON_ZH = {
@@ -45,6 +45,7 @@ _REASON_ZH = {
     "empty_reply": "云端返回空正文",
     "bad_config": "云端配置非法",
     "ledger_error": "出网台账不可写（拒绝出网）",
+    "ledger_error_after_send": "出网台账写入失败（本次调用已发生并计费，建议作废）",
     "unknown": "云端调用失败",
 }
 

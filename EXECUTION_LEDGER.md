@@ -565,7 +565,7 @@ R0–R5 各小项的打勾细分（含每步实测结果与计划外发现）已
 
 | 项 | 当前值 | 口径 |
 |---|---|---|
-| 金测试项数 | 1701 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
+| 金测试项数 | 1708 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
 | 测试文件数 | 111 | `backend/tests/` 下递归的 `test_*.py` |
 | mcp 文件数 | 31 | `backend/framework/mcp/` 递归下的 `.py`，**不含** `__init__.py` |
 | BaseTool 子类 | 67 | 全 backend 内 `class X(BaseTool)` 的声明数（一个文件可有多个） |
@@ -4390,19 +4390,24 @@ m9 **server 约束采样竞态修复**（S–M，单文件为主，guard-type �
    qwen38 0.943/0.958，ChartQA hard 差约 20 题）、长上下文×结构化（08-16
    矩阵弱信号，需补探针）、深推理（26b 无思考模式）；另设生产日志回流
    管道（journal 失败案例→目录候选）。🔴 探针补跑需 GPU + sentinel。
-   **✅ ⑤′-2 交付（2026-08-23 傍晚；GPU 两段探针共 ~25 min，单 GPU 手核独占）**：
+   **✅ ⑤′-2 交付（2026-08-23 傍晚；GPU 两段探针共 ~25 min，单 GPU 手核独占；两段各挂了
+   task-sentinel（Haiku）——第一段的哨兵把轮询派生成 detached 脚本且只记第一个模型的 PID，
+   我核实后杀掉了孤儿循环，第二段哨兵改为自身后台循环；两段真正的唤醒信号都是 harness 的后台
+   任务完成通知，哨兵未报异常）**：
    - **谓词是代码**：新 `framework/cloud/boundary.py`——`RequestFacts`（文本/带图/上下文
      token/显式深推理/附件字数，全部生成前可得）、`Boundary`（谓词+证据+探针+状态+动作）、
      `CATALOG` 4 条、`match()` 缺省排除 `pending`（护栏不建在猜测上）。文档面
      `backend/benchmarks/model_eval/BOUNDARY.md` 逐条对应，金测试钉 id 集合与状态字样一致。
    - **B1 `vision_chart_numeric`（confirmed → 换 qwen38-4bit）**：零 GPU，从归档 transcripts
-     算逐题差分——**30 题 26b-4bit 错而 qwen38 两档全对**（全部 vi-chartqa），反向 10，
-     三档同错 3；清单 `benchmarks/data/boundary-probe-20260823/vision_diff.json`。
+     算逐题差分——**30 题 26b-4bit 错而 qwen38 两档全对**（全部 vi-chartqa），对称反向（两档
+     qwen 都错而 26b 对）5（宽口径 10），三档同错 3；清单与复算脚本
+     `benchmarks/data/boundary-probe-20260823/vision_diff.{json,py}`（来源 run 为 results/ 下
+     gitignored 本地件，换机不可重算，文件内已声明）。
    - **B2 `long_context_structured`（cleared）**：快照里的"08-16 矩阵弱信号"经追溯是 08-14
      哨兵矩阵 26b-4bit tool@32k/64k ✗，而那是 **JSON 声明体旧口径，DSL 迁移后同格翻正**
      （20260814-dsl-fullmatrix 翻正 24 格、回退 0）。真正没探过的是答复正文里的结构化产出：
      新批 `items/text/longctx_struct.jsonl`（`gen_longctx_struct.py` seed 20260823 确定性重建，
-     12 条巡检记录散落百科体填充文，实测 prompt 7.8k/15.3k/30.3k/45.6k token）任务 A（JSON
+     12 条巡检记录散落百科体填充文，实测 prompt 7939/15347/30405/45711 token——json 题；table 题各 +2）任务 A（JSON
      提取）**26b-4bit 4/4、每档 12/12 记录全中；26b-8bit 同 4/4** → 不是弱项，留档防重立。
    - **B3 `implicit_aggregation`（confirmed → 换 qwen38-4bit 且开思考）——探针意外揪出的真弱项**：
      任务 B（按状态分组→条数+读数合计，Markdown 表）26b-4bit 关思考 **0/4 且 8k 即挂、分组
@@ -4417,8 +4422,9 @@ m9 **server 约束采样竞态修复**（S–M，单文件为主，guard-type �
    - **回流管道** `scripts/boundary_harvest.py`：扫 `sessions/*/history.jsonl` 按确定性信号
      （status fail/warning、解析错 ≥2、≥12 圈、工具错 ≥3、cloud_degraded、用户重发）出候选
      + 目录谓词命中（含 pending 供对表）；产物 gitignored（含 prompt 片段）。首跑 dev 机
-     119 会话/122 轮：候选 23（fail 13/多圈 9/工具错 6/解析错 2/重发 2/warning 1），目录命中
-     0、**盲区候选 22**——多为架构调试期工具链路故障，待人工剔锅后归条。
+     118 会话/122 轮：候选 23（fail 13/多圈 9/工具错 6/解析错 2/重发 2/warning 1），目录命中
+     `implicit_aggregation` 2（同一条 bench 用 prompt 的两轮）、**盲区候选 21**（复审后谓词收窄
+     重跑的数字）——多为架构调试期工具链路故障，待人工剔锅后归条。
    - 档案 `benchmarks/data/boundary-probe-20260823/`（4 个 run 的 summary+transcripts，
      transcripts 不含 prompt 故只有 KB 级）；config 26b-4bit note 改指向目录（文本，无功能值）；
      model_eval README 补 text 维度行。金测试 `tests/test_boundary_catalog.py` 12 条
@@ -4445,7 +4451,7 @@ m9 **server 约束采样竞态修复**（S–M，单文件为主，guard-type �
      2048；nit 清理。未采：m40 探针 JSONL 1 MB 入库（确定性重建 + 整条比对守漂移，评测可
      复现优先于仓体积）；m41 weak 缺省可命中（改为 `include_weak` 由消费方筛，⑤′-3 自动档
      只认 confirmed）。金测试 12→**31**，全套 **1656**。
-   - **变异证明**（两轮 9 只，`benchmarks/data/boundary-probe-20260823/mutants.log`）：首轮
+   - **变异证明**（两轮 8 只 + 1 次补测重跑，`benchmarks/data/boundary-probe-20260823/mutants.log`）：首轮
      A pending 照样触发→红 / B cleared 谓词复活→2 红 / C 聚合谓词恒假→3 红；复审后 D pending
      →红 / E cleared 不跳过且去不变量→4 红 / F 英文锚定退回→4 红 / G 回流把材料并进关键词
      →**首跑存活**（无 ingested 用例）→补测后红 / H 聚合恒假→3 红；sha256 核对还原。
@@ -4503,6 +4509,46 @@ m9 **server 约束采样竞态修复**（S–M，单文件为主，guard-type �
      不随续跑→红；L 否定语不排除→2 红；M off 仍出提示→3 红；N 无人值守不降档→红；O consult
      当变更类→红；P 失败按调用计→红；sha256 核对还原。
 第 5/6 层不动。推送纪律照旧。本快照写毕即等 /compact。
+
+---
+
+**🔍 ⑤′ 波（m9 + ⑤′-1/2/3）阶段复审（2026-08-23 晚；stage-reviewer Opus 5 xhigh；范围
+`3626127..8b00e6e`）**：0 Critical / 4 Major / 9 minor / 3 nit；全部核实后处置如下，
+fix-up commit 走双门（本块之后不再触发阶段复审）。
+- **M1（真回归）**：⑤′-3 为修 D2 误判把 `cloud_consult` 标 `is_read_only=True`，副作用是只读指纹
+  被写屏障清掉——「问云端→改文件→同参再问」不再被重复调用拦截 = 多一次付费出网（复审实测
+  执行 2 次 vs 改前 1 次）。处置：撤回只读标记，D2 三态改按工具名显式豁免咨询
+  （`_is_local_mutation`），两条行为测试钉住（批准咨询不解除零变更守门；写后同参重问仍被拦）。
+  我第一版把判据写反（`not _is_local_mutation`），行为测试当场红，改正后绿——说明行为测试
+  比属性测试值钱。
+- **M2**：PROTOCOL §2.3「所有收尾出口都记审计键」是绝对断言，runaway_call / parse_loop /
+  cancelled 三类出口曾漏 → 抽 `_exit_audit()` 闭包，七处出口全调；parse_loop 出口测试钉住。
+- **M3/M4/m5/m6**：台账 harvest 数字过时且算不平（0/22 vs 23）→ 2/21；`boundary.py` evidence
+  与台账的「反向 10」配到对称口径句子上 → 对称 5（宽口径 10）；prompt token 7.8k→7939 等精确值；
+  119 会话→118。
+- **m1/m9**：档案补 `vision_diff.py` / `rescore.py`（复算脚本，前者输入为 results/ 下 gitignored
+  本地件——文档与台账已明示换机不可重算）、两段跑法脚本、`ANALYSIS.md`。
+- **m2/n1**：换档提示加「该档在这类任务上约慢 5–8 倍」；5–8× 按实测 4.9–7.8× 标注。
+- **m3**：advisor 成功路台账写失败也抛 `ledger_error`（钱已花、建议作废、不伪装成连接失败）。
+- **m4**：两套测试桩 `read_only=False` 随 M1 撤回重新与真工具一致；注释保留。
+- **m7**：sentinel 留痕补记（两段各挂 Haiku 哨兵；第一段哨兵派生 detached 脚本且只记首个 PID，
+  核实后杀孤儿；唤醒实际来自 harness 任务完成通知）。
+- **m8**：`cloud_consult` 工具级超时改为按 config 计算（sanitize_timeout + timeout + 15s），且
+  工具级熔断文本对 cloud_consult 改产出 `timeout` 降级观察（不再绕过 ⑤′-1 标注路）。
+- **n2/n3**：PROTOCOL action 联合补 `unavailable`；变异只数口径统一（补测重跑不计新只）。
+- 未采：cuda/gen_sem>1 形态共享 matcher 残余竞态——m9 交付注已存查，本机 MLX 形态不触发。
+- **处置 diff 的 per-diff 评审（reviewer 0C/2M/5m）**：M1′ pending_approval/suspended 两个
+  挂起出口也要记审计键（用户改发新消息时那份 metrics 会被 `_abandon_paused_turn` 当 turn_ended
+  落盘）→ `_exit_audit()` 加到两处；M2′ 成功路的 ledger_error 文案会对用户说「拒绝出网」而钱
+  已花 → 新 kind `ledger_error_after_send`（"本次调用已发生并计费，建议作废"）；m3′ 传输失败
+  路的台账写失败也不得顶替原因 → 合并报；m4′ 工具级超时回落口径与 advisor 一致（`or`）；
+  m5′ 「慢 5–8 倍」只对 B3 实测过 → `Boundary.action_cost` 字段随决策带出，B1 无实测用通用
+  措辞；m6′ M1 没有变异 → **补做，首跑存活**（行为测试跑在 FakeTool 上，真工具重标只读根本
+  碰不到它——评审"会死"的推断是错的）→ 补真工具属性钉后红；m7′ 跑法脚本 `exit=$?` 恒 0 →
+  修（档案注明原版缺陷，各 run 当时以 summary.json 核实）。
+- 处置变异证明 5 只（Q 咨询当本地变更 / R parse_loop 不记审计 / S 咨询超时不按降级 / T 成功路
+  台账失败顶替原因 / U 真工具重标只读——首跑存活→补钉后红）全红，记
+  `benchmarks/data/cloud-upgrade-20260823/mutants.log` 末段。全套 1701→**1708**。
 
 ---
 

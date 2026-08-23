@@ -63,12 +63,25 @@ class CloudConsultTool(BaseTool):
             self.parameters = params
     requires_approval = True     # 静态默认；实际按 needs_approval 旋钮动态判定
     is_concurrency_safe = False
-    # 只读：对本地系统状态无副作用（出网、花钱，但不改本机任何东西）。不声明会按
-    # is_concurrency_safe=False 被当成变更类——审批通过的一次咨询就把 D2「零变更却声称已做」
-    # 的守门解除（⑤′-3 评审 M3 实测）。去重面：参数键 question/context 不在 _TARGET_KEYS，
-    # 不会被"同目标取代"
-    is_read_only = True
-    timeout_seconds = 180
+    # 工具级熔断 = L0 模型腿脱敏（sanitize_timeout）+ HTTP 单发（timeout）串行之和 + 15s 余量，
+    # 按 config 现值算（静态 180 曾只剩 15s 余量且不随 config 变，阶段复审 m8）。注意 requests 的
+    # timeout 是 connect/read 各自的上限而非总墙钟，慢供应商仍可能先触工具级熔断——那时按 ⑤′-1
+    # 的 timeout 降级处理（编排层对本工具的熔断文本改产出降级观察），不是静默失败。
+    # 另一处自陈：本工具不标只读，故它会触发写屏障（之后同轮只读调用可重复）——这是换取
+    # 「付费重复咨询被拦」的代价，见 orchestrator._is_local_mutation
+    # 刻意**不**声明 is_read_only：它在编排层是双用途的——只读调用的重复指纹（r:）会被写屏障
+    # 清掉，标只读 = 「问云端→改文件→再问同一问题」的付费重复出网不再被拦（阶段复审 M1 实测）。
+    # 它也不是变更类：审批通过的一次咨询不得解除 D2「零变更却声称已做」守门——这一点在
+    # orchestrator 的三态扫描里按工具名显式豁免（评审 M3），不靠 is_read_only
+    @property
+    def timeout_seconds(self) -> int:
+        try:
+            from ...utils.config_loader import load_section
+            c = load_section("cloud") or {}
+            # 回落口径与 advisor.consult / cloud_consult.execute 一致（`or` 回落：0/空 = 缺省）
+            return int(float(c.get("sanitize_timeout") or 45) + float(c.get("timeout") or 120) + 15)
+        except Exception:
+            return 180
 
     def needs_approval(self, arguments) -> bool:
         """出网审批旋钮（config cloud.require_approval，默认 true）：L0 试运行期恒
