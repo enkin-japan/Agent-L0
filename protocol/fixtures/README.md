@@ -32,6 +32,7 @@ web(vitest)与原生 app(XCTest)各自实现 `reduce(state, event)`,**读取同�
 | `005-late-attach-rebuilds-pending` | **多端附着**:第二个客户端在轮次挂起后才 attach,只凭首帧 `stream_attached` + 服务端重放即重建出与全程在线者相同的审批卡(§7 预留 4) |
 | `006-reattach-midturn-keeps-state` | **断线重连**:流中途再来一帧 `stream_attached`(带游标重连),已累积状态不得被冲掉 |
 | `007-render-hint` | **工具渲染格**:观察带 `render:{hint,payload}`(R3)穿过两端归约器不被吞。**守卫夹具**——实现前就是绿的,详见 `007-render-hint.md` |
+| `008-cloud-degraded` | **云端导师降级轮**(⑤′-1):真实会发出的新事件类型 `cloud_degraded` 被忽略、`turn_ended` 顶层 additive 字段 `cloud_degraded`/`cloud_consult_ok` 不破坏归约、带「本地作答」标注的答复原样进 transcript。守卫夹具,详见 `008-cloud-degraded.md` |
 
 ## 为什么 005/006 建在 002(暂停态)而不是 001(完整轮)上
 

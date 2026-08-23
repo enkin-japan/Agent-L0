@@ -87,6 +87,55 @@ def _append_missing_asset_links(text: str, turn_messages: List[Dict[str, Any]]) 
     return (text.rstrip() + "\n\n" + "\n".join(missing)) if text.strip() else "\n".join(missing)
 
 
+def _cloud_degraded_scan(history: List[Dict[str, Any]]) -> Tuple[List[str], bool]:
+    """本轮（自最后一条 user 消息起）cloud_consult 观察扫描 → (降级原因序列, 同轮是否有成功咨询)。
+
+    扫历史而非轮内局部变量：cloud_consult 要审批，降级观察多半是在
+    resume_after_approval 里落进历史、再重入 run_turn 的——轮内变量那时已经没了。
+    只认工具名为 cloud_consult 的条目（评审 M2：read_file 翻到同款日志不算）。"""
+    from ..cloud.degrade import cloud_consult_succeeded, degraded_kind   # core 不静态依赖 cloud
+    start = 0
+    for i in range(len(history) - 1, -1, -1):
+        if history[i].get("role") == "user":
+            start = i
+            break
+    kinds: List[str] = []
+    succeeded = False
+    for msg in history[start:]:
+        if msg.get("role") != "tool":
+            continue
+        for tr in msg.get("tool_responses", []) or []:
+            k = degraded_kind(tr.get("response"), tr.get("name"))
+            if k:
+                kinds.append(k)
+            elif cloud_consult_succeeded(tr.get("response"), tr.get("name")):
+                succeeded = True
+    return kinds, succeeded
+
+
+def _finalize_cloud_degraded(session: ChatSession, metrics: Dict[str, Any], text: str,
+                             *, append_notice: bool) -> str:
+    """⑤′-1 收尾：本轮降级过 → metrics 平铺 `cloud_degraded`（审计面，所有出口都记）；
+    最终答复末尾确定性追加「本地作答」说明——**仅当同轮没有成功的云端咨询**（评审 M1：
+    首次超时、重试成功 = 真用了云端建议，再挂"未经云端导师"就是反向谎报）。
+
+    不依赖模型是否听话转述（降级观察里已要求它说，但交付不能建在转写忠实度上——
+    与 _append_missing_asset_links 同一路数）。已含同一句则不重复。"""
+    kinds, succeeded = _cloud_degraded_scan(session.history)
+    if not kinds:
+        return text
+    metrics["cloud_degraded"] = list(kinds)
+    metrics["cloud_consult_ok"] = bool(succeeded)
+    if not append_notice or succeeded:
+        return text
+    from ..cloud.degrade import user_notice
+    note = user_notice(kinds)
+    events.emit("cloud_degraded_notice", session=session.session_id, kinds=list(kinds))
+    if not note or note in text:
+        return text
+    return (text.rstrip() + "\n\n" + note) if text.strip() else note
+
+
 # ---------- 元工具 Schema（编排层拦截，不进 MCP 注册表） ----------
 UPDATE_PLAN_SCHEMA = {
     "name": "update_plan",
@@ -571,6 +620,7 @@ class Orchestrator:
                 events.emit("turn_abort", session=session.session_id,
                             reason="max_sub_generations",
                             sub_generations=turn_usage.get("sub_generations", 0))
+                _finalize_cloud_degraded(session, metrics, "", append_notice=False)  # 审计面照记
                 return {
                     "status": "warning",
                     "response": (f"子调研生成已达预算上限（{self.max_sub_generations} 次），任务终止。"
@@ -814,6 +864,11 @@ class Orchestrator:
                     if c.get("type") == "error":
                         continue
                     rtext = str(r.get("response") or "")
+                    if r.get("_cloud_degraded"):
+                        # ⑤′-1：云端导师降级不是"吞掉的失败"——按设计本地作答、禁止重试，
+                        # 收尾由编排层确定性标注；不进三态（既不是失败也不是成功变更），
+                        # 否则失败吞没推回会逼模型"修复重试"并把本轮降级成 warning
+                        continue
                     if _obs_failed(r):
                         unresolved_failure = True
                         continue
@@ -1002,6 +1057,8 @@ class Orchestrator:
 
                 session.set_activity("已完成", phase="done")
                 text = _append_missing_asset_links(text, session.history[turn_start_idx:])
+                # ⑤′-1 降级路：云端导师本轮不可用过 → 答复末尾明示「本地作答」，不静默装满血
+                text = _finalize_cloud_degraded(session, metrics, text, append_notice=True)
                 session.add_assistant_message(content=text, thoughts=thoughts)
                 if task is not None and (task.all_done() or not task.plan):
                     # 任务完成即弃：工作过程已沉淀在本轮消息流（blackboard=消息流本身）
@@ -1045,6 +1102,7 @@ class Orchestrator:
         # 如实说明预算烧在哪：主循环之外另有多少子调研生成，用户据此才知道
         # 该拆任务还是该少调研（子生成有自己的保险丝,这里只如实附注）。
         _budget_detail = (f"（期间另有子调研生成 {_sub_gens} 次）" if _sub_gens else "")
+        _finalize_cloud_degraded(session, metrics, "", append_notice=False)  # 审计面照记（评审 M5）
         return {
             "status": "warning",
             "response": (f"任务在 {self.max_total_iterations} 次主循环迭代内未能收敛{_budget_detail}，已终止。"
@@ -1347,6 +1405,10 @@ class Orchestrator:
         if errored:
             events.emit("tool_error", session=session.session_id, tool=name,
                         timeout=timed_out, msg=str(result_text)[:160])
+        # ⑤′-1：云端导师降级观察（工具名 + 前缀常量双锚）。账本事件在 tool_result 之后发
+        # （PROTOCOL：紧随对应 tool_result）；收尾标注另由 _cloud_degraded_scan 扫历史
+        from ..cloud.degrade import degraded_kind as _degraded_kind_of   # core 不静态依赖 cloud
+        degraded = _degraded_kind_of(result_text, name)
 
         # [D2 谎报围堵] 失败事实在此单点判定，随观察以 `_failed` 挂出（见 _obs_failed）。
         # 必须在下面的观察截断**之前**算：截断会改写文本，判据不能建在被改写的文本上。
@@ -1379,6 +1441,9 @@ class Orchestrator:
         journal.emit("tool_result", {"call_id": call_id, "name": name,
                                      "response": result_text,
                                      "status": "timeout" if timed_out else "ok"})
+        if degraded:
+            events.emit("cloud_degraded", session=session.session_id, name=name, kind=degraded)
+            journal.emit("cloud_degraded", {"call_id": call_id, "name": name, "kind": degraded})
         # 挂上压缩层用的内存元数据（T3-a/b）：_safe=只读可取代、_target=取代键（同工具同目标去重）。
         # 均为 `_` 前缀，落盘时被 append_log 剥离（与 _compacted 同规矩）；`_failed` 同规矩。
         # 注意「剥离」在两个面各自发生：持久化面由 `_strip_internal_meta` 清 tool_responses,
@@ -1387,6 +1452,8 @@ class Orchestrator:
         # 判据用 is_read_only（而非 is_concurrency_safe）：read_ui_tree 这类「只读但不可并发」
         # 的观察最大、最需要取代去重，不能因退出并发批而失去 _safe。
         obs = {"name": name, "response": result_text, "_failed": failed}
+        if degraded:
+            obs["_cloud_degraded"] = degraded   # `_` 前缀：落盘剥离；收尾标注扫的是文本前缀
         # 渲染格：只在工具真跑成功时挂——超时/报错时没有载荷可言。
         # `render` **不带 `_` 前缀**：它要随 append_log 落盘，重载会话后还得在
         # （`_` 前缀会被 _strip_internal_meta 剥掉 → 刷新即退回灰框，且退得很安静）。
@@ -1478,6 +1545,8 @@ class Orchestrator:
                 if c.get("type") == "error":
                     continue
                 rtext = str(r.get("response") or "")
+                if r.get("_cloud_degraded"):
+                    continue      # ⑤′-1：同主循环，降级不进三态
                 if _obs_failed(r):
                     resume_failure = True
                     continue

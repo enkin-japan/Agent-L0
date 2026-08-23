@@ -1,0 +1,43 @@
+{
+  "turn_state": "none",
+  "transcript": [
+    {
+      "role": "user",
+      "content": "帮我深入比较方案 A 和 B"
+    },
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "type": "function",
+          "name": "cloud_consult",
+          "arguments": {
+            "question": "比较方案 A 与 B 的风险"
+          }
+        }
+      ],
+      "thoughts": []
+    },
+    {
+      "role": "tool",
+      "tool_responses": [
+        {
+          "name": "cloud_consult",
+          "response": "System Error: [cloud advisor degraded: budget_exhausted] 云端日预算已用尽（今日 $2.1000 ≥ 预算 $2.00）\nThe cloud advisor is NOT available for this request. Do not retry it in this turn. Continue with LOCAL capability only, and tell the user explicitly that this answer was produced locally without the cloud advisor (state the reason above). Never claim that the cloud advisor was consulted.\n[L0 egress guard: masked 0 span(s) {} · model leg off]"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "从材料本身看，方案 B 的风险更低，建议先做 B。\n\n—— 本回答由本地模型独立完成，未经云端导师：云端日预算已用尽。"
+    }
+  ],
+  "preview": {
+    "prompt": "",
+    "text": "",
+    "thinking": "",
+    "steps": [],
+    "task": null
+  },
+  "pending_tools": []
+}

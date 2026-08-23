@@ -565,13 +565,13 @@ R0–R5 各小项的打勾细分（含每步实测结果与计划外发现）已
 
 | 项 | 当前值 | 口径 |
 |---|---|---|
-| 金测试项数 | 1606 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
-| 测试文件数 | 108 | `backend/tests/` 下递归的 `test_*.py` |
+| 金测试项数 | 1625 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
+| 测试文件数 | 109 | `backend/tests/` 下递归的 `test_*.py` |
 | mcp 文件数 | 31 | `backend/framework/mcp/` 递归下的 `.py`，**不含** `__init__.py` |
 | BaseTool 子类 | 67 | 全 backend 内 `class X(BaseTool)` 的声明数（一个文件可有多个） |
 | 物理隔离沙箱 | 3 | `backend/framework/agents/*_sandbox.py` |
 | 剧本 | 5 | 仓库根 `skills/` 下的 `.md` |
-| 协议夹具 | 7 | `protocol/fixtures/` 下的 `*.events.jsonl`（一份 = 一条夹具） |
+| 协议夹具 | 8 | `protocol/fixtures/` 下的 `*.events.jsonl`（一份 = 一条夹具） |
 | model_registry 档位 | 9 | `config.yaml` 的 `inference.model_registry` 条目数 |
 | rag.tiers 档位 | 5 | `config.yaml` 的 `rag.tiers` 档位数 |
 
@@ -4341,6 +4341,50 @@ m9 **server 约束采样竞态修复**（S–M，单文件为主，guard-type �
    `degraded` 观察格式回本地循环；编排层把「本地作答」明确标注给用户（不
    静默装满血）；保留出网台账记录失败。验收：advisor 各失败路金测试 +
    标注传播到 turn 产物的测试；零 GPU。
+   **✅ ⑤′-1 交付（2026-08-23 傍晚，零 GPU）**：
+   - **失败语义统一**：新 `framework/cloud/degrade.py`——`CloudAdvisorError(kind)`
+     （RuntimeError 子类，旧 `except RuntimeError` 语义不变）、`KINDS` 11 类
+     （no_provider / no_key / unknown_provider / budget_exhausted / timeout /
+     connection_error / http_error / empty_reply / bad_config / ledger_error / unknown）、
+     `classify()` 按类型名含 MRO 归类（不 import requests；requests 全家继承 IOError，
+     故具体名先于 OSError 兜底判，JSONDecodeError/TooManyRedirects 归 http_error）。
+     读现有语义的结论：无 key/预算耗尽/点名不存在/空正文是 advisor 自判（改抛带 kind），
+     超时/HTTP/连接是传输层异常（原样上抛，台账已记 ok=false）；**L0 模型腿不可用不是
+     降级**——egress_guard 契约是规则腿恒开、状态行随观察明示，仍出网。
+   - **拒发也落账**：`consult` 对无钥/无供应商/点名不存在/配置非法/预算耗尽写
+     `refused=<kind>, cost 0` 行（L0 报告随行，provider 名截 64）；台账写失败不许顶替
+     原因——改抛 `ledger_error`（审计日志不可写本身就是拒绝出网的理由），而不是被
+     classify 读成「连接失败」。
+   - **统一降级观察**：`cloud_consult.execute` 捕获云端失败 → `degraded_observation`
+     （`System Error: [cloud advisor degraded: <kind>] …` + 指示模型本地作答并告知用户
+     + L0 状态行随行；无 traceback）；编程错误（TypeError/AttributeError…）原样上抛，
+     不伪装成「云端不可用」。
+   - **编排层标注**：识别**双锚** = 工具名 `cloud_consult`（常量 `CLOUD_CONSULT_TOOL`
+     共享）+ 前缀常量（read_file 翻到同款日志不算——评审 M2 实证过假标注）；账本
+     `cloud_degraded {call_id,name,kind}` 紧随对应 `tool_result` 之后（PROTOCOL §2.2 新行，
+     非持久化）；降级观察**排除出 D2 三态**（按设计本地作答、禁止重试——否则失败吞没
+     推回逼模型"修复重试"并把本轮降成 warning）；收尾扫本轮历史（自最后一条 user 起，
+     审批续跑路径因此也覆盖）→ `turn_ended` 顶层 `cloud_degraded:[kind…]` +
+     `cloud_consult_ok`（PROTOCOL §2.3 additive 注）——**所有出口都记审计键**（含迭代/
+     子生成保险丝），但「—— 本回答由本地模型独立完成，未经云端导师：<原因>。」只追加
+     在正常完成出口且**同轮无成功咨询**时（评审 M1：首次超时重试成功 = 真用了云端建议，
+     再挂"未经"就是反向谎报）。标注进历史（重载会话仍可见；尾部追加不动 KV 前缀）。
+   - 协议夹具 `008-cloud-degraded`（守卫型：真实新事件类型被忽略 + turn_ended 顶层
+     additive 字段不破坏归约 + 标注随答复正文进 transcript），web/apple 归约器
+     `devctl check` 双过。
+   - **金测试** `tests/test_cloud_degrade.py` 19 条；全套 1606→**1625**。
+   - **变异证明**（15 只，`benchmarks/data/m9-smoke-20260823/mutants-cloud-degrade.log`）：
+     首轮 A 收尾不追加标注 / B 主循环三态不排除 / C 续跑三态不排除 / D 识别放宽到任意
+     System Error / E 预算拒发不记账 / F 工具面仍抛原异常 / G 账本不发事件 / H 标注扫
+     全史；复审后二轮 I 工具名锚去掉 / J 同轮成功仍挂标注 / K 事件提前到 tool_result
+     前 / L 保险丝出口不记审计键 / M 编程错误伪装降级 / N 台账写失败顶替原因 /
+     O OSError 兜底提前——**全部 ≥1 测试红**，sha256 核对还原。
+   - 评审：reviewer 首过 0C/5M/13m——M1–M5 全修（M4 是我一条死断言：
+     failure_swallow_nudge 走 events 面不在账本 ring，改以"脚本不多转一圈"钉）；m7/m8/
+     m9/m10/m11/m12/m14/m15/m16/m17/m18 修；m13（core→cloud 静态边）改懒 import 与
+     文件既有口径一致；nit：死 KeyError 分支/`socket.gaierror` 清掉、`_HTTP_NAMES` 扩到
+     httpx/urllib 名。未采：`cloud_degraded_notice` events 面类型不另立文档（events 面
+     本就无总表）；标注与模型自述可能重复措辞（确定性优先，接受）。
 ⑤′-2 **边界目录**（M）：新文档 `benchmarks/model_eval/BOUNDARY.md`（或同级
    命名）——26b-4bit 弱项清册，每条配可判定谓词 + 探针题：vision（0.84 vs
    qwen38 0.943/0.958，ChartQA hard 差约 20 题）、长上下文×结构化（08-16

@@ -1,0 +1,19 @@
+== ⑤′-1 mutants ==
+A 收尾不追加标注 → FAILED test_orchestrator_appends_local_answer_notice_direct_path FAILED test_orchestrator_notice_survives_approval_resume FAILED test_orchestrator_notice_scoped_to_current_turn 3 failed, 19 passed in 0.16s 
+B 主循环三态不排除降级 → FAILED test_orchestrator_appends_local_answer_notice_direct_path FAILED test_orchestrator_notice_scoped_to_current_turn 2 failed, 20 passed in 0.21s 
+C 续跑三态不排除降级 → FAILED test_orchestrator_notice_survives_approval_resume 1 failed, 21 passed in 0.57s 
+D 识别放宽到任意 System Error → FAILED test_degraded_observation_roundtrip_and_shape 1 failed, 21 passed in 0.16s 
+E 拒发不记台账(预算) → FAILED test_budget_exhausted_kind_refusal_row_and_no_send 1 failed, 21 passed in 0.16s 
+F 工具面仍抛原异常 → FAILED test_cloud_consult_returns_degraded_observation_not_traceback 1 failed, 21 passed in 0.16s 
+G 账本不发 cloud_degraded → FAILED test_orchestrator_appends_local_answer_notice_direct_path FAILED test_orchestrator_notice_survives_approval_resume 2 failed, 20 passed in 0.16s 
+H 标注扫全史而非本轮 → FAILED test_orchestrator_notice_scoped_to_current_turn 1 failed, 21 passed in 0.16s 
+restore: OK
+== ⑤′-1 mutants round 2 (post-review) ==
+I 工具名锚去掉(M2 回退) → FAILED test_degraded_observation_roundtrip_and_shape FAILED test_other_tool_reading_degraded_text_is_not_degradation 2 failed, 26 passed in 0.18s 
+J 同轮成功仍挂标注(M1 回退) → FAILED test_no_notice_when_retry_succeeded_same_turn 1 failed, 27 passed in 0.56s 
+K cloud_degraded 提前到 tool_result 前(M3 回退) → FAILED test_orchestrator_appends_local_answer_notice_direct_path 1 failed, 27 passed in 0.57s 
+L 保险丝出口不记审计键(M5 回退) → FAILED test_fuse_exit_still_records_degradation_in_metrics 1 failed, 27 passed in 0.18s 
+M 编程错误也伪装降级(m12 回退) → FAILED test_cloud_consult_returns_degraded_observation_not_traceback 1 failed, 27 passed in 0.18s 
+N 台账写失败顶替原因(m9 回退) → FAILED test_ledger_write_failure_becomes_ledger_error_not_connection_error 1 failed, 27 passed in 0.18s 
+O OSError 兜底提前(m10 回退) → FAILED test_classify_transport_errors_by_type_name 1 failed, 27 passed in 0.18s 
+restore2: OK

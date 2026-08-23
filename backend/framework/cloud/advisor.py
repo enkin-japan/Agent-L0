@@ -25,6 +25,7 @@ from typing import Optional
 
 from ..core.jsonl import append_record, iter_records
 from ..utils.config_loader import data_dir, load_section
+from .degrade import CloudAdvisorError
 
 _KINDS = ("openai_compat", "anthropic")
 
@@ -63,17 +64,22 @@ def load_providers(cfg: Optional[dict] = None) -> list:
 def pick_provider(name: Optional[str] = None, cfg: Optional[dict] = None) -> dict:
     """选供应商：点名取点名（无 key 响亮报错），缺省取声明序第一个有 key 的。"""
     providers = load_providers(cfg)
+    if not providers:
+        raise CloudAdvisorError("no_provider", "config cloud.providers 为空，未配置云端供应商")
     if name:
         p = next((p for p in providers if p["name"] == name), None)
         if p is None:
-            raise KeyError(f"未声明的云端供应商 {name!r}（现有: {[q['name'] for q in providers]}）")
+            raise CloudAdvisorError(
+                "unknown_provider",
+                f"未声明的云端供应商 {name!r}（现有: {[q['name'] for q in providers]}）")
         if not p["has_key"]:
-            raise RuntimeError(f"供应商 {name!r} 未配置密钥（.env.local 设 {p['key_env']}）")
+            raise CloudAdvisorError(
+                "no_key", f"供应商 {name!r} 未配置密钥（.env.local 设 {p['key_env']}）")
         return p
     p = next((p for p in providers if p["has_key"]), None)
     if p is None:
-        raise RuntimeError("无任何云端供应商配置了密钥（config cloud.providers + "
-                           ".env.local 的 CLOUD_*_API_KEY）")
+        raise CloudAdvisorError("no_key", "无任何云端供应商配置了密钥（config cloud.providers + "
+                                          ".env.local 的 CLOUD_*_API_KEY）")
     return p
 
 
@@ -164,23 +170,49 @@ def consult(question: str, context: str = "", provider: Optional[str] = None,
     可查）。预算护栏：今日累计费用达 daily_budget_usd 即拒绝（先查后发）。
     """
     cloud = cfg if cfg is not None else load_section("cloud")
-    p = pick_provider(provider, cfg=cloud)
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+    san = {"sanitize": sanitize_summary} if sanitize_summary else {}
+
+    def _refuse(err: BaseException, kind: str, prov: str, model: str) -> None:
+        """发不出去的也记台账（⑤′-1）：「想出网而被拒」是审计面的一部分，cost 0，
+        L0 报告照落（规则腿此时已跑过）。台账写失败不许顶替原因——审计日志不可写本身
+        就是拒绝出网的理由（ledger_error），而不是被 classify 读成「连接失败」（评审 m9）。"""
+        try:
+            record_egress({"ts": ts, "provider": str(prov)[:64], "model": str(model)[:64],
+                           "purpose": purpose, "payload_chars": 0, "ok": False,
+                           "refused": kind, "error": str(err)[:300], "cost_usd": 0.0, **san})
+        except Exception as le:
+            raise CloudAdvisorError(
+                "ledger_error", f"出网台账写入失败（{type(le).__name__}: {le}）；原拒绝原因："
+                                f"{kind}: {str(err)[:200]}") from err
+
+    try:
+        p = pick_provider(provider, cfg=cloud)
+    except CloudAdvisorError as e:
+        _refuse(e, e.kind, provider or "-", "-")
+        raise
+    except ValueError as e:
+        # load_providers 的配置非法：同样是拒发，同样落账（评审 m7）
+        _refuse(e, "bad_config", provider or "-", "-")
+        raise
     budget = float(cloud.get("daily_budget_usd") or 0.0)
     if budget > 0:
         spent = spent_today_usd()
         if spent >= budget:
-            raise RuntimeError(f"云端日预算已用尽（今日 ${spent:.4f} ≥ 预算 ${budget:.2f}）；"
-                               f"明日自动恢复，或调高 config cloud.daily_budget_usd")
+            err = CloudAdvisorError(
+                "budget_exhausted",
+                f"云端日预算已用尽（今日 ${spent:.4f} ≥ 预算 ${budget:.2f}）；"
+                f"明日自动恢复，或调高 config cloud.daily_budget_usd")
+            _refuse(err, err.kind, p["name"], p["model"])
+            raise err
     payload_text = question if not context else f"{question}\n\n--- material ---\n{context}"
     max_tokens = int(cloud.get("max_tokens") or 2048)
     timeout = float(cloud.get("timeout") or 120)
     if transport is None:
         import requests as transport  # noqa: PLC0415 —— 生产走 requests，测试注入假体
     call = _call_anthropic if p["kind"] == "anthropic" else _call_openai_compat
-    ts = time.strftime("%Y-%m-%dT%H:%M:%S")
     base = {"ts": ts, "provider": p["name"], "model": p["model"], "purpose": purpose,
-            "payload_chars": len(payload_text),
-            **({"sanitize": sanitize_summary} if sanitize_summary else {})}
+            "payload_chars": len(payload_text), **san}
     try:
         out = call(p, payload_text, max_tokens, timeout, transport)
     except Exception as e:
@@ -193,7 +225,8 @@ def consult(question: str, context: str = "", provider: Optional[str] = None,
         # 推理型供应商（如 gpt-5.6-luna）会把 max_tokens 全花在隐藏推理上、正文空返
         # ——L4 站实测：392→2048 tok 满额零正文。空建议悄悄回填会误导本地决策，必须
         # 响亮失败（台账已记：钱确实花了）并给出可执行的修法。
-        raise RuntimeError(
+        raise CloudAdvisorError(
+            "empty_reply",
             f"云端顾问返回空正文（{p['name']}/{p['model']}，out_tokens="
             f"{out['out_tokens']}——疑为推理 token 吃满 max_tokens）。"
             f"调高 config cloud.max_tokens 或换非推理供应商再试。")

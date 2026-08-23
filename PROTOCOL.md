@@ -107,6 +107,7 @@
 | ★ `tool_started` | `{call_id, name, args}` | 截断 2000 字符 | 工具开始执行。`call_id` 配对 started/result |
 | `tool_progress` | `{call_id?, label, detail?}` | 否 | 长耗时工具的执行中进度(web_research"正在阅读…"等);`call_id` 可缺(旧进度钩子) |
 | ★ `tool_result` | `{call_id, name, response, status: "ok" \| "timeout"}` | 截断 2000 字符 | 工具执行完毕。`response` 已按观察上限截断;工具内部错误以 `status:"ok"` + response 文本表达(与模型看到的一致) |
+| `cloud_degraded` | `{call_id, name, kind}` | 否 | (⑤′-1)云端导师(`cloud_consult`)本次调用降级(`kind` ∈ cloud/degrade.KINDS:no_key/budget_exhausted/timeout/…)。紧随对应 `tool_result` 之后(同 `call_id`)。收尾:`turn_ended` 顶层 `cloud_degraded: [kind…]` 列出本轮原因序列、`cloud_consult_ok: bool` 标明同轮是否另有成功咨询(仅降级轮出现,见 §2.3);最终答复末尾由编排层确定性追加「本地作答」标注——仅当 `cloud_consult_ok` 为 false(首次超时重试成功 = 真用了云端建议,不挂) |
 | ★ `plan_updated` | `{task: TaskSnapshot \| null}` | 是 | 计划创建/修改/清除后的完整快照。`null` = 计划被清除 |
 | ★ `step_completed` | `{title, result}` | 是 | 计划推进一步 |
 | ★ `step_failed` | `{title, reason}` | 是 | 步骤失败并进入失败路由 |
@@ -190,6 +191,13 @@
 条目不带 `call_id`,平行面只能靠下标 join,错位即"图配错工具结果";挂在条目上天然对齐。
 
 夹具:`007-render-hint`(该字段穿过两端归约器不被吞——两端 transcript 均为不透明子树)。
+
+**`cloud_degraded` / `cloud_consult_ok`(additive,2026-08-23,⑤′-1)**:本轮云端导师
+(`cloud_consult`)至少降级一次时出现的两个顶层字段——`cloud_degraded: ["budget_exhausted", …]`
+为原因序列(cloud/degrade.KINDS),`cloud_consult_ok` 为同轮是否另有成功咨询。无降级的轮次
+两字段都不出现;所有收尾出口(含迭代/子生成保险丝)都记,但「本地作答」标注只追加在正常
+完成出口且 `cloud_consult_ok=false` 时。客户端按 §0.5 忽略即可,不要求渲染。
+
 
 ### 2.4 传输:SSE 附着流
 
