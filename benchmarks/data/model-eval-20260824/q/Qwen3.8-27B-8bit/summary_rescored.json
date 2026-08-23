@@ -1,0 +1,96 @@
+{
+  "model": "mlx-community/Qwen3.8-27B-8bit",
+  "revision": "815b83c0df8ffd1d1b5244cf75fd6ef14fca9ef9",
+  "dialect": "qwen35",
+  "speculative": {
+    "mode": "drafter",
+    "draft_model": "mlx-community/Qwen3.8-27B-MTP-8bit",
+    "draft_kind": "",
+    "draft_block_size": 5,
+    "num_draft_tokens": 8,
+    "ngram_max": 3,
+    "ngram_min": 2,
+    "draft_revision": "e88e48d055732ad75d9435f3059139d5279f2064"
+  },
+  "stamp": "20260824-054919",
+  "n_runs": 343,
+  "dimensions": {
+    "tool_call": {
+      "n": 55,
+      "pass_rate": 0.873,
+      "aborted_rate": 0.018,
+      "corrected_rate": 0.0,
+      "final_ok_rate": 0.982,
+      "first_shot_ok_rate": 0.872,
+      "parse_errors_total": 0,
+      "restraint_ok_rate": 1.0,
+      "turns_used_total": 71,
+      "valid_call_ok_rate": 0.872
+    },
+    "longchain": {
+      "n": 16,
+      "pass_rate": 0.938,
+      "aborted_rate": 0.0,
+      "env_errors_total": 3,
+      "final_text_ok_rate": 1.0,
+      "recovered_rate": 0.188,
+      "redundant_calls_total": 6,
+      "state_ok_rate": 0.938,
+      "steps_total": 96,
+      "steps_ok_rate": 1.0,
+      "recovery_success_rate": 1.0
+    },
+    "text": {
+      "n": 48,
+      "pass_rate": 0.875,
+      "aborted_rate": 0.0,
+      "final_ok_rate": 0.875,
+      "stray_calls_total": 0
+    },
+    "vision": {
+      "n": 224,
+      "pass_rate": 0.964,
+      "aborted_rate": 0.0,
+      "final_ok_rate": 0.964,
+      "stray_calls_total": 0
+    }
+  },
+  "cot_purity": {
+    "n": 331,
+    "ctrl_leak_traj_rate": 0.0,
+    "dup_rate_mean": 0.015,
+    "dup_rate_max": 0.15,
+    "recite_rate_mean": 0.067,
+    "recite_rate_max": 1.0,
+    "other_script_max": 0.0,
+    "empty_think_turns_total": 0,
+    "think_chars_mean": 540.5
+  },
+  "speed": {
+    "generation_tps": {
+      "mean": 39.18,
+      "median": 39.99,
+      "min": 24.16,
+      "max": 50.31,
+      "n": 411
+    },
+    "prompt_tps": {
+      "mean": 418.88,
+      "median": 222.46,
+      "min": 194.1,
+      "max": 13526.12,
+      "n": 411
+    },
+    "peak_memory_max": 43.79,
+    "kv_prefix_hit_rate": {
+      "mean": 0.4,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.99,
+      "n": 68
+    }
+  },
+  "rescored_with_items_fingerprint": "580c8b6f91af",
+  "rescore_flips": [],
+  "rescore_missing_items": []
+}

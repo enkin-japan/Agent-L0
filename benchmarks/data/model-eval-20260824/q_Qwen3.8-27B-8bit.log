@@ -1,0 +1,843 @@
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+[Engine] 已禁用 LanguageModel.speculative_argmax_from_hidden（融合采样绕过 logits 处理器；改走 hidden+批量投影走查路，与 gemma 同形态）
+[Engine] 已禁用 LanguageModel.speculative_verify_logits（融合采样绕过 logits 处理器；改走 hidden+批量投影走查路，与 gemma 同形态）
+[Engine] 草稿深度上限已解锁：采纳请求值 draft_block_size=5（否则被草稿件 config 缺省值 4 顶死）
+[Engine] 投机草稿件已装载：/Volumes/enkin/project/Agent/backend/models/Qwen3.8-27B-MTP-8bit（kind=mtp）
+[Engine] 投机采样启用：{'mode': 'drafter', 'draft_model': 'mlx-community/Qwen3.8-27B-MTP-8bit', 'draft_kind': '', 'draft_block_size': 5, 'num_draft_tokens': 8, 'ngram_max': 3, 'ngram_min': 2, 'draft_revision': 'e88e48d055732ad75d9435f3059139d5279f2064'}
+== 评测 mlx-community/Qwen3.8-27B-8bit（方言 qwen35）：343 题 × 1 重复 → /Volumes/enkin/project/Agent/benchmarks/data/model-eval-20260824/q/Qwen3.8-27B-8bit
+[Engine] 约束采样引擎就绪（llguidance）
+[Engine] 约束采样构建失败，永久禁用（纠错闭环兜底）: NotImplementedError: qwen35 方言使用原生 XML 调用体（<function=…><parameter=…>），按设计不启用 约束采样——engine 将 fail-open 到自由采样 + 解析纠错闭环。
+[Engine] 前缀命中 0/360 tokens，gen 43.9 tps
+✅ tc-bfcl-simple_0 r0 (4.67s)
+[Engine] 前缀命中 0/327 tokens，gen 39.6 tps
+✅ tc-bfcl-simple_17 r0 (3.62s)
+[Engine] 前缀命中 0/413 tokens，gen 41.2 tps
+✅ tc-bfcl-multiple_2 r0 (3.13s)
+[Engine] 前缀命中 0/640 tokens，gen 41.3 tps
+✅ tc-bfcl-multiple_5 r0 (5.9s)
+[Engine] 前缀命中 0/550 tokens，gen 34.4 tps
+❌ tc-bfcl-multiple_10 r0 (15.43s)  | 无完全合格调用（期望 database.modify_columns，实际 [('database.create_backup', {'db_name': 'employees', 'backup_location': '/backups/
+[Engine] 前缀命中 0/605 tokens，gen 46.8 tps
+✅ tc-bfcl-multiple_17 r0 (4.9s)
+[Engine] 前缀命中 0/515 tokens，gen 42.0 tps
+✅ tc-bfcl-multiple_21 r0 (10.81s)
+[Engine] 前缀命中 0/640 tokens，gen 39.3 tps
+✅ tc-bfcl-multiple_23 r0 (6.19s)
+[Engine] 前缀命中 0/361 tokens，gen 45.6 tps
+✅ tc-bfcl-live_simple_0-0-0 r0 (3.47s)
+[Engine] 前缀命中 0/426 tokens，gen 43.2 tps
+✅ tc-bfcl-live_simple_1-1-0 r0 (4.32s)
+[Engine] 前缀命中 0/426 tokens，gen 47.8 tps
+✅ tc-bfcl-live_simple_2-2-0 r0 (4.9s)
+[Engine] 前缀命中 0/403 tokens，gen 34.3 tps
+✅ tc-bfcl-live_simple_4-3-0 r0 (5.06s)
+[Engine] 前缀命中 0/402 tokens，gen 39.1 tps
+✅ tc-bfcl-live_simple_13-3-9 r0 (4.09s)
+[Engine] 前缀命中 0/3271 tokens，gen 38.0 tps
+✅ tc-real-001 r0 (19.12s)
+[Engine] 前缀命中 0/3273 tokens，gen 34.3 tps
+✅ tc-real-002 r0 (21.96s)
+[Engine] 前缀命中 0/2602 tokens，gen 27.9 tps
+✅ tc-real-003 r0 (60.71s)
+[Engine] 前缀命中 0/2491 tokens，gen 29.5 tps
+✅ tc-real-004 r0 (13.34s)
+[Engine] 前缀命中 0/2829 tokens，gen 30.8 tps
+✅ tc-real-005 r0 (33.7s)
+[Engine] 前缀命中 0/3119 tokens，gen 26.7 tps
+✅ tc-real-006 r0 (70.73s)
+[Engine] 前缀命中 0/2155 tokens，gen 34.8 tps
+✅ tc-real-007 r0 (11.85s)
+[Engine] 前缀命中 0/2096 tokens，gen 31.5 tps
+❌ tc-real-008 r0 (22.4s)  | 无完全合格调用（期望 calendar_add，实际 []）
+[Engine] 前缀命中 0/2474 tokens，gen 30.5 tps
+✅ tc-real-009 r0 (24.05s)
+[Engine] 前缀命中 0/2098 tokens，gen 37.2 tps
+✅ tc-real-010 r0 (13.08s)
+[Engine] 前缀命中 0/2224 tokens，gen 31.2 tps
+✅ tc-real-011 r0 (12.02s)
+[Engine] 前缀命中 0/3036 tokens，gen 34.8 tps
+✅ tc-real-012 r0 (16.78s)
+[Engine] 前缀命中 0/1999 tokens，gen 40.8 tps
+✅ tc-real-013 r0 (10.12s)
+[Engine] 前缀命中 0/2275 tokens，gen 27.6 tps
+✅ tc-real-014 r0 (14.82s)
+[Engine] 前缀命中 0/3035 tokens，gen 33.7 tps
+✅ tc-real-015 r0 (14.11s)
+[Engine] 前缀命中 0/3216 tokens，gen 30.8 tps
+❌ tc-real-016 r0 (21.51s)  | 无完全合格调用（期望 math_research，实际 [('run_math', {'code': 'fill = 12      # L/min in\ndrain = 4.5    # L/min out\nstart, cap = 
+[Engine] 前缀命中 0/2014 tokens，gen 31.7 tps
+✅ tc-real-017 r0 (13.37s)
+[Engine] 前缀命中 0/2352 tokens，gen 29.2 tps
+✅ tc-real-018 r0 (13.32s)
+[Engine] 前缀命中 0/2494 tokens，gen 27.1 tps
+❌ tc-real-019 r0 (13.84s)  | 无完全合格调用（期望 edit_file，实际 [('run_shell_command', {'command': 'cat ~/proj/config.yaml'})]）
+[Engine] 前缀命中 0/2017 tokens，gen 34.3 tps
+❌ tc-real-020 r0 (11.83s)  | 无完全合格调用（期望 move_file，实际 [('list_dir', {'path': '~/Downloads'}), ('list_dir', {'path': '~/Documents'})]）
+[Engine] 前缀命中 0/3051 tokens，gen 33.1 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=3224 记录长=3224 新长=3257 记录[3220:3228]=[29, 198, 248059, 248046] 新[3220:3228]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/3257 tokens，gen 43.9 tps
+✅ tc-real-021 r0 (32.06s)
+[Engine] 前缀命中 0/2346 tokens，gen 31.3 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=2429 记录长=2429 新长=2487 记录[2425:2433]=[29, 198, 248059, 248046] 新[2425:2433]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/2487 tokens，gen 30.0 tps
+✅ tc-real-022 r0 (24.17s)
+[Engine] 前缀命中 0/2499 tokens，gen 32.8 tps
+[Engine] 前缀命中 2569/2650 tokens，gen 37.5 tps
+❌ tc-real-023 r0 (14.59s)  | 无完全合格调用（期望 file_extract，实际 [('file_extract', {'path': '/Users/me/Downloads/租约.pdf', 'page': 3})]）
+[Engine] 前缀命中 0/3157 tokens，gen 24.5 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=3622 记录长=3622 新长=3700 记录[3618:3626]=[29, 198, 248059, 248046] 新[3618:3626]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/3700 tokens，gen 25.8 tps
+[Engine] 前缀命中 4035/4083 tokens，gen 26.0 tps
+✅ tc-real-024 r0 (71.85s)
+[Engine] 前缀命中 0/2103 tokens，gen 25.9 tps
+✅ tc-real-025 r0 (23.85s)
+[Engine] 前缀命中 0/1872 tokens，gen 32.9 tps
+✅ tc-real-026 r0 (9.57s)
+[Engine] 前缀命中 0/2035 tokens，gen 26.9 tps
+✅ tc-real-027 r0 (10.85s)
+[Engine] 前缀命中 0/2685 tokens，gen 28.4 tps
+✅ tc-real-028 r0 (44.35s)
+[Engine] 前缀命中 0/2154 tokens，gen 26.7 tps
+✅ tc-real-029 r0 (13.64s)
+[Engine] 前缀命中 0/2107 tokens，gen 31.3 tps
+✅ tc-real-030 r0 (12.31s)
+[Engine] 前缀命中 0/298 tokens，gen 40.5 tps
+[Engine] 前缀命中 352/402 tokens，gen 26.8 tps
+✅ tc-seed-001 r0 (5.76s)
+[Engine] 前缀命中 0/285 tokens，gen 39.4 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=377 记录长=377 新长=424 记录[373:381]=[29, 198, 248059, 248046] 新[373:381]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/424 tokens，gen 27.1 tps
+✅ tc-seed-002 r0 (8.26s)
+[Engine] 前缀命中 0/278 tokens，gen 47.5 tps
+[Engine] 前缀命中 334/375 tokens，gen 28.7 tps
+✅ tc-seed-003 r0 (4.92s)
+[Engine] 前缀命中 0/309 tokens，gen 46.0 tps
+[Engine] 前缀命中 460/504 tokens，gen 24.2 tps
+✅ tc-seed-004 r0 (7.19s)
+[Engine] 前缀命中 0/293 tokens，gen 42.2 tps
+[Engine] 前缀命中 397/438 tokens，gen 32.1 tps
+✅ tc-seed-005 r0 (5.67s)
+[Engine] 前缀命中 0/372 tokens，gen 45.1 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=430 记录长=430 新长=465 记录[426:434]=[29, 198, 248059, 248046] 新[426:434]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/465 tokens，gen 41.8 tps
+✅ tc-seed-006 r0 (5.9s)
+[Engine] 前缀命中 0/325 tokens，gen 42.8 tps
+[Engine] 前缀命中 387/449 tokens，gen 32.5 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=547 记录长=547 新长=608 记录[543:551]=[29, 198, 248059, 248046] 新[543:551]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/608 tokens，gen 40.2 tps
+❌ tc-seed-007 r0 (11.35s)  | must_any 全缺: ['0.30', 'MLX']
+[Engine] 前缀命中 0/281 tokens，gen 36.4 tps
+✅ tc-seed-008 r0 (6.75s)
+[Engine] 前缀命中 0/276 tokens，gen 41.6 tps
+✅ tc-seed-009 r0 (2.97s)
+[Engine] 前缀命中 0/305 tokens，gen 42.5 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=388 记录长=388 新长=430 记录[384:392]=[29, 198, 248059, 248046] 新[384:392]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/430 tokens，gen 32.8 tps
+✅ tc-seed-010 r0 (6.26s)
+[Engine] 前缀命中 0/296 tokens，gen 32.3 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=406 记录长=406 新长=440 记录[402:410]=[29, 198, 248059, 248046] 新[402:410]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/440 tokens，gen 37.3 tps
+✅ tc-seed-011 r0 (8.33s)
+[Engine] 前缀命中 0/286 tokens，gen 42.9 tps
+[Engine] 前缀命中 348/403 tokens，gen 30.0 tps
+✅ tc-seed-012 r0 (7.46s)
+[Engine] 前缀命中 0/526 tokens，gen 35.8 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=562 记录长=562 新长=654 记录[558:566]=[29, 198, 248059, 248046] 新[558:566]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/654 tokens，gen 47.9 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=838 记录长=838 新长=1315 记录[834:842]=[29, 198, 248059, 248046] 新[834:842]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/1315 tokens，gen 46.4 tps
+[Engine] 前缀命中 2165/2206 tokens，gen 30.9 tps
+✅ lc-hard-001 r0 (36.65s)
+[Engine] 前缀命中 0/530 tokens，gen 36.7 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=562 记录长=562 新长=612 记录[558:566]=[29, 198, 248059, 248046] 新[558:566]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/612 tokens，gen 48.4 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=713 记录长=713 新长=858 记录[709:717]=[29, 198, 248059, 248046] 新[709:717]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/858 tokens，gen 36.9 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=1025 记录长=1025 新长=1069 记录[1021:1029]=[29, 198, 248059, 248046] 新[1021:1029]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/1069 tokens，gen 45.9 tps
+[Engine] 前缀命中 1189/1296 tokens，gen 34.3 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=1320 记录长=1320 新长=1359 记录[1316:1324]=[29, 198, 248059, 248046] 新[1316:1324]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/1359 tokens，gen 38.2 tps
+✅ lc-hard-002 r0 (34.6s)
+[Engine] 前缀命中 0/498 tokens，gen 44.7 tps
+[Engine] 前缀命中 529/589 tokens，gen 45.2 tps
+[Engine] 前缀命中 720/890 tokens，gen 39.3 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=1017 记录长=1017 新长=1059 记录[1013:1021]=[29, 198, 248059, 248046] 新[1013:1021]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/1059 tokens，gen 45.4 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=1125 记录长=1125 新长=1168 记录[1121:1129]=[29, 198, 248059, 248046] 新[1121:1129]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/1168 tokens，gen 39.4 tps
+✅ lc-hard-003 r0 (22.75s)
+[Engine] 前缀命中 0/549 tokens，gen 40.0 tps
+[Engine] 前缀命中 581/630 tokens，gen 42.9 tps
+[Engine] 前缀命中 725/886 tokens，gen 38.1 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=1139 记录长=1139 新长=1246 记录[1135:1143]=[29, 198, 248059, 248046] 新[1135:1143]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/1246 tokens，gen 41.2 tps
+[Engine] 前缀命中 1403/1448 tokens，gen 33.5 tps
+✅ lc-hard-004 r0 (29.45s)
+[Engine] 前缀命中 0/667 tokens，gen 40.3 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=712 记录长=712 新长=789 记录[708:716]=[29, 198, 248059, 248046] 新[708:716]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/789 tokens，gen 41.2 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=1081 记录长=1081 新长=1243 记录[1077:1085]=[29, 198, 248059, 248046] 新[1077:1085]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/1243 tokens，gen 46.0 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=1409 记录长=1409 新长=1510 记录[1405:1413]=[29, 198, 248059, 248046] 新[1405:1413]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/1510 tokens，gen 42.4 tps
+[Engine] 前缀命中 1543/1641 tokens，gen 34.4 tps
+✅ lc-hard-005 r0 (38.6s)
+[Engine] 前缀命中 0/513 tokens，gen 37.7 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=551 记录长=551 新长=598 记录[547:555]=[29, 198, 248059, 248046] 新[547:555]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/598 tokens，gen 47.9 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=693 记录长=693 新长=821 记录[689:697]=[29, 198, 248059, 248046] 新[689:697]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/821 tokens，gen 42.9 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=1129 记录长=1129 新长=1200 记录[1125:1133]=[29, 198, 248059, 248046] 新[1125:1133]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/1200 tokens，gen 35.9 tps
+✅ lc-hard-006 r0 (26.19s)
+[Engine] 前缀命中 0/527 tokens，gen 36.9 tps
+[Engine] 前缀命中 556/628 tokens，gen 33.6 tps
+[Engine] 前缀命中 699/810 tokens，gen 43.3 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=1069 记录长=1069 新长=1144 记录[1065:1073]=[29, 198, 248059, 248046] 新[1065:1073]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/1144 tokens，gen 41.3 tps
+[Engine] 前缀命中 1235/1279 tokens，gen 43.4 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=1377 记录长=1377 新长=1547 记录[1373:1381]=[29, 198, 248059, 248046] 新[1373:1381]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/1547 tokens，gen 43.2 tps
+✅ lc-hard-007 r0 (36.23s)
+[Engine] 前缀命中 0/534 tokens，gen 43.2 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=565 记录长=565 新长=607 记录[561:569]=[29, 198, 248059, 248046] 新[561:569]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/607 tokens，gen 47.0 tps
+[Engine] 前缀命中 681/792 tokens，gen 40.6 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=998 记录长=998 新长=1105 记录[994:1002]=[29, 198, 248059, 248046] 新[994:1002]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/1105 tokens，gen 45.3 tps
+[Engine] 前缀命中 1165/1208 tokens，gen 38.6 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=1299 记录长=1299 新长=1479 记录[1295:1303]=[29, 198, 248059, 248046] 新[1295:1303]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/1479 tokens，gen 34.6 tps
+✅ lc-hard-008 r0 (33.94s)
+[Engine] 前缀命中 0/536 tokens，gen 34.0 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=567 记录长=567 新长=627 记录[563:571]=[29, 198, 248059, 248046] 新[563:571]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/627 tokens，gen 50.0 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=775 记录长=775 新长=990 记录[771:779]=[29, 198, 248059, 248046] 新[771:779]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/990 tokens，gen 46.4 tps
+[Engine] 前缀命中 1224/1268 tokens，gen 40.7 tps
+❌ lc-hard-009 r0 (26.72s)  | files/metrics/summary.json: regex 失败: '(?s)\\{\\s*"cpu"\\s*:\\s*21(?:\\.0+)?\\s*,\\s*"mem"\\s*:\\s*44(?:\\.0+)?\\s*,\\s*
+[Engine] 前缀命中 0/511 tokens，gen 41.9 tps
+[Engine] 前缀命中 544/601 tokens，gen 41.5 tps
+[Engine] 前缀命中 729/951 tokens，gen 41.6 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=1273 记录长=1273 新长=1315 记录[1269:1277]=[29, 198, 248059, 248046] 新[1269:1277]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/1315 tokens，gen 40.3 tps
+✅ lc-hard-010 r0 (25.51s)
+[Engine] 前缀命中 0/490 tokens，gen 45.8 tps
+[Engine] 前缀命中 536/583 tokens，gen 34.3 tps
+[Engine] 前缀命中 682/724 tokens，gen 36.6 tps
+✅ lc-seed-001 r0 (8.51s)
+[Engine] 前缀命中 0/493 tokens，gen 45.9 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=557 记录长=557 新长=643 记录[553:561]=[29, 198, 248059, 248046] 新[553:561]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/643 tokens，gen 43.6 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=802 记录长=802 新长=843 记录[798:806]=[29, 198, 248059, 248046] 新[798:806]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/843 tokens，gen 39.6 tps
+✅ lc-seed-002 r0 (16.92s)
+[Engine] 前缀命中 0/377 tokens，gen 40.3 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=499 记录长=499 新长=569 记录[495:503]=[29, 198, 248059, 248046] 新[495:503]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/569 tokens，gen 43.1 tps
+[Engine] 前缀命中 615/655 tokens，gen 33.5 tps
+✅ lc-seed-003 r0 (9.85s)
+[Engine] 前缀命中 0/489 tokens，gen 43.1 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=549 记录长=549 新长=596 记录[545:553]=[29, 198, 248059, 248046] 新[545:553]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/596 tokens，gen 48.9 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=693 记录长=693 新长=842 记录[689:697]=[29, 198, 248059, 248046] 新[689:697]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/842 tokens，gen 46.2 tps
+[Engine] 前缀命中 1012/1055 tokens，gen 37.8 tps
+✅ lc-seed-004 r0 (18.84s)
+[Engine] 前缀命中 0/486 tokens，gen 47.0 tps
+[Engine] 前缀命中 546/594 tokens，gen 36.3 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=728 记录长=728 新长=799 记录[724:732]=[29, 198, 248059, 248046] 新[724:732]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/799 tokens，gen 39.1 tps
+✅ lc-seed-005 r0 (13.04s)
+[Engine] 前缀命中 0/481 tokens，gen 49.0 tps
+[Engine] 前缀命中 553/600 tokens，gen 36.4 tps
+[Memory] 前缀复用放弃（退冷预填，慢但正确）：层 0 ArraysCache 是递归状态缓存，无回滚接口
+[Memory] 拒绝诊断：prefix_len=678 记录长=678 新长=719 记录[674:682]=[29, 198, 248059, 248046] 新[674:682]=[29, 198, 248059, 248046, 198, 248045, 846, 198]
+[Engine] 前缀命中 0/719 tokens，gen 41.0 tps
+✅ lc-seed-006 r0 (10.13s)
+[Engine] 前缀命中 0/169 tokens，gen 39.7 tps
+✅ tx-gen-001 r0 (5.75s)
+[Engine] 前缀命中 0/152 tokens，gen 34.6 tps
+✅ tx-gen-002 r0 (2.78s)
+[Engine] 前缀命中 0/170 tokens，gen 44.4 tps
+✅ tx-gen-003 r0 (5.85s)
+[Engine] 前缀命中 0/116 tokens，gen 34.6 tps
+✅ tx-gen-004 r0 (1.92s)
+[Engine] 前缀命中 0/133 tokens，gen 36.4 tps
+✅ tx-gen-005 r0 (2.91s)
+[Engine] 前缀命中 0/121 tokens，gen 32.1 tps
+✅ tx-gen-006 r0 (5.39s)
+[Engine] 前缀命中 0/116 tokens，gen 34.9 tps
+✅ tx-gen-007 r0 (10.0s)
+[Engine] 前缀命中 0/147 tokens，gen 36.0 tps
+✅ tx-gen-008 r0 (10.02s)
+[Engine] 前缀命中 0/153 tokens，gen 40.6 tps
+✅ tx-gen-009 r0 (6.88s)
+[Engine] 前缀命中 0/159 tokens，gen 42.3 tps
+✅ tx-gen-010 r0 (25.45s)
+[Engine] 前缀命中 0/143 tokens，gen 39.6 tps
+✅ tx-gen-011 r0 (7.06s)
+[Engine] 前缀命中 0/136 tokens，gen 45.3 tps
+✅ tx-gen-012 r0 (3.2s)
+[Engine] 前缀命中 0/150 tokens，gen 33.7 tps
+✅ tx-gen-013 r0 (14.84s)
+[Engine] 前缀命中 0/220 tokens，gen 45.3 tps
+✅ tx-gen-014 r0 (3.19s)
+[Engine] 前缀命中 0/196 tokens，gen 39.6 tps
+✅ tx-gen-015 r0 (5.66s)
+[Engine] 前缀命中 0/188 tokens，gen 47.5 tps
+✅ tx-gen-016 r0 (2.58s)
+[Engine] 前缀命中 0/163 tokens，gen 46.5 tps
+✅ tx-gen-017 r0 (4.61s)
+[Engine] 前缀命中 0/173 tokens，gen 43.5 tps
+✅ tx-gen-018 r0 (3.05s)
+[Engine] 前缀命中 0/142 tokens，gen 31.7 tps
+✅ tx-gen-019 r0 (11.87s)
+[Engine] 前缀命中 0/153 tokens，gen 38.0 tps
+✅ tx-gen-020 r0 (1.96s)
+[Engine] 前缀命中 0/169 tokens，gen 31.5 tps
+✅ tx-gen-021 r0 (7.68s)
+[Engine] 前缀命中 0/163 tokens，gen 34.4 tps
+✅ tx-gen-022 r0 (5.85s)
+[Engine] 前缀命中 0/141 tokens，gen 34.4 tps
+✅ tx-gen-023 r0 (7.34s)
+[Engine] 前缀命中 0/167 tokens，gen 35.3 tps
+✅ tx-gen-024 r0 (7.48s)
+[Engine] 前缀命中 0/137 tokens，gen 42.1 tps
+✅ tx-gen-025 r0 (3.68s)
+[Engine] 前缀命中 0/136 tokens，gen 39.0 tps
+✅ tx-gen-026 r0 (9.25s)
+[Engine] 前缀命中 0/144 tokens，gen 46.0 tps
+✅ tx-gen-027 r0 (2.82s)
+[Engine] 前缀命中 0/159 tokens，gen 40.7 tps
+✅ tx-gen-028 r0 (2.84s)
+[Engine] 前缀命中 0/121 tokens，gen 34.3 tps
+✅ tx-gen-029 r0 (2.4s)
+[Engine] 前缀命中 0/134 tokens，gen 27.4 tps
+✅ tx-gen-030 r0 (7.93s)
+[Engine] 前缀命中 0/165 tokens，gen 42.8 tps
+✅ tx-gen-031 r0 (4.98s)
+[Engine] 前缀命中 0/161 tokens，gen 35.1 tps
+✅ tx-gen-032 r0 (11.84s)
+[Engine] 前缀命中 0/6814 tokens，gen 49.7 tps
+✅ tx-lcs-8k-json r0 (40.58s)
+[Engine] 前缀命中 0/6817 tokens，gen 35.9 tps
+❌ tx-lcs-8k-table r0 (29.17s)  | regex_all 不中: '正常\\s*\\|\\s*3\\s*\\|\\s*1798(?!\\d)'; regex_all 不中: '停机\\s*\\|\\s*5\\s*\\|\\s*7068(?!\\d)'; regex_all 不中
+[Engine] 前缀命中 0/6815 tokens，gen 45.4 tps
+❌ tx-lcs-8k-table-think r0 (51.41s)  | regex_all 不中: '停机\\s*\\|\\s*5\\s*\\|\\s*7068(?!\\d)'
+[Engine] 前缀命中 0/6846 tokens，gen 38.2 tps
+❌ tx-lcs-8k-table-list r0 (34.64s)  | regex_all 不中: '告警\\s*\\|\\s*4\\s*\\|\\s*1702(?!\\d)'
+[Engine] 前缀命中 0/13141 tokens，gen 46.1 tps
+✅ tx-lcs-16k-json r0 (68.25s)
+[Engine] 前缀命中 0/13144 tokens，gen 32.9 tps
+❌ tx-lcs-16k-table r0 (55.89s)  | regex_all 不中: '告警\\s*\\|\\s*7\\s*\\|\\s*5941(?!\\d)'; regex_all 不中: '正常\\s*\\|\\s*4\\s*\\|\\s*4195(?!\\d)'
+[Engine] 前缀命中 0/13142 tokens，gen 41.0 tps
+✅ tx-lcs-16k-table-think r0 (80.58s)
+[Engine] 前缀命中 0/13173 tokens，gen 37.4 tps
+✅ tx-lcs-16k-table-list r0 (60.78s)
+[Engine] 前缀命中 0/25937 tokens，gen 40.9 tps
+✅ tx-lcs-32k-json r0 (127.5s)
+[Engine] 前缀命中 0/25940 tokens，gen 27.7 tps
+❌ tx-lcs-32k-table r0 (113.79s)  | regex_all 不中: '停机\\s*\\|\\s*5\\s*\\|\\s*4747(?!\\d)'
+[Engine] 前缀命中 0/25938 tokens，gen 36.1 tps
+✅ tx-lcs-32k-table-think r0 (141.66s)
+[Engine] 前缀命中 0/25969 tokens，gen 32.4 tps
+✅ tx-lcs-32k-table-list r0 (120.0s)
+[Engine] 前缀命中 0/39061 tokens，gen 37.3 tps
+✅ tx-lcs-48k-json r0 (193.15s)
+[Engine] 前缀命中 0/39064 tokens，gen 26.3 tps
+❌ tx-lcs-48k-table r0 (178.12s)  | regex_all 不中: '停机\\s*\\|\\s*5\\s*\\|\\s*2129(?!\\d)'; regex_all 不中: '告警\\s*\\|\\s*4\\s*\\|\\s*3018(?!\\d)'
+[Engine] 前缀命中 0/39062 tokens，gen 35.1 tps
+✅ tx-lcs-48k-table-think r0 (206.64s)
+[Engine] 前缀命中 0/39093 tokens，gen 29.3 tps
+✅ tx-lcs-48k-table-list r0 (184.95s)
+[Engine] 前缀命中 0/594 tokens，gen 34.3 tps
+✅ vi-app-001 r0 (4.35s)
+[Engine] 前缀命中 0/446 tokens，gen 40.7 tps
+✅ vi-app-002 r0 (4.38s)
+[Engine] 前缀命中 0/352 tokens，gen 35.9 tps
+✅ vi-app-003 r0 (3.25s)
+[Engine] 前缀命中 0/521 tokens，gen 42.7 tps
+✅ vi-app-004 r0 (4.02s)
+[Engine] 前缀命中 0/454 tokens，gen 34.7 tps
+✅ vi-app-005 r0 (3.73s)
+[Engine] 前缀命中 0/382 tokens，gen 44.3 tps
+✅ vi-app-006 r0 (3.02s)
+[Engine] 前缀命中 0/277 tokens，gen 35.3 tps
+✅ vi-app-007 r0 (2.57s)
+[Engine] 前缀命中 0/422 tokens，gen 39.0 tps
+✅ vi-app-008 r0 (4.85s)
+[Engine] 前缀命中 0/368 tokens，gen 32.1 tps
+✅ vi-app-009 r0 (5.82s)
+[Engine] 前缀命中 0/530 tokens，gen 32.3 tps
+✅ vi-app-010 r0 (3.75s)
+[Engine] 前缀命中 0/286 tokens，gen 41.5 tps
+✅ vi-app-011 r0 (2.67s)
+[Engine] 前缀命中 0/470 tokens，gen 31.5 tps
+✅ vi-app-012 r0 (3.94s)
+[Engine] 前缀命中 0/624 tokens，gen 39.8 tps
+✅ vi-chartqa-2 r0 (4.39s)
+[Engine] 前缀命中 0/759 tokens，gen 42.4 tps
+✅ vi-chartqa-8 r0 (10.36s)
+[Engine] 前缀命中 0/619 tokens，gen 40.9 tps
+✅ vi-chartqa-16 r0 (5.84s)
+[Engine] 前缀命中 0/546 tokens，gen 40.7 tps
+✅ vi-chartqa-34 r0 (5.92s)
+[Engine] 前缀命中 0/266 tokens，gen 41.5 tps
+✅ vi-chartqa-50 r0 (3.62s)
+[Engine] 前缀命中 0/556 tokens，gen 41.0 tps
+✅ vi-chartqa-68 r0 (5.72s)
+[Engine] 前缀命中 0/180 tokens，gen 36.1 tps
+✅ vi-chartqa-110 r0 (8.23s)
+[Engine] 前缀命中 0/622 tokens，gen 39.5 tps
+✅ vi-chartqa-122 r0 (5.74s)
+[Engine] 前缀命中 0/190 tokens，gen 38.3 tps
+✅ vi-chartqa-130 r0 (4.69s)
+[Engine] 前缀命中 0/216 tokens，gen 38.0 tps
+✅ vi-chartqa-146 r0 (6.8s)
+[Engine] 前缀命中 0/631 tokens，gen 41.7 tps
+✅ vi-chartqa-hard-209 r0 (5.07s)
+[Engine] 前缀命中 0/625 tokens，gen 44.4 tps
+✅ vi-chartqa-hard-227 r0 (4.39s)
+[Engine] 前缀命中 0/626 tokens，gen 41.8 tps
+✅ vi-chartqa-hard-249 r0 (4.77s)
+[Engine] 前缀命中 0/618 tokens，gen 38.7 tps
+✅ vi-chartqa-hard-256 r0 (7.3s)
+[Engine] 前缀命中 0/628 tokens，gen 44.8 tps
+✅ vi-chartqa-hard-277 r0 (4.58s)
+[Engine] 前缀命中 0/626 tokens，gen 45.4 tps
+✅ vi-chartqa-hard-291 r0 (5.26s)
+[Engine] 前缀命中 0/624 tokens，gen 36.1 tps
+✅ vi-chartqa-hard-332 r0 (6.81s)
+[Engine] 前缀命中 0/626 tokens，gen 39.0 tps
+✅ vi-chartqa-hard-359 r0 (8.22s)
+[Engine] 前缀命中 0/626 tokens，gen 39.1 tps
+✅ vi-chartqa-hard-371 r0 (15.8s)
+[Engine] 前缀命中 0/636 tokens，gen 37.6 tps
+✅ vi-chartqa-hard-381 r0 (14.24s)
+[Engine] 前缀命中 0/627 tokens，gen 39.5 tps
+✅ vi-chartqa-hard-397 r0 (22.13s)
+[Engine] 前缀命中 0/631 tokens，gen 35.5 tps
+❌ vi-chartqa-hard-419 r0 (32.09s)  | regex_any 全不中: ['\\b1990\\b']
+[Engine] 前缀命中 0/560 tokens，gen 43.5 tps
+✅ vi-chartqa-hard-439 r0 (4.88s)
+[Engine] 前缀命中 0/226 tokens，gen 42.8 tps
+✅ vi-chartqa-hard-443 r0 (6.91s)
+[Engine] 前缀命中 0/1159 tokens，gen 37.7 tps
+✅ vi-chartqa-hard-447 r0 (10.99s)
+[Engine] 前缀命中 0/535 tokens，gen 47.1 tps
+✅ vi-chartqa-hard-448 r0 (4.04s)
+[Engine] 前缀命中 0/615 tokens，gen 40.7 tps
+✅ vi-chartqa-hard-459 r0 (4.95s)
+[Engine] 前缀命中 0/670 tokens，gen 40.6 tps
+✅ vi-chartqa-hard-460 r0 (5.16s)
+[Engine] 前缀命中 0/670 tokens，gen 28.6 tps
+❌ vi-chartqa-hard-461 r0 (22.27s)  | regex_any 全不中: ['\\b44\\b']
+[Engine] 前缀命中 0/302 tokens，gen 37.5 tps
+✅ vi-chartqa-hard-469 r0 (4.12s)
+[Engine] 前缀命中 0/613 tokens，gen 37.6 tps
+✅ vi-chartqa-hard-471 r0 (4.47s)
+[Engine] 前缀命中 0/261 tokens，gen 43.7 tps
+✅ vi-chartqa-hard-479 r0 (4.88s)
+[Engine] 前缀命中 0/222 tokens，gen 40.0 tps
+✅ vi-chartqa-hard-483 r0 (6.24s)
+[Engine] 前缀命中 0/232 tokens，gen 43.6 tps
+✅ vi-chartqa-hard-505 r0 (5.02s)
+[Engine] 前缀命中 0/439 tokens，gen 38.8 tps
+✅ vi-chartqa-hard-509 r0 (5.59s)
+[Engine] 前缀命中 0/543 tokens，gen 43.7 tps
+✅ vi-chartqa-hard-513 r0 (4.53s)
+[Engine] 前缀命中 0/548 tokens，gen 40.1 tps
+✅ vi-chartqa-hard-515 r0 (5.24s)
+[Engine] 前缀命中 0/535 tokens，gen 37.2 tps
+✅ vi-chartqa-hard-517 r0 (8.6s)
+[Engine] 前缀命中 0/545 tokens，gen 39.7 tps
+✅ vi-chartqa-hard-519 r0 (4.94s)
+[Engine] 前缀命中 0/554 tokens，gen 38.8 tps
+✅ vi-chartqa-hard-534 r0 (4.45s)
+[Engine] 前缀命中 0/547 tokens，gen 35.4 tps
+✅ vi-chartqa-hard-549 r0 (16.26s)
+[Engine] 前缀命中 0/223 tokens，gen 40.1 tps
+✅ vi-chartqa-hard-552 r0 (2.61s)
+[Engine] 前缀命中 0/259 tokens，gen 34.8 tps
+✅ vi-chartqa-hard-555 r0 (27.14s)
+[Engine] 前缀命中 0/240 tokens，gen 39.9 tps
+✅ vi-chartqa-hard-556 r0 (2.91s)
+[Engine] 前缀命中 0/260 tokens，gen 43.4 tps
+✅ vi-chartqa-hard-565 r0 (2.85s)
+[Engine] 前缀命中 0/548 tokens，gen 44.1 tps
+✅ vi-chartqa-hard-598 r0 (17.57s)
+[Engine] 前缀命中 0/549 tokens，gen 34.8 tps
+✅ vi-chartqa-hard-617 r0 (6.42s)
+[Engine] 前缀命中 0/544 tokens，gen 42.3 tps
+✅ vi-chartqa-hard2-635 r0 (5.58s)
+[Engine] 前缀命中 0/548 tokens，gen 41.3 tps
+✅ vi-chartqa-hard2-637 r0 (4.36s)
+[Engine] 前缀命中 0/536 tokens，gen 44.4 tps
+✅ vi-chartqa-hard2-661 r0 (4.13s)
+[Engine] 前缀命中 0/538 tokens，gen 43.7 tps
+✅ vi-chartqa-hard2-663 r0 (7.05s)
+[Engine] 前缀命中 0/539 tokens，gen 43.6 tps
+✅ vi-chartqa-hard2-667 r0 (4.63s)
+[Engine] 前缀命中 0/541 tokens，gen 45.1 tps
+✅ vi-chartqa-hard2-671 r0 (6.66s)
+[Engine] 前缀命中 0/536 tokens，gen 42.1 tps
+✅ vi-chartqa-hard2-673 r0 (3.94s)
+[Engine] 前缀命中 0/538 tokens，gen 39.9 tps
+✅ vi-chartqa-hard2-695 r0 (4.63s)
+[Engine] 前缀命中 0/537 tokens，gen 45.7 tps
+✅ vi-chartqa-hard2-703 r0 (5.88s)
+[Engine] 前缀命中 0/540 tokens，gen 42.0 tps
+✅ vi-chartqa-hard2-705 r0 (4.14s)
+[Engine] 前缀命中 0/536 tokens，gen 36.3 tps
+✅ vi-chartqa-hard2-716 r0 (4.62s)
+[Engine] 前缀命中 0/552 tokens，gen 41.6 tps
+✅ vi-chartqa-hard2-721 r0 (7.95s)
+[Engine] 前缀命中 0/541 tokens，gen 45.7 tps
+✅ vi-chartqa-hard2-725 r0 (5.47s)
+[Engine] 前缀命中 0/548 tokens，gen 49.0 tps
+✅ vi-chartqa-hard2-739 r0 (4.16s)
+[Engine] 前缀命中 0/537 tokens，gen 45.8 tps
+✅ vi-chartqa-hard2-741 r0 (4.24s)
+[Engine] 前缀命中 0/544 tokens，gen 34.5 tps
+✅ vi-chartqa-hard2-742 r0 (5.97s)
+[Engine] 前缀命中 0/568 tokens，gen 42.7 tps
+✅ vi-chartqa-hard2-747 r0 (6.61s)
+[Engine] 前缀命中 0/548 tokens，gen 43.6 tps
+✅ vi-chartqa-hard2-755 r0 (4.84s)
+[Engine] 前缀命中 0/536 tokens，gen 43.2 tps
+✅ vi-chartqa-hard2-763 r0 (4.04s)
+[Engine] 前缀命中 0/540 tokens，gen 40.5 tps
+✅ vi-chartqa-hard2-767 r0 (4.72s)
+[Engine] 前缀命中 0/536 tokens，gen 45.4 tps
+✅ vi-chartqa-hard2-769 r0 (4.23s)
+[Engine] 前缀命中 0/539 tokens，gen 42.7 tps
+✅ vi-chartqa-hard2-781 r0 (4.14s)
+[Engine] 前缀命中 0/540 tokens，gen 42.4 tps
+✅ vi-chartqa-hard2-785 r0 (4.24s)
+[Engine] 前缀命中 0/556 tokens，gen 48.4 tps
+✅ vi-chartqa-hard2-787 r0 (7.57s)
+[Engine] 前缀命中 0/540 tokens，gen 43.5 tps
+✅ vi-chartqa-hard2-803 r0 (6.08s)
+[Engine] 前缀命中 0/536 tokens，gen 38.9 tps
+✅ vi-chartqa-hard2-804 r0 (4.04s)
+[Engine] 前缀命中 0/535 tokens，gen 33.7 tps
+✅ vi-chartqa-hard2-808 r0 (6.84s)
+[Engine] 前缀命中 0/541 tokens，gen 42.2 tps
+✅ vi-chartqa-hard2-825 r0 (5.79s)
+[Engine] 前缀命中 0/540 tokens，gen 45.9 tps
+✅ vi-chartqa-hard2-835 r0 (6.34s)
+[Engine] 前缀命中 0/553 tokens，gen 45.6 tps
+✅ vi-chartqa-hard2-839 r0 (10.69s)
+[Engine] 前缀命中 0/538 tokens，gen 39.2 tps
+✅ vi-chartqa-hard2-849 r0 (6.66s)
+[Engine] 前缀命中 0/541 tokens，gen 43.8 tps
+✅ vi-chartqa-hard2-864 r0 (10.6s)
+[Engine] 前缀命中 0/539 tokens，gen 45.7 tps
+✅ vi-chartqa-hard2-866 r0 (4.53s)
+[Engine] 前缀命中 0/541 tokens，gen 44.0 tps
+✅ vi-chartqa-hard2-881 r0 (5.52s)
+[Engine] 前缀命中 0/538 tokens，gen 45.6 tps
+✅ vi-chartqa-hard2-887 r0 (4.14s)
+[Engine] 前缀命中 0/547 tokens，gen 41.3 tps
+✅ vi-chartqa-hard2-893 r0 (5.02s)
+[Engine] 前缀命中 0/542 tokens，gen 44.8 tps
+✅ vi-chartqa-hard2-897 r0 (4.24s)
+[Engine] 前缀命中 0/548 tokens，gen 50.3 tps
+✅ vi-chartqa-hard2-899 r0 (5.13s)
+[Engine] 前缀命中 0/539 tokens，gen 39.6 tps
+✅ vi-chartqa-hard2-907 r0 (14.15s)
+[Engine] 前缀命中 0/551 tokens，gen 33.6 tps
+✅ vi-chartqa-hard2-917 r0 (33.26s)
+[Engine] 前缀命中 0/561 tokens，gen 45.7 tps
+✅ vi-chartqa-hard2-923 r0 (7.09s)
+[Engine] 前缀命中 0/552 tokens，gen 43.5 tps
+✅ vi-chartqa-hard2-925 r0 (6.5s)
+[Engine] 前缀命中 0/554 tokens，gen 45.4 tps
+✅ vi-chartqa-hard2-929 r0 (5.24s)
+[Engine] 前缀命中 0/542 tokens，gen 44.9 tps
+✅ vi-chartqa-hard2-935 r0 (8.32s)
+[Engine] 前缀命中 0/544 tokens，gen 42.3 tps
+✅ vi-chartqa-hard2-941 r0 (4.61s)
+[Engine] 前缀命中 0/544 tokens，gen 45.6 tps
+✅ vi-chartqa-hard2-943 r0 (4.33s)
+[Engine] 前缀命中 0/543 tokens，gen 45.4 tps
+✅ vi-chartqa-hard2-945 r0 (5.4s)
+[Engine] 前缀命中 0/543 tokens，gen 39.7 tps
+✅ vi-chartqa-hard2-947 r0 (9.84s)
+[Engine] 前缀命中 0/543 tokens，gen 42.3 tps
+✅ vi-chartqa-hard2-949 r0 (5.21s)
+[Engine] 前缀命中 0/534 tokens，gen 31.6 tps
+❌ vi-chartqa-hard2-953 r0 (13.86s)  | regex_any 全不中: ['\\b50\\b']
+[Engine] 前缀命中 0/538 tokens，gen 45.9 tps
+✅ vi-chartqa-hard2-955 r0 (4.04s)
+[Engine] 前缀命中 0/541 tokens，gen 41.5 tps
+✅ vi-chartqa-hard2-961 r0 (4.14s)
+[Engine] 前缀命中 0/544 tokens，gen 41.0 tps
+✅ vi-chartqa-hard2-966 r0 (5.49s)
+[Engine] 前缀命中 0/532 tokens，gen 38.5 tps
+✅ vi-chartqa-hard2-969 r0 (10.1s)
+[Engine] 前缀命中 0/536 tokens，gen 40.7 tps
+✅ vi-chartqa-hard2-985 r0 (4.88s)
+[Engine] 前缀命中 0/542 tokens，gen 41.4 tps
+✅ vi-chartqa-hard2-987 r0 (11.43s)
+[Engine] 前缀命中 0/538 tokens，gen 42.7 tps
+✅ vi-chartqa-hard2-988 r0 (4.81s)
+[Engine] 前缀命中 0/555 tokens，gen 43.3 tps
+✅ vi-chartqa-hard2-993 r0 (9.03s)
+[Engine] 前缀命中 0/536 tokens，gen 43.2 tps
+✅ vi-chartqa-hard2-995 r0 (4.62s)
+[Engine] 前缀命中 0/543 tokens，gen 36.0 tps
+✅ vi-chartqa-hard2-996 r0 (9.51s)
+[Engine] 前缀命中 0/544 tokens，gen 43.4 tps
+✅ vi-chartqa-hard2-997 r0 (7.83s)
+[Engine] 前缀命中 0/540 tokens，gen 43.6 tps
+✅ vi-chartqa-hard2-999 r0 (10.57s)
+[Engine] 前缀命中 0/541 tokens，gen 43.2 tps
+✅ vi-chartqa-hard2-1003 r0 (7.63s)
+[Engine] 前缀命中 0/540 tokens，gen 45.8 tps
+✅ vi-chartqa-hard2-1013 r0 (8.91s)
+[Engine] 前缀命中 0/554 tokens，gen 36.8 tps
+✅ vi-chartqa-hard2-1025 r0 (7.56s)
+[Engine] 前缀命中 0/543 tokens，gen 39.2 tps
+✅ vi-chartqa-hard2-1027 r0 (6.28s)
+[Engine] 前缀命中 0/540 tokens，gen 39.9 tps
+✅ vi-chartqa-hard2-1035 r0 (5.21s)
+[Engine] 前缀命中 0/536 tokens，gen 46.6 tps
+✅ vi-chartqa-hard2-1037 r0 (7.64s)
+[Engine] 前缀命中 0/529 tokens，gen 41.5 tps
+✅ vi-chartqa-hard2-1041 r0 (9.0s)
+[Engine] 前缀命中 0/542 tokens，gen 42.1 tps
+❌ vi-chartqa-hard2-1047 r0 (7.6s)  | regex_any 全不中: ['\\b44\\b']
+[Engine] 前缀命中 0/541 tokens，gen 42.9 tps
+✅ vi-chartqa-hard2-1069 r0 (6.17s)
+[Engine] 前缀命中 0/530 tokens，gen 43.6 tps
+✅ vi-chartqa-hard2-1071 r0 (12.58s)
+[Engine] 前缀命中 0/547 tokens，gen 42.5 tps
+✅ vi-chartqa-hard2-1073 r0 (5.72s)
+[Engine] 前缀命中 0/537 tokens，gen 30.4 tps
+✅ vi-chartqa-hard2-1085 r0 (16.5s)
+[Engine] 前缀命中 0/541 tokens，gen 38.3 tps
+✅ vi-chartqa-hard2-1087 r0 (11.93s)
+[Engine] 前缀命中 0/540 tokens，gen 44.5 tps
+✅ vi-chartqa-hard2-1088 r0 (7.15s)
+[Engine] 前缀命中 0/540 tokens，gen 40.9 tps
+✅ vi-chartqa-hard2-1089 r0 (7.54s)
+[Engine] 前缀命中 0/552 tokens，gen 42.4 tps
+✅ vi-chartqa-hard2-1091 r0 (6.69s)
+[Engine] 前缀命中 0/541 tokens，gen 39.0 tps
+✅ vi-chartqa-hard2-1095 r0 (9.3s)
+[Engine] 前缀命中 0/538 tokens，gen 39.9 tps
+✅ vi-chartqa-hard2-1097 r0 (10.95s)
+[Engine] 前缀命中 0/557 tokens，gen 44.7 tps
+✅ vi-chartqa-hard2-1101 r0 (6.3s)
+[Engine] 前缀命中 0/536 tokens，gen 42.2 tps
+✅ vi-chartqa-hard2-1105 r0 (4.72s)
+[Engine] 前缀命中 0/536 tokens，gen 41.0 tps
+✅ vi-chartqa-hard2-1109 r0 (5.1s)
+[Engine] 前缀命中 0/539 tokens，gen 40.5 tps
+✅ vi-chartqa-hard2-1115 r0 (4.62s)
+[Engine] 前缀命中 0/537 tokens，gen 44.2 tps
+✅ vi-chartqa-hard2-1119 r0 (6.18s)
+[Engine] 前缀命中 0/543 tokens，gen 40.7 tps
+✅ vi-chartqa-hard2-1125 r0 (6.08s)
+[Engine] 前缀命中 0/540 tokens，gen 37.0 tps
+✅ vi-chartqa-hard2-1127 r0 (6.86s)
+[Engine] 前缀命中 0/553 tokens，gen 44.6 tps
+✅ vi-chartqa-hard2-1137 r0 (5.04s)
+[Engine] 前缀命中 0/541 tokens，gen 42.2 tps
+✅ vi-chartqa-hard2-1151 r0 (4.82s)
+[Engine] 前缀命中 0/539 tokens，gen 38.7 tps
+✅ vi-chartqa-hard2-1153 r0 (4.44s)
+[Engine] 前缀命中 0/542 tokens，gen 46.0 tps
+✅ vi-chartqa-hard2-1159 r0 (5.71s)
+[Engine] 前缀命中 0/544 tokens，gen 44.5 tps
+✅ vi-chartqa-hard2-1161 r0 (15.68s)
+[Engine] 前缀命中 0/539 tokens，gen 33.5 tps
+✅ vi-chartqa-hard2-1173 r0 (31.57s)
+[Engine] 前缀命中 0/535 tokens，gen 43.4 tps
+✅ vi-chartqa-hard2-1185 r0 (4.45s)
+[Engine] 前缀命中 0/550 tokens，gen 40.0 tps
+✅ vi-chartqa-hard2-1187 r0 (4.88s)
+[Engine] 前缀命中 0/541 tokens，gen 43.8 tps
+✅ vi-chartqa-hard2-1189 r0 (5.53s)
+[Engine] 前缀命中 0/541 tokens，gen 38.1 tps
+❌ vi-chartqa-hard2-1191 r0 (5.05s)  | regex_any 全不中: ['\\b56\\b']
+[Engine] 前缀命中 0/536 tokens，gen 34.0 tps
+✅ vi-chartqa-hard2-1192 r0 (30.47s)
+[Engine] 前缀命中 0/537 tokens，gen 31.2 tps
+✅ vi-chartqa-hard2-1193 r0 (34.55s)
+[Engine] 前缀命中 0/535 tokens，gen 42.9 tps
+✅ vi-chartqa-hard2-1194 r0 (11.66s)
+[Engine] 前缀命中 0/541 tokens，gen 41.4 tps
+✅ vi-chartqa-hard2-1197 r0 (6.8s)
+[Engine] 前缀命中 0/559 tokens，gen 43.0 tps
+✅ vi-chartqa-hard2-1201 r0 (4.97s)
+[Engine] 前缀命中 0/546 tokens，gen 43.6 tps
+✅ vi-chartqa-hard2-1209 r0 (4.86s)
+[Engine] 前缀命中 0/535 tokens，gen 43.5 tps
+✅ vi-chartqa-hard2-1213 r0 (4.45s)
+[Engine] 前缀命中 0/541 tokens，gen 35.7 tps
+✅ vi-chartqa-hard2-1219 r0 (6.71s)
+[Engine] 前缀命中 0/543 tokens，gen 40.2 tps
+✅ vi-chartqa-hard2-1225 r0 (4.69s)
+[Engine] 前缀命中 0/535 tokens，gen 43.7 tps
+✅ vi-chartqa-hard2-1229 r0 (4.14s)
+[Engine] 前缀命中 0/537 tokens，gen 42.9 tps
+✅ vi-chartqa-hard2-1235 r0 (5.89s)
+[Engine] 前缀命中 0/545 tokens，gen 37.4 tps
+✅ vi-chartqa-hard2-1237 r0 (5.45s)
+[Engine] 前缀命中 0/535 tokens，gen 41.7 tps
+✅ vi-chartqa-hard2-1241 r0 (5.23s)
+[Engine] 前缀命中 0/555 tokens，gen 40.9 tps
+✅ vi-chartqa-hard2-1249 r0 (5.66s)
+[Engine] 前缀命中 0/538 tokens，gen 38.7 tps
+✅ vi-chartqa-hard2-1264 r0 (11.05s)
+[Engine] 前缀命中 0/540 tokens，gen 33.4 tps
+✅ vi-chartqa-hard2-1283 r0 (13.0s)
+[Engine] 前缀命中 0/542 tokens，gen 37.9 tps
+✅ vi-chartqa-hard2-1306 r0 (6.12s)
+[Engine] 前缀命中 0/556 tokens，gen 30.8 tps
+✅ vi-chartqa-hard2-1309 r0 (4.87s)
+[Engine] 前缀命中 0/541 tokens，gen 35.7 tps
+✅ vi-chartqa-hard2-1338 r0 (4.36s)
+[Engine] 前缀命中 0/544 tokens，gen 33.5 tps
+✅ vi-chartqa-hard2-1344 r0 (5.69s)
+[Engine] 前缀命中 0/544 tokens，gen 41.6 tps
+✅ vi-chartqa-hard2-1355 r0 (5.23s)
+[Engine] 前缀命中 0/718 tokens，gen 37.7 tps
+✅ vi-chartqa-hard2-1434 r0 (6.42s)
+[Engine] 前缀命中 0/537 tokens，gen 39.8 tps
+✅ vi-chartqa-hard2-1460 r0 (4.06s)
+[Engine] 前缀命中 0/542 tokens，gen 38.1 tps
+✅ vi-chartqa-hard2-1514 r0 (5.73s)
+[Engine] 前缀命中 0/550 tokens，gen 43.6 tps
+✅ vi-chartqa-hard2-1589 r0 (4.47s)
+[Engine] 前缀命中 0/548 tokens，gen 42.9 tps
+✅ vi-chartqa-hard2-1602 r0 (4.18s)
+[Engine] 前缀命中 0/545 tokens，gen 38.3 tps
+❌ vi-chartqa-hard2-1682 r0 (5.75s)  | regex_any 全不中: ['\\b17\\b']
+[Engine] 前缀命中 0/535 tokens，gen 32.3 tps
+✅ vi-chartqa-hard2-1686 r0 (47.01s)
+[Engine] 前缀命中 0/542 tokens，gen 37.1 tps
+✅ vi-chartqa-hard2-1695 r0 (5.04s)
+[Engine] 前缀命中 0/546 tokens，gen 39.4 tps
+✅ vi-chartqa-hard2-1756 r0 (4.58s)
+[Engine] 前缀命中 0/552 tokens，gen 42.0 tps
+✅ vi-chartqa-hard2-1766 r0 (5.36s)
+[Engine] 前缀命中 0/846 tokens，gen 38.5 tps
+✅ vi-chartqa-hard2-1768 r0 (5.55s)
+[Engine] 前缀命中 0/537 tokens，gen 33.1 tps
+✅ vi-chartqa-hard2-1795 r0 (14.49s)
+[Engine] 前缀命中 0/542 tokens，gen 36.0 tps
+❌ vi-chartqa-hard2-1817 r0 (9.37s)  | regex_any 全不中: ['\\b109\\b']
+[Engine] 前缀命中 0/531 tokens，gen 32.7 tps
+✅ vi-chartqa-hard2-1825 r0 (16.31s)
+[Engine] 前缀命中 0/542 tokens，gen 41.3 tps
+✅ vi-chartqa-hard2-1833 r0 (4.94s)
+[Engine] 前缀命中 0/542 tokens，gen 30.9 tps
+✅ vi-chartqa-hard2-1870 r0 (37.33s)
+[Engine] 前缀命中 0/548 tokens，gen 38.1 tps
+✅ vi-chartqa-hard2-1874 r0 (4.48s)
+[Engine] 前缀命中 0/537 tokens，gen 38.8 tps
+✅ vi-chartqa-hard2-1898 r0 (4.74s)
+[Engine] 前缀命中 0/545 tokens，gen 37.2 tps
+✅ vi-chartqa-hard2-1911 r0 (5.6s)
+[Engine] 前缀命中 0/545 tokens，gen 36.7 tps
+✅ vi-chartqa-hard2-1931 r0 (5.16s)
+[Engine] 前缀命中 0/550 tokens，gen 43.2 tps
+✅ vi-chartqa-hard2-2000 r0 (3.98s)
+[Engine] 前缀命中 0/1196 tokens，gen 43.7 tps
+✅ vi-chartqa-hard2-2009 r0 (7.27s)
+[Engine] 前缀命中 0/553 tokens，gen 40.9 tps
+✅ vi-chartqa-hard2-2033 r0 (5.17s)
+[Engine] 前缀命中 0/545 tokens，gen 39.5 tps
+✅ vi-chartqa-hard2-2034 r0 (4.77s)
+[Engine] 前缀命中 0/539 tokens，gen 47.3 tps
+✅ vi-chartqa-hard2-2044 r0 (6.61s)
+[Engine] 前缀命中 0/545 tokens，gen 35.2 tps
+✅ vi-chartqa-hard2-2049 r0 (5.52s)
+[Engine] 前缀命中 0/1029 tokens，gen 32.9 tps
+✅ vi-chartqa-hard2-2079 r0 (19.83s)
+[Engine] 前缀命中 0/550 tokens，gen 41.8 tps
+✅ vi-chartqa-hard2-2135 r0 (3.98s)
+[Engine] 前缀命中 0/726 tokens，gen 40.2 tps
+✅ vi-chartqa-hard2-2138 r0 (5.74s)
+[Engine] 前缀命中 0/542 tokens，gen 37.4 tps
+✅ vi-chartqa-hard2-2169 r0 (4.72s)
+[Engine] 前缀命中 0/549 tokens，gen 31.5 tps
+❌ vi-chartqa-hard2-2175 r0 (24.99s)  | regex_any 全不中: ['\\b1[\\s,\\u00a0\\u202f\\u2009]?125\\b', '\\b1,125\\b']
+[Engine] 前缀命中 0/548 tokens，gen 37.3 tps
+✅ vi-chartqa-hard2-2222 r0 (4.47s)
+[Engine] 前缀命中 0/542 tokens，gen 35.9 tps
+✅ vi-chartqa-hard2-2223 r0 (5.23s)
+[Engine] 前缀命中 0/545 tokens，gen 39.3 tps
+✅ vi-chartqa-hard2-2279 r0 (6.44s)
+[Engine] 前缀命中 0/771 tokens，gen 33.3 tps
+✅ vi-chartqa-hard2-2293 r0 (12.22s)
+[Engine] 前缀命中 0/738 tokens，gen 41.1 tps
+✅ vi-chartqa-hard2-2300 r0 (5.09s)
+[Engine] 前缀命中 0/538 tokens，gen 35.0 tps
+✅ vi-chartqa-hard2-2301 r0 (4.65s)
+[Engine] 前缀命中 0/888 tokens，gen 43.5 tps
+✅ vi-chartqa-hard2-2385 r0 (5.63s)
+[Engine] 前缀命中 0/537 tokens，gen 34.7 tps
+✅ vi-chartqa-hard2-2431 r0 (5.04s)
+[Engine] 前缀命中 0/536 tokens，gen 37.7 tps
+✅ vi-chartqa-hard2-2432 r0 (4.94s)
+[Engine] 前缀命中 0/1047 tokens，gen 42.8 tps
+✅ vi-chartqa-hard2-2459 r0 (6.5s)
+[Engine] 前缀命中 0/548 tokens，gen 41.7 tps
+✅ vi-chartqa-hard2-2467 r0 (6.34s)
+[Engine] 前缀命中 0/266 tokens，gen 36.6 tps
+✅ vi-seed-001 r0 (3.56s)
+[Engine] 前缀命中 0/324 tokens，gen 35.5 tps
+✅ vi-seed-002 r0 (3.26s)
+[Engine] 前缀命中 0/351 tokens，gen 34.0 tps
+✅ vi-seed-003 r0 (3.09s)
+[Engine] 前缀命中 0/275 tokens，gen 34.3 tps
+✅ vi-seed-004 r0 (3.96s)
+[Engine] 前缀命中 0/322 tokens，gen 30.2 tps
+✅ vi-seed-005 r0 (7.27s)
+== summary: {"tool_call": {"n": 55, "pass_rate": 0.873, "aborted_rate": 0.018, "corrected_rate": 0.0, "final_ok_rate": 0.982, "first_shot_ok_rate": 0.872, "parse_errors_total": 0, "restraint_ok_rate": 1.0, "turns_used_total": 71, "valid_call_ok_rate": 0.872}, "longchain": {"n": 16, "pass_rate": 0.938, "aborted_rate": 0.0, "env_errors_total": 3, "final_text_ok_rate": 1.0, "recovered_rate": 0.188, "redundant_calls_total": 6, "state_ok_rate": 0.938, "steps_total": 96, "steps_ok_rate": 1.0, "recovery_success_rate": 1.0}, "text": {"n": 48, "pass_rate": 0.875, "aborted_rate": 0.0, "final_ok_rate": 0.875, "stray_calls_total": 0}, "vision": {"n": 224, "pass_rate": 0.964, "aborted_rate": 0.0, "final_ok_rate": 0.964, "stray_calls_total": 0}}
+== cot: {"n": 331, "ctrl_leak_traj_rate": 0.0, "dup_rate_mean": 0.015, "dup_rate_max": 0.15, "recite_rate_mean": 0.067, "recite_rate_max": 1.0, "other_script_max": 0.0, "empty_think_turns_total": 0, "think_chars_mean": 540.3}
+== speed: {"generation_tps": {"mean": 39.18, "median": 39.99, "min": 24.16, "max": 50.31, "n": 411}, "prompt_tps": {"mean": 418.9, "median": 222.46, "min": 194.1, "max": 13526.12, "n": 411}, "peak_memory_max": 43.79, "kv_prefix_hit_rate": {"mean": 0.4, "median": 0.0, "min": 0.0, "max": 0.99, "n": 68}}
+== 产物: /Volumes/enkin/project/Agent/benchmarks/data/model-eval-20260824/q/Qwen3.8-27B-8bit

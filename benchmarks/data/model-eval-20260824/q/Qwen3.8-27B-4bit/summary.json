@@ -1,0 +1,93 @@
+{
+  "model": "mlx-community/Qwen3.8-27B-4bit",
+  "revision": "3e6447f082e89cc7f0bc6e5441afd38dfce760ff",
+  "dialect": "qwen35",
+  "speculative": {
+    "mode": "drafter",
+    "draft_model": "mlx-community/Qwen3.8-27B-MTP-4bit",
+    "draft_kind": "",
+    "draft_block_size": 3,
+    "num_draft_tokens": 8,
+    "ngram_max": 3,
+    "ngram_min": 2,
+    "draft_revision": "b643c01b6d3b094e325edb6ebd832e16c486c575"
+  },
+  "stamp": "20260824-043625",
+  "n_runs": 343,
+  "dimensions": {
+    "tool_call": {
+      "n": 55,
+      "pass_rate": 0.818,
+      "aborted_rate": 0.018,
+      "corrected_rate": 0.0,
+      "final_ok_rate": 0.982,
+      "first_shot_ok_rate": 0.787,
+      "parse_errors_total": 0,
+      "restraint_ok_rate": 1.0,
+      "turns_used_total": 71,
+      "valid_call_ok_rate": 0.809
+    },
+    "longchain": {
+      "n": 16,
+      "pass_rate": 0.875,
+      "aborted_rate": 0.0,
+      "env_errors_total": 2,
+      "final_text_ok_rate": 1.0,
+      "recovered_rate": 0.125,
+      "redundant_calls_total": 6,
+      "state_ok_rate": 0.875,
+      "steps_total": 101,
+      "steps_ok_rate": 1.0,
+      "recovery_success_rate": 1.0
+    },
+    "text": {
+      "n": 48,
+      "pass_rate": 0.854,
+      "aborted_rate": 0.0,
+      "final_ok_rate": 0.854,
+      "stray_calls_total": 0
+    },
+    "vision": {
+      "n": 224,
+      "pass_rate": 0.955,
+      "aborted_rate": 0.0,
+      "final_ok_rate": 0.955,
+      "stray_calls_total": 0
+    }
+  },
+  "cot_purity": {
+    "n": 331,
+    "ctrl_leak_traj_rate": 0.0,
+    "dup_rate_mean": 0.017,
+    "dup_rate_max": 0.176,
+    "recite_rate_mean": 0.079,
+    "recite_rate_max": 1.0,
+    "other_script_max": 0.0,
+    "empty_think_turns_total": 0,
+    "think_chars_mean": 559.0
+  },
+  "speed": {
+    "generation_tps": {
+      "mean": 47.61,
+      "median": 48.44,
+      "min": 35.35,
+      "max": 56.8,
+      "n": 414
+    },
+    "prompt_tps": {
+      "mean": 506.39,
+      "median": 224.21,
+      "min": 197.35,
+      "max": 11672.07,
+      "n": 414
+    },
+    "peak_memory_max": 28.11,
+    "kv_prefix_hit_rate": {
+      "mean": 0.6,
+      "median": 0.87,
+      "min": 0.0,
+      "max": 0.99,
+      "n": 71
+    }
+  }
+}

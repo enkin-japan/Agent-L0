@@ -1,0 +1,34 @@
+INFO:     Started server process [76442]
+INFO:     Waiting for application startup.
+[Server] 投机配置被环境覆盖：{'mode': 'off'}
+🚀 [Server] loading model: ornith-ai/Ornith-1.5-35B-A3B-MLX-6bit (backend=mlx)
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+📝 text-only VLM-family checkpoint detected, loading without vision tower: Ornith-1.5-35B-A3B-MLX-6bit
+[Server] 方言声明不出调用体语法，约束采样整段禁用（自由采样 + 解析纠错闭环）: qwen35 方言使用原生 XML 调用体（<function=…><parameter=…>），按设计不启用 约束采样——engine 将 fail-open 到自由采样 + 解析纠错闭环。
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:60463 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60464 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60465 - "DELETE /v1/cache/52257a9c589343b1817e417c6076aabd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60466 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60467 - "DELETE /v1/cache/3271ad72ce3f413e8729b0d6e77798d2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60468 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60469 - "DELETE /v1/cache/338ce66b69b44f6b9194e493038c56bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60470 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60471 - "DELETE /v1/cache/9f20ad0acaae45a9a4fa5631808b531e HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60472 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60473 - "DELETE /v1/cache/e5aecdbf5b6e48eab84e9d23720aa697 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60474 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60475 - "DELETE /v1/cache/8a4fedf496de4a02a1f834680e89a9f3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60476 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60482 - "DELETE /v1/cache/8c7e0d8e95114c58babe2930839f3373 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [76442]
+/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/multiprocessing/resource_tracker.py:277: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown: {'/loky-76442-qewfr312'}
+  warnings.warn(

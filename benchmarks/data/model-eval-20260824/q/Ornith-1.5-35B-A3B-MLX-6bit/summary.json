@@ -1,0 +1,79 @@
+{
+  "model": "ornith-ai/Ornith-1.5-35B-A3B-MLX-6bit",
+  "revision": "585b7867b0517980293ece857b26d64e84491352",
+  "dialect": "qwen35",
+  "speculative": {
+    "mode": "off"
+  },
+  "stamp": "20260824-035356",
+  "n_runs": 119,
+  "dimensions": {
+    "tool_call": {
+      "n": 55,
+      "pass_rate": 0.8,
+      "aborted_rate": 0.036,
+      "corrected_rate": 0.0,
+      "final_ok_rate": 0.945,
+      "first_shot_ok_rate": 0.787,
+      "parse_errors_total": 0,
+      "restraint_ok_rate": 1.0,
+      "turns_used_total": 72,
+      "valid_call_ok_rate": 0.809
+    },
+    "longchain": {
+      "n": 16,
+      "pass_rate": 0.812,
+      "aborted_rate": 0.0,
+      "env_errors_total": 3,
+      "final_text_ok_rate": 1.0,
+      "recovered_rate": 0.125,
+      "redundant_calls_total": 11,
+      "state_ok_rate": 0.875,
+      "steps_total": 108,
+      "steps_ok_rate": 0.875,
+      "recovery_success_rate": 0.667
+    },
+    "text": {
+      "n": 48,
+      "pass_rate": 0.771,
+      "aborted_rate": 0.0,
+      "final_ok_rate": 0.771,
+      "stray_calls_total": 0
+    }
+  },
+  "cot_purity": {
+    "n": 107,
+    "ctrl_leak_traj_rate": 0.0,
+    "dup_rate_mean": 0.023,
+    "dup_rate_max": 0.233,
+    "recite_rate_mean": 0.154,
+    "recite_rate_max": 1.0,
+    "other_script_max": 0.0,
+    "empty_think_turns_total": 0,
+    "think_chars_mean": 550.3
+  },
+  "speed": {
+    "generation_tps": {
+      "mean": 74.91,
+      "median": 74.09,
+      "min": 72.01,
+      "max": 93.27,
+      "n": 200
+    },
+    "prompt_tps": {
+      "mean": 4755.41,
+      "median": 1705.35,
+      "min": 501.06,
+      "max": 36167.64,
+      "n": 200
+    },
+    "peak_memory_max": 33.98,
+    "kv_prefix_hit_rate": {
+      "mean": 0.92,
+      "median": 0.93,
+      "min": 0.65,
+      "max": 0.99,
+      "n": 81
+    }
+  }
+}

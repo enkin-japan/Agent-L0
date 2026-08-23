@@ -1,0 +1,22 @@
+== rerun020 Ornith-1.5-35B-A3B-MLX-4bit
+❌ tc-real-020 r0 (5.13s)  | 无完全合格调用（期望 move_file，实际 [('find_files', {'query': 'report-2026Q1.pdf', 'folder': '~/Downloads'}), ('list_dir', {'path': 
+== summary: {"tool_call": {"n": 1, "pass_rate": 0.0, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.0, "parse_errors_total": 0, "turns_used_total": 1, "valid_call_ok_rate": 0.0}}
+== rerun020 Ornith-1.5-35B-A3B-MLX-6bit
+❌ tc-real-020 r0 (3.88s)  | 无完全合格调用（期望 move_file，实际 [('list_dir', {'path': '~/Downloads'}), ('list_dir', {'path': '~/Documents/报告'})]）
+== summary: {"tool_call": {"n": 1, "pass_rate": 0.0, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.0, "parse_errors_total": 0, "turns_used_total": 1, "valid_call_ok_rate": 0.0}}
+== rerun020 Ornith-1.5-35B-A3B-MLX-8bit
+❌ tc-real-020 r0 (4.06s)  | 无完全合格调用（期望 move_file，实际 [('find_files', {'query': 'report-2026Q1.pdf', 'folder': '~/Downloads'}), ('list_dir', {'path': 
+== summary: {"tool_call": {"n": 1, "pass_rate": 0.0, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.0, "parse_errors_total": 0, "turns_used_total": 1, "valid_call_ok_rate": 0.0}}
+== rerun020 gemma-4-26b-a4b-it-4bit
+✅ tc-real-020 r0 (2.68s)
+== summary: {"tool_call": {"n": 1, "pass_rate": 1.0, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 1.0, "parse_errors_total": 0, "turns_used_total": 1, "valid_call_ok_rate": 1.0}}
+== rerun020 gemma-4-26b-a4b-it-8bit
+✅ tc-real-020 r0 (3.02s)
+== summary: {"tool_call": {"n": 1, "pass_rate": 1.0, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 1.0, "parse_errors_total": 0, "turns_used_total": 1, "valid_call_ok_rate": 1.0}}
+== rerun020 Qwen3.8-27B-4bit
+❌ tc-real-020 r0 (9.83s)  | 无完全合格调用（期望 move_file，实际 [('list_dir', {'path': '~/Downloads'}), ('list_dir', {'path': '~/Documents/报告'})]）
+== summary: {"tool_call": {"n": 1, "pass_rate": 0.0, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.0, "parse_errors_total": 0, "turns_used_total": 1, "valid_call_ok_rate": 0.0}}
+== rerun020 Qwen3.8-27B-8bit
+❌ tc-real-020 r0 (11.19s)  | 无完全合格调用（期望 move_file，实际 [('list_dir', {'path': '~/Downloads'}), ('list_dir', {'path': '~/Documents/报告'})]）
+== summary: {"tool_call": {"n": 1, "pass_rate": 0.0, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.0, "parse_errors_total": 0, "turns_used_total": 1, "valid_call_ok_rate": 0.0}}
+== RERUN020 DONE

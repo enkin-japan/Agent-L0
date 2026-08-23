@@ -1,0 +1,23 @@
+[2026-08-24 03:23:51] ==== CAMPAIGN START pid=54760 ====
+[2026-08-24 03:23:51] Q Ornith-1.5-35B-A3B-MLX-4bit start
+[2026-08-24 03:37:21] Q Ornith-1.5-35B-A3B-MLX-4bit rc=0 dur=810s == summary: {"tool_call": {"n": 55, "pass_rate": 0.836, "aborted_rate": 0.036, "corrected_rate": 0.021, "final_ok_rate": 0.982, "first_shot_ok_rate": 0.809, "parse_errors_total": 1, "restraint_ok_rate": 1.0, "turns_used_total": 72, "valid_call_ok_rate": 0.83, "correction_success_rate": 1.0}, "longchain": {"n": 16, "pass_rate": 0.875, "aborted_rate": 0.0, "env_errors_total": 3, "final_text_ok_rate"
+[2026-08-24 03:37:21] Q Ornith-1.5-35B-A3B-MLX-8bit start
+[2026-08-24 03:53:19] Q Ornith-1.5-35B-A3B-MLX-8bit rc=0 dur=958s == summary: {"tool_call": {"n": 55, "pass_rate": 0.8, "aborted_rate": 0.036, "corrected_rate": 0.0, "final_ok_rate": 0.964, "first_shot_ok_rate": 0.809, "parse_errors_total": 0, "restraint_ok_rate": 1.0, "turns_used_total": 70, "valid_call_ok_rate": 0.83}, "longchain": {"n": 16, "pass_rate": 0.812, "aborted_rate": 0.0, "env_errors_total": 2, "final_text_ok_rate": 1.0, "recovered_rate": 0.125, "red
+[2026-08-24 03:53:19] 6bit 判定：yes:{"tool_call": 0.036, "longchain": 0.063, "text": 0.021}
+[2026-08-24 03:53:19] Q Ornith-1.5-35B-A3B-MLX-6bit start
+[2026-08-24 04:07:39] Q Ornith-1.5-35B-A3B-MLX-6bit rc=0 dur=860s == summary: {"tool_call": {"n": 55, "pass_rate": 0.8, "aborted_rate": 0.036, "corrected_rate": 0.0, "final_ok_rate": 0.945, "first_shot_ok_rate": 0.787, "parse_errors_total": 0, "restraint_ok_rate": 1.0, "turns_used_total": 72, "valid_call_ok_rate": 0.809}, "longchain": {"n": 16, "pass_rate": 0.812, "aborted_rate": 0.0, "env_errors_total": 3, "final_text_ok_rate": 1.0, "recovered_rate": 0.125, "re
+[2026-08-24 04:07:39] Q gemma-4-26b-a4b-it-4bit start
+[2026-08-24 04:20:43] Q gemma-4-26b-a4b-it-4bit rc=0 dur=784s == summary: {"tool_call": {"n": 55, "pass_rate": 0.891, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 0.982, "first_shot_ok_rate": 0.894, "parse_errors_total": 0, "restraint_ok_rate": 1.0, "turns_used_total": 68, "valid_call_ok_rate": 0.894}, "longchain": {"n": 16, "pass_rate": 0.875, "aborted_rate": 0.0, "env_errors_total": 3, "final_text_ok_rate": 1.0, "recovered_rate": 0.188, "re
+[2026-08-24 04:20:43] Q gemma-4-26b-a4b-it-8bit start
+[2026-08-24 04:36:01] Q gemma-4-26b-a4b-it-8bit rc=0 dur=918s == summary: {"tool_call": {"n": 55, "pass_rate": 0.909, "aborted_rate": 0.0, "corrected_rate": 0.0, "final_ok_rate": 1.0, "first_shot_ok_rate": 0.894, "parse_errors_total": 0, "restraint_ok_rate": 1.0, "turns_used_total": 69, "valid_call_ok_rate": 0.894}, "longchain": {"n": 16, "pass_rate": 0.875, "aborted_rate": 0.062, "env_errors_total": 4, "final_text_ok_rate": 0.938, "recovered_rate": 0.25, "r
+[2026-08-24 04:36:01] Q Qwen3.8-27B-4bit start
+[2026-08-24 05:48:40] Q Qwen3.8-27B-4bit rc=0 dur=4359s == summary: {"tool_call": {"n": 55, "pass_rate": 0.818, "aborted_rate": 0.018, "corrected_rate": 0.0, "final_ok_rate": 0.982, "first_shot_ok_rate": 0.787, "parse_errors_total": 0, "restraint_ok_rate": 1.0, "turns_used_total": 71, "valid_call_ok_rate": 0.809}, "longchain": {"n": 16, "pass_rate": 0.875, "aborted_rate": 0.0, "env_errors_total": 2, "final_text_ok_rate": 1.0, "recovered_rate": 0.125, "
+[2026-08-24 05:48:40] Q Qwen3.8-27B-8bit start
+[2026-08-24 07:09:44] Q Qwen3.8-27B-8bit rc=0 dur=4864s == summary: {"tool_call": {"n": 55, "pass_rate": 0.873, "aborted_rate": 0.018, "corrected_rate": 0.0, "final_ok_rate": 0.982, "first_shot_ok_rate": 0.872, "parse_errors_total": 0, "restraint_ok_rate": 1.0, "turns_used_total": 71, "valid_call_ok_rate": 0.872}, "longchain": {"n": 16, "pass_rate": 0.938, "aborted_rate": 0.0, "env_errors_total": 3, "final_text_ok_rate": 1.0, "recovered_rate": 0.188, "
+[2026-08-24 07:09:44] S Ornith-1.5-35B-A3B-MLX-4bit start
+[2026-08-24 07:23:15] S Ornith-1.5-35B-A3B-MLX-4bit rc=0 cells=5/5 dur=811s
+[2026-08-24 07:23:15] S Ornith-1.5-35B-A3B-MLX-8bit start
+[2026-08-24 07:40:05] S Ornith-1.5-35B-A3B-MLX-8bit rc=0 cells=5/5 dur=1010s
+[2026-08-24 07:40:05] S Ornith-1.5-35B-A3B-MLX-6bit start
+[2026-08-24 07:55:03] S Ornith-1.5-35B-A3B-MLX-6bit rc=0 cells=5/5 dur=898s
+[2026-08-24 07:55:03] ==== CAMPAIGN DONE q_fail=0 s_fail=0 ====

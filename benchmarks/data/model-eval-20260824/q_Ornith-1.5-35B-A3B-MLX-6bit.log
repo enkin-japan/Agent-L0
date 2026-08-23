@@ -1,0 +1,329 @@
+⚠️ Ornith-1.5-35B-A3B-MLX-6bit 未声明 vision 能力，跳过 224 道视觉题（注册表 capabilities 单一真相）
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+📝 text-only VLM-family checkpoint detected, loading without vision tower: Ornith-1.5-35B-A3B-MLX-6bit
+== 评测 ornith-ai/Ornith-1.5-35B-A3B-MLX-6bit（方言 qwen35）：119 题 × 1 重复 → /Volumes/enkin/project/Agent/benchmarks/data/model-eval-20260824/q/Ornith-1.5-35B-A3B-MLX-6bit
+[Engine] 约束采样引擎就绪（llguidance）
+[Engine] 约束采样构建失败，永久禁用（纠错闭环兜底）: NotImplementedError: qwen35 方言使用原生 XML 调用体（<function=…><parameter=…>），按设计不启用 约束采样——engine 将 fail-open 到自由采样 + 解析纠错闭环。
+[Engine] 前缀命中 0/360 tokens，gen 74.4 tps
+✅ tc-bfcl-simple_0 r0 (2.74s)
+[Engine] 前缀命中 0/327 tokens，gen 74.9 tps
+❌ tc-bfcl-simple_17 r0 (1.41s)  | 无完全合格调用（期望 get_prime_factors，实际 [('get_prime_factors', {'number': 450, 'formatted': False})]）
+[Engine] 前缀命中 0/413 tokens，gen 74.1 tps
+❌ tc-bfcl-multiple_2 r0 (2.36s)  | 无完全合格调用（期望 country_info.capital，实际 []）
+[Engine] 前缀命中 0/640 tokens，gen 73.8 tps
+✅ tc-bfcl-multiple_5 r0 (2.49s)
+[Engine] 前缀命中 0/550 tokens，gen 73.6 tps
+❌ tc-bfcl-multiple_10 r0 (15.94s)  | 无完全合格调用（期望 database.modify_columns，实际 [('database.create_backup', {'db_name': 'employees', 'backup_location': '/backups/
+[Engine] 前缀命中 0/605 tokens，gen 74.2 tps
+✅ tc-bfcl-multiple_17 r0 (1.94s)
+[Engine] 前缀命中 0/515 tokens，gen 73.6 tps
+✅ tc-bfcl-multiple_21 r0 (4.46s)
+[Engine] 前缀命中 0/640 tokens，gen 73.8 tps
+✅ tc-bfcl-multiple_23 r0 (1.83s)
+[Engine] 前缀命中 0/361 tokens，gen 74.4 tps
+✅ tc-bfcl-live_simple_0-0-0 r0 (1.86s)
+[Engine] 前缀命中 0/426 tokens，gen 74.1 tps
+✅ tc-bfcl-live_simple_1-1-0 r0 (2.41s)
+[Engine] 前缀命中 0/426 tokens，gen 74.1 tps
+✅ tc-bfcl-live_simple_2-2-0 r0 (2.5s)
+[Engine] 前缀命中 0/403 tokens，gen 74.6 tps
+✅ tc-bfcl-live_simple_4-3-0 r0 (1.2s)
+[Engine] 前缀命中 0/402 tokens，gen 74.0 tps
+✅ tc-bfcl-live_simple_13-3-9 r0 (2.82s)
+[Engine] 前缀命中 0/3271 tokens，gen 72.8 tps
+✅ tc-real-001 r0 (4.7s)
+[Engine] 前缀命中 0/3273 tokens，gen 72.5 tps
+✅ tc-real-002 r0 (6.13s)
+[Engine] 前缀命中 0/2602 tokens，gen 73.0 tps
+✅ tc-real-003 r0 (6.74s)
+[Engine] 前缀命中 0/2491 tokens，gen 73.2 tps
+✅ tc-real-004 r0 (3.22s)
+[Engine] 前缀命中 0/2829 tokens，gen 72.7 tps
+✅ tc-real-005 r0 (6.66s)
+[Engine] 前缀命中 0/3119 tokens，gen 72.4 tps
+❌ tc-real-006 r0 (18.0s)  | 无完全合格调用（期望 register_skill，实际 [('run_shell_command', {'command': 'if [ -d ~/work ]; then echo "EXISTS"; ls -la ~/work | h
+[Engine] 前缀命中 0/2155 tokens，gen 73.6 tps
+✅ tc-real-007 r0 (2.79s)
+[Engine] 前缀命中 0/2096 tokens，gen 73.1 tps
+✅ tc-real-008 r0 (3.58s)
+[Engine] 前缀命中 0/2474 tokens，gen 72.9 tps
+✅ tc-real-009 r0 (5.05s)
+[Engine] 前缀命中 0/2098 tokens，gen 73.5 tps
+✅ tc-real-010 r0 (3.22s)
+[Engine] 前缀命中 0/2224 tokens，gen 73.4 tps
+✅ tc-real-011 r0 (2.78s)
+[Engine] 前缀命中 0/3036 tokens，gen 73.0 tps
+✅ tc-real-012 r0 (3.5s)
+[Engine] 前缀命中 0/1999 tokens，gen 72.8 tps
+✅ tc-real-013 r0 (2.46s)
+[Engine] 前缀命中 0/2275 tokens，gen 73.3 tps
+✅ tc-real-014 r0 (3.09s)
+[Engine] 前缀命中 0/3035 tokens，gen 73.5 tps
+✅ tc-real-015 r0 (2.59s)
+[Engine] 前缀命中 0/3216 tokens，gen 72.6 tps
+❌ tc-real-016 r0 (4.54s)  | 无完全合格调用（期望 math_research，实际 [('run_math', {'code': 'fill=12; drain=4.5; start=80; cap=500\nspace=cap-start\nnet=fill-dra
+[Engine] 前缀命中 0/2014 tokens，gen 73.1 tps
+✅ tc-real-017 r0 (2.42s)
+[Engine] 前缀命中 0/2352 tokens，gen 73.2 tps
+✅ tc-real-018 r0 (3.11s)
+[Engine] 前缀命中 0/2494 tokens，gen 72.9 tps
+❌ tc-real-019 r0 (3.16s)  | 无完全合格调用（期望 edit_file，实际 [('run_shell_command', {'command': 'cat -A ~/proj/config.yaml | grep -n "timeout" '})]）
+[Engine] 前缀命中 0/2017 tokens，gen 72.8 tps
+❌ tc-real-020 r0 (2.84s)  | 无完全合格调用（期望 move_file，实际 [('list_dir', {'path': '~/Downloads'}), ('list_dir', {'path': '~/Documents/报告'})]）
+[Engine] 前缀命中 0/3051 tokens，gen 73.4 tps
+[Engine] 前缀命中 3111/3144 tokens，gen 73.1 tps
+✅ tc-real-021 r0 (4.02s)
+[Engine] 前缀命中 0/2346 tokens，gen 73.0 tps
+[Engine] 前缀命中 2481/2539 tokens，gen 72.7 tps
+✅ tc-real-022 r0 (5.84s)
+[Engine] 前缀命中 0/2499 tokens，gen 73.2 tps
+[Engine] 前缀命中 2573/2653 tokens，gen 73.6 tps
+❌ tc-real-023 r0 (3.38s)  | 无完全合格调用（期望 file_extract，实际 [('file_extract', {'path': '/Users/me/Downloads/租约.pdf', 'page': 3})]）
+[Engine] 前缀命中 0/3157 tokens，gen 73.0 tps
+[Engine] 前缀命中 3263/3309 tokens，gen 72.5 tps
+[Engine] 前缀命中 3515/3562 tokens，gen 72.4 tps
+❌ tc-real-024 r0 (10.14s)  | must_any 全缺: ['売上2026_updated.xlsx']; 无完全合格调用（期望 excel_research，实际 [('file_extract', {'path': '/Users/me/Desktop/売上2026.
+[Engine] 前缀命中 0/2103 tokens，gen 73.0 tps
+✅ tc-real-025 r0 (6.21s)
+[Engine] 前缀命中 0/1872 tokens，gen 73.5 tps
+✅ tc-real-026 r0 (2.13s)
+[Engine] 前缀命中 0/2035 tokens，gen 73.1 tps
+❌ tc-real-027 r0 (2.2s)  | must_any 全缺: ['welcome', 'Welcome', 'glad', 'Glad', 'anytime', 'Anytime', 'care', 'Care']
+[Engine] 前缀命中 0/2685 tokens，gen 72.5 tps
+✅ tc-real-028 r0 (14.17s)
+[Engine] 前缀命中 0/2154 tokens，gen 73.1 tps
+✅ tc-real-029 r0 (3.47s)
+[Engine] 前缀命中 0/2107 tokens，gen 73.3 tps
+✅ tc-real-030 r0 (3.48s)
+[Engine] 前缀命中 0/298 tokens，gen 74.9 tps
+[Engine] 前缀命中 349/398 tokens，gen 74.6 tps
+✅ tc-seed-001 r0 (2.02s)
+[Engine] 前缀命中 0/285 tokens，gen 74.9 tps
+[Engine] 前缀命中 333/380 tokens，gen 75.0 tps
+✅ tc-seed-002 r0 (1.7s)
+[Engine] 前缀命中 0/278 tokens，gen 74.9 tps
+[Engine] 前缀命中 329/370 tokens，gen 74.7 tps
+✅ tc-seed-003 r0 (1.89s)
+[Engine] 前缀命中 0/309 tokens，gen 74.0 tps
+[Engine] 前缀命中 487/530 tokens，gen 74.5 tps
+✅ tc-seed-004 r0 (3.78s)
+[Engine] 前缀命中 0/293 tokens，gen 74.6 tps
+[Engine] 前缀命中 358/399 tokens，gen 74.8 tps
+✅ tc-seed-005 r0 (2.05s)
+[Engine] 前缀命中 0/372 tokens，gen 74.9 tps
+[Engine] 前缀命中 425/460 tokens，gen 75.8 tps
+✅ tc-seed-006 r0 (1.53s)
+[Engine] 前缀命中 0/325 tokens，gen 74.1 tps
+[Engine] 前缀命中 396/457 tokens，gen 74.1 tps
+[Engine] 前缀命中 559/670 tokens，gen 73.8 tps
+❌ tc-seed-007 r0 (4.57s)  | must_any 全缺: ['0.30', 'MLX']
+[Engine] 前缀命中 0/281 tokens，gen 73.7 tps
+✅ tc-seed-008 r0 (4.24s)
+[Engine] 前缀命中 0/276 tokens，gen 74.4 tps
+✅ tc-seed-009 r0 (1.72s)
+[Engine] 前缀命中 0/305 tokens，gen 74.4 tps
+[Engine] 前缀命中 395/437 tokens，gen 75.6 tps
+✅ tc-seed-010 r0 (2.07s)
+[Engine] 前缀命中 0/296 tokens，gen 74.5 tps
+[Engine] 前缀命中 379/425 tokens，gen 73.6 tps
+[Engine] 前缀命中 706/740 tokens，gen 74.4 tps
+✅ tc-seed-011 r0 (6.43s)
+[Engine] 前缀命中 0/286 tokens，gen 74.6 tps
+[Engine] 前缀命中 358/412 tokens，gen 74.0 tps
+✅ tc-seed-012 r0 (3.28s)
+[Engine] 前缀命中 0/526 tokens，gen 74.3 tps
+[Engine] 前缀命中 598/690 tokens，gen 73.7 tps
+[Engine] 前缀命中 890/1367 tokens，gen 73.1 tps
+[Engine] 前缀命中 2561/2602 tokens，gen 73.4 tps
+✅ lc-hard-001 r0 (22.83s)
+[Engine] 前缀命中 0/530 tokens，gen 74.6 tps
+[Engine] 前缀命中 595/645 tokens，gen 74.0 tps
+[Engine] 前缀命中 762/907 tokens，gen 73.3 tps
+[Engine] 前缀命中 1314/1358 tokens，gen 73.8 tps
+[Engine] 前缀命中 1463/1570 tokens，gen 74.8 tps
+[Engine] 前缀命中 1609/1648 tokens，gen 73.6 tps
+✅ lc-hard-002 r0 (13.09s)
+[Engine] 前缀命中 0/498 tokens，gen 74.8 tps
+[Engine] 前缀命中 547/606 tokens，gen 73.9 tps
+[Engine] 前缀命中 747/916 tokens，gen 73.6 tps
+[Engine] 前缀命中 1161/1203 tokens，gen 74.0 tps
+[Engine] 前缀命中 1278/1321 tokens，gen 73.9 tps
+✅ lc-hard-003 r0 (9.21s)
+[Engine] 前缀命中 0/549 tokens，gen 74.6 tps
+[Engine] 前缀命中 600/648 tokens，gen 74.0 tps
+[Engine] 前缀命中 757/917 tokens，gen 73.5 tps
+[Engine] 前缀命中 1256/1298 tokens，gen 74.0 tps
+[Engine] 前缀命中 1387/1430 tokens，gen 74.0 tps
+[Engine] 前缀命中 1533/1577 tokens，gen 73.4 tps
+[Engine] 前缀命中 1831/1876 tokens，gen 73.8 tps
+[Engine] 前缀命中 2021/2269 tokens，gen 73.1 tps
+❌ lc-hard-004 r0 (20.33s)  | files/policy/backup.md: eq 失败: 'Backup policy\n- Snapshots are kept for 30 days.' != 'Backup policy\n- Snapshots are kep
+[Engine] 前缀命中 0/667 tokens，gen 74.4 tps
+[Engine] 前缀命中 730/807 tokens，gen 73.1 tps
+[Engine] 前缀命中 1161/1323 tokens，gen 73.7 tps
+[Engine] 前缀命中 1434/1505 tokens，gen 73.7 tps
+[Engine] 前缀命中 1615/1656 tokens，gen 74.7 tps
+[Engine] 前缀命中 1698/1795 tokens，gen 73.6 tps
+✅ lc-hard-005 r0 (12.32s)
+[Engine] 前缀命中 0/513 tokens，gen 74.5 tps
+[Engine] 前缀命中 566/613 tokens，gen 74.2 tps
+[Engine] 前缀命中 713/841 tokens，gen 73.4 tps
+[Engine] 前缀命中 1244/1315 tokens，gen 74.2 tps
+[Engine] 前缀命中 1388/1479 tokens，gen 73.5 tps
+✅ lc-hard-006 r0 (12.11s)
+[Engine] 前缀命中 0/527 tokens，gen 74.6 tps
+[Engine] 前缀命中 582/653 tokens，gen 73.9 tps
+[Engine] 前缀命中 816/926 tokens，gen 73.4 tps
+[Engine] 前缀命中 1328/1403 tokens，gen 73.6 tps
+[Engine] 前缀命中 1550/1593 tokens，gen 73.9 tps
+[Engine] 前缀命中 1713/1881 tokens，gen 73.3 tps
+✅ lc-hard-007 r0 (16.56s)
+[Engine] 前缀命中 0/534 tokens，gen 74.1 tps
+[Engine] 前缀命中 652/694 tokens，gen 73.9 tps
+[Engine] 前缀命中 839/949 tokens，gen 73.4 tps
+[Engine] 前缀命中 1460/1567 tokens，gen 73.8 tps
+[Engine] 前缀命中 1692/1866 tokens，gen 73.5 tps
+[Engine] 前缀命中 2018/2060 tokens，gen 74.6 tps
+[Engine] 前缀命中 2099/2141 tokens，gen 73.3 tps
+❌ lc-hard-008 r0 (19.05s)  | 步数超限: 11 > 10
+[Engine] 前缀命中 0/536 tokens，gen 74.6 tps
+[Engine] 前缀命中 595/655 tokens，gen 73.7 tps
+[Engine] 前缀命中 854/1069 tokens，gen 73.4 tps
+[Engine] 前缀命中 1666/1709 tokens，gen 72.0 tps
+❌ lc-hard-009 r0 (15.5s)  | files/metrics/summary.json: regex 失败: '(?s)\\{\\s*"cpu"\\s*:\\s*21(?:\\.0+)?\\s*,\\s*"mem"\\s*:\\s*44(?:\\.0+)?\\s*,\\s*
+[Engine] 前缀命中 0/511 tokens，gen 74.0 tps
+[Engine] 前缀命中 571/627 tokens，gen 74.2 tps
+[Engine] 前缀命中 772/993 tokens，gen 73.4 tps
+[Engine] 前缀命中 1451/1493 tokens，gen 73.8 tps
+✅ lc-hard-010 r0 (11.29s)
+[Engine] 前缀命中 0/490 tokens，gen 74.2 tps
+[Engine] 前缀命中 576/623 tokens，gen 73.9 tps
+[Engine] 前缀命中 805/846 tokens，gen 74.4 tps
+✅ lc-seed-001 r0 (5.28s)
+[Engine] 前缀命中 0/493 tokens，gen 74.1 tps
+[Engine] 前缀命中 577/663 tokens，gen 73.8 tps
+[Engine] 前缀命中 857/898 tokens，gen 74.7 tps
+[Engine] 前缀命中 949/1016 tokens，gen 73.9 tps
+✅ lc-seed-002 r0 (6.76s)
+[Engine] 前缀命中 0/377 tokens，gen 74.8 tps
+[Engine] 前缀命中 459/491 tokens，gen 74.6 tps
+[Engine] 前缀命中 593/663 tokens，gen 74.8 tps
+[Engine] 前缀命中 722/762 tokens，gen 75.1 tps
+[Engine] 前缀命中 806/862 tokens，gen 74.2 tps
+✅ lc-seed-003 r0 (5.73s)
+[Engine] 前缀命中 0/489 tokens，gen 74.4 tps
+[Engine] 前缀命中 572/619 tokens，gen 74.1 tps
+[Engine] 前缀命中 745/894 tokens，gen 73.7 tps
+[Engine] 前缀命中 1159/1201 tokens，gen 74.2 tps
+✅ lc-seed-004 r0 (8.41s)
+[Engine] 前缀命中 0/486 tokens，gen 74.7 tps
+[Engine] 前缀命中 559/606 tokens，gen 73.9 tps
+[Engine] 前缀命中 777/818 tokens，gen 75.6 tps
+[Engine] 前缀命中 853/894 tokens，gen 74.0 tps
+[Engine] 前缀命中 993/1040 tokens，gen 74.8 tps
+✅ lc-seed-005 r0 (6.6s)
+[Engine] 前缀命中 0/481 tokens，gen 74.3 tps
+[Engine] 前缀命中 585/631 tokens，gen 74.7 tps
+[Engine] 前缀命中 698/735 tokens，gen 73.9 tps
+[Engine] 前缀命中 908/949 tokens，gen 74.0 tps
+✅ lc-seed-006 r0 (6.77s)
+[Engine] 前缀命中 0/169 tokens，gen 74.3 tps
+✅ tx-gen-001 r0 (3.46s)
+[Engine] 前缀命中 0/152 tokens，gen 75.4 tps
+✅ tx-gen-002 r0 (0.81s)
+[Engine] 前缀命中 0/170 tokens，gen 74.5 tps
+✅ tx-gen-003 r0 (2.22s)
+[Engine] 前缀命中 0/116 tokens，gen 76.7 tps
+✅ tx-gen-004 r0 (0.58s)
+[Engine] 前缀命中 0/133 tokens，gen 75.8 tps
+✅ tx-gen-005 r0 (0.73s)
+[Engine] 前缀命中 0/121 tokens，gen 74.9 tps
+✅ tx-gen-006 r0 (1.42s)
+[Engine] 前缀命中 0/116 tokens，gen 74.0 tps
+✅ tx-gen-007 r0 (6.43s)
+[Engine] 前缀命中 0/147 tokens，gen 74.3 tps
+✅ tx-gen-008 r0 (4.26s)
+[Engine] 前缀命中 0/153 tokens，gen 74.6 tps
+✅ tx-gen-009 r0 (1.59s)
+[Engine] 前缀命中 0/159 tokens，gen 74.1 tps
+✅ tx-gen-010 r0 (4.55s)
+[Engine] 前缀命中 0/143 tokens，gen 74.3 tps
+✅ tx-gen-011 r0 (2.84s)
+[Engine] 前缀命中 0/136 tokens，gen 76.0 tps
+✅ tx-gen-012 r0 (0.65s)
+[Engine] 前缀命中 0/150 tokens，gen 74.1 tps
+✅ tx-gen-013 r0 (4.1s)
+[Engine] 前缀命中 0/220 tokens，gen 75.4 tps
+✅ tx-gen-014 r0 (0.76s)
+[Engine] 前缀命中 0/196 tokens，gen 74.1 tps
+✅ tx-gen-015 r0 (4.05s)
+[Engine] 前缀命中 0/188 tokens，gen 75.3 tps
+✅ tx-gen-016 r0 (0.94s)
+[Engine] 前缀命中 0/163 tokens，gen 74.4 tps
+✅ tx-gen-017 r0 (1.93s)
+[Engine] 前缀命中 0/173 tokens，gen 75.0 tps
+✅ tx-gen-018 r0 (1.11s)
+[Engine] 前缀命中 0/142 tokens，gen 74.8 tps
+✅ tx-gen-019 r0 (1.42s)
+[Engine] 前缀命中 0/153 tokens，gen 75.5 tps
+✅ tx-gen-020 r0 (0.73s)
+[Engine] 前缀命中 0/169 tokens，gen 74.3 tps
+✅ tx-gen-021 r0 (2.26s)
+[Engine] 前缀命中 0/163 tokens，gen 74.1 tps
+✅ tx-gen-022 r0 (5.09s)
+[Engine] 前缀命中 0/141 tokens，gen 74.4 tps
+✅ tx-gen-023 r0 (1.43s)
+[Engine] 前缀命中 0/167 tokens，gen 74.5 tps
+✅ tx-gen-024 r0 (1.79s)
+[Engine] 前缀命中 0/137 tokens，gen 75.2 tps
+✅ tx-gen-025 r0 (0.89s)
+[Engine] 前缀命中 0/136 tokens，gen 74.2 tps
+✅ tx-gen-026 r0 (4.01s)
+[Engine] 前缀命中 0/144 tokens，gen 75.4 tps
+✅ tx-gen-027 r0 (0.77s)
+[Engine] 前缀命中 0/159 tokens，gen 74.2 tps
+✅ tx-gen-028 r0 (2.38s)
+[Engine] 前缀命中 0/121 tokens，gen 76.3 tps
+✅ tx-gen-029 r0 (0.6s)
+[Engine] 前缀命中 0/134 tokens，gen 74.6 tps
+✅ tx-gen-030 r0 (1.56s)
+[Engine] 前缀命中 0/165 tokens，gen 74.3 tps
+✅ tx-gen-031 r0 (2.18s)
+[Engine] 前缀命中 0/161 tokens，gen 74.4 tps
+✅ tx-gen-032 r0 (2.42s)
+[Engine] 前缀命中 0/6814 tokens，gen 91.9 tps
+✅ tx-lcs-8k-json r0 (9.79s)
+[Engine] 前缀命中 0/6817 tokens，gen 93.3 tps
+❌ tx-lcs-8k-table r0 (4.68s)  | regex_all 不中: '停机\\s*\\|\\s*5\\s*\\|\\s*7068(?!\\d)'; regex_all 不中: '告警\\s*\\|\\s*4\\s*\\|\\s*1702(?!\\d)'
+[Engine] 前缀命中 0/6815 tokens，gen 92.0 tps
+❌ tx-lcs-8k-table-think r0 (15.86s)  | regex_all 不中: '停机\\s*\\|\\s*5\\s*\\|\\s*7068(?!\\d)'
+[Engine] 前缀命中 0/6846 tokens，gen 92.3 tps
+❌ tx-lcs-8k-table-list r0 (6.8s)  | regex_all 不中: '停机\\s*\\|\\s*5\\s*\\|\\s*7068(?!\\d)'; regex_all 不中: '告警\\s*\\|\\s*4\\s*\\|\\s*1702(?!\\d)'
+[Engine] 前缀命中 0/13141 tokens，gen 88.5 tps
+✅ tx-lcs-16k-json r0 (14.16s)
+[Engine] 前缀命中 0/13144 tokens，gen 90.0 tps
+❌ tx-lcs-16k-table r0 (8.82s)  | regex_all 不中: '告警\\s*\\|\\s*7\\s*\\|\\s*5941(?!\\d)'; regex_all 不中: '正常\\s*\\|\\s*4\\s*\\|\\s*4195(?!\\d)'
+[Engine] 前缀命中 0/13142 tokens，gen 88.2 tps
+❌ tx-lcs-16k-table-think r0 (20.49s)  | regex_all 不中: '告警\\s*\\|\\s*7\\s*\\|\\s*5941(?!\\d)'; regex_all 不中: '正常\\s*\\|\\s*4\\s*\\|\\s*4195(?!\\d)'
+[Engine] 前缀命中 0/13173 tokens，gen 87.6 tps
+❌ tx-lcs-16k-table-list r0 (11.1s)  | regex_all 不中: '告警\\s*\\|\\s*7\\s*\\|\\s*5941(?!\\d)'
+[Engine] 前缀命中 0/25937 tokens，gen 81.5 tps
+✅ tx-lcs-32k-json r0 (24.54s)
+[Engine] 前缀命中 0/25940 tokens，gen 83.0 tps
+❌ tx-lcs-32k-table r0 (18.78s)  | regex_all 不中: '告警\\s*\\|\\s*3\\s*\\|\\s*3838(?!\\d)'; regex_all 不中: '正常\\s*\\|\\s*4\\s*\\|\\s*5208(?!\\d)'; regex_all 不中
+[Engine] 前缀命中 0/25938 tokens，gen 81.5 tps
+❌ tx-lcs-32k-table-think r0 (31.41s)  | regex_all 不中: '停机\\s*\\|\\s*5\\s*\\|\\s*4747(?!\\d)'
+[Engine] 前缀命中 0/25969 tokens，gen 81.6 tps
+❌ tx-lcs-32k-table-list r0 (21.12s)  | regex_all 不中: '正常\\s*\\|\\s*4\\s*\\|\\s*5208(?!\\d)'; regex_all 不中: '停机\\s*\\|\\s*5\\s*\\|\\s*4747(?!\\d)'
+[Engine] 前缀命中 0/39061 tokens，gen 77.2 tps
+✅ tx-lcs-48k-json r0 (38.95s)
+[Engine] 前缀命中 0/39064 tokens，gen 78.1 tps
+❌ tx-lcs-48k-table r0 (31.2s)  | regex_all 不中: '停机\\s*\\|\\s*5\\s*\\|\\s*2129(?!\\d)'; regex_all 不中: '告警\\s*\\|\\s*4\\s*\\|\\s*3018(?!\\d)'
+[Engine] 前缀命中 0/39062 tokens，gen 76.9 tps
+❌ tx-lcs-48k-table-think r0 (44.58s)  | regex_all 不中: '停机\\s*\\|\\s*5\\s*\\|\\s*2129(?!\\d)'; regex_all 不中: '告警\\s*\\|\\s*4\\s*\\|\\s*3018(?!\\d)'
+[Engine] 前缀命中 0/39093 tokens，gen 77.6 tps
+✅ tx-lcs-48k-table-list r0 (33.66s)
+== summary: {"tool_call": {"n": 55, "pass_rate": 0.8, "aborted_rate": 0.036, "corrected_rate": 0.0, "final_ok_rate": 0.945, "first_shot_ok_rate": 0.787, "parse_errors_total": 0, "restraint_ok_rate": 1.0, "turns_used_total": 72, "valid_call_ok_rate": 0.809}, "longchain": {"n": 16, "pass_rate": 0.812, "aborted_rate": 0.0, "env_errors_total": 3, "final_text_ok_rate": 1.0, "recovered_rate": 0.125, "redundant_calls_total": 11, "state_ok_rate": 0.875, "steps_total": 108, "steps_ok_rate": 0.875, "recovery_success_rate": 0.667}, "text": {"n": 48, "pass_rate": 0.771, "aborted_rate": 0.0, "final_ok_rate": 0.771, "stray_calls_total": 0}}
+== cot: {"n": 107, "ctrl_leak_traj_rate": 0.0, "dup_rate_mean": 0.023, "dup_rate_max": 0.233, "recite_rate_mean": 0.154, "recite_rate_max": 1.0, "other_script_max": 0.0, "empty_think_turns_total": 0, "think_chars_mean": 550.3}
+== speed: {"generation_tps": {"mean": 74.91, "median": 74.09, "min": 72.01, "max": 93.27, "n": 200}, "prompt_tps": {"mean": 4755.41, "median": 1705.35, "min": 501.06, "max": 36167.64, "n": 200}, "peak_memory_max": 33.98, "kv_prefix_hit_rate": {"mean": 0.92, "median": 0.93, "min": 0.65, "max": 0.99, "n": 81}}
+== 产物: /Volumes/enkin/project/Agent/benchmarks/data/model-eval-20260824/q/Ornith-1.5-35B-A3B-MLX-6bit

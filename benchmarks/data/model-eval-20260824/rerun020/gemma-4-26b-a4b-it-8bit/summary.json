@@ -1,0 +1,52 @@
+{
+  "model": "mlx-community/gemma-4-26b-a4b-it-8bit",
+  "revision": "33c6d23798a0af159529890f79329206dbfbd73c",
+  "dialect": "gemma4",
+  "speculative": {
+    "mode": "off"
+  },
+  "stamp": "20260824-075819",
+  "n_runs": 1,
+  "dimensions": {
+    "tool_call": {
+      "n": 1,
+      "pass_rate": 1.0,
+      "aborted_rate": 0.0,
+      "corrected_rate": 0.0,
+      "final_ok_rate": 1.0,
+      "first_shot_ok_rate": 1.0,
+      "parse_errors_total": 0,
+      "turns_used_total": 1,
+      "valid_call_ok_rate": 1.0
+    }
+  },
+  "cot_purity": {
+    "n": 1,
+    "ctrl_leak_traj_rate": 0.0,
+    "dup_rate_mean": 0.0,
+    "dup_rate_max": 0.0,
+    "recite_rate_mean": 0.0,
+    "recite_rate_max": 0.0,
+    "other_script_max": 0.0,
+    "empty_think_turns_total": 1,
+    "think_chars_mean": 0.0
+  },
+  "speed": {
+    "generation_tps": {
+      "mean": 64.2,
+      "median": 64.2,
+      "min": 64.2,
+      "max": 64.2,
+      "n": 1
+    },
+    "prompt_tps": {
+      "mean": 1221.4,
+      "median": 1221.4,
+      "min": 1221.4,
+      "max": 1221.4,
+      "n": 1
+    },
+    "peak_memory_max": 28.99,
+    "kv_prefix_hit_rate": {}
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "model": "ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit",
+  "revision": "19504d912fa8fc7622bf6b1de3db5d5d890b1f02",
+  "dialect": "qwen35",
+  "speculative": {
+    "mode": "off"
+  },
+  "stamp": "20260824-075553",
+  "n_runs": 1,
+  "dimensions": {
+    "tool_call": {
+      "n": 1,
+      "pass_rate": 0.0,
+      "aborted_rate": 0.0,
+      "corrected_rate": 0.0,
+      "final_ok_rate": 1.0,
+      "first_shot_ok_rate": 0.0,
+      "parse_errors_total": 0,
+      "turns_used_total": 1,
+      "valid_call_ok_rate": 0.0
+    }
+  },
+  "cot_purity": {
+    "n": 1,
+    "ctrl_leak_traj_rate": 0.0,
+    "dup_rate_mean": 0.068,
+    "dup_rate_max": 0.068,
+    "recite_rate_mean": 0.72,
+    "recite_rate_max": 0.72,
+    "other_script_max": 0.0,
+    "empty_think_turns_total": 0,
+    "think_chars_mean": 771.0
+  },
+  "speed": {
+    "generation_tps": {
+      "mean": 86.48,
+      "median": 86.48,
+      "min": 86.48,
+      "max": 86.48,
+      "n": 1
+    },
+    "prompt_tps": {
+      "mean": 1352.87,
+      "median": 1352.87,
+      "min": 1352.87,
+      "max": 1352.87,
+      "n": 1
+    },
+    "peak_memory_max": 21.74,
+    "kv_prefix_hit_rate": {}
+  }
+}

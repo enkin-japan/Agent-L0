@@ -1,0 +1,32 @@
+INFO:     Started server process [76433]
+INFO:     Waiting for application startup.
+[Server] 投机配置被环境覆盖：{'mode': 'off'}
+🚀 [Server] loading model: ornith-ai/Ornith-1.5-35B-A3B-MLX-6bit (backend=mlx)
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+📝 text-only VLM-family checkpoint detected, loading without vision tower: Ornith-1.5-35B-A3B-MLX-6bit
+[Server] 方言声明不出调用体语法，约束采样整段禁用（自由采样 + 解析纠错闭环）: qwen35 方言使用原生 XML 调用体（<function=…><parameter=…>），按设计不启用 约束采样——engine 将 fail-open 到自由采样 + 解析纠错闭环。
+🔐 [Server] 推理服务鉴权已启用（Bearer INFER_API_KEY）
+✅ [Server] inference-server listening on 127.0.0.1:14161
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:14161 (Press CTRL+C to quit)
+INFO:     127.0.0.1:60419 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60420 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60421 - "DELETE /v1/cache/4364bebb125d4dd4b2cfa1fb4387b1a8 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60422 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60423 - "DELETE /v1/cache/b09835b89e6a4780bbf85a935743465e HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60424 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60425 - "DELETE /v1/cache/c141349a94554ae584ad6c05c3930efc HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60426 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60427 - "DELETE /v1/cache/0c5b09c69fc942378674f9e1066933aa HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60428 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60429 - "DELETE /v1/cache/902d173065a34c87aeadff25cea83eed HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60430 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60431 - "DELETE /v1/cache/ebf233ffdc5146bc8c39b9d2e454480d HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60432 - "POST /v1/generate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60433 - "DELETE /v1/cache/c6360985c851417cb390878234b3b459 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+
+🛑 [Server] shutting down…
+INFO:     Application shutdown complete.
+INFO:     Finished server process [76433]

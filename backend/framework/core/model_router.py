@@ -35,7 +35,7 @@ ROUTE_KINDS = {
 #: profile 字典的合法键（金测试校验 config 声明；rates ∈ [0,1]，tps 为正）
 #: vision_hard（2026-08-08 ChartQA 加难批）：多步读数图表 QA——路由暂无 kind
 #: 引用它，先作合法画像维度登记（图表密集型任务的路由依据候选）
-PROFILE_METRICS = ("tool_call", "longchain", "vision", "vision_hard", "tps")
+PROFILE_METRICS = ("tool_call", "longchain", "text", "vision", "vision_hard", "tps")   # text：2026-08-24 题库扩容起（通用指令遵循+长上下文结构化）
 
 #: 专科挑战 main 需要的最小实测优势（避免在测量噪声上来回切换）
 ROUTING_MARGIN = 0.05

@@ -307,4 +307,7 @@ def test_registry_ornith15_entries_are_text_only_qwen35():
         assert e["dialect"] == "qwen35"
         assert e["capabilities"] == ["text"], "纯文本件不得声明 vision——路由会派图过去"
         assert len(e["revision"]) == 40 and all(c in "0123456789abcdef" for c in e["revision"])
-        assert "profile" not in e, "未画像前不得带 profile（路由优先选中纪律）"
+        prof = e.get("profile") or {}
+        assert {"tool_call", "longchain", "text", "tps"} <= set(prof), \
+            "08-24 画像已回填：四键齐全才可被路由优先选中"
+        assert "vision" not in prof, "纯文本件不得带 vision 画像"

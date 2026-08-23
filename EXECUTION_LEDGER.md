@@ -4631,6 +4631,40 @@ run 是 results/ 下 gitignored 本地件（换机不可重算）；cuda/gen_sem
 
 ---
 
+**✅ 睡前大型任务（用户 2026-08-24 拍板五项）：题库扩容 + Ornith-1.5 入册 + 六档横评 + 对比报告**
+
+交付（commit `946dd63` 补丁+入册 → `0bccc46` 题库扩容 → 本笔档案+画像回填）：
+1. **题库扩容 108→192 题**：`tc-real` 生产工具面 30（`tools_ref`→46 工具 schema 快照
+   `real_tool_schemas.json`，8–12 工具在场含干扰项）、`lc-hard` 长链加难 10（mock 故障注入
+   `fail_first_n`/`readonly` + `office` 合体环境）、`tx-gen` 通用指令遵循 32（executor 新增
+   `task.history` 多轮前史；lang 加 ja）、`vi-app` 合成 App 截图 12（gen_assets.py 确定性重建）。
+   剔坏题两道工序：26b-4bit 先行整跑（修 2 放宽 1）+ reviewer 一审 5 条实质判分缺陷全修
+   （CJK `\b` 词边界→lookaround 为族规）；七档共同失败仅 tc-real-020，裁决为题面缺陷
+   （run_shell_command 自称 PRIMARY 不配当干扰项），剔后单题七档补跑并档（superseded 留痕，
+   merge020.py + rescore.py 统一尺）。
+2. **Ornith-1.5-35B-A3B 三量化入册**：MLX 件为纯文本（vision_config 缺键、0 个视觉塔权重；
+   官方 bf16 有图像能力，转换件没带）。装载补丁 `backends/mlx/patch/text_only_vlm.py`
+   （窄谓词跳塔 + 分词器处理器垫片，锁串行化，5+2 只突变全红）；注册表三档 dialect qwen35、
+   capabilities=["text"]、revision 钉死；D.20 阵容钉 9→12。零解析错误跑通全程。
+3. **横评（campaign.sh，03:23–07:55，q_fail=0 s_fail=0）**：六档+6bit 判定补测。
+   数字见 `benchmarks/model_eval/PROFILES.md` 08-24 节与
+   `benchmarks/data/model-eval-20260824/REPORT.md`（表格 report.py 可复算）。要点：
+   26b tool_call 0.909/0.927 主档不动摇；qwen38 text/vision 特长再确认 + tool_call 弱面
+   新发现（生产工具面 22/30）；Ornith-1.5 三量化差 ≤2 题=噪声级（判定规则 ≥3pt 机械触发了
+   6bit，结论=无独立生态位，**只留 4bit 有意义**）；4bit decode 117→76 tps@0→64k 全库
+   64k 段最快、长链终态 93.8% 步数最省，但探索先行风格在单发择器题吃亏、正文转述率 16–18%
+   偏高、自称 Claude 蒸馏痕迹。B3 隐式聚合弱为全家族通病（七档 longctx table 25–62%）。
+4. **画像回填**：config 注册表 6 档 profile 统一 08-24 口径（新维 `text` 入
+   `PROFILE_METRICS` 词汇表）；Ornith 三档补 profile。生产选择档未动（仍 26b-4bit）。
+5. **速度**：Ornith 三档 bench_baseline v3 15/15 格入档 `speed/baseline_v3_ornith.jsonl`，
+   与 08-16 全库基线同口径可并表；MTP 未测（用户指定）。
+过程纪律：campaign 挂 task-sentinel + 0-token 监控双层；单 GPU 全程串行；两次 per-diff
+门禁（补丁批 reviewer→修 7 项；题库批 reviewer→修 5 实质+11 建议）；突变证明合计 14 只
+全红分录在各 commit。已知边界：vi-app 批七档全对（确认面无区分度）、tx-gen 对现役档
+接近天花板（94–100%）——下轮扩容从这两处加难；Ornith 是否入 endpoints 待用户拍板。
+
+---
+
 **全账重排（D.24，2026-08-18 用户拍板）——判据：① 缺陷修复优先 ② Mac 端优先——**
 
 **这是当前唯一有效的施工顺序**，覆盖此前所有「下一件」写法。`第二梯队` 段已改为指回本块。

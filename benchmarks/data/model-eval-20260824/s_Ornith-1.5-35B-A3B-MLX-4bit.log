@@ -1,0 +1,42 @@
+[07:09:44] 环境头已记：Mac16,9 64G wired=57344MB mlx=0.32.0 spec=off
+[07:09:48] 🚀 起 server: ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit ctx=0（权重 18.2G）
+[07:10:15]    server 就绪（27s）
+[07:10:18]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=0] run0: gen 117.37186618148235 tps, prefill 191.4233715158694 tps, ttft 0.295s
+[07:10:21]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=0] run1: gen 117.41366874716364 tps, prefill 664.6226851638811 tps, ttft 0.078s
+[07:10:24]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=0] run2: gen 117.52813153359791 tps, prefill 651.9055550896643 tps, ttft 0.076s
+[07:10:27]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=0] run3: gen 117.56483259466744 tps, prefill 674.6014822850874 tps, ttft 0.079s
+[07:10:28] ✅ 格 Ornith-1.5-35B-A3B-MLX-4bit × 0: decode 中位 117.53 tps, prefill 664.62 tps, 峰值 20.1546544G, 质量哨 全过
+[07:10:28] 🛑 收 server: ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit ctx=0
+[07:10:28] 🚀 起 server: ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit ctx=4096（权重 18.2G）
+[07:10:34]    server 就绪（6s）
+[07:10:40]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=4096] run0: gen 113.03708056268306 tps, prefill 1817.457638857228 tps, ttft 2.457s
+[07:10:45]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=4096] run1: gen 112.84297617448593 tps, prefill 1860.3221017338224 tps, ttft 2.21s
+[07:10:51]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=4096] run2: gen 112.3988014141623 tps, prefill 1856.5159146560725 tps, ttft 2.213s
+[07:10:56]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=4096] run3: gen 112.29161184140256 tps, prefill 1849.044796750443 tps, ttft 2.223s
+[07:11:03] ✅ 格 Ornith-1.5-35B-A3B-MLX-4bit × 4096: decode 中位 112.4 tps, prefill 1856.52 tps, 峰值 22.006523834G, 质量哨 全过
+[07:11:03] 🛑 收 server: ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit ctx=4096
+[07:11:04] 🚀 起 server: ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit ctx=16384（权重 18.2G）
+[07:11:10]    server 就绪（6s）
+[07:11:23]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=16384] run0: gen 102.2688228781547 tps, prefill 1605.3493211439081 tps, ttft 10.256s
+[07:11:37]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=16384] run1: gen 102.1909297361322 tps, prefill 1635.847317846041 tps, ttft 10.023s
+[07:11:50]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=16384] run2: gen 101.76870372541468 tps, prefill 1635.5773610750714 tps, ttft 10.021s
+[07:12:04]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=16384] run3: gen 101.91836447141716 tps, prefill 1636.1918345943097 tps, ttft 10.021s
+[07:12:34] ✅ 格 Ornith-1.5-35B-A3B-MLX-4bit × 16384: decode 中位 101.92 tps, prefill 1635.85 tps, 峰值 23.08082257G, 质量哨 全过
+[07:12:35] 🛑 收 server: ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit ctx=16384
+[07:12:35] 🚀 起 server: ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit ctx=32768（权重 18.2G）
+[07:12:41]    server 就绪（6s）
+[07:13:08]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=32768] run0: gen 92.99074199992772 tps, prefill 1397.4989663765746 tps, ttft 23.672s
+[07:13:36]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=32768] run1: gen 92.43500475116852 tps, prefill 1396.0958863107676 tps, ttft 23.502s
+[07:14:03]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=32768] run2: gen 92.50443398312179 tps, prefill 1399.444648268748 tps, ttft 23.444s
+[07:14:30]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=32768] run3: gen 92.83198799365971 tps, prefill 1398.9171035202496 tps, ttft 23.454s
+[07:15:41] ✅ 格 Ornith-1.5-35B-A3B-MLX-4bit × 32768: decode 中位 92.5 tps, prefill 1398.92 tps, 峰值 24.564721608G, 质量哨 全过
+[07:15:42] 🛑 收 server: ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit ctx=32768
+[07:15:42] 🚀 起 server: ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit ctx=65536（权重 18.2G）
+[07:15:48]    server 就绪（6s）
+[07:16:54]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=65536] run0: gen 75.47328353271953 tps, prefill 1076.269475170561 tps, ttft 61.124s
+[07:18:00]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=65536] run1: gen 75.92826987129597 tps, prefill 1076.4235216969425 tps, ttft 60.918s
+[07:19:05]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=65536] run2: gen 76.49269275492199 tps, prefill 1076.4322235211155 tps, ttft 60.913s
+[07:20:10]    [Ornith-1.5-35B-A3B-MLX-4bit ctx=65536] run3: gen 76.47632870956211 tps, prefill 1077.1160161901967 tps, ttft 60.877s
+[07:23:14] ✅ 格 Ornith-1.5-35B-A3B-MLX-4bit × 65536: decode 中位 76.48 tps, prefill 1076.43 tps, 峰值 27.599980386G, 质量哨 全过
+[07:23:15] 🛑 收 server: ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit ctx=65536
+[07:23:15] 🏁 基线格全部完成
