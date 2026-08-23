@@ -647,6 +647,16 @@ cloud:
                                # true；信任建立后可关——关的是人工闸，脱敏与台账仍恒开
   sanitize_model: true         # L0 模型腿开关（false=纯规则脱敏，语境标识靠人工审批把关）
   sanitize_timeout: 45         # 模型腿单发熔断（秒）：超时=规则腿结果 + unavailable 标注
+  # ── 升级策略（⑤′-3，2026-08-23；编排层确定性护栏，framework/cloud/upgrade.py）──
+  # 触发：用户显式要求 > 边界目录谓词命中（benchmarks/model_eval/BOUNDARY.md）> 本地连续失败。
+  # 云端出网永远经 cloud_consult → 审批闸 → L0 → 台账；换档（switch_tier）只提示用户自己切
+  # （64G 单档常驻，运行期动态换档已否决）。云端不可用（无钥等）时不触发。
+  # ⚠️ 红线：upgrade.mode: auto 与上面的 require_approval: false **同时**设置 = 正则命中即把用户原文
+  #   无人审阅地发往商用 API（L0 脱敏与台账仍在，但没有人眼）。两者缺省都安全；改其一前先想另一个。
+  upgrade:
+    mode: suggest              # auto=编排层代模型发起 cloud_consult（仍审批）| suggest=只提醒模型 | off=护栏整体关
+    failure_threshold: 2       # 本地连续失败 ≥N 次触发（一轮最多触发一次）
+    tier_notice: true          # 目录 switch_tier 命中时在答复末尾提示换档（不自动换）
   providers:                   # 声明序 = 缺省选择序（第一个配了 key 的当默认）
     - name: "openai"
       kind: "openai_compat"

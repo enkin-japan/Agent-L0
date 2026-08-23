@@ -113,6 +113,23 @@ def _cloud_degraded_scan(history: List[Dict[str, Any]]) -> Tuple[List[str], bool
     return kinds, succeeded
 
 
+def _already_consulted(history: List[Dict[str, Any]]) -> bool:
+    from ..cloud.upgrade import already_consulted_this_turn
+    return already_consulted_this_turn(history)
+
+
+def _append_upgrade_notices(text: str, metrics: Dict[str, Any], decisions: List[Any]) -> str:
+    """⑤′-3 收尾：升级决策入 metrics（审计面）；tier_suggest / unavailable 追加用户提示。"""
+    if not decisions:
+        return text
+    from ..cloud.upgrade import user_notice
+    metrics["cloud_upgrade"] = [d.as_event() for d in decisions]
+    notes = [n for n in (user_notice(d) for d in decisions) if n and n not in text]
+    if not notes:
+        return text
+    return (text.rstrip() + "\n\n" + "\n".join(notes)) if text.strip() else "\n".join(notes)
+
+
 def _finalize_cloud_degraded(session: ChatSession, metrics: Dict[str, Any], text: str,
                              *, append_notice: bool) -> str:
     """⑤′-1 收尾：本轮降级过 → metrics 平铺 `cloud_degraded`（审计面，所有出口都记）；
@@ -342,6 +359,14 @@ class Orchestrator:
         cfg = agent_cfg or {}
         self.engine = engine
         self.registry = mcp_registry
+        # ⑤′-3 升级策略：cloud 段（config.yaml）或测试注入 cfg["cloud"]。mode 非法 → 装配期响亮拒
+        from ..cloud.upgrade import UpgradeConfig   # core 不静态依赖 cloud
+        if "cloud" in cfg:
+            self.cloud_cfg = dict(cfg.get("cloud") or {})
+        else:
+            from ..utils.config_loader import load_section   # 读不到 = 配置坏了，响亮（不静默关护栏）
+            self.cloud_cfg = dict(load_section("cloud") or {})
+        self.upgrade_cfg = UpgradeConfig.from_cloud_section(self.cloud_cfg)
 
         # 护栏配置（config.yaml 的 agent 段，用户可调）
         self.react_max_steps = int(cfg.get("react_max_steps", 4))          # 单步内自纠预算
@@ -541,6 +566,38 @@ class Orchestrator:
         # 一次性会话里跑的每次生成，都往这里回填计数（见 agents/sandbox_runtime.note_usage）。
         # 此前这些子生成完全不入父轮的账——落盘 metrics 系统性低估、熔断只数主循环迭代。
         turn_usage: Dict[str, int] = dict(_carried.get("usage") or {})
+
+        def _suspend_for_approval(phys_calls_: List[Dict[str, Any]], responses_: List[Dict[str, Any]],
+                                  approval_needed_: List[Dict[str, Any]]) -> Dict[str, Any]:
+            """[审批闸门] 整批挂起待审批（模型发起与编排层代发起共用同一条路）。"""
+            if responses_:
+                session.add_tool_message(responses_)
+            session.pending_tool_calls = phys_calls_
+            # 累积本次 run_turn 已消耗的迭代到会话上：审批续跑（新 run_turn）在此基础上
+            # 继续计数，总迭代熔断跨审批循环持续生效（防审批死循环绕过保险丝）。
+            session.carried_iterations += iterations
+            # 仪表随行暂存：续跑段在此基础上继续累计（整轮口径，见 run_turn 播种处）
+            session.carried_turn_stats = {
+                "breakdown": dict(turn_breakdown),
+                "gen_tokens": turn_gen_tokens,
+                "spec": dict(turn_spec),
+                "parse_errors": carried_parse_errors + sum(parse_errors.values()),
+                # [F6] 子沙箱/护栏用量同样跨审批续算：否则续跑段的保险丝分母会
+                # 把前几段烧掉的子生成忘个干净，「弹审批→续跑」又成了绕过路径。
+                "usage": dict(turn_usage),
+            }
+            names = "、".join(c.get("name") for c in approval_needed_)
+            session.set_activity(f"等待授权：{names}", phase="awaiting_approval")
+            print(f"[Orchestrator] 敏感工具调用挂起待审批: {[c.get('name') for c in approval_needed_]}")
+            return {
+                "status": "pending_approval",
+                "pending_tools": [
+                    {"name": c.get("name"), "arguments": c.get("arguments", {})}
+                    for c in approval_needed_
+                ],
+                "metrics": metrics,
+            }
+
         # 沙箱包壳（无状态 MCP 工具）拿不到本方法的局部量，经 ContextVar 交接：在此处
         # （run_turn 的任务上下文里）set，asyncio.to_thread 把上下文拷进工具线程，包壳在
         # 那里 get 出来再作参数显式传进沙箱协程——投回主循环的协程不继承工具线程上下文。
@@ -614,6 +671,46 @@ class Orchestrator:
         # 熔断」比低估更伤。两条丝各守各的:主循环 40 防编排失控,子生成 max_sub_generations
         # 防调研失控——原病根「子生成完全无界」由后者闭合。goal_verify 桶两条都不计
         # （护栏不是子 agent,把护栏烧进保险丝等于让安全网自食其果）。
+        # ⑤′-3 升级策略（护栏是代码）：新用户轮轮首按 显式要求 > 目录谓词 决策；审批续跑
+        # （keep_recent_calls）不重判。consult_auto = 编排层代模型发起 cloud_consult——仍走
+        # 审批闸（审批卡即将出网原文）+ L0 + 台账；switch_tier 永远只建议（64G 单档常驻，
+        # 运行期换档已否决）。一轮只触发一次。
+        # 决策随会话带过审批/挂起续跑（与 carried_turn_stats 同理）：换档提示与审计键要在
+        # 续跑段的收尾落出，不能因为中间弹了一次审批就丢（评审 M2）
+        _fresh_turn = compact_history and not keep_recent_calls
+        if _fresh_turn:
+            session.carried_upgrade = []
+        upgrade_decisions: List[Any] = list(getattr(session, "carried_upgrade", None) or [])
+        session.carried_upgrade = upgrade_decisions
+        # 只在**新用户轮**判：审批续跑（keep_recent_calls）与挂起续跑（compact_history=False
+        # 的轮中重入）都不是新轮——重入再判就是一轮两次提醒/两次代发起。
+        # 用户已点取消/挂起的轮不判（先于代发起：取消了的轮不该再花钱出网，评审 M1）
+        if _fresh_turn and not session.cancel_requested and not session.suspend_requested:
+            for _d in self._upgrade_at_turn_start(session, journal):
+                upgrade_decisions.append(_d)
+                if _d.action == "consult_suggest":
+                    from ..cloud.upgrade import model_hint
+                    pending_tail_notes.append(model_hint(_d))
+                elif _d.action == "consult_auto":
+                    from ..cloud.upgrade import synthetic_consult_call
+                    _calls = [synthetic_consult_call(self._last_user_facts(session).text)]
+                    _verr = self.registry.validate_call(_calls[0]["name"], _calls[0]["arguments"])
+                    if _verr:
+                        print(f"[Orchestrator] 升级策略代发起被参数预检拒绝：{_verr}")
+                        continue
+                    session.add_assistant_message(
+                        tool_calls=_calls,
+                        thoughts=[f"[System upgrade] 编排层代发起云端咨询（{_d.trigger}：{_d.reason}）"
+                                  "——仍需审批；云端只顾问，落地本地。"])
+                    if self.registry.requires_approval(_calls[0]["name"], _calls[0]["arguments"]):
+                        return _suspend_for_approval(_calls, [], _calls)
+                    # 审批旋钮已关：直接执行（L0 与台账仍恒开），观察落历史后进主循环
+                    _tracker = session.task_state.recent_calls if session.task_state is not None else no_task_calls
+                    _resp = await self._execute_physical(session, _calls, _tracker, parse_errors,
+                                                         journal=journal)
+                    session.add_tool_message(_resp)
+        upgrade_failures = 0          # 本轮连续失败的**批次**数（一次迭代的物理调用批算一次）
+
         while session.carried_iterations + iterations < self.max_total_iterations:
             if turn_usage.get("sub_generations", 0) >= self.max_sub_generations:
                 _stamp_turn_stats()
@@ -621,6 +718,7 @@ class Orchestrator:
                             reason="max_sub_generations",
                             sub_generations=turn_usage.get("sub_generations", 0))
                 _finalize_cloud_degraded(session, metrics, "", append_notice=False)  # 审计面照记
+                _append_upgrade_notices("", metrics, upgrade_decisions)
                 return {
                     "status": "warning",
                     "response": (f"子调研生成已达预算上限（{self.max_sub_generations} 次），任务终止。"
@@ -827,39 +925,14 @@ class Orchestrator:
                     and self.registry.requires_approval(c.get("name"), c.get("arguments", {}))
                 ]
                 if approval_needed:
-                    if responses:
-                        session.add_tool_message(responses)
-                    session.pending_tool_calls = phys_calls
-                    # 累积本次 run_turn 已消耗的迭代到会话上：审批续跑（新 run_turn）在此基础上
-                    # 继续计数，总迭代熔断跨审批循环持续生效（防审批死循环绕过保险丝）。
-                    session.carried_iterations += iterations
-                    # 仪表随行暂存：续跑段在此基础上继续累计（整轮口径，见 run_turn 播种处）
-                    session.carried_turn_stats = {
-                        "breakdown": dict(turn_breakdown),
-                        "gen_tokens": turn_gen_tokens,
-                        "spec": dict(turn_spec),
-                        "parse_errors": carried_parse_errors + sum(parse_errors.values()),
-                        # [F6] 子沙箱/护栏用量同样跨审批续算：否则续跑段的保险丝分母会
-                        # 把前几段烧掉的子生成忘个干净，「弹审批→续跑」又成了绕过路径。
-                        "usage": dict(turn_usage),
-                    }
-                    names = "、".join(c.get("name") for c in approval_needed)
-                    session.set_activity(f"等待授权：{names}", phase="awaiting_approval")
-                    print(f"[Orchestrator] 敏感工具调用挂起待审批: {[c.get('name') for c in approval_needed]}")
-                    return {
-                        "status": "pending_approval",
-                        "pending_tools": [
-                            {"name": c.get("name"), "arguments": c.get("arguments", {})}
-                            for c in approval_needed
-                        ],
-                        "metrics": metrics,
-                    }
+                    return _suspend_for_approval(phys_calls, responses, approval_needed)
 
                 tracker = task.recent_calls if task is not None else no_task_calls
                 phys_responses = await self._execute_physical(session, phys_calls, tracker,
                                                               parse_errors, journal=journal)
                 # [D2 谎报围堵] 按声明序扫描本批结果：失败置位、其后任何成功清位；
                 # 成功的变更类调用记账（收尾时"零变更却声称已做"的判据）。
+                _batch_failed = _batch_ok = False
                 for c, r in zip(phys_calls, phys_responses):
                     if c.get("type") == "error":
                         continue
@@ -871,8 +944,10 @@ class Orchestrator:
                         continue
                     if _obs_failed(r):
                         unresolved_failure = True
+                        _batch_failed = True
                         continue
                     unresolved_failure = False
+                    _batch_ok = True
                     # 拦截/取消类响应 = 没真执行，不算成功变更
                     executed = not rtext.startswith(("Duplicate call blocked",
                                                      "Operation cancelled",
@@ -882,6 +957,11 @@ class Orchestrator:
                                                                    c.get("arguments", {})):
                         mutated_ok_this_turn = True
                 responses.extend(phys_responses)
+                # ⑤′-3 失败计数按**批次**（一次迭代 = 模型一次自纠机会）：批内有成功即归零
+                if _batch_ok:
+                    upgrade_failures = 0
+                elif _batch_failed:
+                    upgrade_failures += 1
                 _stamp_turn_stats()  # [仪表 Phase 0] 刷新废轮计数（_execute_physical 可能新增 parse 失败）
                 # [验证门控 T1-4 状态跟踪] 按声明序扫描本批物理调用：改文件（edit_file/write_file）
                 # 置「未验证」，其后任何非写调用（读回文件 / 跑代码 / grep 等）视为复查、清除标记。
@@ -938,6 +1018,37 @@ class Orchestrator:
                                     "plan with update_plan NOW and follow it; otherwise answer the user "
                                     "directly."),
                     })
+                # ⑤′-3 失败触发：本地连续失败达阈 → 建议/代发起云端咨询（一轮一次，云端不可用不打扰）。
+                # 放在本分支末尾：验证门控状态、结构性提醒、观察落历史、解析断环都已照常走完
+                if (not any(d.trigger != "catalog" or d.action != "tier_suggest" for d in upgrade_decisions)
+                        and not _already_consulted(session.history)):
+                    from ..cloud.upgrade import (decide_on_failures, failure_context, model_hint,
+                                                 synthetic_consult_call)
+                    _fd = decide_on_failures(upgrade_failures, self._effective_upgrade_cfg(journal),
+                                             cloud_cfg=self.cloud_cfg,
+                                             consult_registered=self._consult_registered())
+                    if _fd is not None:
+                        upgrade_decisions.append(_fd)
+                        events.emit("upgrade_triggered", session=session.session_id, **_fd.as_event())
+                        journal.emit("upgrade_triggered", _fd.as_event())
+                        if _fd.action == "consult_suggest":
+                            pending_tail_notes.append(model_hint(_fd))
+                        elif _fd.action == "consult_auto":
+                            _calls = [synthetic_consult_call(self._last_user_facts(session).text,
+                                                             failure_context(responses))]
+                            _verr = self.registry.validate_call(_calls[0]["name"], _calls[0]["arguments"])
+                            if _verr:
+                                print(f"[Orchestrator] 升级策略代发起被参数预检拒绝：{_verr}")
+                                continue
+                            session.add_assistant_message(
+                                tool_calls=_calls,
+                                thoughts=[f"[System upgrade] 编排层代发起云端咨询（failures：{_fd.reason}）"
+                                          "——仍需审批；云端只顾问，落地本地。"])
+                            if self.registry.requires_approval(_calls[0]["name"], _calls[0]["arguments"]):
+                                return _suspend_for_approval(_calls, [], _calls)
+                            _resp = await self._execute_physical(session, _calls, tracker, parse_errors,
+                                                                 journal=journal)
+                            session.add_tool_message(_resp)
                 continue
 
             # --- 完结分支：纯文本 = 给用户的答复 ---
@@ -1059,6 +1170,8 @@ class Orchestrator:
                 text = _append_missing_asset_links(text, session.history[turn_start_idx:])
                 # ⑤′-1 降级路：云端导师本轮不可用过 → 答复末尾明示「本地作答」，不静默装满血
                 text = _finalize_cloud_degraded(session, metrics, text, append_notice=True)
+                # ⑤′-3：换档建议 / 显式要求但云端不可用 → 收尾确定性提示（用户要自己动手的事）
+                text = _append_upgrade_notices(text, metrics, upgrade_decisions)
                 session.add_assistant_message(content=text, thoughts=thoughts)
                 if task is not None and (task.all_done() or not task.plan):
                     # 任务完成即弃：工作过程已沉淀在本轮消息流（blackboard=消息流本身）
@@ -1103,6 +1216,7 @@ class Orchestrator:
         # 该拆任务还是该少调研（子生成有自己的保险丝,这里只如实附注）。
         _budget_detail = (f"（期间另有子调研生成 {_sub_gens} 次）" if _sub_gens else "")
         _finalize_cloud_degraded(session, metrics, "", append_notice=False)  # 审计面照记（评审 M5）
+        _append_upgrade_notices("", metrics, upgrade_decisions)
         return {
             "status": "warning",
             "response": (f"任务在 {self.max_total_iterations} 次主循环迭代内未能收敛{_budget_detail}，已终止。"
@@ -1111,6 +1225,61 @@ class Orchestrator:
             "thoughts": ["System Warning: orchestration loop threshold exceeded."],
             "metrics": metrics,
         }
+
+    # ---------- ⑤′-3 升级策略 ----------
+    def _consult_registered(self) -> bool:
+        names = getattr(self.registry, "tool_names", None)
+        try:
+            from ..cloud.degrade import CLOUD_CONSULT_TOOL
+            return CLOUD_CONSULT_TOOL in (names() if callable(names) else set())
+        except Exception:
+            return False
+
+    @staticmethod
+    def _history_chars(history: List[Dict[str, Any]]) -> int:
+        """历史文本字符数（用户消息按文本块、工具消息按观察、assistant 按正文），供长度类谓词粗估。"""
+        n = 0
+        for m in history:
+            c = m.get("content")
+            if isinstance(c, str):
+                n += len(c)
+            elif isinstance(c, list):
+                n += sum(len(str(b.get("text") or "")) for b in c if isinstance(b, dict))
+            for tr in m.get("tool_responses") or []:
+                n += len(str((tr or {}).get("response") or ""))
+        return n
+
+    def _last_user_facts(self, session: ChatSession):
+        from ..cloud.upgrade import facts_from_user_message
+        from ..cloud.boundary import RequestFacts
+        for msg in reversed(session.history):
+            if msg.get("role") == "user":
+                # 上下文长度粗估：历史文本字符 / 1.3（中文 ≈1.24 字/token；只供长度类谓词）
+                return facts_from_user_message(msg, context_tokens=int(self._history_chars(session.history) / 1.3))
+        return RequestFacts()
+
+    def _effective_upgrade_cfg(self, journal: TurnJournal):
+        """无人值守轮（定时任务 origin=schedule）没人点审批：auto 降为 suggest，免得代发起的
+        审批被 runner 自动拒绝并计入拒批保险丝（评审 m19）。"""
+        cfg = self.upgrade_cfg
+        if cfg.mode == "auto" and getattr(journal, "turn_origin", "chat") != "chat":
+            from dataclasses import replace
+            return replace(cfg, mode="suggest")
+        return cfg
+
+    def _upgrade_at_turn_start(self, session: ChatSession, journal: TurnJournal) -> List[Any]:
+        """轮首决策 + 账本/事件记录（决策本身在 cloud.upgrade，纯函数）。"""
+        from ..cloud.upgrade import decide_at_turn_start
+        if _already_consulted(session.history):
+            return []
+        facts = self._last_user_facts(session)
+        ds = decide_at_turn_start(facts, self._effective_upgrade_cfg(journal), cloud_cfg=self.cloud_cfg,
+                                  consult_registered=self._consult_registered())
+        for d in ds:
+            events.emit("upgrade_triggered", session=session.session_id, **d.as_event())
+            journal.emit("upgrade_triggered", d.as_event())
+            print(f"[Orchestrator] 升级策略触发：{d.trigger}/{d.action} {d.reason}")
+        return ds
 
     # ---------- 元工具处理（计划是数据，操作有校验） ----------
     def _handle_meta_call(self, session: ChatSession, call: Dict[str, Any]) -> str:

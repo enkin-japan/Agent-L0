@@ -117,6 +117,10 @@ class FakeRegistry:
         self.executed: List[Dict[str, Any]] = []  # {"name", "args"} 按执行序
 
     # --- 编排层查询面 ---
+    def tool_names(self):
+        """与 MCPRegistry.tool_names 同构（⑤′-3 升级策略据此判 cloud_consult 是否注册）。"""
+        return set(self._tools)
+
     def get_all_schemas(self):
         return [{"name": t.name, "description": f"fake tool {t.name}",
                  "parameters": {"type": "object", "properties": {}, "required": []}}

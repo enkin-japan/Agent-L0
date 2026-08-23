@@ -565,13 +565,13 @@ R0–R5 各小项的打勾细分（含每步实测结果与计划外发现）已
 
 | 项 | 当前值 | 口径 |
 |---|---|---|
-| 金测试项数 | 1656 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
-| 测试文件数 | 110 | `backend/tests/` 下递归的 `test_*.py` |
+| 金测试项数 | 1701 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
+| 测试文件数 | 111 | `backend/tests/` 下递归的 `test_*.py` |
 | mcp 文件数 | 31 | `backend/framework/mcp/` 递归下的 `.py`，**不含** `__init__.py` |
 | BaseTool 子类 | 67 | 全 backend 内 `class X(BaseTool)` 的声明数（一个文件可有多个） |
 | 物理隔离沙箱 | 3 | `backend/framework/agents/*_sandbox.py` |
 | 剧本 | 5 | 仓库根 `skills/` 下的 `.md` |
-| 协议夹具 | 8 | `protocol/fixtures/` 下的 `*.events.jsonl`（一份 = 一条夹具） |
+| 协议夹具 | 9 | `protocol/fixtures/` 下的 `*.events.jsonl`（一份 = 一条夹具） |
 | model_registry 档位 | 9 | `config.yaml` 的 `inference.model_registry` 条目数 |
 | rag.tiers 档位 | 5 | `config.yaml` 的 `rag.tiers` 档位数 |
 
@@ -4453,6 +4453,55 @@ m9 **server 约束采样竞态修复**（S–M，单文件为主，guard-type �
    本地 N 次失败 / 用户显式要求 → 触发 cloud_consult（按 config 决定
    自动或仅建议；审批闸与 L0 照旧）；铁律 6：云端只顾问。验收：金测试
    全覆盖触发/不触发/预算拒绝分支；零 GPU。
+   **✅ ⑤′-3 交付（2026-08-23 晚，零 GPU）**：
+   - **护栏是代码**：新 `framework/cloud/upgrade.py`（纯策略，零出网）——`UpgradeConfig`
+     （config `cloud.upgrade`: mode auto|suggest|off、failure_threshold、tier_notice；非法值装配期
+     拒）、三种触发按优先级 **显式要求 > 目录谓词 > 本地连续失败 ≥N**、决策表、给模型的尾注
+     `model_hint`、给用户的收尾提示 `user_notice`、代发起调用 `synthetic_consult_call`、一轮一次
+     `already_consulted_this_turn`、请求侧事实抽取 `facts_from_user_message`（首文本块=指令，
+     其余文本块只计长度，image_url=带图——与 ⑤′-2 口径一致）。
+   - **动作形状（铁律 6 + 定档）**：`consult_auto` = 编排层在**任何生成之前**代模型追加一条
+     assistant tool_calls 消息（thoughts 写明代发起）→ 与模型发起走**同一条**审批闸
+     `_suspend_for_approval`（status pending_approval、审批卡即将出网原文；拒批即不出网；审批
+     旋钮关时内联执行，L0 与台账仍恒开）；`consult_suggest` = 一次性尾注，模型自决；
+     `switch_tier` **永远只建议**（收尾一行：属哪条边界、本机哪档更稳、`./devctl.sh model`
+     切换、是否开思考——64G 单档常驻、运行期换档已否决）；`unavailable` 只在用户显式要求而云端
+     不可用时说明原因（目录命中而云端不可用 → 不打扰）。auto 档目录触发只认 confirmed（weak 的
+     deep_reasoning 只在 suggest 档进尾注）。
+   - **接线**：`__init__` 读 cloud 段（测试可注入 cfg["cloud"]）；轮首只在**新用户轮**判
+     （`compact_history and not keep_recent_calls`——审批续跑与挂起续跑都不是新轮，变异 E 首跑
+     存活揭出挂起重入会二次触发，补测后红）；失败触发挂在工具分支末尾（验证门控/结构性提醒/
+     观察落历史/解析断环照常走完后再判），计数器随 D2 三态 +1/归零；收尾 `turn_ended` 顶层
+     `cloud_upgrade:[…]`；账本事件 `upgrade_triggered`（PROTOCOL §2.2 新行 + §2.3 additive 注）；
+     夹具 `009-upgrade-triggered`（无 iteration_started 直达 awaiting_approval，代发起与模型发起
+     协议面不可区分）web/apple 双过。原审批挂起块抽成闭包 `_suspend_for_approval` 两路共用。
+   - **评审（reviewer 首过 0C/7M/14m）与处置**：M1 轮首代发起先于取消/挂起检查点（取消的轮
+     照样花钱出网）→ 取消/挂起中不判；M2 决策不随审批/挂起续跑带过（换档提示与审计键在续跑段
+     丢）→ `session.carried_upgrade` 随会话带过、三个出口都记；M3 `cloud_consult` 未声明
+     is_read_only → 批准一次咨询即解除 D2 零变更守门（实测可伪报"已创建文件"）→ 标只读；
+     M4 PROTOCOL §2.2 行被我第二次写文件时覆盖丢失→补回，夹具 009 延到 turn_ended 覆盖
+     `cloud_upgrade` 顶层字段；M5 失败触发的代发起只发原问题不带失败上下文→附最近 3 条失败
+     观察作 context（审批卡可见）；M6 off 仍出换档提示/显式仍建议→off = 护栏整体关；M7 档案
+     未 add→入库。m8 否定语（"不要问云端"）→否定正则排除；m9/m10 正则边界与中英对称；m11
+     上下文粗估读不到工具/块内容→按文本块/观察计；m13 截断加标记；m14 代发起走 validate_call；
+     m15 cloud 段读失败不再静默置空；m16 consult 与 tier 并存→决策改列表两条都出；m17 失败按
+     批次计；m18 钉"auto 目录触发现不可达"（升级目录条目时必须有意解锁）；m19 定时轮
+     （origin=schedule，journal 新记 turn_origin）auto 降 suggest；m20 用户面不露内部 id/
+     key_env 名；m21 config 红线注（auto + require_approval:false）。未采：m12 explicit_deep
+     由调用方按 UI 设、现无调用方（留接口）。
+   - **金测试** `tests/test_cloud_upgrade.py` 45 条：决策表全分支（显式/目录/失败 × 三档 ×
+     可用性）、显式要求正则正负例、auto 经审批闸（审批前零生成零出网、批准后执行、拒批不出网、
+     续跑不重触发）、审批旋钮关内联执行、**预算拒绝分支**（代发起→⑤′-1 降级观察→本地作答+标注、
+     不再重触发）、换档只提示不打扰模型、显式但不可用的说明、off 不触发、普通轮不触发、失败阈
+     触发 suggest/auto、失败计数归零、挂起续跑不重触发；复审后补：否定语、consult+tier 并存、
+     取消轮不出网、续跑后提示仍落、无人值守降档、只读守门、失败按批、auto 目录不可达钉。
+     FakeRegistry 补 `tool_names()`。全套 1656→**1701**。
+   - **变异证明**（两轮 16 只，`benchmarks/data/cloud-upgrade-20260823/mutants.log`）：首轮
+     A auto 放行 weak→红；B off 照触发→2 红；C 云端不可用仍代发起→2 红；D 代发起绕过审批闸→
+     3 红；E 挂起续跑重触发→**首跑存活**→补测后红；F 失败计数不归零→红；G 阈值失效→3 红；
+     H 换档提示不落用户→3 红；复审后 I 中途代发起绕过审批闸→红；J 取消轮仍代发起→红；K 决策
+     不随续跑→红；L 否定语不排除→2 红；M off 仍出提示→3 红；N 无人值守不降档→红；O consult
+     当变更类→红；P 失败按调用计→红；sha256 核对还原。
 第 5/6 层不动。推送纪律照旧。本快照写毕即等 /compact。
 
 ---

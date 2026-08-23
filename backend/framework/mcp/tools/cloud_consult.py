@@ -63,6 +63,11 @@ class CloudConsultTool(BaseTool):
             self.parameters = params
     requires_approval = True     # 静态默认；实际按 needs_approval 旋钮动态判定
     is_concurrency_safe = False
+    # 只读：对本地系统状态无副作用（出网、花钱，但不改本机任何东西）。不声明会按
+    # is_concurrency_safe=False 被当成变更类——审批通过的一次咨询就把 D2「零变更却声称已做」
+    # 的守门解除（⑤′-3 评审 M3 实测）。去重面：参数键 question/context 不在 _TARGET_KEYS，
+    # 不会被"同目标取代"
+    is_read_only = True
     timeout_seconds = 180
 
     def needs_approval(self, arguments) -> bool:

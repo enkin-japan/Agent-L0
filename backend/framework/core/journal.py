@@ -109,6 +109,7 @@ class TurnJournal:
 
         # ---- 轮次状态跟踪(GET /turn 的数据源,由 emit 单点驱动) ----
         self.current_turn_id: Optional[str] = None
+        self.turn_origin: str = "chat"      # 本轮来源（turn_queued.origin：chat / schedule …）；⑤′-3 据此识别无人值守轮
         self.turn_state: str = TURN_NONE
         self.state_since: float = 0.0
         self.turn_prompt: str = ""
@@ -214,6 +215,7 @@ class TurnJournal:
             self.turn_state = TURN_QUEUED
             self.state_since = now
             self.turn_prompt = str(data.get("prompt", ""))
+            self.turn_origin = str(data.get("origin") or "chat")
             self.turn_client_id = data.get("client_turn_id") or None
             self.partial_text = ""
             self.partial_thinking = ""

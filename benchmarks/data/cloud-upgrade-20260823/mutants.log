@@ -1,0 +1,22 @@
+== ⑤′-3 mutants ==
+A auto 档放行 weak 条目 → FAILED test_turn_start_decision_table - Assertio... 1 failed, 24 passed in 0.16s 
+B off 档照样触发目录 → FAILED test_turn_start_decision_table - Assertio... FAILED test_off_mode_never_triggers - AssertionE... 2 failed, 23 passed in 0.57s 
+C 云端不可用仍代发起 → FAILED test_turn_start_decision_table - Assertio... FAILED test_explicit_request_but_cloud_unavailable_is_told 2 failed, 23 passed in 0.57s 
+D 代发起绕过审批闸 → FAILED test_auto_mode_initiates_consult_through_approval_gate FAILED test_auto_mode_denied_does_not_egress - A... FAILED test_budget_refusal_branch_degrades_once_and_annotates 
+E 一轮重触发(续跑不查历史) → 25 passed in 0.14s 
+F 失败计数不归零 → FAILED test_failure_counter_resets_on_success - ... 1 failed, 24 passed in 0.16s 
+G 失败阈值失效(≥1 即触发) → FAILED test_failures_decision - AssertionError: ... FAILED test_failures_trigger_suggest_after_threshold FAILED test_failures_trigger_auto_initiates_consult 
+H 换档提示不落用户 → FAILED test_suggest_mode_injects_one_shot_hint_and_records FAILED test_tier_suggest_appends_user_notice_only FAILED test_explicit_request_but_cloud_unavailable_is_told 
+restore: OK
+E′ 挂起续跑重触发（补测后） → FAILED test_suspend_resume_does_not_retrigger - ... 1 failed, 25 passed in 0.17s 
+restore2: OK
+== ⑤′-3 mutants round 2 (post-review) ==
+I 中途代发起绕过审批闸 → FAILED test_failures_trigger_auto_initiates_consult 1 failed, 44 passed in 0.29s 
+J 取消轮仍代发起 → FAILED test_cancelled_turn_does_not_egress - Ass... 1 failed, 44 passed in 0.28s 
+K 决策不随会话带过续跑 → FAILED test_tier_notice_survives_approval_resume 1 failed, 44 passed in 0.79s 
+L 否定语不排除 → FAILED test_explicit_request_detection[别让云端插手-False] FAILED test_explicit_request_detection[don't ask the cloud advisor-False] 2 failed, 43 passed in 0.28s 
+M off 仍出换档提示 → FAILED test_turn_start_decision_table - Assertio... FAILED test_off_mode_never_triggers[请严格证明这个不等式] FAILED test_off_mode_never_triggers[按状态分组统计条数与读数合计] 
+N 无人值守不降档 → FAILED test_unattended_turn_downgrades_auto_to_suggest 1 failed, 44 passed in 0.27s 
+O cloud_consult 当变更类 → FAILED test_cloud_consult_is_read_only_so_approval_keeps_fabrication_guard 1 failed, 44 passed in 0.28s 
+P 失败按调用计数 → FAILED test_failures_count_batches_not_calls - A... 1 failed, 44 passed in 0.27s 
+restore2: OK
