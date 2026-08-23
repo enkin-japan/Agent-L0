@@ -4258,6 +4258,59 @@ Q14 run1 的「Already borrowed」缺陷类；更糟的是被 :212 捕获后
 
 ---
 
+**⏸ 收尾快照 #3（2026-08-23 下午，供 /compact 后无漂移开工）**
+
+**用户拍板（2026-08-23）**：① m9 **先修**；② ⑤′ 三件套按 **降级路 → 边界目录 →
+升级策略** 顺序；③ 云端导师 = **商用 API**（ChatGPT/Claude 类），Colab 仅开发
+测试、与生产无关（已落档 86ae4cd）；④ 生产选择档由用户自行 `./devctl.sh model`
+设 26b-4bit，不由会话代劳。第 4 层已整层收官（阶段复审闭环 93c4f75）。
+
+**再入前提（踩点结论，勿重查）**：云端导师通道**已存在**——
+`backend/framework/cloud/advisor.py`（`consult()`：providers 双 kind
+openai_compat/anthropic、`timeout` 120s、`daily_budget_usd` 日预算、
+`data_dir()/cloud/egress.jsonl` 无条件出网台账）+ `cloud/egress_guard.py`
+（L0：规则腿恒开 + 模型腿、回填、降级不静默）+ MCP 工具
+`mcp/tools/cloud_consult.py`（requires_approval）。config `cloud:` 段在
+~636 行。铁律 6 约束形状：云端只回文本进本地循环、落地调用永远本地模型 +
+审批闸；出网判定归 L0。三件套全部建在这套管线上，不另起通道。
+
+**队列**：
+m9 **server 约束采样竞态修复**（S–M，单文件为主，guard-type 变更）：
+   现场 `inference/server.py` `_tool_guard()` :190-214——首个带 tool_specs 的
+   请求在**事件循环线程**对共享 tokenizer `encode` 两次建引擎（:197-206），
+   调用点 :671 在 `gen_sem` acquire（:736）**之外**，与推理线程 encode/detok
+   可并发 → `Already borrowed`（Q14 run1 同类）→ :212 兜底
+   `S.constraint_disabled=True` **进程级永久静默禁用**约束采样。修法：
+   (a) 引擎**预建**挪到 `lifespan`（:233，S.backend/S.dialect 于 :326/:330 就
+   绪之后；启动期无在飞生成，encode 在事件循环线程安全；LLTokenizer ~1s
+   启动代价可接受），`_tool_guard` 只剩 `matcher_for`——实现时**先确认**
+   `matcher_for` 不碰 Rust tokenizer，若碰则同样预处理或走互斥区；(b) 兜底
+   分级：预建失败 = 结构性 → 启动期就响（而非首请求静默）；请求期残余异常
+   不得再永久禁用，至少入 metrics 计数 + 日志明示。验收：金测试
+   （test_inference_endpoints.py 同脚手架：启动后 `S.constraint_engine` 非空、
+   请求路径零 encode——可 monkeypatch `tok.encode` 为 raise 断言不被触发、
+   兜底分级行为）+ **变异证明**（去掉预建 / 把分级退回永久禁用 → 对应测试红，
+   cp+sha256 还原、清 __pycache__、记本条）+ reviewer 首过 + 主会话复核。
+   真机：结构消除后竞态不可复现，不必做并发 drill；起一次 server 冒烟
+   （🟡 短占 GPU，<5 min，确认预建日志 + 首个工具请求正常）即可。
+⑤′-1 **降级路**（S–M）：先读 `advisor.consult` 与 `cloud_consult` 的现有失败
+   语义（无 key / 预算耗尽 / HTTP 错 / 超时 / L0 模型腿不可用），定义统一
+   `degraded` 观察格式回本地循环；编排层把「本地作答」明确标注给用户（不
+   静默装满血）；保留出网台账记录失败。验收：advisor 各失败路金测试 +
+   标注传播到 turn 产物的测试；零 GPU。
+⑤′-2 **边界目录**（M）：新文档 `benchmarks/model_eval/BOUNDARY.md`（或同级
+   命名）——26b-4bit 弱项清册，每条配可判定谓词 + 探针题：vision（0.84 vs
+   qwen38 0.943/0.958，ChartQA hard 差约 20 题）、长上下文×结构化（08-16
+   矩阵弱信号，需补探针）、深推理（26b 无思考模式）；另设生产日志回流
+   管道（journal 失败案例→目录候选）。🔴 探针补跑需 GPU + sentinel。
+⑤′-3 **升级策略**（M）：编排层确定性护栏（护栏是代码）——目录谓词命中 /
+   本地 N 次失败 / 用户显式要求 → 触发 cloud_consult（按 config 决定
+   自动或仅建议；审批闸与 L0 照旧）；铁律 6：云端只顾问。验收：金测试
+   全覆盖触发/不触发/预算拒绝分支；零 GPU。
+第 5/6 层不动。推送纪律照旧。本快照写毕即等 /compact。
+
+---
+
 **全账重排（D.24，2026-08-18 用户拍板）——判据：① 缺陷修复优先 ② Mac 端优先——**
 
 **这是当前唯一有效的施工顺序**，覆盖此前所有「下一件」写法。`第二梯队` 段已改为指回本块。
