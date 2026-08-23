@@ -4122,10 +4122,17 @@ harness 不带思考预算。候选解（都动生产口径，须用户拍板）
    0.05，唯一真差距 vision（qwen38 0.948/0.958 vs 26b 0.84）；速度差 3.6×。
 
 **开工队列（按序；除 ①′ 外均为代码/引擎活）：**
-①′ **Q14 进宪落笔**（纯文档，同意已取得）：CHARTER「单 worker 串行」段
+~~①′ **Q14 进宪落笔**（纯文档，同意已取得）：CHARTER「单 worker 串行」段
    （约 242-244 行）替换为 §7-6 预审案文，逐字照抄不改写。**同时**
    `config.yaml inference.mlx.max_concurrency` 缺省**维持 1** 不动——进宪
-   合法化形态，不等于生产放开（准入闸未建）。CHARTER 是 never-delegate 件。
+   合法化形态，不等于生产放开（准入闸未建）。CHARTER 是 never-delegate 件。~~
+   **✅ 2026-08-23 交付**：CHARTER 242-244 已按 §7-6 案文逐字替换（存档引用符
+   `>` 去除，正文一字未改）；config `mlx.max_concurrency` 维持 1，其旁注释
+   由「过门才动此值」改为「已进宪但准入闸未建前不动」以对齐事实。跨文档
+   现行法引用同步：ARCHITECTURE.md §8 首条、DEFERRED.md 想法5 引注、
+   IDEAS.md LoRA 段引注。OSS-SCAN（08-17 快照文档）与代码注释三处
+   （mtp_processors.py×2 / asr.py / server.py，旧条款名仅作历史指名，
+   实质单实例铁律未变）不在本笔范围，代码注释留 ④′ 收口顺手扫。
 ②′ **选 a 引擎工作**：`backend/framework/backends/mlx/patch/gemma4_generate.py`
    drafter 分支（现守卫在 ~1176-1182）实现预算强制收束；同文件 prompt_lookup
    路已有同物可参照（守卫注释自己点名「该路实现了它」）。要点：预算到点时

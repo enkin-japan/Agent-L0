@@ -62,7 +62,8 @@ inference:
   # （上游 BatchGenerator 引擎内连续批处理，仅收 features.batch_ok 显式 opt-in
   # 的纯文本请求；交互轮次恒优先——单流路生成期间泳道在 decode 步边界让路）。
   # 测量场用 env INFER_MLX_MAX_CONCURRENCY 覆盖（非空即赢），不必改本档。
-  # 生产放开与否 = Q14 宪章判定（阶段四受控实验过门才动此值）。
+  # Q14 已进宪（2026-08-23，阶段四受控实验 10× 余量过门）：批内并发形态已合法，
+  # 但本值维持 1——进宪合法化形态 ≠ 生产放开，编排层准入闸未建前不动。
   mlx:
     max_concurrency: 1
   model: "mlx-community/gemma-4-e4b-it-8bit"
