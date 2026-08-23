@@ -24,7 +24,8 @@ from .. import AsrProviderUnavailable
 from ...utils.config_loader import load_section
 
 _CONNECT_TIMEOUT = 5.0
-#: 转写读超时：A 上与生成共用同一个单线程 worker（CHARTER 单 worker 串行），
+#: 转写读超时：A 上与生成共用同一个单线程 worker（CHARTER §3 单引擎单实例，
+#: 2026-08-23 修订自「单 worker 串行」；单流形态下转写照旧排队），
 #: 排在一次长生成后面是正常现象，故给得比控制面宽得多。
 _TRANSCRIBE_READ_TIMEOUT = 600.0
 _UPLOAD_READ_TIMEOUT = 120.0

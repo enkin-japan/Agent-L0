@@ -508,7 +508,8 @@ async def transcribe(request: Request):
     对媒体的处理同一套，不另开上传通道。
 
     **跑在 S.executor（单线程）上**：与生成共用同一个推理 worker，故转写与生成在 A 上
-    天然串行、不抢统一内存带宽——正是 CHARTER「单 worker 串行」那条铁律要的形状，
+    天然串行、不抢统一内存带宽——正是 CHARTER §3「单引擎批内并发」保留的单实例
+    物理内核要的形状（2026-08-23 修订自「单 worker 串行」，转写侧语义不变），
     白拿。（edge 侧摄入本就在 run_turn 之前串行发生，两者不并发。）
 
     fail-open 由调用方负责：edge 的 ingestion/parsers/asr.py 把任何异常收成
