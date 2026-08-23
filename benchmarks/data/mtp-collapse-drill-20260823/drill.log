@@ -1,0 +1,28 @@
+[MoE] 专家排序阈值 64 → 16（覆盖 MTP 验证批）：达阈的批走排序路，同专家 (token,专家) 对聚拢，靠缓存命中回收重复读取（A/B 实测 +9%）
+目标件: models/Qwen3.8-27B-8bit
+草稿件: models/Qwen3.8-27B-MTP-8bit  block=5
+
+[Engine] 已禁用 LanguageModel.speculative_argmax_from_hidden（融合采样绕过 logits 处理器；改走 hidden+批量投影走查路，与 gemma 同形态）
+[Engine] 已禁用 LanguageModel.speculative_verify_logits（融合采样绕过 logits 处理器；改走 hidden+批量投影走查路，与 gemma 同形态）
+[Engine] 草稿深度上限已解锁：采纳请求值 draft_block_size=5（否则被草稿件 config 缺省值 4 顶死）
+[Engine] 投机草稿件已装载：models/Qwen3.8-27B-MTP-8bit（kind=mtp）
+[Engine] 投机采样启用：{'mode': 'drafter', 'draft_model': 'models/Qwen3.8-27B-MTP-8bit', 'draft_kind': '', 'num_draft_tokens': 8, 'draft_block_size': 5}
+装载 35.2s  kind=mtp
+
+=== 臂 1：thinking_budget=64（逼收束）===
+  ✅ A) 不再拒跑（旧守卫已被真实现取代）  [tokens=900 wall=26.7s]
+  ✅ B1) 预算真被触到（计数 ≥ 预算）  [count=69]
+  ✅ B2) 收束及时（计数 ≤ 预算+10 溢出上界）  [count=69]
+  ✅ B3) 收束完成（终态不在思考中）
+  ✅ C1) 收束后有非空正文  ['# 光合作用的完整过程\n\n光合作用是绿色植物、藻类和部分细菌利用光能将二氧化碳和水转化为有机物并释放氧气的生物化学过程。']
+  ✅ C2) 非退化
+  ✅ MTP 真在跑（有草稿统计）  [drafted=1227 accepted=593]
+
+=== 臂 2：thinking_budget=100000（对照：自然思考长度）===
+  ✅ 对照臂自然思考 > 小预算（证明臂 1 是被强制收束）  [natural=400]
+  ✅ 对照臂未触发收束
+
+===== 汇总 =====
+9/9 通过
+[数据] 臂1 思考计数=69 生成=900 tps=34.6
+[数据] 臂2 思考计数=400 生成=900 tps=35.9

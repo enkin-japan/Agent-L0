@@ -4164,6 +4164,13 @@ harness 不带思考预算。候选解（都动生产口径，须用户拍板）
    属断言空泛非夹具问题）→锚加强到门表达式后红；D 桥断线→bridge_arms 红；
    E 谓词恒放行→predicate 红；F 批守卫漏收束→batch_rounds 红；G 活动 guard
    照喂→fails_open 红。每体注入前后清 __pycache__，三文件 sha256 还原核验。
+   **✅ 真机 drill 9/9 通过（同日，②′ 至此全格收案）**：qwen38-8bit + b5、
+   生产口径采样、双臂同 prompt——预算 64 臂思考计数 **69**（溢出 +5 =
+   块中滞后 4 + 强制 `\n` 计 1，与口径差理论上界严丝合缝）、收束完成、
+   正文正常非退化、MTP 真在跑（drafted 1227 / accepted 593）；对照臂
+   （预算 10 万）自然思考 400 ≫ 64，证明收束是被强制的。产物
+   `benchmarks/data/mtp-collapse-drill-20260823/`（log + ANALYSIS），
+   脚本归档 `backend/scripts/drill_thinking_collapse.py`（可复用回归件）。
 ③′ **② 重画像补跑**（a 落地后）：完整生产口径（思考开+预算 2048+drafter b5）
    `run_eval.py --model Qwen3.8-27B-8bit --dims tool_call,longchain,vision`
    （--spec-mode 留空）；4bit 档（b3）视时长跟进；回填 config profile +
