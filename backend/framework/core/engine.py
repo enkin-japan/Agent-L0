@@ -561,6 +561,11 @@ class AgentEngine:
         LLTokenizer 进程内建一次（~1s，摊销）；语法按工具集缓存；matcher 复用
         （推理互斥锁保证同一时刻只有一次生成在用它）。任何失败永久禁用并告警，
         绝不影响生成主路径。
+
+        与 inference/server 的分级**刻意不同**（m9，2026-08-23）：server 的懒建曾在
+        事件循环线程与推理线程并发碰 Rust 分词器（Already borrowed → 永久静默禁用），
+        故改为 lifespan 预建 + 拒启/按次 fail-open。这里的懒建跑在生成线程、持推理锁，
+        没有那条竞态，保持原策；别把两边"统一"回同一种。
         """
         if not self.constrained_tool_calls or self._constraint_disabled or not tools:
             return None

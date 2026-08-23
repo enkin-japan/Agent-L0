@@ -46,7 +46,9 @@ class DialectMarkers:
     stc/etc  工具调用体的起止
 
     ⚠️ stc/etc 必须各自是**单 token**：约束采样的状态机靠 token id 锚定
-    （见 core/constrained.py 与 engine._tool_guard 的单 token 校验）。
+    （见 core/constrained.py 与 engine._tool_guard 的单 token 校验；inference/server
+    的同款校验在 `_build_constraint_engine` 启动期跑，config 开约束而标记非单 token
+    时 server **拒启**而非 fail-open——改标记的人要知道这条后果）。
     """
     soc: str
     eoc: str

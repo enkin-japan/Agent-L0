@@ -1,0 +1,5 @@
+[16:19:16] ready in 24s
+metrics@start: {'constraint_engine_ready': True, 'constraint_failopen_total': 0}
+text: <|tool_call>call:get_weather{city:<|"|>东京<|"|>}<tool_call|>
+done: {'constrained_steps': 13, 'generation_tokens': None, 'finish_reason': None}
+metrics@end: {'constraint_engine_ready': True, 'constraint_failopen_total': 0, 'generations_total': 1, 'errors_total': 0}

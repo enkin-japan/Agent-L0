@@ -163,10 +163,14 @@ class ServerState:
     gens: Dict[str, Dict[str, Any]] = {}          # gen_id → {"cancel": bool}（进行中的生成）
     batch_lane = None                             # §7-0① 批处理泳道（MLX 旋钮>1 时武装）
     single_busy: int = 0                          # 单流路在生成的计数：泳道据此让路（交互优先）
-    constraint_engine = None                      # 懒建（LLTokenizer ~1s）
-    constraint_disabled = _llg is None
+    constraint_engine = None                      # lifespan 预建（m9）：LLTokenizer 序列化是唯一
+                                                  # 碰 Rust 分词器的一步，只许在无在飞生成时做
+    constraint_disabled = _llg is None            # 启动期定案（config 关 / 无 llguidance / 方言不支持）
+    constraint_probe_ok: Optional[bool] = None    # 启动探针结论（None=未跑/已禁用）；/metrics 巡检面
+    constraint_failed_keys: set = set()           # 请求期编译失败的工具集摘要（负缓存：同集只响一次）
     dialect = None                                # ModelDialect：按模型注册表条目装配（R0）
-    metrics = {"generations_total": 0, "cancelled_total": 0, "errors_total": 0}
+    metrics = {"generations_total": 0, "cancelled_total": 0, "errors_total": 0,
+               "constraint_failopen_total": 0}    # 请求期按次 fail-open 计数（m9 分级兜底）
 
 
 S = ServerState()
@@ -187,31 +191,148 @@ def _busy_executor_call(loop, fn):
     return fut
 
 
+# 启动探针用的最小工具声明：只为在 lifespan 内走一遍「方言语法 builder → llguidance
+# 编译」链路，把「方言按设计不出语法」（qwen35 XML 调用体抛 NotImplementedError）这种
+# 确定性结论从首个工具请求提前到启动期——用户看到的是启动日志，不是请求期静默裸奔。
+def _constraint_probe_tools():
+    # 每次现造：交给方言 builder 的是一次性对象，builder 原地规范化也污染不到常量
+    return [{"name": "_startup_probe", "description": "constraint engine startup probe",
+             "parameters": {"type": "object", "properties": {"q": {"type": "string"}},
+                            "required": ["q"]}}]
+
+
+def _build_constraint_engine() -> None:
+    """约束采样引擎**启动期预建**（m9，第 4 层阶段复审立案）。
+
+    只许在 lifespan 内、`S.backend` / `S.dialect` 就绪之后调用：此时没有在飞生成，
+    对共享 HF 分词器 `encode` 与 llguidance 的 `from_tokenizer`（copy + to_str 序列化
+    Rust 分词器）都安全。旧实现在首个带 tool_specs 的请求里懒建——调用点落在
+    `gen_sem` 之外的事件循环线程，与推理线程的 encode/detok 并发 → `Already borrowed`
+    → 兜底把 `constraint_disabled` 永久置 True 且只打一行日志：进程级静默裸奔。
+
+    失败分级（启动期就响，不等首请求）：
+    - config 未启用 / 环境无 llguidance → 禁用并明示（这两支与 engine.py 同策）；
+    - 方言 builder 抛 NotImplementedError = 方言按设计不出语法 → 禁用并明示（确定性
+      结论；**先于建引擎**判——qwen35 这类方言不该为用不上的引擎付 LLTokenizer 代价，
+      更不该因它拒启，评审 M1）；
+    - 引擎建不起来（标记非单 token、分词器序列化失败）= 结构性故障 → **拒启**
+      （config 明确要求约束采样而给不出，静默裸奔就是 m9 本身；要裸奔请显式关
+      inference.constrained_tool_calls）。此支只能落在权重装载之后（引擎要的就是
+      装好的分词器），与 lifespan 里其它「装载前拒启」不同——故 m9 落地前须真机冒烟；
+    - llguidance 编译探针其它异常 → 不下结论、不禁用，交请求期按次分级（probe_ok=False
+      上 /metrics）。
+    """
+    S.constraint_probe_ok = None
+    if not bool(INFERENCE_CFG.get("constrained_tool_calls", False)):
+        S.constraint_disabled = True
+        S.constraint_engine = None
+        print("[Server] 约束采样未启用（inference.constrained_tool_calls=false）")
+        return
+    if _llg is None:
+        S.constraint_disabled = True
+        S.constraint_engine = None
+        print("⚠️ [Server] constrained_tool_calls=true 但本环境无 llguidance——"
+              "约束采样禁用（自由采样 + 解析纠错闭环兜底）")
+        return
+    try:
+        S.dialect.tool_call_grammar(_constraint_probe_tools())
+    except NotImplementedError as e:
+        S.constraint_disabled = True
+        S.constraint_engine = None
+        print(f"[Server] 方言声明不出调用体语法，约束采样整段禁用"
+              f"（自由采样 + 解析纠错闭环）: {e}")
+        return
+    except Exception as e:
+        # 探针声明未必合方言口味：不据此下结论，照样建引擎，编译探针那一步再看
+        print(f"⚠️ [Server] 方言语法探针未通过（不据此禁用）: {type(e).__name__}: {e}")
+    try:
+        proc = S.backend.processor
+        tok = proc.tokenizer if hasattr(proc, "tokenizer") else proc
+        stc = tok.encode(S.dialect.markers.stc, add_special_tokens=False)
+        etc = tok.encode(S.dialect.markers.etc, add_special_tokens=False)
+        if len(stc) != 1 or len(etc) != 1:
+            raise RuntimeError("工具调用标记不是单 token，约束状态机无法锚定")
+        # 语法由方言提供（R0/D1 修复）：少传这个参数 = TypeError → 以前是约束永久禁用
+        # → e4b 裸奔发畸形 JSON；现在是启动期拒启，漂移当场可见
+        engine = ToolConstraintEngine(tok, stc[0], etc[0], S.dialect.tool_call_grammar)
+    except Exception as e:
+        raise SystemExit(
+            f"❌ [Server] 约束采样引擎预建失败：{type(e).__name__}: {e}——"
+            f"config 要求约束采样而引擎建不起来是结构性故障，拒启优于静默裸奔；"
+            f"确需无约束运行请显式关 inference.constrained_tool_calls") from e
+    S.constraint_engine = engine
+    S.constraint_disabled = False
+    S.constraint_failed_keys = set()
+    try:
+        engine.matcher_for(_constraint_probe_tools())
+    except Exception as e:
+        # 编译探针未过：不据此禁用（探针规格未必合方言口味），请求期按工具集分级；
+        # 结论上 /metrics（constraint_probe_ok=False）——"就绪"不等于"会约束"
+        S.constraint_probe_ok = False
+        print(f"⚠️ [Server] 约束采样引擎就绪但启动编译探针未通过（不禁用，请求期按次 fail-open）: "
+              f"{type(e).__name__}: {e}")
+        return
+    S.constraint_probe_ok = True
+    print("[Server] 约束采样引擎就绪（llguidance，启动期预建 + 方言/编译探针通过）")
+
+
 def _tool_guard(tool_specs) -> Optional[ToolCallGuard]:
-    """服务端按客户端捎带的工具声明重建约束 guard（与 AgentEngine._tool_guard 同纪律：
-    任何失败永久禁用 fail-open，绝不影响生成主路径）。"""
-    if not tool_specs or S.constraint_disabled \
-            or not bool(INFERENCE_CFG.get("constrained_tool_calls", False)):
+    """服务端按客户端捎带的工具声明重建约束 guard。
+
+    m9 后本函数在请求期**不碰 Rust 分词器**：引擎由 `_build_constraint_engine` 在
+    lifespan 预建，这里只做语法编译/复用（llguidance 自持 LLTokenizer）。调用位置也
+    随之挪到**推理线程、gen_sem 已持有之后**（`_arm_tool_guard`）：`matcher_for` 对
+    同工具集返回**同一个**缓存 matcher 并 `reset()` 它——在事件循环线程做会把在飞生成
+    正在消费的状态机拨回起点（评审 M4）；MLX gen_sem=1 下进了临界区即与一切生成互斥。
+    失败分级：
+    - 启动期已禁用 → None 直接放行（结论在启动日志里，不在这里重复）；
+    - 未禁用却无引擎 = lifespan 未走预建（入口漂移/测试桩错）→ 响亮抛错，不静默裸奔
+      （在推理线程抛 → SSE error 事件 + errors_total，不是裸 500）；
+    - 请求期异常（坏 schema、语法编译错）→ **本请求** fail-open：计数 + 日志明示，
+      不再永久禁用——一个客户端的坏工具集不得毒化全进程后续所有客户端；同一工具集
+      进负缓存，再来只计数不再重编译/重刷屏（评审 M3：编译失败 matcher_for 不缓存）。
+    """
+    if not tool_specs or S.constraint_disabled:
+        return None
+    eng = S.constraint_engine
+    if eng is None:
+        raise RuntimeError("约束采样未禁用但引擎未预建——lifespan 须先 _build_constraint_engine()")
+    # 负缓存键 = 引擎正缓存的同一内容摘要（引擎拥有键语义；这里不另造一套）
+    key = eng._tools_key(tool_specs)
+    if key in S.constraint_failed_keys:
+        S.metrics["constraint_failopen_total"] += 1
         return None
     try:
-        if S.constraint_engine is None:
-            proc = S.backend.processor
-            tok = proc.tokenizer if hasattr(proc, "tokenizer") else proc
-            stc = tok.encode(S.dialect.markers.stc, add_special_tokens=False)
-            etc = tok.encode(S.dialect.markers.etc, add_special_tokens=False)
-            if len(stc) != 1 or len(etc) != 1:
-                raise RuntimeError("工具调用标记不是单 token，约束状态机无法锚定")
-            # 语法由方言提供（R0/D1 修复）：少传这个参数 = TypeError → 约束永久禁用
-            # → e4b 裸奔发畸形 JSON（沙箱 calls=[] / schedule_create 参数崩的共同根因）
-            S.constraint_engine = ToolConstraintEngine(tok, stc[0], etc[0],
-                                                       S.dialect.tool_call_grammar)
-            print("[Server] 约束采样引擎就绪（llguidance）")
-        eng = S.constraint_engine
         return ToolCallGuard(eng.matcher_for(tool_specs), eng.stc_id, eng.etc_id, eng.vocab_size)
     except Exception as e:
-        print(f"[Server] 约束采样构建失败，永久禁用: {type(e).__name__}: {e}")
-        S.constraint_disabled = True
+        S.metrics["constraint_failopen_total"] += 1
+        S.constraint_failed_keys.add(key)
+        print(f"⚠️ [Server] 本请求工具集约束构建失败，本次 fail-open（同集后续只计数不重试；"
+              f"累计 {S.metrics['constraint_failopen_total']}）: {type(e).__name__}: {e}")
         return None
+
+
+def _arm_tool_guard(features: Dict[str, Any], tool_specs) -> Optional[ToolCallGuard]:
+    """在推理线程、gen_sem 临界区内为本次生成装配约束面（guard + 声明式规格）。
+
+    返回 guard（MLX 逐 token 后端消费 features.tool_guard；cuda/vLLM 首选
+    features.tool_constraint 的 structural-tag，guard 只是其回退）。"""
+    guard = _tool_guard(tool_specs)
+    if guard is not None:
+        features["tool_guard"] = guard
+        # 声明式约束规格（引擎原生结构化输出的后端吃这个，如 cuda/vLLM structural-tag
+        # ——per-request logits_processors 已被 vLLM 0.26 拒收，2026-08-07 实测）。
+        # guard 构建成功即隐含语法 builder 可用（qwen35 XML 方言在启动探针里已
+        # 整段禁用，走不到这里）；MLX 等逐 token 后端忽略此键，语义各自单一来源。
+        # kind 随行（§7-8）：后端据此判断能否表达该语法，不能表达时必须拒。
+        _tc_grammar = S.dialect.tool_call_grammar(tool_specs)
+        features["tool_constraint"] = {
+            "kind": _tc_grammar.kind,
+            "body": _tc_grammar.body,
+            "begin": S.dialect.markers.stc,
+            "end": S.dialect.markers.etc,
+        }
+    return guard
 
 
 def _media_paths(ids, kind: str):
@@ -329,6 +450,8 @@ async def lifespan(app: FastAPI):
     _opts = model_options(model)
     S.dialect = get_dialect_class(str(_opts.get("dialect") or "")).create(
         S.backend.processor, options=_opts)
+    # m9：约束采样引擎在此预建——无在飞生成，是唯一能安全碰 Rust 分词器的窗口
+    _build_constraint_engine()
     S.registry = CacheRegistry(S.backend, CACHE_TTL_SECONDS)
     S.gen_sem = asyncio.Semaphore(n_concurrency)
     if n_concurrency > 1:
@@ -417,7 +540,13 @@ async def metrics():
     # 是不是同一个 TTL。CACHE_TTL_SECONDS 在 import 时绑定，改了 config 不重启服务，
     # 两边就悄悄分家——而工装的「离开」冷档窗宽正是按 TTL 算的，分家即冷重建零样本。
     out = {**S.metrics, "cache_count": len(S.registry), "active_generations": len(S.gens),
-           "cache_ttl_seconds": CACHE_TTL_SECONDS}
+           "cache_ttl_seconds": CACHE_TTL_SECONDS,
+           # m9 冒烟/巡检面：预建是否就绪（False = 启动期已禁用，原因在启动日志）
+           "constraint_engine_ready": S.constraint_engine is not None
+                                      and not S.constraint_disabled,
+           # 探针结论：True=方言+编译链路启动期走通；False=引擎在但探针没过（请求期可能
+           # 按次 fail-open，看 constraint_failopen_total）；None=已禁用/未跑
+           "constraint_probe_ok": S.constraint_probe_ok}
     if S.batch_lane is not None:
         out["batch_lane"] = {"active": S.batch_lane.active_count,
                              # decoding ≠ active：后者含引擎内排队的行——
@@ -667,22 +796,9 @@ async def generate(request: Request):
         cache_id = S.registry.create()
         cache = S.registry.get(cache_id)
 
+    # 约束面装配推迟到推理线程（_blocking_generate 内、gen_sem 已持有）：见 _tool_guard
+    # 文档——在这里（事件循环线程、闸外）做会与在飞生成共用并 reset 同一 matcher。
     tool_specs = features.pop("tool_specs", None)
-    guard = _tool_guard(tool_specs)
-    if guard is not None:
-        features["tool_guard"] = guard
-        # 声明式约束规格（引擎原生结构化输出的后端吃这个，如 cuda/vLLM structural-tag
-        # ——per-request logits_processors 已被 vLLM 0.26 拒收，2026-08-07 实测）。
-        # guard 构建成功即隐含语法 builder 可用（qwen35 XML 方言在 _tool_guard
-        # 内已 fail-open，走不到这里）；MLX 等逐 token 后端忽略此键，语义各自单一来源。
-        # kind 随行（§7-8）：后端据此判断能否表达该语法，不能表达时必须拒。
-        _tc_grammar = S.dialect.tool_call_grammar(tool_specs)
-        features["tool_constraint"] = {
-            "kind": _tc_grammar.kind,
-            "body": _tc_grammar.body,
-            "begin": S.dialect.markers.stc,
-            "end": S.dialect.markers.etc,
-        }
 
     images = _media_paths(body.get("images"), "image")
     audios = _media_paths(body.get("audios"), "audio")
@@ -694,7 +810,11 @@ async def generate(request: Request):
 
     def _blocking_generate():
         """推理执行器线程：消费后端生成流，逐 chunk 投回事件循环。"""
+        guard = None
         try:
+            # 约束面在此装配：已在 gen_sem 内，与一切在飞生成互斥（评审 M4）；
+            # 构建异常（含 lifespan 未预建的结构错）走下方 except → SSE error 事件
+            guard = _arm_tool_guard(features, tool_specs)
             for chunk in S.backend.stream_generate(
                 prompt, cache=cache,
                 images=images or None, audios=audios or None,

@@ -565,8 +565,8 @@ R0–R5 各小项的打勾细分（含每步实测结果与计划外发现）已
 
 | 项 | 当前值 | 口径 |
 |---|---|---|
-| 金测试项数 | 1587 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
-| 测试文件数 | 107 | `backend/tests/` 下递归的 `test_*.py` |
+| 金测试项数 | 1606 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
+| 测试文件数 | 108 | `backend/tests/` 下递归的 `test_*.py` |
 | mcp 文件数 | 31 | `backend/framework/mcp/` 递归下的 `.py`，**不含** `__init__.py` |
 | BaseTool 子类 | 67 | 全 backend 内 `class X(BaseTool)` 的声明数（一个文件可有多个） |
 | 物理隔离沙箱 | 3 | `backend/framework/agents/*_sandbox.py` |
@@ -4254,7 +4254,8 @@ config 同步）✔；m7 bridge 0-d 标量降级分支变量遮蔽（08-15 休�
 Q14 run1 的「Already borrowed」缺陷类；更糟的是被 :212 捕获后
 `S.constraint_disabled = True` **进程级永久静默禁用约束采样**（fail-open 无
 上报）。修法方向：stc 编码在装载期一次算好缓存，或 guard 构建挪入互斥区。
-排期：第 4 层外新工作项，与 ⑤′ 一起等排期。
+排期：第 4 层外新工作项，与 ⑤′ 一起等排期。**→ 已修（2026-08-23 下午，见下方
+「m9 交付」）。**
 
 ---
 
@@ -4293,6 +4294,48 @@ m9 **server 约束采样竞态修复**（S–M，单文件为主，guard-type �
    cp+sha256 还原、清 __pycache__、记本条）+ reviewer 首过 + 主会话复核。
    真机：结构消除后竞态不可复现，不必做并发 drill；起一次 server 冒烟
    （🟡 短占 GPU，<5 min，确认预建日志 + 首个工具请求正常）即可。
+   **✅ m9 交付（2026-08-23 下午）**——两处结构修法都做了：
+   - **预建**：`_build_constraint_engine()` 在 lifespan 内 `S.dialect` 就绪后、
+     `S.registry` 之前调用（源锚测试钉顺序）。顺序为 **方言语法探针 → 建引擎 →
+     llguidance 编译探针**（评审 M1：qwen35 抛 NotImplementedError 时不建引擎、不
+     encode、不拒启，启动日志一行整段禁用）。`matcher_for` 已核实只用自持
+     `LLTokenizer`（`from_tokenizer` 在构造时 copy+to_str 序列化一次，此后与 HF
+     分词器无关）——请求路径零 encode、零触碰 `S.backend`（测试：encode 换必炸 +
+     S.backend=None 仍建 guard）。
+   - **装配挪入互斥区**：guard 构建从 generate() 事件循环线程（闸外）挪到
+     `_blocking_generate`（推理线程、gen_sem 已持有）——评审 M4 指出的**第二个**
+     竞态：`matcher_for` 对同工具集返回同一缓存 matcher 并 `reset()`，闸外做会拨回
+     在飞生成的状态机（MLX gen_sem=1 下进临界区即互斥；cuda >1 路首选
+     structural-tag、guard 仅回退，残余共享风险记此存查）。顺带：语法编译离开事件
+     循环线程；结构错（lifespan 未预建）变 SSE error 事件 + errors_total，不再裸 500。
+   - **分级兜底**：config 关 / 无 llguidance → 禁用明示；引擎建不起来（标记非单 token
+     /分词器序列化失败/构造签名漂移）→ **SystemExit 拒启**（逃生旋钮写在拒启文案：
+     显式关 `inference.constrained_tool_calls`）；方言不出语法 → 禁用明示；编译探针
+     其它异常 → 不禁用、`/metrics constraint_probe_ok=false`；请求期异常 → 本请求
+     fail-open + `constraint_failopen_total` 计数 + 日志，**不再永久禁用**，同工具集
+     进负缓存（评审 M3：编译失败不缓存，无负缓存 = 坏集每请求重编译+刷屏），再来只
+     计数；未禁用却无引擎 → RuntimeError 响亮。`/metrics` 新增
+     `constraint_engine_ready` / `constraint_probe_ok` / `constraint_failopen_total`。
+   - 评审 M2（拒启只能落在权重装载后）：结构如此——引擎要的就是装好的分词器；以真机
+     冒烟背书（下）。events 总线在 server 进程内无消费者，故仪表走 /metrics 不走
+     `events.emit`（评审 m8 不采）。engine.py 懒建保持原策（持推理锁、无该竞态），
+     注释写明两边刻意不同（评审 m9）；dialect_protocol / qwen35 两处旧注释对齐（m10）。
+   - **金测试**：`tests/test_server_constraint_prebuild.py` 19 条（预建/顺序源锚/零
+     encode/按次 fail-open/负缓存/拒启×2/方言禁用不建引擎/探针失败不禁用/config 关/
+     无 llguidance/无引擎抛错/线程内装配源锚/metrics×2 等）。全套 1587→**1606**。
+   - **变异证明**（10 只，`benchmarks/data/m9-smoke-20260823/mutants.log`）：A 去预建
+     调用→顺序源锚红；B 请求期永久禁用回流→2 红；C 拒启退静默→2 红；D NotImplemented
+     不单列→红；E 无引擎静默放行→红；F 请求路径重新 encode→2 红；H 方言探针挪回引擎后
+     （M1 回退）→红；I 负缓存不记（M3 回退）→红；J 装配挪回事件循环线程（M4 回退）→
+     红；K probe_ok 恒 True→红。每只 cp 注入、清 __pycache__、sha256 核对还原。
+   - **真机冒烟**（26b-4bit、INFER_SPEC_MODE=off、GPU 独占手核、总耗时 <2 min）：
+     就绪 24s；启动日志「约束采样引擎就绪（llguidance，启动期预建 + 方言/编译探针
+     通过）」；`/metrics constraint_engine_ready=true`；首个带 tool_specs 请求产出
+     `<|tool_call>call:get_weather{city:<|"|>东京<|"|>}<tool_call|>`，done 事件
+     `constrained_steps=13`；终态 failopen 0 / errors 0。档案
+     `benchmarks/data/m9-smoke-20260823/`（server.log、smoke.out、smoke.py）。
+   - 评审：reviewer 首过 0C/4M/7m（全部处置如上，M2 以冒烟背书、m8 不采有记）+ 主会话
+     复核。
 ⑤′-1 **降级路**（S–M）：先读 `advisor.consult` 与 `cloud_consult` 的现有失败
    语义（无 key / 预算耗尽 / HTTP 错 / 超时 / L0 模型腿不可用），定义统一
    `degraded` 观察格式回本地循环；编排层把「本地作答」明确标注给用户（不

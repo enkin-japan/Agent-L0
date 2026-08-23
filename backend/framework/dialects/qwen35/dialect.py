@@ -8,7 +8,8 @@ chat template 逐行 diff 仅一处：思考回放范围——本方言取 Ornit
 - markers 是**家族字面量**（<think>/</think>/<tool_call>/</tool_call>，两模型
   tokenizer 实测全部单 token），不经 special_tokens_map 取名。
 - `tool_call_grammar` 抛 NotImplementedError：本家族调用体是 XML，既非 JSON 也非
-  gemma-4 的紧凑 DSL——engine._tool_guard 捕获后走 fail-open（打印"永久禁用"一次），
+  gemma-4 的紧凑 DSL——engine._tool_guard 捕获后走 fail-open（打印"永久禁用"一次）；
+  inference/server 在启动探针里据此整段禁用（启动日志一行，不建引擎、不拒启）。
   解析纠错闭环兜底。这是**方言事实**不是故障；§7-8 已把 core/constrained 的语法面
   拓宽到 Lark，将来要约束 XML 在此实现一个 Lark 语法即可，不必再改 core。
 """

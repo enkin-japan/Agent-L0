@@ -1,0 +1,13 @@
+orig 555bba367b67e62a45adf1e75f43fa511016c2d1ff8daa481a84f4a799eb6d49
+A 去预建调用 → FAILED tests/test_server_constraint_prebuild.py::test_lifespan_calls_prebuild_after_dialect_before_registry 1 failed, 13 passed in 0.87s 
+B 请求期永久禁用回流 → FAILED tests/test_server_constraint_prebuild.py::test_request_time_failure_is_per_request_not_permanent FAILED tests/test_server_constraint_prebuild.py::test_lazy_build_is_gone_from_request_path 2 failed, 12 passed in 0.87s 
+C 拒启退为静默禁用 → FAILED tests/test_server_constraint_prebuild.py::test_prebuild_structural_failure_refuses_startup FAILED tests/test_server_constraint_prebuild.py::test_prebuild_engine_ctor_failure_refuses_startup 2 failed, 12 passed in 1.26s 
+D 方言 NotImplemented 不再单列 → FAILED tests/test_server_constraint_prebuild.py::test_dialect_without_grammar_disables_at_startup_loudly 1 failed, 13 passed in 0.87s 
+E 无引擎静默放行 → FAILED tests/test_server_constraint_prebuild.py::test_guard_without_prebuild_raises_instead_of_silent_bypass 1 failed, 13 passed in 0.86s 
+F 请求路径重新 encode → FAILED tests/test_server_constraint_prebuild.py::test_request_path_touches_neither_tokenizer_nor_backend FAILED tests/test_server_constraint_prebuild.py::test_lazy_build_is_gone_from_request_path 2 failed, 12 passed in 0.88s 
+restore: OK
+H 方言探针挪回引擎之后(M1 回退) → FAILED test_dialect_without_grammar_disables_before_engine_build 1 failed, 18 passed in 0.96s 
+I 负缓存不记(M3 回退) → FAILED test_request_failure_negative_cache_same_toolset_once 1 failed, 18 passed in 0.96s 
+J 装配挪回事件循环线程(M4 回退) → FAILED test_guard_is_armed_inside_inference_thread_not_event_loop 1 failed, 18 passed in 1.35s 
+K probe_ok 恒 True → FAILED test_metrics_probe_ok_false_when_compile_probe_fails 1 failed, 18 passed in 0.96s 
+restore2: OK
