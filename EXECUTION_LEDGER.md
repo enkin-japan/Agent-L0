@@ -4589,6 +4589,48 @@ fix-up commit 走双门（本块之后不再触发阶段复审）。
 
 ---
 
+**⏸ 收尾快照 #4（2026-08-23 夜，供 /compact 后无漂移再入）**
+
+**状态**：收尾快照 #3 队列（m9 + ⑤′-1/2/3）**整体收官**，阶段复审闭环，用户三条裁决落地。
+`3626127..bd1790c` 共 6 个 commit 全部推送；工作树干净；GPU 空闲、无后续 GPU 需求。
+金测试 1587→**1715**；变异证明累计 64 只全红（5 只首跑存活，全因缺用例，补测后杀）。
+
+**用户裁决（2026-08-23，已全部落地）**：
+① **B1 图表读数 → `caveat`**（64G 两档不共驻，换档代价 ≫ 一题收益；成批看图由用户自行切档）；
+② **B2 长上下文×结构化 cleared**（08-14 弱信号 = JSON 声明体旧口径；答复正文提取 12/12）；
+③ **B3 隐式聚合 → `tool_assist → run_math`**（先列后算探针：列得全、算不对；算术交沙箱）；
+④ **`cloud.upgrade.mode` 留 `suggest`**，有问题再反馈。
+此前拍板不变：云端导师 = 商用 API、Colab 仅开发测试；选择档由用户 `./devctl.sh model` 自设
+（现 26b-4bit）；64G 运行期不动态换档。
+
+**现在的护栏形状（一句话各一条，细节见各交付块）**：
+- ⑤′-1 降级路：云端失败 → 统一降级观察 + 答复末尾确定性「本地作答」标注（同轮重试成功不挂）；
+  拒发也落出网台账；工具级超时也按降级。
+- ⑤′-2 边界目录 `framework/cloud/boundary.py` ↔ `BOUNDARY.md`（测试钉 id/状态/动作）：
+  B1 caveat / B2 cleared / B3 tool_assist→run_math / B4 deep_reasoning weak→cloud_consult。
+  目录现**无活跃换档条目**；回流 `scripts/boundary_harvest.py`（产物 gitignored）。
+- ⑤′-3 升级策略 `framework/cloud/upgrade.py`：显式要求 > 目录 > 连续失败（按批）；auto 代发起
+  走同一审批闸；off = 编排层注入的总开关；定时轮 auto 降 suggest；决策随会话带过续跑、
+  `turn_ended` 顶层 `cloud_upgrade`。
+- m9：server 约束采样引擎 lifespan 预建、guard 在 gen_sem 内装配、分级兜底、/metrics 三键。
+
+**已知空白（写在文档里，不是待办）**：B3 的 run_math 提醒未做端到端实跑（看生产回流聚合类轮次
+有无 `tool_started: run_math`）；提示文案对"几十条以上记录"分支无探针；B1 的 vision 差分来源
+run 是 results/ 下 gitignored 本地件（换机不可重算）；cuda/gen_sem>1 形态共享 matcher 残余竞态
+存查（本机 MLX 形态不触发）。
+
+**再入时不要做的事**：不改 `.model-selection`、`config.yaml` 功能值；不开 auto；不加换档条目
+（先按 64G 算账）；不为 B4 造证据（等回流）。
+
+**下一步（无队列，候选按 D.24 第 5 层顺序，触发才排）**：
+- 观察期：suggest 档跑一两周，harvest 回流看①模型是否采纳建议②聚合类轮次是否调 run_math
+  ③目录盲区候选 21 轮人工剔锅后能否归条。零 GPU。
+- 第 5 层 `D1` 模型可见文本纳入金测试（M）→ `D2` 提示词减法纪律与预算闸（M）……（见该层原文）。
+- 第 6 层 CUDA 侧重画像：下次 colab 场搭车，**进场先补 Drive 正主 colab.env 的 INFER 钥**。
+本快照写毕即等 /compact。
+
+---
+
 **全账重排（D.24，2026-08-18 用户拍板）——判据：① 缺陷修复优先 ② Mac 端优先——**
 
 **这是当前唯一有效的施工顺序**，覆盖此前所有「下一件」写法。`第二梯队` 段已改为指回本块。
