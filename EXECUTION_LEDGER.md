@@ -4183,10 +4183,19 @@ harness 不带思考预算。候选解（都动生产口径，须用户拍板）
    （预算 10 万）自然思考 400 ≫ 64，证明收束是被强制的。产物
    `benchmarks/data/mtp-collapse-drill-20260823/`（log + ANALYSIS），
    脚本归档 `backend/scripts/drill_thinking_collapse.py`（可复用回归件）。
-③′ **② 重画像补跑**（a 落地后）：完整生产口径（思考开+预算 2048+drafter b5）
+~~③′ **② 重画像补跑**（a 落地后）：完整生产口径（思考开+预算 2048+drafter b5）
    `run_eval.py --model Qwen3.8-27B-8bit --dims tool_call,longchain,vision`
    （--spec-mode 留空）；4bit 档（b3）视时长跟进；回填 config profile +
-   PROFILES.md（现值是 mode=off 口径 run 20260815）。🔴 独占 + sentinel。
+   PROFILES.md（现值是 mode=off 口径 run 20260815）。🔴 独占 + sentinel。~~
+   **✅ 2026-08-23 双档全跑收案**（8bit run 20260823-133216 / 4bit
+   20260823-140448，各 ~35 分钟，sentinel 全程无异常）。口径注：评测 executor
+   缺省预算 1024 而非快照写的 2048——思考均长 ~515 字符远不触顶，两值画像
+   无差，按 executor 缺省跑保口径同源可比，偏差在此记档。结果：**质量与
+   mode=off 旧画像各维差 ≤1 题**（tool 0.88/0.92、长链双 1.00、vision
+   0.943/0.958）全在噪声带内——drafter+思考开不伤质量；tps 中位 40.9/48.9
+   （off 口径 2.51×/1.75×，口径切换非引擎变快）；内存 32.6/19.3G；CoT 卫生
+   全绿。config profile + PROFILES.md（新增 08-23 生产口径节）已回填；
+   横评节「MTP 口径重画像搭车项」了结。原始件 results/（gitignored）本地存。
 ~~④′ **定档收口文档面**：config.yaml 注册表 note 按拍板 3 改写（26b-4bit 确认、
    五档静态位、KV 定档 dense、「31b@64k 场景开关」启用条件挂 wired-limit
    实测）；台账阶段四横幅收案。config.yaml 是 never-delegate 件。~~

@@ -109,7 +109,7 @@ inference:
     # 「运行时动态换档」对 64G 形态**判死**：换档 = 卸载重装 24s+ 且三层 KV
     # 全灭，换来的质量差在路由噪声带（0.05）以内——结构性负收益；128G 双驻
     # 形态另论（存查）。依据：六档画像文本维差 ≤ 噪声带，唯一真差距 vision
-    # （qwen38 0.948/0.958 vs 26b 0.84），速度差 3.6× 才是真分化轴。
+    # （qwen38 0.943/0.958〔08-23 生产口径〕vs 26b 0.84），速度差才是真分化轴。
     # KV 量化定档 **dense**（阶段三 20260823 格阵）：MoE 26b 的 KV 本就小
     # （≤0.4G 可省）且 @64k 解码 -9%；31b@64k 3.5bit 省 2.6G 为**场景开关**，
     # 启用条件挂 wired-limit 上调实测（未测不开）。2.5bit 判死（增益无几）。
@@ -167,8 +167,8 @@ inference:
       speculative: { mode: "drafter", draft_model: "mlx-community/Qwen3.8-27B-MTP-8bit",
                      draft_revision: "e88e48d055732ad75d9435f3059139d5279f2064",
                      draft_block_size: 5 }
-      profile: { tool_call: 0.92, longchain: 1.00, vision: 0.948, tps: 16.3 }  # run 20260815-161411（mode=off 口径）
-      note: "28GB | 画像 ✓（解析错 0=qwen35 方言直接兼容；vision 212 题含 ChartQA hard；峰值内存 36.4G）| D.21 生产 MTP b5（多轮 1.30×）"
+      profile: { tool_call: 0.88, longchain: 1.00, vision: 0.943, tps: 40.9 }  # run 20260823-133216（生产口径：思考开+预算1024+drafter b5；质量与 mode=off 旧画像各维差 ≤1 题）
+      note: "28GB | 定档静态位：思考/vision 特长位（2026-08-23）| 生产口径重画像 ✓（drafter×思考收束引擎补课后补跑；峰值内存 32.6G；tps 为 b5 生产实测=off 口径 2.5×）| D.21 生产 MTP b5"
     - repo: "mlx-community/Qwen3.8-27B-4bit"
       revision: "3e6447f082e89cc7f0bc6e5441afd38dfce760ff"
       dialect: "qwen35"
@@ -176,8 +176,8 @@ inference:
       speculative: { mode: "drafter", draft_model: "mlx-community/Qwen3.8-27B-MTP-4bit",
                      draft_revision: "b643c01b6d3b094e325edb6ebd832e16c486c575",
                      draft_block_size: 3 }
-      profile: { tool_call: 0.96, longchain: 1.00, vision: 0.958, tps: 27.9 }  # run 20260815-183117（mode=off 口径）
-      note: "15GB | 画像 ✓ 质量与 8bit 打平（各维差 ≤1-2 题，低于路由噪声带 0.05）而 tps 1.72×/内存 -42% = 本模型效率王 | D.21 生产 MTP b3（多轮 1.12×）"
+      profile: { tool_call: 0.92, longchain: 1.00, vision: 0.958, tps: 48.9 }  # run 20260823-140448（生产口径：思考开+预算1024+drafter b3；质量与 mode=off 旧画像各维差 ≤1 题）
+      note: "15GB | 定档静态位：思考/vision 特长位（2026-08-23，与 8bit 同位；质量打平而 tps 1.20×/内存 -41% = 本模型效率王）| 生产口径重画像 ✓（峰值内存 19.3G；tps 为 b3 生产实测=off 口径 1.75×）| D.21 生产 MTP b3"
     # ── CUDA 档（bf16 原件，backend: cuda / Colab A100 联调；2026-08-06 用户指定）──
     # revision 已钉死（2026-08-06 HF API 主干 SHA；各仓 lastModified 均早于入库日，
     # 与 Drive 权重一致——凡常驻均应钉死的纪律）。
