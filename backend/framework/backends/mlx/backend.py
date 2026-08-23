@@ -123,6 +123,12 @@ class _GuardAdapter:
         if self._seen is not None:
             self._seen += 1
 
+    def fail_open(self, e: Exception) -> None:
+        # 代理逻辑 guard 的 fail-open（思考收束强注 token 撞上活动态 guard 时，
+        # 走查侧用它整体放开约束而不是喂状态机一个语法外 token——mtp_processors
+        # 收束分支）。语义与 __call__ 的 except 路同一条纪律。
+        self._g.fail_open(e)
+
     def mask_logits(self, logits: mx.array) -> mx.array:
         if self._g.failed:
             return logits

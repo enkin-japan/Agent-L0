@@ -525,3 +525,316 @@ def test_record_emitted_skips_tokens_the_walk_already_committed():
         for i, t in enumerate([3, 4, 5], start=1):
             mp.record_emitted(t, i)
         assert g.consumed == [77, 3, 4, 5]
+
+
+# ── 思考预算强制收束（轮界注入，2026-08-23 补课；模块头「思考预算强制收束」）──
+
+
+class _FakeCriteria:
+    """ThinkingBudgetCriteria 的走查侧表面：两面稳定旗 + 收束序列。
+
+    `feed(token)` 模拟外层消费循环回流 criteria 的那次调用里**与收束相关**的
+    转移：真 end token 过手 → 双旗落下（真件 __call__ 2115-2118 行为）。
+    """
+
+    NL, END = 11, 12
+
+    def __init__(self, exceeded=True):
+        self.in_thinking = True
+        self.budget_exceeded = exceeded
+        self.enable_thinking = True
+        self._forced_sequence = [self.NL, self.END]
+        self.thinking_end_token_id = self.END
+
+    def feed(self, token):
+        if token == self.END:
+            self.in_thinking = False
+            self.budget_exceeded = False
+
+
+class _UntouchableLM:
+    """收束轮不许碰模型：投影被调即失败（断言强制分支真的短路了采样）。"""
+
+    def speculative_logits_from_hidden(self, hidden):
+        raise AssertionError("收束轮不应发生投影/采样")
+
+
+def _tb_ctx(criteria, procs=()):
+    return mp.processor_context(list(procs), prompt_tokens=PROMPT,
+                                penalty_window=64,
+                                thinking_criteria=criteria)
+
+
+def test_collapse_injects_sequence_without_sampling():
+    """收束待决：逐轮注出 \\n → </think>，全程零采样；旗翻后回正常流。"""
+    c = _FakeCriteria()
+    with _tb_ctx(c):
+        got1 = _mtp._mtp_acceptance_walk(
+            _UntouchableLM(), _Verify([3]), mx.array([[3]]), _sampler, 99,
+            row_id=0, base_position=0)
+        assert got1 == (0, [c.NL])
+        c.feed(c.NL)  # 外层回流：\n 不翻旗
+        got2 = _mtp._mtp_acceptance_walk(
+            _UntouchableLM(), _Verify([3]), mx.array([[3]]), _sampler, 99,
+            row_id=0, base_position=0)
+        assert got2 == (0, [c.END])
+        c.feed(c.END)  # end 过手 → 双旗落下
+        # 收束完成后走查恢复正常语义（含游标复位）
+        assert _walk(_Verify([3, 4, 5]), [3, 4]) == (2, [3, 4, 5])
+        assert mp._collapse().index == 0
+
+
+def test_collapse_flags_down_is_passthrough():
+    """criteria 在场但旗未立（预算未到/模型自行收束）→ 正常走查，游标不动。"""
+    c = _FakeCriteria(exceeded=False)
+    with _tb_ctx(c):
+        assert _walk(_Verify([3, 4, 5]), [3, 4]) == (2, [3, 4, 5])
+        assert mp._collapse().index == 0
+
+
+def test_collapse_commits_forced_token_to_history():
+    """强制 token 与正常产出同责：进惩罚历史/guard 水位线，消费侧不双登。"""
+    rec, g = _Recorder(), _FakeGuard()
+    c = _FakeCriteria()
+    with _tb_ctx(c, procs=[rec, g]):
+        ctx = mp._ctx()
+        # 真实轮结构：bonus token（索引 0，走查没经手）先行——收束 token 在
+        # 消费流里占的是 bonus 之后的索引（评审 m13：轮界不变量是
+        # 「yield_index == n_emitted 时归消费侧登记，commit 后 +1」）
+        mp.record_emitted(77, 0)
+        assert g.consumed == [77] and ctx.n_emitted == 1
+        _mtp._mtp_acceptance_walk(
+            _UntouchableLM(), _Verify([3]), mx.array([[3]]), _sampler, 99,
+            row_id=0, base_position=0)
+        assert ctx.hist[-1] == c.NL and g.consumed == [77, c.NL]
+        assert ctx.n_emitted == 2
+        # 消费侧 yield 强制 token：索引 1 < n_emitted → 不重复登记
+        mp.record_emitted(c.NL, 1)
+        assert g.consumed == [77, c.NL]
+        c.feed(c.NL)
+        # 下一轮（注 end）后，惩罚历史应含 \n（后续走查窗口看得见强制段）
+        c2 = _mtp._mtp_acceptance_walk(
+            _UntouchableLM(), _Verify([3]), mx.array([[3]]), _sampler, 99,
+            row_id=0, base_position=0)
+        assert c2 == (0, [c.END]) and ctx.hist[-2:] == [c.NL, c.END]
+
+
+def test_collapse_zero_budget_does_not_consume_cursor():
+    """budget<1 防御位：不注入也不推游标（下轮 budget 恢复时从头注）。"""
+    c = _FakeCriteria()
+    with _tb_ctx(c):
+        got = _walk(_Verify([3, 4, 5]), [3, 4], budget=0)
+        assert got[1] == [] and mp._collapse().index == 0
+        got2 = _mtp._mtp_acceptance_walk(
+            _UntouchableLM(), _Verify([3]), mx.array([[3]]), _sampler, 1,
+            row_id=0, base_position=0)
+        assert got2 == (0, [c.NL])
+
+
+def test_collapse_stuck_flags_raise_instead_of_spinning():
+    """序列注完旗仍立（产出未回流 criteria）→ 响，不空转。"""
+    c = _FakeCriteria()
+    with _tb_ctx(c):
+        for _ in range(2):
+            _mtp._mtp_acceptance_walk(
+                _UntouchableLM(), _Verify([3]), mx.array([[3]]), _sampler, 99,
+                row_id=0, base_position=0)
+        with pytest.raises(RuntimeError, match="旗未翻"):
+            _mtp._mtp_acceptance_walk(
+                _UntouchableLM(), _Verify([3]), mx.array([[3]]), _sampler, 99,
+                row_id=0, base_position=0)
+
+
+def test_collapse_seam_armed_tracks_walk_binding():
+    """在位性检查对着真实绑定：uninstall 后必须报未在位（分派门 fail-closed 依据）。"""
+    assert mp.collapse_seam_armed() is True
+    mp.uninstall()
+    try:
+        assert mp.collapse_seam_armed() is False
+    finally:
+        mp.install()
+    assert mp.collapse_seam_armed() is True
+
+
+def test_collapse_slot_nesting_restores():
+    """收束槽与处理器槽同规矩：嵌套进出各自还原。"""
+    c = _FakeCriteria(exceeded=False)
+    assert mp._collapse() is None
+    with _tb_ctx(c):
+        assert mp._collapse() is not None
+        with mp.processor_context([], prompt_tokens=[], penalty_window=64):
+            assert mp._collapse() is None
+        assert mp._collapse() is not None and mp._collapse().criteria is c
+    assert mp._collapse() is None
+
+
+def test_dispatch_gate_predicate_behaviour():
+    """分派门谓词行为级：只在「mtp + B=1 + 接缝在位」放行，其余全拒（评审 M2：
+    只锚源码字符串测不出门的活性——把门提成谓词直接驱动）。"""
+    from framework.backends.mlx.patch.gemma4_generate import (
+        _mtp_thinking_collapse_refusal as refusal,
+    )
+    assert refusal("mtp", 1) is None
+    assert refusal("eagle3", 1) is not None
+    assert refusal("dflash", 1) is not None
+    assert refusal(None, 1) is not None
+    assert refusal("mtp", 2) is not None
+    mp.uninstall()
+    try:
+        r = refusal("mtp", 1)
+        assert r is not None and "在位" in r, "接缝不在位必须拒跑"
+    finally:
+        mp.install()
+    assert refusal("mtp", 1) is None
+
+
+def test_dispatch_gate_source_anchors():
+    """分派门的接线锚：谓词真的被分派处调用、非 None 真的被 raise，
+    且 criteria 真的交给 bridge。行为在上一测试；这里钉接线不被绕开。"""
+    import inspect
+    from framework.backends.mlx.patch import gemma4_generate as gg
+    src = inspect.getsource(gg)
+    assert "refusal = _mtp_thinking_collapse_refusal(" in src
+    assert "raise RuntimeError(refusal)" in src
+    assert "thinking_criteria=mtp_thinking" in src
+    # 旧的无条件拒跑不复存在（不兼容案文已由在位性门取代）
+    assert "上游草稿件投机路不消费 forced_token_id" not in src
+
+
+def test_bridge_arms_collapse_slot():
+    """评审 C1：bridge → processor_context 的 thinking_criteria 转发是收束的
+    唯一接线，删掉它整个套件曾照绿。行为级钉住：bridge 迭代期间收束槽在场
+    且持有该 criteria，退出后清空；不传 criteria 则槽保持空。"""
+    from framework.backends.mlx.patch.gemma4_generate import _mtp_processor_bridge
+
+    seen = {}
+
+    def _gen():
+        col = mp._collapse()
+        seen["inside"] = col is not None and col.criteria is c
+        yield (5, None)
+
+    c = _FakeCriteria(exceeded=False)
+    out = list(_mtp_processor_bridge(_gen(), [], prompt_tokens=PROMPT,
+                                     penalty_window=64, thinking_criteria=c))
+    assert out == [(5, None)]
+    assert seen["inside"] is True, "bridge 没把 criteria 装进收束槽——预算承诺空转"
+    assert mp._collapse() is None, "bridge 退出后收束槽未清"
+
+    def _gen2():
+        seen["inside2"] = mp._collapse() is None
+        yield (5, None)
+
+    list(_mtp_processor_bridge(_gen2(), [], prompt_tokens=PROMPT,
+                               penalty_window=64))
+    assert seen["inside2"] is True, "未传 criteria 时收束槽应保持空"
+
+
+def test_collapse_guard_active_fails_open_not_consume():
+    """评审 M4：强制 token 未经 mask 授权——活动态 guard 整体 fail-open 且
+    不喂语法外 token；非活动态照常 consume（水位线/激活扫描连续）。"""
+
+    class _ActiveGuard(_FakeGuard):
+        def __init__(self):
+            super().__init__()
+            self.active = True
+            self.failed_with = None
+
+        def fail_open(self, e):
+            self.failed_with = e
+
+    g = _ActiveGuard()
+    c = _FakeCriteria()
+    with _tb_ctx(c, procs=[g]):
+        got = _mtp._mtp_acceptance_walk(
+            _UntouchableLM(), _Verify([3]), mx.array([[3]]), _sampler, 99,
+            row_id=0, base_position=0)
+        assert got == (0, [c.NL])
+        assert g.consumed == [], "活动态 guard 不许被喂语法外 token"
+        assert g.failed_with is not None, "活动态 guard 应被 fail-open"
+        assert mp._ctx().hist[-1] == c.NL and mp._ctx().n_emitted == 1
+
+    class _ActiveNoFailOpen(_FakeGuard):
+        def __init__(self):
+            super().__init__()
+            self.active = True
+
+    g2 = _ActiveNoFailOpen()
+    c2 = _FakeCriteria()
+    with _tb_ctx(c2, procs=[g2]):
+        got = _mtp._mtp_acceptance_walk(
+            _UntouchableLM(), _Verify([3]), mx.array([[3]]), _sampler, 99,
+            row_id=0, base_position=0)
+        assert got == (0, [c2.NL]) and g2.consumed == []
+
+
+def test_guard_adapter_proxies_fail_open():
+    """_GuardAdapter 的 fail_open 代理真通到逻辑 guard（收束分支的依赖面）。"""
+    from framework.backends.mlx.backend import _GuardAdapter
+
+    class _Logical:
+        def __init__(self):
+            self.err = None
+            self.active = False
+            self.failed = False
+
+        def consume(self, t):
+            pass
+
+        def fail_open(self, e):
+            self.err = e
+
+    lg = _Logical()
+    adapter = _GuardAdapter(lg)
+    boom = RuntimeError("x")
+    adapter.fail_open(boom)
+    assert lg.err is boom
+
+
+def test_batch_rounds_raise_when_collapse_armed_without_processors():
+    """评审 M5：开思考 × 空处理器列表时 ctx=None 而收束槽在场——批处理守卫
+    必须同样拒跑，否则预算承诺从批入口静默失守。"""
+    c = _FakeCriteria(exceeded=False)
+    with _tb_ctx(c):
+        assert mp._ctx() is None and mp._collapse() is not None
+        with pytest.raises(RuntimeError, match="思考预算收束"):
+            _mtp._mtp_rounds_batch()
+
+
+def test_collapse_empty_forced_sequence_falls_back_to_end_token():
+    """评审 m14：上游撤掉 _forced_sequence 时退化为单 token 收束；
+    连 end id 都没有则响而不是 AttributeError。"""
+    c = _FakeCriteria()
+    c._forced_sequence = []
+    with _tb_ctx(c):
+        got = _mtp._mtp_acceptance_walk(
+            _UntouchableLM(), _Verify([3]), mx.array([[3]]), _sampler, 99,
+            row_id=0, base_position=0)
+        assert got == (0, [c.END])
+
+    c2 = _FakeCriteria()
+    c2._forced_sequence = []
+    c2.thinking_end_token_id = None
+    with _tb_ctx(c2):
+        with pytest.raises(RuntimeError, match="重适配"):
+            _mtp._mtp_acceptance_walk(
+                _UntouchableLM(), _Verify([3]), mx.array([[3]]), _sampler, 99,
+                row_id=0, base_position=0)
+
+
+def test_collapse_cursor_resets_mid_sequence():
+    """评审 m15：\\n 已注（游标=1）后真 </think> 混在溢出里抢先落旗——
+    下一轮回正常流且游标复位，第二次收束从头注。"""
+    c = _FakeCriteria()
+    with _tb_ctx(c):
+        assert _mtp._mtp_acceptance_walk(
+            _UntouchableLM(), _Verify([3]), mx.array([[3]]), _sampler, 99,
+            row_id=0, base_position=0) == (0, [c.NL])
+        c.feed(c.END)  # 模型自己在溢出段吐了真 end，旗落
+        assert _walk(_Verify([3, 4, 5]), [3, 4]) == (2, [3, 4, 5])
+        assert mp._collapse().index == 0
+        # 再触发一次：从序列头（\n）开始，不是从游标 1
+        c.in_thinking = c.budget_exceeded = True
+        assert _mtp._mtp_acceptance_walk(
+            _UntouchableLM(), _Verify([3]), mx.array([[3]]), _sampler, 99,
+            row_id=0, base_position=0) == (0, [c.NL])

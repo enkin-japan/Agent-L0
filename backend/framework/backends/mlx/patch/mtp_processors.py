@@ -53,12 +53,47 @@ gemma-4 的路径已逐条查实：`speculative_argmax_from_hidden` **无**（�
 故即便将来采样口径变成满足 `_PositionedTargetSampler` 条件的那种，本模块仍逐位走：
 `sample_target` 接显式 positions，逐位调用与批量调用的 RNG 流等价，确定性不受影响。
 
+# 思考预算强制收束（轮界注入，2026-08-23 补课）
+
+上游投机路的第二个静默丢弃：`generate_step` 的非投机循环在每个 yield 后
+`pop_forced_token_id()` 消费思考预算的强制收束 token（ar.py:511-513），而
+`draft_model is not None` 时整段 `yield from run_speculative_rounds(...)` 就
+return 了——**收束在草稿件路上从不执行**，预算承诺空转。08-14 起由
+gemma4_generate 分派处一道 RuntimeError 守卫兜着（drafter × 开思考直接拒跑）；
+本次把守卫换成真实现，落点仍是本模块的走查接缝：
+
+- **消费的是稳定旗 `(in_thinking, budget_exceeded)`，不是 `forced_token_id`**。
+  `ThinkingBudgetCriteria` 是逐调用推进的状态机（`\\n` → `</think>` 两步），
+  且每次调用都改写/清空 `forced_token_id`——它假设自己返回的 token 就是下一个
+  产出。MTP 按块产出，块内溢出 token 的后续 criteria 调用会把那个格子冲掉；
+  两面旗则全程稳定（只有真 `</think>` 过手才翻），适合轮界读取。
+- **注入发生在走查入口**：收束待决时整轮草稿判死，返回 `(accepted=0,
+  new_tokens=[强制 token])`。上游轮循环自己的回滚（保 1 条=[b]）、hidden 选槽
+  （slot 0=b 位，正是预测强制 token 的位置）、drafter 状态同步（kv_offset+=1）
+  全部按既有语义自然成立，缓存轨迹与产出严格一致。
+- **口径差（记档，三条）**：①与 prompt_lookup 路的块中即时截断不同，本路收束
+  滞后到轮界——预算到点后额外流出的**思考 token** = 本块剩余（≤ block_size-1，
+  b5 即 ≤4）+ 收束序列 2 个（`\n` 计入思考计数；这 2 个 lookup 路同样发出，
+  故**对 lookup 路的差值**只有 ≤ block_size-1 那部分）。预算是尾部风险保险
+  （观测思考 ~513 ≪ 2048），滞后是噪声级；换取的是不复制上游 ~90 行轮循环
+  状态机。②每个收束 token 占一整轮（草稿+验证 forward 全弃），一次收束
+  ≈ 2 个浪费轮——一次生成一次收束，噪声级。③收束轮以 accepted=0 计入
+  drafter 终身统计与自适应块长样本（`_record_speculative_round`），故**开思考
+  且触发收束的跑次，其 AL/接受率读数与未触发跑次不可互相对表**（每次生成
+  混入 2 个全拒轮）。
+- 分派处的守卫**不删除**，改为「接缝在位性检查」：`collapse_seam_armed()` 不
+  成立（上游改了绑定/第三方占位）时照旧拒跑——fail-closed 语义保留。
+
 # 覆盖面
 
-`_mtp_acceptance_walk` 只有一个调用点（`_mtp_rounds`，**B=1**），本栈正是 B=1
-（CHARTER §3 单 worker 串行）。B>1 的 `_mtp_rounds_batch` 走的是另一组走查函数，
-**未覆盖**——Q14 若放开并发、MTP 与批处理叠加，那条路要同样补处理器，否则同一个
-静默失效会从批处理入口回来。
+`_mtp_acceptance_walk` 只有一个调用点（`_mtp_rounds`，**B=1**），而本栈现行
+B=1 的依据是 **config `inference.mlx.max_concurrency` 缺省 1**（Q14 进宪合法化
+了批内并发形态但准入闸未建，缺省不放开）+ 分派门显式把守 B=1——**不是**宪章
+禁令：CHARTER §3 明写「并发×MTP 的 B_eff 拐点」是待实测项。放开并发时本段
+前提随之失效，B>1 的 `_mtp_rounds_batch` 走的是另一组走查函数，**未覆盖**——
+届时要同样补处理器与收束，否则同一批静默失效会从批处理入口回来；在那之前，
+分派门（draft_kind/B=1/接缝在位）与下方批处理守卫（处理器或收束任一在场即拒）
+两层把守。
 """
 
 import threading
@@ -78,11 +113,77 @@ except Exception as _exc:  # pragma: no cover - 上游模块结构变动
     print(f"[MTP] speculative.utils import 失败（{_exc!r}）：批处理守卫只能覆盖 mtp 模块侧")
     _utils = None
 
-__all__ = ["install", "uninstall", "processor_context", "record_emitted"]
+__all__ = ["install", "uninstall", "processor_context", "record_emitted",
+           "collapse_seam_armed"]
 
 _ORIGINAL_WALK = _mtp._mtp_acceptance_walk
 
 _local = threading.local()
+
+
+class _ThinkingCollapse:
+    """思考预算收束驱动器（MTP 走查侧，见模块头「思考预算强制收束」）。
+
+    自持序列游标，不碰 criteria 的 `_forced_index`/`forced_token_id`——那套
+    per-call 状态机在块产出下会被溢出 token 的调用推歪（模块头有推演）。
+    读稳定旗判「收束待决」，按 criteria 自己的 `_forced_sequence` 逐轮注出。
+    """
+
+    __slots__ = ("criteria", "index")
+
+    def __init__(self, criteria):
+        self.criteria = criteria
+        self.index = 0
+
+    def next_forced(self) -> Optional[int]:
+        c = self.criteria
+        if not (getattr(c, "in_thinking", False)
+                and getattr(c, "budget_exceeded", False)):
+            # 收束已完成（真 </think> 过手翻旗）或模型自行收束/预算未到。
+            # 在此复位游标：两面旗任何一轮落下都必经这里，先于任何再触发
+            # （再超预算至少需要 thinking_budget 个 token ≫ 一轮块长）。
+            self.index = 0
+            return None
+        seq = list(getattr(c, "_forced_sequence", None) or [])
+        if not seq:
+            # 上游若撤掉序列容器，退化为单 token 收束（语义核心不丢）。
+            # 连 end token id 都没有则是接线级破损，响而不是 AttributeError
+            # 从兜底分支里炸出来（兜底自己不许再需要兜底）。
+            end_id = getattr(c, "thinking_end_token_id", None)
+            if end_id is None:
+                raise RuntimeError(
+                    "ThinkingBudgetCriteria 既无 _forced_sequence 也无 "
+                    "thinking_end_token_id：收束无 token 可注，上游接口已变，"
+                    "须重适配。"
+                )
+            seq = [end_id]
+        if self.index >= len(seq):
+            # 序列尾是 end token，它一经产出、外层 criteria 调用就会翻旗；
+            # 旗还立着说明产出没有回流 criteria（消费侧接线断了）。继续注入
+            # 只会原地空转，必须响。**这会中断一次用户生成——刻意为之**：
+            # 它探测的是代码缺陷（消费循环停喂 criteria）而非数据条件，
+            # 静默空转到 max_tokens 比响一次更糟。
+            raise RuntimeError(
+                "MTP 思考收束序列已全部注出但 ThinkingBudgetCriteria 旗未翻："
+                "产出 token 未回流 criteria（外层每 yield 应调用一次），"
+                "消费侧接线已断，拒绝空转。"
+            )
+        forced = int(seq[self.index])
+        self.index += 1
+        return forced
+
+
+def _collapse() -> Optional[_ThinkingCollapse]:
+    return getattr(_local, "collapse", None)
+
+
+def collapse_seam_armed() -> bool:
+    """思考收束的接缝在位性：走查绑定必须是本模块实现（分派处的 fail-closed 门）。
+
+    上游改绑定/第三方占位/uninstall 后，收束无处执行——此时 drafter × 开思考
+    必须维持拒跑，不得静默跑成「预算承诺空转」。
+    """
+    return _mtp._mtp_acceptance_walk is acceptance_walk_with_processors
 
 
 def _is_guard(p: Any) -> bool:
@@ -141,32 +242,46 @@ def _ctx() -> Optional[_Ctx]:
 
 
 class processor_context:
-    """在 with 块内让 MTP 走查看到这批处理器；块外恢复（可嵌套）。
+    """在 with 块内让 MTP 走查看到这批处理器与思考收束驱动器；块外恢复（可嵌套）。
 
-    processors 为空时不建上下文——走查走空上下文批量快路（见
-    acceptance_walk_with_processors 的 ctx is None 分支）。
+    processors 为空时不建处理器上下文——走查走空上下文批量快路（见
+    acceptance_walk_with_processors 的 ctx is None 分支）。收束驱动器占**独立槽**
+    （thinking_criteria 非空才建）：处理器有无与收束有无互不牵连，嵌套进入
+    thinking_criteria=None 的内层会在其存续期关闭收束（各槽按各自入参覆盖、
+    退出各自还原）。可嵌套指**不同实例**嵌套；同一实例重入会踩掉自存的
+    _prev/_prev_collapse，勿复用（生产单调用点，不构成风险面）。
     """
 
     def __init__(self, processors: Optional[List[Callable]],
                  prompt_tokens: Optional[List[int]] = None,
-                 penalty_window: int = 64):
+                 penalty_window: int = 64,
+                 thinking_criteria: Optional[Any] = None):
         procs = [p for p in (processors or []) if p is not None]
         self._guard = next((p for p in procs if _is_guard(p)), None)
         self._plain = [p for p in procs if not _is_guard(p)]
         self._prompt = list(prompt_tokens or [])
         self._window = max(int(penalty_window or 64), 64)
+        # 思考收束驱动器占独立槽：处理器可以为空（ctx=None 走批量快路）而
+        # 收束照样要执行，二者的有无互不牵连。
+        self._tb = thinking_criteria
         self._prev = None
+        self._prev_collapse = None
 
     def __enter__(self):
         self._prev = getattr(_local, "ctx", None)
+        self._prev_collapse = getattr(_local, "collapse", None)
         _local.ctx = (
             _Ctx(self._plain, self._guard, self._prompt, self._window)
             if (self._plain or self._guard) else None
+        )
+        _local.collapse = (
+            _ThinkingCollapse(self._tb) if self._tb is not None else None
         )
         return self
 
     def __exit__(self, *exc):
         _local.ctx = self._prev
+        _local.collapse = self._prev_collapse
         return False
 
 
@@ -371,6 +486,39 @@ def acceptance_walk_with_processors(
     base_position: Optional[int] = None,
 ) -> Tuple[int, List[int]]:
     """`_mtp_acceptance_walk` 的替换实现。"""
+    collapse = _collapse()
+    if collapse is not None and budget >= 1:
+        forced = collapse.next_forced()
+        if forced is not None:
+            # 收束待决：整轮草稿判死、注入强制 token，完全不采样（fake lm 也
+            # 不许被碰——测试以此断言本分支真的短路了投影/采样）。
+            # accepted=0 → 上游回滚只保 [b]、hidden 取 slot 0、kv_offset+=1，
+            # 缓存轨迹 = 实际产出，见模块头。
+            # 位置在融合 target/缺投影两道拒跑之前是有意的：本分支不依赖任何
+            # lm 接口、对一切模型形态语义相同；那两道拒跑针对的是**采样**路，
+            # 会在紧随的第一个非收束轮照常响，不因收束延迟而失守。
+            ctx = _ctx()
+            if ctx is not None:
+                # 与正常走查同责：产出即登记进惩罚历史；consumer 侧的
+                # record_emitted 会因 n_emitted 已推进而跳过，不双登。
+                # guard 分状态处置：强制 token 未经 mask_logits 授权（本分支
+                # 不采样），活动态 guard 的语法状态机可能拒收——此时按处理器
+                # 路同一纪律整体 fail-open（_GuardAdapter.fail_open 代理），
+                # 绝不喂语法外 token 也绝不让约束器炸掉收束；非活动态照常
+                # consume 保持激活扫描与水位线连续。无 fail_open 的鸭子 guard
+                # 活动态下跳过 consume（激活判定按 token-id，漏收束 token 无碍）。
+                ctx.hist.append(int(forced))
+                g = ctx.guard
+                if g is not None:
+                    if getattr(g, "active", False):
+                        fo = getattr(g, "fail_open", None)
+                        if callable(fo):
+                            fo(RuntimeError(
+                                "thinking 收束强注 token 撞上活动态工具 guard"))
+                    else:
+                        g.consume(int(forced))
+                ctx.n_emitted += 1
+            return 0, [forced]
     ctx = _ctx()
     if ctx is None:
         # 无活动处理器：仍走批量快路，只是挂一个空上下文（apply=恒等）。
@@ -428,18 +576,21 @@ _rounds_batch_originals: dict = {}
 
 
 def rounds_batch_guarded(*args, **kwargs):
-    """B>1 的批处理轮循环：有活动处理器时拒跑。
+    """B>1 的批处理轮循环：有活动处理器**或收束驱动器**时拒跑。
 
     批处理走的是另一组走查函数（`_speculative_walk_batch_*`），本模块没补。
-    本栈恒 B=1（CHARTER §3 单 worker 串行），故正常不可达；Q14 若放开并发、
-    MTP 与批处理叠加，这里会**响**而不是把处理器悄悄丢掉——那正是本模块存在的
-    理由，不能从批处理入口再漏一次。
+    本栈现行 B=1（config `mlx.max_concurrency` 缺省 1 + 分派门把守，见模块头
+    「覆盖面」——不是宪章禁令），故正常不可达；Q14 若放开并发、MTP 与批处理
+    叠加，这里会**响**而不是把处理器/收束悄悄丢掉——那正是本模块存在的理由，
+    不能从批处理入口再漏一次。收束判据独立于处理器：开思考 × 空处理器列表时
+    ctx 为 None 而收束槽在场，只查 ctx 会让预算承诺从这道门静默失守。
     """
-    if _ctx() is not None:
+    if _ctx() is not None or _collapse() is not None:
         raise RuntimeError(
-            "MTP 批处理（B>1）轮循环尚未补 logits 处理器：该路会静默丢弃 "
-            "repetition_penalty 与工具约束 guard。并发 × MTP 需先补 "
-            "_speculative_walk_batch_* 一族，见 mtp_processors 模块头。"
+            "MTP 批处理（B>1）轮循环尚未补 logits 处理器与思考收束：该路会"
+            "静默丢弃 repetition_penalty / 工具约束 guard / 思考预算收束。"
+            "并发 × MTP 需先补 _speculative_walk_batch_* 一族，见 "
+            "mtp_processors 模块头。"
         )
     return _ORIGINAL_ROUNDS_BATCH(*args, **kwargs)
 

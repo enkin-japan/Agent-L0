@@ -19,6 +19,7 @@ except Exception as _exc:  # pragma: no cover - 上游模块结构变动时的�
     # 静默不装 = 归档里两张差 9% 的表分不出来源。
     print(f"[MoE] 专家排序阈值补丁未安装：import 失败 {_exc!r}，沿用上游阈值 64")
     _install_moe_sort = None
+from .mtp_processors import collapse_seam_armed as mtp_collapse_seam_armed
 from .mtp_processors import install as _install_mtp_processors
 from .mtp_processors import processor_context as mtp_processor_context
 from .mtp_processors import record_emitted as mtp_record_emitted
@@ -82,8 +83,30 @@ if _install_moe_sort is not None:
 # ============================================================================
 
 
+def _mtp_thinking_collapse_refusal(draft_kind, batch_size: int):
+    """开思考态 × drafter 的放行判定：None=放行，否则返回拒跑理由（fail-closed）。
+
+    收束由 MTP 走查接缝在轮界注入（mtp_processors 模块头「思考预算强制收束」）；
+    只有 draft_kind='mtp'、B=1 且走查补丁确认在位（上游没改绑定、没被第三方
+    占位）时收束才有处可执行。任一不满足都必须拒跑——静默跑 = 预算承诺空转，
+    正是 08-14 守卫要防的事。独立成函数是为了让这道门可被直接测试与变异证明
+    （评审 C1/M2：埋在分派深处的门无从行为级验证）。
+    """
+    armed = mtp_collapse_seam_armed()
+    if draft_kind == "mtp" and batch_size == 1 and armed:
+        return None
+    return (
+        "speculative.mode=drafter 与开思考态的 thinking_budget 需要"
+        "MTP 走查接缝执行预算强制收束，但当前形态不满足（要求："
+        f"draft_kind='mtp'（现 {draft_kind!r}）、B=1（现 {batch_size}）、"
+        f"走查补丁在位（现 {armed}））。收束无处执行时不得默跑，"
+        "请关思考跑投机，或改用 mode=prompt_lookup。"
+    )
+
+
 def _mtp_processor_bridge(gen, processors, prompt_tokens, penalty_window,
-                          draft_model=None, spec_stats=None):
+                          draft_model=None, spec_stats=None,
+                          thinking_criteria=None):
     """把 MTP 走查的处理器上下文套在解码生成器外层，并逐 token 登记已产出。
 
     做成包装生成器而非 with 块，是为了不动下方那段长消费循环的缩进。语义等价：
@@ -100,7 +123,8 @@ def _mtp_processor_bridge(gen, processors, prompt_tokens, penalty_window,
         snap = speculative_stats_snapshot(draft_model)
 
     with mtp_processor_context(processors, prompt_tokens=prompt_tokens,
-                               penalty_window=penalty_window):
+                               penalty_window=penalty_window,
+                               thinking_criteria=thinking_criteria):
         idx = 0
         for item in gen:
             tok = item[0]
@@ -1170,19 +1194,26 @@ def stream_generate(
             )
         elif use_mtp:
             # 上游投机路 return 在 pop_forced_token_id 之前（ar.py），thinking 预算的
-            # 强制收束在草稿件模式下**不会执行**。prompt_lookup 路自己实现了它，
-            # drafter 路没有——所以这里不能默默跑，否则"预算到点自动收束"这个承诺
-            # 在这条路上是空的。生产 enable_thinking 缺省 False，故正常不触发。
-            if thinking_criteria is not None and getattr(
-                    thinking_criteria, "enable_thinking", False):
-                raise RuntimeError(
-                    "speculative.mode=drafter 与开思考态的 thinking_budget 不兼容："
-                    "上游草稿件投机路不消费 forced_token_id，预算到点不会强制收束。"
-                    "请关思考跑投机，或改用 mode=prompt_lookup（该路实现了强制收束）。"
-                )
-            # [MTP] 草稿件投机：解码循环整段交给上游 generate_step，我方只补两件——
+            # 强制收束在草稿件模式下不会自己执行。补课（2026-08-23，用户拍板选 a）：
+            # 收束由 MTP 走查接缝在轮界注入（mtp_processors 模块头「思考预算强制
+            # 收束」，含 ≤block_size-1 token 的轮界滞后口径）。开思考态只有在接缝
+            # 确认在位时才放行——上游改绑定/第三方占位/非 mtp 草稿件形态一律维持
+            # 08-14 守卫的 fail-closed 拒跑，不得静默跑成「预算承诺空转」。
+            mtp_thinking = (
+                thinking_criteria
+                if thinking_criteria is not None
+                and getattr(thinking_criteria, "enable_thinking", False)
+                else None
+            )
+            if mtp_thinking is not None:
+                refusal = _mtp_thinking_collapse_refusal(
+                    draft_kind, int(input_ids.shape[0]))
+                if refusal is not None:
+                    raise RuntimeError(refusal)
+            # [MTP] 草稿件投机：解码循环整段交给上游 generate_step，我方只补三件——
             # ① 处理器上下文（上游投机路不接处理器，见 mtp_processors 模块头）；
-            # ② 逐 token 登记已产出，供走查拼出真实历史。
+            # ② 逐 token 登记已产出，供走查拼出真实历史；
+            # ③ 思考预算收束驱动器（同上下文携带，走查入口消费）。
             gen = generate_step(
                 input_ids, model, pixel_values, mask,
                 draft_model=draft_model,
@@ -1192,6 +1223,7 @@ def stream_generate(
             )
             gen = _mtp_processor_bridge(
                 gen, mtp_processors_list,
+                thinking_criteria=mtp_thinking,
                 # 惩罚窗口历史必须与上游同口径 = 实际喂进 _step 的 token
                 # （= input_ids；分块预填后上游只剩末段，这里取全量是**更长**的
                 #  窗口上界，再由 penalty_window 截断，不会少喂）

@@ -565,7 +565,7 @@ R0–R5 各小项的打勾细分（含每步实测结果与计划外发现）已
 
 | 项 | 当前值 | 口径 |
 |---|---|---|
-| 金测试项数 | 1571 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
+| 金测试项数 | 1586 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
 | 测试文件数 | 107 | `backend/tests/` 下递归的 `test_*.py` |
 | mcp 文件数 | 31 | `backend/framework/mcp/` 递归下的 `.py`，**不含** `__init__.py` |
 | BaseTool 子类 | 67 | 全 backend 内 `class X(BaseTool)` 的声明数（一个文件可有多个） |
@@ -4141,6 +4141,29 @@ harness 不带思考预算。候选解（都动生产口径，须用户拍板）
    真机 drill（qwen38-8bit：思考开+预算+drafter b5 冒烟，预算到点真收束）。
    🔴 真机部分独占 GPU + 挂 sentinel。**警惕**：CLAUDE.md 分类器口径——本件
    纯引擎逻辑不涉密钥/权限，可在本会话做，但若中途出现 fallback 通知则停手。
+   **✅ 2026-08-23 代码面交付**（真机 drill 见后续条目）。实现要点与快照设想
+   的一处偏差：收束**不在** `_mtp_rounds` 轮循环内打断（那要复制上游 ~90 行
+   状态机），而是落在**既有走查接缝**（`_mtp_acceptance_walk` 已是我方补丁）：
+   - 消费**稳定旗** `(in_thinking, budget_exceeded)` 而非 `forced_token_id`——
+     criteria 是逐调用推进的两步状态机（`\n`→`</think>`）且每次调用改写该
+     格子，MTP 块产出下溢出 token 的调用会把它冲掉（设计推演记
+     mtp_processors 模块头）；
+   - 收束待决轮返回 `(accepted=0, [强制token])`，上游回滚/hidden 选槽/drafter
+     同步按既有全拒轮语义自然成立；口径差三条记模块头（轮界滞后 ≤bs-1、
+     每收束 ~2 个浪费轮、收束跑次的 AL/接受率与未触发跑次不可对表）；
+   - 分派守卫改「接缝在位性」fail-closed 门（谓词
+     `_mtp_thinking_collapse_refusal`：mtp × B=1 × 走查补丁在位才放行）。
+   评审（reviewer 首过 1C/5M/12m，全数处置）：C1 桥→上下文的 criteria 转发
+   曾无测试（删线全套照绿）→ 补行为测试+变异证明；M3 模块头误引宪章
+   「批泳道禁投机」（宪章无此文，B=1 真依据=config 缺省 1+分派门）→ 改正；
+   M4 强制 token 撞活动态 guard → 分状态处置（活动态 fail-open 经
+   `_GuardAdapter.fail_open` 新代理，非活动态照常 consume）；M5 批处理守卫
+   补收束在场判据；M2 门提成谓词直接测。金测试 1579→1586（收束契约 8+评审
+   处置 7=15 新增）。**变异证明 7 体全灭**：A 旗判反→5 测试红；B 漏
+   commit→commits 测试红；C 拆门→首轮幸存（锚被报错文案 f-string 喂饱，
+   属断言空泛非夹具问题）→锚加强到门表达式后红；D 桥断线→bridge_arms 红；
+   E 谓词恒放行→predicate 红；F 批守卫漏收束→batch_rounds 红；G 活动 guard
+   照喂→fails_open 红。每体注入前后清 __pycache__，三文件 sha256 还原核验。
 ③′ **② 重画像补跑**（a 落地后）：完整生产口径（思考开+预算 2048+drafter b5）
    `run_eval.py --model Qwen3.8-27B-8bit --dims tool_call,longchain,vision`
    （--spec-mode 留空）；4bit 档（b3）视时长跟进；回填 config profile +
