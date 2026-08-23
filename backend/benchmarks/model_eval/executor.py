@@ -4,6 +4,14 @@
 同款信封（parse_error_feedback + 方言 parse_error_retry_hint）——测出的纠错
 成功率才是部署里会发生的那个数。工具执行是**脚本化回喂**（题面给定响应表），
 不碰真实工具：评的是模型的调用行为，不是工具本身。
+
+多轮前史（`task.history`，可选）：一列 `{"role": "user"|"assistant", "content": str}`
+按序铺进 `session.history`，**在** `task.user` 这条终问**之前**——测的是"上文里说过的
+事实/纠正/格式约定，模型在下一问里还认不认"，正是生产日志里最常掉的那类。
+assistant 条目按编排层同款形态入历史（`thoughts`/`content`/`tool_calls` 齐备），
+以免方言渲染时踩到缺键。形态不合（非 list / 角色不在白名单 / content 非 str）
+一律响亮 ValueError：坏题面静默降级成"少一轮上文"，测出来的分是假的。
+缺 `history` 时行为与旧版逐字节一致。
 """
 import json
 import tempfile
@@ -56,6 +64,38 @@ def feed_for_calls(calls: List[Dict[str, Any]],
     return feed
 
 
+_HISTORY_ROLES = ("user", "assistant")
+
+
+def apply_history(session, history: Any, item_id: str = "?") -> None:
+    """把题面的多轮前史铺进 session.history（纯副作用，金测试钉形态）。
+
+    user 条目与执行器给终问用的形态一致（`{"role","content"}`，content 为 str）；
+    assistant 条目补齐 thoughts/tool_calls 空位，与 run_item 里回喂闭环追加的
+    assistant 轮同构——方言渲染与压缩层都按这套键取值。
+    """
+    if history is None:
+        return
+    if not isinstance(history, list):
+        raise ValueError(f"[{item_id}] task.history 须为消息列表，得到 {type(history).__name__}")
+    for i, msg in enumerate(history):
+        if not isinstance(msg, dict):
+            raise ValueError(f"[{item_id}] task.history[{i}] 须为对象，得到 {type(msg).__name__}")
+        role = msg.get("role")
+        if role not in _HISTORY_ROLES:
+            raise ValueError(
+                f"[{item_id}] task.history[{i}] role 须为 {_HISTORY_ROLES}，得到 {role!r}")
+        content = msg.get("content")
+        if not isinstance(content, str):
+            raise ValueError(
+                f"[{item_id}] task.history[{i}] content 须为字符串，得到 {type(content).__name__}")
+        if role == "user":
+            session.history.append({"role": "user", "content": content})
+        else:
+            session.history.append({"role": "assistant", "thoughts": "",
+                                    "content": content, "tool_calls": []})
+
+
 def _default_max_turns(task: Dict[str, Any]) -> int:
     if task.get("env"):
         return 8            # 长链：多步工具链 + 容错回合
@@ -90,6 +130,7 @@ async def run_item(engine, item: Dict[str, Any], repeat_idx: int = 0,
                               system_prompt=task.get("system") or system_prompt
                               or DEFAULT_SYSTEM_PROMPT,
                               backend=engine.backend)
+        apply_history(session, task.get("history"), item["id"])
         images = [str(Path(item.get("_src_dir", ".")) / p)
                   for p in task.get("images") or []]
         if images:

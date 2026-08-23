@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 
 DIMENSIONS = ("tool_call", "vision", "longchain", "text")
 _FIT_MIN_LEN = 8   # 鉴定结论最短长度——挡"ok"式敷衍，不挡认真写的短句
-_LANGS = ("zh", "en")
+_LANGS = ("zh", "en", "ja")   # ja：2026-08-24 通用文本批加入（用户在日语环境）
 
 
 def _fail(path: Path, lineno: int, item_id: str, why: str) -> None:
@@ -45,6 +45,51 @@ def validate_item(item: Dict[str, Any], path: Path = Path("?"), lineno: int = 0)
     responses = task.get("tool_responses")
     if responses is not None and not isinstance(responses, dict):
         _fail(path, lineno, item_id, "task.tool_responses 须为 {工具名: 回喂内容} 映射")
+    history = task.get("history")
+    if history is not None:
+        if not isinstance(history, list):
+            _fail(path, lineno, item_id, "task.history 须为消息列表")
+        for i, msg in enumerate(history):
+            if not isinstance(msg, dict) or msg.get("role") not in ("user", "assistant") \
+                    or not isinstance(msg.get("content"), str):
+                _fail(path, lineno, item_id,
+                      f"task.history[{i}] 须为 {{role: user|assistant, content: str}}")
+    refs = task.get("tools_ref")
+    if refs is not None:
+        if tools is not None:
+            _fail(path, lineno, item_id, "task.tools 与 task.tools_ref 二选一")
+        if not isinstance(refs, list) or not refs or not all(isinstance(r, str) and r for r in refs):
+            _fail(path, lineno, item_id, "task.tools_ref 须为非空工具名列表")
+
+
+_SNAPSHOT_NAME = "real_tool_schemas.json"
+_snapshot_cache: Dict[str, Dict[str, Any]] = {}
+
+
+def _real_tool_snapshot(src_dir: Path) -> Dict[str, Any]:
+    """题库目录旁的生产工具声明快照（items/tool_call/real_tool_schemas.json，
+    由 snapshot_real_tools.py 生成）。按目录缓存。"""
+    key = str(src_dir)
+    if key not in _snapshot_cache:
+        snap = src_dir / _SNAPSHOT_NAME
+        if not snap.is_file():
+            raise ValueError(f"tools_ref 需要 {snap}（运行 snapshot_real_tools.py 生成）")
+        _snapshot_cache[key] = json.loads(snap.read_text(encoding="utf-8"))["tools"]
+    return _snapshot_cache[key]
+
+
+def resolve_tools_ref(item: Dict[str, Any], src_dir: Path) -> None:
+    """把 task.tools_ref（工具名列表）就地解析成 task.tools（生产 schema 快照副本）。
+    未知名字响亮失败——题目引用了不存在的工具就是坏题。"""
+    refs = (item.get("task") or {}).get("tools_ref")
+    if not refs:
+        return
+    snap = _real_tool_snapshot(src_dir)
+    missing = [r for r in refs if r not in snap]
+    if missing:
+        raise ValueError(f"[{item['id']}] tools_ref 含快照中不存在的工具: {missing}")
+    item["task"]["tools"] = [json.loads(json.dumps(snap[r])) for r in refs]
+    item["task"]["tools_ref_resolved"] = item["task"].pop("tools_ref")   # 解析后二选一约束仍成立
 
 
 def load_items(paths: List[Path]) -> List[Dict[str, Any]]:
@@ -65,6 +110,7 @@ def load_items(paths: List[Path]) -> List[Dict[str, Any]]:
                 _fail(path, lineno, item["id"], f"id 重复（先出现于 {seen[item['id']]}）")
             seen[item["id"]] = f"{path.name}:{lineno}"
             item["_src_dir"] = str(path.parent)   # 图片等资产的相对根
+            resolve_tools_ref(item, path.parent)
             items.append(item)
     return items
 

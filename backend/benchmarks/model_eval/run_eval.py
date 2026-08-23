@@ -89,6 +89,13 @@ async def amain(args: argparse.Namespace) -> int:
         missing = wanted - {it["id"] for it in items}
         if missing:
             raise SystemExit(f"❌ 题库中不存在: {sorted(missing)}")
+    if args.id_prefix:
+        prefixes = tuple(p.strip() for p in args.id_prefix.split(",") if p.strip())
+        if not prefixes:
+            raise SystemExit("❌ --id-prefix 为空（只有分隔符）")
+        items = [it for it in items if it["id"].startswith(prefixes)]
+        if not items:
+            raise SystemExit(f"❌ 没有 id 以 {prefixes} 开头的题")
     if args.limit:
         items = items[:args.limit]
     caps = model_capabilities(repo)
@@ -171,6 +178,8 @@ def main() -> int:
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 题（冒烟用）")
     ap.add_argument("--ids", default="", help="只跑指定题 id（逗号分隔）")
+    ap.add_argument("--id-prefix", default="",
+                    help="只跑 id 以这些前缀开头的题（逗号分隔；新批次剔坏题专用）")
     ap.add_argument("--out", default="", help="产物目录（缺省 results/<模型>/<时间戳>）")
     ap.add_argument("--spec-mode", default="", choices=["", "off"],
                     help="off=压制条目级 speculative 测 mode=off 口径（D.21 后 qwen38 "

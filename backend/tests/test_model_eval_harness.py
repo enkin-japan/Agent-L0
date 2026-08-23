@@ -247,7 +247,8 @@ def test_cot_aggregate_over_records():
 
 # ---- mock 环境与 longchain 打分器 ----
 
-from benchmarks.model_eval.mock_envs import TodoEnv, VfsEnv, make_env  # noqa: E402
+from benchmarks.model_eval.mock_envs import (MOCK_ENVS, TodoEnv,  # noqa: E402
+                                             VfsEnv, make_env)
 from benchmarks.model_eval.scorers.longchain import check_assert  # noqa: E402
 
 
@@ -342,7 +343,8 @@ def test_longchain_seed_bank_loads_clean():
     files = itemlib.discover_item_files(ITEMS_ROOT, ["longchain"])
     items = itemlib.load_items(files)
     assert len(items) >= 6
-    assert all(i["task"].get("env") in ("vfs", "todo") for i in items)
+    # 环境名对着注册表校验（2026-08-24 加 office 合体环境后，写死的白名单会假红）
+    assert all(i["task"].get("env") in MOCK_ENVS for i in items)
 
 
 # ---- text_answer 打分器（vision/text 共用）与视觉题库 ----

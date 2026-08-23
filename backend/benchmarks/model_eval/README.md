@@ -30,11 +30,11 @@ model_eval/
 | 维度 | 采集方式 | 核心指标 |
 |---|---|---|
 | speed | 任何题顺带（engine metrics 白捡） | prompt_tps / generation_tps / peak_memory / KV 前缀命中率 |
-| tool_call | 专用题 | 首发合格率 / 解析错误率 / 纠错成功率 / 无工具陷阱克制率 |
+| tool_call | 专用题 | 首发合格率 / 解析错误率 / 纠错成功率 / 无工具陷阱克制率。现存批：`seed.jsonl`（玩具工具 12）、`bfcl.jsonl`（借题 13）、`real.jsonl`（**生产工具面** 30 题：`tools_ref` 按名引用 `real_tool_schemas.json` 快照，每题 8–12 个真工具含干扰项，嵌套参数/日期格式/枚举/择器/闭环/克制/缺参反问；2026-08-24） |
 | cot_purity | 任何开思考题顺带 | 控制标记泄漏 / thoughts↔正文复读 / 语种混杂 / 预算纪律 |
-| longchain | 专用题（mock 工具态机） | 终态断言成败 / 步数 / 回退次数 |
-| vision | 专用题（带图） | 关键词/精确匹配正确率 |
-| text | 专用题（纯文本，与 vision 共用 text_answer 打分） | 关键词/正则命中率。现存批：`items/text/longctx_struct.jsonl`（⑤′-2 边界探针，生成器确定性重建，见 BOUNDARY.md） |
+| longchain | 专用题（mock 工具态机） | 终态断言成败 / 步数 / 回退次数。现存批：`seed.jsonl`（6）、`hard.jsonl`（8–15 步 10 题：瞬时故障重试 / 只读路径改道 / 条件分支 / 多文件聚合 / office 合体环境；2026-08-24） |
+| vision | 专用题（带图） | 关键词/精确匹配正确率。现存批：`items/vision/{seed,chartqa*}.jsonl`、`items/vision/app_screens.jsonl`（App 面截图 12 题，assets/gen_assets.py 确定性重建） |
+| text | 专用题（纯文本，与 vision 共用 text_answer 打分） | 关键词/正则命中率。现存批：`items/text/longctx_struct.jsonl`（⑤′-2 边界探针，生成器确定性重建，见 BOUNDARY.md）、`items/text/general.jsonl`（通用指令遵循 32 题：格式/改写/抽取/多轮承接/轻推理/日语） |
 
 ## 题库 schema（JSONL 每行一题）
 
@@ -42,14 +42,17 @@ model_eval/
 {
   "id": "tc-seed-001",
   "dimension": "tool_call",
-  "lang": "zh",
+  "lang": "zh",                 （zh | en | ja）
   "source": {"origin": "self | BFCL-v3-simple#123 | MMMU-dev#45",
              "fit": "为何适合本项目目的的鉴定结论（必填，见下）"},
   "task": {
     "system": "（可省，缺省用标准评测系统提示）",
+    "history": [{"role": "user|assistant", "content": "多轮前史，按序铺在 user 终问之前（可省）"}],
     "user": "任务文本",
     "tools": [ …项目工具声明格式… ],
+    "tools_ref": ["run_math", "render_chart"],   （与 tools 二选一：按名取 items/tool_call/real_tool_schemas.json 的生产 schema 快照；快照由 snapshot_real_tools.py 生成，金测试盯漂移）
     "images": ["assets/xx.png"],
+    "env": "vfs|todo|office", "env_init": {"files": {…}, "todos": […], "faults": {"write_file": {"fail_first_n": 1}}, "readonly": ["a.md"]},   （longchain 专用）
     "tool_responses": {"tool_name": "脚本化回喂内容（str 或对象）"},
     "max_turns": 3
   },

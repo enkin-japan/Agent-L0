@@ -565,14 +565,14 @@ R0–R5 各小项的打勾细分（含每步实测结果与计划外发现）已
 
 | 项 | 当前值 | 口径 |
 |---|---|---|
-| 金测试项数 | 1715 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
-| 测试文件数 | 111 | `backend/tests/` 下递归的 `test_*.py` |
+| 金测试项数 | 1817 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
+| 测试文件数 | 114 | `backend/tests/` 下递归的 `test_*.py` |
 | mcp 文件数 | 31 | `backend/framework/mcp/` 递归下的 `.py`，**不含** `__init__.py` |
 | BaseTool 子类 | 67 | 全 backend 内 `class X(BaseTool)` 的声明数（一个文件可有多个） |
 | 物理隔离沙箱 | 3 | `backend/framework/agents/*_sandbox.py` |
 | 剧本 | 5 | 仓库根 `skills/` 下的 `.md` |
 | 协议夹具 | 9 | `protocol/fixtures/` 下的 `*.events.jsonl`（一份 = 一条夹具） |
-| model_registry 档位 | 9 | `config.yaml` 的 `inference.model_registry` 条目数 |
+| model_registry 档位 | 12 | `config.yaml` 的 `inference.model_registry` 条目数 |
 | rag.tiers 档位 | 5 | `config.yaml` 的 `rag.tiers` 档位数 |
 
 
