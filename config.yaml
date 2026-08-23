@@ -186,6 +186,28 @@ inference:
                      draft_block_size: 3 }
       profile: { tool_call: 0.92, longchain: 1.00, vision: 0.958, tps: 48.9 }  # run 20260823-140448（生产口径：思考开+预算1024+drafter b3；质量与 mode=off 旧画像各维差 ≤1 题）
       note: "15GB | 定档静态位：思考/vision 特长位（2026-08-23，与 8bit 同位；质量打平而 tps 1.20×/内存 -41% = 本模型效率王）| 生产口径重画像 ✓（峰值内存 19.3G；tps 为 b3 生产实测=off 口径 1.75×）| D.21 生产 MTP b3"
+    # ── Ornith-1.5-35B-A3B（ornith-ai，2026-08-24 入册评测；Qwen3.5-MoE 架构
+    # 256 专家激活 8、~3B 激活参数，方言 qwen35）──
+    # ⚠️ 三件 MLX 量化都是**纯文本件**：config `vision_config: null`、权重 0 个
+    # vision_tower 键，故 capabilities 只有 text；装载经 backends/mlx/patch/
+    # text_only_vlm.py 跳视觉塔（mlx_vlm 0.6.13 原生类会硬建塔报缺参）。
+    # revision = 入册当日 refs/main。无 profile = 路由绝不优先选中（未画像纪律），
+    # 评测回填后再补。
+    - repo: "ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit"
+      revision: "19504d912fa8fc7622bf6b1de3db5d5d890b1f02"
+      dialect: "qwen35"
+      capabilities: ["text"]
+      note: "18GB | 纯文本 MoE（A3B）| 2026-08-24 入册待画像"
+    - repo: "ornith-ai/Ornith-1.5-35B-A3B-MLX-6bit"
+      revision: "585b7867b0517980293ece857b26d64e84491352"
+      dialect: "qwen35"
+      capabilities: ["text"]
+      note: "26GB | 纯文本 MoE（A3B）| 2026-08-24 入册；仅当 4bit/8bit 能力差距 ≥3pt 才补测"
+    - repo: "ornith-ai/Ornith-1.5-35B-A3B-MLX-8bit"
+      revision: "02440c39bdf7365c494a7f55f2a8b104ba87562f"
+      dialect: "qwen35"
+      capabilities: ["text"]
+      note: "34GB | 纯文本 MoE（A3B）| 2026-08-24 入册待画像"
     # ── CUDA 档（bf16 原件，backend: cuda / Colab A100 联调；2026-08-06 用户指定）──
     # **角色边界（用户 2026-08-23 明确）：Colab 仅为开发测试用途，与实际生产
     # 无关**。本段条目只服务 CUDA 特有形态对照与评测；生产的云端升级目标是

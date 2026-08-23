@@ -296,7 +296,8 @@ class MLXBackend:
         executor 缺省时在当前线程同步加载——仅限脚本/试验场景；生产装配一律
         经 AgentEngine.create 传入专用推理执行器。
         """
-        from mlx_vlm.utils import load as _vlm_load
+        # 纯文本件（Ornith-1.5-35B-A3B 案）绕开视觉塔；其余目录原样走 mlx_vlm.load。
+        from .patch.text_only_vlm import load_model_and_processor as _vlm_load
 
         spec_cfg = cfg.get("speculative") or {}
         draft_path = ""

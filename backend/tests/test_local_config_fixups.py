@@ -111,12 +111,23 @@ _DROPPED = (
 )
 
 
+# 2026-08-24 入册评测的 Ornith-1.5-35B-A3B 三件 MLX 量化（纯文本件，dialect qwen35）。
+# 与 D.20 舍弃的 Ornith-1.0 无关：1.0 条目当年靠 local_config_fixups 修 vision
+# model_type，1.5 的 MLX 件没有视觉塔，走 backends/mlx/patch/text_only_vlm.py。
+_ADDED_0824 = (
+    "ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit",
+    "ornith-ai/Ornith-1.5-35B-A3B-MLX-6bit",
+    "ornith-ai/Ornith-1.5-35B-A3B-MLX-8bit",
+)
+
+
 def test_registry_matches_d20_roster():
     entries = {e.get("repo"): e for e in _registry()}
-    # 6 MLX 保留档 + 3 CUDA 部署形态 = 9；长度钉防"静默加档不触钉"
-    assert len(entries) == 9, f"注册表应为 9 条（D.20），实际 {len(entries)}: {sorted(entries)}"
-    for repo in _KEPT_MLX:
-        assert repo in entries, f"{repo} 注册表条目缺失（D.20 保留档）"
+    # 6 MLX 保留档 + 3 CUDA 部署形态 = 9（D.20）+ 3 Ornith-1.5（08-24）= 12；
+    # 长度钉防"静默加档不触钉"
+    assert len(entries) == 12, f"注册表应为 12 条（D.20 9 + 08-24 3），实际 {len(entries)}: {sorted(entries)}"
+    for repo in _KEPT_MLX + _ADDED_0824:
+        assert repo in entries, f"{repo} 注册表条目缺失（D.20 保留档 / 08-24 入册）"
     for repo in _DROPPED:
         assert repo not in entries, f"{repo} 应已随 D.20 阵容收束删除"
     # fixups 机制保留但现无在册声明方（原消费方 Ornith 已舍弃）
