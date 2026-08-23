@@ -210,7 +210,9 @@ def run_arm(cli: Client, dialect, arm: str):
     for i in range(N_INTERACTIVE):
         prompt = build_user_prompt(
             dialect, f"帮我想想{TOPICS[i % len(TOPICS)]}要准备什么，说三点。")
-        rows.append(interactive_round(cli, prompt))
+        row = interactive_round(cli, prompt)
+        row["prompt_idx"] = i    # 配对键：按题配对，不按压实后的下标（复审 m11）
+        rows.append(row)
         if i < N_INTERACTIVE - 1:      # 尾行不睡（评审 m29）
             time.sleep(INTER_GAP_S)
     print(f"[q14] 臂 {arm}：{sum(1 for r in rows if r.get('ok'))}/{len(rows)} ok",
@@ -356,12 +358,16 @@ def main() -> int:
         wall_a, _ = med(ok_a, "wall")
         wall_b, _ = med(ok_b, "wall")
         ttft_a2, _ = med(ok_a2, "ttft")
-        # 配对差（同序同 prompt 贪心 → 逐行同构）：n 不齐时如实短配
-        pair_n = min(len(ok_a), len(ok_b))
-        pair_ttft = [round(ok_b[i]["ttft"] - ok_a[i]["ttft"], 4)
-                     for i in range(pair_n)
-                     if ok_b[i].get("ttft") is not None
-                     and ok_a[i].get("ttft") is not None]
+        # 配对差（同序同 prompt 贪心 → 按 prompt_idx 键配对）。修正（复审
+        # m11）：旧版按过滤后列表下标 zip，一臂有失败行时其后全部跨题错位
+        # （run 1 归档件 q14-run1-invalid.jsonl 的 pair 值即该口径，读档慎）；
+        # 失败行现按真实缺席处理——只配两臂同题都 ok 的行。
+        b_by_idx = {r.get("prompt_idx"): r for r in ok_b}
+        pair_ttft = [round(b_by_idx[r["prompt_idx"]]["ttft"] - r["ttft"], 4)
+                     for r in ok_a
+                     if r.get("prompt_idx") in b_by_idx
+                     and r.get("ttft") is not None
+                     and b_by_idx[r["prompt_idx"]].get("ttft") is not None]
         ttft_max_delta = max(pair_ttft) if pair_ttft else None
         ttft_med_delta, _ = _med(pair_ttft)
         wall_ratio = (round(wall_b / wall_a, 4)

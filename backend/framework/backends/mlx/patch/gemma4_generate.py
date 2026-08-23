@@ -133,8 +133,12 @@ def _mtp_processor_bridge(gen, processors, prompt_tokens, penalty_window,
                 # （登记不缺位，守护不降级）；其余形态一律响——静默跳过 =
                 # 处理器登记全程停摆（guard 一个 token 都消费不到、惩罚窗口
                 # 看不见生成段），与走查里"融合 target 不得降级"同一口径。
-                item = getattr(tok, "item", None)
-                val = item() if callable(item) else None
+                # 勿把取值器命名成 item——那会遮蔽 `for item in gen` 的循环变量，
+                # 使下方 yield 吐出绑定方法而非 (token, logprobs) 元组，消费循环
+                # 解包即炸——降级分支反而比它要防的事更糟（阶段复审 m7，
+                # 08-15 引入的休眠缺陷，本口修正）。
+                to_int = getattr(tok, "item", None)
+                val = to_int() if callable(to_int) else None
                 if not isinstance(val, int):
                     raise RuntimeError(
                         f"MTP 解码生成器产出的 token 类型为 {type(tok).__name__} 而非 int："

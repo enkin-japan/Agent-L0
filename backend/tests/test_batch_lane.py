@@ -457,6 +457,9 @@ def test_upstream_factory_source_anchors():
     # HF fast tokenizer 的 Rust RefCell 不许跨单流/批两线程共用一实例）
     assert "_copy.deepcopy(backend.processor)" in src
     assert "processor = backend.processor" not in src
+    # 修复前原文是 `model, processor = backend.model, backend.processor`——
+    # 上一条负锚匹配不到它（恒真）；真正挡住退回的是这一条（复审 m8）
+    assert "model, processor = backend.model, backend.processor" not in src
 
 
 def test_server_wiring_anchors():

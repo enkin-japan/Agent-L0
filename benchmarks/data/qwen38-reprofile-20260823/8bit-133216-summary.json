@@ -1,0 +1,86 @@
+{
+  "model": "mlx-community/Qwen3.8-27B-8bit",
+  "revision": "815b83c0df8ffd1d1b5244cf75fd6ef14fca9ef9",
+  "dialect": "qwen35",
+  "speculative": {
+    "mode": "drafter",
+    "draft_model": "mlx-community/Qwen3.8-27B-MTP-8bit",
+    "draft_kind": "",
+    "draft_block_size": 5,
+    "num_draft_tokens": 8,
+    "ngram_max": 3,
+    "ngram_min": 2,
+    "draft_revision": "e88e48d055732ad75d9435f3059139d5279f2064"
+  },
+  "stamp": "20260823-133216",
+  "n_runs": 243,
+  "dimensions": {
+    "tool_call": {
+      "n": 25,
+      "pass_rate": 0.88,
+      "aborted_rate": 0.04,
+      "corrected_rate": 0.0,
+      "final_ok_rate": 0.96,
+      "first_shot_ok_rate": 0.913,
+      "parse_errors_total": 0,
+      "restraint_ok_rate": 1.0,
+      "turns_used_total": 36,
+      "valid_call_ok_rate": 0.913
+    },
+    "longchain": {
+      "n": 6,
+      "pass_rate": 1.0,
+      "aborted_rate": 0.0,
+      "env_errors_total": 1,
+      "final_text_ok_rate": 1.0,
+      "recovered_rate": 0.167,
+      "redundant_calls_total": 0,
+      "state_ok_rate": 1.0,
+      "steps_total": 17,
+      "steps_ok_rate": 1.0,
+      "recovery_success_rate": 1.0
+    },
+    "vision": {
+      "n": 212,
+      "pass_rate": 0.943,
+      "aborted_rate": 0.0,
+      "final_ok_rate": 0.943,
+      "stray_calls_total": 0
+    }
+  },
+  "cot_purity": {
+    "n": 243,
+    "ctrl_leak_traj_rate": 0.0,
+    "dup_rate_mean": 0.012,
+    "dup_rate_max": 0.119,
+    "recite_rate_mean": 0.028,
+    "recite_rate_max": 0.544,
+    "other_script_max": 0.0,
+    "empty_think_turns_total": 0,
+    "think_chars_mean": 514.6
+  },
+  "speed": {
+    "generation_tps": {
+      "mean": 40.1,
+      "median": 40.86,
+      "min": 25.78,
+      "max": 49.0,
+      "n": 268
+    },
+    "prompt_tps": {
+      "mean": 306.01,
+      "median": 221.53,
+      "min": 153.94,
+      "max": 3693.89,
+      "n": 268
+    },
+    "peak_memory_max": 32.57,
+    "kv_prefix_hit_rate": {
+      "mean": 0.44,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.96,
+      "n": 25
+    }
+  }
+}

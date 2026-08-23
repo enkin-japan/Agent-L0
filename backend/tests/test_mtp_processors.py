@@ -838,3 +838,27 @@ def test_collapse_cursor_resets_mid_sequence():
         assert _mtp._mtp_acceptance_walk(
             _UntouchableLM(), _Verify([3]), mx.array([[3]]), _sampler, 99,
             row_id=0, base_position=0) == (0, [c.NL])
+
+
+def test_bridge_scalar_token_branch_yields_unpackable_tuple():
+    """复审 m7：0-d 标量降级分支旧版把取值器命名成 item 遮蔽循环变量——
+    yield 吐出绑定方法，消费循环解包即炸。钉住：登记取整、产出仍是原元组。"""
+    from framework.backends.mlx.patch.gemma4_generate import _mtp_processor_bridge
+
+    class _Scalar:
+        def __init__(self, v):
+            self._v = v
+
+        def item(self):
+            return self._v
+
+    def _gen():
+        yield (_Scalar(7), None)
+
+    g = _FakeGuard()
+    out = list(_mtp_processor_bridge(_gen(), [g], prompt_tokens=PROMPT,
+                                     penalty_window=64))
+    assert len(out) == 1
+    tok, logprobs = out[0]          # 必须可解包（消费循环同构）
+    assert isinstance(tok, _Scalar) and logprobs is None
+    assert g.consumed == [7], "登记应取整后的 int，且不缺位"
