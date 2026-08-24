@@ -199,19 +199,19 @@ inference:
       dialect: "qwen35"
       capabilities: ["text"]
       profile: { tool_call: 0.855, longchain: 0.875, text: 0.771, tps: 85.8 }  # run 20260824（扩容题库 55/16/48 题；无 vision）
-      note: "18GB | 纯文本 MoE（A3B）| 08-24 画像 ✓：三量化质量差≤2题=噪声级，4bit 最快最省=本家族推荐档；bench decode 117→76 tps(0→64k)、prefill 1857 tps@4k、峰值 27.6G@64k；探索先行风格（先 ls/找再动手）在单发题上吃亏，长链步数最省"
+      note: "18GB | 纯文本 MoE（A3B）| 08-24 画像 ✓ 后**用户裁决不留**（每维都有在册更优解+无 vision+身份混乱；权重已删，复测按钉死 revision 重下）；bench decode 117→76 tps(0→64k)、prefill 1857 tps@4k、峰值 27.6G@64k；探索先行风格在单发题吃亏，长链省步。条目保留=画像档案"
     - repo: "ornith-ai/Ornith-1.5-35B-A3B-MLX-6bit"
       revision: "585b7867b0517980293ece857b26d64e84491352"
       dialect: "qwen35"
       capabilities: ["text"]
       profile: { tool_call: 0.800, longchain: 0.812, text: 0.771, tps: 74.1 }  # run 20260824（判定规则触发补测；与 4/8bit 差 1–2 题=噪声级）
-      note: "26GB | 纯文本 MoE（A3B）| 08-24 画像 ✓（质量≈4bit，速度居中——无独立生态位）"
+      note: "26GB | 纯文本 MoE（A3B）| 08-24 画像 ✓（质量≈4bit，无独立生态位）；权重已删（08-24 用户裁决），条目保留=画像档案"
     - repo: "ornith-ai/Ornith-1.5-35B-A3B-MLX-8bit"
       revision: "02440c39bdf7365c494a7f55f2a8b104ba87562f"
       dialect: "qwen35"
       capabilities: ["text"]
       profile: { tool_call: 0.800, longchain: 0.812, text: 0.750, tps: 68.4 }  # run 20260824（与 4bit 差≤2题=噪声级；4bit 不弱于 8bit）
-      note: "34GB | 纯文本 MoE（A3B）| 08-24 画像 ✓（bench decode 88→63 tps、峰值 45.3G@64k；质量不优于 4bit、比 4bit 慢 25%、多占 18G——本家族内无使用理由，不推荐）"
+      note: "34GB | 纯文本 MoE（A3B）| 08-24 画像 ✓（bench decode 88→63 tps、峰值 45.3G@64k；质量不优于 4bit——家族内无使用理由）；权重已删（08-24 用户裁决），条目保留=画像档案"
     # ── CUDA 档（bf16 原件，backend: cuda / Colab A100 联调；2026-08-06 用户指定）──
     # **角色边界（用户 2026-08-23 明确）：Colab 仅为开发测试用途，与实际生产
     # 无关**。本段条目只服务 CUDA 特有形态对照与评测；生产的云端升级目标是
