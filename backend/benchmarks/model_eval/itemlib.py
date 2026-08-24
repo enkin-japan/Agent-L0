@@ -3,6 +3,7 @@
 鉴定纪律是**装载期硬校验**而非文档口号：source.fit 缺失/敷衍 → 响亮 ValueError，
 一道未鉴定的题都进不了执行器。宁可跑不起来，不可静默混入劣题污染画像。
 """
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Dict, List
@@ -123,3 +124,29 @@ def discover_item_files(items_root: Path, dims: List[str]) -> List[Path]:
         if d.is_dir():
             files.extend(sorted(d.glob("*.jsonl")))
     return files
+
+
+# 跑时题面指纹进轨迹、重判时比对——「重判只能修判分、不能修题面」这条前提
+# 从流程自觉变成机器可查（阶段复审 MJ-7）。键覆盖一切决定轨迹形态的题面字段；
+# 判分规格（expect）**故意不进指纹**：改判分正是重判的合法用途。
+# 指纹带版本前缀（v2: 图片按内容摘要+dimension 入纹）：算法升级后，旧版本指纹
+# 记「不可核验」而不是误报「题面漂移」。
+_FINGERPRINT_KEYS = ("user", "system", "history", "env", "env_init", "images",
+                     "tools", "tools_ref_resolved", "tool_responses", "max_turns")
+
+
+def task_fingerprint(item: Dict[str, Any]) -> str:
+    task = item.get("task") or {}
+    keep = {k: task.get(k) for k in _FINGERPRINT_KEYS}
+    keep["_gen"] = item.get("gen")         # 采样参数同样决定轨迹（下划线键避开 task 撞名）
+    keep["_dimension"] = item.get("dimension")   # 换维=换打分器，同样不可静默重判
+    # 图片按**内容**入指纹：文件名不变而字节变（换机重渲）正是要抓的漂移
+    if task.get("images") and item.get("_src_dir"):
+        digests = []
+        for rel in task["images"]:
+            f = Path(item["_src_dir"]) / rel
+            digests.append(hashlib.sha256(f.read_bytes()).hexdigest()[:16]
+                           if f.is_file() else f"missing:{rel}")
+        keep["_image_digests"] = digests
+    return "v2:" + hashlib.sha256(json.dumps(keep, ensure_ascii=False, sort_keys=True)
+                                  .encode()).hexdigest()[:16]

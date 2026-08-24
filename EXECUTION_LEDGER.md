@@ -565,7 +565,7 @@ R0–R5 各小项的打勾细分（含每步实测结果与计划外发现）已
 
 | 项 | 当前值 | 口径 |
 |---|---|---|
-| 金测试项数 | 1817 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
+| 金测试项数 | 1820 | `pytest --collect-only`（含 parametrize 展开；`grep '^def test_'` 这类文本解析**永远数不出这个数**，两种口径互相排斥） |
 | 测试文件数 | 114 | `backend/tests/` 下递归的 `test_*.py` |
 | mcp 文件数 | 31 | `backend/framework/mcp/` 递归下的 `.py`，**不含** `__init__.py` |
 | BaseTool 子类 | 67 | 全 backend 内 `class X(BaseTool)` 的声明数（一个文件可有多个） |
@@ -4633,35 +4633,59 @@ run 是 results/ 下 gitignored 本地件（换机不可重算）；cuda/gen_sem
 
 **✅ 睡前大型任务（用户 2026-08-24 拍板五项）：题库扩容 + Ornith-1.5 入册 + 六档横评 + 对比报告**
 
-交付（commit `946dd63` 补丁+入册 → `0bccc46` 题库扩容 → 本笔档案+画像回填）：
-1. **题库扩容 108→192 题**：`tc-real` 生产工具面 30（`tools_ref`→46 工具 schema 快照
+交付（commit `946dd63` 补丁+入册 → `0bccc46` 题库扩容 → `e5ae069` 档案+画像 → 阶段复审订正批）：
+1. **题库扩容 259→343 题（+84）**：`tc-real` 生产工具面 30（`tools_ref`→46 工具 schema 快照
    `real_tool_schemas.json`，8–12 工具在场含干扰项）、`lc-hard` 长链加难 10（mock 故障注入
    `fail_first_n`/`readonly` + `office` 合体环境）、`tx-gen` 通用指令遵循 32（executor 新增
    `task.history` 多轮前史；lang 加 ja）、`vi-app` 合成 App 截图 12（gen_assets.py 确定性重建）。
-   剔坏题两道工序：26b-4bit 先行整跑（修 2 放宽 1）+ reviewer 一审 5 条实质判分缺陷全修
-   （CJK `\b` 词边界→lookaround 为族规）；七档共同失败仅 tc-real-020，裁决为题面缺陷
-   （run_shell_command 自称 PRIMARY 不配当干扰项），剔后单题七档补跑并档（superseded 留痕，
-   merge020.py + rescore.py 统一尺）。
-2. **Ornith-1.5-35B-A3B 三量化入册**：MLX 件为纯文本（vision_config 缺键、0 个视觉塔权重；
-   官方 bf16 有图像能力，转换件没带）。装载补丁 `backends/mlx/patch/text_only_vlm.py`
-   （窄谓词跳塔 + 分词器处理器垫片，锁串行化，5+2 只突变全红）；注册表三档 dialect qwen35、
-   capabilities=["text"]、revision 钉死；D.20 阵容钉 9→12。零解析错误跑通全程。
-3. **横评（campaign.sh，03:23–07:55，q_fail=0 s_fail=0）**：六档+6bit 判定补测。
-   数字见 `benchmarks/model_eval/PROFILES.md` 08-24 节与
-   `benchmarks/data/model-eval-20260824/REPORT.md`（表格 report.py 可复算）。要点：
-   26b tool_call 0.909/0.927 主档不动摇；qwen38 text/vision 特长再确认 + tool_call 弱面
-   新发现（生产工具面 22/30）；Ornith-1.5 三量化差 ≤2 题=噪声级（判定规则 ≥3pt 机械触发了
-   6bit，结论=无独立生态位，**只留 4bit 有意义**）；4bit decode 117→76 tps@0→64k 全库
-   64k 段最快、长链终态 93.8% 步数最省，但探索先行风格在单发择器题吃亏、正文转述率 16–18%
-   偏高、自称 Claude 蒸馏痕迹。B3 隐式聚合弱为全家族通病（七档 longctx table 25–62%）。
-4. **画像回填**：config 注册表 6 档 profile 统一 08-24 口径（新维 `text` 入
+   剔坏题三道工序：26b-4bit 先行整跑（修 2 题面放宽 1 判分）+ reviewer 一审 5 条实质判分
+   缺陷全修（CJK `\b` 词边界→lookaround 为族规）+ 全库全败扫描裁决两题——`tc-real-020`
+   （run_shell_command 自称 PRIMARY 不配当干扰项→剔）与 `tc-bfcl-multiple_10`（backup 工具
+   描述明写 before modification，先备份是照章办事→改闭环回喂 + 按用户原话扩列名容许集）。
+   两题修订版七档单题补跑并档（merge_item.py，superseded 留痕）。
+2. **Ornith-1.5-35B-A3B 三量化入册**：MLX 件为纯文本（config 无 vision_config 键、0 个视觉塔
+   权重；官方 bf16 有图像能力，转换件没带）。装载补丁 `backends/mlx/patch/text_only_vlm.py`
+   （窄谓词跳塔 + 分词器处理器垫片，锁串行化）；注册表三档 dialect qwen35、capabilities=
+   ["text"]、revision 钉死；D.20 阵容钉 9→12。解析错误合计 1（4bit 一次，纠错成功收束）。
+   自称 Claude/Anthropic 的蒸馏痕迹已留探针原件（identity_probe.json，贪心双语全文）。
+3. **横评（campaign.sh，03:23–07:55，q_fail=0 s_fail=0）+ 统一尺重判**：六档+6bit 判定补测。
+   数字（统一尺终版）：tool_call Ornith 0.855/0.800/0.800、26b 0.927/0.945、qwen38
+   0.836/0.891；longchain 0.875/0.812/0.812/0.875/0.875/0.875/0.938；text 0.771/0.771/
+   0.750/0.708/0.708/0.854/0.875；vision 26b 0.871/0.866、qwen38 0.955/0.964。要点：
+   26b 工具执行主档不动摇；qwen38 text/vision 特长再确认 + 生产工具面弱面新发现（22/30@4bit）；
+   Ornith-1.5 三量化差=噪声级（≥3pt 规则机械触发 6bit，结论无独立生态位，**只留 4bit 有意义**）
+   ——4bit decode 117→76 tps@0→64k 全库 64k 段最快、长链步数 101 最省级（qwen38-8bit 96）、
+   复读 9 次（26b-4bit 64），但探索先行在单发择器题吃亏、转述率 15–18% 偏高。
+   **B3 最强新证据：纯 `-table` 聚合变体七档 × 4 长度 0/28 全灭**（qwen38 开思考也只 3/4，
+   较 08-23 探针回落一题）——BOUNDARY.md B3 证据已回填；B1/B2 复核仍成立。
+4. **画像回填**：config 注册表 6 档 profile 统一 08-24 统一尺（新维 `text` 入
    `PROFILE_METRICS` 词汇表）；Ornith 三档补 profile。生产选择档未动（仍 26b-4bit）。
 5. **速度**：Ornith 三档 bench_baseline v3 15/15 格入档 `speed/baseline_v3_ornith.jsonl`，
    与 08-16 全库基线同口径可并表；MTP 未测（用户指定）。
-过程纪律：campaign 挂 task-sentinel + 0-token 监控双层；单 GPU 全程串行；两次 per-diff
-门禁（补丁批 reviewer→修 7 项；题库批 reviewer→修 5 实质+11 建议）；突变证明合计 14 只
-全红分录在各 commit。已知边界：vi-app 批七档全对（确认面无区分度）、tx-gen 对现役档
-接近天花板（94–100%）——下轮扩容从这两处加难；Ornith 是否入 endpoints 待用户拍板。
+**阶段复审（stage-reviewer，范围 aa34d32..e5ae069）：0 Critical / 8 Major / 14 Minor，全部
+处置**——MJ-1 report.py 分批表按批名归并串号（改 (维度,批名) 键重生成）；MJ-2 「长链终态
+93.8% 全场最高」系新旧两尺混用（统一尺 0.875，措辞改步数口径）；MJ-3 题库基数 108→192 应为
+259→343（三文档同改）；MJ-4「旧批依旧全对/区分度全来自新批」有反例（改写）；MJ-5「longctx
+table 25–62%」把 JSON 抽取题混进了表格族（真实 0–50%、26b 0/12，并补 0/28 强证据）；MJ-6
+「自称 Claude」零原始件（补探针入档）；MJ-7 rescore 承诺的题面漂移检查不存在（重写：run_eval
+轨迹记 `task_fp` 指纹、rescore 逐条比对不符即拒判并回写轨迹统一尺；指纹突变实测 7/7 档检出后
+复原）；MJ-8 坏题探测只扫新批（扫描面扩到全库，tx-lcs 探针单列，由此揪出 multiple_10）。
+Minor 14 条含：tx-gen-021 残留小写 spain（must_not 整体移除）、快照补 _generated_at/_git_head、
+逐字节重建测试补字体前提 skip 守卫（gen_assets 导出 REQUIRED_FONTS）、config 过期注释两处、
+B3 证据行更新。**订正数字记录**：0bccc46 commit 说明的「金测试 +47（1813→1816）」有误，实为
+题库批 +80（1737→1817）、补丁批 +22（1715→1737）；其「突变 7 只（A4+本轮2+B5）」应为 11 只。
+突变清册（红测试全数复核）：补丁批 5（谓词恒真/不跳塔/上下文不复原/dunder 守卫/eos 空列表）+
+mock 故障面 2（校验前扣配额/配额浅共享）+ A 批 4（fail_first_n 停减/只读集缺 write/office 快照
+丢 todos/枚举外 chart_type）+ B 批 5（history 角色白名单恒假/铺设位置后移/assistant 形态缺键/
+tx-gen-001 正则退化/资产字形改动）+ 指纹护栏 1（题面突变→7/7 档 fp_mismatch）= **17 只全红**。
+过程纪律：campaign 挂 task-sentinel + 0-token 监控双层；单 GPU 全程串行；per-diff 门禁两轮
+（补丁批 reviewer 修 7 项；题库批 reviewer 修 5 实质+11 建议）。已知边界：vi-app 批四个
+vision 档全对、tx-gen 对现役档 94–100%（确认面，无区分度）——下轮扩容从这两处加难；
+全库全败扫描另两条候选 vi-chartqa-hard-461 / hard2-2175（同答不中=标签可疑样式）**挂起
+待裁决**（剔题动 vision n=224 口径，下轮一并处理）；订正批 reviewer 二审 1C（字体 skip
+守卫恒假→改四族齐备判定）+ 建议全落实（指纹 v2：图片按内容入纹+dimension+版本前缀，旧指纹
+降级不可核验；rescore 原子写+口径自述；merge_item 防重复并档；m10 容许集按规则展开并注明
+观察后扩集）；Ornith 是否入 endpoints 待用户拍板。
 
 ---
 

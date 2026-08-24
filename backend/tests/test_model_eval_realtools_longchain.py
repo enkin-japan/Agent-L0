@@ -322,6 +322,49 @@ def test_itemlib_rejects_malformed_history(tmp_path):
         itemlib.load_items([f])
 
 
+def test_task_fingerprint_tracks_task_face_not_expectations():
+    """指纹动于题面（user/env/tools/回喂/max_turns/gen），不动于判分规格——重判合法性的机器判据。"""
+    base = {"id": "f1", "dimension": "text", "lang": "zh",
+            "source": {"origin": "self", "fit": "指纹语义钉扎：题面变=不可重判，判分变=重判的合法用途"},
+            "task": {"user": "u", "max_turns": 3},
+            "expect": {"type": "text", "final": {"must_all": ["x"]}}}
+    fp = itemlib.task_fingerprint(json.loads(json.dumps(base)))
+    same = json.loads(json.dumps(base)); same["expect"]["final"]["must_all"] = ["改判分"]
+    assert itemlib.task_fingerprint(same) == fp          # 判分规格不进指纹
+    for mutate in (lambda d: d["task"].__setitem__("user", "变了"),
+                   lambda d: d["task"].__setitem__("system", "新系统提示"),
+                   lambda d: d["task"].__setitem__("max_turns", 4),
+                   lambda d: d["task"].__setitem__("tool_responses", {"t": "r"}),
+                   lambda d: d["task"].__setitem__("history", [{"role": "user", "content": "h"}]),
+                   lambda d: d["task"].__setitem__("env", "vfs"),
+                   lambda d: d["task"].__setitem__("env_init", {"files": {"a": "1"}}),
+                   lambda d: d["task"].__setitem__("images", ["x.png"]),
+                   lambda d: d["task"].__setitem__("tools", [{"name": "t"}]),
+                   lambda d: d["task"].__setitem__("tools_ref_resolved", ["run_math"]),
+                   lambda d: d.__setitem__("dimension", "vision"),
+                   lambda d: d.__setitem__("gen", {"max_tokens": 9})):
+        m = json.loads(json.dumps(base)); mutate(m)
+        assert itemlib.task_fingerprint(m) != fp, mutate
+    assert fp.startswith("v2:")            # 版本前缀：算法升级时旧指纹降级为不可核验而非误报漂移
+
+
+def test_task_fingerprint_hashes_image_bytes(tmp_path):
+    (tmp_path / "img.png").write_bytes(b"AAA")
+    base = {"id": "f2", "dimension": "vision", "lang": "zh", "_src_dir": str(tmp_path),
+            "source": {"origin": "self", "fit": "图片按内容入纹：文件名不变字节变（换机重渲）必须被抓住"},
+            "task": {"user": "u", "images": ["img.png"]},
+            "expect": {"type": "text", "final": {"must_all": ["x"]}}}
+    fp1 = itemlib.task_fingerprint(base)
+    (tmp_path / "img.png").write_bytes(b"BBB")
+    assert itemlib.task_fingerprint(base) != fp1
+
+
+def test_run_eval_records_task_fp_in_transcript_records():
+    """写侧契约钉扎：run_eval 的轨迹记录必须带 task_fp——删了它，重判护栏整体 fail-open。"""
+    src = (Path(__file__).resolve().parents[1] / "benchmarks/model_eval/run_eval.py").read_text(encoding="utf-8")
+    assert '"task_fp": task_fingerprint(item)' in src
+
+
 def test_mock_envs_registry_lists_office():
     assert set(MOCK_ENVS) == {"vfs", "todo", "office"}
     assert MOCK_ENVS["office"] is OfficeEnv

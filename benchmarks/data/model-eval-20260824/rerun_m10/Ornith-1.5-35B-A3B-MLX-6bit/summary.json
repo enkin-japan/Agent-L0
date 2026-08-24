@@ -1,0 +1,58 @@
+{
+  "model": "ornith-ai/Ornith-1.5-35B-A3B-MLX-6bit",
+  "revision": "585b7867b0517980293ece857b26d64e84491352",
+  "dialect": "qwen35",
+  "speculative": {
+    "mode": "off"
+  },
+  "stamp": "20260824-083434",
+  "n_runs": 1,
+  "dimensions": {
+    "tool_call": {
+      "n": 1,
+      "pass_rate": 0.0,
+      "aborted_rate": 0.0,
+      "corrected_rate": 0.0,
+      "final_ok_rate": 1.0,
+      "first_shot_ok_rate": 0.0,
+      "parse_errors_total": 0,
+      "turns_used_total": 2,
+      "valid_call_ok_rate": 0.0
+    }
+  },
+  "cot_purity": {
+    "n": 1,
+    "ctrl_leak_traj_rate": 0.0,
+    "dup_rate_mean": 0.141,
+    "dup_rate_max": 0.141,
+    "recite_rate_mean": 0.252,
+    "recite_rate_max": 0.252,
+    "other_script_max": 0.0,
+    "empty_think_turns_total": 0,
+    "think_chars_mean": 5377.0
+  },
+  "speed": {
+    "generation_tps": {
+      "mean": 74.33,
+      "median": 74.33,
+      "min": 74.28,
+      "max": 74.38,
+      "n": 2
+    },
+    "prompt_tps": {
+      "mean": 8021.2,
+      "median": 8021.2,
+      "min": 784.52,
+      "max": 15257.88,
+      "n": 2
+    },
+    "peak_memory_max": 29.42,
+    "kv_prefix_hit_rate": {
+      "mean": 0.97,
+      "median": 0.97,
+      "min": 0.97,
+      "max": 0.97,
+      "n": 1
+    }
+  }
+}

@@ -1,5 +1,7 @@
 {
  "_note": "生产工具声明快照（snapshot_real_tools.py 生成；题库 task.tools_ref 按名解析）。依赖在线服务的工具（rag_*/web_research/skill_invoke）在离线快照时缺席。",
+ "_generated_at": "2026-08-24T08:31:50+0900",
+ "_git_head": "e5ae069",
  "tools": {
   "calendar_add": {
    "name": "calendar_add",

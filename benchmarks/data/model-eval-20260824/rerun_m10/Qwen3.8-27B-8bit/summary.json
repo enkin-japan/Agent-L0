@@ -1,0 +1,65 @@
+{
+  "model": "mlx-community/Qwen3.8-27B-8bit",
+  "revision": "815b83c0df8ffd1d1b5244cf75fd6ef14fca9ef9",
+  "dialect": "qwen35",
+  "speculative": {
+    "mode": "drafter",
+    "draft_model": "mlx-community/Qwen3.8-27B-MTP-8bit",
+    "draft_kind": "",
+    "draft_block_size": 5,
+    "num_draft_tokens": 8,
+    "ngram_max": 3,
+    "ngram_min": 2,
+    "draft_revision": "e88e48d055732ad75d9435f3059139d5279f2064"
+  },
+  "stamp": "20260824-083842",
+  "n_runs": 1,
+  "dimensions": {
+    "tool_call": {
+      "n": 1,
+      "pass_rate": 1.0,
+      "aborted_rate": 0.0,
+      "corrected_rate": 0.0,
+      "final_ok_rate": 1.0,
+      "first_shot_ok_rate": 0.0,
+      "parse_errors_total": 0,
+      "turns_used_total": 3,
+      "valid_call_ok_rate": 1.0
+    }
+  },
+  "cot_purity": {
+    "n": 1,
+    "ctrl_leak_traj_rate": 0.0,
+    "dup_rate_mean": 0.122,
+    "dup_rate_max": 0.122,
+    "recite_rate_mean": 0.257,
+    "recite_rate_max": 0.257,
+    "other_script_max": 0.0,
+    "empty_think_turns_total": 0,
+    "think_chars_mean": 2478.0
+  },
+  "speed": {
+    "generation_tps": {
+      "mean": 37.87,
+      "median": 36.04,
+      "min": 33.62,
+      "max": 43.96,
+      "n": 3
+    },
+    "prompt_tps": {
+      "mean": 228.72,
+      "median": 237.09,
+      "min": 208.56,
+      "max": 240.52,
+      "n": 3
+    },
+    "peak_memory_max": 33.0,
+    "kv_prefix_hit_rate": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "n": 2
+    }
+  }
+}

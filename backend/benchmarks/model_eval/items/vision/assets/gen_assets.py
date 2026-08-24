@@ -49,6 +49,11 @@ def _first_font_path(candidates: Sequence[str]) -> Optional[str]:
 
 CJK_OK = _first_font_path(_CJK) is not None
 
+# 逐字节重建测试的前置声明：本机实际选中的字体路径集合。字体不同渲染必不同，
+# 缺任一款时该测试应跳过而不是误报（gen_assets 的确定性口径本就是「同机同批」）。
+REQUIRED_FONTS = [pth for pth in (_first_font_path(_UI), _first_font_path(_UI_BOLD),
+                                  _first_font_path(_MONO), _first_font_path(_CJK)) if pth]
+
 
 def _tt(candidates: Sequence[str], size: int):
     """按候选顺序取 TrueType 字体；全缺则回退位图字体（题仍可跑，只是不好看）。"""

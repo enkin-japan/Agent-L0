@@ -23,7 +23,7 @@ from framework.utils.model_selection import model_capabilities, model_options  #
 from framework.utils.path_resolver import resolve_model_path              # noqa: E402
 from benchmarks.model_eval.executor import run_item                       # noqa: E402
 from benchmarks.model_eval.itemlib import (DIMENSIONS, discover_item_files,  # noqa: E402
-                                           load_items)
+                                           load_items, task_fingerprint)
 from benchmarks.model_eval.scorers import get_scorer                      # noqa: E402
 from benchmarks.model_eval.scorers import cot_purity                      # noqa: E402
 from benchmarks.model_eval.scorers.speed import aggregate as speed_aggregate  # noqa: E402
@@ -134,7 +134,8 @@ async def amain(args: argparse.Namespace) -> int:
                 traj = await run_item(engine, item, repeat_idx=rep)
                 score = scorer(traj, item)
                 rec = {"model": repo, "dimension": item["dimension"],
-                       "lang": item["lang"], **traj, "score": score,
+                       "lang": item["lang"], "task_fp": task_fingerprint(item),
+                       **traj, "score": score,
                        "cot": cot_purity.analyze(traj, item.get("gen") or {})}
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 fh.flush()

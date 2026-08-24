@@ -91,14 +91,14 @@ def main():
     per = {m: defaultdict(lambda: [0, 0]) for m in names}
     for m in names:
         for r in models[m][1]:
-            _, b = batch_of(r["item_id"])
-            per[m][b][1] += 1
-            per[m][b][0] += 1 if r["score"].get("pass") else 0
+            dim_b = batch_of(r["item_id"])          # 键 = (维度, 批名)：两个 "seed" 批不同维，按批名归并会串号（阶段复审 MJ-1）
+            per[m][dim_b][1] += 1
+            per[m][dim_b][0] += 1 if r["score"].get("pass") else 0
     rows = []
     for pre, dim, bname in BATCHES:
         row = [f"{dim}/{bname}"]
         for m in names:
-            p, n = per[m][bname]
+            p, n = per[m][(dim, bname)]
             row.append("—" if n == 0 else f"{p}/{n} ({100 * p / n:.0f}%)")
         rows.append(row)
     md.append(fmt_table(["题批"] + [SHORT[m] for m in names], rows))
@@ -180,22 +180,26 @@ def main():
               "Qwen3.8「生产 MTP」行 = 同目录 `speed_mtp/mtp_v3.jsonl`。\n")
 
     # ---- 逐题矩阵：全败题 / 分歧题 ----
-    md.append("\n## 7. 逐题矩阵摘要（新批：全员失败 = 疑似坏题候选；分歧题 = 区分度来源）\n")
+    md.append("\n## 7. 逐题矩阵摘要（全库全败 = 坏题候选；分歧题 = 区分度来源）\n")
     byitem = defaultdict(dict)
     for m in names:
         for r in models[m][1]:
             byitem[r["item_id"]][m] = bool(r["score"].get("pass"))
     new_prefixes = ("tc-real-", "lc-hard-", "tx-gen-", "vi-app-")
-    all_fail, split = [], []
+    # 全败扫描覆盖**全库**（阶段复审 MJ-8：只扫新批漏掉 tc-bfcl-multiple_10）；
+    # tx-lcs 的 **table 族**是 B3 边界探针，按设计就该挂，单列不进坏题候选
+    # （-json 抽取族七档全过，若哪天全败就是真坏题，不豁免）
+    def _is_probe(iid):
+        return iid.startswith("tx-lcs-") and "-table" in iid
+    all_fail, probe_fail, split = [], [], []
     for iid, res in sorted(byitem.items()):
-        if not iid.startswith(new_prefixes):
-            continue
         vals = list(res.values())
         if not any(vals):
-            all_fail.append(iid)
-        elif not all(vals):
+            (probe_fail if _is_probe(iid) else all_fail).append(iid)
+        elif not all(vals) and iid.startswith(new_prefixes):
             split.append((iid, "".join("✅" if res.get(m) else ("❌" if m in res else "·") for m in names)))
-    md.append(f"- 新批全员失败（{len(all_fail)}）：{', '.join(all_fail) or '无'}")
+    md.append(f"- 全库全员失败（坏题候选，B3 探针除外）（{len(all_fail)}）：{', '.join(all_fail) or '无'}")
+    md.append(f"- B3 探针全败（按设计）（{len(probe_fail)}）：{', '.join(probe_fail) or '无'}")
     md.append(f"- 新批分歧题（{len(split)}，列序 = {' '.join(SHORT[m] for m in names)}）：")
     for iid, pat in split:
         md.append(f"  - `{iid}` {pat}")

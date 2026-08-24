@@ -137,14 +137,14 @@ inference:
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
-      profile: { tool_call: 0.909, longchain: 0.875, text: 0.708, vision: 0.871, tps: 96.2 }  # run 20260824（扩容题库 55/16/48/224 题；tps=chat 负载中位。08-17/08-16 旧口径见 git 历史）
+      profile: { tool_call: 0.927, longchain: 0.875, text: 0.708, vision: 0.871, tps: 96.2 }  # run 20260824（扩容题库 55/16/48/224 题；tps=chat 负载中位。08-17/08-16 旧口径见 git 历史）
       note: "15.6GB | ★ 定档生产单档（2026-08-23 用户拍板，暂且；KV dense）——64G 机上跑到底，边界外交云端导师 | 静态校验 ✓ | 08-16 画像 ✓ + 26B 缺省档裁决胜出（质量与 8bit 打平、速度 1.34×、省 12G）| 边界目录 benchmarks/model_eval/BOUNDARY.md（⑤′-2，08-23）：图表读数→换 qwen38；隐式聚合（分组计数/求和）→列表交模型、算术交 run_math（先列后算探针：列得全、算不对）；长上下文×结构化提取已探过无弱项（cleared） | MoE，建议 ≥32GB 统一内存"
     - repo: "mlx-community/gemma-4-26b-a4b-it-8bit"
       revision: "33c6d23798a0af159529890f79329206dbfbd73c"
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
-      profile: { tool_call: 0.927, longchain: 0.875, text: 0.708, vision: 0.866, tps: 71.2 }  # run 20260824（扩容题库同口径）
+      profile: { tool_call: 0.945, longchain: 0.875, text: 0.708, vision: 0.866, tps: 71.2 }  # run 20260824（扩容题库同口径）
       note: "28.0GB | 定档静态位：长上下文×结构化后备（2026-08-23）| 静态校验 ✓ | 08-16 画像 ✓（26B 缺省档让位 4bit）| MoE，建议 ≥48GB 统一内存"
     - repo: "mlx-community/gemma-4-31b-it-4bit"
       revision: "696d436c404745a59f30e4939a658162b0a9e57f"
@@ -175,7 +175,7 @@ inference:
       speculative: { mode: "drafter", draft_model: "mlx-community/Qwen3.8-27B-MTP-8bit",
                      draft_revision: "e88e48d055732ad75d9435f3059139d5279f2064",
                      draft_block_size: 5 }
-      profile: { tool_call: 0.873, longchain: 0.938, text: 0.875, vision: 0.964, tps: 40.0 }  # run 20260824（扩容题库 55/16/48/224 题，生产口径：思考开+预算1024+drafter b5）
+      profile: { tool_call: 0.891, longchain: 0.938, text: 0.875, vision: 0.964, tps: 40.0 }  # run 20260824（扩容题库 55/16/48/224 题，生产口径：思考开+预算1024+drafter b5）
       note: "28GB | 定档静态位：思考/vision 特长位（2026-08-23）| 生产口径重画像 ✓（drafter×思考收束引擎补课后补跑；峰值内存 32.6G；tps 为 b5 生产实测=off 口径 2.5×）| D.21 生产 MTP b5"
     - repo: "mlx-community/Qwen3.8-27B-4bit"
       revision: "3e6447f082e89cc7f0bc6e5441afd38dfce760ff"
@@ -184,20 +184,21 @@ inference:
       speculative: { mode: "drafter", draft_model: "mlx-community/Qwen3.8-27B-MTP-4bit",
                      draft_revision: "b643c01b6d3b094e325edb6ebd832e16c486c575",
                      draft_block_size: 3 }
-      profile: { tool_call: 0.818, longchain: 0.875, text: 0.854, vision: 0.955, tps: 48.4 }  # run 20260824（扩容题库同口径，生产口径 drafter b3；tool_call 回落主因=生产工具面新批 22/30）
+      profile: { tool_call: 0.836, longchain: 0.875, text: 0.854, vision: 0.955, tps: 48.4 }  # run 20260824（扩容题库同口径，生产口径 drafter b3；tool_call 弱面=生产工具面新批 22/30）
       note: "15GB | 定档静态位：思考/vision 特长位（2026-08-23，与 8bit 同位；质量打平而 tps 1.20×/内存 -41% = 本模型效率王）| 生产口径重画像 ✓（峰值内存 19.3G；tps 为 b3 生产实测=off 口径 1.75×）| D.21 生产 MTP b3"
     # ── Ornith-1.5-35B-A3B（ornith-ai，2026-08-24 入册评测；Qwen3.5-MoE 架构
     # 256 专家激活 8、~3B 激活参数，方言 qwen35）──
     # ⚠️ 三件 MLX 量化都是**纯文本件**：config `vision_config: null`、权重 0 个
     # vision_tower 键，故 capabilities 只有 text；装载经 backends/mlx/patch/
     # text_only_vlm.py 跳视觉塔（mlx_vlm 0.6.13 原生类会硬建塔报缺参）。
-    # revision = 入册当日 refs/main。无 profile = 路由绝不优先选中（未画像纪律），
-    # 评测回填后再补。
+    # revision = 入册当日 refs/main。profile 已按 08-24 横评回填（出处
+    # benchmarks/model_eval/PROFILES.md 08-24 节）；能否被路由选中取决于
+    # inference.endpoints（常年全注释），profile 只是画像登记。
     - repo: "ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit"
       revision: "19504d912fa8fc7622bf6b1de3db5d5d890b1f02"
       dialect: "qwen35"
       capabilities: ["text"]
-      profile: { tool_call: 0.836, longchain: 0.875, text: 0.771, tps: 85.8 }  # run 20260824（扩容题库 55/16/48 题；无 vision）
+      profile: { tool_call: 0.855, longchain: 0.875, text: 0.771, tps: 85.8 }  # run 20260824（扩容题库 55/16/48 题；无 vision）
       note: "18GB | 纯文本 MoE（A3B）| 08-24 画像 ✓：三量化质量差≤2题=噪声级，4bit 最快最省=本家族推荐档；bench decode 117→76 tps(0→64k)、prefill 1857 tps@4k、峰值 27.6G@64k；探索先行风格（先 ls/找再动手）在单发题上吃亏，长链步数最省"
     - repo: "ornith-ai/Ornith-1.5-35B-A3B-MLX-6bit"
       revision: "585b7867b0517980293ece857b26d64e84491352"
@@ -210,7 +211,7 @@ inference:
       dialect: "qwen35"
       capabilities: ["text"]
       profile: { tool_call: 0.800, longchain: 0.812, text: 0.750, tps: 68.4 }  # run 20260824（与 4bit 差≤2题=噪声级；4bit 不弱于 8bit）
-      note: "34GB | 纯文本 MoE（A3B）| 08-24 画像 ✓（bench decode 88→63 tps、峰值 45.3G@64k；质量不优于 4bit，仅长上下文内存余量场景无意义——不推荐）"
+      note: "34GB | 纯文本 MoE（A3B）| 08-24 画像 ✓（bench decode 88→63 tps、峰值 45.3G@64k；质量不优于 4bit、比 4bit 慢 25%、多占 18G——本家族内无使用理由，不推荐）"
     # ── CUDA 档（bf16 原件，backend: cuda / Colab A100 联调；2026-08-06 用户指定）──
     # **角色边界（用户 2026-08-23 明确）：Colab 仅为开发测试用途，与实际生产
     # 无关**。本段条目只服务 CUDA 特有形态对照与评测；生产的云端升级目标是

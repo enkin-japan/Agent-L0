@@ -7,7 +7,9 @@
 用法：cd backend && .venv/bin/python benchmarks/model_eval/items/tool_call/snapshot_real_tools.py
 """
 import json
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -25,8 +27,16 @@ def main() -> None:
     for s in reg.get_all_schemas():
         name = s.get("name") or (s.get("function") or {}).get("name")
         schemas[name] = s
+    try:
+        proc = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT,
+                              capture_output=True, text=True, timeout=10)
+        head = proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else "unknown"
+    except Exception:
+        head = "unknown"
     payload = {"_note": "生产工具声明快照（snapshot_real_tools.py 生成；题库 task.tools_ref 按名解析）。"
                         "依赖在线服务的工具（rag_*/web_research/skill_invoke）在离线快照时缺席。",
+               "_generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+               "_git_head": head,
                "tools": dict(sorted(schemas.items()))}
     OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     print(f"✅ {len(schemas)} tools → {OUT}")

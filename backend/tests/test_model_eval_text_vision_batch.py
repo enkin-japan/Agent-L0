@@ -355,6 +355,16 @@ def _load_gen_assets():
     return mod
 
 
+try:  # 收集期软探测：缺包/缺字体 → 只跳字节重建一测，不拖垮整个文件
+    from benchmarks.model_eval.items.vision.assets.gen_assets import REQUIRED_FONTS as _RF
+    _FONTS_COMPLETE = len(_RF) == 4          # 四族（UI/UI_BOLD/MONO/CJK）都解析到才算齐
+except Exception:                             # noqa: BLE001
+    _FONTS_COMPLETE = False
+
+
+@pytest.mark.skipif(
+    not _FONTS_COMPLETE,
+    reason="逐字节重建以本机四族系统字体齐备为前提（gen_assets 口径=同机重现）；缺族则跳过而不是误报")
 def test_app_assets_are_deterministically_regenerable(tmp_path):
     """入库 PNG 必须能由 gen_assets.py 逐字节重建（无随机、无时间戳、不写 pnginfo）。
     重建对不上 = 题库不可复现，跨机/跨时的跑分就没有可比性。"""
