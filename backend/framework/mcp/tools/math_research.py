@@ -32,8 +32,8 @@ class MathResearchTool(BaseTool):
         "ANSWER section is printed directly by the interpreter (authoritative). Use this for "
         "multi-step problems: word problems, systems of equations, calculus chains, optimization, "
         "probability/statistics — anything needing several dependent computations or verification. "
-        "For one quick calculation, call run_math directly instead. Pass a complete, self-contained "
-        "problem statement (all numbers, units and conditions; the sub-module has no other memory). "
+        "For one quick calculation, call run_math directly instead. "
+        # D2-减法(类B):「自足题面」句与 problem 参数述近字节重复,留参数侧(语法逐字段走)。
         "When answering the user, quote the values from the ANSWER section verbatim — digit for "
         "digit — even if they contradict what you expected; the interpreter is right and your "
         "memory is wrong."

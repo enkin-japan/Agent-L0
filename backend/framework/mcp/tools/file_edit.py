@@ -226,8 +226,9 @@ class EditFileTool(BaseTool):
         "until it is unique). Keep each edit SMALL — old_string should be at most ~10 lines; "
         "for a big change, make a SERIES of small edit_file calls, one per spot. Never include "
         "line-number prefixes like '  14 | ' in old_string — they are display decoration, not "
-        "file content. This is the PREFERRED way to modify files; NEVER write files via shell "
-        "heredocs (cat <<EOF). The user approves each edit before it is applied."
+        "file content. This is the PREFERRED way to modify files. The user approves each edit "
+        # D2-减法(类B):heredoc 禁令三副本去重,主本留 run_shell_command(事故发生地)。
+        "before it is applied."
     )
     requires_approval = True
     parameters = {
@@ -301,7 +302,8 @@ class WriteFileTool(BaseTool):
         "Create a new text file or completely overwrite an existing one with the given content. "
         "Use this ONLY for new files or full rewrites — to change part of an existing file, use "
         "edit_file with a small unique snippet instead (smaller, safer, easier to review). "
-        "NEVER write files via shell heredocs (cat <<EOF). If the file already exists, a backup "
+        # D2-减法(类B):heredoc 禁令副本删,主本在 run_shell_command。
+        "If the file already exists, a backup "
         "is saved as <path>.bak before overwriting. The user approves each write."
     )
     requires_approval = True

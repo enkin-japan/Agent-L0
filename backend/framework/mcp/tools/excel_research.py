@@ -38,9 +38,9 @@ class ExcelResearchTool(BaseTool):
         "before anything is returned. Use it whenever the user wants a workbook CREATED, EDITED, "
         "FIXED, or ANALYZED with computation — e.g. add formulas/summaries/pivots, clean data, "
         "build a financial model, repair broken formulas. Do NOT use it for merely reading values "
-        "out of a spreadsheet (use file_extract or the ingested summary instead). Pass a complete, "
-        "self-contained task description — include every sheet name, column, number and rule the "
-        "user stated, verbatim; the sub-module cannot see the conversation. State the language "
+        "out of a spreadsheet (use file_extract or the ingested summary instead). "
+        # D2-减法(类B):「自足任务书」句与 task 参数述近字节重复,留参数侧。
+        "State the language "
         "for workbook-visible text in the task: NEW workbooks follow the user's conversation "
         "language; edits to an existing workbook follow that workbook's existing language and "
         "style. For files the user "

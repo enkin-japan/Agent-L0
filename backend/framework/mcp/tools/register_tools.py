@@ -23,9 +23,9 @@ def _factory():
 class RegisterApiToolTool(BaseTool):
     name = "register_api_tool"
     description = (
-        "Draft a new HTTP API tool and submit it for the user's confirmation. It does "
-        "NOT take effect immediately: the declaration lands in a pending queue that the "
-        "user reviews in Settings. NEVER put a real API key/token anywhere in the "
+        "Draft a new HTTP API tool and submit it for the user's confirmation. "
+        # D2-减法(类A):「不立即生效/落待确认区」由 execute 返回文案在使用时刻交付。
+        "NEVER put a real API key/token anywhere in the "
         "declaration or the conversation — set auth_env to an ENVIRONMENT VARIABLE NAME "
         "(e.g. WEATHER_API_KEY) and tell the user to enter the actual value in the "
         "Settings key field after confirming. Declarations containing literal secrets "
@@ -127,8 +127,8 @@ class RegisterSkillTool(BaseTool):
     name = "register_skill"
     description = (
         "Draft a new skill playbook (markdown workflow) and submit it for the user's "
-        "confirmation. It does NOT take effect immediately: it lands in a pending queue "
-        "the user reviews in Settings. Write the body as concrete numbered steps using "
+        # D2-减法(类A):「不立即生效/落待确认区」由 execute 返回文案在使用时刻交付。
+        "confirmation. Write the body as concrete numbered steps using "
         "existing tools; list those tools in requires."
     )
     parameters = {

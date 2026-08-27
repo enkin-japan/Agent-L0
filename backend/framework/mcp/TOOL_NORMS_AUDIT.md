@@ -90,7 +90,7 @@
 | 工具 | 判定 | 依据 |
 |---|---|---|
 | skill_invoke | ✅ | 昨日三轮调参定稿（多语言线索例+任务映射例+次序令，5/5） |
-| register_api_tool / register_skill | ✅ | 昨日建成即带满准则（密钥红线/待确认/撞名） |
+| register_api_tool / register_skill | ✅ | 密钥红线/撞名准则在位；「待确认」句 08-28 按 § 减法与预算 删除（execute 响应自证） |
 | schedule_create / update / delete / list | ✅ | 审批+先 list 再改的次序准则在位 |
 | api_tool_factory 合成工具 | ✅ | description 质量准则已挂在注册面（"工具好不好用九成在这句话"校验文案） |
 
@@ -103,6 +103,49 @@ cd backend && .venv/bin/python benchmarks/tool_norms/norms_probe.py \
 ```
 通过线：4/4。跑偏则按 L4 站方法迭代描述（具体例句优先）至全过，产物归档
 `benchmarks/model_eval/results/`（gitignored）。
+
+## § 减法与预算（D2-减法半，2026-08-28）
+
+> 背景：D0 真账（`scripts/tool_token_audit.py`）实测 full 模式 **12185 真 token，已越
+> D4 拍板的 12000 线**。用户裁决（D.25）：减法先行，回不去再议重锚。
+
+**三条纪律**（原则 4 的执行细则，删句只认这三条）：
+
+1. **no-op 判据绑定生产档模型**（现 26b-4bit）。换生产档，所有「可删」结论作废重判。
+2. **判为可删的，删整句不改词**——改词是新的提示词工程，要走完整的准则调优流程。
+3. **可删仅限两类「不需要模型就能判」的**，其余一律只进下方观测清单、等真机套件搭车裁决：
+   - **类 A｜代码已确定性强制事实的复述**（读源码即可证：该行为无论模型知不知道都
+     机械发生，且事实在使用时刻由响应文案自证）；
+   - **类 B｜同一稳定前缀内的重复表述**（同声明内参数述与主述近字节重复、或跨声明
+     字节级重复；删其一后信息仍在场）。
+
+**本轮删句台账（12 处，full 12185 → 11887，−298 token）**：
+
+| 位置 | 删句 | 类 | 代码证据 |
+|---|---|---|---|
+| run_shell_command 描述 | 响应格式句（reports stdout/stderr/exit code…denied） | A | stdout/stderr 由 execute 条件拼装（空则 "(no output)"）；拒批文案由编排层产出（orchestrator "Operation denied by user…"）——两路都在使用时刻抵达模型 |
+| run_shell_command.timeout | 钳位机理句（orchestrator abandons after 180s…） | A | `_clamp_timeout` 强制 + 跨模块契约测试；保留 max 与 capped 事实 |
+| register_api_tool 描述 | 不立即生效/落待确认区句 | A | `execute` 返回「已提交待确认…不会立即生效…」（register_tools.py:122） |
+| register_skill 描述 | 同上 | A | 同上（同文件 skill 分支） |
+| run_applescript 描述 | The response returns the script's output or the error | A | execute 返回即是 |
+| edit_file 描述 | heredoc 禁令副本 | B | 主本留 run_shell_command（事故发生地，26B heredoc 写炸实案）；heredoc **非**代码强制（预检见 `<<` 即跳过），故按类 B 去重而非类 A |
+| write_file 描述 | heredoc 禁令副本 | B | 同上 |
+| memory_write.type 参数述 | "user \| feedback \| project \| reference" | B | enum 同声明相邻，四类型语义主述已详释 |
+| math_research 描述 | 自足题面句（Pass a complete, self-contained…） | B | problem 参数述近字节同义，留参数侧 |
+| excel_research 描述 | 自足任务书句 | B | task 参数述近字节同义；语言条款原样保留（金测试钉） |
+| schedule spec 述 | (weekday 0=Monday..6=Sunday) 括注 | B | weekday 字段述逐字同义 |
+| schedule_update.spec 述 | 整块换短述指回 create | B | full 模式同一前缀渲染两遍；`_SPEC_SCHEMA_UPDATE` 浅拷贝仅换 description，properties 同引用零漂移。**catalog caveat**：catalog 模式只留描述首行且丢 parameters，指回对象不在场（子字段述仍随 get_tool_schema 取到，仅丢 JSON 形状例）——切 catalog 前重估本条 |
+
+**减法候补观测（疑似 no-op，需模型行为裁决，等下次真机套件搭车；不删。与文末「后续观测清单」分工：这里只管删句候补）**：
+update_plan.op 的语义映射行；schedule_update/write_file/edit_file 的「Requires/The user
+approves…」句（防口头求权准则的一部分，删除可能复发 26B 口头求权）；deck_export_pdf 的
+「Requires ≥1 slide」；deck_set_slide 的 "(generation arrives later)" 括注。
+cloud_consult 整件不动（⑤′ 刚调优）。另挂一条**已删句的回填监测**：register 双件的类 A
+依据是**中文**响应文案替代英文描述句，26B 跨语理解未实测——真机套件搭车验证，跑偏即回填。
+
+**预算现状**：full 11887 / 12000，余量 113 ≈ 半件中等工具。下一件要进稳定前缀的东西
+落地前，先跑 `scripts/tool_token_audit.py` 看余量；越线时的出路按 D.25 顺序：再减法 →
+议重锚 → catalog（最后，理由见 D.25）。
 
 ## 后续观测清单（⏳ 触发条件）
 

@@ -48,8 +48,8 @@ class MemoryWriteTool(BaseTool):
                             "description": "One line describing what this note holds. This is "
                                            "what you will see in future conversations to decide "
                                            "whether to read the full note — make it specific."},
-            "type": {"type": "string", "enum": list(NOTE_TYPES),
-                     "description": "user | feedback | project | reference"},
+            # D2-减法(类B):枚举值复述删——enum 就在同一声明里,四类型语义主述已详释。
+            "type": {"type": "string", "enum": list(NOTE_TYPES)},
             "body": {"type": "string",
                      "description": "The fact itself. For feedback/project, follow with why it "
                                     "matters and how to apply it. Convert relative dates to "

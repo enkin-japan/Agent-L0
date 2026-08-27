@@ -31,7 +31,8 @@ class AppleScriptTool(BaseTool):
         "prefer plain shell commands over this when a task can be done in the terminal. "
         "Every run triggers a user confirmation dialog before executing (AppleScript can perform "
         "any app-level action), so call the tool directly — do NOT ask the user for permission in "
-        "words. The response returns the script's output or the error."
+        # D2-减法(类A):响应格式句删,execute 返回即是(台账:TOOL_NORMS_AUDIT §减法与预算)。
+        "words."
     )
     requires_approval = True  # 恒需审批（应用级操作不可静态判定只读）
     parameters = {

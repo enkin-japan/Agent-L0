@@ -17,8 +17,8 @@ _SPEC_SCHEMA = {
     "type": "object",
     "description": (
         'When to run. One of: {"type": "interval", "minutes": 30} / '
-        '{"type": "daily", "at": "08:00"} / {"type": "weekly", "weekday": 0, "at": "09:00"} '
-        '(weekday 0=Monday..6=Sunday) / {"type": "once", "at": "2026-07-09 15:00"}. '
+        '{"type": "daily", "at": "08:00"} / {"type": "weekly", "weekday": 0, "at": "09:00"} / '
+        '{"type": "once", "at": "2026-07-09 15:00"}. '
         "Times are the user's local time, 24h format."
     ),
     "properties": {
@@ -29,6 +29,13 @@ _SPEC_SCHEMA = {
     },
     "required": ["type"],
 }
+
+# D2-减法(类B):full 模式下 create/update 各渲染一份 _SPEC_SCHEMA,同述逐字节两遍;
+# update 侧换短述指回 create;description 里的 weekday 括注同波删除(字段述逐字同义)。
+# ⚠️ properties/required 是**同引用**——绝不要原地改 _SPEC_SCHEMA_UPDATE["properties"],
+# 那会连带改掉 schedule_create;要分叉先深拷贝。
+_SPEC_SCHEMA_UPDATE = {**_SPEC_SCHEMA, "description": (
+    "Same format as schedule_create's spec. Times are the user's local time, 24h format.")}
 
 
 def _fmt_ts(ts) -> str:
@@ -98,7 +105,7 @@ class ScheduleUpdateTool(BaseTool):
             "schedule_id": {"type": "string", "description": "Target task id (from schedule_list)."},
             "name": {"type": "string", "description": "New title (optional)."},
             "prompt": {"type": "string", "description": "New run instruction (optional)."},
-            "spec": _SPEC_SCHEMA,
+            "spec": _SPEC_SCHEMA_UPDATE,
             "enabled": {"type": "boolean", "description": "Enable (true) or pause (false) the task (optional)."},
         },
         "required": ["schedule_id"],

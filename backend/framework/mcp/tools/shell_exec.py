@@ -347,8 +347,9 @@ class ShellExecTool(BaseTool):
         "Read-only commands (ls, cat, grep, find, git status, ...) run immediately; any command "
         "that changes state (writing files, installing, sudo, pipes/redirects, or unknown "
         "commands) automatically triggers a user confirmation dialog before running — so just "
-        "call the tool directly, do NOT ask the user for permission in words. The tool response "
-        "reports stdout, stderr and the exit code (and tells you if the user denied it). "
+        "call the tool directly, do NOT ask the user for permission in words. "
+        # D2-减法(类A):响应格式句删——stdout/stderr/exit_code/拒批文案均由代码产出,
+        # 模型在首次调用的响应里即见,常驻声明无需复述。
         "To create or modify FILES, use the write_file / edit_file tools instead — never shell "
         "heredocs (cat <<EOF) or echo redirection.\n"
         # 波 F10：CLI 参数的先验记忆不可信，本地 4bit 模型尤甚。横切行为规范挂在工具
@@ -378,11 +379,11 @@ class ShellExecTool(BaseTool):
                 "type": "integer",
                 # 原写 "max 600" —— 钳位落地后这句就成了对模型说的假话。上限现算。
                 "description": (
+                    # D2-减法(类A):钳位机理复述删——钳位由 _clamp_timeout 代码强制,
+                    # 模型只需知道上限与「超了会被钳」。
                     f"Optional per-command timeout in seconds "
-                    f"(default {_DEFAULT_TIMEOUT_S}, max {_MAX_INNER_TIMEOUT_S}). "
-                    f"Larger values are capped: the orchestrator abandons any tool after "
-                    f"{_OUTER_BUDGET_S}s, so a longer inner timeout would only leave the "
-                    f"command running unattended."
+                    f"(default {_DEFAULT_TIMEOUT_S}, max {_MAX_INNER_TIMEOUT_S}; "
+                    f"larger values are capped)."
                 ),
             }
         },
