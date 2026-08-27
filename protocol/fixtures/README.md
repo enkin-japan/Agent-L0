@@ -12,6 +12,31 @@ web(vitest)与原生 app(XCTest)各自实现 `reduce(state, event)`,**读取同�
 <name>.md                (可选)场景说明与断言意图
 ```
 
+## 录制（2026-08-28 起,手工构造之外的第二条路）
+
+`record_fixture.py` 对着**跑起来的后端**(FakeEngine dev 栈即可)把
+`GET /chat/{sid}/events?after=0` 的信封落盘(默认 seq/ts 重编号,`--raw` 保留)。
+**边界如实**(首审 C1/S13):只能录**后端已实现的行为**,且必须**先附着新会话再发消息**
+——journal 对历史轮瘦身持久化,录旧会话=把 gutted 事件固化成自洽的垃圾夹具(录制器
+见无 response 的 turn_ended 会拒绝落盘);夹具先行的新协议行为仍走手工构造,铁律 5
+不因有了录制器而松动。期望态由**已提交**的 web 归约器生成,对 web 是同义反复,
+**Swift 回放才是独立校验**。
+
+三步纪律(refresh 态:期望值由已提交归约器重生成,人审 diff——不许手写终态):
+1. 录:`python3 protocol/fixtures/record_fixture.py <name> --session <sid>`
+   （暂停态夹具用 `--until-turns 0` + 到态后 Ctrl-C;要 stream_attached 帧加
+   `--keep-attach`,详见脚本文件头）
+2. 生成期望:`cd frontend && EMIT_FIXTURE_EXPECTED=<name> npm test -- turn-reducer`
+   ——生成**必红**(确认收据);人工审它是「应该」的终态而不只是「当前」的终态。
+   注意:`JSON.stringify` 丢 undefined 键而 Swift 可能吐 null——step 3 若 Swift 红在
+   「缺键」上,先怀疑这条序列化差异,别追错端。
+3. 不带环境变量重跑 web 回放 + `apple-app/Tests/run_reducer_fixtures.sh` 双端全绿,
+   **并且**:README 表格登记 + 写 `<name>.md` 场景说明 + `./devctl.sh doc-numbers
+   --write` 刷新夹具计数(漏了这步 docs 门当场红),才算入库。
+
+历史注记:9 份既有 expected.json 已于 2026-08-28 统一走发射器重排版(逐文件深比对
+语义等值、双端回放绿)——此后任何 refresh 的 diff 都是纯语义的。
+
 ## 规则
 
 - **新增协议行为必须先落夹具再改实现**(两端实现以夹具为验收)。

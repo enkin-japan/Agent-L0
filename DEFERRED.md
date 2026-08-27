@@ -29,12 +29,18 @@
 - 形态：模型以**普通助手文本**提问，轮次 `success` 结束，用户**普通回复**开启新轮续任务。
 
 ### 完整版（未做，择机）——结构化澄清暂停态
-- **`ask_user(question, options?)` 元工具**：与 `update_plan`/`complete_step` 并列，让"提问"
-  **显式化**（不再依赖提前收尾门控的启发式判断），并可携带结构化选项。
+- **`ask_user(questions[])` 元工具**：与 `update_plan`/`complete_step` 并列，让"提问"
+  **显式化**（不再依赖提前收尾门控的启发式判断）。签名为**批式前沿**（F7，OSS 扫描
+  2026-08-28 D.25 顺序 4 改定；原单数 `ask_user(question, options?)` 作废）：一次调用把
+  **前置条件已确定的问题全部问完**——每项 `{question, options?, recommendation?}`，
+  编号呈现、附推荐答案，**上限 2–3 题**（本地档一轮=冷预填十几秒×单 worker 串行，
+  逐题打断的经济账比云端惨得多；但选项墙也是墙——上限 4 会叠乘出最多 12 个选项）。
+  反向约束原样保留：Never burn a question on a request with a clear outcome。
 - **`awaiting_clarification` 轮次暂停态**：`awaiting_approval` 的兄弟。轮次保持 alive、可查询、
   可断可重连（铁律2 暂停态语义），暂存态经 `/turn` 可查，刷新能重建澄清卡。
 - **协议（铁律5：先落夹具再改实现）**：
-  - 新事件 `clarification_requested`（payload：question + options）；未知事件仍被忽略（向前兼容）。
+  - 新事件 `clarification_requested`（payload：questions[]，每项 question + options? +
+    recommendation?，与批式签名同形）；未知事件仍被忽略（向前兼容）。
   - 归约器新增一种卡片状态（"待你回答"），web `lib/turn-reducer.ts` + 原生 `Store/TurnReducer.swift`。
   - 恢复路径 `POST /turns/clarification`（带 answer），**照抄 `/turns/approval` 的形状**。
   - 落 `protocol/fixtures/`（事件流 + 期望归约终态），双端回放全绿方为验收。

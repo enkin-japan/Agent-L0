@@ -6,11 +6,24 @@
     "text": "",
     "thinking": "需要先读文件确认旧地址出现的位置,再执行替换。替换是写操作,会触发审批。",
     "steps": [
-      {"kind": "tool", "label": "file_extract", "detail": "…旧地址出现 3 处…", "status": "ok"}
+      {
+        "kind": "tool",
+        "label": "file_extract",
+        "detail": "…旧地址出现 3 处…",
+        "status": "ok"
+      }
     ],
     "task": null
   },
   "pending_tools": [
-    {"name": "edit_file", "arguments": {"path": "~/notes.txt", "old": "旧地址", "new": "新地址", "replace_all": true}}
+    {
+      "name": "edit_file",
+      "arguments": {
+        "path": "~/notes.txt",
+        "old": "旧地址",
+        "new": "新地址",
+        "replace_all": true
+      }
+    }
   ]
 }
