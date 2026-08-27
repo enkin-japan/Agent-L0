@@ -67,15 +67,11 @@ def _full_fleet():
 
 
 def _real_lltokenizer():
-    """真 LLTokenizer(本地模型目录只载分词器)。目录不在=跳过并说明。"""
-    from llguidance import hf as llhf
-    from framework.utils.config_loader import load_section
-    model = (load_section("inference") or {}).get("model", "")
-    local = Path(__file__).resolve().parents[1] / "models" / model.split("/")[-1]
-    if not local.is_dir():
-        pytest.skip(f"本地模型目录不在({local}),真 tokenizer 编译无从做起")
-    from transformers import AutoTokenizer
-    return llhf.from_tokenizer(AutoTokenizer.from_pretrained(str(local)))
+    """真 LLTokenizer——取数统一走 tests/_tool_fleet.real_lltokenizer(经 model_selection
+    决议,与引擎同源;D1 复审 S8:原实现只读 config inference.model,与 .model-selection
+    脱钩,换 Qwen 档会拿错家族的尺)。"""
+    from ._tool_fleet import real_lltokenizer
+    return real_lltokenizer()
 
 
 def test_full_fleet_grammar_parses_a_real_call_body():

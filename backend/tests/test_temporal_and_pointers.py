@@ -60,7 +60,10 @@ def test_memory_write_tool_exposes_valid_until():
     from framework.mcp.tools.memory_write import MemoryWriteTool
     props = MemoryWriteTool.parameters["properties"]
     assert "valid_until" in props and "valid_until" not in MemoryWriteTool.parameters["required"]
-    assert "EXPIRED" in props["valid_until"]["description"]
+    # EXPIRED 机理句 08-28 按 §减法与预算 删除(类A:notes.py 渲染 [EXPIRED] 进模型可见
+    # 索引行自证)——钉字改指存留的「何时该设/何时别设」准则半。
+    assert "Set ONLY" in props["valid_until"]["description"]
+    assert "Omit for durable facts" in props["valid_until"]["description"]
 
 
 # ---- 凭证指针（rag 侧源码钉板 + 工具面） ----

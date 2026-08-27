@@ -173,8 +173,9 @@ UPDATE_PLAN_SCHEMA = {
         "Create or modify the multi-step task plan. For complex tasks (ones that need multiple "
         "steps / multiple tool calls), first use op='replace' to lay out a concise plan of 2-8 "
         "steps, then execute step by step; use add/remove/reorder for small adjustments along "
-        "the way, or replace again to re-plan when the situation changes substantially (limited "
-        "number of re-plans). Do NOT create a plan for simple questions — just answer them."
+        "the way, or replace again to re-plan when the situation changes substantially. "
+        # D2-减法(类B):重规划上限句删——task.render 每轮渲染 "re-plans N/max",信息在场。
+        "Do NOT create a plan for simple questions — just answer them."
     ),
     "parameters": {
         "properties": {

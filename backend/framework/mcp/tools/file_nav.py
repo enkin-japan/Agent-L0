@@ -82,8 +82,8 @@ class FindFilesTool(BaseTool):
     description = (
         "Find files on the user's Mac via Spotlight: matches file names first and automatically "
         "falls back to searching file contents. Use this whenever the user asks to locate a file "
-        "('where is that PDF from last week') instead of guessing paths. "
-        "Returns up to 30 matches, newest first."
+        "('where is that PDF from last week') instead of guessing paths."
+        # D2-减法(类A):返回条数/排序句删——输出首行自报 "N matches (showing M, newest first)"。
     )
     requires_approval = False
     is_concurrency_safe = True  # 只读查询

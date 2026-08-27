@@ -58,9 +58,8 @@ class MemoryWriteTool(BaseTool):
             "valid_until": {"type": "string",
                             "description": "OPTIONAL, ISO date (YYYY-MM-DD). Set ONLY when the "
                                            "fact has a known expiry (contract end, policy period, "
-                                           "password rotation). After this date the note is "
-                                           "flagged EXPIRED in your index instead of silently "
-                                           "going stale. Omit for durable facts."},
+                                           "password rotation). Omit for durable facts."},
+            # D2-减法(类A):EXPIRED 机理句删——过期标注由 notes.py 渲染进模型可见索引行自证。
         },
         "required": ["name", "description", "type", "body"],
     }

@@ -143,9 +143,24 @@ approves…」句（防口头求权准则的一部分，删除可能复发 26B �
 cloud_consult 整件不动（⑤′ 刚调优）。另挂一条**已删句的回填监测**：register 双件的类 A
 依据是**中文**响应文案替代英文描述句，26B 跨语理解未实测——真机套件搭车验证，跑偏即回填。
 
-**预算现状**：full 11887 / 12000，余量 113 ≈ 半件中等工具。下一件要进稳定前缀的东西
-落地前，先跑 `scripts/tool_token_audit.py` 看余量；越线时的出路按 D.25 顺序：再减法 →
-议重锚 → catalog（最后，理由见 D.25）。
+**第二批删句（D1 金测试复审 C3 迫出，2026-08-28 当日，3 处 −35 token）**：
+
+| 位置 | 删句 | 类 | 代码证据 |
+|---|---|---|---|
+| update_plan 描述 | "(limited number of re-plans)" | B | task.render 每轮渲染 "re-plans N/max"，信息在场 |
+| find_files 描述 | "Returns up to 30 matches, newest first." | A | 输出首行自报 "N matches (showing M, newest first)" |
+| memory_write.valid_until | EXPIRED 机理句 | A | notes.py 把 [EXPIRED …] 渲染进模型可见索引行；原被 test_temporal_and_pointers 钉住，钉字同步改指存留准则半（Set ONLY/Omit durable） |
+
+**⚠️ 口径订正（复审 C3，比第二批更重要）**：第一批的「11887 回线下余量 113」是
+**裸类形口径**——生产装配的 skill_invoke 带 repo 剧本索引（5 份，+134 token），真实
+前缀当时仍在 12021 越线。`tool_token_audit.py` 与预算闸金测试已同步改为**生产形口径**
+（密封构造：无云钥、无活 RAG、repo 剧本索引经 AST 名单探活装配）。
+
+**预算现状（生产形口径）**：full **11986 / 12000，余量 14**——已无「再加东西」的空间，
+下一件进稳定前缀的东西必然触发 D.25 阶梯（再减法 → 议重锚 → catalog）。另一把尺的
+未决问题：D4 的 12000 线当年锚在 **est（chars/4）** 上，生产 est 现值 ≈12399——est 尺上
+减法救不回来（差 ~400）。**线锚哪把尺、锚多少，待用户裁**；金测试闸暂按「真 token ≤
+12000」执行（`tests/test_model_visible_text.py`，恒与本文件同步）。
 
 ## 后续观测清单（⏳ 触发条件）
 

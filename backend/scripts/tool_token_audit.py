@@ -13,11 +13,14 @@
 排除 rag_admin(import 即探活)——动态 api_tools 与它同为本账盲区,恰含推动 catalog
 化的增长向量,读数时记得这层。
 """
+import contextlib
 import importlib
 import json
+import os
 import pkgutil
 import sys
 from pathlib import Path
+from unittest import mock
 
 BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
@@ -28,39 +31,110 @@ from framework.dialects.gemma4.dsl import format_function_declaration
 from framework.mcp.base import BaseTool
 
 
+REPO_ROOT = BACKEND.parent
+
+
+def _provider_key_envs():
+    from framework.utils.config_loader import load_section
+    provs = (load_section("cloud") or {}).get("providers") or []
+    return [p.get("key_env") for p in provs if isinstance(p, dict) and p.get("key_env")]
+
+
+@contextlib.contextmanager
+def hermetic_construction():
+    """密封构造环境——声明文本一律取确定性形态(D1 金测试复审 C1/C2/S9):
+    ① 云供应商 key env 全摘除 → cloud_consult 恒为无钥回退形(带钥构造会把用户的
+      供应商清单吸进声明/快照);
+    ② requests.get 打断 → rag_search 恒为 'Categories known at startup: default.'
+      回退形(活栈构造会吸入用户知识库类目名,且金测试面零网络 I/O);
+    还原语义:环境变量逐一放回,patch 出栈即拆。"""
+    saved = {k: os.environ.pop(k) for k in _provider_key_envs() if k in os.environ}
+    try:
+        with mock.patch("requests.get", side_effect=ConnectionError("hermetic construction")):
+            yield
+    finally:
+        os.environ.update(saved)
+
+
 def collect_schemas():
     """真构造优先(rag_search 等在 __init__ 组装 parameters,__new__ 会把它错归零参,
     复审 DC3);失败退 __new__。动态 api_tools 与 rag_admin(模块 import 即探活)不在
-    清单内——本账的盲区,恰含推动 catalog 化的增长向量(用户自装 API 工具),如实注明。"""
+    清单内——本账的盲区,恰含推动 catalog 化的增长向量(用户自装 API 工具),如实注明。
+
+    skill_invoke 取**生产形**(D1 金测试复审 C3):repo skills/ 的剧本索引在装配期追加进
+    description(app.py 经 registry.load_tool 重注册),import 扫描的裸类形比生产少
+    ~130 token——恰好大于减法后的全部余量,不算它的预算闸是结构性乐观。repo 剧本在
+    git 内、确定性;用户目录剧本(数据根)不算,与 api_tools 同为挂账盲区。"""
     import framework.mcp.tools as tools_pkg
     out, seen = [], set()
-    for info in pkgutil.iter_modules(tools_pkg.__path__):
-        if info.name == "rag_admin":
-            continue          # 模块体 import 即 3s 网络探活;与金测试同口径排除,挂账盲区
-        try:
-            mod = importlib.import_module(f"framework.mcp.tools.{info.name}")
-        except Exception:
-            continue
-        for obj in vars(mod).values():
-            if (isinstance(obj, type) and issubclass(obj, BaseTool) and obj is not BaseTool
-                    and getattr(obj, "name", "") and obj.name not in seen):
-                try:
-                    inst = obj()
-                except Exception:
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(hermetic_construction())
+        for info in pkgutil.iter_modules(tools_pkg.__path__):
+            if info.name == "rag_admin":
+                continue          # 模块体 import 即 3s 网络探活;与金测试同口径排除,挂账盲区
+            try:
+                mod = importlib.import_module(f"framework.mcp.tools.{info.name}")
+            except Exception:
+                continue
+            for obj in vars(mod).values():
+                if (isinstance(obj, type) and issubclass(obj, BaseTool) and obj is not BaseTool
+                        and getattr(obj, "name", "") and obj.name not in seen):
                     try:
-                        inst = obj.__new__(obj)
+                        inst = obj()
+                    except Exception:
+                        try:
+                            inst = obj.__new__(obj)
+                        except Exception:
+                            continue
+                    try:
+                        out.append(inst.get_schema())
+                        seen.add(obj.name)
                     except Exception:
                         continue
-                try:
-                    out.append(inst.get_schema())
-                    seen.add(obj.name)
-                except Exception:
-                    continue
     if len(out) < 40:
         print(f"[audit] ⚠️ 工具清单只收到 {len(out)} 件——枚举路径可疑,数字别进台账",
               file=sys.stderr)
+    out = _swap_production_skill_invoke(out)
     return out + [UPDATE_PLAN_SCHEMA, COMPLETE_STEP_SCHEMA, REMEMBER_SCHEMA,
                   GET_TOOL_SCHEMA_SCHEMA]
+
+
+def _ast_tool_names(module: str) -> set:
+    """AST 静态抽某工具模块的类级 name 常量——rag_admin import 即网络探活,不能进程内
+    枚举,但其工具名必须进剧本探活面(否则 ingest 被舍弃,生产索引 5 份这里只算 4 份,
+    预算闸又乐观一截)。纯语法抽取,零 import 零网络。"""
+    import ast as _ast
+    src = (BACKEND / "framework" / "mcp" / "tools" / f"{module}.py").read_text()
+    out = set()
+    for node in _ast.walk(_ast.parse(src)):
+        if isinstance(node, _ast.ClassDef):
+            for st in node.body:
+                if (isinstance(st, _ast.Assign) and len(st.targets) == 1
+                        and getattr(st.targets[0], "id", "") == "name"
+                        and isinstance(st.value, _ast.Constant)):
+                    out.add(st.value.value)
+    return out
+
+
+def _swap_production_skill_invoke(schemas):
+    """skill_invoke 换成带 repo 剧本索引的生产形;装不出=如实保留裸类形并警告,
+    绝不静默(索引 ~130 token,漏算即预算闸乐观)。runtime 全局注册表用后还原。"""
+    from framework.agents import runtime
+    from framework.core.skill_registry import SkillRegistry
+    names = {sc["name"] for sc in schemas} | _ast_tool_names("rag_admin")
+    saved_reg = runtime.get_skill_registry()
+    try:
+        reg = SkillRegistry(REPO_ROOT / "skills", tool_names=names)
+        if not reg.names():
+            print("[audit] ⚠️ repo 剧本 0 份可装配——skill_invoke 按裸类形计,预算偏乐观",
+                  file=sys.stderr)
+            return schemas
+        runtime.set_skill_registry(reg)
+        from framework.mcp.tools.skill_invoke import SkillInvokeTool
+        prod = SkillInvokeTool().get_schema()
+        return [prod if sc["name"] == "skill_invoke" else sc for sc in schemas]
+    finally:
+        runtime.set_skill_registry(saved_reg)
 
 
 def make_counter():
@@ -73,7 +147,7 @@ def make_counter():
     """
     try:
         from framework.utils import model_selection
-        model = model_selection.resolve_model()
+        model = model_selection.resolve_selected_model()[0]   # 与引擎同源(含 .model-selection)
     except Exception:
         from framework.utils.config_loader import load_section
         model = (load_section("inference") or {}).get("model", "")
