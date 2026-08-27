@@ -45,6 +45,19 @@ _LEDGER_OK = """\
 | 协议夹具 | 0 | `protocol/fixtures/` 下的 `*.events.jsonl` |
 | model_registry 档位 | 2 | `config.yaml` 的条目数 |
 | rag.tiers 档位 | 1 | `config.yaml` 的档位数 |
+
+## §D 已定决策（不再重议）
+
+| | 决策 | 定于 | 依据 | 依据口径 | 状态 |
+|---|---|---|---|---|---|
+| **D.1** | 假决策甲 | 07-01 用户 | 某依据 | — | 有效 |
+| **D.2** | 假决策乙 | 07-02 用户 | 某依据 | e4b,07-02 实测 | 已翻案→D.3 |
+| **D.3** | 假决策丙（接替乙） | 07-03 用户 | 某依据 | — | 有效 |
+
+## §Z 后续小节（§D 的边界探针）
+
+散文里提一句 ## §D 已定决策（不再重议） 不该被认成表头（行首锚定）。
+| **D.7** | 这行在 §D 节外,绝不许被扫进决策表（否则跳号检查会红） | x | x | — | 有效 |
 """
 
 _CONFIG = """\
@@ -447,3 +460,128 @@ def test_anchor_is_bound_to_the_scale_section(tmp_path):
     assert "找不到「### 当前规模」小节" in r.stdout, _out(r)
     assert "全部一致" not in r.stdout
     assert (tmp_path / "EXECUTION_LEDGER.md").read_text(encoding="utf-8") == before
+
+
+# ---- §D 决策表结构校验（F8，D.25 顺序 3） ----
+# 合法态（含一条 已翻案→D.3 的活链）已并入 _LEDGER_OK：test_no_drift_is_rc0 即其
+# happy path。以下逐向打坏——每一向都必须红，且「表没了」是 rc=1 不是 rc=0。
+
+def _decision_case(tmp_path, mutate):
+    script = _fake_repo(tmp_path, ledger=mutate(_LEDGER_OK))
+    _fake_venv(tmp_path, count=137)
+    return _run(script, "--check")
+
+
+def test_decision_section_missing_is_internal_error(tmp_path):
+    r = _decision_case(tmp_path, lambda t: t.split("## §D")[0])
+    assert r.returncode == 1, _out(r)
+    assert "找不到「## §D 已定决策" in r.stdout      # 钉「缺段」分支,不与零行分支混
+    assert "全部一致" not in r.stdout
+
+
+def test_decision_zero_rows_is_internal_error(tmp_path):
+    """表头在、行全没了（复审 S1 存活变异之三）：必须 rc=1「校验面没了」,不是没病。"""
+    import re as _re
+    r = _decision_case(tmp_path, lambda t: _re.sub(r"^\| \*\*D\.\d+\*\* .*\n", "", t, flags=_re.M))
+    assert r.returncode == 1, _out(r)
+    assert "命中 0 行" in r.stdout
+    assert "全部一致" not in r.stdout
+
+
+def test_decision_empty_caliber_is_drift(tmp_path):
+    """「依据口径」空格子必须红（复审 S1 存活变异之一——本检查是两列契约的一半）。"""
+    r = _decision_case(tmp_path, lambda t: t.replace(
+        "| **D.1** | 假决策甲 | 07-01 用户 | 某依据 | — | 有效 |",
+        "| **D.1** | 假决策甲 | 07-01 用户 | 某依据 |  | 有效 |"))
+    assert r.returncode == 3, _out(r)
+    assert "「依据口径」为空" in r.stdout
+
+
+def test_decision_rows_outside_section_are_ignored(tmp_path):
+    """§D 节边界（复审 S1 存活变异之二）：后续小节里的伪 D 行不许被扫进来。
+    夹具 §Z 节常驻一行 **D.7**——本用例即 happy path 的边界半（不越界=不跳号=rc0），
+    越界扫入则 D.4-D.6 跳号立刻红,test_no_drift_is_rc0 同时守着。"""
+    script = _fake_repo(tmp_path)
+    _fake_venv(tmp_path, count=137)
+    r = _run(script, "--check")
+    assert r.returncode == 0, _out(r)
+
+
+def test_decision_self_supersede_is_drift(tmp_path):
+    r = _decision_case(tmp_path, lambda t: t.replace("已翻案→D.3", "已翻案→D.2"))
+    assert r.returncode == 3, _out(r)
+    assert "指向自己" in r.stdout
+
+
+def test_decision_supersede_cycle_is_drift(tmp_path):
+    """A→B、B→A：链上没有现行有效裁决,必须红（复审 S4）。"""
+    r = _decision_case(tmp_path, lambda t: t.replace(
+        "| **D.3** | 假决策丙（接替乙） | 07-03 用户 | 某依据 | — | 有效 |",
+        "| **D.3** | 假决策丙（接替乙） | 07-03 用户 | 某依据 | — | 已翻案→D.2 |"))
+    assert r.returncode == 3, _out(r)
+    assert "成环" in r.stdout
+
+
+def test_decision_inline_pipe_row_is_drift(tmp_path):
+    """正文裸 |（未转义）把列切乱——必须红而不是猜列位后报没病（复审 S2）。"""
+    r = _decision_case(tmp_path, lambda t: t.replace(
+        "| **D.1** | 假决策甲 | 07-01 用户 | 某依据 | — | 有效 |",
+        "| **D.1** | 假决策甲 a|b | 07-01 用户 | 某依据 | — | 有效 |"))
+    assert r.returncode == 3, _out(r)
+    assert "列界数不对" in r.stdout
+
+
+def test_decision_duplicate_id_is_drift(tmp_path):
+    # 复制行必须插在 §D 节内——追加到文件尾会落进 §Z,被边界检查正确忽略(那是另一条测试)
+    r = _decision_case(tmp_path, lambda t: t.replace(
+        "| **D.3** | 假决策丙（接替乙） | 07-03 用户 | 某依据 | — | 有效 |",
+        "| **D.3** | 假决策丙（接替乙） | 07-03 用户 | 某依据 | — | 有效 |\n"
+        "| **D.3** | 复制行 | 07-04 | 依 | — | 有效 |"))
+    assert r.returncode == 3, _out(r)
+    assert "条目号重复" in r.stdout
+
+
+def test_decision_gap_is_drift(tmp_path):
+    """孤立探针（复审 N7）：翻案链一并改指 D.5，只留跳号一处病。"""
+    r = _decision_case(tmp_path, lambda t: t.replace("**D.3**", "**D.5**")
+                                            .replace("已翻案→D.3", "已翻案→D.5"))
+    assert r.returncode == 3, _out(r)
+    assert "跳号" in r.stdout
+    assert "该条不存在" not in r.stdout
+
+
+def test_decision_bad_status_is_drift(tmp_path):
+    r = _decision_case(tmp_path, lambda t: t.replace("| — | 有效 |\n", "| — | 大概有效 |\n", 1))
+    assert r.returncode == 3, _out(r)
+    assert "只认「有效」或「已翻案→D.N」" in r.stdout
+
+
+def test_decision_dangling_supersede_is_drift(tmp_path):
+    """已翻案指向不存在的接替条目——决策链断裂是本校验的核心病灶。"""
+    r = _decision_case(tmp_path, lambda t: t.replace("已翻案→D.3", "已翻案→D.9"))
+    assert r.returncode == 3, _out(r)
+    assert "但该条不存在" in r.stdout
+
+
+def test_decision_missing_columns_is_drift(tmp_path):
+    r = _decision_case(tmp_path, lambda t: t.replace(
+        "| **D.1** | 假决策甲 | 07-01 用户 | 某依据 | — | 有效 |",
+        "| **D.1** | 假决策甲 | 07-01 用户 | 某依据 |"))
+    assert r.returncode == 3, _out(r)
+    assert "列界数不对" in r.stdout
+
+
+def test_write_never_rewrites_decision_table(tmp_path):
+    """--write 只机械刷数字；§D 的结构病没有机械改写，必须留给人修（rc 仍 3，
+    §D 原文一字不动）。"""
+    bad = _LEDGER_OK.replace("已翻案→D.3", "已翻案→D.9").replace(
+        "| 剧本 | 0 |", "| 剧本 | 9 |")          # 同时造一处数字漂移
+    script = _fake_repo(tmp_path, ledger=bad)
+    _fake_venv(tmp_path, count=137)
+    before = (tmp_path / "EXECUTION_LEDGER.md").read_text(encoding="utf-8")
+    sec_before = before[before.index("## §D"):]
+    r = _run(script, "--write")
+    text = (tmp_path / "EXECUTION_LEDGER.md").read_text(encoding="utf-8")
+    assert text[text.index("## §D"):] == sec_before   # §D 段字节等值(复审 N9)
+    assert "| 剧本 | 0 |" in text                # 数字被刷新
+    assert r.returncode == 3, _out(r)

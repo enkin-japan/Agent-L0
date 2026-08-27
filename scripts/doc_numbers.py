@@ -252,6 +252,76 @@ def rewrite(path: Path, drift_specs: list[tuple[str, str, str]]) -> "int | None"
     return len(pending)
 
 
+# ---------------- §D 决策表结构校验（F8，D.25 顺序 3） ----------------
+# 「已定决策不再重议」表是跨文档决策索引的宿主：翻案必须在表内留链（已翻案→D.N），
+# 换档失效必须可按「依据口径」列筛出。这里只校验**结构**（人不会忘写正文，会忘的是
+# 状态链与接替号）；内容对错仍归人。占位「—」合法——需求驱动增量灌入，不逼批量手抄。
+_DECISION_HEADER = "## §D 已定决策（不再重议）"
+_STATUS_RE = re.compile(r"^(有效|已翻案→D\.[1-9]\d*)$")
+
+
+def check_decision_table(text: str) -> "tuple[list[str], list[str]]":
+    """返回 (broken, drift)。锚点失配纪律与数字锚一致：表/行找不到记 broken(rc=1)，
+    绝不记「没问题」——那是校验面没了，不是表没病。"""
+    broken, drift = [], []
+    m_h = re.search("^" + re.escape(_DECISION_HEADER), text, re.M)
+    i = m_h.start() if m_h else -1     # 行首锚定：散文里提到标题不算(复审 N4)
+    if i < 0:
+        return ([f"EXECUTION_LEDGER.md：找不到「{_DECISION_HEADER}」——§D 结构校验面"
+                 "没了，这不是「表没问题」"], [])
+    nxt = text.find("\n## ", i + 1)
+    sec = text[i:nxt if nxt > 0 else len(text)]
+    rows = []
+    for line in sec.splitlines():
+        m = re.match(r"^\| \*\*D\.(\d+)\*\* \|", line)
+        if m:
+            rows.append((int(m.group(1)), line))
+    if not rows:
+        return (["EXECUTION_LEDGER.md §D：决策行正则命中 0 行——校验面没了"], [])
+    ids = [n for n, _ in rows]
+    dup = sorted({x for x in ids if ids.count(x) > 1})
+    if dup:
+        drift.append(f"§D 决策表：条目号重复 {['D.%d' % d for d in dup]}")
+    missing = sorted(set(range(1, max(ids) + 1)) - set(ids))
+    if missing:
+        drift.append(f"§D 决策表：条目号跳号，缺 {['D.%d' % d for d in missing]}")
+    idset = set(ids)
+    supersede = {}
+    for n, line in rows:
+        # 行内转义管道（\|）不是列界——先占位再切,取值时还原(复审 N1)
+        cells = [c.strip() for c in line.replace("\\|", "\x00").split("|")]
+        if len(cells) != 8 or cells[-1] != "":
+            # 6 列 = 8 段(首尾各一空段)。段数多=正文有未转义的裸 |,少=缺列或缺行尾 |
+            # ——两种都不许猜列位(猜错会把「依据」认成「状态」然后报没病,复审 S2)
+            drift.append(f"§D D.{n}：列界数不对——6 列应切出 8 段,实得 {len(cells)} 段。"
+                         f"多=正文裸 | 未转义(\\|),少=缺列或缺行尾 |")
+            continue
+        caliber, status = cells[-3].replace("\x00", "\\|"), cells[-2].replace("\x00", "\\|")
+        if not caliber:
+            drift.append(f"§D D.{n}：「依据口径」为空（未定写占位「—」，空格不算）")
+        if not _STATUS_RE.match(status):
+            drift.append(f"§D D.{n}：「状态」为「{status}」——只认「有效」或「已翻案→D.N」")
+        elif status.startswith("已翻案"):
+            succ = int(status.rsplit("D.", 1)[1])
+            if succ == n:
+                drift.append(f"§D D.{n}：已翻案指向自己——决策链断裂")
+            elif succ not in idset:
+                drift.append(f"§D D.{n}：已翻案指向 D.{succ}，但该条不存在")
+            else:
+                supersede[n] = succ
+    # 环检测(复审 S4)：翻案链必须最终落在一条「有效」上,A→B→A 等价于两条都没有接替者
+    for start_id in supersede:
+        seen_ids, cur = set(), start_id
+        while cur in supersede:
+            if cur in seen_ids:
+                drift.append(f"§D D.{start_id}：翻案链成环（经 D.{cur}）——链上没有任何"
+                             f"一条是现行有效裁决")
+                break
+            seen_ids.add(cur)
+            cur = supersede[cur]
+    return (broken, drift)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="文档规模数字的派生与校验（波 A3）")
     ap.add_argument("--check", action="store_true",
@@ -325,6 +395,15 @@ def main() -> int:
                          f"            文档写 {got} → 实际 {a['want']}")
             drift_specs.append((a["file"], a["re"], got[0], a["want"][0]))
 
+    led = REPO / _LEDGER
+    if led.exists():
+        db, dd = check_decision_table(led.read_text(encoding="utf-8"))
+        broken += db
+        drift += dd          # 刻意不进 drift_specs：结构病没有机械改写，须人修
+    else:
+        broken.append(f"{_LEDGER}：文件不存在——§D 结构校验面没了（复审 S6：这里沉默"
+                      f"就是又一处自己关掉自己）")
+
     print("\n── 校验 ──")
     if broken:
         rc = RC_INTERNAL
@@ -348,6 +427,12 @@ def main() -> int:
             print(f"\n[doc-numbers] {'、'.join(blocked)} 按宪章纪律**永不自动改写**——"
                   f"上面的 diff 须交用户确认后手改。")
         writable = [sp for sp in drift_specs if sp[0] not in NEVER_WRITE]
+        structural = len(drift) - len(drift_specs)     # §D 结构病:不在机械改写面
+        if structural:
+            print(f"\n[doc-numbers] 上列漂移中 {structural} 处是 §D 结构病——**没有机械"
+                  f"改写**,须人修（复审 S5:不许对修不了的病报「已刷新」）。")
+        if not writable:
+            return rc                                   # 全是结构病:别再打印刷新话术
         n = 0
         for f in sorted({sp[0] for sp in writable}):
             got = rewrite(REPO / f, [(sp[1], sp[2], sp[3]) for sp in writable if sp[0] == f])
@@ -364,7 +449,11 @@ def main() -> int:
         if n == len(writable):
             print("[doc-numbers] rc 仍为 3 = 「已改写、待复核」，不是「失败」。")
     elif drift:
-        print("\n[doc-numbers] 用 `--write` 就地刷新（只改数字，不动口径说明）。")
+        if drift_specs:
+            print("\n[doc-numbers] 数字漂移可用 `--write` 就地刷新（只改数字，不动口径"
+                  "说明）；§D 结构病（若有）须人修。")
+        else:
+            print("\n[doc-numbers] 上列均为 §D 结构病——`--write` 不适用，须人修。")
     return rc
 
 

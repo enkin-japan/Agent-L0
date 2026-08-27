@@ -569,7 +569,7 @@ check_gate_docs() {
         0) return 0 ;;
         3) fail "docs 门不过：文档规模数字与仓库实际不符"
            fail "  看 diff：  ./devctl.sh doc-numbers"
-           fail "  就地刷新：./devctl.sh doc-numbers --write"
+           fail "  就地刷新：./devctl.sh doc-numbers --write（仅数字；§D 结构病须人修）"
            return 3 ;;
         *) fail "docs 门跑不起来（doc-numbers rc=${rc}）——这不是「过」"
            printf '%s\n' "$out" >&2
