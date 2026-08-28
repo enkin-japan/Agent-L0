@@ -4,7 +4,8 @@
 而本仓的护栏措辞是逐条事故驱动调出来的(skill_invoke 例句 2/5→5/5、heredoc 写炸、
 cloud_consult provider 幻觉):
 
-1. **预算闸**(真分词器,D4 拍板线 12000):确定性工具面的方言渲染声明总量不越线,
+1. **预算闸**(真分词器,D.26 重锚线 12300;原 D4 est 尺 12k 线已随 D.26 退役):
+   确定性工具面的方言渲染声明总量不越线,
    余量打进失败文案。
 2. **快照**:声明文本 + DEFAULT_SYSTEM_PROMPT 逐字节钉死,「顺手改措辞」必须显式过审。
 
@@ -31,7 +32,7 @@ from framework.memory.session import DEFAULT_SYSTEM_PROMPT
 
 from ._tool_fleet import GET_TOOL_SCHEMA_NAME, audit, collect_schemas, real_lltokenizer
 
-BUDGET = 12000            # D4 拍板线(EXECUTION_LEDGER §D D.4/D.25);重锚须用户拍板
+BUDGET = 12300            # D.26 重锚线(2026-08-28 用户;真 token 生产形口径);再动须用户拍板
 EXPECTED_DECLS = 56       # 确定性工具面件数(复审 S6:枚举静默吞 import 错,缩水要报真锅)
 SNAP = Path(__file__).parent / "data" / "model_visible_text.snap"
 
@@ -61,7 +62,7 @@ def test_tool_declarations_under_token_budget():
     total = sum(len(tok.tokenize_str(d)) for _, d in _declarations())
     headroom = BUDGET - total
     assert total <= BUDGET, (
-        f"full 工具声明 {total} tok 已越 D4 的 {BUDGET} 线(超 {-headroom})。"
+        f"full 工具声明 {total} tok 已越 D.26 的 {BUDGET} 线(超 {-headroom})。"
         f"出路按 D.25 顺序:先减法(TOOL_NORMS_AUDIT.md §减法与预算,只删两类机械可判句)"
         f"→ 议重锚(用户拍板)→ catalog(最后)。逐件账:backend/scripts/tool_token_audit.py")
     print(f"[budget] full 工具声明 {total}/{BUDGET},余量 {headroom}"
