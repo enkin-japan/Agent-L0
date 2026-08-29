@@ -16,11 +16,10 @@ Agent/
 ├── .env.example         # 环境变量模板（复制为 .env.local 填写密钥；各服务与前端代理共读）
 ├── CHARTER.md           # ★ 架构宪章：核心思想 + 开发铁律（每次迭代开工前通读）
 ├── ARCHITECTURE.md      # 运行架构逻辑示意图（拓扑 / 分层 / 数据流 / 生命周期）
-├── REARCHITECTURE.md    # 交互层重整蓝图（体检报告 / 目标架构 / 四期迁移计划 + 踩坑）
 ├── PROTOCOL.md          # 交互协议 v1（事件账本契约，三端行为标准）
-├── HETERO_COMPUTE.md    # 异构算力落地方案（执行账本）：CUDA 兼容层 + 算力分离 + RAG 档位
 ├── DEFERRED.md          # 未竟架构账本（轻量已交付·完整版待做；与 CHARTER §7 非目标相区分）
-├── RETROSPECTIVE.md     # 全项目复盘（B2c 收官时点：走过的路 / 做对的 / 踩坑提炼 / 未竟清单）
+├── IDEAS.md             # 巧思搁置账本（想过、评估过、暂时不做）
+├── docs/history/        # 开发历史档案（2026-08-29 冻结归档：执行台账 / 各专项账本 / 复盘 / 蓝图）
 ├── evaluations/         # 开源项目评估文档（grok-build / mem0 / browser-use / codegraph / markitdown）
 ├── protocol/fixtures/   # 协议测试夹具（web 与原生 app 共享的行为标准）
 ├── backend/             # Agent 主体（FastAPI, :14159）：编排循环 / 工具 / 会话记忆 / 推理后端
@@ -79,7 +78,7 @@ edge 侧的 backend 不加载模型权重，只拉分词器（B3 实测：31MB v
 
 拆分只按「是否出算力」划线：**SearXNG 归设备 B**（与 backend 同机）——它无模型无 GPU，是
 `web_research` 的工具依赖，而抓正文的三档升级本就在 backend 里跑，出网口已经在 B。
-完整拓扑与执行记录见 [HETERO_COMPUTE.md](HETERO_COMPUTE.md)。
+完整拓扑与执行记录见 [docs/history/HETERO_COMPUTE.md](docs/history/HETERO_COMPUTE.md)（已冻结归档）。
 
 ## 配置与密钥
 
@@ -117,4 +116,5 @@ edge 侧的 backend 不加载模型权重，只拉分词器（B3 实测：31MB v
 - [rag/README.md](rag/README.md) —— 档位选择、分类路由、两阶段检索、数据治理、API
 - [frontend/README.md](frontend/README.md) —— 功能清单、目录结构、局域网/HTTPS 访问
 - [ARCHITECTURE.md](ARCHITECTURE.md) —— 整体运行架构示意图
-- [HETERO_COMPUTE.md](HETERO_COMPUTE.md) —— 算力分离与 inference-server 的执行账本（该服务无独立 README）
+- [docs/history/HETERO_COMPUTE.md](docs/history/HETERO_COMPUTE.md) —— 算力分离与 inference-server 的执行账本（已冻结归档；该服务无独立 README）
+- [docs/history/](docs/history/) —— 全部开发历史档案（执行台账 / MTP / OSS 对比 / 复盘等，2026-08-29 冻结）

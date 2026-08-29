@@ -1,7 +1,7 @@
 # evaluations/ —— 开源项目评估文档
 
 > 对候选开源项目的架构对比与融合裁决。每项目一文档，结论一行版同步记在
-> `EXECUTION_LEDGER.md` §3「五开源项目过夜评估」。更早的三项评估（yt-dlp /
+> `docs/history/EXECUTION_LEDGER.md` §3「五开源项目过夜评估」（台账已冻结归档）。更早的三项评估（yt-dlp /
 > MediaCrawler / remotion-skills）先于本目录存在，记录在账本 media_download 节。
 
 | 文档 | 对象 | 一句话结论（2026-07-18） |

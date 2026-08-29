@@ -133,7 +133,7 @@ history 本地全文扫，按 last_updated 缓存失效；后端搜索端点做�
 `./install-macos.sh`（Release → /Applications）。
 
 第十批（v0.10.0，重整 Phase 2 native——换事件账本脊柱，见根 PROTOCOL.md /
-REARCHITECTURE.md）：**AgentStore 重写为归约器投影**（`Store/TurnReducer.swift`
+docs/history/REARCHITECTURE.md，后者已归档）：**AgentStore 重写为归约器投影**（`Store/TurnReducer.swift`
 实现协议 §5，与 web 端共享 `protocol/fixtures/` 同一批夹具，
 `Tests/run_reducer_fixtures.sh` 回放全绿——两端行为一致性的可执行标准）；
 发送/审批/恢复改 **202 受理即返**（`/turns` `/turns/approval` `/turns/resume`），

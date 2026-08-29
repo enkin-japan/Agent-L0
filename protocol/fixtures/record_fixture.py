@@ -27,7 +27,7 @@
  2. `cd frontend && EMIT_FIXTURE_EXPECTED=<name> npm test -- turn-reducer`
     → 生成 `<name>.expected.json` 并**必红**(确认收据);人工审它是「应该」的终态;
  3. 双端回放全绿(web + `apple-app/Tests/run_reducer_fixtures.sh`)+ 登记 README 表格
-    + 写 `<name>.md` 场景说明 + `./devctl.sh doc-numbers --write` 刷新夹具计数,才算入库。
+    + 写 `<name>.md` 场景说明,才算入库。(doc-numbers 门已于 2026-08-29 退役,不再刷计数。)
 
 鉴权:AGENT_API_KEY 环境变量,只进请求头;**非回环 --base 不附密钥**（明文外发面),
 且不跟随任何重定向（30x 会把 Bearer 带去别的主机）。纯 stdlib。

@@ -97,35 +97,33 @@ def _check_was_called(tmp_path):
     return (tmp_path / ".devctl-calls").exists()
 
 
-def test_docs_only_diff_still_runs_the_docs_gate(tmp_path):
-    """★ 文档-only **不是**「什么都不用查」：`docs` 门守的那张「当前规模」表就住在
-    `EXECUTION_LEDGER.md` 里，本身也是个 `.md`。整体跳过的话，**手改那张表恰好是唯一
-    保证不被拦下的改法**（首审 Critical 3）。"""
+def test_docs_only_diff_is_waved_through_without_running_any_gate(tmp_path):
+    """文档-only 直接放行、一门都不跑。曾经的语义是「只跑 docs 门」——那道门守的
+    规模表住在 `EXECUTION_LEDGER.md` 里（首审 Critical 3）；2026-08-29 台账冻结
+    归档、docs 门退役后，文档改动不再有守卫对象，快路径由「只跑 docs 门」变为放行。"""
     hook = _git_repo(tmp_path)
-    _stage(tmp_path, "EXECUTION_LEDGER.md", "docs/notes.md")
+    _stage(tmp_path, "docs/notes.md", "README.md")
     r = _run_hook(tmp_path, hook)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert _check_was_called(tmp_path), "文档-only 也必须跑 docs 门"
-    assert "--only docs" in (tmp_path / ".devctl-calls").read_text(encoding="utf-8")
+    assert not _check_was_called(tmp_path), "文档-only 不该再起任何门"
 
 
-def test_docs_only_diff_does_not_run_the_heavy_gates(tmp_path):
-    """轻量路径的意义在于**只**跑 docs 门：改一行文档不该等 50 秒。"""
+def test_skill_md_is_functional_content_not_documentation(tmp_path):
+    """★ `skills/*.md` 是运行时剧本（skill_registry 启动即解析 frontmatter，坏了会炸），
+    不是文档。docs 门退役后文档-only 快路径变成零门放行，若剧本也被当文档放行，
+    改坏一份剧本会绿灯入库、启动时才炸。故 skills/ 下的 .md 必须走全门。"""
     hook = _git_repo(tmp_path)
-    _stage(tmp_path, "docs/notes.md")
-    _run_hook(tmp_path, hook)
-    calls = (tmp_path / ".devctl-calls").read_text(encoding="utf-8")
-    assert calls.count("STUB-DEVCTL-CALLED") == 1, calls
-    assert "--only docs" in calls
+    _stage(tmp_path, "skills/broken-playbook.md")
+    r = _run_hook(tmp_path, hook)
+    assert _check_was_called(tmp_path), r.stdout + r.stderr
 
 
-def test_a_broken_scale_table_blocks_a_docs_only_commit(tmp_path):
-    """★ 这条是 Critical 3 的正面证明：手改规模表时 docs 门要真的拦下提交。"""
+def test_backend_skills_md_is_also_not_whitelisted(tmp_path):
+    """用户自建剧本目录 backend/skills/ 同理。"""
     hook = _git_repo(tmp_path)
-    _stage(tmp_path, "EXECUTION_LEDGER.md")
-    r = _run_hook(tmp_path, hook, check_rc=3)
-    assert r.returncode == 3, r.stdout + r.stderr
-    assert "--write" in r.stderr
+    _stage(tmp_path, "backend/skills/user-playbook.md")
+    r = _run_hook(tmp_path, hook)
+    assert _check_was_called(tmp_path), r.stdout + r.stderr
 
 
 def test_benchmarks_data_files_take_the_light_path(tmp_path):
@@ -133,7 +131,7 @@ def test_benchmarks_data_files_take_the_light_path(tmp_path):
     _stage(tmp_path, "benchmarks/data/soak/req.jsonl", "benchmarks/data/soak/summary.json")
     r = _run_hook(tmp_path, hook)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "--only docs" in (tmp_path / ".devctl-calls").read_text(encoding="utf-8")
+    assert not _check_was_called(tmp_path)
 
 
 def test_a_script_inside_benchmarks_data_is_not_whitelisted(tmp_path):
@@ -149,7 +147,7 @@ def test_a_script_inside_benchmarks_data_is_not_whitelisted(tmp_path):
 def test_one_code_file_among_docs_still_runs_the_gates(tmp_path):
     """★ 白名单必须是「全部命中才跳」，不是「有命中就跳」。"""
     hook = _git_repo(tmp_path)
-    _stage(tmp_path, "EXECUTION_LEDGER.md", "backend/framework/thing.py")
+    _stage(tmp_path, "README.md", "backend/framework/thing.py")
     r = _run_hook(tmp_path, hook)
     assert _check_was_called(tmp_path), r.stdout + r.stderr
     assert r.returncode == 0

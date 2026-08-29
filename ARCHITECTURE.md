@@ -9,7 +9,7 @@
 > 编排"先记账后分发"，客户端是账本事件的瘦渲染器（web + 原生 app 共享
 > `protocol/fixtures/` 行为夹具）。**架构原则与开发铁律见 `CHARTER.md`**；
 > 协议冻结见 `PROTOCOL.md`，蓝图与踩坑见
-> `REARCHITECTURE.md`。核心交互面：`POST /turns`(202 受理即返) +
+> `docs/history/REARCHITECTURE.md`（已归档）。核心交互面：`POST /turns`(202 受理即返) +
 > `GET /chat/{sid}/events`(附着流,断线任意重连重放) + `GET /turn`(可恢复状态) +
 > `GET /events`(全局任务 feed)。旧 SSE/阻塞端点已退役（`POST /chat` 阻塞版留作
 > App Intents 便捷入口）。

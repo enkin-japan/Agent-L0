@@ -8,7 +8,9 @@
 # .git/hooks 不受版本控制——正身放那里就等于「新克隆天生没有钩子」。
 #
 # 白名单纪律：**只有**当本次暂存的每一个路径都是 `.md`、或 `benchmarks/data/` 下的
-# **数据扩展名**时，才走轻量路径（只跑 docs 门，不跑 backend/web/apple 三门）。
+# **数据扩展名**时，才走轻量路径（直接放行，不跑 backend/web/apple 三门）。
+# （2026-08-29 前轻量路径是「只跑 docs 门」；docs 门随台账冻结归档退役后，
+# 文档-only 不再有任何门可守——那道门守的规模表已随台账一起冻结成历史档案。）
 # 判不出来的路径（含引号转义的非 ASCII 文件名）一律落到「跑全部门」那一边。
 # ⚠️ 白名单一度写成整个 `benchmarks/data/*` 并注明「原始数据，无可执行内容」——
 # 而该目录下**实际躺着** `mtp-t4-divergence/t4_divergence_probe.py` 与 `t4_verdict.py`
@@ -47,6 +49,9 @@ need_check=0
 while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in
+        # 剧本不是文档：skills/*.md 是运行时内容（skill_registry 启动即解析 frontmatter，
+        # 坏 frontmatter 会炸后端），必须走全门。此分支须排在 *.md 通配之前。
+        skills/*.md|backend/skills/*.md) need_check=1; break ;;
         *.md) ;;                                        # 文档
         # 跑批档案：只认数据扩展名。该目录下有真 .py 脚本，整目录放行会漏门。
         benchmarks/data/*.jsonl|benchmarks/data/*.json|benchmarks/data/*.csv) ;;
@@ -57,20 +62,11 @@ done <<EOF
 $files
 EOF
 
-# ⚠️ 文档-only **不是**「什么都不用查」：`docs` 门守的那张「当前规模」表就住在
-# `EXECUTION_LEDGER.md` 里，也是个 `.md`。整体跳过的话，**手改那张表恰好是唯一
-# 保证不被拦下的改法**——而台账里就写着「别手改本表」（首审 Critical 3）。
-# 故文档-only 走「只跑 docs 门」（约 3s），而不是全跳。
+# 文档-only 放行：曾经「不是什么都不用查」——docs 门守的规模表本身是个 `.md`。
+# 2026-08-29 台账冻结归档、docs 门退役后，这个理由消失了：文档改动不再有守卫对象。
 if [ "$need_check" -eq 0 ]; then
-    echo "[pre-commit] 本次只动文档/档案 → 只跑 docs 门（规模表守在 .md 里，不能整体跳过）"
-    "$ROOT/devctl.sh" check --only docs
-    rc=$?
-    if [ "$rc" -ne 0 ]; then
-        echo "" >&2
-        echo "[pre-commit] docs 门没过（rc=${rc}）→ 提交已中止。" >&2
-        echo "             ./devctl.sh doc-numbers --write 可就地刷新台账 §2 的规模表。" >&2
-    fi
-    exit "$rc"
+    echo "[pre-commit] 本次只动文档/档案 → 放行（docs 门已随台账冻结退役，2026-08-29）"
+    exit 0
 fi
 
 "$ROOT/devctl.sh" check

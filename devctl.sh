@@ -443,15 +443,18 @@ do_logs() {
 # 第一版**刻意不加任何新校验器**，只做聚合与退出码合并。加校验器是另一件事，混在
 # 一起会让这条也变成「写下来了但没人跑」。
 # =======================================================
-CHECK_GATES="backend web apple docs"
+# 曾有第四道门 docs（doc-numbers 防漂移，2026-08-18 并入）：2026-08-29 随台账冻结
+# 归档一起退役——它守的是活跃开发期的文档数字漂移，冻结档案无漂移可防。
+# 脚本与测试存档于 docs/history/tools/；复役步骤见该台账头部冻结注记。
+CHECK_GATES="backend web apple"
 
 # ---- 门的子进程不继承密钥（首审 #14）----
 # 把门接到提交路径上 = 每次 `git commit` 都会把 `.env.local` 里的东西经本脚本顶部的
 # `set -a` 交给 pytest / npm / xcrun 的子进程；`npm run test` 还会连带执行
 # node_modules 带来的任何 lifecycle 脚本。实读 `.env.local` 的键名：五把 Bearer 钥匙
 # （AGENT / INFER / RAG / RAG_COMPUTE / CLOUD_OPENAI）+ 两个 App Store Connect 标识。
-# 四条门**一把都不需要**（backend 金测试是 FakeEngine、前端是夹具回放、apple 是 Swift
-# 编译、docs 是纯 stdlib + 一次 pytest 收集），故在门的子 shell 里逐个摘掉。这是本次改动**新引入**的暴露面——虽无已知泄漏
+# 三条门**一把都不需要**（backend 金测试是 FakeEngine、前端是夹具回放、apple 是 Swift
+# 编译），故在门的子 shell 里逐个摘掉。这是本次改动**新引入**的暴露面——虽无已知泄漏
 # 路径，但无声扩大暴露面本身就不该默认发生。
 # 键名从 env 文件现读（不另立一张会漂移的清单）；运行必需项走安全名单排除。
 CHECK_ENV_KEEP=" PATH HOME LANG LC_ALL SHELL TMPDIR TMP USER LOGNAME TERM PWD PYTHONUNBUFFERED DEVELOPER_DIR SDKROOT "
@@ -548,33 +551,6 @@ check_gate_apple() {
     rc=$?
     [ "$rc" -eq 0 ] && return 0
     return 3
-}
-
-# 第四道门：文档规模数字 vs 仓库实际。纯 stdlib + 一次 pytest --collect-only，
-# 零 GPU、约 4s。它与前三门共用同一套三值码，故直接透传。
-check_gate_docs() {
-    # ⚠️ 与另外三门一样必须摘密钥，而且这一门更要紧：它会起
-    # `pytest tests --collect-only`，那等于把全仓每个 conftest 与测试模块在**提交时刻**
-    # 带着真密钥 import 一遍。首审 Critical 1：本门原先裸调 `do_doc_numbers`，把
-    # 顶部 `set -a` 导出的五把钥匙 + 两个 ASC 标识整份交了下去，等于把上一波刚立的
-    # 隔离一笔勾销。
-    #
-    # rc=1（锚点失配/venv 缺失/收集不完整）时**要把脚本自己的输出放出来**——那正是
-    # 操作者最需要看细节的情形。rc=3 只报结论即可，细节让人自己跑 doc-numbers 看
-    # （首审 #15）。
-    local rc out
-    out="$( ( check_drop_secrets; do_doc_numbers ) 2>&1 )"
-    rc=$?
-    case "$rc" in
-        0) return 0 ;;
-        3) fail "docs 门不过：文档规模数字与仓库实际不符"
-           fail "  看 diff：  ./devctl.sh doc-numbers"
-           fail "  就地刷新：./devctl.sh doc-numbers --write（仅数字；§D 结构病须人修）"
-           return 3 ;;
-        *) fail "docs 门跑不起来（doc-numbers rc=${rc}）——这不是「过」"
-           printf '%s\n' "$out" >&2
-           return 1 ;;
-    esac
 }
 
 check_usage() {
@@ -927,49 +903,6 @@ do_preflight() {
     return "$rc"
 }
 
-# ---- doc-numbers：文档规模数字的派生与校验（波 A3）----
-# 退出码与 check 同一套三值纪律（0=一致 / 3=有漂移 / 2=用法错 / 1=跑不起来）。
-# **已并入 `check` 的第四道门**（2026-08-18）：此前不挂，是因为打点宿主还是
-# `CHARTER.md`、而它三处确有漂移又需用户显式同意才能改——挂上去就是一道天天红的门，
-# 而天天红的门最终一定被删掉。用户拍板把数字整个挪进台账 §2 后漂移归零、宿主也可写，
-# 前提消失，故并入。
-do_doc_numbers() {
-    local py="$BACKEND_DIR/.venv/bin/python" script="$ROOT/scripts/doc_numbers.py" rc a
-    # ⚠️ 帮助必须在这里就地拦下，**不能透传给 argparse**：argparse 打完 --help 会
-    # exit 0，而下面的 case 会把这个 0 翻译成「doc-numbers 一致」——一次什么都没核对
-    # 的绿灯（首审 Critical 1，实测复现）。这正是本波要消灭的那类失效，出现在本波
-    # 自己新写的代码里。
-    for a in "$@"; do
-        case "$a" in
-            --help) echo "用法: $0 doc-numbers [--check | --write]"
-                    echo "      比对台账 §2「当前规模」表与仓库实际值（宪章只留指针，不记数字）。"
-                    echo "      --check  只校验（默认）"
-                    echo "      --write  就地把漂移的数字刷成实际值；**只改数字，不动口径说明**；"
-                    echo "               任一项跑不起来时一行都不改。改完请复跑 --check 确认。"
-                    echo "      退出码: 0=一致 / 3=有漂移 / 2=用法错 / 1=跑不起来（含锚点失配）"
-                    return 0 ;;
-            -h) fail "doc-numbers: 本脚本里 -h 表 host 不表 help；要帮助请用 --help"; return 2 ;;
-        esac
-    done
-    # 前置检查排在帮助**之后**：`--help` 不该因为下游脚本缺失就不给（那会在最需要
-    # 看用法的时候闭嘴），但真要跑的时候仍然要先拦。
-    [ -f "$script" ] || { fail "doc-numbers 跑不起来：找不到 ${script}"; return 1; }
-    # 甲类是纯 stdlib、任何 python3 都能算；**乙类（金测试项数）另说**——脚本内部固定
-    # 去调 `backend/.venv/bin/python -m pytest --collect-only`，与这里用哪个解释器无关。
-    # 所以这条回落只救得了甲类，乙类照样会是 unknown（原注释说反了，首审 #6）。
-    [ -x "$py" ] || py="$(command -v python3 2>/dev/null)"
-    [ -n "$py" ] && [ -x "$py" ] || { fail "doc-numbers 跑不起来：找不到可用的 python3"; return 1; }
-    "$py" "$script" "$@"
-    rc=$?
-    case "$rc" in
-        0) info "doc-numbers 一致（rc=0）" ;;
-        3) fail "doc-numbers 有漂移（rc=3）" ;;
-        2) fail "doc-numbers 用法错（rc=2）" ;;
-        *) fail "doc-numbers 跑不起来（rc=${rc}）——这不是「一致」" ;;
-    esac
-    return "$rc"
-}
-
 # ---- git 钩子安装：把 check 接到提交路径上 ----
 # 钩子正文入库在 scripts/git-hooks/pre-commit（.git/hooks 不受版本控制，新克隆天生
 # 没有钩子——所以正身必须入库）。.git/hooks/pre-commit 只放一个三行 shim。
@@ -1313,7 +1246,6 @@ case "$CMD" in
     logs)   do_logs "$TARGET" ;;
     check)  do_check ${RAW_ARGS[@]+"${RAW_ARGS[@]}"}; exit $? ;;
     eval-rag) do_eval_rag ${RAW_ARGS[@]+"${RAW_ARGS[@]}"}; exit $? ;;
-    doc-numbers) do_doc_numbers ${RAW_ARGS[@]+"${RAW_ARGS[@]}"}; exit $? ;;
     preflight) do_preflight ${RAW_ARGS[@]+"${RAW_ARGS[@]}"}; exit $? ;;
     install-hooks) install_git_hooks; exit $? ;;
     *)
@@ -1326,12 +1258,11 @@ case "$CMD" in
         echo "      $0 start|stop|restart -p edge [-h <算力端IP>]   # 工作端：RAG 数据面(若本机)+backend+前端"
         echo "      $0 start|stop|restart -p gpu  [-h <本机IP>]     # 算力端：inference-server + RAG 计算面/融合RAG"
         echo "      （-p = --profile；-h/--host 一次落盘 .env.local 两键 INFER_REMOTE_HOST/RAG_COMPUTE_HOST，后续免传）"
-        echo "      $0 check [--only <门>] [--skip <门>]  # 跑全部验证物（backend/web/apple/docs 四门）"
+        echo "      $0 check [--only <门>] [--skip <门>]  # 跑全部验证物（backend/web/apple 三门）"
         echo "                                                 #   退出码 0=过 3=不过 2=用法错 1=跑不起来（缺前置不会自动跳过）"
         echo "      $0 eval-rag [...]                          # RAG 检索棘轮（占 GPU 数分钟，故不进 pre-commit）"
         echo "                                                 #   ⚠️ 任何检索侧改动后必须手动跑它；退出码原样透传"
         echo "      $0 preflight                               # 开工事实包 JSON（委托时整段粘贴；0=可开工 3=有阻断）"
-        echo "      $0 doc-numbers [--check|--write]           # 台账 §2 规模表 vs 仓库实际（= check 的第四道门 docs）"
         echo "      $0 install-hooks                           # 装 .git/hooks/pre-commit（三行 shim，转调入库的 scripts/git-hooks/pre-commit）"
         echo "      $0 status"
         echo "      $0 logs [rag|rag-compute|searx|infer|backend|front]"

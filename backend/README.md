@@ -4,7 +4,7 @@
 
 ## 特性
 
-- **纯本地推理（后端可插拔）**：推理面收敛在 `InferenceBackend` 协议（`core/backend_protocol.py`）后，编排/记忆/工具一律不认识 MLX。`inference.mode` 决定承载——`inprocess` 用 `backends/mlx/` 在本进程加载多模态模型（默认 `mlx-community/gemma-4-e4b-it-8bit`，文本 / 图像原生输入），`remote` 用 `backends/remote/` 把生成托给另一台机器的 inference-server（同一协议两个实现，见根 [HETERO_COMPUTE.md](../HETERO_COMPUTE.md)）。无论哪种，数据都不出自己的机器
+- **纯本地推理（后端可插拔）**：推理面收敛在 `InferenceBackend` 协议（`core/backend_protocol.py`）后，编排/记忆/工具一律不认识 MLX。`inference.mode` 决定承载——`inprocess` 用 `backends/mlx/` 在本进程加载多模态模型（默认 `mlx-community/gemma-4-e4b-it-8bit`，文本 / 图像原生输入），`remote` 用 `backends/remote/` 把生成托给另一台机器的 inference-server（同一协议两个实现，见已归档的 [docs/history/HETERO_COMPUTE.md](../docs/history/HETERO_COMPUTE.md)）。无论哪种，数据都不出自己的机器
 - **摄入解析层（多模态分路）**：文本 + 图像原生直喂模型；其余模态在进模型前的 worker 之外急解析——音频经 mlx-whisper 转写、PDF/办公文档折成带 provenance 标记的文本、扫描型 PDF 渲染成图走原生视觉、代码/大文件懒登记（只给路径不倾倒正文）；解析结果烘进历史日志、重放不重解析；模型可用 `file_extract` 逃生舱按 path 回源取精确内容（PDF 某页 / 音频某时段 / 代码某行区间）
 - **编排循环（多步任务 Agent）**：护栏是代码、计划是数据——模型通过结构化元工具（`update_plan` / `complete_step`）制定并推进多步计划，确定性护栏管预算（单步自纠上限 / 总迭代熔断 / 重规划上限）、失败路由（重试 / 改计划 / 降级 / 问用户兜底）与死循环拦截（同名同参调用直接打回）；任务可跨轮存续并随冷冻落盘恢复
 - **保持集中的推理约束**：借鉴大厂 agent loop，把「让模型专注当前步、少发散」的约束落到代码——**结构性提醒**（步骤边界 / 漂移 / 收尾验证的即时 nudge 贴到最新观察旁）、**完成门控**（计划未完成却提前吐文本收尾则有界推回，堵住「一段散文绕过整个计划」）、**输出截断恢复**（撞 `max_tokens` 先升档重试同一步、再多轮「从断点接着写」，消除半截答复→下轮道歉复述）；每处恢复分支均有界并带命名 transition，杜绝新增分支造成死循环；这些一次性护栏提醒走**可变尾部注入**（用完即弃、不进历史、不被摘要压缩污染）
@@ -14,7 +14,7 @@
 - **长期记忆沉淀**：被折叠掉的对话原文沉淀进 RAG `agent_memory` 类目（压缩的无损承重网，fail-open），日后经 `rag_search` 召回早前交互
 - **联网调查（受限沙箱知识扩充）**：主体只调 `web_research` 一个工具、只拿回交叉验证过的事实摘要；搜索/抓取/原始网页全封在受限沙箱内（复用主模型权重、KV 隔离，仅有 `web_search`/`open_pages` 两个脏工具，物理上不进主体上下文）——注入即便劫持沙箱也够不到任何危险工具（无行为劫持），最坏只能返回被污染文本，故摘要仍以「不可信资料」边界交回主体。反投毒落到代码：删隐藏元素/脚本/零宽字符、标记祈使注入、域名信誉分交叉质证、SSRF 硬拒内网/环回/云元数据。搜索层用本机 SearXNG（数据不出门），离线则该工具自动不注册。另有独立工具 `web_read`：只读给定 URL 并如实摘要（不能搜索），任务超出该页再改用 `web_research`
 - **进度可视与真取消**：`GET /task` 轮询计划推进进度；`POST /task/cancel` 在 token 级检查点停止生成并整轮回滚（非仅中断等待）
-- **事件账本（协议 v1，根 `PROTOCOL.md`）**：轮次是可寻址资源——`POST /turns` 受理即返（202），编排过程"先记账后分发"（`core/journal.py`：活跃轮内存环 + journal.jsonl 里程碑落盘），`GET /events?after=seq` 断线任意重连、重放后续播，`GET /turn` 即查进行中轮次的完整可恢复状态（含待审批工具）；轮次生命周期唯一属主为 `core/turn_runner.py`，旧 SSE/阻塞对话端点全部退化为其薄适配器（旧事件契约兼容至 Phase 4，蓝图见根 `REARCHITECTURE.md`）
+- **事件账本（协议 v1，根 `PROTOCOL.md`）**：轮次是可寻址资源——`POST /turns` 受理即返（202），编排过程"先记账后分发"（`core/journal.py`：活跃轮内存环 + journal.jsonl 里程碑落盘），`GET /events?after=seq` 断线任意重连、重放后续播，`GET /turn` 即查进行中轮次的完整可恢复状态（含待审批工具）；轮次生命周期唯一属主为 `core/turn_runner.py`，旧 SSE/阻塞对话端点全部退化为其薄适配器（旧事件契约兼容至 Phase 4，蓝图见已归档的 `docs/history/REARCHITECTURE.md`）
 - **MCP 工具插件**：扫描 `framework/mcp/tools/` 自动注册 `BaseTool` 子类；注册前探活，依赖服务不可用的工具自动舍弃
 - **桌面任务工具集**：三层递进——终端命令（`run_shell_command`，主力）→ AppleScript/JXA 应用级自动化（`run_applescript`）→ Accessibility GUI 操作兜底（读 UI 树 / 点击 / 键入 / 快捷键），配合按调用动态审批
 - **KV Cache 前缀复用**：多轮对话仅预填充新增 token，实测续轮 prefill 提速近 10 倍

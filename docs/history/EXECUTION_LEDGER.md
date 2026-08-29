@@ -1,5 +1,16 @@
 # 架构修正与原生收编 · 执行账本（EXECUTION_LEDGER）
 
+> **⚠ 已冻结（2026-08-29，用户拍板）**：开发主线收官，本账本连同
+> `EXECUTION_LEDGER_ARCHIVE.md` 迁入 `docs/history/` 作历史档案，不再打点；
+> doc-numbers 防漂移门同日退役（脚本与测试存档于 `docs/history/tools/`）。
+> §2「当前规模」表与各处数字为冻结时点值。若重启大规模开发：另起新账本，
+> 或解冻本文件。**复役步骤（缺一不可）**：①本文件迁回仓库根；
+> ②`docs/history/tools/doc_numbers.py` 迁回 `scripts/`、
+> `test_doc_numbers.py.frozen` 迁回 `backend/tests/test_doc_numbers.py`
+> （两者都用 `__file__` 推仓库根，留在档案位跑必错）；③恢复 devctl 第四道门
+> `docs`（CHECK_GATES、check_gate_docs、do_doc_numbers、doc-numbers 子命令）
+> 与 pre-commit 文档-only 快路径的「只跑 docs 门」语义——见本冻结 commit 的反向 diff。
+>
 > **这是什么**：`ROADMAP.md` 方向的**可执行落地步骤 + 进度表**。自包含、可再入——
 > 会话记录丢失或上下文压缩后，**只读本文即可接着干**。
 >

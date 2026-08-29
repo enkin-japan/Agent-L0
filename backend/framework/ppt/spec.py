@@ -117,7 +117,7 @@ def _chart_block(grid: Tuple[int, int, int, int], chart_spec: Dict, alt: str) ->
 
 def _image_block(grid: Tuple[int, int, int, int], prompt: str, alt: str) -> Dict:
     """image 块：本机阶段恒为占位（asset=None）；生产机文生图子 agent 依 visual_request
-    生成资产并回填 content.asset——接口契约见 docs/ppt-production-todo.md。"""
+    生成资产并回填 content.asset——接口契约见 docs/history/ppt-production-todo.md（仓库根，已归档）。"""
     return {"id": _bid(), "type": "image", "role": "body",
             "grid": {"col": grid[0], "row": grid[1], "colSpan": grid[2], "rowSpan": grid[3]},
             "content": {"asset": None, "alt": alt},

@@ -6,7 +6,7 @@
  · image → 【生产机接入点】本机阶段一律保持占位（content.asset=None，前端渲染
    风格化占位块）。文生图子 agent 上线后在 resolve_visuals 的 image 分支接入：
    依 visual_request.prompt 生成图片存 assets/、回填 content.asset、清 visual_request。
-   详见 docs/ppt-production-todo.md。
+   详见 docs/history/ppt-production-todo.md（仓库根，已归档）。
 
 本层由 deck_ops.set_slide 在写入前同步调用（chart 渲染 ~200ms，不值得异步化）。
 """

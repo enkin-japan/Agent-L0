@@ -31,8 +31,8 @@ web(vitest)与原生 app(XCTest)各自实现 `reduce(state, event)`,**读取同�
    注意:`JSON.stringify` 丢 undefined 键而 Swift 可能吐 null——step 3 若 Swift 红在
    「缺键」上,先怀疑这条序列化差异,别追错端。
 3. 不带环境变量重跑 web 回放 + `apple-app/Tests/run_reducer_fixtures.sh` 双端全绿,
-   **并且**:README 表格登记 + 写 `<name>.md` 场景说明 + `./devctl.sh doc-numbers
-   --write` 刷新夹具计数(漏了这步 docs 门当场红),才算入库。
+   **并且**:README 表格登记 + 写 `<name>.md` 场景说明,才算入库。
+   (2026-08-29 前此处还要 `doc-numbers --write` 刷新夹具计数——该门已随台账冻结退役。)
 
 历史注记:9 份既有 expected.json 已于 2026-08-28 统一走发射器重排版(逐文件深比对
 语义等值、双端回放绿)——此后任何 refresh 的 diff 都是纯语义的。
