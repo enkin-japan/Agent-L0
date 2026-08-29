@@ -21,7 +21,8 @@
   - `backend/framework/mcp/tools/api_tool_factory.py` — the secrets handling
     parts (`read_secret` / `write_secret` / `.secrets.env`, 0600 perms)
   - `config.yaml` (`bundle_id` is an Apple-registered APNs topic; must not change)
-- Governance documents: `CHARTER.md`, `EXECUTION_LEDGER.md`, `PROTOCOL.md`.
+- Governance documents: `CHARTER.md`, `PROTOCOL.md`, and the frozen
+  `docs/history/EXECUTION_LEDGER.md` (archived 2026-08-29; read-only).
   These carry decision history and discipline, not boilerplate; "documentation"
   in chore-worker's scope means code-adjacent docs, never these. (`CHARTER.md`
   additionally requires explicit user consent to change at all.)
@@ -138,9 +139,12 @@ test is evidence.
   loader-side fix in one test file does not generalize, so the clearing belongs
   in the ritual: `find . -name __pycache__ -type d -not -path "./.venv/*" -exec
   rm -rf {} +` before each mutant's test run.
-- Record the proof in that wave's `EXECUTION_LEDGER.md` entry (which mutants,
-  which tests went red). **There is no separate mutation ledger** — a second
-  place to keep the same numbers in sync is just a third source of drift.
+- Record the proof in the commit message of the change (which mutants, which
+  tests went red). Until 2026-08-29 the record went into that wave's
+  `EXECUTION_LEDGER.md` entry; the ledger is now frozen in `docs/history/`, and
+  the commit message is the successor record (user decision 2026-08-29).
+  **There is no separate mutation ledger** — a second place to keep the same
+  numbers in sync is just a third source of drift.
 
 ### Stage review — mandatory after every completed stage (user decision, 2026-08-16)
 - Trigger: a stage/station/wave has closed out — its commits are pushed and the
