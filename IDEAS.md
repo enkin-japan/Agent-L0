@@ -48,3 +48,16 @@
 场景 1 先做（缺口=TTS 端点+流式播放+口语档，全架构侧，16GB 可完整落地，符合 D1）；
 场景 2 做 iMessage MVP 验证语气渲染质量，LINE 生态死结不押注。
 LoRA 头实验属模型侧，可等生产设备。
+
+## 2. 个人加密资产观察系统（crypto-copilot，2026-08-29 评估后待定）
+
+- **是什么**：常驻数据 daemon（确定性采集/指标/阈值，零 LLM）+ 决策日志 + 事件唤醒
+  Agent 溯源 + 定时日报。方案本体 `crypto-copilot-plan.md` 与完整评估
+  `crypto-copilot-eval-20260829.md` 均 gitignored（含个人语境，不入库）。
+- **评估结论**：能装、贴合度高——日报走现成 schedule 子系统（近零开发）、事件唤醒走
+  现成 `POST /api/v1/chat/{sid}/turns`；真正要新建的只有 daemon 本身（独立进程独立
+  venv，零 GPU 零依赖污染）。
+- **捡起前必裁决两件**：①深夜推送政策（方案要 P0 穿透静默窗 vs notify.sh 23:00–06:00
+  拒发纪律，三选一见评估文档）；②查询面路线（推荐 skill+shell curl 零工具声明；方案
+  原设想的"外挂 MCP server"本架构无此机制，须改道）。
+- **捡起时先重验**：工具预算余量（`tool_token_audit.py` 实测）、端点行号、CCXT 限流。
