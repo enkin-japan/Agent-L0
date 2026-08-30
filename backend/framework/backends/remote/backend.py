@@ -38,6 +38,53 @@ _PERSIST_TIMEOUT = 30.0     # KV 落盘/恢复（服务端序列化百 MB 级文
 _RELEASE_TIMEOUT = 5.0      # 释放走事件循环线程（freeze 是同步路径），必须短；TTL 兜底
 
 
+def guard_model_identity(ident: dict, expected: dict, base_url: str) -> None:
+    """模型身份护栏（分离部署缺陷二）：服务端 /health 报的真身 vs 本侧期望的选型。
+
+    两侧的模型选择各自落地（算力端 .model-selection / 执行端 .model-selection 或
+    config 默认），没有比对时错开的症状是**分词器与方言驱动错权重静默出垃圾**——
+    比 401 难查十倍。范式同 RAG 档位护栏（rag_server._guard_or_stamp_store）：
+    配置性错误装配期响亮拒启，不留到首轮生成。判定序：
+      - service 报了别的名字 → 拒启（端口被外来程序占用；repo 恰好对上也不放行）；
+      - 服务端未报身份（旧版 server / 外来程序）→ 拒启（fail-closed：无法核对 =
+        不核对，护栏会被版本错峰静默架空）；
+      - repo 不符 → 拒启，指明两侧各自怎么改；
+      - revision 两侧都有且不符 → 拒启（同 repo 不同钉扎也是错峰）；单侧缺省不比
+        （服务端可能按注册表解析了默认 revision，而本侧未钉扎）；
+      - 全符 → 放行并打印核对结论。
+    expected 为空（无 "repo"）时整个跳过——直接构造/测试路径的既有行为不变。
+    ident 非 dict（外来 http 服务回 JSON 标量/数组）按「未报身份」处理，不许
+    AttributeError 把最需要可读性的报错糊成裸 traceback（首评 S3）。
+    """
+    if not (expected or {}).get("repo"):
+        return
+    if not isinstance(ident, dict):
+        ident = {}
+    svc = ident.get("service")
+    if svc and svc != "macagent-inference":
+        raise RuntimeError(
+            f"{base_url} 上不是 inference-server（service={svc!r}）：端口被外来程序占用。\n"
+            f"  检查算力端该端口上跑的是什么，或修正 config inference.remote 的 host/port。")
+    got_repo = ident.get("model_repo")
+    if not got_repo:
+        raise RuntimeError(
+            f"inference-server（{base_url}）未报模型身份，无法核对两侧选型：旧版 "
+            f"inference-server（算力端 git pull 后重启），或端口被外来程序占用。\n"
+            f"  护栏拒绝盲信本地选型继续启动（分离部署缺陷二：错开=静默出垃圾）。")
+    if got_repo != expected["repo"]:
+        raise RuntimeError(
+            f"模型档位错开：算力端在跑 {got_repo}，本侧选型是 {expected['repo']}。\n"
+            f"  两侧必须同档。dev 形态：任一侧 ./devctl.sh model 对齐；app 形态：本侧\n"
+            f"  改不了选型，唯一补救在算力端——把算力端换回 app 打包默认档再重启本 app。")
+    exp_rev, got_rev = expected.get("revision"), ident.get("model_revision")
+    if exp_rev and got_rev and exp_rev != got_rev:
+        raise RuntimeError(
+            f"模型 revision 错开（repo 同为 {got_repo}）：算力端 {got_rev}，本侧 {exp_rev}。\n"
+            f"  两侧 config.yaml model_registry 的钉扎不一致——先 git pull 对齐再启动。")
+    print(f"[RemoteBackend] 模型身份核对通过：{got_repo}"
+          f"（revision={got_rev or '未钉扎'}，capabilities={ident.get('capabilities')}）")
+
+
 class _ProcessorShim:
     """把裸 tokenizer 包成引擎期望的 processor 形状（.tokenizer 属性）。
 
@@ -88,6 +135,16 @@ class RemoteBackend:
                 f"inference-server 不可达（{backend.base_url}）：{e}\n"
                 f"  请先启动推理服务（inference/server.py）或把 config inference.mode 改回 inprocess"
             ) from e
+        # 模型身份护栏（分离部署缺陷二）：期望身份由装配方注入 cfg.expected_model
+        # （app.py 主端点 / engine_pool 专科端点），服务端真身取自刚拿到的 /health。
+        # 注意放在可达性 try 之外：档位错开是配置性错误，不得被包装成「不可达」。
+        expected = cfg.get("expected_model") or {}
+        if expected.get("repo"):
+            try:
+                ident = r.json()
+            except ValueError:
+                ident = {}
+            guard_model_identity(ident, expected, backend.base_url)
         print(f"[RemoteBackend] 已连接 inference-server: {backend.base_url}")
         return backend
 

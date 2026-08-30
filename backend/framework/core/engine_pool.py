@@ -56,7 +56,12 @@ class EnginePool:
             print(f"🔀 [EnginePool] 装配专科端点 {name!r}: "
                   f"{str(ep['repo']).split('/')[-1]} @ {ep['host']}:{ep['port']}")
             kv = {**cfg, "remote": {**(cfg.get("remote") or {}),
-                                    "host": ep["host"], "port": ep["port"]}}
+                                    "host": ep["host"], "port": ep["port"]},
+                  # 模型身份护栏（分离部署缺陷二）：专科端点同样核对——那台实例的
+                  # /health 真身必须就是本端点声明的 repo。错开时装配响亮上抛；
+                  # 消费方按池纪律 fail-soft 回落 main（错开的专科端点缺席增强步骤，
+                  # 好过把请求打给错模型静默出垃圾）
+                  "expected_model": {"repo": ep["repo"], "revision": ep.get("revision")}}
             eng = await AgentEngine.create(model_path, kv_config=kv, model_options=entry,
                                            env=None, backend="remote", max_concurrency=1)
             self._engines[name] = eng

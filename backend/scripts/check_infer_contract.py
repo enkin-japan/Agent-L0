@@ -56,9 +56,14 @@ def main() -> int:
     base = a.base_url.rstrip("/")
     H = {"Authorization": f"Bearer {a.key}"} if a.key else {}
 
-    # ① 探活：200 即模型已加载（lifespan 完成才受理）
+    # ① 探活：200 即模型已加载（lifespan 完成才受理）；身份字段是执行端护栏的
+    #   契约面（分离部署缺陷二）——服务端哪天不再盖戳，这里要红，不能等执行端拒启才发现
     r = requests.get(f"{base}/health", timeout=30)
     check("health 200 即就绪", r.status_code == 200, f"got {r.status_code}")
+    h = r.json() if r.status_code == 200 else {}
+    check("health 报模型身份（service+model_repo）",
+          h.get("service") == "macagent-inference" and bool(h.get("model_repo")),
+          f"got {h!r}"[:120])
 
     # ② 鉴权：错钥/缺钥必须 401（服务未启鉴权时跳过）
     if a.key:

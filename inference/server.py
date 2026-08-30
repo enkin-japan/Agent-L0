@@ -54,7 +54,7 @@ from fastapi.responses import StreamingResponse
 
 from framework.utils.config_loader import load_config
 from framework.utils.model_selection import (
-    merge_entry_speculative, model_options, resolve_selected_model)
+    capabilities_of, merge_entry_speculative, model_options, resolve_selected_model)
 from framework.utils.path_resolver import resolve_model_path
 # 方言经注册面取（R0）：server 只要工具段标记（dialect.markers.stc/etc 喂约束采样），
 # 不 import 任何家族私有模块——直接 import gemma4 的 ResponseParser 就是把
@@ -152,6 +152,9 @@ class ServerState:
     executor: Optional[ThreadPoolExecutor] = None
     registry: Optional[CacheRegistry] = None
     model_name: str = ""                          # /v1/models 报告用
+    model_repo: str = ""                          # /health 模型身份（分离部署缺陷二：执行端
+    model_revision: Optional[str] = None          # RemoteBackend 装配期据此比对本地选型，
+    model_capabilities: list = []                 # 档位错开响亮拒启，不是首轮生成静默出垃圾）
     facade_cache = None                           # T6 门面专用缓存（不入注册表、不 TTL；
                                                   # 聊天客户端全量重发历史 → 前缀匹配白拿增量预填）
     facade_stream = None                          # 门面 prompt 字节流（上位解）：与 facade_cache
@@ -490,6 +493,11 @@ async def lifespan(app: FastAPI):
               f"（opt-in：features.batch_ok；交互恒优先）"
               + ("" if _mlx_n_env == "" else f"［env 覆盖 {_mlx_n_env}］"))
     S.model_name = str(model)
+    # /health 身份三件套（含 INFER_MODEL_REPO 覆盖后的定案值）：capabilities 走注册表
+    # 条目（表外/本地路径回落 {"text"}，与路由消费面同口径）；启动时定案，/health 零查询
+    S.model_repo = str(model) if model else ""   # 空选型不报 "None"：报空串=「未报身份」，
+    S.model_revision = revision                  # 执行端护栏照样 fail-closed（首评 nit）
+    S.model_capabilities = sorted(capabilities_of(model_options(model)))
     MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
     async def _sweep_loop():
@@ -530,8 +538,15 @@ app = FastAPI(title="Agent inference-server", version="1.0.0", lifespan=lifespan
 
 
 @app.get("/health")
-async def health():  # 免鉴权探活：lifespan 完成（模型已加载）后才受理 → 200 即就绪
-    return {"status": "ok"}
+async def health():
+    # 免鉴权探活：lifespan 完成（模型已加载）后才受理 → 200 即就绪。
+    # 身份字段（分离部署缺陷二，范式同 backend #85 /health 与 RAG 计算面 /health）：
+    # 执行端 RemoteBackend 装配期比对本地选型与这里的真身，档位错开当场拒启——
+    # 两侧 .model-selection 各管各的，没有发现机制时错开=分词器/方言驱动错权重静默出垃圾。
+    # service 供区分「端口被外来程序占用」与「旧版服务未报身份」。零 IO（字段启动期定案）。
+    return {"status": "ok", "service": "macagent-inference",
+            "model_repo": S.model_repo, "model_revision": S.model_revision,
+            "capabilities": S.model_capabilities}
 
 
 @app.get("/metrics", dependencies=[Depends(verify_api_key)])

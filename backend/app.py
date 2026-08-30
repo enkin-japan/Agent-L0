@@ -383,6 +383,14 @@ async def lifespan(app: FastAPI):
         if len(_eps) > 1:
             print("🔌 [System] 追加推理端点：" + ", ".join(
                 f"{e['name']}={e['repo'].split('/')[-1]}:{e['port']}" for e in _eps[1:]))
+    if _backend_name == "remote":
+        # 模型身份护栏（分离部署缺陷二）：把本侧选型注入装配 cfg，RemoteBackend 拿
+        # inference-server /health 报的真身来比——两侧 .model-selection 各管各的，
+        # 档位错开时在装配期响亮拒启，不是分词器驱动错权重静默出垃圾。键在
+        # _backend_name 而非 mode：inference.backend=remote（mode 仍 inprocess）
+        # 同样装 RemoteBackend，按 mode 注入会让那条路的护栏静默失效（首评 S1）。
+        _inference_cfg = {**_inference_cfg,
+                          "expected_model": {"repo": MODEL, "revision": MODEL_REVISION}}
     engine = await AgentEngine.create(
         model_path, kv_config=_inference_cfg,
         # 注册表条目整条透传（R0）：方言名与全部模型级开关（suppress_ghost_thinking 等）
