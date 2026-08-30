@@ -90,29 +90,38 @@ app sidecar 启动），计算面跑在算力端（`../devctl.sh start --profile
 ../devctl.sh rag-model   # 交互选择 → 写仓库根 .rag-tier-selection（gitignored）
 ```
 
-| 档位 | 模态 | 维度 | 状态 |
+| 档位 | 模态 | 维度 | 状态（2026-08-08 A100 五档选型后） |
 |---|---|---|---|
 | `text-0.6b` | text | 1024 | 阈值实测标定 ✓（历史默认，已换档） |
-| `text-4b` | text | 2560 | 阈值待标定 |
-| `text-8b` | text | 4096 | 生产档，需设备 A（≥40GB 或双卡分置） |
-| `vl-2b` | vl | 2048 | **默认**，加载契约已实测 ✓，阈值待标定 |
-| `vl-8b` | vl | 4096 | 多模态生产档，需设备 A |
+| `text-4b` | text | 2560 | 选型否决（检索 0.882 反低于 0.6b，尺寸无红利），阈值故不标定 |
+| `text-8b` | text | 4096 | 选型否决（0.912 仍低于 0.6b/vl-2b 的 0.941），阈值故不标定 |
+| `vl-2b` | vl | 2048 | **默认/生产档（用户定档）**，阈值 2026-08-09 A100 实测标定 ✓（rerank 0.5→0.3，multidoc 归零一并修） |
+| `vl-8b` | vl | 4096 | 选型否决（实验态检索塌方 0.588），阈值故不标定 |
 
 > `modality: vl` 档位当前仅「加载 + 文本 I/O」——**图像真入库是另一期（L2）**，尚未实施。
 > 各档的余弦分布不同，三个阈值（`insert_routing` / `query_routing` / `rerank_min_score`）
-> 须逐档标定；非 0.6B 档现为占位继承值。
+> 须逐档标定；已标定 = `text-0.6b` 与 `vl-2b`（数值与依据见 config.yaml 各档注记），
+> 否决档保留的是占位继承值（真要启用先重标定）。
 
 **换档纪律（关键不变量）**：向量库一旦入库，档位即固定。换档 = 开发者**主动重建**，
-运行中 / 用户侧绝不换档。库里盖着档位戳（`chroma_data/.tier_stamp.json`），启动时与运行时
-探测到的真实维度比对，不符即快速失败并提示先重建——而不是让新旧维度的向量在同一个库里混。
+运行中 / 用户侧绝不换档。库里盖着档位戳（`chroma_data/.tier_stamp.json`），启动（融合模式）或
+首次请求（拆分模式，护栏惰性触发）时与探测到的真实嵌入比对，不符即快速失败并提示先重建
+——而不是让新旧维度的向量在同一个库里混。
 
-标准换档流程（`scripts/reembed.py`，从 `storage/raw_files` 原文备份全量重灌）：
+**自动路径（推荐）**：`../devctl.sh rag-model` 在选择档位后自动比对库内档位戳
+（`chroma_data/.tier_stamp.json`，比对口径与运行护栏同源：embed_repo+embed_dim），
+不一致时经确认代跑下面整套流程，并带四道保险：FTS 索引连带清理、拆分模式先确认算力端已切
+同档、重灌前 /health 实测档位拦截（算力端没切档不会产生假成功）、重灌后复读档位戳断言。
+拿不到控制终端时只提示，绝不擅自动库。
+
+手动流程（自动化不可用 / 排障时；`scripts/reembed.py`，从 `storage/raw_files` 原文备份全量重灌）：
 
 ```bash
 ../devctl.sh rag-model                          # 1) 选新档位
 python scripts/reembed.py dump-categories       # 2) 旧服务还在跑时备份分类描述
 ../devctl.sh stop rag                           # 3)
 python scripts/reembed.py wipe                  # 4) 删 chroma_data（换新维度的空库）
+rm -f fts_index.sqlite3*                        # 4.5) FTS 索引连带清（fail-open，重灌时随 /insert 重建）
 ../devctl.sh start rag                          # 5) 新档位加载 + 空库盖新戳
 python scripts/reembed.py rebuild               # 6) 重建分类 + 全量重灌（--dry-run 可先看计划）
 ```

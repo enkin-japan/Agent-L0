@@ -15,7 +15,7 @@
 # 用法:
 #   ./devctl.sh setup                                # 首次部署: 建 venv + 装依赖 + npm install
 #   ./devctl.sh model                                # 从注册表选择启动模型（写 .model-selection）
-#   ./devctl.sh rag-model                            # 从 rag.tiers 选择 RAG 档位（写 .rag-tier-selection）
+#   ./devctl.sh rag-model                            # 从 rag.tiers 选择 RAG 档位（选后自动体检库档位戳，不一致可代跑重建）
 #   ./devctl.sh start|stop|restart [rag|searx|backend|front|all]   # 缺省 all
 #   ./devctl.sh start -p edge|gpu [-h <算力端IP/本机IP>]  # 分离部署（-h 一次落盘 .env.local 免重复输入）
 #   ./devctl.sh status
@@ -1007,8 +1007,9 @@ PY
 }
 
 # ---- RAG 档位选择：从 config.yaml rag.tiers 交互选择，写仓库根 .rag-tier-selection 指针 ----
-# 换档 = 选择，非手填（HETERO_COMPUTE B2a）。换档纪律：库一旦入库档位即固定，换到不同维度的
-# 新档须重建向量库（rag/scripts/reembed.py）。非 TTY（脚本化）只打印状态不阻塞。
+# 换档 = 选择，非手填（HETERO_COMPUTE B2a）。换档纪律：库一旦入库档位即固定，换嵌入模型须
+# 重建向量库——选择落盘后 rag_retier_check 自动体检档位戳，不一致可经确认代跑整套重建
+# （手动路径 rag/scripts/reembed.py 仍在，见其头注）。非 TTY（脚本化）只打印状态不阻塞。
 do_rag_model() {
     [ -x "$RAG_DIR/.venv/bin/python" ] || { fail "缺少 rag/.venv，请先运行: ./devctl.sh setup"; return 1; }
     MACAGENT_ROOT="$ROOT" "$RAG_DIR/.venv/bin/python" - <<'PY'
@@ -1063,10 +1064,185 @@ else:
         sys.exit(1)
     sel_file.write_text(json.dumps({"tier": entry["id"]}, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"已选择档位: {entry['id']}（{entry.get('embed_repo')} + {entry.get('rerank_repo')}）")
-print("⚠️ 换档纪律：库一旦入库档位即固定。换到不同维度的新档需重建向量库——")
-print("   见 rag/scripts/reembed.py（dump-categories → stop → wipe → start → rebuild）。")
-print("重启 rag 生效: ./devctl.sh restart rag（新模型将在启动时下载并加载）")
 PY
+    local rc=$?
+    [ "$rc" -eq 0 ] || return "$rc"
+    rag_retier_check
+}
+
+# ---- 换档体检：所选档位 vs 库内档位戳，不一致时（经确认）代跑整套重建 ----
+# 库的真相是 chroma_data/.tier_stamp.json（运行护栏据此快速失败）；比对口径与护栏同源：
+# **embed_repo + embed_dim**（rag_server._guard_or_stamp_store），不是档位名——改名不该
+# 触发毁灭性重建，同名换嵌入模型也不该被放过。每次 rag-model 都体检：此前换档没重建
+# 留下的病也会在这里被查出来。破坏性步骤的三道保险：交互确认（无控制终端绝不动库）、
+# 重灌前 /health 实测档位拦截（拆分模式算力端没切档=在这里停下，不产生假成功）、
+# 重灌后复读档位戳断言。
+rag_retier_check() {
+    local PY="$RAG_DIR/.venv/bin/python" REEMBED="$RAG_DIR/scripts/reembed.py"
+    local DATA_ROOT="${RAG_DATA_DIR:-$RAG_DIR}"   # reembed/rag_server 同一旋钮（B2c），不写死
+    local STAMP="$DATA_ROOT/chroma_data/.tier_stamp.json"
+    local SEL_FILE="$ROOT/.rag-tier-selection"
+
+    # 生效档位三元组（id/embed_repo/embed_dim）：指针 → config 默认；解析不出=老形态，不管
+    local new_tier new_repo new_dim
+    IFS='|' read -r new_tier new_repo new_dim <<EOF
+$(MACAGENT_ROOT="$ROOT" "$PY" - <<'PY' 2>/dev/null
+import json, os
+from pathlib import Path
+import yaml
+root = Path(os.environ["MACAGENT_ROOT"])
+rag = (yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8")) or {}).get("rag") or {}
+try:
+    sel = json.loads((root / ".rag-tier-selection").read_text(encoding="utf-8")).get("tier")
+except Exception:
+    sel = None
+tid = sel or rag.get("active_tier") or ""
+t = next((x for x in (rag.get("tiers") or []) if x.get("id") == tid), {})
+print(f"{tid}|{t.get('embed_repo','')}|{t.get('embed_dim','')}")
+PY
+)
+EOF
+    [ -n "$new_tier" ] && [ -n "$new_repo" ] || return 0
+
+    if [ ! -d "$DATA_ROOT/chroma_data" ]; then
+        info "向量库不存在——无需重建，下次 start rag 将按 ${new_tier} 建空库盖戳。"
+        return 0
+    fi
+    if [ ! -f "$STAMP" ]; then
+        # 有库无戳 = 前分层时代旧库：启动护栏会把旧向量误盖新戳（rag_server 注释里的已知洞），
+        # 绝不能当空库放行，也不敢自动清——来源要人认。
+        warn "chroma_data 在而档位戳缺失（前分层时代旧库？）——不动它。请人工确认来源后按"
+        warn "rag/scripts/reembed.py 头注手动重建（或确认库确属 ${new_tier} 后自行补戳）。"
+        return 1
+    fi
+    local stamp_tier stamp_repo stamp_dim
+    IFS='|' read -r stamp_tier stamp_repo stamp_dim <<EOF
+$("$PY" -c "import json,sys;d=json.load(open(sys.argv[1]));print(f\"{d.get('tier_id','')}|{d.get('embed_repo','')}|{d.get('embed_dim','')}\")" "$STAMP" 2>/dev/null)
+EOF
+    if [ -z "$stamp_tier" ] || [ -z "$stamp_repo" ]; then
+        warn "档位戳损坏（${STAMP} 读不出 tier_id/embed_repo）——不自动处理，见 reembed.py 头注。"
+        return 1
+    fi
+    if [ "$new_repo" = "$stamp_repo" ] && [ "$new_dim" = "$stamp_dim" ]; then
+        info "库内嵌入与所选一致（${stamp_tier} → ${new_tier}，${new_repo}），无需重建。重启生效: ./devctl.sh restart rag"
+        return 0
+    fi
+
+    warn "嵌入不一致：库内=${stamp_tier}（${stamp_repo}, dim=${stamp_dim}）≠ 所选=${new_tier}（${new_repo}, dim=${new_dim}）。"
+    warn "不重建的话 rag 会在启动/首次请求时被护栏拦下。"
+    # 交互确认走 /dev/tty；拿不到控制终端绝不动库（`[ -r /dev/tty ]` 判不住，必须实际试开）
+    if ! { : < /dev/tty; } 2>/dev/null; then
+        warn "无控制终端，不自动重建。手动流程见 rag/scripts/reembed.py 头注（或在终端重跑 ./devctl.sh rag-model）。"
+        return 0
+    fi
+    local ans
+    printf "自动重建向量库？将执行：备份分类 → stop → 清库(+FTS 索引) → start → 全量重灌原文 [y/N] " > /dev/tty
+    IFS= read -r ans < /dev/tty
+    [ "$ans" = "y" ] || [ "$ans" = "Y" ] || {
+        info "不重建（用户选择）。手动流程：reembed.py dump-categories → stop rag → wipe → start rag → rebuild"
+        return 0; }
+
+    # 拓扑三态（RAGC_HOST 由 lib_edge 按 env>config 算好）：空=融合（数据面进程内计算）；
+    # 回环=本机拆分（计算面也归本机 devctl 管，跟着起停）；远端=算力端在别的机器，须人确认已切档。
+    local ragc="${RAGC_HOST:-}" compute_local=0
+    case "$ragc" in
+        "" ) : ;;
+        127.0.0.1|localhost|::1) compute_local=1 ;;
+        *) printf "⚠️ 拆分模式（计算面在 %s）：算力端必须已切到 %s 并重启计算面，否则会在重灌前的档位校验被拦。已就绪？ [y/N] " "$ragc" "$new_tier" > /dev/tty
+           IFS= read -r ans < /dev/tty
+           [ "$ans" = "y" ] || [ "$ans" = "Y" ] || { info "不重建（用户选择）。先去算力端切档，再重跑 ./devctl.sh rag-model。"; return 0; } ;;
+    esac
+    # 单 GPU 纪律：融合/本机计算面要真加载嵌入+重排模型；推理服务在跑时不盲加载
+    if [ "$compute_local" -eq 1 ] || [ -z "$ragc" ]; then
+        if (exec 3<>"/dev/tcp/127.0.0.1/${INFER_PORT:-14161}") 2>/dev/null; then
+            exec 3>&- 3<&- || true
+            printf "⚠️ 本机推理服务（:%s）在跑，重建要加载 RAG 模型共用 GPU。继续？ [y/N] " "${INFER_PORT:-14161}" > /dev/tty
+            IFS= read -r ans < /dev/tty
+            [ "$ans" = "y" ] || [ "$ans" = "Y" ] || { info "不重建（用户选择）。停掉推理服务或错峰后再来。"; return 0; }
+        fi
+    fi
+    # 本机要跟着起停的目标集合
+    local SVC="rag"; [ "$compute_local" -eq 1 ] && SVC="rag rag-compute"
+
+    # 数据面健康探测（区分「不在线」与「在线但坏」——dump 失败不能一律当服务没起）
+    _rag_alive() {
+        MACAGENT_ROOT="$ROOT" "$PY" -c "
+import os, requests, yaml
+from pathlib import Path
+rag = (yaml.safe_load((Path(os.environ['MACAGENT_ROOT'])/'config.yaml').read_text(encoding='utf-8')) or {}).get('rag') or {}
+requests.get(f\"http://{rag['host']}:{rag['port']}/health\", timeout=3)" 2>/dev/null
+    }
+    # /health 实测生效档位（拆分模式=计算面真实身份；identity 惰性填充，短轮询几次）
+    _rag_live_tier() {
+        MACAGENT_ROOT="$ROOT" "$PY" -c "
+import os, time, requests, yaml
+from pathlib import Path
+rag = (yaml.safe_load((Path(os.environ['MACAGENT_ROOT'])/'config.yaml').read_text(encoding='utf-8')) or {}).get('rag') or {}
+url = f\"http://{rag['host']}:{rag['port']}/health\"
+for _ in range(10):
+    try:
+        t = (requests.get(url, timeout=3).json() or {}).get('tier')
+        if t: print(t); break
+    except Exception: pass
+    time.sleep(2)" 2>/dev/null
+    }
+
+    # ① 备份分类路由描述（只存 meta 库，wipe 会清掉）。须「与库同档」的服务在线才能读：
+    #    在线→直接备份（失败=真故障，响亮终止不动库）；不在线→临时按库内档位拉起，备份完复位。
+    info "① 备份分类路由描述…"
+    if _rag_alive; then
+        "$PY" "$REEMBED" dump-categories || {
+            fail "服务在线但备份失败（看上面报错：401 钥不符 / 服务端错误）——不动库，中止。"
+            return 1; }
+    else
+        # 指针状态留档：备份舞步结束后要恢复成「用户刚选完」的状态——有文件写回新档，
+        # 没文件（选 0 清除/新克隆）就保持没有，不许把指针无中生有钉死未来的 config 默认。
+        local had_sel=0; [ -f "$SEL_FILE" ] && had_sel=1
+        _restore_new_sel() {
+            if [ "$had_sel" -eq 1 ]; then
+                "$PY" -c "import json,sys;open(sys.argv[1],'w',encoding='utf-8').write(json.dumps({'tier':sys.argv[2]},ensure_ascii=False)+chr(10))" "$SEL_FILE" "$new_tier"
+            else
+                rm -f "$SEL_FILE"
+            fi
+        }
+        trap '_restore_new_sel; trap - INT TERM; warn "中断：指针已复位为所选档位，库未动。"; return 130' INT TERM
+        warn "服务不在线，临时按库内档位（${stamp_tier}）拉起做备份…"
+        "$PY" -c "import json,sys;open(sys.argv[1],'w',encoding='utf-8').write(json.dumps({'tier':sys.argv[2]},ensure_ascii=False)+chr(10))" "$SEL_FILE" "$stamp_tier"
+        if ! "$ROOT/devctl.sh" start $SVC || ! "$PY" "$REEMBED" dump-categories; then
+            "$ROOT/devctl.sh" stop $SVC >/dev/null 2>&1 || true
+            _restore_new_sel; trap - INT TERM
+            fail "临时拉起/备份失败——库未动，指针已复位为 ${new_tier}。按 reembed.py 头注手动处理。"
+            return 1
+        fi
+        "$ROOT/devctl.sh" stop $SVC
+        _restore_new_sel; trap - INT TERM
+    fi
+    info "② 停服务…";  "$ROOT/devctl.sh" stop $SVC
+    info "③ 清库 + FTS 索引…"
+    "$PY" "$REEMBED" wipe --yes || { fail "wipe 失败，中止。"; return 1; }
+    rm -f "$DATA_ROOT"/fts_index.sqlite3*   # 连 -wal/-shm 一起；fail-open 索引，重灌时随 /insert 重建（rag/README §核心检索）
+    info "④ 起服务（新档位首启会下载/加载模型）…"
+    "$ROOT/devctl.sh" start $SVC || {
+        fail "新档位未在时限内就绪。注意：超时≠死亡——大模型档可能仍在下载（./devctl.sh logs rag 看进度）；"
+        fail "库已清空，就绪后手动跑: $PY $REEMBED rebuild"
+        return 1; }
+    # 重灌前拦截：/health 实测档位必须等于所选（拆分模式算力端没切档在此停下，不产生假成功）
+    local live_tier; live_tier="$(_rag_live_tier)"
+    if [ "$live_tier" != "$new_tier" ]; then
+        fail "实测生效档位=${live_tier:-未知} ≠ 所选=${new_tier}（拆分模式算力端没切档？）——不重灌。"
+        fail "库已清空；对齐两侧档位后手动跑: $PY $REEMBED rebuild"
+        return 1
+    fi
+    info "⑤ 全量重灌原文备份…"
+    "$PY" "$REEMBED" rebuild || { fail "重灌失败——服务与空库在位，修复后重跑: $PY $REEMBED rebuild"; return 1; }
+    # 事后断言：库上的新戳必须是所选档（皮带+吊裤带）
+    local stamped; stamped="$("$PY" -c "import json,sys;print(json.load(open(sys.argv[1])).get('tier_id',''))" "$STAMP" 2>/dev/null)"
+    [ "$stamped" = "$new_tier" ] || { fail "重建后档位戳=${stamped:-无} ≠ ${new_tier}——结果不可信，按 reembed.py 头注排查。"; return 1; }
+    info "✅ 重灌请求已全部受理（${stamp_tier} → ${new_tier}）。"
+    warn "注意：入库是服务端异步切块（受理≠完成）——稍候片刻才可检索；若有失败只记在 rag 日志"
+    warn "（./devctl.sh logs rag），本流程看不见。阈值已实测标定的档位只有 text-0.6b 与 vl-2b"
+    warn "（依据见 config.yaml 各档注记），换到其他档检索异常先怀疑阈值。入库沉降后建议跑"
+    warn "./devctl.sh eval-rag 对比基线（占 GPU 数分钟，别与其他真模型任务并发）。"
 }
 
 # ---- 命令分发 ----
@@ -1253,7 +1429,7 @@ case "$CMD" in
         echo "      $0 keygen [--rotate] [--show]              # 生成/补全四把强随机 Bearer 密钥（写 .env.local，600）"
         echo "                                                 #   --rotate 强值也换新（轮换）；--show 打明文（默认只打指纹）"
         echo "      $0 model                                   # 从注册表选择启动模型（钉死 revision）"
-        echo "      $0 rag-model                                # 从 rag.tiers 选择 RAG 档位（写 .rag-tier-selection）"
+        echo "      $0 rag-model                                # 从 rag.tiers 选择 RAG 档位（选后自动体检库档位戳，不一致可代跑重建）"
         echo "      $0 start|stop|restart [rag|rag-compute|searx|infer|backend|front|all]"
         echo "      $0 start|stop|restart -p edge [-h <算力端IP>]   # 工作端：RAG 数据面(若本机)+backend+前端"
         echo "      $0 start|stop|restart -p gpu  [-h <本机IP>]     # 算力端：inference-server + RAG 计算面/融合RAG"

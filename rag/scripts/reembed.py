@@ -10,11 +10,12 @@
 unclassified_raw/*.txt 为未分类池。分类的**路由描述**只存在 meta 库里（会随重建被清），
 故重建前须先 dump-categories 备份描述。
 
-标准换档流程（devctl 管理服务生命周期）：
+标准换档流程（devctl 管理服务生命周期；`./devctl.sh rag-model` 选档后可经确认自动代跑全套）：
   1) ./devctl.sh rag-model                          # 选新档位（写 .rag-tier-selection）
   2) python rag/scripts/reembed.py dump-categories  # 旧服务在跑时备份分类描述
   3) ./devctl.sh stop rag
   4) python rag/scripts/reembed.py wipe             # 删 chroma_data（换新维度的空库）
+     rm -f rag/fts_index.sqlite3*                   #   FTS 索引连带清（fail-open，重灌自动重建）
   5) ./devctl.sh start rag                          # 新档位加载 + 空库盖新戳
   6) python rag/scripts/reembed.py rebuild          # 重建分类 + 全量重灌原文
   7) （§3.3 生产：新旧库并行查询对比 → 切流 → 旧库归档；本脚本只管重建）
