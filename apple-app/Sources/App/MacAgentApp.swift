@@ -1,4 +1,16 @@
 import SwiftUI
+#if os(macOS)
+import Sparkle
+#endif
+
+#if os(macOS)
+/// 应用内更新（Sparkle 2）：feed/公钥在 Info.plist（SUFeedURL/SUPublicEDKey），
+/// 更新包由 release-macos.sh 公证后连同 appcast 推到公共发布仓的滚动 release。
+/// 文件级单例：主窗口菜单与菜单栏常驻面板两个入口共用同一个 updater，
+/// 且保证 App 结构体重建时不会重复实例化（Sparkle 要求进程内唯一）。
+@MainActor let sparkleUpdater = SPUStandardUpdaterController(
+    startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+#endif
 
 #if os(macOS)
 /// app 收摊时收掉自己拉起的 sidecar（R5-4）——SwiftUI 生命周期没有 willTerminate 等价物。
@@ -11,7 +23,12 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     /// autostart 自守卫 sidecarEnabled：新用户引导未完成时它仍为 false（引导完成的
     /// 回调里才置 true 并触发），老用户迁移后按其原开关值决定启不启——此处一律安全。
     func applicationDidFinishLaunching(_ notification: Notification) {
-        Task { @MainActor in await Self.sidecar?.autostart() }
+        Task { @MainActor in
+            // Sparkle 惰性单例必须在启动期显式碰一次：只在菜单按钮闭包里引用的话，
+            // 用户不点它 updater 永不实例化，自动检查更新等于没开（首审 C4）。
+            _ = sparkleUpdater
+            await Self.sidecar?.autostart()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -114,6 +131,14 @@ struct MacAgentApp: App {
                 .frame(minWidth: store.showInspector ? 960 : 760, minHeight: 520)
                 #endif
         }
+        #if os(macOS)
+        .commands {
+            // 惯例位置：应用菜单「关于」之后
+            CommandGroup(after: .appInfo) {
+                Button(L("检查更新…")) { sparkleUpdater.checkForUpdates(nil) }
+            }
+        }
+        #endif
 
         #if os(macOS)
         // 菜单栏常驻：主窗口关掉后仍可看连接状态、一键回到对话；
@@ -170,6 +195,11 @@ struct MenuBarPanel: View {
                 activateMainWindow()
             }
             Divider()
+            // 菜单栏常驻面板也给一个入口：主窗口关掉时更新入口不消失
+            Button(L("检查更新…")) {
+                NSApp.activate(ignoringOtherApps: true)
+                sparkleUpdater.checkForUpdates(nil)
+            }
             Button(L("退出")) {
                 NSApp.terminate(nil)
             }

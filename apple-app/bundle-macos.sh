@@ -32,11 +32,17 @@ echo "== 装入执行层 =="
 # backend：只带代码与只读内容。数据目录（models/sessions/schedules/notes/日志）是
 # DATA_DIR 的事（D.16），dev 形态它们恰好躺在 backend/ 里——必须排掉，否则把
 # 开发机的会话史打进包里。__pycache__ 排掉：字节码在新位置首次 import 时重生成。
-rsync -a --delete \
-  --exclude='.venv' --exclude='__pycache__' --exclude='.pytest_cache' \
+# ⚠️ '.venv*' 必须带通配：曾写 '.venv' 漏掉 .venv-mlxsrc（477MB 开发 venv + 越界软链），
+#    公证 126 项全数拒收（2026-08-30 实测）。'*.log'/.DS_Store 同理是开发机残留，
+#    包是要公开分发的，多带一个字节都是无审查的暴露面。
+# --delete-excluded 不能省：光 --delete 会把「此前误打进包、如今已列入排除」的旧文件
+# 原样留在目的地（排除项不参与删除决策）——venv 首修后第二跑仍拒收即此坑实测。
+rsync -a --delete --delete-excluded \
+  --exclude='.venv*' --exclude='__pycache__' --exclude='.pytest_cache' \
   --exclude='tests' --exclude='benchmarks' --exclude='docs' \
   --exclude='models' --exclude='sessions' --exclude='schedules' --exclude='notes' \
-  --exclude='*.jsonl' --exclude='logs' --exclude='api_tools' --exclude='skills' \
+  --exclude='*.jsonl' --exclude='*.log' --exclude='.DS_Store' \
+  --exclude='logs' --exclude='api_tools' --exclude='skills' \
   "$ROOT/backend/" "$RES/backend/"
 # ⚠️ backend/api_tools 是 dev 形态的数据目录（UI 添加的声明 + .secrets.env 密钥文件），
 #    绝不进包——密钥红线；app 形态由 DATA_DIR（App Support）承接同名目录。
@@ -90,7 +96,30 @@ SIGN_ID="${SIGN_ID:-$(security find-identity -v -p codesigning 2>/dev/null \
     | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)}"
 if [ -n "$SIGN_ID" ]; then
   echo "   签名身份: $SIGN_ID"
-  codesign --force --timestamp -s "$SIGN_ID" "$APP"
+  # Sparkle 框架的嵌套件（XPC 服务/Autoupdate/Updater.app）由 xcodebuild 按 ad-hoc
+  # 签出，而公证要求**全部嵌套代码**都是 Developer ID + hardened runtime——由深到浅
+  # 定点重签（绝不 --deep，理由同上：Resources 里的运行时签名不能被覆盖）。
+  SPARKLE_FW="$APP/Contents/Frameworks/Sparkle.framework"
+  if [ -d "$SPARKLE_FW" ]; then
+    for nested in \
+      "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc" \
+      "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc" \
+      "$SPARKLE_FW/Versions/B/Autoupdate" \
+      "$SPARKLE_FW/Versions/B/Updater.app"; do
+      # 硬断言而非跳过：Sparkle 换版挪了路径时要当场红，不许静默漏签
+      # 让 ad-hoc 嵌套件走到苹果那边才被拒（首审 S5）。
+      [ -e "$nested" ] || { echo "❌ Sparkle 嵌套件不在预期路径：$nested（升级了 Sparkle？对照新版布局更新此清单）" >&2; exit 1; }
+      # 不继承 entitlements：Autoupdate 自带 org.sparkle-project 的
+      # application-identifier，换队签名后语义已错，Sparkle 官方重签指引也不保留。
+      codesign --force --timestamp --options runtime -s "$SIGN_ID" "$nested"
+    done
+    codesign --force --timestamp --options runtime -s "$SIGN_ID" "$SPARKLE_FW"
+  fi
+  # 主 app：hardened runtime 是公证硬性要求；entitlements **显式指定** xcodegen 产出的
+  # 文件（只含麦克风/定位），绝不用 --preserve-metadata=entitlements 继承——ad-hoc 构建
+  # 签名会注入 get-task-allow（调试键），继承下来公证必拒（首跑实测踩中）。
+  codesign --force --timestamp --options runtime \
+    --entitlements Generated/MacAgent-macOS.entitlements -s "$SIGN_ID" "$APP"
 else
   echo "   ⚠️ 未找到 Developer ID 证书，回落 ad-hoc（每次重装需重存密钥）"
   codesign --force -s - "$APP"

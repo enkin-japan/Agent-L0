@@ -390,6 +390,7 @@ enum L10n {
         "正在生成…": ("生成中…", "Generating…"),
         "打开 MacAgent": ("MacAgent を開く", "Open MacAgent"),
         "退出": ("終了", "Quit"),
+        "检查更新…": ("アップデートを確認…", "Check for Updates…"),
         // Store 消息
         "会话列表加载失败：": ("チャット一覧の読み込みに失敗：", "Failed to load chats: "),
         "历史加载失败：": ("履歴の読み込みに失敗：", "Failed to load history: "),

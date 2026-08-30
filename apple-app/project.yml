@@ -12,7 +12,7 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: "0.16.0"
-    CURRENT_PROJECT_VERSION: "69"
+    CURRENT_PROJECT_VERSION: "70"
     ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
 # 块级 Markdown 渲染（标题/列表/表格/引用等 GFM）——AttributedString 只认行内语法
@@ -20,6 +20,10 @@ packages:
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
     from: "2.4.0"
+  # 应用内更新（仅 macOS target 挂）：DMG 全量 + delta 补丁走公共发布仓的滚动 release
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: "2.9.6"
 
 targets:
   MacAgent-macOS:
@@ -28,16 +32,31 @@ targets:
     sources: [Sources, Assets.xcassets]
     dependencies:
       - package: MarkdownUI
+      - package: Sparkle
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.enkin.macagent.mac
         PRODUCT_NAME: MacAgent
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"
+    # 公证（notarization）要求主可执行开 hardened runtime；届时麦克风/定位要靠
+    # entitlements 显式放行（hardened runtime 下无 entitlement = 直接拒访问）。
+    # bundle-macos.sh 资源注入后的终签名显式引用 Generated/ 下的这份产物文件
+    # （不继承构建期签名——那里面有 ad-hoc 注入的 get-task-allow，公证必拒）。
+    entitlements:
+      path: Generated/MacAgent-macOS.entitlements
+      properties:
+        com.apple.security.device.audio-input: true
+        com.apple.security.personal-information.location: true
     info:
       path: Generated/Info-macOS.plist
       properties:
         CFBundleDisplayName: MacAgent
+        # Sparkle 更新源：公共发布仓的滚动 release（tag=updates），appcast+DMG+delta 同处
+        SUFeedURL: https://github.com/enkin-japan/Agent-L0-macOS-app/releases/download/updates/appcast.xml
+        # EdDSA 公钥（私钥在构建机钥匙串，永不入仓库）
+        SUPublicEDKey: rO8YyJT++AQ8w9YIhWVaY2YTlLvdSZIXCZrPeR1A2jI=
+        SUEnableAutomaticChecks: true
         # xcodegen 生成的 plist 默认写死 1.0/1，必须显式引用构建设置才能吃到顶部的版本号
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
