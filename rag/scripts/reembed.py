@@ -10,7 +10,7 @@
 unclassified_raw/*.txt 为未分类池。分类的**路由描述**只存在 meta 库里（会随重建被清），
 故重建前须先 dump-categories 备份描述。
 
-标准换档流程（devctl 管理服务生命周期；`./devctl.sh rag-model` 选档后可经确认自动代跑全套）：
+标准换档流程（devctl 管理服务生命周期；过渡期手动流程——正式口径为执行端 app/数据面驱动，见 rag/README §档位与换档）：
   1) ./devctl.sh rag-model                          # 选新档位（写 .rag-tier-selection）
   2) python rag/scripts/reembed.py dump-categories  # 旧服务在跑时备份分类描述
   3) ./devctl.sh stop rag
