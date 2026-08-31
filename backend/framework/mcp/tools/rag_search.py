@@ -187,6 +187,16 @@ class RAGSearchTool(BaseTool):
 
         except requests.ConnectionError as e:
             return f"System Error: Tool execution failed. Unable to connect to the RAG server (please check if {RAG_HOST}:{RAG_PORT} is running)."
+        except requests.HTTPError as e:
+            # 数据面降级存活态（build 71 复盘）：5xx 的 detail 正是可执行指引
+            # （「换档必须重建向量库…」）——透给模型/用户，别糊成裸 traceback
+            try:
+                detail = (e.response.json() or {}).get("detail") if e.response is not None else None
+            except ValueError:
+                detail = None
+            if detail:
+                return f"System Error: RAG 服务暂不可用——{detail}"
+            return f"System Error: RAG request failed: {e}"
         except Exception as e:
             import traceback
             return f"System Error: Tool execution exception occurred: {str(e)}\n{traceback.format_exc()}"

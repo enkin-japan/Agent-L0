@@ -39,6 +39,7 @@ def fake_embed(texts):
     return [[float(len(t) % 7 + i) for i in range(dim)] for t in texts]
 
 
+REAL_FETCH_LIVE = srv._retier_fetch_live_identity   # 事故格要用真函数，先留档再打桩
 srv._retier_fetch_live_identity = lambda: dict(LIVE["ident"])
 srv.RETIER._fetch_live_identity = srv._retier_fetch_live_identity
 srv.COMPUTE.embed = fake_embed
@@ -131,5 +132,64 @@ with srv.RETIER._state_lock:
     srv.RETIER._progress["state"] = "done"
 _ok = _aio.run(srv.upsert_category(srv.CategoryItem(db_name="thaw", description="解冻验证")))
 check("窗口关闭后写入恢复", "thaw" in str(_ok))
+
+print("== ⑤ 事故格（build 71 实机复盘）：启动时计算面可达且已换档 → 降级存活 ==")
+# 71 版实况：库戳 vl-2b 之外的旧档 + 算力端刚启动且可达 → _RemoteCompute.start()
+# 曾 SystemExit，把 retier 端点连同数据面一起带走——app 的重建引导路被它自己堵死。
+# 用真 _RemoteCompute + 假 /health 重现：现在必须活着降级，fatal 缓存、重建端点可用。
+IDENT_NEWER = {"tier": "text-8b", "embed_repo": "org/embed-8b", "embed_dim": 6,
+               "thresholds": {}}
+
+
+class _FakeHealthResp:
+    status_code = 200
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return dict(IDENT_NEWER)
+
+
+_orig_get = srv.requests.get
+srv.requests.get = lambda url, timeout=None, headers=None: _FakeHealthResp()
+try:
+    rc = srv._RemoteCompute("127.0.0.1", 14162)
+    try:
+        rc.start()                       # 库戳=embed-new(dim4) vs 活体=embed-8b(dim6)
+        alive = True
+    except SystemExit as e:
+        alive = False
+        print(f"  ✗ 数据面被拒启: {e}")
+    check("错档启动不拒启（降级存活）", alive)
+    check("配置性错误已缓存为 fatal", bool(rc._fatal) and "换档" in rc._fatal)
+    try:
+        rc.embed(["x"])
+        check("计算类请求被拦（500 指引）", False)
+    except srv.HTTPException as e:
+        check("计算类请求被拦（500 指引）", e.status_code == 500 and "重建" in str(e.detail))
+    # 承重版断言（复审 S4）：不走脚本桩——换回**真** _retier_fetch_live_identity
+    # （吃上面 patch 过的 requests.get），并把模块级 COMPUTE 置入真 fatal 态，
+    # 证明「fatal 缓存不影响 retier 检测（绕缓存活体）」这句注释本身。
+    _stub_fetch = srv.RETIER._fetch_live_identity
+    _orig_fatal = srv.COMPUTE._fatal
+    srv.RETIER._fetch_live_identity = REAL_FETCH_LIVE
+    srv._retier_ident_cache.update(at=0.0, ident=None, err=None)   # 清 3s TTL 缓存
+    srv.COMPUTE._fatal = "❌ RAG 换档护栏：…（事故格注入）"
+    try:
+        st_incident = srv.RETIER.status()
+        check("错档态下 retier 检测仍可用（真活体路+真 fatal）",
+              st_incident["needs_rebuild"] is True and st_incident["mismatch"] is True,
+              json.dumps(st_incident, ensure_ascii=False))
+        h = _aio.run(srv.health_check())
+        check("/health 如实报降级", h["status"] == "degraded"
+              and h["degraded_reason"] == "tier_mismatch_pending_rebuild", json.dumps(h))
+    finally:
+        srv.RETIER._fetch_live_identity = _stub_fetch
+        srv.COMPUTE._fatal = _orig_fatal
+        srv._retier_ident_cache.update(at=0.0, ident=None, err=None)
+finally:
+    srv.requests.get = _orig_get
+    LIVE["ident"] = IDENT_NEW
 
 print(f"== ALL WIRING CHECKS PASS ==（临时数据根 {TMP}，可手动删除）")

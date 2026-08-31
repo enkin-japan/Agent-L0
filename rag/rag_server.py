@@ -217,8 +217,19 @@ class _RemoteCompute:
                 logger.warning(f"⚠️ 计算面暂不可达（{self.base_url}）：数据面照常启动，"
                                f"检索/入库将在计算面上线后自愈。")
             else:
-                # 换档不符等配置性错误：启动时就知道的话立即拒启（与融合模式护栏同纪律）
-                raise SystemExit(str(e.detail))
+                # 换档不符等配置性错误：**降级存活，绝不拒启**（build 71 实机复盘
+                # 2026-08-31）。旧口径「与融合模式护栏同纪律立即拒启」在拆分模式是
+                # 自噬的：拒启把 /api/v1/maintenance/retier* 连同整个数据面一起带走，
+                # app 检测→弹窗→驱动重建的自救路被它自己堵死——用户看到的就是护栏
+                # 文案让他等 app 引导、而 app 永远等不到数据面。ensure_ready 已把
+                # fatal 缓存：计算类请求全部 500 并给指引，纯数据操作与重建端点照常。
+                # （融合模式 lifespan 的启动拒启维持：并非「重建端点没接」——接了——
+                # 而是单机形态换档必然伴随本进程重启且操作员在场，拒启即最响的提示，
+                # 不存在「app 在别处等引导」的自噬环。）
+                logger.error(str(e.detail))
+                logger.error("⚠️ 换档待重建：数据面降级启动——检索/入库暂拒绝服务，"
+                             "app 将提示重建（或 POST /api/v1/maintenance/retier/rebuild）；"
+                             "若选择改回原档位，改回后需重启数据面（fatal 缓存进程级）。")
 
     def ensure_ready(self) -> dict:
         with self._lock:
@@ -735,6 +746,11 @@ async def health_check():
     if SPLIT_MODE:
         payload["compute_url"] = COMPUTE.base_url
         payload["compute_reachable"] = COMPUTE.identity is not None
+        if getattr(COMPUTE, "_fatal", None):
+            # 降级存活态（build 71 复盘）：计算面**可达**但档位错开——不报 healthy
+            # 也不误报「计算面离线」，操作员/探针按这两个字段一眼定性
+            payload["status"] = "degraded"
+            payload["degraded_reason"] = "tier_mismatch_pending_rebuild"
     return payload
 
 @app.post("/tokenize", tags=["基础监控"])
