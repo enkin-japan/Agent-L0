@@ -42,6 +42,10 @@ inference:
   # （实测省 3-13s/次）。KV 是对话派生物——真两机拓扑下它落在算力机的盘上；介意
   # 会话残片留在设备 A 就设 false（解冻退基座克隆，只慢在摘要+尾部重预填）。
   kv_persist: true
+  # 跨机媒体中转 media/ 的 TTL（天，分离部署缺陷三）：算力端按**最后使用时间**自动
+  # 清扫闲置媒体（用到即续命；HEAD /v1/media/{id} 供客户端探活）。0 = 不清扫。
+  # 须 ≥1：客户端上传缓存鲜度是 1 小时，量级差是「刚确认就被清」竞态的防线。
+  media_ttl_days: 7
   # ── CUDA 后端旋钮（backend: "cuda" 时生效；Colab/生产 GPU 档）────────────
   # quantization fp8：Ampere（A100）无原生 FP8 核，vLLM 走 Marlin weight-only
   # 在线量化（bf16 原件加载即量化，显存约砍半）；Hopper 起为原生 FP8。

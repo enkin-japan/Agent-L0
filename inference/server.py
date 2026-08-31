@@ -4,13 +4,16 @@
 换后端只改 config 的 inference.backend，本服务一行不动）。设备 B 的 RemoteBackend
 （backend/framework/backends/remote/）是它唯一的预期客户端。
 
-隐私边界（§3.1）：本服务只见 prompt 字符串与媒体文件，不持久化任何会话数据；
-媒体以 sha256 内容寻址落在本机 media/ 目录（可随时清空，客户端会按需重传）。
+隐私边界（§3.1）：本服务不持久化会话文本/记忆；两类**会话派生物**落本机盘：
+媒体（media/，sha256 内容寻址，按最后使用时间 TTL 自动清扫，inference.media_ttl_days）
+与冻结 KV（kvstore/，config kv_persist=false 可整面关闭）。手动清空 media/ 也可以，
+但长命客户端的上传缓存最长 1 小时后才会重探/重传——清完想立即生效就重启 backend。
 
 端点（把 §1.1 协议 SSE 化）：
   POST   /v1/generate                  SSE 生成流（events: meta / chunk / done / error）
   POST   /v1/generate/{gen_id}/cancel  段粒度取消（对应引擎逐 chunk 的取消检查点）
   POST   /v1/media                     内容寻址上传（sha256 去重）→ {media_id}
+  HEAD   /v1/media/{media_id}          客户端上传缓存的探活+续命（缺陷三 TTL 配套）
   POST   /v1/transcribe                音频转写（R5-2/D.14：edge 不留 whisper）→ {text}
   POST   /v1/cache                     新建缓存 → {cache_id}
   POST   /v1/cache/{id}/clone          分支克隆 → {cache_id}；不支持时 501（客户端冷启动回退）
@@ -86,6 +89,25 @@ HOST = os.environ.get("INFER_REMOTE_HOST", "").strip() or str(REMOTE_CFG.get("ho
 # INFER_PORT：多实例第二档的端口覆盖（与 INFER_MODEL_REPO 配对；Q10 固定端口 14163 起顺延）
 PORT = int(os.environ.get("INFER_PORT") or REMOTE_CFG.get("port", 14161))
 CACHE_TTL_SECONDS = float(REMOTE_CFG.get("cache_ttl_minutes", 45)) * 60.0
+# media/ TTL（分离部署缺陷三）：算力端不该无限囤积用户媒体。按**最后使用时间**清
+# （用到即 touch 续命，见 _media_paths / HEAD /v1/media），客户端上传缓存过期先
+# HEAD 探活、404 才重传——两端差着量级（客户端鲜度 1h << 这里默认 7 天），不存在
+# 「刚确认就被清」的窗。0 = 关闭清扫（旧行为）。天数须 ≥1（守住上面那个量级差）。
+def _media_ttl_seconds(days_raw) -> float:
+    """media_ttl_days → 秒。「须 ≥1 天或 0」不能只是散文（首评 S）：客户端鲜度 1h
+    靠量级差防「刚确认就被清」，14 分钟的 TTL 会静默复活缺媒体症状——配置错误
+    必须响亮拒启（§S.3）。非数值同样拒。"""
+    try:
+        days = float(days_raw or 0)
+    except (TypeError, ValueError):
+        raise SystemExit(f"❌ [Server] inference.media_ttl_days 不是数值：{days_raw!r}")
+    if 0 < days < 1:
+        raise SystemExit(f"❌ [Server] inference.media_ttl_days 须为 0（关闭）或 ≥1 天，"
+                         f"收到 {days}——小于客户端缓存鲜度量级即竞态窗")
+    return days * 86400
+
+
+MEDIA_TTL_SECONDS = _media_ttl_seconds(INFERENCE_CFG.get("media_ttl_days", 7))
 API_KEY = os.environ.get("INFER_API_KEY", "")
 
 
@@ -338,6 +360,20 @@ def _arm_tool_guard(features: Dict[str, Any], tool_specs) -> Optional[ToolCallGu
     return guard
 
 
+_touch_failed_once = False
+
+
+def _touch_media(p: Path) -> None:
+    """用到即续命：TTL 按最后使用时间算，活跃会话反复引用的媒体不会被清走。"""
+    global _touch_failed_once
+    try:
+        os.utime(p)
+    except OSError as e:
+        if not _touch_failed_once:   # 只响一次：续命全废时清扫会反复清在用媒体，
+            _touch_failed_once = True  # 症状只是费带宽（客户端重传自愈），但得留痕
+            print(f"[Server] ⚠️ media touch 失败（续命失效，TTL 清扫将偏激进）: {e}")
+
+
 def _media_paths(ids, kind: str):
     """media_id 列表 → 服务端本地文件路径列表；缺失/非法 id 跳过并告警（不炸整轮）。"""
     out = []
@@ -347,10 +383,33 @@ def _media_paths(ids, kind: str):
             continue
         p = MEDIA_DIR / mid
         if p.is_file():
+            _touch_media(p)
             out.append(str(p))
         else:
             print(f"[Server] {kind} 媒体缺失（客户端需重传），跳过: {mid}")
     return out
+
+
+def _sweep_media() -> int:
+    """TTL 清扫：删掉超过 MEDIA_TTL_SECONDS 没被使用的媒体（含中断残留的 .tmp）。
+    返回清掉的文件数。媒体是内容寻址的派生缓存——正主在执行端会话里，删了客户端
+    会按需重传（配合 RemoteBackend 的缓存鲜度 + HEAD 探活，不产生静默缺媒体）。"""
+    if MEDIA_TTL_SECONDS <= 0:
+        return 0
+    cutoff = time.time() - MEDIA_TTL_SECONDS
+    n = 0
+    try:
+        entries = list(MEDIA_DIR.iterdir())
+    except OSError:
+        return 0
+    for p in entries:
+        try:
+            if p.is_file() and p.stat().st_mtime < cutoff:
+                p.unlink()
+                n += 1
+        except OSError:
+            continue   # 并发 touch/删除竞态：下一轮再说
+    return n
 
 
 @asynccontextmanager
@@ -507,6 +566,10 @@ async def lifespan(app: FastAPI):
                 n = S.registry.sweep()
                 if n:
                     print(f"🧹 [Server] TTL 回收 {n} 份空闲缓存（剩余 {len(S.registry)}）")
+                nm = await asyncio.to_thread(_sweep_media)   # 逐文件 stat 不占事件循环
+                if nm:
+                    print(f"🧹 [Server] TTL 清扫 {nm} 份闲置媒体（media_ttl_days，"
+                          f"客户端需要时会重传）")
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -666,6 +729,7 @@ async def transcribe(request: Request):
     p = MEDIA_DIR / media_id
     if not p.is_file():
         raise HTTPException(status_code=404, detail="媒体缺失（请先经 /v1/media 上传）")
+    _touch_media(p)   # 转写也是使用：TTL 时钟拨回
 
     model = body.get("model") or None
     language = body.get("language") or None
@@ -706,7 +770,22 @@ async def media_upload(file: UploadFile, sha256: str = Form("")):
         tmp = dest.with_suffix(dest.suffix + ".tmp")
         tmp.write_bytes(data)
         tmp.replace(dest)
+    else:
+        _touch_media(dest)   # 去重命中也算一次使用：TTL 时钟拨回
     return {"media_id": media_id, "bytes": len(data)}
+
+
+@app.head("/v1/media/{media_id}", dependencies=[Depends(verify_api_key)])
+async def media_exists(media_id: str):
+    """客户端缓存鲜度探活（缺陷三）：上传缓存过期时先问在不在，404 才重传整份字节。
+    命中即 touch——客户端马上要用它，TTL 时钟拨回。"""
+    if not _MEDIA_ID_RE.match(media_id):
+        raise HTTPException(status_code=400, detail="非法 media_id")
+    p = MEDIA_DIR / media_id
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail="媒体不存在（请重传）")
+    _touch_media(p)
+    return {}
 
 
 @app.post("/v1/generate/{gen_id}/cancel", dependencies=[Depends(verify_api_key)])

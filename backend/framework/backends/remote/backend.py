@@ -23,6 +23,7 @@
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -36,6 +37,8 @@ _STREAM_READ_TIMEOUT = 300.0
 _CONTROL_TIMEOUT = 15.0     # 缓存控制面（clone 含服务端深拷贝，稍宽）
 _PERSIST_TIMEOUT = 30.0     # KV 落盘/恢复（服务端序列化百 MB 级文件，再宽一档）
 _RELEASE_TIMEOUT = 5.0      # 释放走事件循环线程（freeze 是同步路径），必须短；TTL 兜底
+_MEDIA_CACHE_FRESH_SECONDS = 3600.0   # 上传缓存鲜度：远小于服务端 media TTL（≥1 天），
+                                      # 量级差即无「刚确认就被清」竞态窗
 
 
 def guard_model_identity(ident: dict, expected: dict, base_url: str) -> None:
@@ -159,7 +162,11 @@ class RemoteBackend:
         self._session = requests.Session()
         if self._api_key:
             self._session.headers["Authorization"] = f"Bearer {self._api_key}"
-        self._uploaded_media: set = set()   # 本进程已确认上传的 media_id（sha256 内容寻址）
+        # 本进程已确认上传的 media_id → 确认时刻（sha256 内容寻址）。带时间戳是因为
+        # 服务端 media/ 有 TTL 清扫（缺陷三）：backend 是长命进程，光记「传过」会在
+        # 服务端清掉后拿着幻影 id 发生成请求——服务端只会「缺媒体跳过」，症状是图
+        # 静默不见。过期条目先 HEAD 探活（顺带给服务端 TTL 续命），404 才重传字节。
+        self._uploaded_media: Dict[str, float] = {}
 
     def base_url_for(self, endpoint: str = "main") -> str:
         """按端点名取拨号地址（多模型协作的专科调用消费面，接口准备③）。
@@ -248,17 +255,35 @@ class RemoteBackend:
     def shutdown(self) -> None:
         self._session.close()
 
-    # ---- 媒体（内容寻址上传，sha256 去重） ----
+    # ---- 媒体（内容寻址上传，sha256 去重；服务端 TTL 清扫见 inference media_ttl_days） ----
+
     def _ensure_media(self, path: str) -> Optional[str]:
-        """把本地媒体文件上传到服务端（已传过的跳过），返回 media_id；失败返回 None
+        """把本地媒体文件上传到服务端（新鲜确认过的跳过），返回 media_id；失败返回 None
         （该媒体缺席本次生成——与本地文件丢失时 mlx_vlm 的容错方向一致，不炸整轮）。"""
         try:
             p = Path(path)
             data = p.read_bytes()
             digest = hashlib.sha256(data).hexdigest()
             media_id = digest + p.suffix.lower()
-            if media_id in self._uploaded_media:
+            # 墙钟而非 monotonic（首评 S）：服务端 TTL 是墙钟 mtime，而 macOS 的
+            # monotonic 睡眠不走——长命 backend 睡过 7 天醒来会自以为缓存「不到 1h」，
+            # 恰好复活幻影 id 环。墙钟跳变的代价只是多一次 HEAD，方向安全。
+            now = time.time()
+            confirmed_at = self._uploaded_media.get(media_id)
+            if confirmed_at is not None and now - confirmed_at < _MEDIA_CACHE_FRESH_SECONDS:
                 return media_id
+            # 冷缓存（进程重启）或过期：都先 HEAD 问一声（服务端命中即续 TTL 并零字节
+            # 返回）——不这样，backend 每次重启都把会话摸过的百 MB 音频整份重推一遍
+            # （首评 S）。404/探活失败才重传字节。
+            try:
+                hr = self._session.head(f"{self.base_url}/v1/media/{media_id}",
+                                        timeout=_CONNECT_TIMEOUT)
+                if hr.status_code == 200:
+                    self._uploaded_media[media_id] = now
+                    return media_id
+            except Exception:
+                pass   # 探活失败按「不在」处理，走重传路
+            self._uploaded_media.pop(media_id, None)
             r = self._session.post(
                 f"{self.base_url}/v1/media",
                 files={"file": (p.name, data)},
@@ -267,7 +292,7 @@ class RemoteBackend:
             )
             r.raise_for_status()
             media_id = r.json()["media_id"]
-            self._uploaded_media.add(media_id)
+            self._uploaded_media[media_id] = now
             return media_id
         except Exception as e:
             print(f"[RemoteBackend] 媒体上传失败（本次生成将缺席该媒体）: {path}: {e}")

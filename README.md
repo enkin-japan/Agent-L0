@@ -6,7 +6,9 @@
 可单机跑全套（all-in-one），也可把重型计算（模型推理 / RAG 嵌入重排）拆到另一台机器上，
 执行层与会话数据留在用户机。**入库的 `config.yaml` 是空模板形态**（`inference.mode: remote`
 但两个 host 留空 = 融合/本机模式）：机器差异全部走库外——算力端地址与密钥填在各机的
-`.env.local`（macOS app 则在应用设置里填），配置文件本身两机 pull 即同步。
+`.env.local`（macOS app 则在应用设置里填）。dev 形态配置文件两机 pull 即同步；app 形态
+执行端没有 repo，config 随包烘入、跨端状态（主模型/RAG 档位）靠**发现比对**而非同步
+（inference /health 模型身份护栏、RAG 档位戳 + app 换档检测——分离部署审计 2026-08-31）。
 退回单机见下文「部署形态」。
 
 ```
@@ -54,13 +56,15 @@ Agent/
 ```
 
 两个指针文件都是 gitignored，优先级高于 config.yaml 里的默认值。
-⚠️ 换 RAG 档位后向量库必须重建（`rag/scripts/reembed.py`），详见 [rag/README.md](rag/README.md)。
+⚠️ 换 RAG 档位后向量库必须重建——正式口径是执行端驱动（app 检测提示；数据面
+`GET /api/v1/maintenance/retier` 查状态、`POST …/retier/rebuild` 执行），
+`rag/scripts/reembed.py` 是手动后备，详见 [rag/README.md](rag/README.md)。
 
 ## 部署形态
 
 | 形态 | 命令 | 说明 |
 |---|---|---|
-| 算力分离 · 算力端 | `./devctl.sh start --profile gpu` | inference-server + RAG 计算面：**完全无状态**，只出算力，不落任何用户数据 |
+| 算力分离 · 算力端 | `./devctl.sh start --profile gpu` | inference-server + RAG 计算面：只出算力，不持久化会话文本/记忆。RAG 计算面不落任何用户数据；inference-server 有两类会话**派生物**落本机盘——`media/`（跨机媒体中转，按最后使用 TTL 自动清扫，`inference.media_ttl_days`）与 `kvstore/`（会话 KV 冻结落盘，`inference.kv_persist: false` 可整面关闭），均可随时清空 |
 | 算力分离 · 工作端 | `./devctl.sh start --profile edge -h <算力端地址>` | RAG 数据面 + SearXNG + backend + 前端：编排 / 工具 / 记忆 / 会话与知识库落盘 |
 | all-in-one（入库缺省） | `./devctl.sh start` | 单机跑全部；host 留空即融合/本机模式，`inference.mode` 改回 `inprocess` 走进程内推理 |
 
