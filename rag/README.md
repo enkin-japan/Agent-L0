@@ -114,11 +114,13 @@ app sidecar 启动），计算面跑在算力端（`../devctl.sh start --profile
 - `GET /api/v1/maintenance/retier`——库戳 vs 计算面**活体**身份（绕缓存现查，与换档
   护栏同口径）+ 重建进度；`needs_rebuild` 是 app 的唯一提示判据（真换档 mismatch，
   或耐久标记揭示的**中断残局**——上一场重建死在半路时档位戳反而是「健康」假象）。
-- `POST /api/v1/maintenance/retier/rebuild`——单飞后台重建：备份分类路由（空 dump 不
-  覆盖好备份，孤儿分类目录占位补建）→ 落耐久标记 → 清库（向量+FTS+戳；**原文
-  storage/ 一字节不动**）→ 按活体身份重盖戳 → 重建路由 → 同步逐篇重灌（逐篇记账，
-  `docs_failed` 单列）→ 事后戳断言，验收过了才撤标记。两侧已同档时 409 拒绝白重灌
-  （`force` 仅修库场景）；重建窗口内 insert/reclassify 一律 409 冻结写入。
+- `POST /api/v1/maintenance/retier/rebuild`——单飞后台重建：备份分类路由（手写描述
+  绝不被空/缺项 dump 覆盖，孤儿分类目录占位补建）+ 过时标记快照 → 落耐久标记 →
+  清库（向量+FTS+戳；**原文 storage/ 一字节不动**）→ 按活体身份重盖戳 → 重建路由 →
+  同步逐篇重灌（逐篇记账，`docs_failed` 单列）→ 按 source_path 重挂过时标记（重灌中
+  被自动路由迁移改了路径的进 `stale_lost` 记账）→ 事后戳断言，验收过了才撤标记。
+  两侧已同档时 409 拒绝白重灌（`force` 仅修库场景）；重建窗口内**全部写入面**
+  （insert/分类增删/purge/stale/删除/reclassify）一律 409 冻结。
 
 macOS app 的 `RetierMonitor` 周期轮询（backend 薄代理 `/api/v1/rag/retier`）、发现
 `needs_rebuild` 弹窗征求确认、驱动重建并跟进进度到系统通知。devctl 侧刻意不做重建
@@ -230,7 +232,7 @@ tuning:
 |------|------|------|
 | GET | `/api/v1/document/list` | 管理面板数据源：不带 `category` 返回分类总览（文档数/切片数），带则返回该分类的文档清单 |
 | POST | `/api/v1/document/insert` | 插入文档（后台异步处理：分类→备份→切块→向量化→入库）。可选 `category` 显式指定目标分类：不存在则 400 拒绝并附现有目录（不静默兜底）；缺省走向量自动路由 |
-| GET | `/api/v1/document/context` | 取相邻块（R3 凭证指针）：按 `source_path`+`seq` 返回 [seq-n, seq+n] 窗口；纯数据操作，计算面离线可用；旧格式切片（无 seq）明说并指向 reembed |
+| GET | `/api/v1/document/context` | 取相邻块（R3 凭证指针）：按 `source_path`+`seq` 返回 [seq-n, seq+n] 窗口；纯数据操作，计算面离线可用；旧格式切片（无 seq）明说并指向全量重建 |
 | DELETE | `/api/v1/document/delete` | 按 `source_path`（元数据中的备份路径）跨库整篇删除，含磁盘备份；零命中时返回引导提示与 `deleted_chunks: 0` |
 | POST | `/api/v1/document/stale` | 标记/取消标记文档为过时（只写元数据不动内容），检索结果与管理面板据此带出提示 |
 | POST | `/api/v1/governance/reclassify` | 触发未分类文档重分拣（后台异步） |
@@ -326,4 +328,4 @@ rag/
 - **删除分类 ≠ 删除数据**：`DELETE /api/v1/category/{db_name}` 只移除路由，该分类库中的向量数据仍在
 - **换档必重建**：库维度与档位绑定，靠 `.tier_stamp.json` + 运行时探测把关，不符即拒绝服务而非静默混库
 - **MPS 显存**：两个模型按档位 dtype 常驻（当前默认 `vl-2b`：bf16 2B × 2 ≈ 8GB），推理通过全局锁串行化，避免 MPS 并发冲突；大档位（4B/8B）在 16GB 开发机上跑不动，需设备 A
-- **换档须重灌**：`text-0.6b`(1024 维) → `vl-2b`(2048 维) 这类跨维度换档须先跑 `rag/scripts/reembed.py` 全量重建——库维度不符时护栏会拒启，不是静默混库
+- **换档须重灌**：`text-0.6b`(1024 维) → `vl-2b`(2048 维) 这类跨维度换档须全量重建——正式口径是执行端驱动（app 检测提示 / 数据面 `POST /api/v1/maintenance/retier/rebuild`，见「档位与换档」节；手动后备 `rag/scripts/reembed.py`）。库维度不符时护栏会拒绝服务，不是静默混库

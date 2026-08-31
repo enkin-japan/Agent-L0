@@ -60,6 +60,14 @@ class RetierManager:
                                                按原文路径就地重灌一篇（同步，完成才返回）
       list_raw_files() -> list[(Path, Optional[str])]
                                                全部原文 [(路径, 分类或 None=自动路由)]
+      dump_stale() -> (dict[str, dict], int)   过时标记快照 {source_path: {stale,
+                                               stale_at}} + 快照失败的库数（阶段复审
+                                               m4：治理元数据只活在切片 metadata 里，
+                                               不抢救就随 wipe 归零；哪个库快照失败
+                                               要计数上报，静默丢标记正是 m4 要防的）
+      restore_stale(mapping) -> list[str]      重灌后按 source_path 重挂标记；返回没
+                                               找到切片的路径（重灌中被自动路由迁移
+                                               改了路径、或该篇重灌失败）
     rebuild_marker：耐久的「重建进行中」标记文件（首评 C1）。清库前落盘、验收通过
     才删——重建中途进程死掉后，库是空的而新戳已在（重灌期的嵌入会经护栏无戳分支
     盖戳），单看 mismatch 是「健康」的假象；标记在盘上，重启后的 status() 才能报
@@ -74,6 +82,8 @@ class RetierManager:
                  upsert_category: Callable[[str, str], None],
                  insert_document: Callable[[Path, Optional[str]], None],
                  list_raw_files: Callable[[], List[tuple]],
+                 dump_stale: Callable[[], dict],
+                 restore_stale: Callable[[dict], List[str]],
                  categories_backup: Path,
                  rebuild_marker: Path,
                  logger=None):
@@ -85,6 +95,8 @@ class RetierManager:
         self._upsert_category = upsert_category
         self._insert_document = insert_document
         self._list_raw_files = list_raw_files
+        self._dump_stale = dump_stale
+        self._restore_stale = restore_stale
         self._categories_backup = Path(categories_backup)
         self._rebuild_marker = Path(rebuild_marker)
         self._log = logger
@@ -161,6 +173,10 @@ class RetierManager:
                 "state": "running", "phase": "starting",
                 "docs_total": None, "docs_done": 0, "docs_failed": 0,
                 "failed_docs": [], "failed_categories": [],
+                # stale 三件套恒初始化（修正评审 nit）：状态形状不随「有没有标记」漂移；
+                # stale_lost 同 failed_docs 只展示前 20，总量 = stale_total - stale_restored
+                "stale_total": 0, "stale_restored": 0, "stale_lost": [],
+                "stale_dump_failed": 0,
                 "from": (stamp or {}).get("embed_repo"),
                 "to": ident.get("embed_repo"),
                 "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -180,32 +196,45 @@ class RetierManager:
             self._progress.update(kw)
 
     def _backup_categories(self, cats: List[dict], files: List[tuple]) -> List[dict]:
-        """备份分类路由描述并回填缺口。三条防线（首评 C3/S5）：
-        - dump 出来是空而盘上还有非空备份 → 采纳盘上备份而非清空它（meta 库已损坏时
-          路由描述是用户手写的、原文里没有，覆盖 = 永久丢失）；
-        - 原文目录里有、路由表里没有的分类 → 占位补建（reembed.py 同款），否则该目录
-          重灌成「有数据无路由」的隐形库；
+        """备份分类路由描述并回填缺口。防线（首评 C3/S5 + 阶段复审 m1 + 修正评审 C1）：
+        - 路由描述是用户手写的、原文里没有——覆盖/删除 = 永久丢失。**重建集**（返回
+          值，决定 upsert 哪些路由）与**落盘集**（写回备份文件）刻意不同：
+          · 重建集 = dump（现役 meta 库，同名胜出）+ 旧备份里目录仍有原文的条目
+            （沿用手写描述，胜过占位）+ 两边都无的原文目录占位；目录已空的不复活
+            （用户真删的路由不还魂）；
+          · 落盘集 = 重建集 ∪ 旧备份**全部**条目——备份是描述的最后一份真相，
+            孤儿条目留在备份里无害，从备份里抹掉才是不可逆（修正评审 C1：曾把
+            落盘集写成重建集，meta 库损坏时手写描述被静默清出最后副本）。
+        - 旧备份形状畸形（非 list / 条目非 dict）按空处理，不许一个坏文件挡住重建
+          （方向安全：解析失败只是少了回填来源，dump 仍在）；
         - 写备份走临时文件 + 原子改名，写一半断电不会留下半个 JSON。"""
-        if not cats and self._categories_backup.exists():
-            try:
-                old = json.loads(self._categories_backup.read_text(encoding="utf-8"))
-            except Exception:
-                old = []
-            if old:
+        try:
+            old = json.loads(self._categories_backup.read_text(encoding="utf-8"))
+        except Exception:
+            old = []
+        if not isinstance(old, list):
+            old = []
+        old = [c for c in old if isinstance(c, dict) and c.get("db_name")]
+        file_cats = {c for _, c in files if c}
+        known = {c.get("db_name") for c in cats if c.get("db_name")}
+        for c in old:
+            name = c["db_name"]
+            if name not in known and name in file_cats:
                 if self._log:
-                    self._log.warning("⚠️ meta 路由库 dump 为空，改用盘上 categories_backup.json"
-                                      f"（{len(old)} 条）重建路由")
-                cats = old
-        known = {c.get("db_name") for c in cats}
-        for cat_name in sorted({c for _, c in files if c}):
-            if cat_name not in known:
-                cats.append({"db_name": cat_name,
-                             "description": f"(重建补建，路由描述缺失，请用 rag_upsert_category 重写) {cat_name}"})
-        if cats:
+                    self._log.warning(f"⚠️ 分类 {name} 不在 meta 路由库但原文尚存："
+                                      f"沿用盘上备份的路由描述重建")
+                cats.append(c)
+                known.add(name)
+        for cat_name in sorted(file_cats - known):
+            cats.append({"db_name": cat_name,
+                         "description": f"(重建补建，路由描述缺失，请用 rag_upsert_category 重写) {cat_name}"})
+        to_disk = {c["db_name"]: c for c in old}
+        to_disk.update({c.get("db_name"): c for c in cats if c.get("db_name")})
+        if to_disk:
             self._categories_backup.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._categories_backup.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(cats, ensure_ascii=False, indent=2) + "\n",
-                           encoding="utf-8")
+            tmp.write_text(json.dumps(list(to_disk.values()), ensure_ascii=False,
+                                      indent=2) + "\n", encoding="utf-8")
             tmp.replace(self._categories_backup)
         return cats
 
@@ -216,7 +245,13 @@ class RetierManager:
             self._set(phase="dump_categories")
             files = self._list_raw_files()
             cats = self._backup_categories(self._dump_categories(), files)
-            self._set(docs_total=len(files))
+            # 过时标记快照（阶段复审 m4）：治理元数据只活在切片 metadata 里，
+            # 与分类备份同理必须先于清库抢救出来。快照整体失败会中止重建（此时
+            # 什么都还没删，方向安全）；单库失败计数上报——与重挂侧的 fail-open
+            # 刻意不对称：清库前失败零代价，清库后失败只剩记账可做。
+            stale_map, stale_dump_failed = self._dump_stale()
+            self._set(docs_total=len(files), stale_total=len(stale_map),
+                      stale_dump_failed=stale_dump_failed)
 
             # 2) 落耐久标记（首评 C1）→ 清库（向量 + FTS + 戳；原文不动）→ 清计算面
             #    缓存并按活体身份重新盖戳+套用档位阈值。标记必须先于第一笔删除：从这
@@ -265,7 +300,21 @@ class RetierManager:
                 self._set(docs_done=done, docs_failed=len(failed),
                           failed_docs=failed[:20])
 
-            # 5) 事后戳断言：库戳必须已按活体身份重盖（保险④）
+            # 5) 重挂过时标记：按原 source_path 匹配新切片。匹配不到的（重灌中被
+            #    自动路由迁移改了路径 / 该篇重灌失败）逐条记账——标记丢失要可见，
+            #    但元数据层的失败不拉倒整场重建（fail-open + 记账）。
+            if stale_map:
+                self._set(phase="restore_stale")
+                try:
+                    lost = self._restore_stale(stale_map)
+                except Exception as e:
+                    lost = sorted(stale_map)
+                    if self._log:
+                        self._log.warning(f"⚠️ 过时标记整批重挂失败（标记丢失，原文无恙）: {e}")
+                self._set(stale_restored=len(stale_map) - len(lost),
+                          stale_lost=sorted(lost)[:20])
+
+            # 6) 事后戳断言：库戳必须已按活体身份重盖（保险④）
             self._set(phase="verify")
             stamp = self._read_stamp()
             if mismatch_of(stamp, ident) is not False:
@@ -275,7 +324,10 @@ class RetierManager:
                     f"重建期间计算面可能又换档/重启，请核实后重跑")
             # 验收过了才撤耐久标记；失败/中断都把它留在盘上，app 会再来提示补跑
             self._rebuild_marker.unlink(missing_ok=True)
-            state = "done" if not (failed or failed_cats) else "done_with_errors"
+            clean = not (failed or failed_cats
+                         or self.progress().get("stale_dump_failed")
+                         or self.progress().get("stale_lost"))
+            state = "done" if clean else "done_with_errors"
             self._set(state=state, phase="idle",
                       finished_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
             if self._log:

@@ -94,16 +94,27 @@ CACHE_TTL_SECONDS = float(REMOTE_CFG.get("cache_ttl_minutes", 45)) * 60.0
 # HEAD 探活、404 才重传——两端差着量级（客户端鲜度 1h << 这里默认 7 天），不存在
 # 「刚确认就被清」的窗。0 = 关闭清扫（旧行为）。天数须 ≥1（守住上面那个量级差）。
 def _media_ttl_seconds(days_raw) -> float:
-    """media_ttl_days → 秒。「须 ≥1 天或 0」不能只是散文（首评 S）：客户端鲜度 1h
-    靠量级差防「刚确认就被清」，14 分钟的 TTL 会静默复活缺媒体症状——配置错误
-    必须响亮拒启（§S.3）。非数值同样拒。"""
+    """media_ttl_days → 秒。「须 ≥1 天或恰为 0（关闭）」不能只是散文（首评 S）：
+    客户端鲜度 1h 靠量级差防「刚确认就被清」，14 分钟的 TTL 会静默复活缺媒体症状。
+    负数/空串/null/布尔/非有限数一律拒启（阶段复审 M1 + 修正评审：`days_raw or 0`
+    曾把 -1/'' 静默放成「关闭」；`.nan`/`.inf` 会让清扫比较恒假=静默关闭；YAML 的
+    true 会被 float() 悄悄化成 1（shell_exec 预算旋钮同款先例）。用户想关就写 0，
+    别的写法都是配置错误——响亮优于猜意图，§S.3。"""
+    import math
+    if isinstance(days_raw, bool):
+        raise SystemExit(f"❌ [Server] inference.media_ttl_days 不接受布尔值：{days_raw!r}"
+                         f"——写天数，关闭清扫写 0")
     try:
-        days = float(days_raw or 0)
+        days = float(days_raw)
     except (TypeError, ValueError):
-        raise SystemExit(f"❌ [Server] inference.media_ttl_days 不是数值：{days_raw!r}")
-    if 0 < days < 1:
+        raise SystemExit(f"❌ [Server] inference.media_ttl_days 不是数值：{days_raw!r}"
+                         f"——关闭清扫请显式写 0")
+    if not math.isfinite(days):
+        raise SystemExit(f"❌ [Server] inference.media_ttl_days 须为有限数：{days_raw!r}"
+                         f"（nan/inf 会让清扫静默失效）")
+    if days != 0 and days < 1:
         raise SystemExit(f"❌ [Server] inference.media_ttl_days 须为 0（关闭）或 ≥1 天，"
-                         f"收到 {days}——小于客户端缓存鲜度量级即竞态窗")
+                         f"收到 {days}——负数不是关闭，<1 天则小于客户端缓存鲜度量级即竞态窗")
     return days * 86400
 
 

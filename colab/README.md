@@ -68,8 +68,10 @@ A100 会话（`agent_colab.ipynb` 三个 cell）：挂 Drive → `bootstrap.sh <
 自动转发到本机端口→服务绑回环即可、护栏不触碰）→ 解包代码 → pip 依赖（Drive
 缓存，**不用 backend/requirements.txt——那是 MLX 家的**）→ 权重 Drive→本地盘
 （补 `.download_complete` 标记喂 path_resolver）→ 拉起 `INFER_BACKEND=cuda` 的
-inference-server + **契约测试**（`backend/scripts/check_infer_contract.py`，18 项
-协议断言，已在本地对 MLX 服务全过——它就是"换后端服务一行不动"的背书）。
+inference-server + **契约测试**（`backend/scripts/check_infer_contract.py`，19 项
+无条件协议断言，clone 走 200 时另有 1 项条件断言；/health 模型身份断言为
+2026-08-31 缺陷二新增、尚未在 CUDA 臂实跑，其余已在本地对 MLX 服务全过——
+它就是"换后端服务一行不动"的背书）。
 
 colab.env 需三行：`HF_TOKEN` / `TS_AUTHKEY`（ephemeral+reusable）/
 `INFER_API_KEY`（≥16 位，edge 侧 .env.local 同值）。

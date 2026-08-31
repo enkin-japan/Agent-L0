@@ -11,7 +11,8 @@
 
 拆分模式的就绪语义：数据面启动**不依赖**计算面在线（工作端开机不被算力端卡死）；
 纯数据操作（列类/删除）恒可用，需要计算的操作在计算面不可达时返回 503、恢复即自愈。
-换档护栏在首次拿到计算面身份时比对存储戳，不符即拒绝服务并指向 reembed。
+换档护栏在首次拿到计算面身份时比对存储戳，不符即拒绝服务并指向执行端重建
+（/api/v1/maintenance/retier 端点 + app 检测提示；手动后备 scripts/reembed.py）。
 
 环境变量：
   RAG_CONFIG      config.yaml 路径覆盖（缺省 = 仓库根；bundle/测试布局注入）
@@ -284,7 +285,8 @@ COMPUTE = _RemoteCompute(COMPUTE_HOST, COMPUTE_PORT) if SPLIT_MODE else _LocalCo
 def _guard_or_stamp_store(ident: dict) -> None:
     """比对存储戳与计算面身份（档位/维度）。
 
-    - 有戳且维度/模型不符 → 快速失败（RuntimeError），提示先跑 reembed.py 重建。
+    - 有戳且维度/模型不符 → 快速失败（RuntimeError），指向执行端重建（app 提示 /
+      retier 维护端点；手动后备 reembed.py）。
     - 无戳（新库 / 档位化之前的旧库）→ 采纳当前身份盖戳。旧库若曾用别的档位建（无戳无从
       得知），首个 add/query 会在 chroma 层撞维度错误，由入库/检索处包成同样的"先重建"提示兜底。
     """
@@ -301,8 +303,9 @@ def _guard_or_stamp_store(ident: dict) -> None:
                 f"❌ RAG 换档护栏：向量库是用档位 '{stamp.get('tier_id')}'"
                 f"（{stamp.get('embed_repo')}, dim={stamp.get('embed_dim')}）建立的，"
                 f"而当前计算面是 '{ident.get('tier')}'（{embed_repo}, dim={runtime_dim}）。\n"
-                f"   换档必须重建向量库：先跑  python rag/scripts/reembed.py  从 storage/raw_files "
-                f"全量重灌，或改回原档位。（不变量：库一旦入库，档位即固定。）"
+                f"   换档必须重建向量库：app 会检测并弹窗引导（或对数据面 "
+                f"POST /api/v1/maintenance/retier/rebuild），或改回原档位；"
+                f"手动后备见 rag/scripts/reembed.py。（不变量：库一旦入库，档位即固定。）"
             )
         return
 
@@ -630,7 +633,8 @@ def auto_classify_and_insert(raw_document: str, doc_title: str, forced_category:
             logger.error(
                 f"❌ 入库维度不匹配：库 '{target_category}' 与当前档位 "
                 f"'{ident.get('tier')}'(dim={ident.get('embed_dim')}) 冲突——换档后未重建。"
-                f"请跑  python rag/scripts/reembed.py  全量重建，或改回原档位。原始错误: {e}")
+                f"请全量重建（app 会检测提示 / POST /api/v1/maintenance/retier/rebuild；"
+                f"手动后备 rag/scripts/reembed.py），或改回原档位。原始错误: {e}")
         raise
     FTS.add_chunks(target_category, ids, chunks, str(backup_path))
     logger.info(f"✅ 入库完成: [{doc_title}] -> {target_category} ({total_chunks} 个片段)")
@@ -747,6 +751,7 @@ async def list_categories():
 
 @app.post("/api/v1/category", tags=["分类管理"])
 async def upsert_category(cat: CategoryItem):
+    _refuse_if_rebuilding("建/改分类")   # 重建窗口新建的路由会被 wipe 清成无痕（m5）
     db = get_chroma_collection("meta_classification_db")
     emb = get_embeddings([cat.description])[0]
     db.upsert(ids=[cat.db_name], documents=[cat.description], embeddings=[emb])
@@ -754,6 +759,7 @@ async def upsert_category(cat: CategoryItem):
 
 @app.delete("/api/v1/category/{db_name}", tags=["分类管理"])
 async def delete_category(db_name: str):
+    _refuse_if_rebuilding("删分类路由")
     db = get_chroma_collection("meta_classification_db")
     db.delete(ids=[db_name])
     return {"msg": f"分类 {db_name} 路由已删除（实际数据保留）"}
@@ -843,6 +849,7 @@ async def purge_category(db_name: str):
     """
     if db_name == "meta_classification_db":
         raise HTTPException(status_code=400, detail="系统路由表不可删除")
+    _refuse_if_rebuilding("删除分类")   # 快照里的原文目录被移进 .trash=重灌整类必失败（m5）
     client = get_chroma_client()
     dropped = False
     try:
@@ -869,6 +876,17 @@ async def purge_category(db_name: str):
 
 
 # ---------------- 数据流向与治理 ----------------
+def _refuse_if_rebuilding(op: str) -> None:
+    """换档重建窗口冻结**全部写入面**（阶段复审 m5）：清点/备份快照之后落地的任何
+    写操作，要么被 wipe 清成无痕（insert/新建路由），要么把快照赖以重放的实体挪走
+    （purge 把原文移进 .trash → 重灌必失败）。读/查不冻。RETIER 定义在下方维护段，
+    call-time 解析。"""
+    if RETIER.progress().get("state") == "running":
+        raise HTTPException(status_code=409,
+                            detail=f"知识库换档重建进行中（全量重嵌入，可能需要数十分钟），"
+                                   f"暂不受理{op}——请勿循环重试，稍后再来。")
+
+
 @app.post("/api/v1/document/insert", tags=["数据入库"])
 async def insert_docs(req: InsertRequest, background_tasks: BackgroundTasks,
                       user_id: str = Depends(_current_user)):
@@ -876,11 +894,7 @@ async def insert_docs(req: InsertRequest, background_tasks: BackgroundTasks,
     # _scoped_collection 对其返回原名——入库路径行为与现状全同。见模块头 _scoped_collection。
     forced = (req.category or "").strip() or None
 
-    # 换档重建窗口冻结写入（首评 S6）：清点快照之后落地的入库会被 wipe 清掉切片、
-    # 而快照里又没有它的原文——盘上有文件、库里零切片、无处报错。重建期一律 409。
-    if RETIER.progress().get("state") == "running":
-        raise HTTPException(status_code=409,
-                            detail="知识库换档重建进行中，暂不受理入库——稍后重试即可。")
+    _refuse_if_rebuilding("入库")
 
     # 计算面前置确认：入库必然要算向量，计算面不可达时当场 503 告知调用方，
     # 而不是受理后在后台任务里静默失败（Agent 端看到的是"已启动"却永远查不到）。
@@ -930,6 +944,7 @@ async def insert_docs(req: InsertRequest, background_tasks: BackgroundTasks,
 @app.delete("/api/v1/document/delete", tags=["数据治理"])
 async def delete_document_by_path(source_path: str = Body(embed=True)):
     """传入元数据中的备份路径，瞬间跨越切片进行整篇删除"""
+    _refuse_if_rebuilding("删除文档")   # 快照里的原文被挪走=重灌该篇必失败（m5）
     client = get_chroma_client()
     deleted_chunks = 0
     # 暴力但极简的做法：轮询所有 Collection，清扫相关片段
@@ -975,6 +990,7 @@ async def mark_document_stale(req: StaleRequest):
     检索结果与管理面板据此带出警示；reason 传空串即取消标记。恒写 stale 键
     （空串=无标记），不依赖「update 能否删键」的 Chroma 版本行为。
     """
+    _refuse_if_rebuilding("过时标记")   # 窗口内标记会随 wipe/重挂时序错乱（m5）
     client = get_chroma_client()
     stale_val = req.reason.strip()
     stale_at = time.strftime("%Y-%m-%d") if stale_val else ""
@@ -1001,9 +1017,7 @@ async def mark_document_stale(req: StaleRequest):
 
 @app.post("/api/v1/governance/reclassify", tags=["数据治理"])
 async def trigger_reclassification(background_tasks: BackgroundTasks):
-    if RETIER.progress().get("state") == "running":   # 与 insert 同理：重建窗口冻结写入
-        raise HTTPException(status_code=409,
-                            detail="知识库换档重建进行中，暂不受理重分拣——稍后重试即可。")
+    _refuse_if_rebuilding("重分拣")
     COMPUTE.ensure_ready()   # 重分拣要算向量：计算面不可达时当场 503
     background_tasks.add_task(reclassify_background_task)
     return {"msg": "数据重构清洗任务已置入后台运行"}
@@ -1289,7 +1303,7 @@ async def document_context(source_path: str, seq: int, n: int = 1):
 
     「先搜索定位，再翻开细读」的第二步——检索命中一个块后补前后文，不必整篇重读。
     纯数据操作（无嵌入/重排），计算面离线也可用。存量旧切片无 seq 字段：明说旧格式
-    并指向 reembed，不静默返回空。
+    并指向重建，不静默返回空。
     """
     n = max(0, min(int(n), 5))
     category = _collection_of_raw_file(Path(source_path))
@@ -1312,7 +1326,9 @@ async def document_context(source_path: str, seq: int, n: int = 1):
         if legacy:
             return {"source_path": source_path, "chunks": [],
                     "msg": ("该文档为旧格式入库（切片无 seq 序号），取相邻块不可用。"
-                            "跑 python rag/scripts/reembed.py 全量重建后即可用。")}
+                            "全量重建知识库后即可用——这是维护操作，请交给用户在 app "
+                            "里执行（或由操作员走数据面维护端点/rag/scripts/reembed.py），"
+                            "不要自行尝试重建。")}
         return {"source_path": source_path, "chunks": [],
                 "msg": "未找到该 source_path 的任何切片（路径可能不精确，先用检索确认 Path）。"}
     rows.sort(key=lambda r: r["seq"])
@@ -1430,6 +1446,70 @@ def _retier_list_raw_files() -> list:
     return out
 
 
+def _retier_dump_stale():
+    """过时标记快照（阶段复审 m4）：({source_path: {stale, stale_at}}, 快照失败库数)。
+    标记只活在切片 metadata 里（U3 设计：agent 只有标记权），不抢救就随 wipe 归零。
+    注意 where {"stale": {"$ne": ""}} 在 chroma 1.5.9 **拦不住缺键文档**（普通入库
+    根本不写 stale 键）——这一步实际是全库元数据扫描，靠下面的 m.get("stale") 真值
+    过滤兜正确性；只拉 metadatas 不拉向量/正文，量级可接受（修正评审实测定性）。"""
+    out: Dict[str, dict] = {}
+    failed = 0
+    client = get_chroma_client()
+    for col_info in client.list_collections():
+        name = col_info if isinstance(col_info, str) else col_info.name
+        try:
+            got = get_chroma_collection(name).get(where={"stale": {"$ne": ""}},
+                                                  include=["metadatas"])
+        except Exception as e:
+            failed += 1   # 该库标记将丢失：计数上报（stale_dump_failed），不许静默
+            logger.warning(f"⚠️ 过时标记快照失败（库 {name}，该库标记将丢失）: {e}")
+            continue
+        for m in got.get("metadatas") or []:
+            sp = (m or {}).get("source_path")
+            if sp and m.get("stale"):
+                out[sp] = {"stale": m["stale"], "stale_at": m.get("stale_at", "")}
+    return out, failed
+
+
+def _retier_restore_stale(mapping: dict) -> list:
+    """重灌后按 source_path 重挂标记（mark_document_stale 同款 update 循环）；
+    返回没找到切片的路径。原路径没命中时按**同名文件**兜一层（修正评审 S）：
+    自动路由迁移只换父目录不换文件名（auto_classify_and_insert 的 rename 语义），
+    在 raw_files/*/ 与未分类池里找同名者即是它的新家。"""
+    lost = []
+    client = get_chroma_client()
+    names = [c if isinstance(c, str) else c.name for c in client.list_collections()]
+
+    def _apply(sp: str) -> int:
+        n = 0
+        for name in names:
+            try:
+                col = get_chroma_collection(name)
+                matched = col.get(where={"source_path": sp})
+                ids = matched["ids"]
+                if not ids:
+                    continue
+                metas = [{**dict(m or {}), "stale": meta.get("stale", ""),
+                          "stale_at": meta.get("stale_at", "")}
+                         for m in matched["metadatas"]]
+                col.update(ids=ids, metadatas=metas)
+                n += len(ids)
+            except Exception as e:
+                logger.warning(f"⚠️ 过时标记重挂失败（库 {name}）: {sp}: {e}")
+        return n
+
+    for sp, meta in mapping.items():
+        if _apply(sp) > 0:
+            continue
+        base = Path(sp).name
+        candidates = [p for p in RAW_FILES_DIR.glob(f"*/{base}") if p.is_file()]
+        if (UNCLASSIFIED_DIR / base).is_file():
+            candidates.append(UNCLASSIFIED_DIR / base)
+        if not any(_apply(str(p)) > 0 for p in candidates):
+            lost.append(sp)
+    return lost
+
+
 RETIER = RetierManager(
     fetch_live_identity=_retier_fetch_live_identity,
     read_stamp=_retier_read_stamp,
@@ -1439,6 +1519,8 @@ RETIER = RetierManager(
     upsert_category=_retier_upsert_category,
     insert_document=_retier_insert_document,
     list_raw_files=_retier_list_raw_files,
+    dump_stale=_retier_dump_stale,
+    restore_stale=_retier_restore_stale,
     categories_backup=STORAGE_BASE / "categories_backup.json",
     # 耐久标记与库戳同目录：中途死掉的重建靠它在重启后仍被 status() 认出来。
     # 手动 reembed 的 wipe（rmtree chroma_data）会连它一起清——那条路本就以

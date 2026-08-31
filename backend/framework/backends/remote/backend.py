@@ -267,10 +267,11 @@ class RemoteBackend:
             media_id = digest + p.suffix.lower()
             # 墙钟而非 monotonic（首评 S）：服务端 TTL 是墙钟 mtime，而 macOS 的
             # monotonic 睡眠不走——长命 backend 睡过 7 天醒来会自以为缓存「不到 1h」，
-            # 恰好复活幻影 id 环。墙钟跳变的代价只是多一次 HEAD，方向安全。
+            # 恰好复活幻影 id 环。墙钟向前跳只多付一次 HEAD；向后跳会让差值变负——
+            # 负差不算新鲜（阶段复审 m7），照走 HEAD 探活路。
             now = time.time()
             confirmed_at = self._uploaded_media.get(media_id)
-            if confirmed_at is not None and now - confirmed_at < _MEDIA_CACHE_FRESH_SECONDS:
+            if confirmed_at is not None and 0 <= now - confirmed_at < _MEDIA_CACHE_FRESH_SECONDS:
                 return media_id
             # 冷缓存（进程重启）或过期：都先 HEAD 问一声（服务端命中即续 TTL 并零字节
             # 返回）——不这样，backend 每次重启都把会话摸过的百 MB 音频整份重推一遍

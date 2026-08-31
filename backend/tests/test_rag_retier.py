@@ -76,6 +76,8 @@ class Harness:
             {"db_name": "unclassified_db", "description": "池"}]
         self.insert_fail = set()      # 路径名 → 该篇重灌抛错
         self.upsert_fail = set()      # 分类名 → 路由重建抛错
+        self.stale_map = {}           # 过时标记快照（dump_stale 返回）
+        self.stale_lost = []          # restore_stale 报告的丢失路径
         self.backup = tmp_path / "storage/categories_backup.json"
         self.marker = tmp_path / "chroma_data/.rebuild_in_progress"
         self.mgr = retier.RetierManager(
@@ -83,6 +85,7 @@ class Harness:
             dump_categories=self._dump, wipe_store=self._wipe,
             reset_and_adopt=self._adopt, upsert_category=self._upsert,
             insert_document=self._insert, list_raw_files=self._list,
+            dump_stale=self._dump_stale, restore_stale=self._restore_stale,
             categories_backup=self.backup, rebuild_marker=self.marker)
 
     def _fetch(self):
@@ -123,6 +126,14 @@ class Harness:
     def _list(self):
         self.calls.append("list_files")
         return list(self.files)
+
+    def _dump_stale(self):
+        self.calls.append("dump_stale")
+        return dict(self.stale_map), 0
+
+    def _restore_stale(self, mapping):
+        self.calls.append(f"restore_stale:{len(mapping)}")
+        return list(self.stale_lost)
 
     def run_and_wait(self, force=False, timeout=5.0):
         self.mgr.start_rebuild(force=force)
@@ -345,6 +356,99 @@ def test_backup_and_inventory_precede_wipe(tmp_path):
     assert order.index("wipe") < order.index("adopt"), "先清库再按活体身份盖新戳"
     first_insert = next(i for i, c in enumerate(h.calls) if c.startswith("insert:"))
     assert h.calls.index("adopt") < first_insert, "重灌必须发生在采纳+盖戳之后"
+
+
+# ---------- 过时标记保留（阶段复审 m4） / 备份合并（m1） ----------
+
+def test_stale_snapshot_before_wipe_and_restore_after_reinsert(tmp_path):
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A)
+    h.stale_map = {"/x/a_1.txt": {"stale": "旧合同", "stale_at": "2026-08-01"}}
+    out = h.run_and_wait()
+    assert out["state"] == "done"
+    order = [c for c in h.calls if c in ("dump_stale", "wipe") or c.startswith("restore_stale")]
+    assert order[0] == "dump_stale" and order[1] == "wipe", "标记快照必须先于清库"
+    assert order[2] == "restore_stale:1", "重灌完成后按快照重挂"
+    last_insert = max(i for i, c in enumerate(h.calls) if c.startswith("insert:"))
+    assert h.calls.index("restore_stale:1") > last_insert, "重挂必须在全部重灌之后"
+    assert out["stale_total"] == 1 and out["stale_restored"] == 1 and out["stale_lost"] == []
+
+
+def test_stale_lost_paths_are_booked(tmp_path):
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A)
+    h.stale_map = {"/x/a.txt": {"stale": "r"}, "/x/b.txt": {"stale": "r"}}
+    h.stale_lost = ["/x/b.txt"]     # 重灌中被自动路由迁移改了路径
+    out = h.run_and_wait()
+    assert out["stale_restored"] == 1 and out["stale_lost"] == ["/x/b.txt"]
+
+
+def test_partial_dump_preserves_handwritten_backup_entries(tmp_path):
+    # 阶段复审 m1：dump 部分缺失（如路由被单独删过）时，目录里还有原文的分类
+    # 必须沿用旧备份的手写描述——占位补建是没得选时的下策，覆盖手写描述是丢失
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A,
+                cats=[{"db_name": "notes", "description": "笔记"}],
+                files=[(tmp_path / "raw_files/faq/a_1.txt", "faq"),
+                       (tmp_path / "raw_files/notes/b_2.txt", "notes")])
+    h.backup.parent.mkdir(parents=True, exist_ok=True)
+    h.backup.write_text(json.dumps([{"db_name": "faq", "description": "手写描述"},
+                                    {"db_name": "notes", "description": "旧笔记描述"}]),
+                        encoding="utf-8")
+    out = h.run_and_wait()
+    assert out["state"] == "done"
+    cats = {c["db_name"]: c["description"] for c in
+            json.loads(h.backup.read_text(encoding="utf-8"))}
+    assert cats["faq"] == "手写描述", "部分缺失的 dump 不许把手写描述打成占位"
+    assert cats["notes"] == "笔记", "dump 里有的以 dump（现役 meta 库）为准"
+    assert "upsert:faq" in h.calls and "upsert:notes" in h.calls
+
+
+def test_backup_file_keeps_orphan_entries_on_disk(tmp_path):
+    # 修正评审 C1：重建集（upsert 哪些）与落盘集（写回备份）必须不同——目录已空的
+    # 条目不重建（不还魂），但**不许从备份文件里抹掉**（备份是手写描述的最后副本）
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A, cats=[],
+                files=[(tmp_path / "raw_files/faq/a_1.txt", "faq")])
+    h.backup.parent.mkdir(parents=True, exist_ok=True)
+    h.backup.write_text(json.dumps([{"db_name": "faq", "description": "手写A"},
+                                    {"db_name": "archive", "description": "手写B"}]),
+                        encoding="utf-8")
+    out = h.run_and_wait()
+    assert out["state"] == "done"
+    assert "upsert:faq" in h.calls and "upsert:archive" not in h.calls
+    disk = {c["db_name"]: c["description"] for c in
+            json.loads(h.backup.read_text(encoding="utf-8"))}
+    assert disk.get("archive") == "手写B", "落盘备份不许抹掉孤儿条目的手写描述"
+    assert disk.get("faq") == "手写A"
+
+
+def test_malformed_backup_does_not_block_rebuild(tmp_path):
+    # 修正评审 S：坏备份文件（非 list / 条目非 dict）按空处理，不许挡住重建
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A)
+    h.backup.parent.mkdir(parents=True, exist_ok=True)
+    h.backup.write_text('{"not": "a list"}', encoding="utf-8")
+    assert h.run_and_wait()["state"] == "done"
+    h2 = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A)
+    h2.backup.write_text('["字符串条目", 42]', encoding="utf-8")
+    assert h2.run_and_wait()["state"] == "done"
+
+
+def test_stale_dump_failure_is_booked_as_errors(tmp_path):
+    # 修正评审 S：单库快照失败=该库标记静默丢失——必须计数上报并降级 done_with_errors
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A)
+    h.mgr._dump_stale = lambda: ({}, 2)
+    out = h.run_and_wait()
+    assert out["state"] == "done_with_errors"
+    assert out["stale_dump_failed"] == 2
+
+
+def test_deleted_category_with_no_files_stays_deleted(tmp_path):
+    # 用户真删（路由删了、原文也清了）的分类不复活
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A,
+                cats=[{"db_name": "faq", "description": "常见问题"}],
+                files=[(tmp_path / "raw_files/faq/a_1.txt", "faq")])
+    h.backup.parent.mkdir(parents=True, exist_ok=True)
+    h.backup.write_text(json.dumps([{"db_name": "gone", "description": "已删"}]),
+                        encoding="utf-8")
+    h.run_and_wait()
+    assert "upsert:gone" not in h.calls
 
 
 # ---------- 状态面 ----------

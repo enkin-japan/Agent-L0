@@ -1169,12 +1169,12 @@ def _rag_base() -> str:
     return f"http://{RAG_HOST}:{RAG_PORT}"
 
 
-async def _rag_proxy(method: str, path: str, **kw):
+async def _rag_proxy(method: str, path: str, timeout: float = 15, **kw):
     import requests
     from ..utils.config_loader import rag_auth_headers
 
     def _do():
-        return requests.request(method, f"{_rag_base()}{path}", timeout=15,
+        return requests.request(method, f"{_rag_base()}{path}", timeout=timeout,
                                 headers=rag_auth_headers(), **kw)
     try:
         resp = await asyncio.to_thread(_do)
@@ -1240,6 +1240,9 @@ async def rag_retier_rebuild(body: Optional[dict] = None):
     """用户确认后触发数据面就地重建。body: {"force": bool}——force 只给修库场景，
     app 的常规提示路径不传（两侧已同档时数据面 409 拒绝白重灌）。
     `is True` 而非 bool()：force 是绕过「已同档拒绝」去清健康库的开关，"false"/"0"
-    这类字符串真值绝不能被顺手转正（首评 S13）。"""
-    return await _rag_proxy("POST", "/api/v1/maintenance/retier/rebuild",
+    这类字符串真值绝不能被顺手转正（首评 S13）。
+    超时 25s（阶段复审 m3）：数据面 start_rebuild 背后串着活体探查（connect+read 各
+    5s）+ 线程起步，15s 缺省会把「已开跑」翻译成 503「起不来」——app 收到正常 HTTP
+    错误就不走它的求真相路，用户在一场进行中的破坏性重建旁被告知没在重建。"""
+    return await _rag_proxy("POST", "/api/v1/maintenance/retier/rebuild", timeout=25,
                             json={"force": (body or {}).get("force") is True})

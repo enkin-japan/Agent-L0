@@ -1070,8 +1070,9 @@ PY
     # 换档纪律：库一旦入库档位即固定（chroma_data/.tier_stamp.json 护栏快速失败）。
     # 重建的正式口径 = 执行端（app/数据面服务）驱动——分离部署审计后用户拍板
     # （2026-08-31）：devctl 侧不做重建自动化，模型的事归计算端，库的事归执行端。
-    warn "换档纪律：换嵌入模型须重建向量库（执行端驱动为正式口径；服务端重建端点落地前"
-    warn "的过渡手动流程见 rag/scripts/reembed.py 头注）。重启生效: ./devctl.sh restart rag"
+    warn "换档纪律：换嵌入模型须重建向量库。正式口径=执行端驱动（app 检测提示，或对数据面"
+    warn "POST /api/v1/maintenance/retier/rebuild）；手动后备 rag/scripts/reembed.py。"
+    warn "重启生效: ./devctl.sh restart rag"
 }
 
 # ---- 命令分发 ----

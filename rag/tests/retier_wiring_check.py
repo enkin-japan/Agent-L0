@@ -68,6 +68,12 @@ check("原文清点 = 3 篇", len(srv._retier_list_raw_files()) == 3)
 check("dump 出 2 个分类", {c["db_name"] for c in srv._retier_dump_categories()} >= {"faq", "notes"})
 check("faq 库有切片", srv.get_chroma_collection("faq").count() > 0)
 
+print("== ①.5 过时标记（重建前打上，事后必须还在） ==")
+import asyncio as _aio
+_mark = _aio.run(srv.mark_document_stale(srv.StaleRequest(
+    source_path=str(srv.RAW_FILES_DIR / "faq" / "a_1.txt"), reason="旧版合同")))
+check("标记已打上", _mark["updated_chunks"] > 0)
+
 print("== ② 计算端换档（8 维 → 4 维）→ RETIER 全场重建 ==")
 LIVE["ident"] = IDENT_NEW
 st = srv.RETIER.status()
@@ -97,5 +103,33 @@ st2 = srv.RETIER.status()
 check("status 回到同档", st2["mismatch"] is False and st2["needs_rebuild"] is False)
 n_raw = len(srv._retier_list_raw_files())
 check("原文一篇未动", n_raw == 3)
+check("stale 记账全还原", out.get("stale_total") == 1 and out.get("stale_restored") == 1,
+      json.dumps(out, ensure_ascii=False))
+_sp = str(srv.RAW_FILES_DIR / "faq" / "a_1.txt")
+_got = srv.get_chroma_collection("faq").get(where={"source_path": _sp},
+                                            include=["metadatas"])
+check("过时标记随重建保留", all(m.get("stale") == "旧版合同"
+                                for m in _got["metadatas"]) and _got["ids"])
+
+print("== ④ 重建窗口写入冻结（m5，覆盖全部写端点的直接可调子集） ==")
+with srv.RETIER._state_lock:                 # 模拟在建窗口（加锁改，别裸摸）
+    srv.RETIER._progress["state"] = "running"
+_frozen = [
+    ("建分类", lambda: srv.upsert_category(srv.CategoryItem(db_name="x", description="d"))),
+    ("删路由", lambda: srv.delete_category("faq")),
+    ("purge", lambda: srv.purge_category("faq")),
+    ("stale", lambda: srv.mark_document_stale(srv.StaleRequest(source_path=_sp, reason="r"))),
+    ("删文档", lambda: srv.delete_document_by_path(source_path=_sp)),
+]
+for _name, _fn in _frozen:
+    try:
+        _aio.run(_fn())
+        check(f"窗口内{_name}被 409 拒", False)
+    except srv.HTTPException as e:
+        check(f"窗口内{_name}被 409 拒", e.status_code == 409, str(e.detail))
+with srv.RETIER._state_lock:
+    srv.RETIER._progress["state"] = "done"
+_ok = _aio.run(srv.upsert_category(srv.CategoryItem(db_name="thaw", description="解冻验证")))
+check("窗口关闭后写入恢复", "thaw" in str(_ok))
 
 print(f"== ALL WIRING CHECKS PASS ==（临时数据根 {TMP}，可手动删除）")

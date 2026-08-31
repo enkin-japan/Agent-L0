@@ -48,6 +48,16 @@ def sse_events(resp, limit_s: float = 120.0):
             event = None
 
 
+def _json(r) -> dict:
+    """非 JSON/非 dict 一律回 {}：坏响应走断言失败路（红），不许 traceback 裸崩
+    ——CUDA 臂（bootstrap 花钱路径）最容易撞上代理/错误页（修正评审）。"""
+    try:
+        body = r.json()
+        return body if isinstance(body, dict) else {}
+    except ValueError:
+        return {}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-url", required=True)
@@ -60,7 +70,7 @@ def main() -> int:
     #   契约面（分离部署缺陷二）——服务端哪天不再盖戳，这里要红，不能等执行端拒启才发现
     r = requests.get(f"{base}/health", timeout=30)
     check("health 200 即就绪", r.status_code == 200, f"got {r.status_code}")
-    h = r.json() if r.status_code == 200 else {}
+    h = _json(r) if r.status_code == 200 else {}
     check("health 报模型身份（service+model_repo）",
           h.get("service") == "macagent-inference" and bool(h.get("model_repo")),
           f"got {h!r}"[:120])
@@ -77,14 +87,14 @@ def main() -> int:
 
     # ③ 缓存生命周期：new → clone（允许 501=冷路回退语义）→ release
     r = requests.post(f"{base}/v1/cache", headers=H, timeout=30)
-    check("cache new", r.status_code == 200 and "cache_id" in r.json(),
+    check("cache new", r.status_code == 200 and "cache_id" in _json(r),
           f"{r.status_code} {r.text[:80]}")
-    cid = r.json().get("cache_id", "")
+    cid = _json(r).get("cache_id", "")
     r = requests.post(f"{base}/v1/cache/{cid}/clone", headers=H, timeout=60)
     check("cache clone（200 或 501=冷路回退）", r.status_code in (200, 501),
           f"got {r.status_code}")
     if r.status_code == 200:
-        cid2 = r.json().get("cache_id", "")
+        cid2 = _json(r).get("cache_id", "")
         check("clone 得新 id", bool(cid2) and cid2 != cid)
         requests.delete(f"{base}/v1/cache/{cid2}", headers=H, timeout=30)
     r = requests.delete(f"{base}/v1/cache/{cid}", headers=H, timeout=30)
@@ -136,7 +146,7 @@ def main() -> int:
             if k == "chunk":
                 break                      # 已在产出中 → 发取消
         rc = requests.post(f"{base}/v1/generate/{gen_id}/cancel", headers=H, timeout=10)
-        check("cancel 受理", rc.status_code == 200 and rc.json().get("cancelled") is True,
+        check("cancel 受理", rc.status_code == 200 and _json(rc).get("cancelled") is True,
               f"{rc.status_code} {rc.text[:80]}")
         tail = list(it)                    # 消费余流至服务端收场
     elapsed = time.time() - t0
@@ -145,13 +155,13 @@ def main() -> int:
 
     # ⑦ OpenAI 门面：/v1/models + 非流式 chat/completions
     r = requests.get(f"{base}/v1/models", headers=H, timeout=30)
-    check("facade models", r.status_code == 200 and r.json().get("data"),
+    check("facade models", r.status_code == 200 and _json(r).get("data"),
           f"{r.status_code}")
-    model_id = (r.json().get("data") or [{}])[0].get("id", "")
+    model_id = (_json(r).get("data") or [{}])[0].get("id", "")
     r = requests.post(f"{base}/v1/chat/completions", headers=H, timeout=300, json={
         "model": model_id, "stream": False, "max_tokens": 16,
         "messages": [{"role": "user", "content": "Say OK."}]})
-    ok = r.status_code == 200 and (r.json().get("choices") or [{}])[0] \
+    ok = r.status_code == 200 and (_json(r).get("choices") or [{}])[0] \
         .get("message", {}).get("content") is not None
     check("facade chat/completions 非流式", ok, f"{r.status_code} {r.text[:120]}")
 

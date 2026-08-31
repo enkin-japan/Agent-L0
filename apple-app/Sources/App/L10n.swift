@@ -268,6 +268,8 @@ enum L10n {
         "（": ("（", " ("),
         "）": ("）", ")"),
         "，": ("，", ", "),
+        "条过时标记未能重挂": ("件の古い情報マークを再付与できませんでした", "stale markers could not be reattached"),
+        "部分收尾项有误（详见日志）": ("一部の後処理に問題があります（詳細はログ）", "some finishing steps had issues (see logs)"),
         "已标记过时": ("古い情報の可能性", "Marked stale"),
         "切片": ("チャンク", "chunks"),
         "未索引": ("未インデックス", "Not indexed"),

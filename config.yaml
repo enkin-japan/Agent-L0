@@ -374,9 +374,10 @@ rag:
   # rag_server.py 按「指针 → active_tier 默认 → 下方 embed_path/rerank_path 兜底」解析；
   # 下载仍收敛到 rag/models/（resolve_model_path，不变）。
   #
-  # 关键不变量（换档纪律）：向量库一旦入库，档位即固定；换档 = 开发者**主动重建**
-  #   （rag/scripts/reembed.py 从 storage/raw_files 全量重灌），运行中/用户侧绝不换。
-  #   换档若嵌入维度与旧库不符，服务启动/入库会**快速失败**并提示先 reembed（护栏）。
+  # 关键不变量（换档纪律）：向量库一旦入库，档位即固定；换档 = **主动重建**——正式
+  #   口径是执行端驱动（app 检测提示 / 数据面 POST /api/v1/maintenance/retier/rebuild，
+  #   从 storage/raw_files 全量重灌；手动后备 rag/scripts/reembed.py）。
+  #   换档若嵌入维度与旧库不符，服务启动/入库会**快速失败**并指向重建（护栏）。
   #
   # 字段：modality=text 纯文本 / vl 视觉多模态（Qwen3-VL；图像真入库属 L2 另一期，
   #   当前 vl 档仅"加载 + 文本 I/O"，见 HETERO_COMPUTE §S.3）；embed_dim 该档向量维度
@@ -387,7 +388,7 @@ rag:
   # 2026-08-08 定档 vl-2b（用户拍板，A100 五档选型）：文本检索与 0.6b 并列榜首
   # 零回归（0.941）且 MRR 全场最高（0.969），多模态升级路白拿；尺寸无红利
   # （4b/8b 反降）故 vl-8b 塌方与 qwen35 系观察项一并销案不归因。
-  # ⚠ 换档=embed_dim 1024→2048：既有库首启会被护栏拦下，须先 rag/scripts/reembed.py
+  # ⚠ 换档=embed_dim 1024→2048：既有库首启会被护栏拦下，须先全量重建（执行端驱动/后备 reembed）
   active_tier: "vl-2b"          # 当前档位 id（被 .rag-tier-selection 指针覆盖）
   tiers:
     - id: "text-0.6b"
