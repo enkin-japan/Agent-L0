@@ -1226,3 +1226,20 @@ async def rag_purge_category(category: str):
     """真删整个分类（collection 丢弃 + 原文目录入回收 + 路由条目删除）。"""
     _validate_category_name(category)
     return await _rag_proxy("DELETE", f"/api/v1/category/{category}/purge")
+
+
+@router.get("/api/v1/rag/retier")
+async def rag_retier_status():
+    """换档检测数据源（分离部署缺陷一）：库戳 vs 计算面活体身份 + 重建进度。
+    app 据此发现「计算端换了嵌入档位而本机库还是旧档」并提示用户重建。"""
+    return await _rag_proxy("GET", "/api/v1/maintenance/retier")
+
+
+@router.post("/api/v1/rag/retier/rebuild")
+async def rag_retier_rebuild(body: Optional[dict] = None):
+    """用户确认后触发数据面就地重建。body: {"force": bool}——force 只给修库场景，
+    app 的常规提示路径不传（两侧已同档时数据面 409 拒绝白重灌）。
+    `is True` 而非 bool()：force 是绕过「已同档拒绝」去清健康库的开关，"false"/"0"
+    这类字符串真值绝不能被顺手转正（首评 S13）。"""
+    return await _rag_proxy("POST", "/api/v1/maintenance/retier/rebuild",
+                            json={"force": (body or {}).get("force") is True})

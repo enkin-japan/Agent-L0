@@ -108,12 +108,26 @@ app sidecar 启动），计算面跑在算力端（`../devctl.sh start --profile
 首次请求（拆分模式，护栏惰性触发）时与探测到的真实嵌入比对，不符即快速失败并提示先重建
 ——而不是让新旧维度的向量在同一个库里混。
 
-**正式口径（分离部署审计 2026-08-31 用户拍板）**：重建由**执行端**驱动——数据面将新增
-受鉴权的重建管理端点（备份分类→清库→重灌，带进度上报），app 依据数据面对计算端档位的
-发现（`/health` 采纳 identity）检测不一致并提示用户确认后执行；devctl 侧刻意不做重建
-自动化（曾做过一版当日移除：模型的事归计算端，库的事归执行端，repo 工具不该是执行端依赖）。
+**正式口径（分离部署审计 2026-08-31 用户拍板，已落地）**：重建由**执行端**驱动。
+数据面自带受鉴权的重建管理端点（`retier.py` + rag_server 装配）：
 
-过渡期手动流程（服务端重建端点落地前；`scripts/reembed.py`，从 `storage/raw_files` 原文备份全量重灌）：
+- `GET /api/v1/maintenance/retier`——库戳 vs 计算面**活体**身份（绕缓存现查，与换档
+  护栏同口径）+ 重建进度；`needs_rebuild` 是 app 的唯一提示判据（真换档 mismatch，
+  或耐久标记揭示的**中断残局**——上一场重建死在半路时档位戳反而是「健康」假象）。
+- `POST /api/v1/maintenance/retier/rebuild`——单飞后台重建：备份分类路由（空 dump 不
+  覆盖好备份，孤儿分类目录占位补建）→ 落耐久标记 → 清库（向量+FTS+戳；**原文
+  storage/ 一字节不动**）→ 按活体身份重盖戳 → 重建路由 → 同步逐篇重灌（逐篇记账，
+  `docs_failed` 单列）→ 事后戳断言，验收过了才撤标记。两侧已同档时 409 拒绝白重灌
+  （`force` 仅修库场景）；重建窗口内 insert/reclassify 一律 409 冻结写入。
+
+macOS app 的 `RetierMonitor` 周期轮询（backend 薄代理 `/api/v1/rag/retier`）、发现
+`needs_rebuild` 弹窗征求确认、驱动重建并跟进进度到系统通知。devctl 侧刻意不做重建
+自动化（曾做过一版当日移除：模型的事归计算端，库的事归执行端，repo 工具不该是执行端
+依赖）。接线自检：`rag/.venv/bin/python tests/retier_wiring_check.py`（真 chroma 临时
+库，不进 devctl 门）。
+
+手动后备流程（融合模式换档后服务起不来时仍需要它；`scripts/reembed.py`，从
+`storage/raw_files` 原文备份全量重灌）：
 
 ```bash
 ../devctl.sh rag-model                          # 1) 选新档位

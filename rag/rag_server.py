@@ -38,6 +38,7 @@ import yaml
 
 from retrieval_extras import extract_identifiers, mmr_select
 from fts_index import FtsIndex
+from retier import RetierManager, RetierRefused
 
 # ==========================================
 # 全局配置与数据根
@@ -875,6 +876,12 @@ async def insert_docs(req: InsertRequest, background_tasks: BackgroundTasks,
     # _scoped_collection 对其返回原名——入库路径行为与现状全同。见模块头 _scoped_collection。
     forced = (req.category or "").strip() or None
 
+    # 换档重建窗口冻结写入（首评 S6）：清点快照之后落地的入库会被 wipe 清掉切片、
+    # 而快照里又没有它的原文——盘上有文件、库里零切片、无处报错。重建期一律 409。
+    if RETIER.progress().get("state") == "running":
+        raise HTTPException(status_code=409,
+                            detail="知识库换档重建进行中，暂不受理入库——稍后重试即可。")
+
     # 计算面前置确认：入库必然要算向量，计算面不可达时当场 503 告知调用方，
     # 而不是受理后在后台任务里静默失败（Agent 端看到的是"已启动"却永远查不到）。
     COMPUTE.ensure_ready()
@@ -994,6 +1001,9 @@ async def mark_document_stale(req: StaleRequest):
 
 @app.post("/api/v1/governance/reclassify", tags=["数据治理"])
 async def trigger_reclassification(background_tasks: BackgroundTasks):
+    if RETIER.progress().get("state") == "running":   # 与 insert 同理：重建窗口冻结写入
+        raise HTTPException(status_code=409,
+                            detail="知识库换档重建进行中，暂不受理重分拣——稍后重试即可。")
     COMPUTE.ensure_ready()   # 重分拣要算向量：计算面不可达时当场 503
     background_tasks.add_task(reclassify_background_task)
     return {"msg": "数据重构清洗任务已置入后台运行"}
@@ -1309,6 +1319,150 @@ async def document_context(source_path: str, seq: int, n: int = 1):
     window = [r for r in rows if seq - n <= r["seq"] <= seq + n]
     return {"source_path": source_path, "title": rows[0]["title"],
             "total_chunks": len(rows), "requested_seq": seq, "chunks": window}
+
+
+# ==========================================
+# 换档重建（分离部署缺陷一：执行端驱动的正式口径）
+# ==========================================
+# 端点受全局 Bearer 保护（verify_rag_key 只豁免 /health 与 docs）。app/面板经
+# backend 薄代理消费：GET 检测「计算面档位 ≠ 库内档位戳」→ 提示用户 → 确认后
+# POST 触发服务端就地重建。逻辑本体在 retier.py（零三方依赖，可金测试），
+# 这里只装配数据面的副作用。
+
+# 活体身份短缓存（首评 S9）：app 重建期间 5 秒一轮询 status，计算面不可达时每次
+# 白吊一个线程池工位 5 秒——3 秒内成败都复用上一次结论，可用性判断不受影响。
+_RETIER_IDENT_TTL = 3.0
+_retier_ident_cache: Dict[str, object] = {"at": 0.0, "ident": None, "err": None}
+
+
+def _retier_fetch_live_identity() -> dict:
+    """绕过 _RemoteCompute 的 identity/_fatal 缓存现查计算面身份（保险②）：
+    重建恰恰发生在「缓存的身份是旧档、fatal 缓存着换档错误」的时刻，二者皆不可信。"""
+    if not SPLIT_MODE:
+        ident = COMPUTE.identity
+        if not ident:
+            raise RuntimeError("融合模式计算核未就绪")
+        return ident
+    now = time.time()
+    if now - float(_retier_ident_cache["at"]) < _RETIER_IDENT_TTL:
+        if _retier_ident_cache["err"] is not None:
+            raise RuntimeError(str(_retier_ident_cache["err"]))
+        return dict(_retier_ident_cache["ident"])
+    try:
+        # 带钥匙与其余计算面调用一致（/health 现虽免鉴权，但这不是省钥匙的理由）
+        r = requests.get(f"{COMPUTE.base_url}/health", timeout=5,
+                         headers=COMPUTE._headers())
+        r.raise_for_status()
+        ident = r.json()
+        ident = ident if isinstance(ident, dict) else {}
+    except Exception as e:
+        _retier_ident_cache.update(at=now, ident=None, err=str(e))
+        raise
+    _retier_ident_cache.update(at=now, ident=ident, err=None)
+    return dict(ident)
+
+
+def _retier_read_stamp() -> Optional[dict]:
+    try:
+        return json.loads(TIER_STAMP_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _retier_dump_categories() -> list:
+    data = get_chroma_collection("meta_classification_db").get()
+    return [{"db_name": i, "description": d or ""}
+            for i, d in zip(data["ids"], data["documents"])]
+
+
+def _retier_wipe_store() -> None:
+    """清全部 collection + FTS + 库戳。原文 storage/ 是唯一真相，一个字节不动。
+
+    连 meta_classification_db 一起删是**有意的**（purge 端点对它拒删，这里不冲突）：
+    路由描述已先备份进 categories_backup.json，且它的向量同样是旧档嵌的，必须随档
+    重嵌。list_collections 全删也覆盖将来 D3 的 u_{user}__ 命名空间——注意重灌侧
+    目前只回放 default 用户的 raw_files 布局，D3 落地时两半要一起改。"""
+    client = get_chroma_client()
+    for col in client.list_collections():
+        client.delete_collection(col if isinstance(col, str) else col.name)
+    FTS.wipe()
+    TIER_STAMP_FILE.unlink(missing_ok=True)
+
+
+def _retier_reset_and_adopt() -> None:
+    if SPLIT_MODE:
+        with COMPUTE._lock:
+            COMPUTE.identity = None    # 旧档身份与 fatal 缓存一并作废
+            COMPUTE._fatal = None
+    ident = _retier_fetch_live_identity()
+    _guard_or_stamp_store(ident)       # 戳已删 → 无戳分支：按活体身份给空库盖新戳
+    _apply_tier_thresholds(ident.get("thresholds"))
+    if SPLIT_MODE:
+        # 采纳后就地回填（首评 S11）：省掉重灌首笔嵌入的额外 /health 往返；盖戳在
+        # 回填之前完成，与并发 ensure_ready 撞上也只是对同一身份重复核对，结果一致
+        with COMPUTE._lock:
+            if COMPUTE._fatal is None:
+                COMPUTE.identity = ident
+
+
+def _retier_upsert_category(name: str, desc: str) -> None:
+    emb = get_embeddings([desc])[0]
+    get_chroma_collection("meta_classification_db").upsert(
+        ids=[name], documents=[desc], embeddings=[emb])
+
+
+def _retier_insert_document(path: Path, category: Optional[str]) -> None:
+    text = path.read_text(encoding="utf-8")
+    title = path.name.rsplit("_", 1)[0] if "_" in path.name else path.stem
+    auto_classify_and_insert(text, title, forced_category=category,
+                             existing_source_path=str(path))
+
+
+def _retier_list_raw_files() -> list:
+    """全部原文 [(路径, 分类)]；未分类池分类为 None（重灌时自动路由）。
+    glob("*.txt") 天然扫不进 .versions/ 归档子目录（与 reembed.py 同口径）。"""
+    out = []
+    if RAW_FILES_DIR.exists():
+        for d in sorted(p for p in RAW_FILES_DIR.iterdir() if p.is_dir()):
+            out.extend((f, d.name) for f in sorted(d.glob("*.txt")))
+    if UNCLASSIFIED_DIR.exists():
+        out.extend((f, None) for f in sorted(UNCLASSIFIED_DIR.glob("*.txt")))
+    return out
+
+
+RETIER = RetierManager(
+    fetch_live_identity=_retier_fetch_live_identity,
+    read_stamp=_retier_read_stamp,
+    dump_categories=_retier_dump_categories,
+    wipe_store=_retier_wipe_store,
+    reset_and_adopt=_retier_reset_and_adopt,
+    upsert_category=_retier_upsert_category,
+    insert_document=_retier_insert_document,
+    list_raw_files=_retier_list_raw_files,
+    categories_backup=STORAGE_BASE / "categories_backup.json",
+    # 耐久标记与库戳同目录：中途死掉的重建靠它在重启后仍被 status() 认出来。
+    # 手动 reembed 的 wipe（rmtree chroma_data）会连它一起清——那条路本就以
+    # 「操作员盯完全程」为前提，标记语义随目录一起归零没有害处。
+    rebuild_marker=CHROMA_DB_PATH / ".rebuild_in_progress",
+    logger=logger,
+)
+
+
+@app.get("/api/v1/maintenance/retier", tags=["数据治理"])
+def retier_status():
+    """换档检测数据源：库戳 vs 计算面活体身份（护栏同口径）+ 重建进度。
+    同步 def：活体探查最长 5s 阻塞，交给 FastAPI 线程池，不占事件循环。"""
+    return RETIER.status()
+
+
+@app.post("/api/v1/maintenance/retier/rebuild", tags=["数据治理"])
+def retier_rebuild(force: bool = Body(False, embed=True)):
+    """触发服务端就地重建（后台线程同步逐篇重灌，GET 端点看进度）。
+    两侧已同档 → 409（force=true 越过，修库场景）；计算面不可达 → 503。"""
+    try:
+        return RETIER.start_rebuild(force=force)
+    except RetierRefused as e:
+        raise HTTPException(status_code=e.code, detail=e.detail)
 
 
 def _enforce_bind_guardrail() -> None:

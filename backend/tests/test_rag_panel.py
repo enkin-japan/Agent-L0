@@ -70,6 +70,42 @@ def test_category_name_whitelist_blocks_traversal(monkeypatch):
         assert ei.value.status_code == 400
 
 
+def test_retier_status_proxies_through(monkeypatch):
+    seen = {}
+
+    def ok(method, url, **kw):
+        seen.update(method=method, url=url)
+        return _Resp(payload={"mismatch": True, "rebuild": {"state": "idle"}})
+    _patch_request(monkeypatch, ok)
+    out = asyncio.run(routes.rag_retier_status())
+    assert out["mismatch"] is True
+    assert seen["method"] == "GET" and "/api/v1/maintenance/retier" in seen["url"]
+
+
+def test_retier_rebuild_forwards_force_and_defaults_false(monkeypatch):
+    seen = {}
+
+    def ok(method, url, **kw):
+        seen.update(method=method, url=url, json=kw.get("json"))
+        return _Resp(payload={"state": "running"})
+    _patch_request(monkeypatch, ok)
+    out = asyncio.run(routes.rag_retier_rebuild(None))
+    assert out == {"state": "running"}
+    assert seen["method"] == "POST" and "/retier/rebuild" in seen["url"]
+    assert seen["json"] == {"force": False}, "常规路径绝不隐式 force"
+    asyncio.run(routes.rag_retier_rebuild({"force": True}))
+    assert seen["json"] == {"force": True}
+
+
+def test_retier_refusal_detail_passes_through(monkeypatch):
+    # 数据面的 409（两侧已同档）/503（计算面不可达）拒绝必须原样透传给 app
+    _patch_request(monkeypatch, lambda *a, **k: _Resp(
+        status_code=409, payload={"detail": "两侧已同档，无需重建"}))
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(routes.rag_retier_rebuild({}))
+    assert ei.value.status_code == 409 and "已同档" in ei.value.detail
+
+
 def test_delete_document_requires_source_path(monkeypatch):
     def never(*a, **k):
         raise AssertionError("空 source_path 不该发出请求")

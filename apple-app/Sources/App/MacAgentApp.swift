@@ -17,6 +17,7 @@ import Sparkle
 /// external（devctl 起的）不碰，见 SidecarManager.shutdownSync。
 final class MacAppDelegate: NSObject, NSApplicationDelegate {
     static weak var sidecar: SidecarManager?
+    static weak var retier: RetierMonitor?
 
     /// 执行层生命周期随 **app 进程**（R5-4 修）：启动时触发一次，与窗口无关——
     /// 挂在窗口 `.task` 上会随窗口重开重入，reap 误杀本代健在服务→凭空重启。
@@ -28,6 +29,9 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
             // 用户不点它 updater 永不实例化，自动检查更新等于没开（首审 C4）。
             _ = sparkleUpdater
             await Self.sidecar?.autostart()
+            // 换档巡检排在 autostart 之后：它要问的 backend 正是上一句拉起来的
+            // （自身还有 60 秒首检延迟兜住拉起耗时，这里只是不抢在编队之前）。
+            Self.retier?.start()
         }
     }
 
@@ -62,6 +66,7 @@ struct MacAgentApp: App {
     @StateObject private var push: PushManager
     #if os(macOS)
     @StateObject private var sidecar: SidecarManager
+    @StateObject private var retier: RetierMonitor
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var macDelegate
     #endif
     #if os(iOS)
@@ -82,6 +87,10 @@ struct MacAgentApp: App {
         sidecar.configure(settings: settings)
         _sidecar = StateObject(wrappedValue: sidecar)
         MacAppDelegate.sidecar = sidecar
+        let retier = RetierMonitor()
+        retier.configure(settings: settings)
+        _retier = StateObject(wrappedValue: retier)
+        MacAppDelegate.retier = retier
         #endif
         #if os(iOS)
         AppDelegate.pushManager = push
@@ -108,6 +117,7 @@ struct MacAgentApp: App {
                 .environmentObject(push)
                 #if os(macOS)
                 .environmentObject(sidecar)
+                .environmentObject(retier)
                 #endif
                 .preferredColorScheme(settings.colorScheme)
                 .tint(Theme.accent)   // 全局主色·青瓷（R5-7 色彩设计）：系统控件一并跟随
@@ -148,6 +158,7 @@ struct MacAgentApp: App {
                 .environmentObject(store)
                 .environmentObject(settings)
                 .environmentObject(sidecar)
+                .environmentObject(retier)
                 .id(settings.language)
         }
         #endif
@@ -158,6 +169,7 @@ struct MacAgentApp: App {
 struct MenuBarPanel: View {
     @EnvironmentObject var store: AgentStore
     @EnvironmentObject var sidecar: SidecarManager
+    @EnvironmentObject var retier: RetierMonitor
     @Environment(\.openWindow) private var openWindow
 
     private var sidecarLabel: String? {
@@ -182,6 +194,10 @@ struct MenuBarPanel: View {
             }
             if let label = sidecarLabel {
                 Text(label)
+            }
+            // 换档重建期间知识库不可用：主窗口关着也要能看见它在跑（RetierMonitor）
+            if let p = retier.rebuildProgress {
+                Text(p)
             }
             if store.isGenerating {
                 Text(L("正在生成…"))

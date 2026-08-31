@@ -239,6 +239,35 @@ enum L10n {
         "该分类的全部文档将从检索中清除，原文移入回收目录（可手工找回）。":
             ("このカテゴリの全ドキュメントが検索から除去され、原文はゴミ箱ディレクトリへ移動されます（手動で復元可能）。",
              "All documents in this category are removed from search; raw files go to a trash folder (recoverable by hand)."),
+        // 嵌入档位换档 / 知识库重建（RetierMonitor）
+        "知识库需要重建": ("ナレッジベースの再構築が必要です", "Knowledge base needs rebuilding"),
+        "计算端档位": ("計算ノードのティア", "Compute node tier"),
+        "本机知识库档位": ("ローカルナレッジベースのティア", "Local knowledge base tier"),
+        "计算端已更换嵌入档位，知识库须按新档位全量重嵌入后才能继续使用检索；重建期间知识库暂不可用，原文资料不受影响。":
+            ("計算ノードの埋め込みティアが変更されました。検索を続けるには、新しいティアでナレッジベース全体を再埋め込みする必要があります。再構築中はナレッジベースを利用できませんが、元の資料は影響を受けません。",
+             "The compute node switched embedding tiers. The knowledge base must be fully re-embedded at the new tier before search works again; it is unavailable during the rebuild, but your source files are untouched."),
+        "立即重建": ("今すぐ再構築", "Rebuild Now"),
+        "稍后": ("後で", "Later"),
+        "知识库重建中…": ("ナレッジベースを再構築中…", "Rebuilding knowledge base…"),
+        "知识库重建完成": ("ナレッジベースの再構築が完了", "Knowledge base rebuild finished"),
+        "篇失败（详见日志）": ("件が失敗（詳細はログ）", "docs failed (see logs)"),
+        "知识库重建失败：": ("ナレッジベースの再構築に失敗：", "Knowledge base rebuild failed: "),
+        "无法开始知识库重建": ("ナレッジベースの再構築を開始できません", "Cannot start knowledge base rebuild"),
+        "未知": ("不明", "unknown"),
+        "上次知识库重建中途中断，库内数据不完整，需要重新执行全量重建；原文资料不受影响。":
+            ("前回のナレッジベース再構築が途中で中断され、データが不完全です。全体の再構築をやり直す必要があります。元の資料は影響を受けません。",
+             "The last knowledge base rebuild was interrupted midway and the data is incomplete. A full rebuild must be run again; your source files are untouched."),
+        "已联系不上执行层，进度未知——请检查数据面日志。":
+            ("実行レイヤーに接続できず、進捗は不明です。データプレーンのログを確認してください。",
+             "Lost contact with the execution layer; progress unknown — check the data-plane logs."),
+        "进度长时间停滞——请检查数据面日志。":
+            ("進捗が長時間停滞しています。データプレーンのログを確認してください。",
+             "Progress has stalled for a long time — check the data-plane logs."),
+        // 组合句用的标点也过 L：英文界面不该出现全角冒号/括号/逗号（首审 S）
+        "：": ("：", ": "),
+        "（": ("（", " ("),
+        "）": ("）", ")"),
+        "，": ("，", ", "),
         "已标记过时": ("古い情報の可能性", "Marked stale"),
         "切片": ("チャンク", "chunks"),
         "未索引": ("未インデックス", "Not indexed"),

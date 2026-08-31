@@ -117,6 +117,17 @@ class FtsIndex:
         except Exception as e:
             logger.warning(f"⚠️ FTS 按源删除失败（fail-open）: {e}")
 
+    def wipe(self) -> None:
+        """全清（换档重建）：重灌会逐条重建本索引。fail-open 同纪律——清不掉最坏是
+        残留指向已删切片的死条目，检索侧对查无实体的命中本就 fail-soft。"""
+        if not self.available:
+            return
+        try:
+            with self._conn() as c:
+                c.execute("DELETE FROM chunks_fts")
+        except Exception as e:
+            logger.warning(f"⚠️ FTS 全清失败（fail-open，重灌仍会逐篇覆盖）: {e}")
+
     def drop_db(self, db: str) -> None:
         if not self.available:
             return
