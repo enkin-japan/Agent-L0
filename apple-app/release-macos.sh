@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# macOS 发布管线：bundle-macos.sh（构建+装机）→ app 公证+钉票 → DMG → DMG 公证+钉票
-#   → Sparkle appcast（自动含 delta 补丁）→ 推送公共发布仓的滚动 release（tag=updates）。
+# macOS 发布管线：bundle-macos.sh（构建，SKIP_INSTALL）→ app 公证+钉票 → DMG →
+#   DMG 公证+钉票 → Sparkle appcast（自动含 delta 补丁）→ 推送公共发布仓的滚动
+#   release（tag=updates）→ 本机重装钉票版。
 #
 # 分发模型（用户 2026-08-30 拍板）：
 #   - 新设备装机 = 从发布仓下最新 MacAgent-<ver>-<build>.dmg，双击拖装（app 与 DMG
@@ -66,8 +67,8 @@ notarize() {  # $1 = 待公证文件
   echo "   公证通过（${subid}）"
 }
 
-echo "== ① 构建 + 本机装机（bundle-macos.sh）=="
-./bundle-macos.sh
+echo "== ① 构建（bundle-macos.sh，跳过其安装段——本机装机延到⑦装钉票版）=="
+SKIP_INSTALL=1 ./bundle-macos.sh
 
 APP=build/Build/Products/Release/MacAgent.app
 VER=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")
@@ -139,8 +140,29 @@ gh release view "$FEED_TAG" -R "$RELEASE_REPO" >/dev/null 2>&1 || \
     --title "MacAgent 更新通道" \
     --notes "滚动更新通道：appcast.xml（Sparkle 订阅源）+ 各版本 DMG + delta 补丁。新设备装机请下最新的 MacAgent-<版本>-<构建号>.dmg。"
 UPLOADS=("$DMG" "$ARCHIVE_DIR/appcast.xml")
-for d in "$ARCHIVE_DIR"/*.delta; do [ -e "$d" ] && UPLOADS+=("$d"); done
+n_delta=0
+for d in "$ARCHIVE_DIR"/*.delta; do [ -e "$d" ] && { UPLOADS+=("$d"); n_delta=$((n_delta+1)); }; done
+# delta 是显式发布目标（补丁式更新）：零 delta 要说出来，回归不许静默（复审 nit）。
+# 注：脏基线（≤71 版，运行时带 dSYM xattr）做 before-tree 时 generate_appcast 照旧
+# 差分失败——首份 delta 预期出现在两侧都是净树的版本对（72→73），见 bundle-macos.sh。
+[ "$n_delta" -gt 0 ] || echo "   ⚠️ 本次无 delta 补丁（老设备将全量下载）"
 gh release upload "$FEED_TAG" -R "$RELEASE_REPO" --clobber "${UPLOADS[@]}"
+
+echo "== ⑦ 本机重装钉票版 =="
+# 发布全部落定后才动本机（复审 S1：本机便利步骤失败不许废掉已完成的付费公证发布）。
+# bundle-macos.sh 的①在本脚本里以 SKIP_INSTALL=1 跳过安装——70/71 两版都把钉票前
+# 副本装进了 /Applications、靠事后手动补救；现在唯一安装动作在这，装的必是钉票版。
+# 换位式安装（复审 S2）：先落新版再删旧版，失败退回旧版本而不是退回空。
+if osascript -e 'if application "MacAgent" is running then tell application "MacAgent" to quit' \
+    2>/dev/null; then sleep 1; fi   # 条件式 quit：app 未运行时不把它拉起来（复审 nit）
+rm -rf /Applications/MacAgent.app.staging
+ditto "$APP" /Applications/MacAgent.app.staging
+rm -rf /Applications/MacAgent.app
+mv /Applications/MacAgent.app.staging /Applications/MacAgent.app
+# 后置硬断言（复审 S3）：这一块存在的唯一目的就是「本机这份带票」，一秒可验就必须验
+xcrun stapler validate /Applications/MacAgent.app >/dev/null \
+  || { echo "❌ 本机安装的 app 无公证票据（第三次复发！）" >&2; exit 1; }
+echo "   本机已重装钉票版 → /Applications/MacAgent.app"
 
 echo "== done：v${VER}（${BUILD}）已发布 =="
 echo "   新装机：${DL_PREFIX}${DMG_NAME}"

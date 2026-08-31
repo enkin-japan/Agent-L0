@@ -66,6 +66,23 @@ done
 # 运行时（已按 hardened runtime 逐 Mach-O 签名，ditto 保留符号链接与权限）
 rm -rf "$RES/python"
 ditto "$RUNTIME" "$RES/python"
+# 剪掉调试残渣。两个理由，各对应一个模式：
+# ① `*.dSYM`（含 PyObjCTest 内嵌套的）带签名扩展属性，Sparkle generate_appcast
+#   拒绝差分——71 版实测「Diffing code signed extended attributes are not
+#   supported」，delta 做不出来，更新退全量下载。注意脏基线（≤71 的 DMG）做
+#   before-tree 时照旧报这个错：首份 delta 预期在两侧都是净树的版本对（72→73），
+#   届时再见此报错才是修法失效；
+# ② `PyObjCTest` 是三方包自带的测试目录（16MB 纯死重），本就不该进交付包。
+# 放在 compileall/签名之前：删目录不碰其余 Mach-O 的既有签名（71 版实测这三处
+# 是全包唯一的 com.apple.cs.* 扩展属性载体）。零命中要说话不许静默（上游哪天
+# 自己剥了 dSYM，这行提示就是「可以删掉本段」的信号，而不是无声空转）。
+_pruned=$(find "$RES/python" \( -name '*.dSYM' -o -name 'PyObjCTest' \) -type d -prune \
+  -print -exec rm -rf {} + | wc -l | tr -d ' ')
+if [ "${_pruned}" -gt 0 ]; then
+  echo "   已剪除 ${_pruned} 个调试残渣目录（dSYM/PyObjCTest，保 delta 可差分）"
+else
+  echo "   ⚠️ 未发现 dSYM/PyObjCTest（上游布局变了？核对 delta 是否仍可差分）"
+fi
 # 编队真相 + 配置（config_loader: CONFIG_PATH = backend 父目录/config.yaml → Resources/）
 mkdir -p "$RES/scripts"
 cp "$ROOT/scripts/lib_edge.sh" "$RES/scripts/lib_edge.sh"
@@ -125,6 +142,12 @@ else
   codesign --force -s - "$APP"
 fi
 
+# SKIP_INSTALL=1（release-macos.sh 专用）：发布管线里本段的产物是**钉票前**副本，
+# 装了也会被⑦的钉票版覆盖，还会在公证失败的分支里把未公证构建留在 /Applications
+# ——发布路一律跳过，安装只由 release 的⑦做一次（复审 S4；独立跑本脚本行为不变）。
+if [ "${SKIP_INSTALL:-}" = "1" ]; then
+  echo "== 安装（SKIP_INSTALL=1，跳过——由 release 管线装钉票版）=="
+else
 echo "== 安装 =="
 osascript -e 'quit app "MacAgent"' 2>/dev/null || true
 sleep 1
@@ -132,3 +155,4 @@ rm -rf /Applications/MacAgent.app
 ditto "$APP" /Applications/MacAgent.app
 ver=$(plutil -extract CFBundleShortVersionString raw /Applications/MacAgent.app/Contents/Info.plist)
 echo "installed → /Applications/MacAgent.app (v$ver, $(du -sh /Applications/MacAgent.app | cut -f1))"
+fi
