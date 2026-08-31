@@ -969,15 +969,17 @@ try:
 except Exception:
     current = None
 
-print("可用模型（config.yaml inference.model_registry，revision 已钉死）：")
+# 只列编号+模型名（用户拍板 2026-08-31）：note 注记成段拼进来会把「选了哪个」
+# 淹没——说明归 config.yaml/文档，这里只回答一个问题：现在是哪个、可选哪些。
+effective = current or default_repo
+print("可用模型（各档说明见 config.yaml inference.model_registry 注记）：")
 for i, e in enumerate(registry, 1):
-    marks = []
-    if e["repo"] == (current or default_repo):
-        marks.append("当前")
-    if e["repo"] == default_repo:
-        marks.append("默认")
-    tag = f"  ← {'/'.join(marks)}" if marks else ""
-    print(f"  {i:2d}. {e['repo'].split('/')[-1]:28s} {e.get('note','')}{tag}")
+    name = e["repo"].split("/")[-1]
+    default_tag = "（默认）" if e["repo"] == default_repo else ""
+    arrow = "  ← 当前" if e["repo"] == effective else ""
+    print(f"  {i:2d}. {name}{default_tag}{arrow}")
+src = "来自 .model-selection 选择" if current else "config 默认"
+print(f"\n当前生效：{effective.split('/')[-1]}（{src}）")
 
 try:
     tty = open("/dev/tty", "r")
@@ -1032,15 +1034,16 @@ if not tiers:
     print("config.yaml rag.tiers 为空（走旧 embed_path/rerank_path 兜底）。")
     sys.exit(0)
 
-print("可用 RAG 档位（config.yaml rag.tiers；档 = 一对 嵌入+重排 模型）：")
+# 与 ./devctl.sh model 同风格（用户拍板 2026-08-31）：只列编号+档位 id+模态，
+# note/阈值标定注记归 config.yaml 与 rag/README 的档位表。
+effective = current or default_id
+print("可用 RAG 档位（档 = 一对 嵌入+重排 模型；各档说明见 rag/README 档位表）：")
 for i, t in enumerate(tiers, 1):
-    marks = []
-    if t["id"] == (current or default_id):
-        marks.append("当前")
-    if t["id"] == default_id:
-        marks.append("默认")
-    tag = f"  ← {'/'.join(marks)}" if marks else ""
-    print(f"  {i:2d}. {t['id']:10s} [{t.get('modality','text'):4s}] {t.get('note','')}{tag}")
+    default_tag = "（默认）" if t["id"] == default_id else ""
+    arrow = "  ← 当前" if t["id"] == effective else ""
+    print(f"  {i:2d}. {t['id']:10s} [{t.get('modality','text')}]{default_tag}{arrow}")
+src = "来自 .rag-tier-selection 选择" if current else "config 默认"
+print(f"\n当前生效：{effective}（{src}）")
 
 try:
     tty = open("/dev/tty", "r")
