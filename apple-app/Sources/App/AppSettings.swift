@@ -113,6 +113,23 @@ final class AppSettings: ObservableObject {
     @Published var computeHost: String {
         didSet { UserDefaults.standard.set(computeHost, forKey: "sidecar.computeHost") }
     }
+    /// 会话 KV 落盘（kv_persist）：冻结会话时把 KV 缓存写到算力端磁盘，解冻可省 3-13s。
+    /// 默认 **关**——KV 实质就是会话内容，缺省不在算力机上留痕（隐私优先）；开与不开的
+    /// 决策权在执行端，经 env 注入 backend 子进程（INFER_KV_PERSIST），非密钥走 UserDefaults。
+    @Published var kvPersistEnabled: Bool {
+        didSet { UserDefaults.standard.set(kvPersistEnabled, forKey: "agent.kvPersist") }
+    }
+    /// 落盘留存天数（到期由算力端自行清扫）。钳在 1...365：0 天等于「存了立刻删」，
+    /// 负数与天文数字都是误输入，不该原样注入子进程 env。
+    @Published var kvTTLDays: Int {
+        didSet {
+            let clamped = min(max(kvTTLDays, 1), 365)
+            // @Published 的 setter 会再进一次 didSet；能收敛是因为钳制幂等
+            // （第二轮 clamped == kvTTLDays 不再赋值），不是「didSet 不触发观察者」
+            if clamped != kvTTLDays { kvTTLDays = clamped }
+            UserDefaults.standard.set(clamped, forKey: "agent.kvTTLDays")
+        }
+    }
 
     /// 首启强制引导是否完成：false = 根视图只显示 OnboardingView，执行层与连接一律后置
     /// （新装 app 在填完密钥/地址前不空转尝试，省去「填完手动重启 1-2 次」）。
@@ -137,6 +154,9 @@ final class AppSettings: ObservableObject {
         inferApiKey = Keychain.load("infer-api-key")
         ragApiKey = Keychain.load("rag-api-key")
         computeHost = ud.string(forKey: "sidecar.computeHost") ?? ""
+        kvPersistEnabled = ud.object(forKey: "agent.kvPersist") as? Bool ?? false
+        // 加载时同样钳制：手工写坏的 defaults / 老版本残值不该绕过范围
+        kvTTLDays = min(max(ud.object(forKey: "agent.kvTTLDays") as? Int ?? 14, 1), 365)
         // 老用户迁移（关键：升级用户绝不看到引导）：无 setup.completed 记录但已有配置痕迹
         // → 视为已完成并落盘。init 里对存储属性的首次赋值不触发 didSet，须显式 set。
         if let done = ud.object(forKey: "setup.completed") as? Bool {

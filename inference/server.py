@@ -4,10 +4,11 @@
 换后端只改 config 的 inference.backend，本服务一行不动）。设备 B 的 RemoteBackend
 （backend/framework/backends/remote/）是它唯一的预期客户端。
 
-隐私边界（§3.1）：本服务不持久化会话文本/记忆；两类**会话派生物**落本机盘：
+隐私边界（§3.1）：本服务不持久化会话文本/记忆；会话**派生物**面两类：
 媒体（media/，sha256 内容寻址，按最后使用时间 TTL 自动清扫，inference.media_ttl_days）
-与冻结 KV（kvstore/，config kv_persist=false 可整面关闭）。手动清空 media/ 也可以，
-但长命客户端的上传缓存最长 1 小时后才会重探/重传——清完想立即生效就重启 backend。
+与冻结 KV（kvstore/，**缺省不落**——执行端 kv_persist 总开关放行才写，留存期随请求
+逐份携带、到期清扫，DELETE /v1/kvstore 立即全清；D 方案 2026-08-31）。手动清空
+media/ 也可以，但长命客户端的上传缓存最长 1 小时后才会重探/重传。
 
 端点（把 §1.1 协议 SSE 化）：
   POST   /v1/generate                  SSE 生成流（events: meta / chunk / done / error）
@@ -18,6 +19,7 @@
   POST   /v1/cache                     新建缓存 → {cache_id}
   POST   /v1/cache/{id}/clone          分支克隆 → {cache_id}；不支持时 501（客户端冷启动回退）
   DELETE /v1/cache/{id}                冻结/删会话时释放
+  DELETE /v1/kvstore                   清空全部落盘 KV（app「立即清除」按钮；D 方案）
   GET    /health  /metrics             devctl 探活 + 仪表
 
 鉴权：Bearer 共享密钥（环境变量 INFER_API_KEY，.env.local 注入），常量时间比对，
@@ -37,6 +39,7 @@ import json
 import queue
 import re
 import sys
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
@@ -74,8 +77,10 @@ import openai_facade as oai  # 同目录纯逻辑层（T6 门面）
 
 MEDIA_DIR = Path(__file__).resolve().parent / "media"
 _MEDIA_ID_RE = re.compile(r"^[0-9a-f]{64}(\.[A-Za-z0-9]{1,8})?$")  # 内容寻址名，防路径穿越
-# KV 冻结落盘（Q9-a）：会话 KV 的服务端存放处。与 media/ 同一隐私档位——本机磁盘、
-# 可随时清空、config inference.kv_persist=false 即整面关闭（写读全停）
+# KV 冻结落盘（Q9-a；D 方案后）：会话 KV 的服务端存放处。与 media/ 同一隐私档位——
+# 本机磁盘、可随时清空。**写不写由执行端总开关决定**（本机 config 的 kv_persist 对
+# 服务端已不再是闸，见 lifespan 的能力强开注释）；本机想整面拒收走
+# INFER_KV_STORE_DISABLE=1（机主对自家磁盘的最后否决权）。
 KV_DIR = Path(__file__).resolve().parent / "kvstore"
 _KV_HINT_RE = re.compile(r"^[A-Za-z0-9._\-]{1,128}$")  # 会话 id 形状，防路径穿越
 
@@ -93,32 +98,40 @@ CACHE_TTL_SECONDS = float(REMOTE_CFG.get("cache_ttl_minutes", 45)) * 60.0
 # （用到即 touch 续命，见 _media_paths / HEAD /v1/media），客户端上传缓存过期先
 # HEAD 探活、404 才重传——两端差着量级（客户端鲜度 1h << 这里默认 7 天），不存在
 # 「刚确认就被清」的窗。0 = 关闭清扫（旧行为）。天数须 ≥1（守住上面那个量级差）。
-def _media_ttl_seconds(days_raw) -> float:
-    """media_ttl_days → 秒。「须 ≥1 天或恰为 0（关闭）」不能只是散文（首评 S）：
-    客户端鲜度 1h 靠量级差防「刚确认就被清」，14 分钟的 TTL 会静默复活缺媒体症状。
-    负数/空串/null/布尔/非有限数一律拒启（阶段复审 M1 + 修正评审：`days_raw or 0`
-    曾把 -1/'' 静默放成「关闭」；`.nan`/`.inf` 会让清扫比较恒假=静默关闭；YAML 的
-    true 会被 float() 悄悄化成 1（shell_exec 预算旋钮同款先例）。用户想关就写 0，
-    别的写法都是配置错误——响亮优于猜意图，§S.3。"""
+def _ttl_seconds(days_raw, key: str) -> float:
+    """<key> 天数 → 秒（media_ttl_days / kv_ttl_days 共用）。「须 ≥1 天或恰为 0
+    （关闭）」不能只是散文（首评 S）：media 侧客户端鲜度 1h 靠量级差防「刚确认就
+    被清」。负数/空串/null/布尔/非有限数一律拒启（阶段复审 M1 + 修正评审：
+    `days_raw or 0` 曾把 -1/'' 静默放成「关闭」；`.nan`/`.inf` 会让清扫比较恒假=
+    静默关闭；YAML 的 true 会被 float() 悄悄化成 1，shell_exec 预算旋钮同款先例）。
+    用户想关就写 0，别的写法都是配置错误——响亮优于猜意图，§S.3。"""
     import math
     if isinstance(days_raw, bool):
-        raise SystemExit(f"❌ [Server] inference.media_ttl_days 不接受布尔值：{days_raw!r}"
+        raise SystemExit(f"❌ [Server] inference.{key} 不接受布尔值：{days_raw!r}"
                          f"——写天数，关闭清扫写 0")
     try:
         days = float(days_raw)
     except (TypeError, ValueError):
-        raise SystemExit(f"❌ [Server] inference.media_ttl_days 不是数值：{days_raw!r}"
+        raise SystemExit(f"❌ [Server] inference.{key} 不是数值：{days_raw!r}"
                          f"——关闭清扫请显式写 0")
     if not math.isfinite(days):
-        raise SystemExit(f"❌ [Server] inference.media_ttl_days 须为有限数：{days_raw!r}"
+        raise SystemExit(f"❌ [Server] inference.{key} 须为有限数：{days_raw!r}"
                          f"（nan/inf 会让清扫静默失效）")
     if days != 0 and days < 1:
-        raise SystemExit(f"❌ [Server] inference.media_ttl_days 须为 0（关闭）或 ≥1 天，"
-                         f"收到 {days}——负数不是关闭，<1 天则小于客户端缓存鲜度量级即竞态窗")
+        raise SystemExit(f"❌ [Server] inference.{key} 须为 0（关闭）或 ≥1 天，"
+                         f"收到 {days}——负数不是关闭，<1 天是竞态窗/误伤热会话")
     return days * 86400
 
 
-MEDIA_TTL_SECONDS = _media_ttl_seconds(INFERENCE_CFG.get("media_ttl_days", 7))
+MEDIA_TTL_SECONDS = _ttl_seconds(INFERENCE_CFG.get("media_ttl_days", 7), "media_ttl_days")
+# kvstore 兜底留存（kv_persist D 方案）：正主留存期由执行端随每次 persist 请求携带
+# （逐份记在 .retention.json）；本值只兜「没带 ttl 的旧存量/裸调用」。0 = 不兜底清扫
+# （有逐份到期的照清）。
+KV_TTL_SECONDS = _ttl_seconds(INFERENCE_CFG.get("kv_ttl_days", 14), "kv_ttl_days")
+# 机主否决权（首评 S）：能力面默认恒开（决策在执行端），但磁盘属于算力机——
+# 旧版执行端（无门）或共享钥匙的第二客户端仍可能来写；机主设 1 即整面拒收
+# （persist 回 {persisted:false}、restore 404），清理端点照常可用。
+KV_STORE_DISABLED = os.environ.get("INFER_KV_STORE_DISABLE", "").strip() in ("1", "true")
 API_KEY = os.environ.get("INFER_API_KEY", "")
 
 
@@ -517,8 +530,13 @@ async def lifespan(app: FastAPI):
     if backend_name == "cuda":
         n_concurrency = max(1, int((INFERENCE_CFG.get("cuda") or {}).get("max_concurrency") or 8))
     S.executor = ThreadPoolExecutor(max_workers=n_concurrency, thread_name_prefix="inference")
+    # KV 持久化能力恒开（kv_persist D 方案）：**要不要落盘由执行端总开关定夺**
+    # （config_loader.kv_persist_enabled，缺省 false），本端只提供能力——若这里也读
+    # config 的 kv_persist（现缺省 false）就成了两侧手抄同步：执行端开了、算力端
+    # 还得改一遍 config 才生效，正是分离部署审计要消灭的形态。盘由逐份留存 +
+    # kv_ttl_days 兜底 + DELETE /v1/kvstore 守着。
     S.backend = await get_backend_class(backend_name).load(
-        model_path, executor=S.executor, **_inf_cfg)
+        model_path, executor=S.executor, **{**_inf_cfg, "kv_persist": True})
     # 方言跟着所选模型的注册表条目走（与 engine.py 同一条路）；server 只消费 markers
     _opts = model_options(model)
     S.dialect = get_dialect_class(str(_opts.get("dialect") or "")).create(
@@ -581,6 +599,10 @@ async def lifespan(app: FastAPI):
                 if nm:
                     print(f"🧹 [Server] TTL 清扫 {nm} 份闲置媒体（media_ttl_days，"
                           f"客户端需要时会重传）")
+                nk = await asyncio.to_thread(_sweep_kvstore)
+                if nk:
+                    print(f"🧹 [Server] 到期清扫 {nk} 份落盘 KV（逐份留存/kv_ttl_days，"
+                          f"解冻退冷路）")
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -678,13 +700,118 @@ def _kv_path(hint: str) -> Path:
     return KV_DIR / f"{hint}.safetensors"
 
 
+# ── kvstore 逐份留存（kv_persist D 方案：执行端定留存期，本端只记账+到期清扫）──
+KV_RETENTION_FILE = KV_DIR / ".retention.json"
+_kv_retention_lock = threading.Lock()
+
+
+def _kv_retention_load() -> dict:
+    """无锁读是安全的**仅因**所有写方都走 tmp+原子改名（读到的要么旧版要么新版，
+    绝无半个 JSON）——给账本加第二种写法前先读这行。"""
+    try:
+        data = json.loads(KV_RETENTION_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _kv_retention_update(mutate) -> bool:
+    """读-改-写一体（锁内）：persist/restore/drop/sweep 多线程并发碰同一份账本。
+    fail-open：账本写不动最坏退回「按服务端兜底 TTL 清」，不炸持久化主路；
+    返回写入成败供调用方在兜底也关闭时响亮（见 _kv_note_retention）。"""
+    with _kv_retention_lock:
+        data = _kv_retention_load()
+        mutate(data)
+        try:
+            KV_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = KV_RETENTION_FILE.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False) + "\n", encoding="utf-8")
+            tmp.replace(KV_RETENTION_FILE)
+            return True
+        except OSError as e:
+            print(f"[Server] ⚠️ kv 留存账本写入失败（退兜底 TTL）: {e}")
+            return False
+
+
+def _kv_note_retention(hint: str, ttl_days) -> None:
+    """persist/restore 成功后记/续到期。ttl_days 来自执行端请求；非法/缺省回落服务端
+    兜底值（便利参数不拒请求——隐私门在执行端开关，这里只是清扫节奏）。
+    上限钳 365 天（首评 S）：磁盘是本机的，authed 客户端传 1e6 天=变相永久留存，
+    inf 还会把账本写成非标 JSON；与 app 设置面的 1..365 钳一致。"""
+    import math
+    try:
+        days = float(ttl_days)
+        if isinstance(ttl_days, bool) or not math.isfinite(days) or days < 1:
+            days = 0.0
+    except (TypeError, ValueError):
+        days = 0.0
+    days = min(days, 365.0)
+    seconds = days * 86400 if days else KV_TTL_SECONDS
+    if seconds <= 0:
+        return   # 双双关闭：不记账（该份只随会话删除/手动清除走）
+    expires = time.time() + seconds
+    ok = _kv_retention_update(lambda d: d.__setitem__(
+        hint, {"expires": expires, "ttl_days": days or KV_TTL_SECONDS / 86400}))
+    if not ok and KV_TTL_SECONDS <= 0:
+        # 兜底也关着时账本失败=该份将无限期保留（fail-open 的注明例外，首评 S）
+        print(f"[Server] ⚠️ kv 留存账本写不动且兜底 TTL=0：{hint} 将无限期保留，"
+              f"请人工清理或修盘")
+
+
+def _sweep_kvstore() -> int:
+    """到期清扫：逐份到期（执行端定）优先，没记账的按服务端兜底 TTL（0=不兜）。
+    返回清掉的文件数。KV 是会话派生物，删了解冻走冷路（慢 3-13s），不丢数据。"""
+    now = time.time()
+    n = 0
+    try:
+        entries = list(KV_DIR.glob("*.safetensors"))
+    except OSError:
+        return 0
+    retention = _kv_retention_load()
+    stale_hints = []
+    for p in entries:
+        hint = p.name[:-len(".safetensors")]
+        ent = retention.get(hint)
+        if isinstance(ent, dict) and "expires" in ent:
+            try:
+                expired = now > float(ent["expires"])
+            except (TypeError, ValueError):
+                expired = True   # 坏账目按到期处理（fail-closed 向隐私侧）
+        elif KV_TTL_SECONDS > 0:
+            try:
+                expired = p.stat().st_mtime < now - KV_TTL_SECONDS
+            except OSError:
+                continue
+        else:
+            expired = False
+        if expired:
+            try:
+                p.unlink()
+                n += 1
+                stale_hints.append(hint)
+            except OSError:
+                continue
+    if stale_hints or retention:
+        def _prune(d: dict) -> None:
+            for h in stale_hints:
+                d.pop(h, None)
+            # 死账在锁内按**当前**账本重算（首评 nit：快照期间刚重落盘的份不许被销账）
+            for h in [k for k in list(d) if not (KV_DIR / f"{k}.safetensors").exists()]:
+                d.pop(h, None)
+        _kv_retention_update(_prune)
+    return n
+
+
 @app.post("/v1/cache/{cache_id}/persist", dependencies=[Depends(verify_api_key)])
 async def cache_persist(cache_id: str, request: Request):
     """KV 落盘（Q9-a）：把注册表里的缓存序列化到服务端本地盘。开关关闭时后端
     返回 False（{persisted: false}，边端按冷路处理）。序列化在推理执行器线程内做
     且持生成锁——与 clone 同一纪律（张量归属线程 + 不落写到一半的缓存）。"""
+    if KV_STORE_DISABLED:
+        return {"persisted": False}   # 机主整面拒收：边端按冷路语义处理（既有契约）
     body = await request.json()
-    path = _kv_path(str(body.get("hint", "")))
+    hint = str(body.get("hint", ""))
+    path = _kv_path(hint)
     handle = S.registry.get(cache_id)
     if handle is None:
         raise HTTPException(status_code=404, detail="缓存不存在或已被 TTL 回收")
@@ -692,20 +819,28 @@ async def cache_persist(cache_id: str, request: Request):
     async with S.gen_sem:
         ok = await _busy_executor_call(
             loop, lambda: S.backend.persist_cache(handle, str(path)))
+    if ok:
+        # 逐份留存（D 方案）：留存期由执行端随请求携带，本端记到期账。
+        # 账本锁可能被 to_thread 的清扫短暂持有——记账也下线程，不占事件循环
+        await asyncio.to_thread(_kv_note_retention, hint, body.get("ttl_days"))
     return {"persisted": bool(ok)}
 
 
 @app.post("/v1/cache/restore", dependencies=[Depends(verify_api_key)])
 async def cache_restore(request: Request):
     """KV 热恢复：盘上产物 → 新缓存句柄入注册表。无产物/开关关/校验不过 → 404（边端退基座/冷路）。"""
+    if KV_STORE_DISABLED:
+        raise HTTPException(status_code=404, detail="本机已拒收 KV 落盘（INFER_KV_STORE_DISABLE）")
     body = await request.json()
-    path = _kv_path(str(body.get("hint", "")))
+    hint = str(body.get("hint", ""))
+    path = _kv_path(hint)
     loop = asyncio.get_running_loop()
     async with S.gen_sem:
         handle = await _busy_executor_call(
             loop, lambda: S.backend.restore_cache(str(path)))
     if handle is None:
         raise HTTPException(status_code=404, detail="无可恢复的 KV 产物")
+    await asyncio.to_thread(_kv_note_retention, hint, body.get("ttl_days"))   # 用到即续期
     return {"cache_id": S.registry.adopt(handle)}
 
 
@@ -715,7 +850,35 @@ async def cache_persisted_drop(hint: str):
     path = _kv_path(hint)
     existed = path.exists()
     path.unlink(missing_ok=True)
+    _kv_retention_update(lambda d: d.pop(hint, None))
     return {"dropped": existed}
+
+
+@app.delete("/v1/kvstore", dependencies=[Depends(verify_api_key)])
+async def kvstore_clear():
+    """立即清空全部落盘 KV（kv_persist D 方案：app 设置页「立即清除」按钮的落点；
+    关掉开关后清历史残留正是主用例）。KV 是派生物：删了解冻走冷路，不丢会话数据。
+    磁盘遍历下线程（首评 S）：几百份 × 百 MB 的 unlink 不许挂在事件循环上噎住 SSE。"""
+    def _clear():
+        deleted = 0
+        freed = 0
+        try:
+            entries = list(KV_DIR.glob("*.safetensors"))
+        except OSError:
+            entries = []
+        for p in entries:
+            try:
+                size = p.stat().st_size
+                p.unlink()
+                deleted += 1
+                freed += size   # 删成了才计（首评 nit：失败的删除不算释放）
+            except OSError:
+                continue
+        _kv_retention_update(lambda d: d.clear())
+        return deleted, freed
+    deleted, freed = await asyncio.to_thread(_clear)
+    print(f"🧹 [Server] kvstore 手动清空：{deleted} 份 / {freed / 2**20:.1f} MB")
+    return {"deleted": deleted, "bytes": freed}
 
 
 @app.post("/v1/transcribe", dependencies=[Depends(verify_api_key)])

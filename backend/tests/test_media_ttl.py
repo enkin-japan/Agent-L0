@@ -51,15 +51,15 @@ def _aged(path, seconds):
 def test_media_ttl_validation_refuses_sub_day(srv):
     # 量级差防线是代码不是散文：恰为 0=关，≥1 天合法；其余全拒（阶段复审 M1：
     # 负数/空串曾被 `or 0` 静默放成「关闭」——缺陷三原症状无声复发）
-    assert srv._media_ttl_seconds(0) == 0.0
-    assert srv._media_ttl_seconds(7) == 7 * 86400.0
-    assert srv._media_ttl_seconds("2") == 2 * 86400.0
+    assert srv._ttl_seconds(0, "media_ttl_days") == 0.0
+    assert srv._ttl_seconds(7, "media_ttl_days") == 7 * 86400.0
+    assert srv._ttl_seconds("2", "media_ttl_days") == 2 * 86400.0
     for bad in (0.5, -1, -0.5):
         with pytest.raises(SystemExit, match="media_ttl_days"):
-            srv._media_ttl_seconds(bad)
+            srv._ttl_seconds(bad, "media_ttl_days")
     for nonnum in (None, "", "一周", []):
         with pytest.raises(SystemExit, match="不是数值"):
-            srv._media_ttl_seconds(nonnum)
+            srv._ttl_seconds(nonnum, "media_ttl_days")
 
 def test_sweep_deletes_idle_keeps_recent(srv, media_dir):
     old = media_dir / (DIGEST + ".png")

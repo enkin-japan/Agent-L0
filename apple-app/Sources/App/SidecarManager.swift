@@ -296,6 +296,7 @@ final class SidecarManager: ObservableObject {
                 env["INFER_REMOTE_HOST"] = host
                 env["RAG_COMPUTE_HOST"] = host
             }
+            injectKVPersist(&env)
             return Layout(libEdge: res.appendingPathComponent("scripts/lib_edge.sh"),
                           env: env, logDir: logDir, isBundle: true)
         }
@@ -338,8 +339,26 @@ final class SidecarManager: ObservableObject {
         // 与 devctl 同一句自报（devctl.sh 的 export AGENT_LAYOUT=repo）：同一套仓库检出、
         // 同一份 .env.local 密钥来源，形态就是 repo，不因发起者是 app 而改称。
         env["AGENT_LAYOUT"] = "repo"
+        // 放在 .env(.local) 平面解析**之后**：会话 KV 落不落盘是设置页上的用户决定，
+        // 仓库里那份开发用赋值清单不该盖掉它。
+        injectKVPersist(&env)
         return Layout(libEdge: rootURL.appendingPathComponent("scripts/lib_edge.sh"),
                       env: env, logDir: logDir, isBundle: false)
+    }
+
+    /// 会话 KV 落盘的 env 注入（两种布局共用）。
+    /// **决策权归执行端（数据主权）**：开不开、留几天由本机 app 的设置说了算，算力端
+    /// 只负责存 + 到期清扫。关闭时两个变量一个都不注入——由 config 的缺省值（false）
+    /// 生效，算力机上不留任何会话 KV。
+    private func injectKVPersist(_ env: inout [String: String]) {
+        guard let settings else { return }
+        // 关也要**显式注 "0"**（首审 Critical）：repo 布局先平铺解析了 .env(.local)，
+        // 里面残留的 INFER_KV_PERSIST=1 会在「不注入」时原样生效——隐私开关拨到关
+        // 却继续往算力端落盘。app 管的 sidecar，app 的开关就是最终话语权。
+        env["INFER_KV_PERSIST"] = settings.kvPersistEnabled ? "1" : "0"
+        if settings.kvPersistEnabled {
+            env["INFER_KV_TTL_DAYS"] = String(settings.kvTTLDays)
+        }
     }
 
     /// 首启生成的 AGENT_API_KEY：32 字节系统熵，base64url（无需人抄写，只走 Keychain）。

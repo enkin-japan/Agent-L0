@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import re
 import time
 from typing import Any, Dict, List, Optional
@@ -1233,6 +1234,39 @@ async def rag_retier_status():
     """换档检测数据源（分离部署缺陷一）：库戳 vs 计算面活体身份 + 重建进度。
     app 据此发现「计算端换了嵌入档位而本机库还是旧档」并提示用户重建。"""
     return await _rag_proxy("GET", "/api/v1/maintenance/retier")
+
+
+@router.delete("/api/v1/compute/kvstore")
+async def compute_kvstore_clear():
+    """立即清空算力端全部落盘 KV（kv_persist D 方案：app 设置页按钮）。薄代理到
+    inference-server DELETE /v1/kvstore；KV 是派生物，删了解冻走冷路不丢数据。
+    关掉落盘开关后清历史残留是主用例，故不看开关状态、恒可用。"""
+    import requests as _rq
+    from ..utils.config_loader import load_section
+    remote = load_section("inference").get("remote") or {}
+    host = str(remote.get("host") or "").strip()
+    if not host:
+        raise HTTPException(status_code=503,
+                            detail="未配置算力端地址（inference.remote.host / INFER_REMOTE_HOST）")
+    key = os.environ.get("INFER_API_KEY", "")
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+
+    def _do():
+        return _rq.delete(f"http://{host}:{int(remote.get('port', 14161))}/v1/kvstore",
+                          headers=headers, timeout=30)
+    try:
+        resp = await asyncio.to_thread(_do)
+    except Exception:
+        raise HTTPException(status_code=503, detail="算力端不可达（inference-server 离线？）")
+    if resp.status_code >= 400:
+        # 502 而非透传上游码（首评 S）：把算力端的 401 原样转出去，app 会误以为
+        # 是自己的 backend 钥匙错。detail 提出来别嵌套 JSON。
+        try:
+            detail = (resp.json() or {}).get("detail") or (resp.text or "")[:200]
+        except ValueError:
+            detail = (resp.text or "")[:200]
+        raise HTTPException(status_code=502, detail=f"算力端拒绝清除：{detail}")
+    return resp.json()
 
 
 @router.post("/api/v1/rag/retier/rebuild")

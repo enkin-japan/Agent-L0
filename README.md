@@ -64,7 +64,7 @@ Agent/
 
 | 形态 | 命令 | 说明 |
 |---|---|---|
-| 算力分离 · 算力端 | `./devctl.sh start --profile gpu` | inference-server + RAG 计算面：只出算力，不持久化会话文本/记忆。RAG 计算面不落任何用户数据；inference-server 有两类会话**派生物**落本机盘——`media/`（跨机媒体中转，按最后使用 TTL 自动清扫，`inference.media_ttl_days`）与 `kvstore/`（会话 KV 冻结落盘，`inference.kv_persist: false` 可整面关闭），均可随时清空 |
+| 算力分离 · 算力端 | `./devctl.sh start --profile gpu` | inference-server + RAG 计算面：只出算力，不持久化会话文本/记忆。RAG 计算面不落任何用户数据；inference-server 的会话**派生物**面：`media/`（跨机媒体中转，按最后使用 TTL 自动清扫，`inference.media_ttl_days`）；`kvstore/`（会话 KV 冻结落盘）**缺省关闭**——执行端显式开启（app 设置 → 执行层，或 `INFER_KV_PERSIST=1`）才落，留存期由执行端随请求携带、到期自动清，app 设置页有「立即清除」按钮（`DELETE /v1/kvstore`） |
 | 算力分离 · 工作端 | `./devctl.sh start --profile edge -h <算力端地址>` | RAG 数据面 + SearXNG + backend + 前端：编排 / 工具 / 记忆 / 会话与知识库落盘 |
 | all-in-one（入库缺省） | `./devctl.sh start` | 单机跑全部；host 留空即融合/本机模式，`inference.mode` 改回 `inprocess` 走进程内推理 |
 

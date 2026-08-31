@@ -200,7 +200,9 @@ class RemoteBackend:
             print(f"[RemoteBackend] 缓存克隆失败，分支将冷启动: {e}")
             return None
 
-    # ---- KV 冻结落盘（T2/Q9-a：config inference.kv_persist 总开关在服务端后端生效）----
+    # ---- KV 冻结落盘（T2/Q9-a；D 方案：**执行端总开关**在 session/engine 层把门，
+    # 本类被调到 = 决策已放行；留存期同为执行端设置，随每次请求携带，服务端逐份记
+    # 到期——两侧不各读各的 config）----
     # dest 是边端会话本地路径（sessions/<sid>/kv_cache.safetensors）；远端存储键取其
     # 父目录名（= session_id，会话目录命名约定）——服务端按键落 kvstore/<sid>.safetensors。
 
@@ -208,13 +210,18 @@ class RemoteBackend:
     def _persist_hint(dest: str) -> str:
         return Path(dest).resolve().parent.name
 
+    @staticmethod
+    def _kv_body(dest: str) -> Dict[str, Any]:
+        from ...utils.config_loader import kv_ttl_days
+        return {"hint": RemoteBackend._persist_hint(dest), "ttl_days": kv_ttl_days()}
+
     def persist_cache(self, h, dest: str) -> bool:
         cid = getattr(h, "cache_id", None)
         if not cid:
             return False    # 从未在服务端生成过：无物可落
         try:
             r = self._session.post(f"{self.base_url}/v1/cache/{cid}/persist",
-                                   json={"hint": self._persist_hint(dest)},
+                                   json=self._kv_body(dest),
                                    timeout=_PERSIST_TIMEOUT)
             return r.status_code == 200 and bool(r.json().get("persisted"))
         except Exception as e:
@@ -224,7 +231,7 @@ class RemoteBackend:
     def restore_cache(self, dest: str):
         try:
             r = self._session.post(f"{self.base_url}/v1/cache/restore",
-                                   json={"hint": self._persist_hint(dest)},
+                                   json=self._kv_body(dest),   # 用到即按执行端留存期续
                                    timeout=_PERSIST_TIMEOUT)
             if r.status_code != 200:
                 return None   # 404=无产物/开关关 → 基座/冷路（既有语义）

@@ -63,6 +63,20 @@ enum L10n {
             ("計算マシンの Tailscale IP を入力。変更後は下の「実行レイヤーを再起動」で反映されます。",
              "Enter the compute machine's Tailscale IP. After changing, tap \"Restart execution layer\" below to apply."),
         "已存长度": ("保存済みの長さ", "Stored length"),
+        // 会话 KV 落盘（kv_persist，隐私相关：缺省关）
+        "会话缓存落盘（算力端热恢复）":
+            ("セッションキャッシュをディスクに保存（計算ノードでの高速復元）",
+             "Persist session cache on compute host (fast resume)"),
+        "开启后，冻结会话的 KV 会存到算力端磁盘，解冻快约 3-13 秒；到期自动清除。开关改动点\"重启执行层\"生效；关闭后不再写入新缓存，历史残留用下方按钮清除。":
+            ("有効にすると、凍結したセッションの KV が計算ノードのディスクに保存され、復元が約 3〜13 秒速くなります。保存期間を過ぎると自動的に削除されます。切り替えは「実行レイヤーを再起動」で反映されます。オフにすると新規保存は止まりますが、既存の残存分は下のボタンで削除してください。",
+             "When enabled, the KV cache of frozen sessions is stored on the compute host's disk, making resume about 3-13 seconds faster; it is deleted automatically when it expires. Toggle changes take effect after \"Restart execution layer\"; turning it off stops new writes — clear existing leftovers with the button below."),
+        "留存天数": ("保存日数", "Retention days"),
+        "立即清除算力端会话缓存":
+            ("計算ノードのセッションキャッシュを今すぐ削除",
+             "Clear session cache on compute host now"),
+        "清除中…": ("削除中…", "Clearing…"),
+        "已清除": ("削除しました", "Cleared"),
+        "份": ("件", "entries"),
         // 执行层布局形态（#85）：形态决定密钥来源，必须写在脸上
         "布局": ("レイアウト", "Layout"),
         "bundle（密钥：钥匙串）": ("bundle（キー：キーチェーン）", "bundle (key: Keychain)"),

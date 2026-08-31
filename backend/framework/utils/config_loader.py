@@ -58,6 +58,33 @@ def _apply_host_overrides(cfg: Dict[str, Any]) -> Dict[str, Any]:
     ragc_host = os.environ.get("RAG_COMPUTE_HOST", "").strip()
     if ragc_host:
         _branch("rag", "compute")["host"] = ragc_host
+
+    # 会话 KV 落盘（kv_persist D 方案，2026-08-31 用户拍板）：决策权归执行端（数据
+    # 主权）——app 设置/.env.local 经这两个 env 覆盖 config；算力端只提供存储能力 +
+    # 到期清扫，不各读各的 config（发现比对纪律：两侧手抄同步是审计要消灭的形态）。
+    def _sect(root: str):
+        sect = cfg.get(root)
+        if not isinstance(sect, dict):
+            sect = {}
+            cfg[root] = sect
+        return sect
+
+    kv_env = os.environ.get("INFER_KV_PERSIST", "").strip().lower()
+    if kv_env:
+        if kv_env in ("1", "true", "yes", "on"):
+            _sect("inference")["kv_persist"] = True
+        elif kv_env in ("0", "false", "no", "off"):
+            _sect("inference")["kv_persist"] = False
+        else:
+            # 隐私开关的取值拼错不许静默猜方向（"ture" 被当 off 或 on 都是事故）
+            raise SystemExit(f"❌ INFER_KV_PERSIST 只认 1/true/yes/on 或 0/false/no/off，"
+                             f"收到 {kv_env!r}")
+    ttl_env = os.environ.get("INFER_KV_TTL_DAYS", "").strip()
+    if ttl_env:
+        try:
+            _sect("inference")["kv_ttl_days"] = float(ttl_env)
+        except ValueError:
+            raise SystemExit(f"❌ INFER_KV_TTL_DAYS 不是数值：{ttl_env!r}")
     return cfg
 
 
@@ -75,6 +102,30 @@ def load_section(name: str) -> Dict[str, Any]:
         return load_config().get(name) or {}
     except Exception:
         return {}
+
+
+def kv_persist_enabled() -> bool:
+    """会话 KV 落盘总开关（执行端唯一判据；缺省 **false**——KV 实质是会话内容，
+    拆分拓扑下缺省不许留在算力机盘上，分离部署审计缺陷三收尾）。冻结落盘
+    （session.freeze）与解冻热恢复（engine._prepare_session_cache）都只问这里；
+    算力端的持久化面恒为能力开启（decision 与 capability 分离，见 inference/server.py）。"""
+    return load_section("inference").get("kv_persist", False) is True
+
+
+def kv_ttl_days() -> float:
+    """KV 落盘留存天数（执行端设置，随 persist 请求发给算力端做逐份到期）。
+    值域 [1, 365]：落盘一旦开启就必须有界留存是 D 方案的立场——0 在这里**不是**
+    「永久保留」（那是 media_ttl_days 式清扫开关的语义，别混用），与 <1/坏值一并
+    回落 14；超 365 钳 365（服务端同钳，app 设置面同界）。便利参数不拒启，
+    开关才是隐私门。注意 load_config 有进程级缓存：改设置后要重启执行层生效。"""
+    raw = load_section("inference").get("kv_ttl_days", 14)
+    try:
+        days = float(raw)
+    except (TypeError, ValueError):
+        return 14.0
+    if days < 1:
+        return 14.0
+    return min(days, 365.0)
 
 
 def rag_auth_headers() -> Dict[str, str]:

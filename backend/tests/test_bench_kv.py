@@ -103,8 +103,9 @@ def test_server_kv_env_override_anchors():
     # 文本锚直接钉死变异面：全 server 不许出现对全局配置的下标赋值）
     assert '_inf_cfg = {**_inf_cfg, "kv_bits"' in server
     assert "INFERENCE_CFG[" not in server
-    # 覆盖结果必须真的进装载（_inf_cfg 是 load 的实参）
-    assert "**_inf_cfg)" in server
+    # 覆盖结果必须真的进装载（_inf_cfg 是 load 实参的基座；kv_persist D 方案在装载处
+    # 叠了能力强开 {**_inf_cfg, "kv_persist": True}——决策在执行端，这里只开能力）
+    assert '**{**_inf_cfg, "kv_persist": True})' in server
 
 
 def test_harness_source_anchors():

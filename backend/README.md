@@ -62,7 +62,10 @@ inference:
     host: "127.0.0.1"       # inference-server 地址；跨机部署改为算力机的 Tailscale 地址
     port: 14161
     cache_ttl_minutes: 45   # 服务端缓存注册表空闲回收（略长于本侧 30min 冻结，只兜底）
-  kv_persist: true          # 会话冻结时把 KV 缓存序列化落盘，解冻热恢复（省数秒重预填）
+  kv_persist: false         # 会话冻结时把 KV 序列化落盘、解冻热恢复（省 3-13s/次）。KV 实质是
+                            #   会话内容，拆分拓扑下落在算力机盘上——缺省关（D 方案 2026-08-31）。
+                            #   开启：app 设置 → 执行层，或 .env.local 写 INFER_KV_PERSIST=1
+  kv_ttl_days: 14           # 落盘 KV 留存天数（1-365；随请求发给算力端逐份记到期，用到即续）
   cuda:                     # backend: "cuda" 时生效：量化档 / 显存占比 / 投机解码等 vLLM 旋钮
     quantization: "fp8"     # 置空/null = 不量化
   # endpoints:               # 多模型常驻的追加端点（缺省注释掉=单端点现状）：每模型一实例一端口，

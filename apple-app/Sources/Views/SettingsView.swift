@@ -21,6 +21,9 @@ struct SettingsView: View {
     // 共用一个实例会让两枚钮互相串反馈）
     private enum RestartPhase { case idle, restarting, done, failed }
     @State private var restartPhase: RestartPhase = .idle
+    // 「立即清除算力端会话缓存」两态：飞行中禁点 + 进行中文案；结果就地一行小字，不弹窗
+    @State private var kvClearing = false
+    @State private var kvClearResult: String?
     // Tab 选中态必须显式绑定：store/push 是高频发布源（连接状态、流式事件），
     // 每次 body 重算时无绑定的 TabView 会重置回第一页——实机症状即"点击不切页/
     // 切过去又弹回第一页"。@State 存活于重渲染，选中页才稳得住。
@@ -328,6 +331,29 @@ struct SettingsView: View {
                         Text(L("填算力机的 Tailscale IP。改后点下方\"重启执行层\"生效。"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        // 会话 KV 落盘（kv_persist）：决策权在执行端，缺省关（KV 实质是
+                        // 会话内容）。开关与天数经 spawn env 注入，故与算力端地址同域。
+                        Toggle(L("会话缓存落盘（算力端热恢复）"), isOn: kvPersistBinding)
+                        Text(L("开启后，冻结会话的 KV 会存到算力端磁盘，解冻快约 3-13 秒；到期自动清除。开关改动点\"重启执行层\"生效；关闭后不再写入新缓存，历史残留用下方按钮清除。"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Stepper(value: kvTTLDaysBinding, in: 1...365) {
+                            Text("\(L("留存天数"))：\(store.settings.kvTTLDays)")
+                        }
+                        .disabled(!store.settings.kvPersistEnabled)
+                        // 清除钮**不看开关状态**恒可用：关掉开关之后清历史残留正是主用例。
+                        // 两态反馈（照重启钮的三态简化）：清除中…（禁点）→ 就地一行结果。
+                        if kvClearing {
+                            Button(L("清除中…")) {}.disabled(true)
+                        } else {
+                            Button(L("立即清除算力端会话缓存")) { clearKVStore() }
+                        }
+                        if let result = kvClearResult {
+                            Text(result)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
                         // 语义分工（用户拍板 2026-07-18）：这枚 = 纯重启（故障自救/
                         // 应用改过的密钥），**不动任何 key**；换 AGENT_API_KEY 走
                         // 连接页的「重新生成」。旧标签「（应用新密钥）」读起来像会
@@ -404,6 +430,18 @@ struct SettingsView: View {
     private var computeHostBinding: Binding<String> {
         Binding(get: { store.settings.computeHost },
                 set: { store.settings.computeHost = $0 })
+    }
+
+    /// 会话 KV 落盘开关/天数即改即存（UserDefaults didSet，天数在 setter 里钳 1...365）；
+    /// 两者都是 spawn 时注入的 env，对正在跑的执行层要点「重启执行层」才生效。
+    private var kvPersistBinding: Binding<Bool> {
+        Binding(get: { store.settings.kvPersistEnabled },
+                set: { store.settings.kvPersistEnabled = $0 })
+    }
+
+    private var kvTTLDaysBinding: Binding<Int> {
+        Binding(get: { store.settings.kvTTLDays },
+                set: { store.settings.kvTTLDays = $0 })
     }
 
     /// 设备 A 服务密钥即改即存（Keychain didSet），运行中的执行层重启后生效。
@@ -514,6 +552,54 @@ struct SettingsView: View {
             try? await Task.sleep(for: .seconds(1.5))
             withAnimation { regenPhase = .idle }
         }
+    }
+
+    /// 立即清除算力端已落盘的会话 KV（DELETE /api/v1/compute/kvstore，backend 薄代理）。
+    /// 与落盘开关状态无关：关掉开关后清历史残留正是主用例。
+    private func clearKVStore() {
+        guard let base = store.settings.baseURL, base.scheme != nil,
+              let url = URL(string: "/api/v1/compute/kvstore", relativeTo: base) else {
+            kvClearResult = L("❌ 地址无效")
+            return
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "DELETE"
+        // 比 backend 代理（30s）再宽一档：让「代理先答」成为常态、URLSession 超时成为例外
+        req.timeoutInterval = 40
+        let key = store.settings.apiKey
+        if !key.isEmpty {
+            req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        }
+        kvClearing = true
+        kvClearResult = nil
+        Task {
+            do {
+                let (data, resp) = try await URLSession.shared.data(for: req)
+                let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                if code == 200,
+                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    let deleted = obj["deleted"] as? Int ?? 0
+                    let mb = Double(obj["bytes"] as? Int ?? 0) / 1_048_576
+                    kvClearResult = "\(L("已清除")) \(deleted) \(L("份"))"
+                        + "（\(String(format: "%.1f", mb)) MB）"
+                } else {
+                    // backend 不可达/算力端不可达是 503 + {"detail": ...}：把它的原话带给用户
+                    kvClearResult = "❌ " + kvErrorDetail(from: data, code: code)
+                }
+            } catch {
+                kvClearResult = "❌ " + error.localizedDescription
+            }
+            kvClearing = false
+        }
+    }
+
+    /// FastAPI 的错误体是 {"detail": ...}；解不出就退回状态码，不把整段 HTML/空串糊给用户。
+    private func kvErrorDetail(from data: Data, code: Int) -> String {
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let detail = obj["detail"] as? String, !detail.isEmpty {
+            return detail
+        }
+        return "HTTP \(code)"
     }
 
     /// 纯重启（不动任何 key）：restart() 等到执行层重新就绪才返回，

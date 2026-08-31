@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional
 
 from ..core.jsonl import append_record, count_records, iter_records
 from ..core.task_state import TaskState
+from ..utils.config_loader import kv_persist_enabled
 
 
 def _strip_internal_meta(response_data: dict) -> dict:
@@ -270,11 +271,13 @@ class ChatSession:
             self.cancel_requested = False
 
             # 释放推理缓存的底层内存（后端负责物理释放，句柄换新）。
-            # T2：释放前先落盘（有能力的后端才做；远程后端暂无此面——隐私边界待决），
-            # 解冻首轮经 restore 热恢复省掉全量重预填（M3 实测 ~0.1s vs ~13s）
+            # T2：释放前先落盘，解冻首轮经 restore 热恢复省掉全量重预填（M3 实测
+            # ~0.1s vs ~13s）。远程后端的持久化面 Q9-a 已落地（旧注释「暂无此面」
+            # 过期，阶段收官时修正）；**是否落盘由执行端总开关定夺**（kv_persist
+            # D 方案：缺省 false——KV 实质是会话内容，拆分拓扑下缺省不留算力机）。
             if self._backend is not None:
                 if self.brain_memory_state is not None:
-                    if hasattr(self._backend, "persist_cache"):
+                    if kv_persist_enabled() and hasattr(self._backend, "persist_cache"):
                         try:
                             if self._backend.persist_cache(self.brain_memory_state,
                                                            str(self.kv_persist_path)):

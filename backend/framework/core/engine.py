@@ -11,6 +11,7 @@ from .dialect_protocol import ModelDialect
 from .stream_filter import VisibleTextStreamer
 from .constrained import ToolConstraintEngine, ToolCallGuard, llguidance as _llg
 from ..memory.session import ChatSession
+from ..utils.config_loader import kv_persist_enabled
 
 
 class AgentEngine:
@@ -182,7 +183,10 @@ class AgentEngine:
                 or not self._cache_is_virgin(session.brain_memory_state):
             return
         persist_path = getattr(session, "kv_persist_path", None)
-        if persist_path is not None and hasattr(self.backend, "restore_cache"):
+        # 执行端总开关（kv_persist D 方案）：关着就不去问盘——落盘侧同门（session.freeze），
+        # 两处同为模块顶层绑定（首评 S：两种 import 拼法会让测试补丁漏一半）
+        if persist_path is not None and kv_persist_enabled() \
+                and hasattr(self.backend, "restore_cache"):
             restored = None
             try:
                 restored = self.backend.restore_cache(str(persist_path))

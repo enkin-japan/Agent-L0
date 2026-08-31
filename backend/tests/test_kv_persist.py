@@ -11,10 +11,32 @@ from types import SimpleNamespace
 import mlx.core as mx
 from mlx_vlm.models import cache as C
 
+import pytest
+
 import framework.backends.mlx.backend as mlx_backend_mod
+import framework.memory.session as session_mod
 from framework.backends.mlx.backend import MLXBackend, MLXCacheHandle
 from framework.core.engine import AgentEngine
 from framework.memory.session import ChatSession
+
+
+import framework.core.engine as engine_mod
+
+
+@pytest.fixture
+def kv_on(monkeypatch):
+    """执行端总开关拨开（D 方案缺省 false）：冻结落盘与解冻热恢复的既有语义
+    测试都在「用户显式开启」前提下进行。两处消费点都是模块顶层绑定，各补各的名。"""
+    monkeypatch.setattr(session_mod, "kv_persist_enabled", lambda: True)
+    monkeypatch.setattr(engine_mod, "kv_persist_enabled", lambda: True)
+
+
+@pytest.fixture
+def kv_off(monkeypatch):
+    """开关钉死在关（首评 S：直读真 config 会被开发者 shell 里的
+    INFER_KV_PERSIST=1 污染——测试断言的是「门关时的行为」，不是「你的环境很干净」）。"""
+    monkeypatch.setattr(session_mod, "kv_persist_enabled", lambda: False)
+    monkeypatch.setattr(engine_mod, "kv_persist_enabled", lambda: False)
 
 
 def _backend(model_key="test-model"):
@@ -138,7 +160,10 @@ def test_remote_persist_restore_drop():
     h = SimpleNamespace(cache_id="c1")
     assert rb.persist_cache(h, "/s/sess-1/kv_cache.safetensors") is True
     assert "/v1/cache/c1/persist" in rb._session.calls[0][1]
-    assert rb._session.calls[0][2]["json"] == {"hint": "sess-1"}
+    body = rb._session.calls[0][2]["json"]
+    assert body["hint"] == "sess-1"
+    # D 方案：留存期由执行端随身携带（服务端逐份记到期），缺省 14 天
+    assert body["ttl_days"] == 14.0
     assert rb.persist_cache(SimpleNamespace(cache_id=None), "/s/x/kv.safetensors") is False
 
     rb = _remote(_FakeResp(200, {"cache_id": "c9"}))
@@ -194,7 +219,7 @@ class FakeBackend:
         yield SimpleNamespace(text="x")
 
 
-def test_freeze_persists_before_release(tmp_path):
+def test_freeze_persists_before_release(tmp_path, kv_on):
     be = FakeBackend()
     s = ChatSession("t2s1", tmp_path, backend=be)
     s.freeze()
@@ -203,7 +228,7 @@ def test_freeze_persists_before_release(tmp_path):
     assert s.is_cold
 
 
-def test_prepare_cache_prefers_restore_over_base():
+def test_prepare_cache_prefers_restore_over_base(kv_on):
     be = FakeBackend()
     eng = AgentEngine(be)
     asyncio.run(eng.prewarm_base_cache("sys", []))
@@ -217,7 +242,7 @@ def test_prepare_cache_prefers_restore_over_base():
     assert session.brain_memory_state is hot          # 热恢复优先于基座克隆
 
 
-def test_prepare_cache_falls_back_to_base_then_cold():
+def test_prepare_cache_falls_back_to_base_then_cold(kv_on):
     be = FakeBackend()
     eng = AgentEngine(be)
     asyncio.run(eng.prewarm_base_cache("sys", []))
@@ -228,3 +253,53 @@ def test_prepare_cache_falls_back_to_base_then_cold():
                               kv_persist_path=Path("/nonexistent/kv.safetensors"))
     eng._prepare_session_cache(session)
     assert session.brain_memory_state.state.cache == ["base-clone"]
+
+
+# ---------- D 方案缺省关闭（隐私守卫：KV 实质是会话内容，缺省不许离机） ----------
+
+def test_default_off_freeze_never_persists(tmp_path, kv_off):
+    """门关时冻结绝不调 persist——拆分拓扑下这就是「会话残片流向算力机盘」的那一步。
+    （「缺省即关」由 test_kv_retention 的 test_kv_gate_defaults 单独钉。）"""
+    be = FakeBackend()
+    s = ChatSession("t2s-off", tmp_path, backend=be)
+    s.freeze()
+    assert be.persist_calls == [], "默认关闭时冻结不得落盘"
+    assert s.is_cold
+
+
+def test_default_off_prepare_never_touches_disk(kv_off):
+    """门关时解冻不问盘（restore 不被调用），直接退基座克隆。"""
+    be = FakeBackend()
+    eng = AgentEngine(be)
+    asyncio.run(eng.prewarm_base_cache("sys", []))
+    hot = SimpleNamespace(state=SimpleNamespace(cache=["restored"], token_ids=[1]))
+    be.restore_result = hot        # 盘上「有」产物——但默认关闭连问都不该问
+    calls = []
+    orig = be.restore_cache
+    be.restore_cache = lambda p: (calls.append(p), orig(p))[1]
+    session = SimpleNamespace(session_id="t2s-off2",
+                              brain_memory_state=be.new_cache(),
+                              inject_env_context=True,
+                              kv_persist_path=Path("/nonexistent/kv.safetensors"))
+    eng._prepare_session_cache(session)
+    assert calls == [], "默认关闭时不得尝试热恢复"
+    assert session.brain_memory_state.state.cache == ["base-clone"]
+
+
+def test_drop_persisted_is_not_gated_source_anchor():
+    """源锚：SessionManager 删会话时的 drop_persisted 清理**不受开关辖制**——
+    关掉开关后删会话，仍要把算力端旧残片带走。按**整个调用函数**扫（首评 S：
+    只看前 600 字符的窗，门写在调用点下一行就漏了）。"""
+    import ast
+    import inspect
+    import framework.memory.session as m
+    tree = ast.parse(inspect.getsource(m))
+    hits = 0
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            body_src = ast.dump(node)
+            if "drop_persisted" in body_src:
+                hits += 1
+                assert "kv_persist_enabled" not in body_src, \
+                    f"{node.name} 里 drop_persisted 与开关判定同函数——清理必须无条件"
+    assert hits >= 1, "找不到 drop_persisted 调用函数"
