@@ -77,8 +77,9 @@ def guard_model_identity(ident: dict, expected: dict, base_url: str) -> None:
     if got_repo != expected["repo"]:
         raise RuntimeError(
             f"模型档位错开：算力端在跑 {got_repo}，本侧选型是 {expected['repo']}。\n"
-            f"  两侧必须同档。dev 形态：任一侧 ./devctl.sh model 对齐；app 形态：本侧\n"
-            f"  改不了选型，唯一补救在算力端——把算力端换回 app 打包默认档再重启本 app。")
+            f"  remote 形态启动时本应自动发现采纳算力端型号（discover_remote_model）——\n"
+            f"  走到这一步说明启动窗内算力端换了模型/重启换档，或服务过旧未报身份。\n"
+            f"  重启本侧（app：重启执行层）重新发现即可；dev 单侧强钉选型则 ./devctl.sh model 对齐。")
     exp_rev, got_rev = expected.get("revision"), ident.get("model_revision")
     if exp_rev and got_rev and exp_rev != got_rev:
         raise RuntimeError(

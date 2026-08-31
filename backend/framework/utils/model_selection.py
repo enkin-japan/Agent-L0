@@ -14,9 +14,25 @@ from .config_loader import REPO_ROOT, load_section
 
 SELECTION_FILE = REPO_ROOT / ".model-selection"
 
+# 发现采纳态（remote 形态启动期由 app.py 写一次；build 72 复盘）：记在**本模块**而非
+# app.MODEL——resolve_endpoints / model_router / RemoteBackend 都在调用期经
+# resolve_selected_model 重推主模型，只改 app 全局会让路由面继续拿未采纳的缺省
+# （修正评审 C1：e4b 声明 audio 而采纳的 26b 没有 → 路由静默把请求发给错能力集）。
+_ADOPTED: Optional[Tuple[str, Optional[str]]] = None
+
+
+def adopt_model(repo: str, revision: Optional[str]) -> None:
+    """记录算力端发现采纳（进程级，一次性）。此后 resolve_selected_model 全链路
+    （含 resolve_endpoints 的 main、路由的能力/画像推导）以采纳值为准。"""
+    global _ADOPTED
+    _ADOPTED = (repo, revision)
+
 
 def resolve_selected_model() -> Tuple[str, Optional[str], str]:
-    """返回 (repo_or_path, revision, source)。source ∈ {"selection", "default"}，供日志。"""
+    """返回 (repo_or_path, revision, source)。source ∈ {"adopted", "selection", "default"}。
+    优先级：发现采纳（remote 启动期定案）> .model-selection 显式选型 > config 缺省。"""
+    if _ADOPTED is not None:
+        return _ADOPTED[0], _ADOPTED[1], "adopted"
     inference = load_section("inference")
     default = (inference.get("model"), inference.get("model_revision"), "default")
     registry = inference.get("model_registry") or []
@@ -33,6 +49,53 @@ def resolve_selected_model() -> Tuple[str, Optional[str], str]:
     print(f"⚠️ .model-selection 指向注册表外的 {selected!r}，回落默认模型"
           f"（注册表见 config.yaml inference.model_registry）")
     return default
+
+
+def discover_remote_model(base_url: str, timeout: float = 5.0
+                          ) -> Optional[Tuple[str, Optional[str], dict]]:
+    """算力端模型**发现**（分离部署铁则：模型状态靠发现不靠抄；build 72 实机复盘）。
+
+    remote 形态的执行端（尤其 app bundle：没有 .model-selection、config 默认键按
+    J5 决策只管小内存机回落）启动时问算力端 /health 拿真身，就地采纳——分词器/
+    方言/条目开关全部跟着算力端在跑的模型走，不再依赖两侧手抄一致。
+
+    返回 (repo, revision, entry)：revision 取**本地注册表钉扎**而非活体值——分词器
+    按本地钉扎解析（本地缓存对应它），且身份护栏的 revision 臂要靠「本地钉扎 vs
+    活体」的差异才能抓两侧仓库不同步（修正评审 C2：曾把活体值原样喂给 expected，
+    护栏比对同源恒真、臂成摆设）；活体≠钉扎时这里先响一声，护栏随后拒启指引 pull。
+    返回 None = 不采纳、调用方回落本地缺省（护栏 fail-closed 兜底）：服务端未报
+    身份（旧版），或 service 报了别的名字（端口被外来程序占用——不比对 service 就
+    采纳，等于让任意 http 服务决定我们的分词器，修正评审 S4）。
+    响亮失败：不可达/HTTP 错把 requests 异常抛给调用方；表外 repo 抛 RuntimeError
+    （方言无从查起——库层不 SystemExit，进程退出策略归调用方，修正评审 S10）。
+    """
+    import requests
+    r = requests.get(f"{base_url}/health", timeout=timeout)
+    r.raise_for_status()
+    try:
+        ident = r.json()
+    except ValueError:
+        ident = {}
+    if not isinstance(ident, dict):
+        ident = {}
+    svc = ident.get("service")
+    if svc and svc != "macagent-inference":
+        return None
+    repo = ident.get("model_repo")
+    if not repo:
+        return None
+    entry = model_options(repo)
+    if not entry:
+        raise RuntimeError(
+            f"算力端在跑注册表之外的模型 {repo!r}——方言与开关无从查起，拒绝采纳。"
+            f"请让算力端换回注册表内的档；或两侧同步注册该模型后重启"
+            f"（dev：config.yaml inference.model_registry；app：更新到含该注册项的版本）。")
+    live_rev = ident.get("model_revision")
+    reg_rev = entry.get("revision")
+    if live_rev and reg_rev and live_rev != reg_rev:
+        print(f"⚠️ [System] 算力端实跑 revision（{live_rev[:12]}…）≠ 本地注册表钉扎"
+              f"（{str(reg_rev)[:12]}…）：两侧仓库不同步，身份护栏将拒启并指引对齐")
+    return repo, reg_rev, entry
 
 
 #: capabilities 值域（config.yaml model_registry 各条目按 HF config.json 实测声明）

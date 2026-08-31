@@ -83,6 +83,124 @@ def test_empty_expected_skips_entirely():
     guard_model_identity(_ident(), None, "http://h:1")
 
 
+# ---------- 模型发现采纳（build 72 实机复盘：app 形态无指针文件，靠发现不靠抄） ----------
+
+class _HealthResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+def _discover(monkeypatch, payload, registry=None):
+    from framework.utils import model_selection as ms
+    monkeypatch.setattr("requests.get", lambda url, timeout=None: _HealthResp(payload))
+    monkeypatch.setattr(ms, "load_section",
+                        lambda name: {"model_registry": registry if registry is not None
+                                      else [{"repo": "org/model-a", "revision": "rev-reg",
+                                             "dialect": "gemma4"}]})
+    return ms.discover_remote_model("http://h:1")
+
+
+def test_discover_adopts_registry_pinned_revision(monkeypatch):
+    # revision 取**本地注册表钉扎**（修正评审 C2）：分词器按本地钉扎解析，且护栏的
+    # revision 臂要靠「钉扎 vs 活体」的差异才能抓两侧仓库不同步——活体值直传会让
+    # expected 与 /health 同源、比对恒真
+    repo, rev, entry = _discover(monkeypatch, {
+        "service": "macagent-inference", "model_repo": "org/model-a",
+        "model_revision": "rev-live-different"})
+    assert repo == "org/model-a"
+    assert rev == "rev-reg", "必须是注册表钉扎，不是活体值"
+    assert entry["dialect"] == "gemma4"
+
+
+def test_discover_old_server_returns_none(monkeypatch):
+    # 旧版服务未报身份 → None（调用方回落本地缺省，装配护栏 fail-closed 兜底）
+    assert _discover(monkeypatch, {"status": "ok"}) is None
+    assert _discover(monkeypatch, "not-a-dict") is None
+
+
+def test_discover_foreign_service_returns_none(monkeypatch):
+    # service 报了别的名字（外来程序占端口）绝不采纳（修正评审 S4）：哪怕它碰巧
+    # 带了 model_repo——让任意 http 服务决定我们的分词器是事故不是发现
+    assert _discover(monkeypatch, {"service": "some-other-app",
+                                   "model_repo": "org/model-a"}) is None
+
+
+def test_discover_off_registry_refuses(monkeypatch):
+    # 表外模型拒绝采纳（RuntimeError——库层不 SystemExit，退出策略归调用方）
+    with pytest.raises(RuntimeError, match="注册表之外"):
+        _discover(monkeypatch, {"model_repo": "org/unknown"}, registry=[])
+
+
+def test_discover_unreachable_propagates(monkeypatch):
+    import requests as _rq
+    from framework.utils import model_selection as ms
+
+    def boom(url, timeout=None):
+        raise _rq.ConnectionError("refused")
+    monkeypatch.setattr("requests.get", boom)
+    with pytest.raises(_rq.ConnectionError):
+        ms.discover_remote_model("http://h:1")
+
+
+def test_adopt_model_wins_full_resolution_chain(monkeypatch):
+    """承重测试（修正评审 C1/C3）：采纳记在 model_selection 模块态后，
+    resolve_selected_model 与 resolve_endpoints 的 main 都必须吃到采纳值——
+    路由面的能力/画像推导全经这条链，只改 app.MODEL 是 build 72 缺陷的变体。"""
+    from framework.utils import model_selection as ms
+    monkeypatch.setattr(ms, "_ADOPTED", None)   # 自动还原，防污染其它测试
+    monkeypatch.setattr(ms, "load_section", lambda name: {
+        "model": "org/default-model", "model_revision": "rev-def",
+        "remote": {"host": "h", "port": 14161},
+        "model_registry": [{"repo": "org/adopted-model", "revision": "rev-adp",
+                            "dialect": "gemma4", "capabilities": ["text"]}]})
+    ms.adopt_model("org/adopted-model", "rev-adp")
+    assert ms.resolve_selected_model() == ("org/adopted-model", "rev-adp", "adopted")
+    eps = ms.resolve_endpoints()               # 零参路径走 resolve_selected_model
+    assert eps[0]["repo"] == "org/adopted-model" and eps[0]["revision"] == "rev-adp"
+
+
+def test_app_lifespan_discovers_before_tokenizer_resolve():
+    """源锚（修正评审 C3 强化）：remote 分支必须 ①调 discover_remote_model，
+    ②调 adopt_model（模块态，路由面吃到），③把 MODEL 三元组从
+    resolve_selected_model **重新赋值**（不是留着旧默认），④全部先于分词器解析。
+    弱版（只查调用与 global 存在）放过了「采纳值不落地」的 build 72 同形变异。"""
+    tree = ast.parse((_REPO / "backend" / "app.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.AsyncFunctionDef) and n.name == "lifespan")
+
+    def _lines(pred):
+        return [n.lineno for n in ast.walk(fn) if pred(n)]
+    discover_lines = _lines(lambda n: isinstance(n, ast.Call)
+                            and isinstance(n.func, ast.Name)
+                            and n.func.id == "discover_remote_model")
+    adopt_lines = _lines(lambda n: isinstance(n, ast.Call)
+                         and isinstance(n.func, ast.Name) and n.func.id == "adopt_model")
+    rebind_lines = []
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call) \
+                and isinstance(n.value.func, ast.Name) \
+                and n.value.func.id == "resolve_selected_model":
+            names = {e.id for t in n.targets if isinstance(t, ast.Tuple)
+                     for e in t.elts if isinstance(e, ast.Name)}
+            if {"MODEL", "MODEL_REVISION"} <= names:
+                rebind_lines.append(n.lineno)
+    resolve_lines = _lines(lambda n: isinstance(n, ast.Call)
+                           and isinstance(n.func, ast.Name)
+                           and n.func.id in ("resolve_tokenizer_only_path",
+                                             "resolve_model_path"))
+    assert discover_lines, "发现采纳没接上（discover_remote_model 缺席）"
+    assert adopt_lines, "采纳没落进 model_selection 模块态（adopt_model 缺席=路由面用旧默认）"
+    assert rebind_lines, "MODEL 三元组没有从 resolve_selected_model 重新赋值（采纳不落地）"
+    assert min(discover_lines) < min(adopt_lines) <= max(rebind_lines) < min(resolve_lines), \
+        (discover_lines, adopt_lines, rebind_lines, resolve_lines)
+
+
 # ---------- RemoteBackend.load 接线（护栏必须真的被调用） ----------
 
 class _Resp:

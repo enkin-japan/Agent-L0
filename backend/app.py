@@ -299,6 +299,9 @@ def require_remote_inference_host(cfg) -> None:
 # ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 采纳写回面（发现采纳块用；global 须先于本函数内任何对这些名字的读取——
+    # 条件判断里就读了 _model_source）
+    global MODEL, MODEL_REVISION, MODEL_OPTIONS, _model_source
     # 推理承载（B1）先于路径解析定夺：mode=remote 时本进程只当编排端，权重在设备 A 的
     # inference-server 里——这里若走全量 resolve_model_path，edge 机会照样拉满 4.9G，
     # devctl 的 --tokenizer-only 预取也拦不住（那只让分词器先到位，全量解析看的是
@@ -306,6 +309,54 @@ async def lifespan(app: FastAPI):
     _inference_cfg = config.get("inference") or {}
     _mode = str(_inference_cfg.get("mode", "inprocess"))
     _remote = _mode == "remote"
+    # 模型发现采纳（分离部署铁则，build 72 实机复盘）：remote 形态先问算力端 /health
+    # 拿真身就地采纳——app bundle 没有 .model-selection、config 默认键按 J5 决策只管
+    # 小内存回落（e4b），不发现就必然与生产选型（26b）错配、被身份护栏正确拒启。
+    # 只在本地无显式选型（source=default）时采纳（修正评审 S6）：操作员写下的
+    # .model-selection 是决定不是建议（评测臂强钉某档），显式选型走「不采纳 + 装配
+    # 护栏响亮比对」。采纳落在 model_selection 模块态（adopt_model）而非仅 app 全局：
+    # resolve_endpoints/路由在调用期重推主模型，只改这里的 MODEL 会让路由面继续拿
+    # 未采纳缺省的能力集（修正评审 C1）。旧版服务未报身份/外来占端口 → 回落缺省，
+    # 护栏 fail-closed 兜底；不可达 → 重试窗后拒启（含指引；算力端可能正在开机）。
+    if _remote and _model_source == "default":
+        from framework.utils.model_selection import adopt_model, discover_remote_model
+        require_remote_inference_host(config)   # 空 host 先拦成明确指引（uvicorn app:app 路径也覆盖）
+        _rm = _inference_cfg.get("remote") or {}
+        try:
+            _port = int(_rm.get("port", 14161))
+        except (TypeError, ValueError):
+            raise SystemExit(f"❌ [backend] inference.remote.port 不是数值：{_rm.get('port')!r}")
+        _base = f"http://{str(_rm.get('host') or '').strip()}:{_port}"
+        _found, _last_err = None, None
+        for _attempt in range(5):        # 重试窗 ~8s：算力端可能正在开机（sidecar 快崩
+            try:                         # 循环会烧重启预算，修正评审 S7）
+                _found = discover_remote_model(_base)
+                _last_err = None
+                break
+            except RuntimeError as e:    # 表外模型：重试无意义，当场拒启
+                raise SystemExit(f"❌ [backend] {e}")
+            except Exception as e:
+                _last_err = e
+                await asyncio.sleep(2)
+        if _last_err is not None:
+            raise SystemExit(
+                f"❌ [backend] 拒绝启动：inference.mode=remote 但算力端不可达或探活失败"
+                f"（{_base}）：{_last_err}\n"
+                f"   请先启动算力端推理服务（./devctl.sh start --profile gpu），"
+                f"或把 inference.mode 改回 inprocess。")
+        if _found:
+            adopt_model(_found[0], _found[1])
+            MODEL, MODEL_REVISION, _model_source = resolve_selected_model()
+            MODEL_OPTIONS = model_options(MODEL)
+            print(f"🔎 [System] 已按算力端发现采纳模型：{MODEL}"
+                  f"（注册表钉扎 {str(MODEL_REVISION)[:12] if MODEL_REVISION else '无'}——"
+                  f"模型状态靠发现不靠抄；首启可能现场拉取分词器 ~31MB）")
+        else:
+            print(f"⚠️ [System] 算力端未报模型身份（旧版服务/外来程序占端口）：回落本地"
+                  f"缺省 {MODEL}，装配期身份护栏将 fail-closed 兜底")
+    elif _remote:
+        print(f"📌 [System] 本地 .model-selection 显式选型 {MODEL}：跳过发现采纳"
+              f"（操作员决定优先），装配期身份护栏将与算力端实跑模型响亮比对")
     print(f"🚀 [System] {'resolving tokenizer for' if _remote else 'loading model:'} {MODEL}"
           + ("（来自 .model-selection 启动选择）" if _model_source == "selection" else "")
           + ("（mode=remote：只读分词器，不拉权重）" if _remote else ""))
