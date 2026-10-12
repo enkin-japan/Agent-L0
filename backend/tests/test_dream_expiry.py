@@ -39,4 +39,3 @@ def test_dream_operation_preserves_valid_until_and_expiry_prompt(
     else:
         assert "valid until" not in index
         assert "EXPIRED" not in index
-

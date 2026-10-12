@@ -29,7 +29,7 @@ APP=build/Build/Products/Release/MacAgent.app
 RES="$APP/Contents/Resources"
 
 echo "== 装入执行层 =="
-# backend：只带代码与只读内容。数据目录（models/sessions/schedules/notes/日志）是
+# backend：只带代码与只读内容。数据目录（models/sessions/schedules/notes/maintenance/日志）是
 # DATA_DIR 的事（D.16），dev 形态它们恰好躺在 backend/ 里——必须排掉，否则把
 # 开发机的会话史打进包里。__pycache__ 排掉：字节码在新位置首次 import 时重生成。
 # ⚠️ '.venv*' 必须带通配：曾写 '.venv' 漏掉 .venv-mlxsrc（477MB 开发 venv + 越界软链），
@@ -37,12 +37,13 @@ echo "== 装入执行层 =="
 #    包是要公开分发的，多带一个字节都是无审查的暴露面。
 # --delete-excluded 不能省：光 --delete 会把「此前误打进包、如今已列入排除」的旧文件
 # 原样留在目的地（排除项不参与删除决策）——venv 首修后第二跑仍拒收即此坑实测。
+# /maintenance/ 仅匹配数据根；framework/maintenance/ 是运行代码，必须保留。
 rsync -a --delete --delete-excluded \
   --exclude='.venv*' --exclude='__pycache__' --exclude='.pytest_cache' \
   --exclude='tests' --exclude='benchmarks' --exclude='docs' \
   --exclude='models' --exclude='sessions' --exclude='schedules' --exclude='notes' \
   --exclude='*.jsonl' --exclude='*.log' --exclude='.DS_Store' \
-  --exclude='logs' --exclude='api_tools' --exclude='skills' \
+  --exclude='logs' --exclude='api_tools' --exclude='skills' --exclude='/maintenance/' \
   "$ROOT/backend/" "$RES/backend/"
 # ⚠️ backend/api_tools 是 dev 形态的数据目录（UI 添加的声明 + .secrets.env 密钥文件），
 #    绝不进包——密钥红线；app 形态由 DATA_DIR（App Support）承接同名目录。
