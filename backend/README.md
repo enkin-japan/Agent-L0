@@ -1,6 +1,6 @@
 # backend —— Agent 主体服务
 
-> [Agent](../README.md) monorepo 的核心服务。Apple Silicon 本地多模态 AI Agent 服务，默认以 **MLX** 后端在本进程内推理。以 FastAPI 对外提供 HTTP 接口，内置 ReAct 多轮推理引擎、MCP 风格工具插件系统、KV Cache 前缀复用与会话分支能力，面向单用户、轻量并发场景。
+> [Agent](../README.md) monorepo 的核心服务。Apple Silicon 本地多模态 AI Agent 服务，通过 `inference.mode` 选择进程内推理或远程 MLX/CUDA 推理；仓库模板为待配置的 `remote` 模式。以 FastAPI 对外提供 HTTP 接口，内置 ReAct 多轮推理引擎、MCP 风格工具插件系统、KV Cache 前缀复用与会话分支能力，面向单用户、轻量并发场景。
 
 ## 特性
 
@@ -12,9 +12,9 @@
 - **任务挂起 / 恢复（单核多任务轮换）**：`POST /task/suspend` 在迭代边界安全让出 worker（KV 留内存待恢复），`POST /task/resume` 从 `task_state` + 已提交历史续跑，像单核 CPU 那样在任务间协作式轮换
 - **上下文压缩（有界记忆）**：机械层做**预算感知 + 取代感知**的微压缩（借鉴大厂 microcompaction）——同一只读工具对同一目标的重复读取，较旧那条被后续读取取代（无夹写才取代，GUI「读树→点击→再读树」的两次树都保留）；全部观察越预算才在旧区按体量驱逐（大者先压、小者即使旧也留），未越则旧观察保持原文。再上一层：上下文越阈值把旧轮折叠进滚动摘要（方案A：`[system]+[摘要]+[尾部]`，全量日志始终保留），双阈值触发——活跃期高阈值兜底 + 空闲/冻结前低阈值优化，摘要任务走调度器低优先级不扰活跃任务
 - **长期记忆沉淀**：被折叠掉的对话原文沉淀进 RAG `agent_memory` 类目（压缩的无损承重网，fail-open），日后经 `rag_search` 召回早前交互
-- **联网调查（受限沙箱知识扩充）**：主体只调 `web_research` 一个工具、只拿回交叉验证过的事实摘要；搜索/抓取/原始网页全封在受限沙箱内（复用主模型权重、KV 隔离，仅有 `web_search`/`open_pages` 两个脏工具，物理上不进主体上下文）——注入即便劫持沙箱也够不到任何危险工具（无行为劫持），最坏只能返回被污染文本，故摘要仍以「不可信资料」边界交回主体。反投毒落到代码：删隐藏元素/脚本/零宽字符、标记祈使注入、域名信誉分交叉质证、SSRF 硬拒内网/环回/云元数据。搜索层用本机 SearXNG（数据不出门），离线则该工具自动不注册。另有独立工具 `web_read`：只读给定 URL 并如实摘要（不能搜索），任务超出该页再改用 `web_research`
-- **进度可视与真取消**：`GET /task` 轮询计划推进进度；`POST /task/cancel` 在 token 级检查点停止生成并整轮回滚（非仅中断等待）
-- **事件账本（协议 v1，根 `PROTOCOL.md`）**：轮次是可寻址资源——`POST /turns` 受理即返（202），编排过程"先记账后分发"（`core/journal.py`：活跃轮内存环 + journal.jsonl 里程碑落盘），`GET /events?after=seq` 断线任意重连、重放后续播，`GET /turn` 即查进行中轮次的完整可恢复状态（含待审批工具）；轮次生命周期唯一属主为 `core/turn_runner.py`，旧 SSE/阻塞对话端点全部退化为其薄适配器（旧事件契约兼容至 Phase 4，蓝图见已归档的 `docs/history/REARCHITECTURE.md`）
+- **联网调查（受限沙箱知识扩充）**：主体只调 `web_research` 一个工具、只拿回交叉验证过的事实摘要；搜索/抓取/原始网页全封在受限沙箱内（复用主模型权重、KV 隔离，仅有 `web_search`/`open_pages` 两个脏工具，物理上不进主体上下文）——注入即便劫持沙箱也够不到任何危险工具（无行为劫持），最坏只能返回被污染文本，故摘要仍以「不可信资料」边界交回主体。反投毒落到代码：删隐藏元素/脚本/零宽字符、标记祈使注入、域名信誉分交叉质证、SSRF 硬拒内网/环回/云元数据。搜索层用本机 SearXNG 聚合外部搜索，查询与网页请求仍会联网，离线则该工具自动不注册。另有独立工具 `web_read`：只读给定 URL 并如实摘要（不能搜索），任务超出该页再改用 `web_research`
+- **进度与停止反馈**：账本事件驱动计划与步骤预览，`GET /task` 提供快照；`POST /task/cancel` 请求在安全点停止后续执行。回滚模型记忆不代表撤销已经发生的磁盘或网络副作用
+- **事件账本（协议 v1，根 `PROTOCOL.md`）**：轮次是可寻址资源——`POST /turns` 受理即返（202），编排过程"先记账后分发"（`core/journal.py`：活跃轮内存环 + journal.jsonl 里程碑落盘），`GET /events?after=seq` 断线任意重连、重放后续播，`GET /turn` 即查进行中轮次的完整可恢复状态（含待审批工具）；轮次生命周期唯一属主为 `core/turn_runner.py`，旧 SSE 事件契约已退役；保留的阻塞对话入口是其薄适配器（历史蓝图见 `docs/history/REARCHITECTURE.md`）
 - **MCP 工具插件**：扫描 `framework/mcp/tools/` 自动注册 `BaseTool` 子类；注册前探活，依赖服务不可用的工具自动舍弃
 - **桌面任务工具集**：三层递进——终端命令（`run_shell_command`，主力）→ AppleScript/JXA 应用级自动化（`run_applescript`）→ Accessibility GUI 操作兜底（读 UI 树 / 点击 / 键入 / 快捷键），配合按调用动态审批
 - **KV Cache 前缀复用**：多轮对话仅预填充新增 token，实测续轮 prefill 提速近 10 倍
@@ -47,19 +47,20 @@
 ### 配置（仓库根 config.yaml）
 
 配置统一在**仓库根**的 `config.yaml`（backend 与 rag 共读一份，寻址见
-`framework/utils/config_loader.py`）。本服务读取的段落如下：
+`framework/utils/config_loader.py`）。以下是字段示意，不是完整配置副本；实际默认值以
+根配置为准，不能从示例推断本机已配置或服务已就绪：
 
 ```yaml
 inference:
   host: "127.0.0.1"         # 仅本机回环，外部访问统一走前端的 /api 代理
   port: 14159
   mode: "remote"             # inprocess=本进程加载 backend 所指后端；remote=连 inference-server
-                              # （模板默认 inprocess，本机现为 remote；remote.host 留空时地址走
+                              # （模板默认 remote；remote.host 留空时地址走
                               #   .env.local 的 INFER_REMOTE_HOST，mode=remote 且无地址会拒启）
   backend: "mlx"             # mlx | cuda：进程内所用/服务端内包的后端（cuda 已落地，vLLM 承载，
                               #   见 backend/framework/backends/cuda/backend.py）
   remote:                   # 仅 mode=remote 时用（密钥走 INFER_API_KEY，两侧同值）
-    host: "127.0.0.1"       # inference-server 地址；跨机部署改为算力机的 Tailscale 地址
+    host: ""                # 模板未配置；通过 INFER_REMOTE_HOST 填地址，单机则显式用 inprocess
     port: 14161
     cache_ttl_minutes: 45   # 服务端缓存注册表空闲回收（略长于本侧 30min 冻结，只兜底）
   kv_persist: false         # 会话冻结时把 KV 序列化落盘、解冻热恢复（省 3-13s/次）。KV 实质是
@@ -222,6 +223,14 @@ curl -X POST http://localhost:14159/api/v1/chat/my_session \
 前端默认走本接口；旧的阻塞式 `POST /api/v1/chat/{session_id}` 仍保留为一次性问答的便捷入口
 （阻塞到整轮完成一次性返回，内部走同一 TurnRunner 闭环）。
 
+### 显式任务重试 `POST /api/v1/chat/{session_id}/turns/retry`
+
+由 `TurnRunner.accept_retry` 校验源轮引用并复制原附件与生成设置。重试追加新的规范历史行，
+不先删除原轮，也不重放旧 `tool_calls`；它会重新运行编排，可能再次执行工具，仍受预算、
+审批与沙箱约束。成功后客户端才替换该组的展示结果，失败尝试仍可审计。
+`/history` 的 `last_turn_ref`、`retry_groups` 等可选字段用于定位与展示；输入不可恢复时明确
+拒绝重试，不静默降级为纯文本。请求字段、幂等边界与共享夹具见根 [PROTOCOL.md](../PROTOCOL.md)。
+
 ### 记忆状态 `GET /api/v1/chat/{session_id}/memory`
 
 会话上下文压缩状态快照（只读，不触发会话唤醒）：当前 model-facing 上下文规模
@@ -235,10 +244,11 @@ curl -X POST http://localhost:14159/api/v1/chat/my_session \
 立即运行、`POST /schedules/{id}/cancel` 中止本次运行、`DELETE /schedules/{id}` 删除、
 `GET /schedules/{id}/runs` 运行历史（每条含专属会话 `session_id`，可跳转查看全文）。
 
-### 会话资产 / Deck `GET /api/v1/files/{session_id}/{assets/{filename} | deck}`
+### 会话文件 / 资产 / Deck `GET /api/v1/files/{session_id}`
 
-出货 `render_chart` 生成的图表 PNG、`deck_export_pdf` 导出的 PDF（`assets/`，长缓存），
-以及会话的 Deck Spec（`deck.json`，前端 SlideRenderer 的数据源）。路径双重白名单校验。
+清单端点列出会话 `assets/` 中允许交付的文件；下载走 `/api/v1/files/{session_id}/assets/{filename}`，
+Deck Spec 走 `/api/v1/files/{session_id}/deck`。文件路径与文件名受白名单校验，不开放任意
+磁盘路径或上传原件。资产随会话保留策略管理，清单读取不会证明任务已成功。
 
 ### 会话索引 `GET /api/v1/sessions` + `PATCH .../pin` / `PATCH .../meta`
 
@@ -257,14 +267,15 @@ curl -X POST http://localhost:14159/api/v1/chat/my_session \
 多步任务进度快照（只读，不触发会话创建）：`active` 是否有进行中的计划、
 `generating` 是否有轮次在推理中、`task` 为完整 TaskState（goal / plan 步骤状态 / 计数器）、
 `activity` 为实时步骤流（`phase` 阶段 / `current` 当前动作 / `steps[]` 已完成步骤）。
-前端在等待对话响应期间轮询本接口，把"黑盒等待"变成看得见的动作流（当前在思考/调哪个
-工具/拿到什么结果），单工具任务（无多步计划）同样可见。活动状态仅存内存、按轮重置、不落盘。
+客户端用账本事件展示过程，并用此快照对账；单工具任务（无多步计划）同样可见。活动状态仅存内存、按轮重置、不落盘。
 
 ### 取消生成 `POST /api/v1/chat/{session_id}/task/cancel`
 
 真取消：置位取消标志，引擎在 token 段粒度、编排循环在迭代边界响应。
 被取消的轮次**整轮回滚出内存记忆**（与引擎故障同语义，用户消息也不保留），
-以 `status: "cancelled"` 落盘存档；对话接口会以 cancelled 状态正常返回。
+以 `status: "cancelled"` 落盘存档；对话接口会以 cancelled 状态正常返回。控制请求的受理
+不是终态，最终以 `turn_ended` 确认。已完成的外部副作用不会自动撤销；终态中的
+`execution_receipts` 提供有界执行记录，截断状态如实标记，不能将其当作通用撤销功能。
 
 ### 全局任务视图 `GET /api/v1/tasks`
 
@@ -296,7 +307,9 @@ curl -X POST http://localhost:14159/api/v1/chat/my_session \
 
 ### 历史节点 `GET /api/v1/chat/{session_id}/history`
 
-返回该会话的历史轮次列表，下标即节点位置，供前端展示与选取分支点。
+返回规范历史轮次，下标是服务端真实节点位置。`replay_after` / `generation` 为历史与
+事件重放提供恢复边界；不能用过滤后的 UI 下标代替真实节点下标。重试组的展示另由
+`retry_groups` 指定，原始尝试仍保留。详见根协议。
 
 ### 删除最后一轮 `DELETE /api/v1/chat/{session_id}/turns/last`
 
@@ -305,7 +318,7 @@ curl -X POST http://localhost:14159/api/v1/chat/my_session \
 - **落盘**：截断 `history.jsonl` 最后一行，物理删除该轮的图片/音频文件
 - **内存**：热会话按截断后的日志整体重建 history 与多模态引用
 - **KV Cache**：保留不动，下次推理经前缀匹配自动裁剪对齐（与分支复用同一机制）
-- 若该轮正等待敏感操作审批（尚未落盘），则撤销挂起状态并回滚内存
+- 待审批或挂起的活轮由 TurnRunner 统一撤销、收尾账本与调度句柄，再清理暂存输入，避免重启复活
 
 前端「更新最后一次发言」= 本接口 + 按新内容重新发送。
 
@@ -338,12 +351,15 @@ curl -X POST http://localhost:14159/api/v1/chat/my_session/turns/approval \
 ```
 
 - `approve: true` 执行挂起的工具调用并继续推理收尾；`false` 则工具不执行，由模型向用户解释
-- 可选 `expected_turn_id`（推送按钮的远程决议带上）：目标轮已换时 409 防错批
+- `expected_turn_id` / `expected_approval_seq` 绑定所审阅的轮次与审批批次；当前客户端带上目标身份，过期决议被拒绝。兼容字段约束见根协议
 - 挂起期间用户直接发新消息视为放弃，该轮以 `warning` 收尾落盘；会话冻结/服务关闭时以 `fail` 作废
 
 ### 销毁会话 `DELETE /api/v1/chat/{session_id}`
 
-释放内存并物理删除该会话目录。
+通过已有生命周期取消/收尾活轮，释放内存并删除会话目录；外部工具副作用不随之撤销。
+若目录和热会话都不存在，仍返回 `status: false`，仅附加明确的 `reason: "not_found"`；
+客户端可据此确认删除目标已不存在。其他失败、缺少 reason 或未知 reason 不能当作成功。
+行为由 `protocol/fixtures/017-delete-absent.responses.json` 约束。
 
 ## 架构
 
@@ -563,7 +579,7 @@ GUI 感知以 AX 树的文本序列化为主（原生 App 足够）；截图作�
 > `_flag_injection` 标记中英祈使注入、域名信誉分 + 「≥2 独立来源」交叉质证、`wrap_untrusted`
 > 明确声明「资料非命令」。**SSRF 硬拒绝**环回/私有网段/链路本地（含 `169.254.169.254`
 > 云元数据）与非 http(s)。搜索层用本机 **SearXNG**（仓库 `searxng/` 原生 venv 部署、无 Docker，
-> `settings.yml` 须开 `json` 输出）——独立服务、数据不出门；离线则 `web_research` 探活失败、自动不注册。
+> `settings.yml` 须开 `json` 输出）——本机搜索聚合服务，但会向外部搜索引擎和网页发出请求；离线则 `web_research` 探活失败、自动不注册。
 
 ### RAG 知识库工具
 
@@ -648,11 +664,11 @@ class MyTool(BaseTool):
 
 ## 注意事项
 
-- 工具探活只发生在服务启动时；若依赖的外部服务（如 RAG）在 Agent 运行期间才上线，需重启服务才能注册对应工具。同理，`rag_search` 的分类目录提示烘在启动时的 schema 里，运行期间新建的分类需经 `rag_list_categories` 现查（工具描述已注明）
+- 工具在启动时探活；依赖恢复后可用 `POST /api/v1/tools/rescan` 重探未上架候选并补注册。已注册实例的替换/下架仍需重启；停用或删除尚未上架的 API 声明会撤回候选，旧探活返回后也不能将它复活。同理，`rag_search` 的分类目录提示烘在启动时的 schema 里，运行期间新建的分类需经 `rag_list_categories` 现查（工具描述已注明）
 - 请勿以 `reload=True` 方式启动，MLX 模型反复重载会导致严重内存泄漏
 - **鉴权**：`/api/v1/*` 全量套 Bearer 校验（`AGENT_API_KEY` 环境变量优先，回落 `config.yaml` 的 `server.api_key`）；密钥为空视为未启用（启动告警后放行，便于首启/dev），生产务必设置。`/health` 免鉴权供探活，并自报**实例指纹**（`service`=`macagent-backend` 身份、`layout`=布局形态（`AGENT_LAYOUT`：devctl 报 `repo`、app 全栈包报 `bundle`、直启为 `unknown`）、`key_fp`=密钥 sha256 前 8 位，空 = 未启用鉴权）——探针据此**认身份认钥匙而非认端口**（app 收养前验钥，见 #85）；明文密钥永不出现在响应/日志里。浏览器不持有密钥——dev 由 Vite 代理注入 `Authorization`，生产由 Nginx 注入。比对面收敛在 `api/auth.py` 的 `verify_token` 一个函数里（换设备票据/JWT/mTLS 只动它），另支持 `auth.devices` 多设备票据——留空即单密钥模式，与预留前行为逐字相同（`tests/test_auth.py` 锁死这一点）
 - **绑定护栏**：绑定到非回环地址却没设密钥时**拒绝启动**（不是告警），在模型加载前失败。inference-server 与 rag 服务同此纪律。理由：改 host 与设密钥是两个独立动作，先改 host 后忘密钥，服务就对整个可达网络裸奔
-- **远程推理**：`inference.mode: remote` 时本服务不加载权重，生成经 `backends/remote/` 转发给设备 A 的 inference-server（`INFER_API_KEY` 两侧同值）。会话数据仍全部落在本机——服务端只见 prompt 与媒体、不持久化会话。部署见根 [README](../README.md#部署形态)
+- **远程推理**：`inference.mode: remote` 时本服务不加载权重，生成经 `backends/remote/` 转发给设备 A 的 inference-server（`INFER_API_KEY` 两侧同值）。会话与知识库的权威数据仍在工作端；算力端存在带 TTL 的媒体中转，显式开启 KV 持久化后也会保存会话派生数据。部署见根 [README](../README.md#部署形态)
 - **CORS**：白名单收敛（`server.allowed_origins`，默认仅 `http://localhost:5173`）；走代理时为同源，CORS 仅在浏览器直连 14159 时触发，属纵深防御
 - **AppleScript 权限**：`run_applescript` 首次驱动某个应用时，macOS 会弹出「自动化」授权请求；部分操作还需在「系统设置 → 隐私与安全性 → 辅助功能 / 自动化」中授予运行 Agent 的进程（终端 / Python）权限，否则脚本会因权限不足报错
 - **Accessibility 权限**：GUI 工具（`read_ui_tree` / `click_ui_element` / `type_text` / `press_keys` / `set_ui_element_value`）需在「系统设置 → 隐私与安全性 → 辅助功能」中授予运行 Agent 的进程权限。未授权时工具会返回明确引导而非报错，运行期授予后**无需重启**即可生效（`list_applications` 免此权限）

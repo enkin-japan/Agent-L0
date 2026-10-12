@@ -2,7 +2,7 @@
 
 > [Agent](../README.md) monorepo 的检索服务。
 
-为 AI Agent 提供的本地化 RAG（检索增强生成）后端服务，用于存储和检索知识、记忆等信息。基于 **FastAPI + ChromaDB + Qwen3 / Qwen3-VL 双模型**（Embedding + Reranker）构建，全程本地运行；计算面设备优先级 `cuda`（Colab/生产 GPU 档）> `mps`（Apple Silicon 开发机）> `cpu`（`compute_core.py:92-94`）。
+为 AI Agent 提供的本地化 RAG（检索增强生成）后端服务，用于存储和检索知识、记忆等信息。基于 **FastAPI + ChromaDB + Qwen3 / Qwen3-VL 双模型**（Embedding + Reranker）构建，支持单机运行或将计算面部署到独立算力端；计算面设备优先级 `cuda`（Colab/生产 GPU 档）> `mps`（Apple Silicon 开发机）> `cpu`（`compute_core.py:92-94`）。
 
 ## 数据/计算拆分（B2c）
 
@@ -104,7 +104,7 @@ app sidecar 启动），计算面跑在算力端（`../devctl.sh start --profile
 > 否决档保留的是占位继承值（真要启用先重标定）。
 
 **换档纪律（关键不变量）**：向量库一旦入库，档位即固定。换档 = 开发者**主动重建**，
-运行中 / 用户侧绝不换档。库里盖着档位戳（`chroma_data/.tier_stamp.json`）。融合模式启动时比对，不符拒启
+运行中不会静默切换已有向量库的档位；需要由执行端明确确认重建。库里盖着档位戳（`chroma_data/.tier_stamp.json`）。融合模式启动时比对，不符拒启
 （换档必然伴随重启、操作员在场）；拆分模式启动或首次请求探到即比对，不符则缓存为
 fatal、**数据面降级存活**（计算类请求 500 带指引，纯数据操作与重建端点照常——拒启
 会把 app 的重建引导路一并堵死，build 71 实机教训）。绝不让新旧维度的向量混库。
@@ -120,11 +120,14 @@ fatal、**数据面降级存活**（计算类请求 500 带指引，纯数据操
   清库（向量+FTS+戳；**原文 storage/ 一字节不动**）→ 按活体身份重盖戳 → 重建路由 →
   同步逐篇重灌（逐篇记账，`docs_failed` 单列）→ 按 source_path 重挂过时标记（重灌中
   被自动路由迁移改了路径的进 `stale_lost` 记账）→ 事后戳断言，验收过了才撤标记。
+  开始清库前先冻结新写入并排空已受理写入，治理元数据备份和中断标记耐久保存，失败后重试恢复。
   两侧已同档时 409 拒绝白重灌（`force` 仅修库场景）；重建窗口内**全部写入面**
   （insert/分类增删/purge/stale/删除/reclassify）一律 409 冻结。
 
 macOS app 的 `RetierMonitor` 周期轮询（backend 薄代理 `/api/v1/rag/retier`）、发现
-`needs_rebuild` 弹窗征求确认、驱动重建并跟进进度到系统通知。devctl 侧刻意不做重建
+`needs_rebuild` 弹窗征求确认、驱动重建并跟进进度。知识库页面也可主动检查并确认重建；
+“稍后”只抑制自动弹窗，不封锁手动入口。健康或未知状态不会被强制重建，连接变化后不会
+把已发出的操作转到新连接；未确认受理与失败会显示在页面上，系统通知遵守用户设置。devctl 侧刻意不做重建
 自动化（曾做过一版当日移除：模型的事归计算端，库的事归执行端，repo 工具不该是执行端
 依赖）。接线自检：`rag/.venv/bin/python tests/retier_wiring_check.py`（真 chroma 临时
 库，不进 devctl 门）。

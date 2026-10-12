@@ -20,8 +20,8 @@
 
 | 组件 | 端口 | 绑定 | 技术栈 | 角色 |
 |---|---|---|---|---|
-| frontend | 5173 | 0.0.0.0 | React 19 + Vite + Zustand | 用户交互界面（唯一对外入口） |
-| backend | 14159 | 127.0.0.1 | FastAPI + MLX (gemma-4-e4b 8bit) | Agent 主体：推理/编排/工具/会话 |
+| frontend | 5173 | 0.0.0.0 | React 19 + Vite + Zustand | Web 交互入口（仅受信通路暴露） |
+| backend | 14159 | 127.0.0.1 | FastAPI + 可配置推理后端 | Agent 主体：推理/编排/工具/会话 |
 | inference-server | 14161 | 按 `inference.remote.host` | FastAPI + MLX/CUDA | 推理服务化（`mode: remote` 时算力端承载） |
 | rag 数据面 | 14160 | 127.0.0.1 | FastAPI + ChromaDB | 分类路由向量库：数据/路由/治理（用户数据只落这里） |
 | rag 计算面 | 14162 | 按 `rag.compute.host` | FastAPI + PyTorch(MPS/CUDA) | 嵌入/重排/分词（无状态；`compute.host` 空=融合进数据面） |
@@ -89,7 +89,8 @@
 
 - **bundle 布局**（`bundle-macos.sh` 全栈包）：判据为包内 `Resources/backend/app.py`
   存在。**Keychain 是密钥的家**：`AGENT_API_KEY` 首启随机生成落 Keychain，
-  `INFER/RAG_API_KEY` 用户在设置页填（同样落 Keychain）；SidecarManager spawn
+  `INFER_API_KEY` / `RAG_COMPUTE_API_KEY` 按算力端配置填写，本机 RAG 数据面密钥另行持有；
+  凭据保存在 Keychain，SidecarManager spawn
   执行层时以 env 注入，app 客户端发同一份 Keychain 值——**天然同源**。
 - **repo 布局**（开发形态，设置页填仓库路径）：dev 桥接平面解析仓库 `.env(.local)`
   注入后端（与 devctl 同源）；但 **app 客户端发的仍是 Keychain 值**——两源异物，
@@ -104,7 +105,7 @@
 认身份——端口被他人占用 / 密钥不匹配 / 健康三态分明，旧钥后端不再被静默收养。
 
 **iOS**：瘦客户端，只持 `AGENT_API_KEY`（Keychain），经 tailscale serve →
-Mac 127.0.0.1:14159 直拨；不持有 INFER/RAG 钥（那两把是 Mac 执行层的拨出边）。
+Mac 127.0.0.1:14159 直拨；不持有 INFER/RAG 服务密钥（这些属于 Mac 执行层及 RAG 数据面的拨出边）。
 
 ---
 
@@ -122,7 +123,7 @@ Mac 127.0.0.1:14159 直拨；不持有 INFER/RAG 钥（那两把是 Mac 执行�
 │  └───────┬────────────────────────────────────────────────────────────────────┘ │
 │          │ session.lock（同会话整轮串行）                                        │
 │          ▼                                                                       │
-│  调度层  core/scheduler.py —— 全局单 worker（Apple Silicon 带宽约束→串行最优）    │
+│  调度层  core/scheduler.py —— 统一准入（进程内单 worker；remote 由配置约束）    │
 │  ┌────────────────────────────────────────────────────────────────────────────┐ │
 │  │ TaskScheduler + ClassPolicy：交互(chat/approval/resume, p=0)                │ │
 │  │   > 后台(scheduled/summarize, p=-1)；老化300s防饿死；                        │ │
@@ -137,7 +138,7 @@ Mac 127.0.0.1:14159 直拨；不持有 INFER/RAG 钥（那两把是 Mac 执行�
 │  │ 只读工具并发批执行；观察截断；tail_notes 一次性护栏提醒（不进历史）           │ │
 │  └───────┬────────────────────────────────────────────────────────────────────┘ │
 │          ▼                                                                       │
-│  引擎层  core/engine.py —— 单次生成（持推理互斥锁，经 InferenceBackend 协议驱动） │
+│  引擎层  core/engine.py —— 单次生成（受并发信号量约束，经 InferenceBackend 协议驱动） │
 │  ┌────────────────────────────────────────────────────────────────────────────┐ │
 │  │ PromptBuilder（前缀分层：稳定前缀→追加历史→可变尾部，KV 缓存友好）           │ │
 │  │ backends/mlx/（MLXBackend + patch/gemma4_generate：KV前缀复用/TurboQuant    │ │
@@ -240,18 +241,18 @@ Mac 127.0.0.1:14159 直拨；不持有 INFER/RAG 钥（那两把是 Mac 执行�
       │                                            → 账本 turn_ended（→ feed）
       │                            待审批 → pending_turn 暂存 + awaiting_approval
       │                            挂起   → suspended_turn 暂存 + suspended
-      │                            落盘后 prompt_tokens>8000 → 折叠摘要 + RAG 沉淀
+      │                            落盘后按配置阈值 → 折叠摘要 + RAG 沉淀
       ▼
  账本事件流(经 events 附着) —— 客户端 TurnReducer 归约为规范态投影 UI：
       token/thinking 逐段预览；turn_ended 权威终态撤下预览、按 response 对账
       │
-      ├─ awaiting_approval → 审批卡（刷新可经 /turn 重建）→ POST /turns/approval {approve}
+      ├─ awaiting_approval → 审批卡（刷新可经 /turn 重建）→ POST /turns/approval（附轮次/审批批次身份）
       │                       批准→执行工具→续跑；拒绝→反馈模型改路（均走事件流）
       └─ suspended → 「可恢复」横幅 → POST /turns/resume 续跑
                      （或发新消息 = 放弃挂起任务）
 
-恢复（刷新/杀进程/切后台/断线）统一一条路：GET /turn 拿可恢复状态（含审批卡/
-进行中预览）→ GET /events?after 续播。崩溃防丢仍靠 inflight.json（write-ahead）。
+恢复统一走历史快照 → GET /turn 可恢复状态 → GET /events?after 重放续播，
+使用历史 replay_after 与活轮边界防止漏播；崩溃防丢仍靠 inflight.json（write-ahead）。
 ```
 
 ---
@@ -269,8 +270,9 @@ store/useChatStore.ts  会话/消息主状态机：附着流驱动（单附着=�
                        /events 长连；断线静默退避重连；刷新/切回经 /history +
                        /turn + 事件重放恢复,审批卡/直播预览可完整重建）
                        + outbox 发送暂存（会话元数据 localStorage + /sessions 对账）
-store/useUiStore.ts    语言/主题 + /tasks(3s) /schedules(10s) 轮询对账
-components/dashboard/  聊天区/输入/侧栏/检视面板(工具·任务·记忆)/定时任务条
+store/useUiStore.ts    语言/主题 + 全局 feed、/tasks 与 /schedules 快照（30s 兜底）
+                       + 文件/运行历史状态；失败保留最近成功记录并标记 stale/unknown
+components/dashboard/  聊天区/输入/侧栏/检视面板(工具·任务·记忆·文件)/定时任务条
 components/deck/       SlideRenderer（Deck 唯一渲染器）+ /print/deck 打印路由
                        （后端 deck_export_pdf 用无头 Chrome 打印它 → 预览即所得）
 ```
@@ -308,13 +310,19 @@ Agent/                           （monorepo 根）
 - **单引擎批内并发**（2026-08-23 进宪，修订自「单 worker 串行」）：推理引擎
   全进程单实例，多实例并跑永远禁止；并发唯一合法形态是引擎内连续批处理
   （一次权重读取服务批内全部流）。交互轮次恒享最高优先级，后台生成经调度器
-  准入闸进批、超水位让位排队。生产缺省仍单流（`max_concurrency: 1`，准入闸
-  未建前不放开）。
+  准入闸进批、超水位让位排队。执行端进程内后端强制单流；remote 模式的任务 worker 与生成并发由
+  `agent.max_inference_concurrency` 同源约束，实际算力并发仍受推理服务端后端配置限制。
 - **KV 缓存策略**：prompt 前缀分层（稳定前缀/追加历史/可变尾部）；分支克隆 KV、
   删轮/摘要折叠后靠前缀匹配自动裁剪对齐；冻结释放、恢复重放。
 - **审批闸门**：敏感调用（写文件/删库/非只读 shell/定时任务管理）由后端挂起
   整轮，前端卡片决议；无人值守的定时运行一律自动拒绝。
 - **有界记忆三层**：机械压缩（观察去重/驱逐）→ 摘要折叠（滚动摘要+水位线）→
   RAG 沉淀（原文可召回）。全量日志永远保留在 history.jsonl。
-- **可靠性**：inflight 预写防输入蒸发；取消/故障整轮回滚；SSE 断线不丢轮
-  （后台跑完照常落盘，前端重连后从 /history 对账）。
+- **可靠性**：inflight 预写防输入蒸发；取消/故障回滚模型记忆，外部副作用不会自动撤销，
+  有界执行凭据可回看；SSE 断线不丢轮，客户端经历史、`/turn` 与事件重放对账。
+- **重试与展示**：重试由 TurnRunner 复用存档输入和生成设置，追加规范历史；成功后才替换
+  重试组的显示结果，旧尝试仍可审计，不重放旧工具调用，也不绕过审批。
+- **管理操作**：客户端同会话删除与在途写入共用保护；逐项使用真实收据，失败项保持可重试。
+  文件入口复用会话资产白名单，不建立第二套成果库。定时任务依赖既有 feed 与快照。
+- **工具配置**：保存声明、加入清单、运行版本与远程验证分别呈现。未上架候选撤回与探活
+  返回时的身份校验由同一注册表管理；已注册工具的替换/删除仍按重启生效。
