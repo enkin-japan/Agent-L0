@@ -221,7 +221,13 @@ class _FakeRegistry:
     def tool_names(self):
         return set(self._names)
 
-    def load_tool(self, tool):
+    def discard_unavailable(self, name):
+        pass  # This receipt-only fake has no pending candidates.
+
+    def queue_tool(self, tool):
+        pass
+
+    def load_tool(self, tool, *, queued=False):
         ok = tool.is_available()
         if ok:
             self._names.add(tool.name)

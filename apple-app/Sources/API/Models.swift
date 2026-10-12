@@ -90,6 +90,26 @@ struct AttachmentInfo: Codable {
 }
 
 /// 一轮问答（POST /chat 响应体 = history turns 元素 = SSE turn_end 数据）。
+struct ExecutionReceipt: Codable {
+    let seq: Int?
+    let ts: Double?
+    let type: String
+    let name: String
+    let callId: String?
+    let detail: String?
+    let status: String?
+    let truncated: Bool?
+    enum CodingKeys: String, CodingKey {
+        case seq, ts, type, name, detail, status, truncated
+        case callId = "call_id"
+    }
+}
+
+struct ExecutionReceipts: Codable {
+    let items: [ExecutionReceipt]
+    let truncated: Bool?
+}
+
 struct Turn: Codable {
     let status: String
     let prompt: String?
@@ -104,15 +124,46 @@ struct Turn: Codable {
     let generationTps: Double?
     /// 轮次完结 epoch 秒（PROTOCOL.md §2.3 additive，2026-07-17）。旧历史行没有。
     let timestamp: Double?
+    var executionReceipts: ExecutionReceipts? = nil
+    var turnRef: String? = nil
+    var retryOf: String? = nil
+    var retryRootIndex: Int? = nil
+    var retryParentIndex: Int? = nil
 
     enum CodingKeys: String, CodingKey {
         case status, prompt, image, audio, response, attachments, timestamp
+        case turnRef = "turn_ref"
+        case retryOf = "retry_of"
+        case retryRootIndex = "retry_root_index"
+        case retryParentIndex = "retry_parent_index"
+        case executionReceipts = "execution_receipts"
         case ingestedText = "ingested_text"
         case pendingTools = "pending_tools"
         case promptTokens = "prompt_tokens"
         case generationTokens = "generation_tokens"
         case generationTps = "generation_tps"
     }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        status = try c.decode(String.self, forKey: .status)
+        prompt = try? c.decodeIfPresent(String.self, forKey: .prompt)
+        image = try? c.decodeIfPresent([String].self, forKey: .image)
+        audio = try? c.decodeIfPresent([String].self, forKey: .audio)
+        ingestedText = try? c.decodeIfPresent(String.self, forKey: .ingestedText)
+        attachments = try? c.decodeIfPresent([AttachmentInfo].self, forKey: .attachments)
+        response = try? c.decodeIfPresent([ResponseMessage].self, forKey: .response)
+        pendingTools = try? c.decodeIfPresent([PendingTool].self, forKey: .pendingTools)
+        promptTokens = try? c.decodeIfPresent(Double.self, forKey: .promptTokens)
+        generationTokens = try? c.decodeIfPresent(Double.self, forKey: .generationTokens)
+        generationTps = try? c.decodeIfPresent(Double.self, forKey: .generationTps)
+        timestamp = try? c.decodeIfPresent(Double.self, forKey: .timestamp)
+        executionReceipts = try? c.decodeIfPresent(ExecutionReceipts.self, forKey: .executionReceipts)
+        turnRef = try? c.decodeIfPresent(String.self, forKey: .turnRef)
+        retryOf = try? c.decodeIfPresent(String.self, forKey: .retryOf)
+        retryRootIndex = try? c.decodeIfPresent(Int.self, forKey: .retryRootIndex)
+        retryParentIndex = try? c.decodeIfPresent(Int.self, forKey: .retryParentIndex)
+    }
+
 }
 
 struct SessionMetaItem: Codable, Identifiable, Hashable {
@@ -139,22 +190,73 @@ struct SessionMetaItem: Codable, Identifiable, Hashable {
 struct SessionListResponse: Codable {
     let status: Bool
     let sessions: [SessionMetaItem]
+    var retentionPolicy: SessionRetentionPolicy? = nil
+    enum CodingKeys: String, CodingKey {
+        case status, sessions
+        case retentionPolicy = "retention_policy"
+    }
+}
+
+struct SessionRetentionPolicy: Codable, Equatable {
+    let enabled: Bool
+    let retentionDays: Double
+    let emptyTTLHours: Double
+    let scanIntervalSeconds: Int
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case retentionDays = "retention_days"
+        case emptyTTLHours = "empty_ttl_hours"
+        case scanIntervalSeconds = "scan_interval_seconds"
+    }
+}
+
+struct RetryGroup: Codable {
+    let rootIndex: Int
+    let displayIndex: Int
+    let turnIndices: [Int]
+    enum CodingKeys: String, CodingKey {
+        case rootIndex = "root_index"
+        case displayIndex = "display_index"
+        case turnIndices = "turn_indices"
+    }
 }
 
 struct HistoryResponse: Codable {
     let status: Bool
     let sessionId: String
     let turns: [Turn]
+    var replayAfter: Int? = nil
+    var generation: String? = nil
+    var lastTurnRef: String? = nil
+    var displayTurnIndices: [Int]? = nil
+    var retryGroups: [RetryGroup]? = nil
 
     enum CodingKeys: String, CodingKey {
-        case status, turns
+        case status, turns, generation
+        case lastTurnRef = "last_turn_ref"
+        case displayTurnIndices = "display_turn_indices"
+        case retryGroups = "retry_groups"
+        case replayAfter = "replay_after"
         case sessionId = "session_id"
     }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        status = try c.decode(Bool.self, forKey: .status)
+        sessionId = try c.decode(String.self, forKey: .sessionId)
+        turns = try c.decode([Turn].self, forKey: .turns)
+        replayAfter = try? c.decodeIfPresent(Int.self, forKey: .replayAfter)
+        generation = try? c.decodeIfPresent(String.self, forKey: .generation)
+        lastTurnRef = try? c.decodeIfPresent(String.self, forKey: .lastTurnRef)
+        displayTurnIndices = try? c.decodeIfPresent([Int].self, forKey: .displayTurnIndices)
+        retryGroups = try? c.decodeIfPresent([RetryGroup].self, forKey: .retryGroups)
+    }
+
 }
 
 struct SimpleActionResponse: Codable {
     let status: Bool
     let response: String?
+    var reason: String? = nil
 }
 
 struct PinResponse: Codable {
@@ -387,11 +489,17 @@ struct ApiToolItem: Codable, Identifiable {
     let authFormat: String?
     let hasSecret: Bool
     let requiresApproval: Bool
+    var approvalOverride: Bool? = nil
     let hasCanary: Bool
     let registered: Bool
+    var runtimeDeclarationCurrent: Bool? = nil
 
     var id: String { source + "/" + file }
     var isUserOwned: Bool { source == "user" }
+    var needsSetup: Bool {
+        isUserOwned && problem == nil &&
+            ((enabled && (!registered || (authEnv?.isEmpty == false && !hasSecret))) || runtimeDeclarationCurrent == false)
+    }
 
     enum CodingKeys: String, CodingKey {
         case file, source, problem, name, description, endpoint, method, enabled
@@ -401,7 +509,9 @@ struct ApiToolItem: Codable, Identifiable {
         case authFormat = "auth_format"
         case hasSecret = "has_secret"
         case requiresApproval = "requires_approval"
+        case approvalOverride = "approval_override"
         case hasCanary = "has_canary"
+        case runtimeDeclarationCurrent = "runtime_declaration_current"
     }
 }
 
@@ -524,6 +634,7 @@ struct RagDocumentsResponse: Codable {
 
 struct RagActionResponse: Codable {
     let msg: String?
+    var status: Bool? = nil // Older data-plane responses use HTTP status + msg only.
 }
 
 // ---------- 定时任务 ----------

@@ -54,6 +54,20 @@ struct ChatMessage: Identifiable {
 }
 
 extension ChatMessage {
+    func canModifyLatestAttempt(canonicalIndex: Int?, auditOnly: Bool) -> Bool {
+        !auditOnly && turnIndex != nil && turnIndex == canonicalIndex
+    }
+
+    static func statusLabel(_ status: String) -> String {
+        switch status {
+        case "success": return L("成功")
+        case "fail": return L("失败")
+        case "warning": return L("警告")
+        case "cancelled": return L("已取消")
+        default: return status
+        }
+    }
+
     /// 一轮 Turn → 消息列表（历史加载与 turn_end 对账共用同一映射，保证两条路径渲染一致）。
     /// includePrompt=false 用于 approval/resume 的增量轮（没有新的用户消息）。
     /// turnIndex：该轮在落盘历史里的下标（分支锚点），未落盘轮传 nil。
@@ -69,6 +83,17 @@ extension ChatMessage {
                 text += "\n📎 " + parts.joined(separator: "、")
             }
             out.append(.user(text))
+        }
+        let abandoned = turn.status == "warning" && (turn.response ?? []).contains { message in
+            message.content == "The suspended task was interrupted by a new user message and abandoned (not continued)." ||
+            (message.toolResponses ?? []).contains { $0.response == "Operation cancelled: the user sent a new message without approving." }
+        }
+        let stopped = turn.status == "cancelled" || turn.status == "fail" || abandoned
+        if stopped {
+            out.append(.system(L(abandoned
+                ? "上一任务已被新消息中止，后续执行已停止。已完成的副作用不会自动撤销；请查看执行记录后决定是否重试。"
+                : turn.status == "cancelled" ? "本轮已取消，后续执行已停止。已完成的副作用不会自动撤销；请查看执行记录后决定是否重试。"
+                : "本轮执行失败，后续执行已停止。已完成的副作用不会自动撤销；请查看执行记录后决定是否重试。")))
         }
         for msg in turn.response ?? [] {
             switch msg.role {
@@ -95,6 +120,11 @@ extension ChatMessage {
                 }
             case "tool":
                 for item in msg.toolResponses ?? [] {
+                    if item.response == "Operation cancelled: the user sent a new message without approving." {
+                        out.append(.tool(label: (item.name ?? L("工具")) + " · " + L("未执行"),
+                                         detail: L("此待审批调用已因新消息作废，未获批执行。")))
+                        continue
+                    }
                     var m = ChatMessage.tool(label: "\(item.name ?? L("工具")) \(L("返回"))",
                                              detail: item.response ?? "")
                     // 渲染格分派（R3，与 web 的 renderByHint 同一决策表）：
@@ -105,6 +135,7 @@ extension ChatMessage {
                     out.append(m)
                 }
             case "system":
+                if stopped { continue }
                 if let content = msg.content, !content.isEmpty {
                     out.append(.system(content))
                 }
@@ -113,6 +144,38 @@ extension ChatMessage {
                     out.append(.system("[\(msg.role)] \(content)"))
                 }
             }
+        }
+        // Reuse the ordinary tool disclosure rows for journal facts in both live and history paths.
+        let hasToolMessages = out.contains { $0.kind == .tool }
+        if stopped || !hasToolMessages, let facts = turn.executionReceipts {
+            for item in facts.items where item.type == "tool_started" || item.type == "tool_result" {
+                let started = item.type == "tool_started"
+                var detail = item.detail ?? ""
+                if started && item.truncated == true {
+                    detail += (detail.isEmpty ? "" : "\n") + L("参数已省略，记录不完整。")
+                } else if item.truncated == true {
+                    detail += "\n" + L("记录已截断，部分内容未保留。")
+                }
+                if !started {
+                    detail += "\n" + L("工具已返回；返回状态不保证外部操作成功。")
+                    if let status = item.status { detail += "\n" + L("返回状态：") + status }
+                }
+                // A retained response may already contain this exact result (not a proposed call).
+                // Enrich that same disclosure row instead of duplicating its complete payload.
+                if !started, let existing = out.firstIndex(where: {
+                    $0.kind == .tool && $0.toolLabel == "\(item.name) \(L("返回"))" &&
+                    $0.toolDetail == (item.detail ?? "")
+                }) {
+                    out[existing].toolLabel = item.name + " · " + L("已返回")
+                    out[existing].toolDetail = detail
+                    continue
+                }
+                out.append(.tool(label: item.name + " · " + L(started ? "已开始" : "已返回"), detail: detail))
+            }
+            if facts.truncated == true { out.append(.system(L("执行记录不完整，不能据此排除其他副作用。"))) }
+            if stopped && facts.items.isEmpty { out.append(.system(L("本轮未记录工具事件；这不能证明没有副作用。"))) }
+        } else if stopped && turn.executionReceipts == nil {
+            out.append(.system(L("本轮执行记录不可用；请核实已完成的操作后再重试。")))
         }
         if let turnIndex {
             for i in out.indices { out[i].turnIndex = turnIndex }
@@ -131,5 +194,40 @@ extension ChatMessage {
             out[lastAssistant].meta = meta
         }
         return out
+    }
+}
+
+/// Server projection validation only. Family/root legality belongs to the backend.
+enum HistoryProjection {
+    static func indices(_ history: HistoryResponse) -> [Int] {
+        let count = history.turns.count
+        guard let requested = history.displayTurnIndices,
+              (count == 0 || !requested.isEmpty), Set(requested).count == requested.count,
+              requested.allSatisfy({ $0 >= 0 && $0 < count }) else { return Array(0..<count) }
+        let validGroups = validGroups(history, displayed: requested)
+        let covered = Set(requested).union(validGroups.flatMap(\.turnIndices))
+        guard covered == Set(0..<count) else { return Array(0..<count) }
+        return requested
+    }
+
+    static func groups(_ history: HistoryResponse, displayed: [Int]) -> [RetryGroup] {
+        guard displayed == history.displayTurnIndices else { return [] }
+        let groups = validGroups(history, displayed: displayed)
+        let covered = Set(displayed).union(groups.flatMap(\.turnIndices))
+        guard covered == Set(history.turns.indices) else { return [] }
+        return groups
+    }
+
+    private static func validGroups(_ history: HistoryResponse, displayed: [Int]) -> [RetryGroup] {
+        var winners = Set<Int>()
+        return (history.retryGroups ?? []).filter { group in
+            let indices = group.turnIndices
+            guard displayed.contains(group.displayIndex), indices.count >= 2,
+                  Set(indices).count == indices.count,
+                  indices.allSatisfy({ $0 >= 0 && $0 < history.turns.count }),
+                  indices.contains(group.rootIndex), indices.contains(group.displayIndex),
+                  winners.insert(group.displayIndex).inserted else { return false }
+            return true
+        }
     }
 }

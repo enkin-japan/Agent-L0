@@ -10,8 +10,10 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from .schemas import (
     ChatResponse,
     ApiToolSaveRequest,
+    ApiToolPatchRequest,
     ApiToolTestRequest,
     ApprovalRequest,
+    RetryRequest,
     CancelResponse,
     DeleteSessionResponse,
     DeleteTurnResponse,
@@ -39,7 +41,7 @@ from .schemas import (
     ToolsResponse,
 )
 from ..core.journal import BOOT_ID, TurnJournal
-from ..core.turn_runner import TurnConflict, public_turn
+from ..core.turn_runner import TurnConflict, public_turn, turn_reference, retry_history_projection
 from ..memory.compactor import maybe_summarize_context
 
 # 路径 ID 白名单（会话/定时任务/资产文件名共用）：首字符字母数字，其余限 [A-Za-z0-9._-]。
@@ -213,11 +215,18 @@ async def list_api_tools(request: Request):
     """全部声明清单（仓库手写 + UI 添加），含注册状态与坏声明原因。密钥永不回传，
     只回传 has_secret（是否已配）。"""
     factory = _atf()
-    registered = request.app.state.mcp_registry.tool_names()
+    registry = request.app.state.mcp_registry
+    registered = registry.tool_names()
+    matches = getattr(registry, "declaration_matches", None)
     items = []
     for item in (factory.load_declarations(factory.DECL_DIR, "repo")
                  + factory.load_declarations(factory.user_decl_dir(), "user")):
         decl = item["decl"] if isinstance(item["decl"], dict) else {}
+        if item["problem"]:
+            # Bad declarations remain visible as diagnostics without treating
+            # malformed auth/schema values as usable management metadata.
+            name = decl.get("name")
+            decl = {"name": name} if isinstance(name, str) else {}
         name = decl.get("name")
         auth = decl.get("auth") or {}
         method = str(decl.get("method") or "GET").upper()
@@ -235,8 +244,14 @@ async def list_api_tools(request: Request):
             "auth_format": auth.get("format") or None,
             "has_secret": bool(auth.get("env")) and bool(factory.read_secret(str(auth.get("env")))),
             "requires_approval": bool(ra) if ra is not None else method in factory._MUTATING,
+            # Old hand-written declarations accept truthy/falsy scalar values;
+            # expose the same effective override as _ApiCore, with a stable type.
+            "approval_override": None if ra is None else bool(ra),
             "has_canary": decl.get("canary") is not None,
             "registered": bool(name) and name in registered,
+            # Catalog membership is not an HTTP/authentication test. None also
+            # supports older/non-factory registry adapters without inventing truth.
+            "runtime_declaration_current": matches(name, decl) if callable(matches) and bool(name) and name in registered else None,
         })
     return {"status": True, "tools": items}
 
@@ -262,25 +277,46 @@ async def _save_api_tool_impl(request: Request, decl: dict,
         _yaml.safe_dump(decl, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     registry = request.app.state.mcp_registry
+    registry.discard_unavailable(decl["name"])
     if decl["name"] in registry.tool_names():
         return {"status": True, "effect": "restart_required"}
     if decl.get("enabled", True) is False:
         return {"status": True, "effect": "saved_disabled"}
     tool = factory.synth_class(decl, f"data/api_tools/{decl['name']}.yaml")()
-    ok = await asyncio.to_thread(registry.load_tool, tool)
+    registry.queue_tool(tool)
+    ok = await asyncio.to_thread(registry.load_tool, tool, queued=True)
     if ok:
         request.app.state.orchestrator.refresh_tools_declaration()
         return {"status": True, "effect": "registered"}
     return {"status": True, "effect": "unavailable",
-            "detail": "已保存但探活未过（密钥缺失？），补齐后 rescan 可上架"}
+            "detail": "声明已保存，尚未加入工具清单；请补齐密钥等配置后再次保存。远程连接尚未验证。"}
 
 
 @router.post("/api/v1/api-tools")
 async def save_api_tool(request: Request, body: ApiToolSaveRequest):
     """保存（upsert）一份 UI 声明并尽力即时上架。effect：
-    registered=已注册可用｜unavailable=已保存但探活未过｜saved_disabled=已保存停用｜
+    registered=已加入清单（未验证远程连接）｜unavailable=已保存但配置未齐｜saved_disabled=已保存停用｜
     restart_required=覆盖了已注册工具（rescan 只增不删，重启生效）。"""
     return await _save_api_tool_impl(request, body.to_decl(), secret=body.secret)
+
+
+@router.patch("/api/v1/api-tools/{name}")
+async def patch_api_tool(name: str, request: Request, body: ApiToolPatchRequest):
+    """Edit a saved user declaration without discarding fields the form cannot show."""
+    factory = _atf()
+    existing = next((item["decl"] for item in factory.load_declarations(factory.user_decl_dir(), "user")
+                     if isinstance(item["decl"], dict) and item["decl"].get("name") == name), None)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="未找到可编辑的私人声明，请刷新清单")
+    decl = dict(existing)
+    changes = body.model_dump(exclude_unset=True)
+    secret = changes.pop("secret", None)
+    for key, value in changes.items():
+        if value is None:
+            decl.pop(key, None)
+        else:
+            decl[key] = value
+    return await _save_api_tool_impl(request, decl, secret=secret)
 
 
 @router.post("/api/v1/api-tools/test")
@@ -313,7 +349,9 @@ async def delete_api_tool(name: str, request: Request):
     if not path.exists():
         raise HTTPException(status_code=404, detail="声明不存在（仓库手写声明请直接改文件）")
     path.unlink()
-    registered = name in request.app.state.mcp_registry.tool_names()
+    registry = request.app.state.mcp_registry
+    registry.discard_unavailable(name)
+    registered = name in registry.tool_names()
     return {"status": True,
             "effect": "restart_required" if registered else "deleted"}
 
@@ -331,7 +369,7 @@ def _pending():
 @router.get("/api/v1/registrations")
 async def list_registrations(request: Request):
     """待确认注册单清单（设置页审批队列数据源）。payload 全文回传供审阅；
-    api_tool 附 has_secret（auth.env 是否已录值——确认前可先去密钥框补）。"""
+    api_tool 附 has_secret（仅表明密钥存在；确认保存后可打开同一声明补配置）。"""
     factory = _atf()
     items = []
     for item in _pending().list_pending():
@@ -739,7 +777,8 @@ async def list_sessions(request: Request):
     """
     session_manager = request.app.state.session_manager
     items = await asyncio.to_thread(session_manager.list_sessions_meta)
-    return {"status": True, "count": len(items), "sessions": items}
+    return {"status": True, "count": len(items), "sessions": items,
+            "retention_policy": getattr(request.app.state, "session_cleanup_policy", None)}
 
 
 @router.patch("/api/v1/chat/{session_id}/pin", response_model=PinResponse)
@@ -748,7 +787,7 @@ async def set_session_pin(session_id: str, request: Request, body: PinRequest):
     置/撤会话 pin（落盘 meta.json）。pin 的会话不被后台自动清扫回收——手动"保留"语义。
     """
     session_manager = request.app.state.session_manager
-    ok = await asyncio.to_thread(session_manager.set_pinned, session_id, body.pinned)
+    ok = await asyncio.to_thread(session_manager.set_meta, session_id, pinned=body.pinned)
     if not ok:
         return {"status": False, "session_id": session_id, "pinned": body.pinned,
                 "response": f"❌ 未发现会话 {session_id} 或写入失败"}
@@ -790,7 +829,10 @@ async def delete_last_turn(session_id: str, request: Request):
     清理该轮媒体文件。供前端「更新/删除最后一次发言」使用（更新 = 删除后重发新内容）。
     """
     session_manager = request.app.state.session_manager
-    return await session_manager.delete_last_turn(session_id)
+    try:
+        return await request.app.state.turn_runner.delete_last_turn(session_manager, session_id)
+    except TurnConflict as e:
+        return JSONResponse(status_code=409, content={"status": False, "reason": e.reason})
 
 
 @router.get("/api/v1/chat/{session_id}/history", response_model=HistoryResponse)
@@ -799,7 +841,15 @@ async def get_history(session_id: str, request: Request):
     读取会话历史节点列表接口：供前端展示对话窗口并选取分支节点（下标即节点位置）。
     """
     session_manager = request.app.state.session_manager
+    # 下界必须先于历史读取；不拿 generation lock（正在运行的轮次可持锁数分钟）。
+    session = session_manager._all_sessions.get(session_id)
+    if session is not None:
+        replay_after = session.journal.seq
+    else:
+        sdir = session_manager.sessions_dir / session_id
+        replay_after = TurnJournal(sdir).seq if sdir.exists() else 0
     turns = session_manager.get_history(session_id)
+    projection = retry_history_projection(turns)
     # 进行中轮次不再随历史下发(Phase 4 退役):客户端统一经 GET /turn + /events
     # 恢复活跃轮;inflight.json 仅存崩溃防丢(write-ahead)一个职责。
     return {
@@ -807,6 +857,10 @@ async def get_history(session_id: str, request: Request):
         "session_id": session_id,
         "count": len(turns),
         "turns": turns,
+        "replay_after": replay_after,
+        "generation": BOOT_ID,
+        "last_turn_ref": turn_reference(turns[-1]) if turns else None,
+        **projection,
     }
 
 
@@ -987,15 +1041,37 @@ async def submit_turn(
         "status": True, "turn_id": ctx["turn_id"], "seq": ctx["seq"]})
 
 
+@router.post("/api/v1/chat/{session_id}/turns/retry")
+async def submit_retry(session_id: str, request: Request, body: RetryRequest):
+    """显式追加同会话任务重试；输入核验/复制/受理由TurnRunner统一拥有。"""
+    manager = request.app.state.session_manager
+    if session_id not in manager._all_sessions and not (manager.sessions_dir / session_id).is_dir():
+        return JSONResponse(status_code=404, content={"status": False, "reason": "retry_source_missing"})
+    session = manager.get_or_create(session_id)
+    runner = request.app.state.turn_runner
+    try:
+        ctx = await runner.accept_retry(session, session_id,
+                                        expected_turn_ref=body.expected_turn_ref,
+                                        client_turn_id=body.client_turn_id)
+    except TurnConflict as exc:
+        return JSONResponse(status_code=409, content={"status": False, "reason": exc.reason})
+    if not ctx.get("duplicate"):
+        runner.spawn(session_id, runner.run_accepted(session, session_id, ctx))
+    return JSONResponse(status_code=202, content={"status": True, "turn_id": ctx["turn_id"],
+                                                  "seq": ctx["seq"],
+                                                  **({"duplicate": True} if ctx.get("duplicate") else {})})
+
+
 @router.post("/api/v1/chat/{session_id}/turns/approval")
 async def submit_approval(session_id: str, request: Request, body: ApprovalRequest):
     """审批决议（202 受理即返）：过程与终态经 GET /events 观察。无等待审批的轮次时 409。
-    expected_turn_id（可选，推送按钮的远程决议带上）：目标轮已换时 409 防错批。"""
+    expected_turn_id / expected_approval_seq 可选绑定展示轮次/审批批次，已换时 409。"""
     runner = request.app.state.turn_runner
     session = request.app.state.session_manager.get_or_create(session_id)
     try:
         turn_id = await runner.accept_approval(session, session_id, body.approve,
-                                               expected_turn_id=body.expected_turn_id)
+                                               expected_turn_id=body.expected_turn_id,
+                                               expected_approval_seq=body.expected_approval_seq)
     except TurnConflict as e:
         return JSONResponse(status_code=409, content={"status": False, "reason": e.reason})
     runner.spawn(session_id, runner.run_approval(session, session_id, body.approve))

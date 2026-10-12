@@ -13,21 +13,26 @@ import { InspectorPanel } from "@/components/dashboard/inspector-panel"
 export default function Page() {
   const t = useT()
   const conversations = useChatStore((s) => s.conversations)
+  const retentionPolicy = useChatStore((s) => s.retentionPolicy)
   const activeId = useChatStore((s) => s.activeId)
   const thinkingEnabled = useChatStore((s) => s.thinkingEnabled)
   const generating = useChatStore((s) => !!s.generating[s.activeId])
   const pendingTools = useChatStore((s) => s.pendingApprovals[s.activeId] ?? null)
+  const approvalTarget = useChatStore((s) => s.pendingApprovalTargets[s.activeId])
   const suspended = useChatStore((s) => !!s.suspendedSessions[s.activeId])
   const taskProgress = useChatStore((s) => s.taskProgress[s.activeId] ?? null)
   const activity = useChatStore((s) => s.liveActivity[s.activeId] ?? null)
+  const turnPhase = useChatStore((s) => s.turnStates[s.activeId]?.phase ?? "unknown")
+  const control = useChatStore((s) => s.controlRequests[s.activeId] ?? null)
   const notice = useChatStore((s) => s.notice)
   const lastMetrics = useChatStore((s) => s.lastMetrics)
 
   const theme = useUiStore((s) => s.theme)
   const startSchedulerPolling = useUiStore((s) => s.startSchedulerPolling)
   const stopSchedulerPolling = useUiStore((s) => s.stopSchedulerPolling)
-  const startSchedulePolling = useUiStore((s) => s.startSchedulePolling)
-  const stopSchedulePolling = useUiStore((s) => s.stopSchedulePolling)
+  const managementPending = useChatStore((s) => !!s.deletingSessions[s.activeId])
+  const deletingSessions = useChatStore((s) => s.deletingSessions)
+  const deletionResults = useChatStore((s) => s.deletionResults)
 
   const {
     selectConversation,
@@ -60,23 +65,11 @@ export default function Page() {
     applyTheme(theme)
   }, [theme])
 
-  // 启动即以后端会话索引对账：剔除已被自动清扫回收的幽灵、补入孤儿会话、同步标题/pin。
-  // (工作区已退役;会话元数据本地 localStorage 缓存 + /sessions 对账恢复,无需 ui_state。)
-  useEffect(() => {
-    void useChatStore.getState().reconcileSessions()
-  }, [])
-
-  // 全局单 worker 调度快照的低频轮询（驱动侧栏 Worker 状态条）
+  // 既有 feed + 慢对账同时刷新调度与会话索引（含保留规则），重启后重新取真相。
   useEffect(() => {
     startSchedulerPolling()
     return () => stopSchedulerPolling()
   }, [startSchedulerPolling, stopSchedulerPolling])
-
-  // 定时任务清单的更低频轮询（驱动侧栏 Schedules 条）
-  useEffect(() => {
-    startSchedulePolling()
-    return () => stopSchedulePolling()
-  }, [startSchedulePolling, stopSchedulePolling])
 
   // 切换会话时按需从服务端拉取历史（刷新后恢复对话内容）
   useEffect(() => {
@@ -88,13 +81,14 @@ export default function Page() {
     [conversations, activeId],
   )
 
-  function handleDelete(id: string) {
-    if (window.confirm(t.confirm.deleteConversation)) deleteConversation(id)
+  async function handleDelete(id: string) {
+    if (window.confirm(t.confirm.deleteConversation)) await deleteConversation(id)
   }
 
-  function handleDeleteMany(ids: string[]) {
-    if (ids.length === 0) return
-    if (window.confirm(t.confirm.deleteConversationsMany(ids.length))) deleteConversations(ids)
+  async function handleDeleteMany(ids: string[]) {
+    if (ids.length === 0) return []
+    if (!window.confirm(t.confirm.deleteConversationsMany(ids.length))) return null
+    return deleteConversations(ids)
   }
 
   return (
@@ -110,6 +104,7 @@ export default function Page() {
         >
           <AgentSidebar
             conversations={conversations}
+            retentionPolicy={retentionPolicy}
             activeId={activeId}
             onSelect={(id) => {
               selectConversation(id)
@@ -126,6 +121,8 @@ export default function Page() {
             onRename={renameConversation}
             onDelete={handleDelete}
             onDeleteMany={handleDeleteMany}
+            deletingSessions={deletingSessions}
+            deletionResults={deletionResults}
             onTogglePin={togglePin}
             onCollapse={() => {
               setMobileOpen(false)
@@ -151,6 +148,9 @@ export default function Page() {
           conversation={activeConversation}
           thinkingEnabled={thinkingEnabled}
           generating={generating}
+          turnPhase={turnPhase}
+          control={control}
+          managementPending={managementPending}
           notice={notice}
           metrics={lastMetrics}
           sidebarHidden={desktopCollapsed}
@@ -160,7 +160,9 @@ export default function Page() {
           activity={activity}
           contextOpen={inspectorOpen}
           onToggleContext={() => setInspectorOpen((v) => !v)}
-          onApproval={(approve) => void respondApproval(activeId, approve)}
+          onApproval={(approve) => {
+            if (approvalTarget) void respondApproval(activeId, approve, approvalTarget)
+          }}
           onSend={(value, files) => {
             // 暂停态（待审批 / 已挂起）下的新轮受理会作废旧轮（后端 accept_turn
             // 先 _abandon_paused_turn），不可逆——先问一句。待审批时输入区本来就

@@ -30,6 +30,11 @@ struct ApiParamRow: Identifiable {
     var desc = ""
     var required = true
     var testValue = ""           // 试调实参（仅试调用，不入声明）
+    var originalSpec: [String: JSONValue] = [:]
+    var hasOriginalSpec = false
+    var originalType = "string"
+    var originalDescription = ""
+    var unmodeledSpec: JSONValue?
 }
 
 struct ApiToolDraft: Identifiable {
@@ -47,6 +52,9 @@ struct ApiToolDraft: Identifiable {
     var timeout = ""
     var approval = "default"     // default | require | skip
     var enabled = true
+    private var originalParams: [String: JSONValue] = [:]
+    private var originalBody: AgentClient.ApiToolSaveBody?
+    private var originalHeaders: JSONValue?
 
     var id: String { originalName ?? "＋new" }
 
@@ -65,7 +73,10 @@ struct ApiToolDraft: Identifiable {
         hasStoredSecret = item.hasSecret
         if let t = item.timeout { timeout = t == t.rounded() ? String(Int(t)) : String(t) }
         enabled = item.enabled
+        originalHeaders = item.headers
+        approval = item.approvalOverride.map { $0 ? "require" : "skip" } ?? "default"
         if case .object(let p)? = item.params {
+            originalParams = p
             var requiredNames: Set<String> = []
             if case .array(let req)? = p["required"] {
                 for v in req { if case .string(let s) = v { requiredNames.insert(s) } }
@@ -74,31 +85,45 @@ struct ApiToolDraft: Identifiable {
                 for key in props.keys.sorted() {
                     var row = ApiParamRow()
                     row.name = key
+                    row.hasOriginalSpec = true
                     if case .object(let spec)? = props[key] {
+                        row.originalSpec = spec
                         if case .string(let t)? = spec["type"] { row.type = t }
                         if case .string(let d)? = spec["description"] { row.desc = d }
+                    } else {
+                        row.unmodeledSpec = props[key]
                     }
+                    row.originalType = row.type
+                    row.originalDescription = row.desc
                     row.required = requiredNames.contains(key)
                     params.append(row)
                 }
             }
         }
+        originalBody = toBody()
     }
 
     func toBody(arguments: JSONValue? = nil) -> AgentClient.ApiToolSaveBody {
         var paramsValue: JSONValue?
         let rows = params.filter { !$0.name.trimmingCharacters(in: .whitespaces).isEmpty }
-        if !rows.isEmpty {
+        if !rows.isEmpty || !originalParams.isEmpty {
             var props: [String: JSONValue] = [:]
             for r in rows {
-                var spec: [String: JSONValue] = ["type": .string(r.type)]
-                if !r.desc.isEmpty { spec["description"] = .string(r.desc) }
+                if let raw = r.unmodeledSpec {
+                    props[r.name] = raw
+                    continue
+                }
+                var spec = r.originalSpec
+                if !r.hasOriginalSpec || r.type != r.originalType { spec["type"] = .string(r.type) }
+                if r.desc != r.originalDescription || r.originalSpec.isEmpty {
+                    spec["description"] = r.desc.isEmpty ? nil : .string(r.desc)
+                }
                 props[r.name] = .object(spec)
             }
-            paramsValue = .object([
-                "properties": .object(props),
-                "required": .array(rows.filter(\.required).map { .string($0.name) }),
-            ])
+            var schema = originalParams
+            schema["properties"] = .object(props)
+            schema["required"] = .array(rows.filter(\.required).map { .string($0.name) })
+            paramsValue = .object(schema)
         }
         var authValue: JSONValue?
         if !authEnv.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -114,12 +139,30 @@ struct ApiToolDraft: Identifiable {
             method: method,
             params: paramsValue,
             auth: authValue,
-            headers: nil,
+            headers: originalHeaders,
             timeout: Double(timeout),
             requires_approval: approval == "default" ? nil : approval == "require",
             enabled: enabled,
             secret: secret.isEmpty ? nil : secret,
             arguments: arguments)
+    }
+
+    /// Editing uses a field delta: hidden headers, canary and future declaration
+    /// fields remain on the server. Explicit null clears an edited optional field.
+    func changes() throws -> [String: JSONValue] {
+        func fields(_ body: AgentClient.ApiToolSaveBody) throws -> [String: JSONValue] {
+            let data = try JSONEncoder().encode(body)
+            guard case .object(let value) = try JSONDecoder().decode(JSONValue.self, from: data)
+            else { return [:] }
+            return value
+        }
+        let before = try originalBody.map(fields) ?? [:]
+        let after = try fields(toBody())
+        var delta: [String: JSONValue] = [:]
+        for key in Set(before.keys).union(after.keys) where key != "name" && key != "arguments" {
+            if before[key] != after[key] { delta[key] = after[key] ?? .null }
+        }
+        return delta
     }
 
     /// 试调实参：按行内类型把试调值折成 JSON（空值行不发送）。
@@ -141,6 +184,13 @@ struct ApiToolDraft: Identifiable {
 
 // MARK: - 面板（清单）
 
+struct ApiToolEditorPresentation: Identifiable {
+    let id = UUID()
+    let draft: ApiToolDraft
+    let client: AgentClient
+}
+
+
 struct ApiToolsPanelView: View {
     @EnvironmentObject var store: AgentStore
     @Environment(\.dismiss) private var dismiss
@@ -148,9 +198,12 @@ struct ApiToolsPanelView: View {
 
     @State private var tools: [ApiToolItem]?
     @State private var failed = false
-    @State private var draft: ApiToolDraft?
+    @State private var editor: ApiToolEditorPresentation?
     @State private var pendingDelete: ApiToolItem?
     @State private var notice: String?
+    @State private var loadId = UUID()
+    @State private var loadError: String?
+    @State private var loadedClient: AgentClient?
 
     var body: some View {
         if embedded {
@@ -179,7 +232,7 @@ struct ApiToolsPanelView: View {
         .navigationTitle(L("API 工具"))
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button { draft = ApiToolDraft() } label: { Image(systemName: "plus") }
+                Button { openDraft(ApiToolDraft()) } label: { Image(systemName: "plus") }
                     .help(L("添加 API 工具"))
             }
             if !embedded {
@@ -189,12 +242,25 @@ struct ApiToolsPanelView: View {
             }
         }
         .task { await reload() }
-        .sheet(item: $draft) { d in
-            ApiToolEditorView(draft: d) { message in
-                notice = message
-                Task { await reload() }
+        .onChange(of: store.client.map { ObjectIdentifier($0) }) { _, _ in
+            loadId = UUID(); tools = nil; loadedClient = nil; editor = nil
+            pendingDelete = nil; notice = nil; loadError = nil
+            Task { await reload() }
+        }
+        .sheet(item: $editor) { presentation in
+            ApiToolEditorView(draft: presentation.draft, targetClient: presentation.client,
+                presentationIsCurrent: { editor?.id == presentation.id },
+                onClose: { if editor?.id == presentation.id { editor = nil } }) { message in
+                    notice = message
+                    Task { await reload() }
+                }.environmentObject(store)
+        }
+        .safeAreaInset(edge: .top) {
+            if failed && tools == nil {
+                Button { Task { await reload() } } label: {
+                    Label(L("重新加载"), systemImage: "arrow.clockwise")
+                }.padding(6)
             }
-            .environmentObject(store)
         }
         .confirmationDialog(L("确认删除该声明？"), isPresented: .init(
             get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
@@ -212,22 +278,40 @@ struct ApiToolsPanelView: View {
     }
 
     private func reload() async {
+        let client = store.client, id = UUID()
+        loadId = id
+        let operation = ApiToolOperation(client: client) { store.client === client && loadId == id }
         do {
-            tools = try await store.client?.listApiTools().tools ?? []
+            tools = try await operation.perform { try await $0.listApiTools().tools }
+            loadedClient = client
             failed = false
+            loadError = nil
+        } catch is CancellationError {
+            return
         } catch {
-            tools = nil
+            guard store.client === client, loadId == id else { return }
             failed = true
+            loadError = error.localizedDescription
         }
+    }
+
+    private func openDraft(_ value: ApiToolDraft) {
+        guard let client = value.originalName == nil ? store.client : loadedClient,
+              store.client === client else { return }
+        editor = ApiToolEditorPresentation(draft: value, client: client)
     }
 
     private func remove(_ item: ApiToolItem) async {
         guard let name = item.name else { return }
+        let client = loadedClient
+        let operation = ApiToolOperation(client: client) { store.client === client }
         do {
-            let res = try await store.client?.deleteApiTool(name: name)
-            notice = res?.effect == "restart_required"
+            let res = try await operation.perform { try await $0.deleteApiTool(name: name) }
+            notice = res.effect == "restart_required"
                 ? L("已删除声明；运行中的实例在重启后端后下架") : L("已删除")
             await reload()
+        } catch is CancellationError {
+            return
         } catch {
             notice = error.localizedDescription
         }
@@ -236,12 +320,18 @@ struct ApiToolsPanelView: View {
     private func toolList(_ items: [ApiToolItem]) -> some View {
         List {
             Section {
-                Button { draft = ApiToolDraft() } label: {
+                Button { openDraft(ApiToolDraft()) } label: {
                     Label(L("添加 API 工具"), systemImage: "plus.circle")
+                }
+                Button { Task { await reload() } } label: {
+                    Label(L("刷新"), systemImage: "arrow.clockwise")
                 }
                 #if os(macOS)
                 .buttonStyle(.plain).foregroundStyle(.tint)
                 #endif
+            }
+            if let loadError {
+                Section { Text(L("刷新失败，保留上次清单：") + loadError).font(.caption).foregroundStyle(.secondary) }
             }
             if items.isEmpty {
                 Section {
@@ -253,6 +343,8 @@ struct ApiToolsPanelView: View {
                     ForEach(items) { item in row(item) }
                 } footer: {
                     Text(L("仓库 api_tools/ 里的手写声明只读；在这里添加的声明保存于数据目录。修改或删除已注册的工具需重启后端生效。"))
+                        .font(.caption)
+                    Text(L("加入工具清单不代表远程连接或密钥已验证。可在编辑页显式试调；试调可能产生实际操作。"))
                         .font(.caption)
                 }
             }
@@ -282,12 +374,12 @@ struct ApiToolsPanelView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            if item.isUserOwned && item.problem == nil { draft = ApiToolDraft(item: item) }
+            if item.isUserOwned && item.problem == nil { openDraft(ApiToolDraft(item: item)) }
         }
         .contextMenu {
             if item.isUserOwned {
                 if item.problem == nil {
-                    Button(L("编辑")) { draft = ApiToolDraft(item: item) }
+                    Button(L("编辑")) { openDraft(ApiToolDraft(item: item)) }
                 }
                 Button(L("删除"), role: .destructive) { pendingDelete = item }
             }
@@ -299,13 +391,16 @@ struct ApiToolsPanelView: View {
         if item.problem != nil {
             Label(L("坏声明"), systemImage: "xmark.circle")
                 .font(.caption).foregroundStyle(.red).labelStyle(.titleAndIcon)
+        } else if item.runtimeDeclarationCurrent == false && item.registered {
+            Label(L("已保存新配置，运行版本待重启更新"), systemImage: "clock")
+                .font(.caption).foregroundStyle(.orange)
         } else if item.registered {
-            Label(L("已上架"), systemImage: "checkmark.circle.fill")
+            Label(item.runtimeDeclarationCurrent == true ? L("当前声明已加入工具清单") : L("已加入工具清单，版本未知"), systemImage: "checkmark.circle.fill")
                 .font(.caption).foregroundStyle(.green).labelStyle(.titleAndIcon)
         } else if !item.enabled {
             Text(L("已停用")).font(.caption).foregroundStyle(.secondary)
         } else {
-            Text(L("未上架")).font(.caption).foregroundStyle(.orange)
+            Text(L("已保存，待补齐配置")).font(.caption).foregroundStyle(.orange)
         }
     }
 }
@@ -317,6 +412,9 @@ struct ApiToolEditorView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State var draft: ApiToolDraft
+    let targetClient: AgentClient?
+    var presentationIsCurrent: () -> Bool
+    var onClose: () -> Void
     var onSaved: (String) -> Void
 
     @State private var saving = false
@@ -330,11 +428,11 @@ struct ApiToolEditorView: View {
                 .navigationTitle(draft.originalName == nil ? L("添加 API 工具") : L("编辑 API 工具"))
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button(L("取消")) { dismiss() }
+                        Button(saving || testing ? L("关闭") : L("取消")) { onClose(); dismiss() }
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button(L("保存")) { Task { await save() } }
-                            .disabled(saving || draft.name.isEmpty
+                            .disabled(saving || testing || draft.name.isEmpty
                                       || draft.description.isEmpty || draft.endpoint.isEmpty)
                     }
                 }
@@ -342,10 +440,18 @@ struct ApiToolEditorView: View {
         #if os(macOS)
         .frame(minWidth: 540, minHeight: 600)
         #endif
+        .onChange(of: store.client.map { ObjectIdentifier($0) }) { _, _ in onClose(); dismiss() }
+        .onDisappear { onClose() }
     }
 
     private var form: some View {
         Form {
+            if draft.originalName != nil {
+                Section {
+                    Text(L("声明已保存。补齐配置后保存；若要验证远程连接，请显式试调。"))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section {
                 TextField(L("工具名"), text: $draft.name)
                     .disabled(draft.originalName != nil)
@@ -380,6 +486,7 @@ struct ApiToolEditorView: View {
                                 Text("boolean").tag("boolean")
                             }
                             .labelsHidden().fixedSize()
+                            .disabled(row.unmodeledSpec != nil)
                             #if os(macOS)
                             Toggle(L("必需"), isOn: $row.required)
                                 .toggleStyle(.checkbox).fixedSize()
@@ -389,6 +496,11 @@ struct ApiToolEditorView: View {
                         }
                         TextField(L("参数说明"), text: $row.desc)
                             .font(.caption)
+                            .disabled(row.unmodeledSpec != nil)
+                        if row.unmodeledSpec != nil {
+                            Text(L("该参数使用高级结构，类型和说明请在声明文件中修改。"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 .onDelete { draft.params.remove(atOffsets: $0) }
@@ -412,6 +524,7 @@ struct ApiToolEditorView: View {
                 }
             } header: { Text(L("鉴权（可选）")) } footer: {
                 Text(L("密钥值保存在后端数据目录的受限文件里（0600），不进声明文件、不进 git、不回传。"))
+                Text(L("已配置只表示存在密钥，并不代表验证成功；后端启动环境中的同名密钥优先。"))
             }
 
             Section {
@@ -441,8 +554,9 @@ struct ApiToolEditorView: View {
                         Label(L("试调一次"), systemImage: "bolt")
                     }
                 }
-                .disabled(testing || draft.endpoint.isEmpty)
+                .disabled(testing || saving || draft.endpoint.isEmpty)
                 if let testResult {
+                    Text(L("上次试调响应（不代表已保存配置）")).font(.caption).foregroundStyle(.secondary)
                     ScrollView {
                         Text(testResult)
                             .font(.caption.monospaced())
@@ -452,13 +566,14 @@ struct ApiToolEditorView: View {
                     .frame(maxHeight: 160)
                 }
             } header: { Text(L("试调")) } footer: {
-                Text(L("按当前表单真实调用一次并回显响应（不保存）。保存前先试调可即时发现声明错误。"))
+                Text(L("按当前表单真实调用一次并回显响应（不保存）。试调可能写入数据或触发外部操作；仅在你确认后执行。"))
             }
 
             if let errorText {
                 Section { Text(errorText).foregroundStyle(.red).font(.caption) }
             }
         }
+        .disabled(saving || testing)
         #if os(macOS)
         .formStyle(.grouped)
         #endif
@@ -467,10 +582,15 @@ struct ApiToolEditorView: View {
     private func test() async {
         testing = true
         defer { testing = false }
+        let operation = ApiToolOperation.editor(client: targetClient,
+            connectionIsCurrent: { store.client === targetClient }, presentationIsCurrent: presentationIsCurrent)
         do {
-            let res = try await store.client?.testApiTool(draft.toBody(arguments: draft.testArguments()))
-            testResult = res?.result ?? ""
+            let body = draft.toBody(arguments: draft.testArguments())
+            let res = try await operation.perform { try await $0.testApiTool(body) }
+            testResult = res.result
             errorText = nil
+        } catch is CancellationError {
+            return
         } catch {
             testResult = nil
             errorText = error.localizedDescription
@@ -480,18 +600,30 @@ struct ApiToolEditorView: View {
     private func save() async {
         saving = true
         defer { saving = false }
+        let operation = ApiToolOperation.editor(client: targetClient,
+            connectionIsCurrent: { store.client === targetClient }, presentationIsCurrent: presentationIsCurrent)
         do {
-            let res = try await store.client?.saveApiTool(draft.toBody())
+            let res: ApiToolActionResponse
+            if let name = draft.originalName {
+                let changes = try draft.changes()
+                res = try await operation.perform { try await $0.updateApiTool(name: name, changes: changes) }
+            } else {
+                let body = draft.toBody()
+                res = try await operation.perform { try await $0.saveApiTool(body) }
+            }
             let message: String
-            switch res?.effect {
-            case "registered": message = L("已保存并上架")
-            case "unavailable": message = L("已保存但探活未过（检查密钥），补齐后重扫可上架")
-            case "restart_required": message = L("已保存；该工具已在运行中，重启后端后生效")
+            switch res.effect {
+            case "registered": message = L("已保存并加入工具清单；远程连接尚未验证。")
+            case "unavailable": message = L("声明已保存，尚未加入工具清单；请补齐密钥等配置后再次保存。远程连接尚未验证。")
+            case "restart_required": message = L("已保存。工具继续运行；请在清单查看新配置是否需要重启后生效。")
             case "saved_disabled": message = L("已保存（停用状态，不会注册）")
             default: message = L("已保存")
             }
+            onClose()
             dismiss()
             onSaved(message)
+        } catch is CancellationError {
+            return
         } catch {
             errorText = error.localizedDescription
         }

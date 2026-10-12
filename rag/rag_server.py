@@ -20,9 +20,11 @@
                   仓库布局现状。bundle 布局注入 app 数据根——bundle 本体只读）
 """
 import hmac
+import ipaddress
 import json
 import logging
 import os
+import re
 import time
 import uuid
 import threading
@@ -30,7 +32,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional, Dict
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Body, Request, Header, Depends
 from pydantic import BaseModel, Field
 import chromadb
@@ -57,6 +59,26 @@ DATA_ROOT = Path(os.environ.get("RAG_DATA_DIR", "").strip() or BASE_WORKSPACE)
 STORAGE_BASE = DATA_ROOT / "storage"
 RAW_FILES_DIR = STORAGE_BASE / "raw_files"
 UNCLASSIFIED_DIR = STORAGE_BASE / "unclassified_raw"
+
+
+def _checked_storage_path(path: Path, root: Optional[Path] = None) -> Path:
+    """每次操作前解析包含关系，拒绝目录/文件符号链接逃逸；不改动原文。"""
+    try:
+        storage = STORAGE_BASE.resolve()
+        boundary = (root or STORAGE_BASE).resolve()
+        resolved = path.resolve()
+        inside = (storage.is_relative_to(DATA_ROOT.resolve())
+                  and boundary.is_relative_to(storage) and resolved.is_relative_to(boundary))
+    except (OSError, ValueError, RuntimeError):
+        inside = False
+    if not inside:
+        raise HTTPException(status_code=400, detail=f"原文路径越界（含符号链接逃逸），已拒绝: {path}")
+    return path
+
+
+# 启动时也不跟随逃逸目录创建结构；数据根自身可由宿主配置为符号链接。
+_checked_storage_path(RAW_FILES_DIR)
+_checked_storage_path(UNCLASSIFIED_DIR)
 RAW_FILES_DIR.mkdir(parents=True, exist_ok=True)
 UNCLASSIFIED_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -368,6 +390,67 @@ def _scoped_collection(user_id: str, name: str) -> str:
 # ==========================================
 # 核心工具函数
 # ==========================================
+def _validate_category_id(name: str) -> str:
+    """保留 Chroma 的既有合法名称；分类 ID 不是路径，也不能是系统路由表。"""
+    is_ipv4 = False
+    try:
+        is_ipv4 = isinstance(name, str) and isinstance(ipaddress.ip_address(name), ipaddress.IPv4Address)
+    except ValueError:
+        pass
+    if (not isinstance(name, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{1,510}[A-Za-z0-9]", name) is None
+            or ".." in name or is_ipv4
+            or name == "meta_classification_db"):
+        raise HTTPException(status_code=400, detail=f"非法分类 ID {name!r}：须为 3–512 位字母/数字/点/横线/下划线，首尾为字母或数字；不能含连续点、是 IPv4 地址或系统路由表。")
+    return name
+
+
+def _category_raw_dir(name: str) -> Path:
+    _validate_category_id(name)
+    if name == "unclassified_db":
+        return _checked_storage_path(UNCLASSIFIED_DIR)
+    _checked_storage_path(RAW_FILES_DIR)
+    try:
+        name_max = os.pathconf(RAW_FILES_DIR, "PC_NAME_MAX")
+    except (OSError, ValueError):
+        name_max = 255  # 无法探测时按可移植的常见文件系统限制拒绝，不新增配置源。
+    if name_max <= 0:
+        name_max = 255
+    if len(os.fsencode(name)) > name_max:
+        raise HTTPException(status_code=400, detail=f"分类 ID 合法，但原文目录名超出文件系统限制（{name_max} 字节），已拒绝: {name!r}")
+    return _checked_storage_path(RAW_FILES_DIR / name, RAW_FILES_DIR)
+
+
+def _move_raw_file_no_replace(source: Path, destination: Path) -> None:
+    """同一数据根内原子占用新路径后才移除旧名，目标并发出现也绝不覆盖。"""
+    _checked_storage_path(source)
+    _checked_storage_path(destination, destination.parent)
+    if source.is_symlink():
+        raise HTTPException(status_code=400, detail=f"原文迁移拒绝符号链接源文件: {source}")
+    try:
+        # link 是排他的原子创建；失败（含跨文件系统）时原文保持原位。
+        os.link(source, destination, follow_symlinks=False)
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail=f"原文目标已存在，迁移已拒绝，两份原文保留: {destination}")
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=f"原文迁移失败，源文件保留: {source}: {e}")
+    try:
+        source.unlink()
+    except OSError as e:
+        # 新路径已耐久可见；保留两份也不能删除任何一份来掩盖失败。
+        raise HTTPException(status_code=500, detail=f"原文迁移未完成，源/目标两份保留: {source}: {e}")
+
+
+def _usable_category(name: str) -> bool:
+    """旧非法 meta 只跳过并报原因，保留路由记录和用户原文供人工处理。"""
+    try:
+        _category_raw_dir(name)
+        return True
+    except HTTPException as e:
+        logger.warning(f"⚠️ 跳过非法分类路由 {name!r}（记录和原文保留）: {e.detail}")
+        return False
+
+
 def get_chroma_client():
     """获取当前线程专属的 ChromaDB 客户端"""
     if not hasattr(thread_local_storage, "client"):
@@ -499,6 +582,8 @@ def _replace_previous_versions(category: str, doc_title: str) -> None:
         return
     old_paths = {m.get("source_path") for m in (matched.get("metadatas") or [])
                  if m and m.get("source_path")}
+    for sp in old_paths:
+        RETIER.record_raw_removal(_checked_storage_path(Path(sp)))
     try:
         col.delete(ids=ids)
         FTS.delete_ids(ids)
@@ -513,8 +598,9 @@ def _replace_previous_versions(category: str, doc_title: str) -> None:
             # 与 delete 端点同一守卫：只动 STORAGE_BASE 之内的文件
             if p.is_file() and p.resolve().is_relative_to(STORAGE_BASE.resolve()):
                 dest_dir = p.parent / VERSIONS_DIR
+                _checked_storage_path(dest_dir, p.parent)
                 dest_dir.mkdir(parents=True, exist_ok=True)
-                p.rename(dest_dir / f"{stamp}_{p.name}")
+                _move_raw_file_no_replace(p, _checked_storage_path(dest_dir / f"{stamp}_{p.name}", p.parent))
                 archived += 1
         except Exception as e:
             logger.warning(f"⚠️ 旧版原文归档失败（切片已清，文件留在原处）: {sp}: {e}")
@@ -528,9 +614,10 @@ def auto_classify_and_insert(raw_document: str, doc_title: str, forced_category:
     复用该文件而非另写一份，见步骤 4。"""
     logger.info(f"🚀 开始处理文档: {doc_title}")
 
-    if forced_category:
+    if forced_category is not None:
         # 调用方（如 Agent 按「查目录→选类/建类→入库」流程）已显式指定目标分类，
-        # 跳过向量自动路由；存在性校验由接口层完成
+        # 跳过向量自动路由；后台也检查 ID/路径，不能只依赖接口受理时的检查。
+        _category_raw_dir(forced_category)
         target_category = forced_category
         logger.info(f"📌 文档 [{doc_title}] 使用调用方指定分类: {target_category}")
     else:
@@ -549,12 +636,19 @@ def auto_classify_and_insert(raw_document: str, doc_title: str, forced_category:
                 if routes['distances'] and routes['distances'][0]:
                     top_distance = routes['distances'][0][0]
                     if top_distance < THRESHOLDS["insert_routing_max_distance"]:
-                        target_category = routes['ids'][0][0]
-                        logger.info(f"🎯 文档 [{doc_title}] 成功匹配到分类: {target_category} (距离: {top_distance:.4f})")
+                        candidate = routes['ids'][0][0]
+                        if _usable_category(candidate):
+                            target_category = candidate
+                            logger.info(f"🎯 文档 [{doc_title}] 成功匹配到分类: {target_category} (距离: {top_distance:.4f})")
                     else:
                         logger.warning(f"⚠️ 相似度不足 (距离 {top_distance:.4f} > 阈值 {THRESHOLDS['insert_routing_max_distance']})，流入待分类库。")
         except Exception as e:
             logger.error(f"分类查询失败，默认进入待分类库。原因: {e}")
+
+    # 在替换旧切片、归档、mkdir 或移动原文之前验证；后台执行与受理之间目录可能改变。
+    expected_dir = _category_raw_dir(target_category)
+    if existing_source_path:
+        _checked_storage_path(Path(existing_source_path))
 
     # 3. 文本切片（先于备份：空文档直接返回，不在磁盘留下无切片指向的孤儿备份文件）
     chunk_pairs = split_text_to_chunks(raw_document)
@@ -577,26 +671,21 @@ def auto_classify_and_insert(raw_document: str, doc_title: str, forced_category:
         original_path = Path(existing_source_path)   # 移动前的路径：旧切片按它清理（见步骤 5）
         backup_path = original_path
         # 路由到了与所在目录不符的分类（未分类池重灌时会发生）：移动而非复制，保持单份
-        expected_dir = (UNCLASSIFIED_DIR if target_category == "unclassified_db"
-                        else RAW_FILES_DIR / target_category)
         if backup_path.parent != expected_dir:
+            moved = _checked_storage_path(expected_dir / backup_path.name, expected_dir)
             expected_dir.mkdir(parents=True, exist_ok=True)
-            moved = expected_dir / backup_path.name
-            backup_path.rename(moved)
+            RETIER.record_raw_move(backup_path, moved)
+            _move_raw_file_no_replace(backup_path, moved)
             logger.info(f"📁 原文备份随路由迁移: {backup_path} → {moved}")
             backup_path = moved
     else:
         safe_title = "".join(c for c in doc_title if c.isalnum() or c in " _-").strip()
         file_name = f"{safe_title}_{uuid.uuid4().hex[:8]}.txt"
 
-        if target_category == "unclassified_db":
-            backup_path = UNCLASSIFIED_DIR / file_name
-        else:
-            cat_dir = RAW_FILES_DIR / target_category
-            cat_dir.mkdir(parents=True, exist_ok=True)
-            backup_path = cat_dir / file_name
-
-        with backup_path.open("w", encoding="utf-8") as f:
+        backup_path = _checked_storage_path(expected_dir / file_name, expected_dir)
+        expected_dir.mkdir(parents=True, exist_ok=True)
+        # 新备份不覆盖既有文件/符号链接；名称冲突时报错并保留原文。
+        with backup_path.open("x", encoding="utf-8") as f:
             f.write(raw_document)
 
     # 5 & 6. 计算块级向量并入库
@@ -653,31 +742,23 @@ def auto_classify_and_insert(raw_document: str, doc_title: str, forced_category:
 def reclassify_background_task():
     """扫描未分类文件夹并重新入库"""
     logger.info("🔄 启动离线数据治理：重新分拣未分类文件...")
+    _category_raw_dir("unclassified_db")
     files = [f for f in UNCLASSIFIED_DIR.iterdir() if f.is_file() and not f.name.startswith(".")]
     if not files:
         logger.info("📂 未分类文件夹为空，无需治理。")
         return
 
     for file in files:
+        _checked_storage_path(file, UNCLASSIFIED_DIR)
         with file.open("r", encoding="utf-8") as f:
             content = f.read()
 
         # 根据文件名还原大致标题
         title = file.name.rsplit("_", 1)[0]
 
-        # 将原 unclassified_db 里的切片根据路径全删掉
-        unclass_db = get_chroma_collection("unclassified_db")
-        try:
-            unclass_db.delete(where={"source_path": str(file)})
-        except Exception:
-            pass
-        FTS.delete_where_source(str(file))
-
-        # 重新走自动化入库流程
-        auto_classify_and_insert(content, title)
-
-        # 清理旧原始文件
-        file.unlink(missing_ok=True)
+        # 与重索引共用原文复用路径：非法旧路由回落时保留同一原文；
+        # 合法重分拣只移动一次，不先删旧文件再复制/清理。
+        auto_classify_and_insert(content, title, existing_source_path=str(file))
     logger.info("🎉 重新分拣任务执行完毕！")
 
 # ==========================================
@@ -763,29 +844,28 @@ async def list_categories():
     # 纯数据操作：计算面离线也可用（backend 启动探活/工具注册靠它，不能被算力端卡住）
     db = get_chroma_collection("meta_classification_db")
     data = db.get()
-    return [{"db_name": id_, "description": doc} for id_, doc in zip(data["ids"], data["documents"])]
+    return [{"db_name": id_, "description": doc} for id_, doc in zip(data["ids"], data["documents"])
+            if _usable_category(id_)]
 
 @app.post("/api/v1/category", tags=["分类管理"])
 async def upsert_category(cat: CategoryItem):
-    _refuse_if_rebuilding("建/改分类")   # 重建窗口新建的路由会被 wipe 清成无痕（m5）
-    db = get_chroma_collection("meta_classification_db")
-    emb = get_embeddings([cat.description])[0]
-    db.upsert(ids=[cat.db_name], documents=[cat.description], embeddings=[emb])
-    return {"msg": f"分类 {cat.db_name} 已创建/更新"}
+    _category_raw_dir(cat.db_name)
+    with _write_scope("建/改分类"):
+        db = get_chroma_collection("meta_classification_db")
+        emb = get_embeddings([cat.description])[0]
+        db.upsert(ids=[cat.db_name], documents=[cat.description], embeddings=[emb])
+        return {"msg": f"分类 {cat.db_name} 已创建/更新"}
 
 @app.delete("/api/v1/category/{db_name}", tags=["分类管理"])
 async def delete_category(db_name: str):
-    _refuse_if_rebuilding("删分类路由")
-    db = get_chroma_collection("meta_classification_db")
-    db.delete(ids=[db_name])
-    return {"msg": f"分类 {db_name} 路由已删除（实际数据保留）"}
+    _category_raw_dir(db_name)
+    with _write_scope("删分类路由"):
+        db = get_chroma_collection("meta_classification_db")
+        db.delete(ids=[db_name])
+        return {"msg": f"分类 {db_name} 路由已删除（实际数据保留）"}
 
 # ---------------- 数据浏览与真删（记忆治理波 P1：管理面板数据源） ----------------
 TRASH_DIR = STORAGE_BASE / ".trash"   # 删除类操作归档先行（红线）：不 rm，移入回收目录
-
-
-def _category_raw_dir(name: str) -> Path:
-    return UNCLASSIFIED_DIR if name == "unclassified_db" else RAW_FILES_DIR / name
 
 
 def _count_raw_files(name: str) -> int:
@@ -809,15 +889,23 @@ async def list_documents(category: Optional[str] = None):
         cats = {id_: (doc or "") for id_, doc in zip(data["ids"], data["documents"])}
         cats.setdefault("unclassified_db", "自动路由未能归类的文档池")
         out = []
+        skipped = []
         for name in sorted(cats):
+            try:
+                _category_raw_dir(name)
+            except HTTPException as e:
+                logger.warning(f"⚠️ 跳过非法分类路由 {name!r}（记录和原文保留）: {e.detail}")
+                skipped.append({"name": name, "reason": e.detail})
+                continue
             try:
                 chunk_count = get_chroma_collection(name).count()
             except Exception:
                 chunk_count = 0
             out.append({"name": name, "description": cats[name],
                         "doc_count": _count_raw_files(name), "chunk_count": chunk_count})
-        return {"categories": out}
+        return {"categories": out, "skipped_categories": skipped}
 
+    _category_raw_dir(category)
     col = get_chroma_collection(category)
     docs: Dict[str, dict] = {}
     try:
@@ -865,30 +953,33 @@ async def purge_category(db_name: str):
     """
     if db_name == "meta_classification_db":
         raise HTTPException(status_code=400, detail="系统路由表不可删除")
-    _refuse_if_rebuilding("删除分类")   # 快照里的原文目录被移进 .trash=重灌整类必失败（m5）
-    client = get_chroma_client()
-    dropped = False
-    try:
-        client.delete_collection(db_name)
-        dropped = True
-    except Exception:
-        pass   # collection 本就不存在
-    archived = False
     raw_dir = _category_raw_dir(db_name)
-    if raw_dir.is_dir():
-        TRASH_DIR.mkdir(parents=True, exist_ok=True)
-        raw_dir.rename(TRASH_DIR / f"{time.strftime('%Y%m%d%H%M%S')}_{db_name}")
-        archived = True
-        if db_name == "unclassified_db":   # 未分类池是常驻结构，移走后重建空池
-            UNCLASSIFIED_DIR.mkdir(parents=True, exist_ok=True)
-    try:
-        get_chroma_collection("meta_classification_db").delete(ids=[db_name])
-    except Exception:
-        pass
-    FTS.drop_db(db_name)
-    logger.info(f"🗑️ 分类 '{db_name}' 已真删（collection={dropped}, 原文归档={archived}）")
-    return {"msg": f"分类 {db_name} 已删除（原文已移入回收目录，可手工找回）",
-            "collection_dropped": dropped, "raw_archived": archived}
+    _checked_storage_path(TRASH_DIR)
+    with _write_scope("删除分类"):
+        RETIER.record_raw_removal(raw_dir, directory=True)
+        client = get_chroma_client()
+        dropped = False
+        try:
+            client.delete_collection(db_name)
+            dropped = True
+        except Exception:
+            pass   # collection 本就不存在
+        archived = False
+        if raw_dir.is_dir():
+            destination = _checked_storage_path(TRASH_DIR / f"{time.strftime('%Y%m%d%H%M%S')}_{db_name}", TRASH_DIR)
+            TRASH_DIR.mkdir(parents=True, exist_ok=True)
+            raw_dir.rename(destination)
+            archived = True
+            if db_name == "unclassified_db":   # 未分类池是常驻结构，移走后重建空池
+                UNCLASSIFIED_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            get_chroma_collection("meta_classification_db").delete(ids=[db_name])
+        except Exception:
+            pass
+        FTS.drop_db(db_name)
+        logger.info(f"🗑️ 分类 '{db_name}' 已真删（collection={dropped}, 原文归档={archived}）")
+        return {"msg": f"分类 {db_name} 已删除（原文已移入回收目录，可手工找回）",
+                "collection_dropped": dropped, "raw_archived": archived}
 
 
 # ---------------- 数据流向与治理 ----------------
@@ -903,12 +994,49 @@ def _refuse_if_rebuilding(op: str) -> None:
                                    f"暂不受理{op}——请勿循环重试，稍后再来。")
 
 
+def _acquire_write(op: str):
+    try:
+        return RETIER.acquire_write(op)
+    except RetierRefused as e:
+        raise HTTPException(status_code=e.code, detail=e.detail)
+
+
+@contextmanager
+def _write_scope(op: str):
+    """One maintenance gate covers the entire synchronous mutation."""
+    ticket = _acquire_write(op)
+    try:
+        yield
+    finally:
+        RETIER.release_write(ticket)
+
+
+def _run_accepted_write(ticket, fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        RETIER.release_write(ticket)
+
+
+def _queue_accepted_write(background_tasks: BackgroundTasks, op: str, fn, **kwargs):
+    # Reserve before returning the HTTP response, not when BackgroundTasks runs.
+    # The existing FastAPI executor still performs the task; no second worker.
+    ticket = _acquire_write(op)
+    try:
+        background_tasks.add_task(_run_accepted_write, ticket, fn, **kwargs)
+    except BaseException:
+        RETIER.release_write(ticket)
+        raise
+
+
 @app.post("/api/v1/document/insert", tags=["数据入库"])
 async def insert_docs(req: InsertRequest, background_tasks: BackgroundTasks,
                       user_id: str = Depends(_current_user)):
     # user_id 为 D3 多用户埋点（参数面已通，逻辑未实现）：当前恒为 "default"，
     # _scoped_collection 对其返回原名——入库路径行为与现状全同。见模块头 _scoped_collection。
     forced = (req.category or "").strip() or None
+    if req.category is not None:
+        _category_raw_dir(forced or "")
 
     _refuse_if_rebuilding("入库")
 
@@ -948,7 +1076,7 @@ async def insert_docs(req: InsertRequest, background_tasks: BackgroundTasks,
             raise HTTPException(status_code=400,
                                 detail=f"source_path 指向的原文备份不存在: {existing_source}")
 
-    background_tasks.add_task(
+    _queue_accepted_write(background_tasks, "入库",
         auto_classify_and_insert,
         raw_document=req.document, doc_title=req.title, forced_category=forced,
         existing_source_path=existing_source,
@@ -960,39 +1088,38 @@ async def insert_docs(req: InsertRequest, background_tasks: BackgroundTasks,
 @app.delete("/api/v1/document/delete", tags=["数据治理"])
 async def delete_document_by_path(source_path: str = Body(embed=True)):
     """传入元数据中的备份路径，瞬间跨越切片进行整篇删除"""
-    _refuse_if_rebuilding("删除文档")   # 快照里的原文被挪走=重灌该篇必失败（m5）
-    client = get_chroma_client()
-    deleted_chunks = 0
-    # 暴力但极简的做法：轮询所有 Collection，清扫相关片段
-    for col_info in client.list_collections():
-        col = client.get_collection(col_info.name)
-        try:
-            matched = col.get(where={"source_path": source_path})
-            if matched["ids"]:
-                col.delete(ids=matched["ids"])
-                deleted_chunks += len(matched["ids"])
-        except Exception as e:
-            logger.error(f"清理库 {col_info.name} 时出错: {e}")
-
-    FTS.delete_where_source(source_path)
-
-    # 原始备份文件移入回收目录（归档先行红线：不 rm，可手工找回）
-    backup_file = Path(source_path)
-    if backup_file.is_file() and backup_file.resolve().is_relative_to(STORAGE_BASE.resolve()):
-        try:
+    with _write_scope("删除文档"):
+        # 所有路径/归档目标检查和排他迁移先于索引删除；拒绝时保留切片及原文。
+        backup_file = _checked_storage_path(Path(source_path))
+        _checked_storage_path(TRASH_DIR)
+        destination = _checked_storage_path(
+            TRASH_DIR / f"{time.strftime('%Y%m%d%H%M%S')}_{backup_file.name}", TRASH_DIR)
+        RETIER.record_raw_removal(backup_file)
+        if backup_file.is_file():
             TRASH_DIR.mkdir(parents=True, exist_ok=True)
-            backup_file.rename(
-                TRASH_DIR / f"{time.strftime('%Y%m%d%H%M%S')}_{backup_file.name}")
-        except OSError as e:
-            logger.warning(f"⚠️ 原文移入回收目录失败（切片已清，文件留在原处）: {e}")
+            _move_raw_file_no_replace(backup_file, destination)
+        client = get_chroma_client()
+        deleted_chunks = 0
+        # 暴力但极简的做法：轮询所有 Collection，清扫相关片段
+        for col_info in client.list_collections():
+            col = client.get_collection(col_info.name)
+            try:
+                matched = col.get(where={"source_path": source_path})
+                if matched["ids"]:
+                    col.delete(ids=matched["ids"])
+                    deleted_chunks += len(matched["ids"])
+            except Exception as e:
+                logger.error(f"清理库 {col_info.name} 时出错: {e}")
 
-    if deleted_chunks == 0:
-        # 教学式反馈：零命中大概率是路径不精确，引导调用方先检索拿到确切 Path
-        return {"msg": (
-            "未找到匹配该 source_path 的任何切片（删除了 0 条，可能路径不精确或文档已删除）。"
-            "请先用检索接口确认目标文档元数据中 'Path: ...' 的精确值后重试。"
-        ), "deleted_chunks": 0}
-    return {"msg": f"全库扫描清理完毕，共删除 {deleted_chunks} 个切片", "deleted_chunks": deleted_chunks}
+        FTS.delete_where_source(source_path)
+
+        if deleted_chunks == 0:
+            # 教学式反馈：零命中大概率是路径不精确，引导调用方先检索拿到确切 Path
+            return {"msg": (
+                "未找到匹配该 source_path 的任何切片（删除了 0 条，可能路径不精确或文档已删除）。"
+                "请先用检索接口确认目标文档元数据中 'Path: ...' 的精确值后重试。"
+            ), "deleted_chunks": 0}
+        return {"msg": f"全库扫描清理完毕，共删除 {deleted_chunks} 个切片", "deleted_chunks": deleted_chunks}
 
 class StaleRequest(BaseModel):
     source_path: str
@@ -1006,36 +1133,47 @@ async def mark_document_stale(req: StaleRequest):
     检索结果与管理面板据此带出警示；reason 传空串即取消标记。恒写 stale 键
     （空串=无标记），不依赖「update 能否删键」的 Chroma 版本行为。
     """
-    _refuse_if_rebuilding("过时标记")   # 窗口内标记会随 wipe/重挂时序错乱（m5）
-    client = get_chroma_client()
-    stale_val = req.reason.strip()
-    stale_at = time.strftime("%Y-%m-%d") if stale_val else ""
-    updated = 0
-    for col_info in client.list_collections():
-        col = client.get_collection(col_info.name)
-        try:
-            matched = col.get(where={"source_path": req.source_path})
-            ids = matched["ids"]
-            if not ids:
-                continue
-            metas = [{**dict(m or {}), "stale": stale_val, "stale_at": stale_at}
-                     for m in matched["metadatas"]]
-            col.update(ids=ids, metadatas=metas)
-            updated += len(ids)
-        except Exception as e:
-            logger.error(f"标记库 {col_info.name} 时出错: {e}")
-    if updated == 0:
-        return {"msg": ("未找到匹配该 source_path 的任何切片。请先用检索接口确认"
-                        "元数据中 'Path: ...' 的精确值后重试。"), "updated_chunks": 0}
-    verb = "已标记过时" if stale_val else "已取消过时标记"
-    return {"msg": f"{verb}（{updated} 个切片）", "updated_chunks": updated}
+    with _write_scope("过时标记"):
+        client = get_chroma_client()
+        stale_val = req.reason.strip()
+        stale_at = time.strftime("%Y-%m-%d") if stale_val else ""
+        matches = []
+        for col_info in client.list_collections():
+            col = client.get_collection(col_info.name)
+            try:
+                matched = col.get(where={"source_path": req.source_path})
+                if matched["ids"]:
+                    matches.append((col, matched))
+            except Exception as e:
+                logger.error(f"查询标记库 {col_info.name} 时出错: {e}")
+        recovery_updated = RETIER.record_stale_change(req.source_path, stale_val, stale_at,
+                                                      live_matches=bool(matches))
+        updated = 0
+        for col, matched in matches:
+            try:
+                ids = matched["ids"]
+                metas = [{**dict(m or {}), "stale": stale_val, "stale_at": stale_at}
+                         for m in matched["metadatas"]]
+                col.update(ids=ids, metadatas=metas)
+                updated += len(ids)
+            except Exception as e:
+                logger.error(f"标记库 {col.name} 时出错: {e}")
+        if updated == 0:
+            if recovery_updated:
+                return {"msg": "恢复中的过时标记已更新，将在重建时应用。",
+                        "updated_chunks": 0, "recovery_updated": True}
+            return {"msg": ("未找到匹配该 source_path 的任何切片。请先用检索接口确认"
+                            "元数据中 'Path: ...' 的精确值后重试。"), "updated_chunks": 0}
+        verb = "已标记过时" if stale_val else "已取消过时标记"
+        return {"msg": f"{verb}（{updated} 个切片）", "updated_chunks": updated,
+                "recovery_updated": recovery_updated}
 
 
 @app.post("/api/v1/governance/reclassify", tags=["数据治理"])
 async def trigger_reclassification(background_tasks: BackgroundTasks):
     _refuse_if_rebuilding("重分拣")
     COMPUTE.ensure_ready()   # 重分拣要算向量：计算面不可达时当场 503
-    background_tasks.add_task(reclassify_background_task)
+    _queue_accepted_write(background_tasks, "重分拣", reclassify_background_task)
     return {"msg": "数据重构清洗任务已置入后台运行"}
 
 # ---------------- 核心并发检索 ----------------
@@ -1134,6 +1272,8 @@ def advanced_query_rag(req: QueryRequest):
         routes = meta_db.query(query_embeddings=[cat_emb], n_results=min(req.top_k_dbs, meta_count))
 
         for db_name, distance in zip(routes["ids"][0], routes["distances"][0]):
+            if not _usable_category(db_name):
+                continue
             if distance <= THRESHOLDS["query_routing_max_distance"]:
                 target_dbs.append(db_name)
             else:
@@ -1438,12 +1578,16 @@ def _retier_reset_and_adopt() -> None:
 
 
 def _retier_upsert_category(name: str, desc: str) -> None:
+    _category_raw_dir(name)
     emb = get_embeddings([desc])[0]
     get_chroma_collection("meta_classification_db").upsert(
         ids=[name], documents=[desc], embeddings=[emb])
 
 
 def _retier_insert_document(path: Path, category: Optional[str]) -> None:
+    _checked_storage_path(path)
+    if category is not None:
+        _category_raw_dir(category)
     text = path.read_text(encoding="utf-8")
     title = path.name.rsplit("_", 1)[0] if "_" in path.name else path.stem
     auto_classify_and_insert(text, title, forced_category=category,
@@ -1477,8 +1621,8 @@ def _retier_dump_stale():
             got = get_chroma_collection(name).get(where={"stale": {"$ne": ""}},
                                                   include=["metadatas"])
         except Exception as e:
-            failed += 1   # 该库标记将丢失：计数上报（stale_dump_failed），不许静默
-            logger.warning(f"⚠️ 过时标记快照失败（库 {name}，该库标记将丢失）: {e}")
+            failed += 1   # 管理器据此拒绝 wipe；不允许不完整快照丢标记。
+            logger.warning(f"⚠️ 过时标记快照失败（库 {name}，重建将拒绝清库）: {e}")
             continue
         for m in got.get("metadatas") or []:
             sp = (m or {}).get("source_path")
@@ -1488,10 +1632,7 @@ def _retier_dump_stale():
 
 
 def _retier_restore_stale(mapping: dict) -> list:
-    """重灌后按 source_path 重挂标记（mark_document_stale 同款 update 循环）；
-    返回没找到切片的路径。原路径没命中时按**同名文件**兜一层（修正评审 S）：
-    自动路由迁移只换父目录不换文件名（auto_classify_and_insert 的 rename 语义），
-    在 raw_files/*/ 与未分类池里找同名者即是它的新家。"""
+    """只按恢复文件确认的精确路径/原文身份重挂；无证据时失败，不猜同名文件。"""
     lost = []
     client = get_chroma_client()
     names = [c if isinstance(c, str) else c.name for c in client.list_collections()]
@@ -1515,14 +1656,12 @@ def _retier_restore_stale(mapping: dict) -> list:
         return n
 
     for sp, meta in mapping.items():
+        if meta.get("_raw_id") and RetierManager.raw_identity(Path(sp)) != meta["_raw_id"]:
+            lost.append(sp)
+            continue
         if _apply(sp) > 0:
             continue
-        base = Path(sp).name
-        candidates = [p for p in RAW_FILES_DIR.glob(f"*/{base}") if p.is_file()]
-        if (UNCLASSIFIED_DIR / base).is_file():
-            candidates.append(UNCLASSIFIED_DIR / base)
-        if not any(_apply(str(p)) > 0 for p in candidates):
-            lost.append(sp)
+        lost.append(sp)
     return lost
 
 
@@ -1538,6 +1677,7 @@ RETIER = RetierManager(
     dump_stale=_retier_dump_stale,
     restore_stale=_retier_restore_stale,
     categories_backup=STORAGE_BASE / "categories_backup.json",
+    stale_backup=STORAGE_BASE / "stale_backup.json",
     # 耐久标记与库戳同目录：中途死掉的重建靠它在重启后仍被 status() 认出来。
     # 手动 reembed 的 wipe（rmtree chroma_data）会连它一起清——那条路本就以
     # 「操作员盯完全程」为前提，标记语义随目录一起归零没有害处。

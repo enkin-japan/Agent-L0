@@ -1,0 +1,7 @@
+{"seq": 1, "turn_id": "t_card_a", "ts": 1.0, "type": "turn_queued", "data": {"prompt": "A"}}
+{"seq": 2, "turn_id": "t_card_a", "ts": 1.0, "type": "turn_started", "data": {}}
+{"seq": 3, "turn_id": "t_card_a", "ts": 1.0, "type": "awaiting_approval", "data": {"pending_tools": [{"name": "write_file", "arguments": {"path": "/fixture/a.txt", "content": "A"}}]}}
+{"seq": 4, "turn_id": "t_card_a", "ts": 1.0, "type": "turn_ended", "data": {"status": "warning", "prompt": "A", "response": [], "turn_index": 0}}
+{"seq": 5, "turn_id": "t_card_b", "ts": 1.0, "type": "turn_queued", "data": {"prompt": "B"}}
+{"seq": 6, "turn_id": "t_card_b", "ts": 1.0, "type": "turn_started", "data": {}}
+{"seq": 7, "turn_id": "t_card_b", "ts": 1.0, "type": "awaiting_approval", "data": {"pending_tools": [{"name": "write_file", "arguments": {"path": "/fixture/b.txt", "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxAPPROVAL_TAIL_VISIBLE"}}]}}

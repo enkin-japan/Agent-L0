@@ -1,0 +1,1 @@
+同一轮先审批 A（seq=3），执行 A 后进入审批 B（seq=9）。客户端未收到后续 SSE 时，仍展示 A，但服务端必须以 expected_approval_seq=3 拒绝对 B 的决议。expected_turn_id 仍相同。新客户端发送这两项可选绑定字段，旧客户端可省略；未知字段仍按既有兼容策略忽略。服务端 seq 来自 journal.emit 的 awaiting_approval 信封，增量/进度事件不能改变审批批次身份。

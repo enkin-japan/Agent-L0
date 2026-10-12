@@ -1,0 +1,26 @@
+{
+  "turn_state": "awaiting_approval",
+  "transcript": [],
+  "preview": {
+    "prompt": "同轮两批审批",
+    "text": "",
+    "thinking": "",
+    "steps": [
+      {
+        "kind": "tool",
+        "label": "danger_op",
+        "detail": "done-A",
+        "status": "ok"
+      }
+    ],
+    "task": null
+  },
+  "pending_tools": [
+    {
+      "name": "danger_op",
+      "arguments": {
+        "target": "B"
+      }
+    }
+  ]
+}

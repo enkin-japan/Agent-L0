@@ -2,7 +2,7 @@
 终端命令执行工具：桌面 Agent 的主力工具（大多数任务优先走终端）。
 
 审批策略（安全默认 = 白名单放行 + 其余弹窗，而非黑名单拦截）：
-- 只有「首命令属于只读白名单 且 不含 shell 元字符」的调用自动放行（如 ls/cat/grep）；
+- 只有「命令、操作及参数均经只读规则审定 且 不含 shell 元字符」的调用自动放行（如 ls/cat/grep）；
 - 其余一切（写文件、装卸软件、sudo、管道/重定向/子命令、任何不认识的命令）一律弹窗审批。
 黑名单（禁危险命令）是不安全的：管道、别名、子 shell、环境变量拼接都能绕过；
 白名单则是 fail-safe——没被明确判定为只读的，都当作有副作用对待。
@@ -104,41 +104,61 @@ def _user_env() -> Dict[str, str]:
         _USER_ENV_CACHE.update(env)
     return dict(_USER_ENV_CACHE)
 
-# 只读命令白名单：执行后不改变系统状态，可自动放行（无需审批）。
-# 刻意不含：curl（-o 写盘 / -d 外发数据，是提示注入外传的第一通道）、
-# networksetup（-set* 直接改网络配置）、env/printenv（会把进程环境变量——含
-# AGENT_API_KEY 等密钥——整份倒进模型上下文）——一律走审批。
-# awk 留在名单里安全：其程序体必带 {}，已被下方元字符检查拦截，实际只有
-# 「awk 作为管道段」之类本就被拦的场景会带它，单独出现无法执行程序体。
-_READONLY_COMMANDS = {
-    "ls", "pwd", "cd", "echo", "cat", "head", "tail", "wc", "stat", "file",
-    "find", "grep", "rg", "fd", "tree", "which", "type", "whereis", "realpath", "basename", "dirname",
-    "date", "cal", "uptime", "whoami", "id", "hostname", "uname", "sw_vers", "arch",
-    "df", "du", "ps", "top", "history",
-    "ping", "dig", "nslookup", "host", "ifconfig",
-    "man", "help", "true", "false", "sleep", "test",
-    "sort", "uniq", "cut", "awk", "sed", "diff", "cmp", "md5", "shasum", "column",
-    "jq", "yq", "xxd", "od", "strings",
-    "python", "python3", "node", "ruby",  # 仅纯 flag 查询（如 --version）放行，见 _is_readonly
+# 自动审批豁免只接受审定的操作/参数。省略的工具（sed/awk/jq/yq/top/history
+# 等）含程序、输出或执行能力，不能靠命令名保证只读，继续走既有审批闸门。
+# 每项为 (无值短选项, 带值短选项, 无值长选项, 带值长选项)。未知选项不放行。
+_READONLY_OPTIONS = {
+    "ls": ("ABCFGHLOPRSTUWabcdefghiklmnopqrstuwx1", "", {"all", "almost-all", "directory", "human-readable", "recursive"}, set()),
+    "pwd": ("LP", "", set(), set()),
+    "cd": ("LP", "", set(), set()),
+    "echo": ("nE", "", set(), set()),
+    "cat": ("benstuvAET", "", set(), set()),
+    "head": ("qv", "nc", {"quiet", "verbose"}, {"lines", "bytes"}),
+    "tail": ("Ffqrv", "nc", {"quiet", "verbose"}, {"lines", "bytes"}),
+    "wc": ("clmwL", "", {"bytes", "chars", "lines", "words"}, set()),
+    "stat": ("Llnqrx", "ft", set(), set()),
+    "file": ("bEhikLlNnrs0", "Fm", {"brief", "mime", "mime-type", "mime-encoding"}, set()),
+    "grep": ("EFGHILPRUVabcdhilnqrsuvwxZ", "efmABC", {"extended-regexp", "fixed-strings", "ignore-case", "line-number", "recursive", "files-with-matches", "files-without-match", "count", "quiet", "invert-match"}, {"regexp", "file", "max-count", "after-context", "before-context", "context", "include", "exclude", "exclude-dir", "color"}),
+    "rg": ("0EFHILNPSUVacilnoqsvwux", "efmABCgjt", {"hidden", "files", "no-ignore", "line-number", "ignore-case", "fixed-strings", "count", "files-with-matches", "files-without-match", "only-matching", "quiet", "no-config"}, {"regexp", "file", "max-count", "context", "before-context", "after-context", "glob", "iglob", "type", "type-not", "max-depth", "color", "sort", "sortr"}),
+    "fd": ("0HILalis", "edEt", {"hidden", "no-ignore", "absolute-path", "full-path", "case-sensitive", "ignore-case", "list-details"}, {"extension", "exclude", "max-depth", "min-depth", "type", "base-directory", "color"}),
+    "tree": ("aCdDfFgHilnpqQrRsux", "LPI", set(), set()),
+    "which": ("as", "", set(), set()),
+    "type": ("afmpw", "", set(), set()),
+    "whereis": ("bmsu", "", set(), set()),
+    "realpath": ("eq", "", set(), set()),
+    "basename": ("a", "s", set(), set()),
+    "dirname": ("", "", set(), set()),
+    "cal": ("jy", "", set(), set()),
+    "uptime": ("", "", set(), set()),
+    "whoami": ("", "", set(), set()),
+    "id": ("Ggnpru", "", set(), set()),
+    "uname": ("amnprsv", "", set(), set()),
+    "sw_vers": ("", "", {"productName", "productVersion", "buildVersion"}, set()),
+    "df": ("HhiklmnPT", "t", set(), set()),
+    "du": ("HILPachklmrsx", "d", set(), set()),
+    "ps": ("AEacefhjlmruvwx", "GgopUt", set(), set()),
+    "true": ("", "", set(), set()),
+    "false": ("", "", set(), set()),
+    "sleep": ("", "", set(), set()),
+    "sort": ("bcdfghimnrsuV", "kt", {"check", "merge", "numeric-sort", "reverse", "unique", "ignore-case", "stable"}, {"key", "field-separator"}),
+    "uniq": ("cdiu", "fsw", {"count", "repeated", "unique", "ignore-case"}, {"skip-fields", "skip-chars", "check-chars"}),
+    "cut": ("ns", "bcdf", {"complement", "only-delimited"}, {"bytes", "characters", "fields", "delimiter", "output-delimiter"}),
+    "diff": ("BEINPTabcdefhilnpqrstuuwy", "CUxX", {"brief", "recursive", "unified", "context", "ignore-case", "ignore-all-space", "ignore-space-change"}, {"exclude", "exclude-from"}),
+    "cmp": ("bls", "in", {"quiet", "silent", "verbose"}, {"ignore-initial", "bytes"}),
+    "md5": ("qr", "s", set(), set()),
+    "shasum": ("bctU", "a", {"binary", "text", "check", "warn", "strict"}, {"algorithm"}),
+    "column": ("tx", "cs", set(), set()),
+    "xxd": ("abceEipuv", "cglos", set(), set()),
+    "od": ("abcdfhilosvx", "ANjt", set(), set()),
+    "strings": ("afov", "nt", set(), set()),
 }
 
-# 白名单命令里仍能写状态的「危险参数」：命中即转审批（fail-safe 补丁，而非依赖黑名单）
-_FIND_WRITE_ARGS = {"-delete", "-exec", "-execdir", "-ok", "-okdir",
-                    "-fls", "-fprint", "-fprint0", "-fprintf"}
+# shell 展开可以把一个审定参数变成多个未审定参数（如 glob 命中 -o）。仅 find/
+# grep/rg/fd 的带值模式参数允许 glob 字符；其他场景保守审批。
+_SHELL_METACHARS = set(";|&<>`$(){}\n!\r")
+_GLOB_CHARS = set("*?[]~")
+_QUERY_FLAGS = {"--version", "-V"}
 
-# git 只读子命令白名单（其余 git 操作如 commit/push/reset 需审批）
-_GIT_READONLY_SUBCOMMANDS = {
-    "status", "log", "show", "diff", "branch", "remote", "config", "rev-parse",
-    "describe", "blame", "shortlog", "tag", "ls-files", "ls-remote", "cat-file", "reflog",
-}
-
-# 危险 shell 元字符：可引入子命令、重定向、命令替换或历史展开，出现即无法静态
-# 保证只读，一律审批。注意不含 glob 字符（* ? [ ]）——它们只影响参数展开，
-# 对只读首命令而言结果仍是只读，否则 `find . -name '*.py'` 这类合法只读命令会被误判。
-_SHELL_METACHARS = set(";|&<>`$(){}\n!")
-
-# 解释器直接执行代码的参数：内容不可知，需审批
-_CODE_EXEC_FLAGS = {"-e", "-c", "--eval", "--exec"}
 
 # ── 良性非零退出码（OSS 扫描 §6.1 实案，2026-08-17）──────────────────────────
 # 下列命令的 exit 1 是「正常的否定答案」而非错误：grep/rg 无命中、diff/cmp 有差异、
@@ -299,43 +319,143 @@ def _is_benign_exit1(command: str, returncode: int, stderr: str) -> bool:
     return os.path.basename(tokens[0]) in _BENIGN_EXIT1_COMMANDS
 
 
-def _is_readonly(command: str) -> bool:
-    """静态判定命令是否为「确定的只读操作」；任何不确定都返回 False（→ 需审批）。"""
-    if not command or not command.strip():
+def _readonly_operands(args, spec, allow_queries=True, required_flag=None):
+    """解析已审定选项；返回普通操作数，未知/缺值/展开形态返回 None。"""
+    short, valued_short, flags, valued_long = spec
+    operands = []
+    required_seen = required_flag is None
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            rest = args[i + 1:]
+            return None if not required_seen or any(any(c in _GLOB_CHARS for c in a) for a in rest) else operands + rest
+        if not arg.startswith("-") or arg == "-":
+            if any(c in _GLOB_CHARS for c in arg):
+                return None
+            operands.append(arg)
+        elif arg.startswith("--"):
+            option, sep, _value = arg[2:].partition("=")
+            if option in flags and not sep:
+                required_seen = required_seen or arg == required_flag
+            elif option in valued_long:
+                if not sep:
+                    i += 1
+                    if i >= len(args):
+                        return None
+                # 参数值只供当前选项，不重新当作选项解析。
+            elif allow_queries and arg in {"--help", "--version"}:
+                pass
+            else:
+                return None
+        else:
+            for offset, option in enumerate(arg[1:], 1):
+                if option in valued_short:
+                    if offset == len(arg) - 1:
+                        i += 1
+                        if i >= len(args):
+                            return None
+                    break
+                if option not in short:
+                    return None
+        i += 1
+    return operands if required_seen else None
+
+
+def _has_unquoted_glob(command):
+    """shlex 去掉引号后不能区分模式与展开；在原文上拒绝 shell 参数展开。"""
+    quote = None
+    escaped = False
+    for ch in command:
+        if escaped:
+            escaped = False
+        elif ch == "\\" and quote != "'":
+            escaped = True
+        elif ch == quote:
+            quote = None
+        elif ch in {"'", '"'} and quote is None:
+            quote = ch
+        elif quote is None and ch in _GLOB_CHARS:
+            return True
+    return False
+
+
+def _git_readonly(args):
+    # git 的全局 -c/--exec-path/--paginate/--help 能改执行环境或调外部程序，
+    # 不跳过全局参数猜子命令。查询含隐式 fsmonitor/textconv 的形式也需审批。
+    if not args:
         return False
-    # 含 shell 元字符：可能有管道/重定向/子命令，无法确保只读
-    if any(ch in _SHELL_METACHARS for ch in command):
+    sub, rest = args[0], args[1:]
+    if sub in {"branch", "tag"}:
+        # branch -l NAME 可创建分支，只有明确 --list 才接收模式操作数。
+        if not rest or rest[0] != "--list":
+            return False
+        return _readonly_operands(rest[1:], ("", "", set(), set()), allow_queries=False) is not None
+    if sub == "config":
+        return (len(rest) == 2 and rest[0] in {"--get", "--get-all"}
+                and not rest[1].startswith("-") and not any(c in _GLOB_CHARS for c in rest[1]))
+    if sub == "rev-parse":
+        # --parseopt/--sq-quote 输出可执行脚本；只接收常见结构查询。
+        return bool(rest) and all(a in {"--show-toplevel", "--show-prefix", "--git-dir",
+                                       "--is-inside-work-tree", "--show-cdup"} for a in rest)
+    return False
+
+
+def _is_readonly(command: str) -> bool:
+    """只豁免已审定的命令、操作及参数；其余交给现有单一审批闸门。"""
+    if (not command or not command.strip()
+            or any(ch in _SHELL_METACHARS for ch in command)
+            or _has_unquoted_glob(command)):
         return False
     try:
         tokens = shlex.split(command)
     except ValueError:
-        return False  # 引号不闭合等：判不了，交给审批
+        return False
     if not tokens:
         return False
-
-    head = os.path.basename(tokens[0])
-    args = tokens[1:]
-
-    # 解释器：只放行纯 flag 查询（如 --version）。带内联代码（-e/-c）或脚本文件 → 内容
-    # 不可知，需审批；裸解释器（无参数）会挂 REPL 干等到超时，同样不放行。
+    head, args = tokens[0], tokens[1:]
+    # ./cat、/tmp/ls 等同名程序不继承系统工具的审批豁免。
+    if "/" in head or any(ch in _GLOB_CHARS for ch in head):
+        return False
     if head in {"python", "python3", "node", "ruby"}:
-        if not args or any(a in _CODE_EXEC_FLAGS for a in args):
-            return False
-        return all(a.startswith("-") for a in args)
-
+        return len(args) == 1 and args[0] in _QUERY_FLAGS
     if head == "git":
-        sub = next((a for a in args if not a.startswith("-")), None)
-        return sub in _GIT_READONLY_SUBCOMMANDS
-
-    # find 的写动作参数（-delete/-exec/…）：命令本身在白名单，但这些参数会删文件/执行子命令
+        return _git_readonly(args)
     if head == "find":
-        return not any(a in _FIND_WRITE_ARGS for a in args)
-
-    # sed 的就地改写（-i / -i'' / --in-place）：写文件，需审批
-    if head == "sed":
-        return not any(a == "--in-place" or a.startswith("-i") for a in args)
-
-    return head in _READONLY_COMMANDS
+        # find 是表达式语言，仅审定无执行/写入能力的基本 AND 查询。
+        if not args or args[0].startswith("-") or any(c in _GLOB_CHARS for c in args[0]):
+            return False
+        i = 1
+        while i < len(args):
+            if args[i] in {"-print", "-print0", "-a", "-and"}:
+                i += 1
+            elif args[i] in {"-name", "-iname", "-path", "-ipath", "-type", "-size", "-mtime", "-maxdepth", "-mindepth"} and i + 1 < len(args):
+                i += 2
+            else:
+                return False
+        return True
+    if head == "date":
+        return not args or (len(args) == 1 and args[0].startswith("+"))
+    if head in {"hostname", "ifconfig"}:
+        return not args or args == ["-a"]
+    if head == "arch":
+        return not args  # arch 带命令参数会直接执行该命令。
+    if head == "man":
+        # -P/--pager 可执行任意程序；-l 读取任意含预处理指令的本地页。
+        return (1 <= len(args) <= 2 and all(re.fullmatch(r"[A-Za-z0-9_.+-]+", a)
+                                          and not a.startswith("-") for a in args))
+    spec = _READONLY_OPTIONS.get(head)
+    if spec is None:
+        return False
+    # RIPGREP_CONFIG_PATH 可含执行器参数；--no-config 必须被解析为真正选项，
+    # 不能只是 -e/--regexp 的值或 -- 后的操作数。
+    operands = _readonly_operands(args, spec, required_flag="--no-config" if head == "rg" else None)
+    if operands is None:
+        return False
+    # uniq/xxd 的第二操作数是输出文件。
+    limits = {"uniq": 1, "xxd": 1, "pwd": 0, "sw_vers": 0,
+              "uptime": 0, "whoami": 0}
+    return head not in limits or len(operands) <= limits[head]
 
 
 class ShellExecTool(BaseTool):
@@ -344,9 +464,10 @@ class ShellExecTool(BaseTool):
     description = (
         "Run a shell command on the user's macOS machine. This is your PRIMARY tool — prefer the "
         "terminal for most tasks (files, processes, network, dev tools, system queries). "
-        "Read-only commands (ls, cat, grep, find, git status, ...) run immediately; any command "
-        "that changes state (writing files, installing, sudo, pipes/redirects, or unknown "
-        "commands) automatically triggers a user confirmation dialog before running — so just "
+        "Only reviewed read-only command forms and options (ls -la, cat, grep, find -name, "
+        "git branch --list, ...) run immediately; state changes, executable hooks, shell "
+        "expansion, and unknown commands or options automatically trigger a user confirmation "
+        "dialog before running — so just "
         "call the tool directly, do NOT ask the user for permission in words. "
         # D2-减法(类A):响应格式句删——stdout/stderr/exit_code/拒批文案均由代码产出,
         # 模型在首次调用的响应里即见,常驻声明无需复述。
@@ -356,9 +477,9 @@ class ShellExecTool(BaseTool):
         # 描述上（本仓既有归宿），不新建剧本——剧本的 requires 只有本工具，会永远探活
         # 通过、永远挂在索引里稀释预算，且规范只在载入它的那一轮生效。
         "Your memory of CLI flags is often stale or invented. Before using a flag you are "
-        "not certain about, check the authoritative source on this machine: `man <cmd>` is "
-        "read-only and never prompts the user. `<cmd> --help` is free only when <cmd> itself "
-        "is a read-only command (ls, grep, git...); for anything else (brew, docker, an "
+        "not certain about, check the authoritative source on this machine: plain `man <cmd>` "
+        "is read-only. `<cmd> --help` is free only when that exact command form is reviewed "
+        "as read-only (ls, grep...); for anything else (git help, brew, docker, an "
         "unfamiliar binary) it costs the user one extra approval — which is exactly the case "
         "where you needed it. If a command fails with a usage/unknown-option error, do not "
         "retry with another guessed flag; read the manual first, and grep it rather than "

@@ -354,6 +354,14 @@ start_front() {
 # ---- 停止（机制 stop_one 在 lib_edge.sh）----
 
 stop_front()   { stop_one "前端"    "$FRONT_PORT"   "$LOG_DIR/front.pid"   5;  }
+
+stop_services() {
+    local service result=0
+    for service in "$@"; do
+        "$service" || result=1
+    done
+    return "$result"
+}
 stop_rag()     { stop_rag_local; }
 stop_rag_compute() { stop_one "RAG计算面" "$RAGC_PORT" "$LOG_DIR/rag-compute.pid" 15; }
 
@@ -1214,15 +1222,15 @@ case "$CMD" in
         ;;
     stop)
         case "$PROFILE" in
-            edge) stop_front; edge_down; exit 0 ;;
+            edge) stop_services stop_front edge_down; exit $? ;;
             # gpu 不含 searx（B3：已归 edge）。设备 A 上若有旧部署残留的 SearXNG，
             # 用 `./devctl.sh stop searx` 单停一次即可，不必为一次性迁移在此长留一行。
             # 拆分/融合两形态的 rag 服务都停（没在跑则是 no-op）
-            gpu)  stop_infer; stop_rag_compute; stop_rag; exit 0 ;;
+            gpu)  stop_services stop_infer stop_rag_compute stop_rag; exit $? ;;
         esac
         case "$TARGET" in
             # all 停机含 infer：同机 remote 双进程（B1 验收形态）下它也是本机进程；没在跑则是 no-op
-            all)     stop_front; stop_backend; stop_infer; stop_searx; stop_rag; stop_rag_compute ;;
+            all)     stop_services stop_front stop_backend stop_infer stop_searx stop_rag stop_rag_compute ;;
             rag)     stop_rag ;;
             rag-compute) stop_rag_compute ;;
             searx)   stop_searx ;;

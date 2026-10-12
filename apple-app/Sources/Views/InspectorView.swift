@@ -204,6 +204,7 @@ struct InspectorView: View {
 
     @ViewBuilder
     private var filesContent: some View {
+        SessionRetentionNotice(policy: store.retentionPolicy)
         if let files, !files.isEmpty {
             VStack(alignment: .leading, spacing: Theme.s2) {
                 ForEach(files) { item in

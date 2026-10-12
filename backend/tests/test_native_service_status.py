@@ -1,0 +1,160 @@
+"""Service reachability/authentication and capability projection use synthetic transport."""
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.skipif(sys.platform != "darwin" or not shutil.which("xcrun"), reason="requires Swift toolchain")
+def test_native_service_status_and_knowledge_management(tmp_path):
+    source = ROOT / "apple-app/Sources"
+    view = (source / "Views/KnowledgePanelView.swift").read_text()
+    reload = view[view.index("    private func reload() async {"):view.index("    private var capabilityLabel:")]
+    reload = reload.replace("private func reload()", "func reload()")
+    harness = '''import Foundation
+    func L(_ value: String) -> String { value }
+    final class SyntheticTransport: URLProtocol {
+        static var healthCode = 200
+        static var indexCode = 200
+        static var indexBody = #"{"status":true,"sessions":[]}"#
+        static var knowledge = #"{"compute":null,"compute_error":"synthetic unavailable","rebuild":{"state":"idle"}}"#
+        static var indexCalls = 0
+        static var overviewCode = 200
+        static var overviewBody = #"{"categories":[{"name":"kept","description":"fixture","doc_count":1,"chunk_count":1}]}"#
+        static let barrier = NSLock()
+        static var pauseOverview = false
+        static var heldOverview: SyntheticTransport?
+        static var overviewCalls = 0
+        static func overviewState() -> (SyntheticTransport?, Int) {
+            barrier.lock(); defer { barrier.unlock() }
+            return (heldOverview, overviewCalls)
+        }
+        override class func canInit(with request: URLRequest) -> Bool { true }
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+        override func stopLoading() {}
+        override func startLoading() {
+            let path = request.url!.path
+            var code = 200, body = "{}"
+            if path == "/health" { code = Self.healthCode }
+            else if path == "/api/v1/sessions" {
+                Self.indexCalls += 1; code = Self.indexCode; body = Self.indexBody
+                precondition(request.timeoutInterval == 5)
+                precondition(request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic")
+            } else if path == "/api/v1/rag/retier" { body = Self.knowledge }
+            else if path == "/api/v1/rag/overview" {
+                Self.barrier.lock()
+                Self.overviewCalls += 1
+                let pause = Self.pauseOverview
+                if pause { Self.heldOverview = self }
+                Self.barrier.unlock()
+                if pause { return }
+                body = Self.overviewBody; code = Self.overviewCode
+            } else { preconditionFailure("unexpected synthetic path") }
+            respond(code: code, body: body)
+        }
+        func respond(code: Int, body: String) {
+            client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: code, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data(body.utf8)); client?.urlProtocolDidFinishLoading(self)
+        }
+    }
+    @MainActor final class Store { var client: AgentClient?; init(_ client: AgentClient) { self.client = client } }
+    @MainActor final class Panel {
+        let store: Store
+        var categories: [RagCategory]?
+        var offline = false
+        var overviewStale = false
+        var serviceStatus: RagRetierStatus?
+        var reloadID = UUID()
+        var refreshing = false
+        init(_ client: AgentClient) { store = Store(client) }
+    ''' + reload + '''
+    }
+    @main struct Check {
+        @MainActor static func main() async throws {
+            let config = URLSessionConfiguration.ephemeral
+            config.protocolClasses = [SyntheticTransport.self]
+            let api = AgentClient(baseURL: URL(string: "https://fixture.invalid")!, apiKey: "synthetic", session: URLSession(configuration: config))
+            for code in [401, 403] {
+                SyntheticTransport.indexCode = code
+                let access = await api.backendAccess()
+                precondition(access == .unauthorized, "health200 cannot prove authentication")
+            }
+            SyntheticTransport.indexCode = 503
+            let reachable = await api.backendAccess(); precondition(reachable == .reachable)
+            SyntheticTransport.indexCode = 200
+            SyntheticTransport.indexBody = #"{"status":false,"sessions":[]}"#
+            let rejected = await api.backendAccess(); precondition(rejected == .reachable)
+            SyntheticTransport.indexBody = #"{"status":true,"sessions":[]}"#
+            let authenticated = await api.backendAccess(); precondition(authenticated == .authenticated)
+            SyntheticTransport.healthCode = 503
+            let count = SyntheticTransport.indexCalls
+            let offline = await api.backendAccess(); precondition(offline == .offline)
+            precondition(count == SyntheticTransport.indexCalls)
+            let panel = Panel(api)
+            await panel.reload()
+            precondition(panel.categories?.first?.name == "kept" && !panel.offline && !panel.overviewStale)
+            precondition(panel.serviceStatus?.availability == .computeOffline)
+            for (json, expected) in [
+                (#"{"rebuild":{"state":"idle"}}"#, RagRetierStatus.Availability.unknown),
+                (#"{"compute":{"tier":"fake"},"rebuild":{"state":"idle"}}"#, .reachable),
+                (#"{"compute":{"tier":"fake"},"needs_rebuild":true,"rebuild":{"state":"idle"}}"#, .needsRebuild),
+                (#"{"compute":{"tier":"fake"},"rebuild":{"state":"running"}}"#, .rebuilding),
+            ] {
+                let decoded = try JSONDecoder().decode(RagRetierStatus.self, from: Data(json.utf8))
+                precondition(decoded.availability == expected)
+            }
+            SyntheticTransport.knowledge = "invalid response"
+            await panel.reload()
+            precondition(panel.categories?.first?.name == "kept" && !panel.offline)
+            precondition(panel.serviceStatus == nil)
+            SyntheticTransport.overviewCode = 503
+            await panel.reload()
+            precondition(!panel.offline && panel.categories?.first?.name == "kept" && panel.overviewStale && !panel.refreshing)
+            let emptyPanel = Panel(api)
+            await emptyPanel.reload()
+            precondition(emptyPanel.offline && emptyPanel.categories == nil && !emptyPanel.overviewStale && !emptyPanel.refreshing)
+            SyntheticTransport.overviewCode = 200
+            SyntheticTransport.overviewBody = #"{"categories":[]}"#
+            SyntheticTransport.knowledge = #"{"rebuild":{"state":"idle"}}"#
+            await panel.reload()
+            precondition(!panel.offline && panel.categories?.isEmpty == true && !panel.overviewStale && !panel.refreshing)
+            precondition(panel.serviceStatus?.availability == .unknown)
+            SyntheticTransport.knowledge = #"{"compute":{"tier":"fake"},"rebuild":{"state":"idle"}}"#
+            await panel.reload()
+            precondition(panel.serviceStatus?.availability == .reachable)
+            SyntheticTransport.pauseOverview = true
+            let first = Task { await panel.reload() }
+            for _ in 0..<400 {
+                if SyntheticTransport.overviewState().0 != nil { break }
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            }
+            let held = SyntheticTransport.overviewState()
+            precondition(held.0 != nil)
+            var secondFinished = false
+            let second = Task { await panel.reload(); secondFinished = true }
+            for _ in 0..<400 {
+                if secondFinished || SyntheticTransport.overviewState().1 > held.1 { break }
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            }
+            precondition(secondFinished && SyntheticTransport.overviewState().1 == held.1, "overlapping refresh must not start duplicate requests")
+            SyntheticTransport.pauseOverview = false
+            held.0!.respond(code: 200, body: SyntheticTransport.overviewBody)
+            await first.value; await second.value
+            precondition(!panel.refreshing)
+        }
+    }
+    '''
+    test = tmp_path / "service-status.swift"
+    test.write_text(harness)
+    binary = tmp_path / "service-status"
+    result = subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-module-cache-path", str(tmp_path / "modules"),
+        *[str(p) for p in sorted((source / "API").glob("*.swift"))],
+        str(source / "Store/TurnReducer.swift"), str(test), "-o", str(binary)],
+        capture_output=True, text=True, timeout=90)
+    assert result.returncode == 0, result.stderr
+    result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr

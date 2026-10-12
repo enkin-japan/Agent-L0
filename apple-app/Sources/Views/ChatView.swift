@@ -17,6 +17,11 @@ struct ChatView: View {
                 banner(text: error, color: .red) { store.errorMessage = nil }
             }
 
+            if store.selectedSessionIsDeleting {
+                Text(L("会话正在删除，请等待删除结果后再操作。"))
+                    .font(.caption).foregroundStyle(.orange).padding(8)
+            }
+
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
@@ -24,6 +29,11 @@ struct ChatView: View {
                         // iOS 长按预览高亮整排、超出内容边界）
                         ForEach(store.messages) { message in
                             MessageView(message: message)
+                            if let index = message.turnIndex,
+                               store.messages.last(where: { $0.turnIndex == index })?.id == message.id,
+                               let group = store.retryGroups.first(where: { $0.displayIndex == index }) {
+                                RetryAttemptsView(group: group)
+                            }
                         }
 
                         // 暂停态（待审批/挂起）也保留直播预览:半截正文/思考/步骤是
@@ -48,16 +58,29 @@ struct ChatView: View {
                             #endif
                         }
 
-                        if let tools = store.pendingTools, !tools.isEmpty {
+                        if let tools = store.pendingTools, !tools.isEmpty,
+                           let target = store.pendingApprovalTarget {
                             ApprovalCard(tools: tools) { approve in
-                                store.decideApproval(approve: approve)
+                                store.decideApproval(approve: approve, target: target)
                             }
+                            .id(target.sessionId + ":" + target.turnId + ":" + String(target.seq))
+                            .disabled(store.isSessionDeleting(target.sessionId))
                         }
 
                         if store.isSuspended {
                             suspendedBanner
                         }
 
+                        if let notice = store.retryStatusNotice {
+                            Text(notice).font(.caption).foregroundStyle(.secondary)
+                        }
+                        if store.historyProjectionNeedsRefresh {
+                            Button(L("重新同步尝试记录")) { store.refreshDisplayedHistory() }
+                                .font(.caption)
+                        }
+                        if let feedback = store.controlFeedback {
+                            Text(feedback).font(.caption).foregroundStyle(.secondary)
+                        }
                         Color.clear.frame(height: 1).id("bottom")
                     }
                     .padding(16)
@@ -126,17 +149,32 @@ struct ChatView: View {
                         Label(L("导出会话 (Markdown)…"), systemImage: "square.and.arrow.up")
                     }
                     .disabled(store.messages.isEmpty)
+                    Button(store.retryActionTitle) { store.requestRetryConfirmation() }
+                        .disabled(store.isGenerating || store.isSuspended || store.canonicalTurns.isEmpty || store.selectedSessionIsDeleting)
+                    Button(L("编辑最近一次尝试并重发")) { store.editLastTurn() }
+                        .disabled(!store.canEditLastAttempt)
                     Button(role: .destructive) {
                         store.deleteLastTurn()
                     } label: {
-                        Label(L("删除最后一轮问答"), systemImage: "arrow.uturn.backward")
+                        Label(L("撤销最近一次尝试"), systemImage: "arrow.uturn.backward")
                     }
-                    .disabled(store.isGenerating || store.messages.isEmpty)
+                    .disabled(store.isGenerating || store.messages.isEmpty || store.selectedSessionIsDeleting)
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
             }
         }
+        .confirmationDialog(L(store.retryConfirmationTarget?.isResend == true
+                              ? "重发未确认的重试？" : "重试最近一次尝试？"),
+            isPresented: Binding(get: { store.retryConfirmationTarget != nil },
+                                 set: { if !$0 { store.cancelRetryConfirmation() } }),
+            titleVisibility: .visible, presenting: store.retryConfirmationTarget) { target in
+                Button(L(target.isResend ? "确认重发" : "确认重试")) { store.confirmRetry(target) }
+                    .disabled(store.isSessionDeleting(target.sessionId))
+                Button(L("取消"), role: .cancel) { store.cancelRetryConfirmation() }
+            } message: { target in
+                Text(target.sourcePrompt + "\n\n" + L("工具可能再次执行。重试成功会更新当前结果，所有尝试都会保留。"))
+            }
         .sheet(isPresented: $showMemory) {
             MemoryPanelView()
         }
@@ -201,21 +239,12 @@ struct ChatView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    // 受理后到 suspended 事件回来之间转圈（原位替换按钮，不挤动行）；
-                    // 待审批时 worker 已让出、后端必拒挂起——直接禁点并说明去处，
-                    // 好过让用户点一下换回一条拒绝横幅。
-                    if store.suspendPending {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        let awaitingApproval = store.pendingTools?.isEmpty == false
+                    if store.canSuspend {
                         Button(L("挂起")) { store.suspendTask() }
                             .font(.caption)
                             .buttonStyle(.borderless)
-                            .disabled(awaitingApproval)
-                            .help(awaitingApproval
-                                  ? L("待审批时任务已暂停，先处理审批卡")
-                                  : L("挂起"))
                     }
+
                 }
             }
         }
@@ -241,6 +270,7 @@ struct ChatView: View {
             Spacer()
             Button(L("恢复续跑")) { store.resumeTask() }
                 .buttonStyle(.borderedProminent)
+                .disabled(store.controlRequest != nil || store.selectedSessionIsDeleting)
         }
         .padding(Theme.s3)
         .background(Theme.accent.opacity(0.08))
@@ -276,5 +306,52 @@ private extension View {
         #else
         self
         #endif
+    }
+}
+
+/// Audit uses the existing message and execution-facts mapper; it never invokes tools.
+struct RetryAttemptsView: View {
+    let group: RetryGroup
+    @EnvironmentObject var store: AgentStore
+    var body: some View {
+        DisclosureGroup {
+            ForEach(group.turnIndices, id: \.self) { index in
+                if index >= 0 && index < store.canonicalTurns.count {
+                    let turn = store.canonicalTurns[index]
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("#\(index) · \(ChatMessage.statusLabel(turn.status))").font(.caption)
+                            if index == group.displayIndex {
+                                Text(L("当前展示版本")).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button {
+                                store.branch(fromTurnIndex: index)
+                            } label: { Image(systemName: "arrow.triangle.branch") }
+                                .help(L("从这一轮分支出新会话"))
+                                .disabled(store.selectedSessionIsDeleting)
+                        }
+                        if let timestamp = turn.timestamp {
+                            Text(Timestamps.messageLabel(Date(timeIntervalSince1970: timestamp)))
+                                .font(.caption2).foregroundStyle(.secondary)
+                        } else {
+                            Text(L("时间未记录")).font(.caption2).foregroundStyle(.secondary)
+                        }
+                        ForEach(ChatMessage.from(turn: turn, turnIndex: index)) { message in
+                            MessageView(message: message, auditOnly: true)
+                        }
+                    }
+                    .padding(8)
+                }
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L("尝试记录") + " (\(group.turnIndices.count))").font(.caption)
+                if let latest = group.turnIndices.last, latest < store.canonicalTurns.count {
+                    Text(L("最近一次尝试：") + ChatMessage.statusLabel(store.canonicalTurns[latest].status))
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 }

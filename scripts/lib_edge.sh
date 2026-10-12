@@ -87,8 +87,8 @@ _read_cfg_hosts() {
     # 兜底：backend 解释器未就绪（devctl setup 之前）时借 rag 的（仅仓库布局存在）
     [ -x "$py" ] || py="${RAG_DIR:-}/.venv/bin/python"
     [ -x "$py" ] || return 1
-    "$py" - "$EDGE_CONFIG" <<'PY' 2>/dev/null
-import os, sys, yaml
+    "$py" - "$EDGE_CONFIG" "${1:-hosts}" <<'PY' 2>/dev/null
+import json, os, sys, yaml
 c = yaml.safe_load(open(sys.argv[1], encoding="utf-8")) or {}
 inf = c.get("inference") or {}
 rem = inf.get("remote") or {}
@@ -98,6 +98,18 @@ ragc = rag.get("compute") or {}
 # host 缺省为空即空（不回落 127.0.0.1）——空由 require_host 在 mode=remote 分支拦下。
 infer_host = os.environ.get("INFER_REMOTE_HOST", "").strip() or (rem.get("host") or "").strip()
 ragc_host = os.environ.get("RAG_COMPUTE_HOST", "").strip() or (ragc.get("host") or "").strip()
+if sys.argv[2] == "configuration":
+    # UI projection of this same parse, not readiness/authentication or another
+    # startup gate. Never return credentials or the configuration document.
+    missing = []
+    if inf.get("mode", "inprocess") == "remote" and not infer_host:
+        missing.append("inference_host")
+    local_rag = rag.get("host", "127.0.0.1") in ("", "127.0.0.1", "localhost", "::1", "0.0.0.0", "::", "*")
+    if os.environ.get("AGENT_LAYOUT") == "bundle" and local_rag and not ragc_host:
+        missing.append("rag_compute_host")
+    print(json.dumps({"status": "incomplete" if missing else "configured",
+                      "missing": missing, "rag_compute_remote": bool(ragc_host)}))
+    sys.exit(0)
 print(inf.get("host", "127.0.0.1"))
 print(infer_host)
 print(rag.get("host", "127.0.0.1"))
@@ -105,6 +117,11 @@ print(inf.get("mode", "inprocess"))
 print(ragc_host)
 print(ragc.get("port") or 14162)
 PY
+}
+
+edge_configuration() {
+    # Parsing/interpreter failures are unknown, never a configured fallback.
+    _read_cfg_hosts configuration || printf '%s\n' '{"status":"unknown","missing":[]}'
 }
 
 edge_resolve_urls() {
@@ -144,51 +161,194 @@ is_ready() {  # $1: url
     curl -sf -m 3 -o /dev/null "$1"
 }
 
-# 「已在运行，跳过」的前置判定。探活只能证明端口上有人应答，证不了那是本脚本起的
-# 服务——三种情形必须分开：
-#   本机无监听进程 + 探活通       = 服务在远端（profile 部署：设备 A 的 RAG/推理），正常跳过；
-#   本机有监听进程 + pid 记录存活 = 确是本脚本起的，正常跳过；
-#   本机有监听进程 + 无 pid 记录  = 端口被本脚本管不着的进程占着（手工起的 / 残留 / 别的程序）。
-# 第三种此前与第二种一样被静默"跳过"：用户看到"已在运行 ✅"，实际既没起它、
-# 也不认识它，故障推迟到访问时才以连不上的形式暴露（B3 实证：设备 B 报"backend 已在
-# 运行，跳过"，而 logs/ 里连 backend.log 都没有——真正该启动的服务被静默略过）。
-# 故第三种改为硬失败并报告占用者，让用户定夺——静默略过比报错难查得多。
-# 注意判据是"pid 记录仍存活"而非"记录 pid == 监听 pid"：前端的 pid 记的是 npm，
-# 真正监听 5173 的是它派生的 vite（stop_one 同样按端口兜底回收子进程）。
-managed_or_report() {  # $1: 名称  $2: 端口  $3: pid 文件  $4: stop 目标名 → 0=可跳过 1=被外部占用
-    local name="$1" port="$2" pidfile="$3" target="$4" owners recorded
-    owners="$(listen_pids "$port")"
-    [ -n "$owners" ] || return 0            # 本机没进程：服务在远端，不归本机管
-    if [ -f "$pidfile" ]; then
-        recorded="$(cat "$pidfile" 2>/dev/null)"
-        [ -n "$recorded" ] && kill -0 "$recorded" 2>/dev/null && return 0
+# 进程身份只读 UID / 父 PID / 内核创建时刻，绝不读取 args 或环境。
+# Darwin 的 libproc 提供微秒创建时间；Linux 用 boot_id + starttime tick。
+# 不用 ps lstart（秒精度不足以排除快速 PID 重用）。不支持的平台安全拒绝。
+_edge_process_query() {  # identity|tree, pid, expected identity（tree）
+    local py="${EDGE_BACKEND_PY:-}"
+    [ -x "$py" ] || py="$(command -v python3)"
+    [ -n "$py" ] || return 1
+    "$py" - "$@" <<'PY'
+import ctypes, errno, os, pathlib, subprocess, sys
+
+mode, raw_pid = sys.argv[1:3]
+if not raw_pid.isascii() or not raw_pid.isdecimal() or int(raw_pid) < 2:
+    sys.exit(1)
+root = int(raw_pid)
+if sys.platform == 'darwin':
+    # SDK sys/proc_info.h: proc_bsdinfo / PROC_PIDTBSDINFO (3).
+    class BSDInfo(ctypes.Structure):
+        _fields_ = [(n, ctypes.c_uint32) for n in (
+            'flags', 'status', 'xstatus', 'pid', 'ppid', 'uid', 'gid',
+            'ruid', 'rgid', 'svuid', 'svgid', 'reserved')]
+        _fields_ += [('comm', ctypes.c_char * 16), ('name', ctypes.c_char * 32)]
+        _fields_ += [(n, ctypes.c_uint32) for n in (
+            'nfiles', 'pgid', 'pjobc', 'tdev', 'tpgid')]
+        _fields_ += [('nice', ctypes.c_int32), ('sec', ctypes.c_uint64),
+                    ('usec', ctypes.c_uint64)]
+    lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
+    lib.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                                 ctypes.c_void_p, ctypes.c_int]
+    lib.proc_pidinfo.restype = ctypes.c_int
+    def read(pid):
+        b = BSDInfo()
+        if lib.proc_pidinfo(pid, 3, 0, ctypes.byref(b), ctypes.sizeof(b)) != ctypes.sizeof(b):
+            raise OSError(ctypes.get_errno(), 'process identity unavailable')
+        if b.status == 5:
+            raise ProcessLookupError(errno.ESRCH, 'zombie')
+        if b.pid != pid or b.uid != os.geteuid():
+            raise ValueError('not an owned live process')
+        return b.ppid, f'v1:{pid}:{b.uid}:darwin:{b.sec}:{b.usec}'
+    def pids():
+        # No command lines: only numeric process IDs.
+        return [int(x) for x in subprocess.check_output(
+            ['ps', '-axo', 'pid='], text=True).split()]
+elif sys.platform.startswith('linux'):
+    boot = pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    def read(pid):
+        base = pathlib.Path('/proc') / str(pid)
+        uid = base.stat().st_uid
+        fields = (base / 'stat').read_text().rsplit(')', 1)[1].split()
+        if fields[0] == 'Z':
+            raise ProcessLookupError(errno.ESRCH, 'zombie')
+        if uid != os.geteuid():
+            raise ValueError('not an owned live process')
+        return int(fields[1]), f'v1:{pid}:{uid}:linux:{boot}:{fields[19]}'
+    def pids():
+        return [int(x.name) for x in pathlib.Path('/proc').iterdir() if x.name.isdecimal()]
+else:
+    sys.exit(1)
+try:
+    root_info = read(root)
+    if mode == 'identity':
+        if len(sys.argv) > 3 and root_info[0] != int(sys.argv[3]):
+            sys.exit(1)
+        print(root_info[1])
+    elif mode == 'tree':
+        if root_info[1] != sys.argv[3]:
+            sys.exit(1)
+        records = {root: root_info}
+        candidates = {}
+        for pid in pids():
+            try:
+                candidates[pid] = read(pid)
+            except (OSError, ValueError):
+                pass
+        # An explicit, verified parent chain is required; a listener is never evidence.
+        while True:
+            additions = {pid: info for pid, info in candidates.items()
+                         if pid not in records and info[0] in records}
+            if not additions:
+                break
+            records.update(additions)
+        # Recheck the whole chain before handing out a snapshot. Any uncertainty refuses.
+        if any(read(pid) != info for pid, info in records.items()):
+            sys.exit(1)
+        for pid, info in records.items():
+            print(pid, info[1])
+    else:
+        sys.exit(1)
+except OSError as e:
+    sys.exit(3 if e.errno in (errno.ESRCH, errno.ENOENT) else 1)
+except (ValueError, IndexError, subprocess.SubprocessError):
+    sys.exit(1)
+PY
+}
+
+edge_process_identity() { _edge_process_query identity "$@"; }
+edge_process_snapshot() { _edge_process_query tree "$1" "$2"; }
+
+# 所有记录写入/读取/条件删除共享同一持久锁文件，不能 unlink 锁本身（会换 inode）。
+# flock 属于内核文件锁，进程退出自动释放；不依赖 macOS 没有的 flock CLI。
+_edge_process_record() {  # read|write|delete, pidfile, pid, identity
+    local py="${EDGE_BACKEND_PY:-}"
+    [ -x "$py" ] || py="$(command -v python3)"
+    [ -n "$py" ] || return 1
+    "$py" - "$@" <<'PY_RECORD'
+import fcntl, os, pathlib, re, sys, tempfile
+mode, name = sys.argv[1:3]
+path = pathlib.Path(name)
+sidecar = pathlib.Path(name + '.identity')
+def valid(pid, identity):
+    return (pid.isascii() and pid.isdecimal() and int(pid) > 1 and
+            re.fullmatch(r'v1:' + re.escape(pid) + r':\d+:(?:darwin:\d+:\d+|linux:[^:\s]+:\d+)', identity))
+def read_pair():
+    return path.read_text().strip(), sidecar.read_text().strip()
+def replace_file(target, content):
+    fd, temporary = tempfile.mkstemp(prefix=target.name + '.', dir=target.parent)
+    try:
+        with os.fdopen(fd, 'w') as output:
+            output.write(content + '\n')
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+try:
+    fd = os.open(name + '.lock', os.O_RDWR | os.O_CREAT, 0o600)
+    with os.fdopen(fd, 'r+') as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if mode == 'read':
+            pid, identity = read_pair()
+            if not valid(pid, identity):
+                sys.exit(1)
+            print(pid)
+            print(identity)
+        elif mode == 'write':
+            pid, identity = sys.argv[3:5]
+            if not valid(pid, identity):
+                sys.exit(1)
+            replace_file(sidecar, identity)
+            replace_file(path, pid)
+        elif mode == 'delete':
+            expected = tuple(sys.argv[3:5])
+            try:
+                actual = read_pair()
+            except FileNotFoundError:
+                actual = None
+            # Comparison and both unlinks stay under the same lock as publication.
+            if actual == expected:
+                os.unlink(path)
+                os.unlink(sidecar)
+        else:
+            sys.exit(1)
+except (OSError, ValueError):
+    sys.exit(1)
+PY_RECORD
+}
+
+_edge_owned_snapshot() {  # pidfile → immutable pid/identity lines
+    local pidfile="$1" pid expected current record
+    if [ "$#" = 3 ]; then
+        pid="$2"; expected="$3"
+    else
+        record="$(_edge_process_record read "$pidfile")" || return 1
+        pid="$(printf '%s\n' "$record" | sed -n 1p)"
+        expected="$(printf '%s\n' "$record" | sed -n 2p)"
     fi
-    fail "$name 端口 ${port} 被本脚本管不着的进程占用（${pidfile} 无记录或记录已失效）："
-    # 占用者若是 app 布局的内嵌解释器（.app/Contents/Resources/ 下，R5-3 PBS 运行时），
-    # 那就是本 app 上一代的执行层残留——强杀 app（SIGKILL 不走 willTerminate）或崩溃
-    # 会留下它。识别出来就别拿「别的程序」吓唬用户：它是自家旧代，可安全回收。
-    local own_stray=0 cmd
+    current="$(edge_process_identity "$pid")" || return "$?"
+    [ "$current" = "$expected" ] || return 1
+    # rc3 from a disappearing descendant is not proof that the root died.
+    edge_process_snapshot "$pid" "$expected" || return 1
+}
+
+# 端口只用来报告占用。所有本地监听者都必须在已验证的本实例父子树中。
+managed_or_report() {  # 名称, 端口, pidfile, stop 目标（兼容调用签名）
+    local name="$1" port="$2" pidfile="$3" target="$4" owners snapshot p cmd owned
+    owners="$(listen_pids "$port")"
+    [ -n "$owners" ] || return 0
+    snapshot="$(_edge_owned_snapshot "$pidfile")" || snapshot=""
+    owned=1
+    for p in $owners; do
+        printf '%s\n' "$snapshot" | awk -v pid="$p" '$1 == pid { found=1 } END { exit !found }' || owned=0
+    done
+    [ "$owned" = 1 ] && return 0
+    fail "$name 端口 ${port} 被本脚本管不着的进程占用（${pidfile} 缺少可验证的本实例身份或身份已失效）："
     for p in $owners; do
         cmd="$(ps -o comm= -p "$p" 2>/dev/null || echo '?')"
-        case "$cmd" in
-            *".app/Contents/Resources/"*)
-                own_stray=1
-                echo "      pid $p  $cmd   ← 本 app 上一代执行层残留" >&2 ;;
-            *)
-                echo "      pid $p  $cmd" >&2 ;;
-        esac
+        echo "      pid $p  $cmd" >&2
     done
-    # ${} 必须显式界定：紧跟其后的全角句号是多字节字符，$EDGE_LOG_DIR。 会被 bash 连着
-    # 首字节当成变量名（set -u 下直接 unbound variable 报错）。
-    # 措辞对两条进入路径都成立：探活通（像我们的服务但没记录）与探活不通（占用者
-    # 对 /health 回 404/拒答）都会走到这里
-    if [ "$own_stray" = 1 ]; then
-        warn "  识别为 app 内建执行层的上代残留进程（多因强制退出/崩溃未走清理），可安全回收："
-        warn "  ${EDGE_STOP_CMD:-stop} ${target}"
-    else
-        warn "  该端口的监听者不是本次启动器拉起的服务，其日志也不在 ${EDGE_LOG_DIR}。"
-        warn "  确认可回收则先停： ${EDGE_STOP_CMD:-stop} ${target}"
-    fi
+    warn "  该端口的监听者不是本次启动器可验证的服务；解释器路径不能证明归属。"
+    warn "  请确认进程归属后由其原启动器停止；${EDGE_STOP_CMD:-stop} ${target} 不会自动认领外来进程。"
     return 1
 }
 
@@ -216,13 +376,23 @@ probe_auth() {  # $1: 名称  $2: url  $3: key（可空）
 }
 
 spawn_daemon() {  # $1: 工作目录  $2: 日志  $3: pid 文件  $4...: 命令
-    local dir="$1" log="$2" pidfile="$3"
+    local dir="$1" log="$2" pidfile="$3" previous="$PWD" pid identity
     shift 3
     cd "$dir" || return 1
     nohup "$@" >>"$log" 2>&1 </dev/null &
-    echo $! >"$pidfile"
+    pid=$!
     disown 2>/dev/null || true
-    cd "$OLDPWD" || return 1
+    cd "$previous" || return 1
+    # $! 是本 shell 刚创建的根，exec 不改变创建时间。记录不含命令/密钥。
+    # 保留纯 PID 文件给现有 caller；sidecar 缺失绝不能退回只凭 PID 停止。
+    identity="$(edge_process_identity "$pid" "$$")" || {
+        fail "启动进程 pid $pid 无法记录身份，未取得停止权限，请由原启动器核查"
+        return 1
+    }
+    _edge_process_record write "$pidfile" "$pid" "$identity" || {
+        fail "启动进程 pid $pid 身份记录写入失败，不能自动停止"
+        return 1
+    }
 }
 
 # 日志代际隔离：本次启动尝试的起点调用，把上一代进程的日志轮转为 $1.prev（覆盖旧 .prev）。
@@ -283,32 +453,89 @@ guard_port_before_spawn() {  # $1名称 $2端口 $3pid文件 $4stop目标 $5就�
     return 2
 }
 
-stop_one() {  # $1: 名称  $2: 端口  $3: pid 文件  $4: 宽限秒（先 TERM 后 KILL）
-    local name="$1" port="$2" pidfile="$3" grace="$4"
-    local pids=""
-    [ -f "$pidfile" ] && pids="$(cat "$pidfile" 2>/dev/null)"
-    pids="$(printf '%s\n%s' "$pids" "$(listen_pids "$port")" | sort -u | grep -E '^[0-9]+$' || true)"
-    if [ -z "$pids" ]; then
-        info "$name 未在运行"
-        rm -f "$pidfile"
-        return 0
+stop_one() {  # 名称, 端口, pidfile, 宽限秒
+    local name="$1" port="$2" pidfile="$3" grace="$4" snapshot p identity current rc
+    local recorded_pid recorded_identity record
+    record="$(_edge_process_record read "$pidfile")" || {
+        if [ ! -f "$pidfile" ] && [ -z "$(listen_pids "$port")" ]; then
+            info "$name 无本实例运行记录"
+            return 0
+        fi
+        fail "$name 拒绝自动停止：缺少完整有效的启动身份记录；未发送信号"
+        return 1
+    }
+    recorded_pid="$(printf '%s\n' "$record" | sed -n 1p)"
+    recorded_identity="$(printf '%s\n' "$record" | sed -n 2p)"
+    if snapshot="$(_edge_owned_snapshot "$pidfile" "$recorded_pid" "$recorded_identity")"; then
+        rc=0
+    else
+        rc=$?
     fi
-    info "停止 $name (pid: $(echo $pids | tr '\n' ' '))"
-    # 先 TERM 给 FastAPI lifespan 留出收尾时间（如 backend 冻结会话落盘）
-    echo "$pids" | xargs kill 2>/dev/null
-    local waited=0
+    if [ "$rc" != 0 ]; then
+        if [ "$rc" = 3 ] && [ -z "$(listen_pids "$port")" ]; then
+            _edge_process_record delete "$pidfile" "$recorded_pid" "$recorded_identity" || {
+                fail "$name 根进程已退出，但旧记录清理失败"
+                return 1
+            }
+            info "$name 记录的根进程已退出，已清理匹配的旧记录；未认领其他进程，也未断言未知后代已退出"
+            return 0
+        fi
+        fail "$name 拒绝自动停止：PID 已重用、身份不可读或根已退出但仍有未认领监听者；未发送信号"
+        return 1
+    fi
+    [ -n "$snapshot" ] || { fail "$name 进程身份快照为空，拒绝自动停止"; return 1; }
+    info "停止 ${name}（已验证本实例父子进程身份）"
+    # 每次信号前核对创建身份。父进程退出后只保留之前验证过的子进程快照。
+    while read -r p identity; do
+        current="$(edge_process_identity "$p")" || continue
+        [ "$current" = "$identity" ] && kill -TERM "$p" 2>/dev/null
+    done <<< "$snapshot"
+    local waited=0 alive
     while [ "$waited" -lt "$grace" ]; do
-        local alive=""
-        for p in $pids; do kill -0 "$p" 2>/dev/null && alive="1"; done
-        [ -z "$alive" ] && [ -z "$(listen_pids "$port")" ] && break
+        alive=0
+        while read -r p identity; do
+            current="$(edge_process_identity "$p")" || continue
+            [ "$current" = "$identity" ] && alive=1
+        done <<< "$snapshot"
+        [ "$alive" = 0 ] && break
         sleep 1; waited=$((waited + 1))
     done
-    # 宽限期后仍存活则强杀（含端口上的残留子进程，如 npm 下的 vite）
-    local rest
-    rest="$(printf '%s\n%s' "$pids" "$(listen_pids "$port")" | sort -u | grep -E '^[0-9]+$' || true)"
-    for p in $rest; do kill -0 "$p" 2>/dev/null && { warn "$name pid $p 未响应 TERM，强制结束"; kill -9 "$p" 2>/dev/null; }; done
-    rm -f "$pidfile"
-    info "$name 已停止"
+    while read -r p identity; do
+        current="$(edge_process_identity "$p")" || continue
+        if [ "$current" = "$identity" ]; then
+            warn "$name pid $p 未响应 TERM，强制结束已验证的同一进程"
+            kill -KILL "$p" 2>/dev/null || {
+                fail "$name pid $p 发送 KILL 失败，保留身份记录"
+                return 1
+            }
+        fi
+    done <<< "$snapshot"
+    # KILL 成功只表示信号已发送，退出仍须观察；身份读取失败不能冒充退出。
+    waited=0
+    while :; do
+        alive=0
+        while read -r p identity; do
+            if current="$(edge_process_identity "$p")"; then rc=0; else rc=$?; fi
+            if [ "$rc" = 3 ]; then continue; fi
+            if [ "$rc" != 0 ]; then
+                fail "$name pid $p 无法确认退出，保留身份记录"
+                return 1
+            fi
+            [ "$current" = "$identity" ] && alive=1
+        done <<< "$snapshot"
+        [ "$alive" = 0 ] && break
+        if [ "$waited" -ge 5 ]; then
+            fail "$name 已发送停止信号，但本实例仍存活，保留身份记录"
+            return 1
+        fi
+        sleep 1; waited=$((waited + 1))
+    done
+    # 与 spawn 的发布共享锁，CAS 比较到删除之间不能插入新代写入。
+    _edge_process_record delete "$pidfile" "$recorded_pid" "$recorded_identity" || {
+        fail "$name 进程已退出，但身份记录清理失败"
+        return 1
+    }
+    info "$name 本实例进程已停止（其他端口占用者不受影响）"
 }
 
 status_one() {  # $1: 名称  $2: 端口  $3: 就绪 url
@@ -386,19 +613,23 @@ EOF
     info "已生成 SearXNG 配置: ${sf}（已开启 html + json 输出）"
 }
 
-# 迁移期兼容：移除旧 docker 部署的 SearXNG 容器（带 --restart unless-stopped，
-# 不显式删除会一直复活并占着 8080）。docker 未装/未运行则静默跳过。
-remove_legacy_searx_container() {
+# 旧 Docker 部署只有名字，没有本实例启动凭据。名字相同不等于归属相同，
+# 不再隐式 rm -f；由原启动器处理迁移。Docker 状态不代表原生服务的归属或可用性。
+remove_legacy_searx_container() {  # 保留旧函数名供 caller 兼容，现仅检测/报告
     command -v docker >/dev/null 2>&1 || return 0
-    if [ -n "$(docker ps -aq -f "name=^${SEARX_LEGACY_CONTAINER}$" 2>/dev/null)" ]; then
-        info "发现旧的 SearXNG docker 容器，移除（已迁移为原生部署）"
-        docker rm -f "$SEARX_LEGACY_CONTAINER" >/dev/null 2>&1 || true
-        sleep 1   # 等 docker 的端口代理释放 8080
+    local containers
+    containers="$(docker ps -aq -f "name=^${SEARX_LEGACY_CONTAINER}$" 2>/dev/null)" || {
+        warn "无法核查旧 SearXNG Docker 容器状态，未操作容器；原生服务继续按自己的端口和进程身份检查"
+        return 0
+    }
+    if [ -n "$containers" ]; then
+        warn "发现同名 SearXNG Docker 容器，名字无法证明本实例归属，未自动删除；如占用端口请由原启动器处理，原生服务独立检查"
     fi
+    return 0
 }
 
 start_searx() {
-    remove_legacy_searx_container
+    remove_legacy_searx_container || return 1
     if is_ready "$SEARX_READY_URL"; then
         managed_or_report "SearXNG" "$SEARX_PORT" "$EDGE_LOG_DIR/searx.pid" searx || return 1
         info "SearXNG 已在运行，跳过"; return 0
@@ -417,9 +648,11 @@ start_searx() {
 }
 
 stop_searx() {
-    # 先清旧 docker 容器再走端口 pid——否则 lsof 命中的是 docker 的端口代理进程，误杀会连累 Docker Desktop
-    remove_legacy_searx_container
-    stop_one "SearXNG" "$SEARX_PORT" "$EDGE_LOG_DIR/searx.pid" 5
+    # 只报告旧容器；stop_one 不认领 Docker 的端口代理。
+    local failed=0
+    remove_legacy_searx_container || failed=1
+    stop_one "SearXNG" "$SEARX_PORT" "$EDGE_LOG_DIR/searx.pid" 5 || failed=1
+    return "$failed"
 }
 
 # ---- RAG 数据面（B2c 拆分：rag.host 为本机时归 edge 编队，先于 backend）----
@@ -530,71 +763,37 @@ edge_up() {
 
 edge_down() {
     edge_require_env || return 1
-    stop_backend
-    stop_searx
+    local failed=0
+    stop_backend || failed=1
+    stop_searx || failed=1
     if rag_is_local && [ -n "${EDGE_RAG_PY:-}" ]; then
-        stop_rag_local
+        stop_rag_local || failed=1
     fi
+    return "$failed"
 }
 
-# ---- 孤儿回收（D 阶段工程票）----
-# 场景：app 被 SIGKILL（不走 willTerminate）后，本脚本拉起的守护进程带着 pid 文件
-# 活了下来；下一代 app 探活见「健康」便当 external 只用不管——孤儿从此永远跑着
-# 已删除的旧 bundle 代码。判据是 pid 文件本身：**谁的数据根谁的兵**——bundle 布局的
-# EDGE_LOG_DIR 在 app 专属数据根下，里面的 pid 记录必然是上代 app 经本脚本所拉。
-# ⚠️ 仅 bundle 布局可用（SidecarManager 侧把关）：repo 布局与 devctl 共用 logs/，
-# pid 文件无法区分归属，reap 会误杀用户的开发后端。
+# ---- 孤儿回收：本数据根中的启动身份记录是唯一认领凭据 ----
+# app 崩溃留下的有档实例仍可停止。无档监听者即使使用相同 bundle 解释器也
+# 不足以证明属于本实例；只报告，不能读取 args 或按宽泛 .app 路径认领。
 edge_reap() {
     edge_require_env || return 1
-    local reaped=0
-    local svc
-    for svc in backend searx rag; do
-        local pidfile="$EDGE_LOG_DIR/$svc.pid"
-        [ -f "$pidfile" ] || continue
-        local pid; pid="$(cat "$pidfile" 2>/dev/null)"
-        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            # ${} 必须显式界定：紧跟全角括号（多字节）会被 bash 吞首字节当变量名
-            info "发现上代残留 ${svc}（pid ${pid}，pid 记录在本数据根），回收后重新拉起"
-            case "$svc" in
-                backend) stop_backend ;;
-                searx)   stop_searx ;;
-                rag)     stop_rag_local ;;
-            esac
-            reaped=$((reaped + 1))
-        else
-            rm -f "$pidfile"   # 记录已死：清掉陈尸的 pid 文件
-        fi
-    done
-    # 第二判据：无档孤儿。pid 档案可能丢失（实机 2026-07-17 事故：孤儿 backend 无
-    # pid 文件，探活「健康」被误判 external，从此永远只连不管、跑着旧代码）——
-    # 端口占用者的解释器路径属于本布局（bundle 的 Resources/python）即是自家兵：
-    # devctl/repo 后端绝不会用 bundle 解释器，按路径认领不存在误杀面。
-    local port py p cmd
+    local svc port pidfile failed=0
     for svc in backend searx rag; do
         case "$svc" in
-            backend) port="$BACKEND_PORT" py="$EDGE_BACKEND_PY" ;;
-            searx)   port="$SEARX_PORT"   py="$EDGE_SEARX_PY" ;;
-            rag)     port="$RAG_PORT"     py="${EDGE_RAG_PY:-}"
-                     [ -n "$py" ] || continue ;;   # 本布局无 rag 承载：无从按解释器认领
+            backend) port="$BACKEND_PORT" ;;
+            searx) port="$SEARX_PORT" ;;
+            rag) port="$RAG_PORT"; [ -n "${EDGE_RAG_PY:-}" ] || continue ;;
         esac
-        for p in $(listen_pids "$port"); do
-            cmd="$(ps -o command= -p "$p" 2>/dev/null)"
-            case "$cmd" in
-                "$py"*)
-                    info "发现无档孤儿 ${svc}（pid ${p}，解释器属本布局），回收后重新拉起"
-                    kill "$p" 2>/dev/null
-                    local waited=0
-                    while [ "$waited" -lt 20 ] && kill -0 "$p" 2>/dev/null; do
-                        sleep 1; waited=$((waited + 1))
-                    done
-                    kill -0 "$p" 2>/dev/null && { warn "${svc} pid ${p} 未响应 TERM，强制结束"; kill -9 "$p" 2>/dev/null; }
-                    reaped=$((reaped + 1))
-                    ;;
-            esac
-        done
+        pidfile="$EDGE_LOG_DIR/$svc.pid"
+        if [ -f "$pidfile" ]; then
+            info "核查上代 ${svc} 的启动身份记录"
+            stop_one "$svc" "$port" "$pidfile" 20 || failed=1
+        elif [ -n "$(listen_pids "$port")" ]; then
+            warn "${svc} 有无档监听者，无法证明属于本实例，拒绝自动回收"
+            failed=1
+        fi
     done
-    [ "$reaped" -eq 0 ] && info "无上代残留进程"
-    return 0
+    return "$failed"
 }
 
 edge_status() {
@@ -624,8 +823,9 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         down)   edge_down ;;
         reap)   edge_reap ;;
         status) edge_status ;;
+        configuration) edge_configuration ;;
         *)
-            echo "用法: EDGE_*=... $0 up|down|reap|status（布局参数见文件头）" >&2
+            echo "用法: EDGE_*=... $0 up|down|reap|status|configuration（布局参数见文件头）" >&2
             exit 1
             ;;
     esac

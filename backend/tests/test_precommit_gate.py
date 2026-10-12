@@ -5,7 +5,8 @@
     掺一个代码文件就得跑门（白名单放宽一格 = 守卫在某类改动上静默关掉自己）；
     退出码原样透传，不许把「不过」压成「过」。
 
-二、`.claude/hooks/block-no-verify.sh`——PreToolUse(Bash) 拦 `git commit --no-verify|-n`。
+二、`scripts/agent-hooks/block-no-verify.sh`——Claude/Codex 共用 PreToolUse(Bash)
+    守卫，拦 `git commit --no-verify|-n`；Claude 原路径保留兼容入口。
     钩子挡得住「忘了跑门」，挡不住「把门一键关掉」，这条补的是后者。
     契约的反直觉处：PreToolUse **只有 exit 2 阻断**，其它非零码是「非阻断错误」——
     钩子自己崩了会放行。故本组同时守两个方向：
@@ -17,14 +18,17 @@
 import json
 import os
 import shutil
+import re
 import stat
 import subprocess
+from pathlib import Path
 
 import pytest
 
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _HOOK_SRC = os.path.join(_REPO, "scripts", "git-hooks", "pre-commit")
-_GUARD_SRC = os.path.join(_REPO, ".claude", "hooks", "block-no-verify.sh")
+_CLAUDE_GUARD_SRC = os.path.join(_REPO, ".claude", "hooks", "block-no-verify.sh")
+_GUARD_SRC = os.path.join(_REPO, "scripts", "agent-hooks", "block-no-verify.sh")
 
 _DEVCTL_STUB = """\
 #!/bin/bash
@@ -199,12 +203,17 @@ def test_hook_survives_the_very_first_commit(tmp_path):
 
 # ============ 二、--no-verify 守卫 ============
 
-def _guard(command: str, *, path_override=None):
+@pytest.fixture(params=[_GUARD_SRC, _CLAUDE_GUARD_SRC], ids=["shared", "claude-wrapper"])
+def guard_src(request):
+    return request.param
+
+
+def _guard(command: str, *, guard_src=_GUARD_SRC, path_override=None):
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
     env = dict(os.environ)
     if path_override:
         env["PATH"] = path_override
-    return subprocess.run(["bash", _GUARD_SRC], input=payload, capture_output=True,
+    return subprocess.run(["bash", guard_src], input=payload, capture_output=True,
                           text=True, env=env, timeout=60)
 
 
@@ -239,6 +248,16 @@ BLOCKED = [
     ("git add -A\ngit commit -n -m wave", "-n"),
     ("cd /Volumes/enkin/project/Agent\ngit commit --no-verify -m x", "--no-verify"),
     ("git status\ngit add -A\ngit commit -nm x", "-nm"),
+    # shlex groups consecutive punctuation: every external boundary run must split.
+    ("cd .\n\ngit commit -n -m x", "-n"),
+    ("cd .\n\n\ngit commit --no-verify -m x", "--no-verify"),
+    ("cd .;\ngit commit -n -m x", "-n"),
+    ("cd .&&\n\ngit commit -nm x", "-nm"),
+    # The same characters inside a message are arguments, never boundaries.
+    ('git commit -m "\n\n" -n', "-n"),
+    ("git commit -m ';\n' -n", "-n"),
+    ('git commit -m "\n" -n', "-n"),
+    ('printf "\n\n"\n\ngit commit -n -m x', "-n"),
 ]
 
 ALLOWED = [
@@ -248,6 +267,14 @@ ALLOWED = [
     'git commit -m"none"',                                       # -m 贴写值，含 n
     'git commit -am"cleanup"',                                   # 短旗标簇 + 贴写值
     'git add -A\ngit commit -m "clean"',                         # 干净的多行序列:不许误拦
+    'cd .\n\ngit commit -m "clean"',
+    'cd .;\ngit commit -m "clean"',
+    'git commit -m "\n\n"',
+    "git commit -m ';\n'",
+    'printf "\n\n" git commit -n',                            # all remaining words are printf args
+    'printf ";\n" git commit -n',
+    'printf "\n" git commit -n',
+    "printf \\; git commit -n",                               # escaped punctuation is an argument
     "git log -n 5 --oneline",
     "git add . && git commit -m ok",
     "grep -rn commit devctl.sh",
@@ -257,19 +284,19 @@ ALLOWED = [
 
 
 @pytest.mark.parametrize("cmd,reason", BLOCKED)
-def test_guard_blocks_bypass(cmd, reason):
-    r = _guard(cmd)
+def test_guard_blocks_bypass(cmd, reason, guard_src):
+    r = _guard(cmd, guard_src=guard_src)
     assert r.returncode == 2, f"{cmd!r} 未被拦下（rc={r.returncode}）"
     assert reason in r.stderr, f"拦是拦了，但理由不是 {reason!r}：{r.stderr}"
 
 
 @pytest.mark.parametrize("cmd", ALLOWED)
-def test_guard_allows_normal_commands(cmd):
-    r = _guard(cmd)
+def test_guard_allows_normal_commands(cmd, guard_src):
+    r = _guard(cmd, guard_src=guard_src)
     assert r.returncode == 0, f"{cmd!r} 被误拦（rc={r.returncode}, {r.stderr}）"
 
 
-def test_guard_falls_back_to_raw_grep_when_python3_is_broken(tmp_path):
+def test_guard_falls_back_to_raw_grep_when_python3_is_broken(tmp_path, guard_src):
     """★ 解析失败绝不等于放行：python3 崩了，长旗标仍要拦住。"""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -278,10 +305,10 @@ def test_guard_falls_back_to_raw_grep_when_python3_is_broken(tmp_path):
     py.chmod(py.stat().st_mode | stat.S_IEXEC)
     path = f"{fake_bin}:/usr/bin:/bin"
 
-    blocked = _guard("git commit --no-verify -m x", path_override=path)
+    blocked = _guard("git commit --no-verify -m x", guard_src=guard_src, path_override=path)
     assert blocked.returncode == 2, blocked.stderr
 
-    allowed = _guard('git commit -m "fix"', path_override=path)
+    allowed = _guard('git commit -m "fix"', guard_src=guard_src, path_override=path)
     assert allowed.returncode == 0, allowed.stderr
 
 
@@ -299,17 +326,17 @@ MALFORMED = [
 
 
 @pytest.mark.parametrize("payload", MALFORMED)
-def test_guard_never_hard_blocks_on_malformed_input(payload):
+def test_guard_never_hard_blocks_on_malformed_input(payload, guard_src):
     """★ 反向守卫：恒 exit 2 会把整个会话彻底锁死，比漏判严重得多。
     畸形输入既拿不到命令、原文里也没有危险串时，唯一正确的行为是放行。"""
-    r = subprocess.run(["bash", _GUARD_SRC], input=payload, capture_output=True,
+    r = subprocess.run(["bash", guard_src], input=payload, capture_output=True,
                        text=True, timeout=60)
     assert r.returncode == 0, f"畸形输入 {payload!r} 触发了阻断（rc={r.returncode}）"
 
 
-def test_guard_still_blocks_when_json_is_malformed_but_text_is_dangerous():
+def test_guard_still_blocks_when_json_is_malformed_but_text_is_dangerous(guard_src):
     """解析不出来 ≠ 放行：原文兜底要接住长旗标。"""
-    r = subprocess.run(["bash", _GUARD_SRC], capture_output=True, text=True, timeout=60,
+    r = subprocess.run(["bash", guard_src], capture_output=True, text=True, timeout=60,
                        input='{"tool_input": {"command": "git commit --no-verify -m unclosed')
     assert r.returncode == 2, r.stdout + r.stderr
 
@@ -329,4 +356,45 @@ def test_guard_is_wired_into_settings_json():
     wired = [c for c in cmds if "block-no-verify.sh" in c]
     assert wired, cmds
     assert all(c.strip().startswith("bash ") for c in wired), wired
-    assert os.access(_GUARD_SRC, os.R_OK)
+    assert os.access(_CLAUDE_GUARD_SRC, os.R_OK)
+
+
+@pytest.mark.parametrize("client", ["claude", "codex"])
+@pytest.mark.parametrize("nested", [False, True], ids=["root", "subdirectory"])
+def test_configured_hook_really_executes_shared_guard(tmp_path, client, nested):
+    """Run the actual configured command in a clean repo (including spaces).
+
+    A correct script with a broken matcher/path is no protection. Commands under
+    inspection are JSON input only; no git commit is ever executed by this test.
+    Codex normalizes exec_command to Bash/tool_input.command at the hook boundary.
+    This proves config wiring, not client trust/activation.
+    """
+    root = tmp_path / "checkout with spaces"
+    root.mkdir()
+    _git(["init", "-q", "."], root)
+    for relative in (".claude/hooks/block-no-verify.sh",
+                     "scripts/agent-hooks/block-no-verify.sh"):
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(Path(_REPO) / relative, target)
+    relative_config = ".claude/settings.json" if client == "claude" else ".codex/hooks.json"
+    settings = json.loads((Path(_REPO) / relative_config).read_text(encoding="utf-8"))
+    handlers = [h for entry in settings["hooks"]["PreToolUse"]
+                if re.search(entry.get("matcher", ""), "Bash")
+                for h in entry["hooks"] if h.get("type") == "command"]
+    assert handlers, "No command hook matches the normalized Bash event"
+    cwd = root / "backend" if nested else root
+    cwd.mkdir(exist_ok=True)
+    env = _clean_env(CLAUDE_PROJECT_DIR=str(root))
+    # Simulate a configured hooks directory elsewhere: discovery must not rely
+    # on .git/hooks or shell CWD for the shared script's location.
+    for command, expected in [("git commit -n -m x", 2), ('git commit -m "clean"', 0)]:
+        payload = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                              "cwd": str(cwd), "tool_input": {"command": command}})
+        results = [subprocess.run(["bash", "-c", h["command"]], input=payload,
+                                  capture_output=True, text=True, env=env, cwd=cwd,
+                                  timeout=10) for h in handlers]
+        if expected == 2:
+            assert any(r.returncode == 2 and "-n" in r.stderr for r in results), results
+        else:
+            assert all(r.returncode == 0 for r in results), results

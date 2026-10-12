@@ -49,6 +49,8 @@ final class SidecarManager: ObservableObject {
     @Published private(set) var isBareBundle = false
     /// 14159 上那个后端自报的布局形态（探活得来；nil = 探不到或对方没报）。
     @Published private(set) var peerLayout: String?
+    /// Configuration only; process and authenticated connection states remain separate.
+    @Published private(set) var configuration: EdgeConfiguration?
 
     private struct Layout {
         let libEdge: URL          // scripts/lib_edge.sh
@@ -86,11 +88,14 @@ final class SidecarManager: ObservableObject {
             case .disabled, .failed: break
             }
         }
+        configuration = nil
         guard let layout = resolveLayout() else {
             state = .failed("找不到执行层布局：bundle 无 Resources/backend，设置里也未填仓库路径")
             return
         }
         self.layout = layout
+        configuration = (try? await EdgeConfiguration.read(lib: layout.libEdge, environment: layout.env))
+            ?? EdgeConfiguration(status: "unknown", missing: [])
         // 孤儿回收（bundle 布局限定）：app 被 SIGKILL 后守护进程活了下来，若不回收，
         // 下面的探活会见「健康」而当 external 永远只用不管——孤儿从此跑着已删除的
         // 旧 bundle 代码（R5-9 实证）。判据在 lib 的 reap：数据根 pid 文件仍存活 =
@@ -124,8 +129,7 @@ final class SidecarManager: ObservableObject {
     func startStop() async {
         switch state {
         case .running, .starting:
-            await down()
-            state = .disabled
+            if await down() { state = .disabled }
         default:
             await autostart()
         }
@@ -137,7 +141,7 @@ final class SidecarManager: ObservableObject {
     func restart() async {
         switch state {
         case .running, .starting:
-            await down()
+            guard await down() else { return }
             // down() 不改 state（仍是 running/starting），非 force 会被新守卫误挡在门外，
             // 导致「重启」变成空动作——force 强穿守卫，reap 后探活见 down 已真杀→重拉。
             await autostart(force: true)
@@ -177,11 +181,22 @@ final class SidecarManager: ObservableObject {
         }
     }
 
-    private func down() async {
-        guard let layout else { return }
+    private func down() async -> Bool {
+        guard let layout else {
+            state = .failed("找不到执行层布局，无法确认停止")
+            return false
+        }
         cancelWatchers()
-        if let run = try? runLib(layout, command: "down") {
-            _ = await run.waitAsync()
+        do {
+            let run = try runLib(layout, command: "down")
+            guard await run.waitAsync() == 0 else {
+                state = .failed(run.outputTail(lines: 12))
+                return false
+            }
+            return true
+        } catch {
+            state = .failed("无法停止执行层: \(error.localizedDescription)")
+            return false
         }
     }
 
@@ -271,23 +286,20 @@ final class SidecarManager: ObservableObject {
             if let settings, settings.apiKey.isEmpty {
                 settings.apiKey = Self.randomKey()
             }
-            if let key = settings?.apiKey, !key.isEmpty { env["AGENT_API_KEY"] = key }
-            // 拨设备 A 的两把必须留（inference-server / rag 服务端各自校验）；
-            // 用户在设置里填（与设备 A 的 .env.local 同值），空 = 未启用鉴权的 dev 对端。
-            // 注入端也清洗一次：钥匙串里可能躺着清洗逻辑上线前存入的带引号旧值。
-            let infer = Self.cleanKey(settings?.inferApiKey ?? "")
-            if !infer.isEmpty { env["INFER_API_KEY"] = infer }
-            let rag = Self.cleanKey(settings?.ragApiKey ?? "")
-            if !rag.isEmpty { env["RAG_API_KEY"] = rag }
+            // 本机数据面独立持钥；旧安装保留现值，绝不随计算面设置轮换。
+            if let settings, settings.ragApiKey.isEmpty {
+                settings.ragApiKey = Self.randomKey()
+            }
+            let credentials = ServiceCredentials(
+                agent: settings?.apiKey ?? "", inference: settings?.inferApiKey ?? "",
+                ragData: settings?.ragApiKey ?? "", ragCompute: settings?.ragComputeApiKey ?? "")
+            // 明确清掉继承值，空设置不得意外使用启动 app 的 shell 凭据。
+            env = credentials.applying(to: env)
             // B2c 拆分：RAG 数据面随包（config 的 rag.host 为回环时 lib_edge 编队自动拉起，
             // 先于 backend；指远端 = 过渡拓扑，不拉）。数据落数据根，代码目录保持只读。
             env["EDGE_RAG_DIR"] = res.appendingPathComponent("rag").path
             env["EDGE_RAG_PY"] = res.appendingPathComponent("python/bin/python3.13").path
             env["EDGE_RAG_DATA_DIR"] = dataDir.appendingPathComponent("rag").path
-            // 数据面拨算力端计算面的钥匙与「RAG 密钥」共用同一个设置项：两种拓扑
-            //（过渡=整 RAG 在算力端走 RAG_API_KEY / 拆分=计算面走 RAG_COMPUTE_API_KEY）
-            // 各用其一，闲置的一侧被忽略——用户无需理解两个变量名。
-            if !rag.isEmpty { env["RAG_COMPUTE_API_KEY"] = rag }
             // 算力端地址一键两职：inference-server 与 RAG 计算面在同一台算力机，一个
             // 设置项覆盖两个 host 变量（后端已支持这两个 env 覆盖 config）——用户无需
             // 理解两个变量名。空 = 不注入，回落包内 config.yaml 的值（换算力机零重打包）。
@@ -379,15 +391,7 @@ final class SidecarManager: ObservableObject {
     /// env 直注不会；带引号/带变量名的值对服务端就是稳定 401（实机二三轮根因域）。
     /// 真钥匙是随机 token，不会长得像 `NAME=...`，前缀剥离不会误伤。
     static func cleanKey(_ raw: String) -> String {
-        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let m = s.range(of: #"^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*="#,
-                           options: .regularExpression) {
-            s = String(s[m.upperBound...])
-        }
-        if s.count >= 2, let f = s.first, f == s.last, f == "\"" || f == "'" {
-            s = String(s.dropFirst().dropLast())
-        }
-        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+        ServiceCredentials.cleanKey(raw)
     }
 
     private func baseEnv() -> [String: String] {

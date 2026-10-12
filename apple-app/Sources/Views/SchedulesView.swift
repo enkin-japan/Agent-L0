@@ -7,31 +7,34 @@ struct SchedulesView: View {
     @EnvironmentObject var store: AgentStore
     @Environment(\.dismiss) private var dismiss
 
-    @State private var schedules: [ScheduledTask] = []
-    @State private var runs: [String: [ScheduleRun]] = [:]
+    private var schedules: [ScheduledTask] { store.schedules }
+    @State private var expandedRuns = Set<String>()
     @State private var notice: String?
-    @State private var loading = true
+    @State private var acting = false
+    @State private var actionRequest = UUID()
 
     var body: some View {
         NavigationStack {
-            Group {
-                if loading && schedules.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                if let notice { Text(notice).font(.caption).foregroundStyle(.secondary).padding(.horizontal) }
+                if let error = store.schedulesError { Text(error).font(.caption).foregroundStyle(.orange).padding(.horizontal) }
+                Group {
+                if store.schedulesLoading && store.schedulesFreshness == .unknown {
                     ProgressView()
+                } else if store.schedulesFreshness == .unknown {
+                    ContentUnavailableView(L("定时任务状态尚未确认"), systemImage: "questionmark.circle",
+                                           description: Text(L("请刷新后查看定时任务状态。")))
                 } else if schedules.isEmpty {
                     ContentUnavailableView(L("暂无定时任务"),
                                            systemImage: "calendar.badge.clock",
                                            description: Text(L("在对话里让 Agent 创建，例如「每天早上 9 点帮我总结新闻」")))
                 } else {
                     List {
-                        if let notice {
-                            Text(notice)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
                         ForEach(schedules) { task in
                             row(task)
                         }
                     }
+                }
                 }
             }
             .navigationTitle(L("定时任务"))
@@ -49,6 +52,9 @@ struct SchedulesView: View {
             }
         }
         .task { await reload() }
+        .onChange(of: store.client.map { ObjectIdentifier($0) }) {
+            actionRequest = UUID(); acting = false; notice = nil; expandedRuns = []
+        }
         #if os(macOS)
         .frame(minWidth: 520, minHeight: 420)
         #endif
@@ -65,10 +71,11 @@ struct SchedulesView: View {
                 Toggle("", isOn: Binding(
                     get: { task.enabled ?? false },
                     set: { enabled in
-                        Task { await act { try await store.client?.toggleSchedule(id: task.id, enabled: enabled) } }
+                        Task { await act(task.id, mutation: .enabled(enabled)) }
                     }
                 ))
                 .labelsHidden()
+                .disabled(acting || !store.canMutateSchedule(task.id))
             }
             HStack(spacing: 8) {
                 Text(task.spec?.summary ?? "")
@@ -84,7 +91,12 @@ struct SchedulesView: View {
                 runLine(last, prefix: L("上次"))
             }
 
-            if let expanded = runs[task.id] {
+            if expandedRuns.contains(task.id) {
+                if let error = store.scheduleRunsError[task.id] { Text(error).font(.caption).foregroundStyle(.orange) }
+                if store.scheduleRunHistory[task.id] == nil && store.scheduleRunsError[task.id] == nil {
+                    ProgressView(L("加载中…"))
+                }
+                let expanded = store.scheduleRunHistory[task.id] ?? []
                 ForEach(expanded) { run in
                     runLine(run)
                         .padding(.leading, 12)
@@ -94,20 +106,23 @@ struct SchedulesView: View {
             HStack(spacing: 14) {
                 if task.running == true {
                     Button(L("中止本次")) {
-                        Task { await act { try await store.client?.cancelScheduleRun(id: task.id) } }
+                        Task { await act(task.id, mutation: .cancelRun) }
                     }
+                    .disabled(acting || !store.canMutateSchedule(task.id))
                 } else {
                     Button(L("立即运行")) {
-                        Task { await act { try await store.client?.runScheduleNow(id: task.id) } }
+                        Task { await act(task.id, mutation: .runNow) }
                     }
+                    .disabled(acting || !store.canMutateSchedule(task.id))
                 }
-                Button(runs[task.id] == nil ? L("运行历史") : L("收起历史")) {
+                Button(expandedRuns.contains(task.id) ? L("收起历史") : L("运行历史")) {
                     Task { await toggleRuns(task.id) }
                 }
                 Spacer()
                 Button(L("删除"), role: .destructive) {
-                    Task { await act { try await store.client?.deleteSchedule(id: task.id) } }
+                    Task { await act(task.id, mutation: .delete) }
                 }
+                    .disabled(acting || !store.canMutateSchedule(task.id))
             }
             .font(.caption)
             .buttonStyle(.borderless)
@@ -148,27 +163,26 @@ struct SchedulesView: View {
     }
 
     private func toggleRuns(_ id: String) async {
-        if runs[id] != nil {
-            runs[id] = nil
-            return
-        }
-        runs[id] = (try? await store.client?.scheduleRuns(id: id)) ?? []
+        if expandedRuns.contains(id) { expandedRuns.remove(id); return }
+        expandedRuns.insert(id)
+        await store.refreshScheduleRuns(id)
     }
 
-    /// 执行动作 → 显示后端回话 → 刷新列表。
-    private func act(_ action: () async throws -> ScheduleActionResponse?) async {
+    private func act(_ id: String, mutation: AgentStore.ScheduleMutation) async {
+        guard !acting, let client = store.client else { return }
+        let request = UUID(); actionRequest = request; acting = true
+        defer { if actionRequest == request { acting = false } }
         do {
-            let res = try await action()
-            notice = res?.response
+            let result = try await store.mutateSchedule(id, mutation: mutation)
+            guard actionRequest == request, store.client === client else { return }
+            notice = result.status ? result.response : result.response ?? L("操作未被受理，请检查后重试。")
         } catch {
+            guard actionRequest == request, store.client === client else { return }
             notice = L("操作失败：") + error.localizedDescription
         }
-        await reload()
+        guard store.client === client, actionRequest == request else { return }
+        await store.refreshSchedules()
     }
 
-    private func reload() async {
-        loading = true
-        schedules = (try? await store.client?.listSchedules()) ?? []
-        loading = false
-    }
+    private func reload() async { await store.refreshSchedules() }
 }

@@ -33,6 +33,12 @@ MILESTONE_TYPES = {
 # 持久化副本的字段截断上限(SSE 实时帧不受此限)
 _PERSIST_TRUNCATE = 2000
 
+# 终态执行事实仅作有界投影，不新增账本或模型上下文。
+_RECEIPT_ITEMS = 64
+_RECEIPT_DETAIL = 2000
+_RECEIPT_IDENTIFIER = 128
+_RECEIPT_STATUS = 32
+
 # ── 重启后的 seq 水位余量(OSS 扫描 §6.3,2026-08-17)────────────────────────────
 # 增量事件(token_delta/thinking_delta)同样消耗 seq,但**不在 MILESTONE_TYPES 里、
 # 不落盘**——一次长回答轻松吃掉上千个 seq。进程重启后若直接从末条里程碑续号,seq 会
@@ -116,6 +122,7 @@ class TurnJournal:
         self.partial_text: str = ""
         self.partial_thinking: str = ""
         self.pending_tools: Optional[List[Dict[str, Any]]] = None
+        self.approval_seq: Optional[int] = None  # 当前 awaiting_approval 的信封序号；只由 emit 驱动
         self.task_snapshot: Optional[Dict[str, Any]] = None
         self.turn_first_seq: int = 0
         self.turn_client_id: Optional[str] = None   # 本轮提交幂等键(B3,来自 turn_queued)
@@ -145,7 +152,9 @@ class TurnJournal:
         try:
             etype, data = env["type"], env["data"]
             if etype == "turn_ended":
-                data = {"status": data.get("status"), "turn_index": data.get("turn_index")}
+                data = {"status": data.get("status"),
+                        **({"turn_index": data["turn_index"]} if "turn_index" in data else {}),
+                        **({"discarded": True} if data.get("discarded") is True else {})}
             elif etype == "tool_started":
                 data = _truncated_copy(data, ["args"])
             elif etype == "tool_result":
@@ -208,6 +217,8 @@ class TurnJournal:
     def _track(self, etype: str, data: Dict[str, Any], env: Dict[str, Any]) -> None:
         """由事件流单点驱动的轮次状态机(GET /turn 数据源)。"""
         now = env["ts"]
+        if etype in {"turn_queued", "turn_started", "resumed", "suspended", "turn_ended"}:
+            self.approval_seq = None
         if etype == "turn_queued":
             # 新轮开始:清上一轮的环与累计(上一轮已以 turn_ended 收尾)
             self.ring.clear()
@@ -229,6 +240,7 @@ class TurnJournal:
             self.turn_state = TURN_AWAITING
             self.state_since = now
             self.pending_tools = data.get("pending_tools") or []
+            self.approval_seq = env["seq"]
         elif etype == "suspended":
             self.turn_state = TURN_SUSPENDED
             self.state_since = now
@@ -248,6 +260,52 @@ class TurnJournal:
             self.task_snapshot = data.get("task")
 
     # ---------- 读取 ----------
+    def execution_receipts(self) -> Optional[Dict[str, Any]]:
+        """同轮最近64条工具开始/返回事实；缺轮首内存证据时未知，不猜副作用。
+
+        不重放磁盘、不复制args。started仅证明开始，result的status保留工具返回
+        原值，不等于外部操作成功。省略非空参数和任何截断均显式标记。
+        """
+        tid = self.current_turn_id
+        if tid is None or not any(e.get("type") == "turn_queued" and e.get("turn_id") == tid
+                                  for e in self.ring):
+            return None
+        items: List[Dict[str, Any]] = []
+        truncated = False
+        for env in reversed(self.ring):
+            if env.get("turn_id") != tid or env.get("type") not in {"tool_started", "tool_result"}:
+                continue
+            if len(items) >= _RECEIPT_ITEMS:
+                truncated = True
+                break
+            data = env.get("data") or {}
+            cut = data.get("truncated") is True
+
+            def bounded(value: Any, limit: int) -> str:
+                nonlocal cut
+                if not isinstance(value, str):
+                    cut |= value is not None
+                    return ""
+                cut |= len(value) > limit
+                return value[:limit]
+
+            item = {"seq": env["seq"], "ts": env["ts"], "type": env["type"],
+                    "name": bounded(data.get("name"), _RECEIPT_IDENTIFIER),
+                    "call_id": bounded(data.get("call_id"), _RECEIPT_IDENTIFIER),
+                    "detail": ""}
+            if env["type"] == "tool_started":
+                cut |= bool(data.get("args"))  # 参数有意省略，不能伪装完整凭据
+            else:
+                item["detail"] = bounded(data.get("response"), _RECEIPT_DETAIL)
+                if data.get("status") is not None:
+                    item["status"] = bounded(data["status"], _RECEIPT_STATUS)
+            if cut:
+                item["truncated"] = True
+                truncated = True
+            items.append(item)
+        items.reverse()
+        return {"items": items, "truncated": truncated}
+
     def replay(self, after: int = 0) -> List[Dict[str, Any]]:
         """按 seq 归并重放:磁盘里程碑(环起点之前) + 内存环(活跃轮全量)。
         磁盘读为小文件同步读;大账本场景由端点侧 to_thread 包裹本方法。"""

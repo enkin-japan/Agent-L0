@@ -34,6 +34,22 @@ export interface PendingTool {
   arguments?: Record<string, unknown>
 }
 
+/** Existing journal start/return facts; a returned status is not external success. */
+export interface ExecutionReceipt {
+  seq: number
+  ts: number
+  type: "tool_started" | "tool_result"
+  name: string
+  call_id?: string
+  detail: string
+  status?: string
+  truncated?: boolean
+}
+export interface ExecutionReceipts {
+  items: ExecutionReceipt[]
+  truncated: boolean
+}
+
 export interface ChatResponse {
   status: "success" | "fail" | "warning" | "pending_approval" | "cancelled" | "suspended"
   prompt: string
@@ -54,12 +70,20 @@ export interface ChatResponse {
   prompt_tps?: number
   generation_tps?: number
   peak_memory?: number
+  execution_receipts?: ExecutionReceipts | null
+  timestamp?: number
+  turn_ref?: string
+  retry_of?: string
+  retry_root_index?: number
+  retry_parent_index?: number
 }
 
 export interface DeleteSessionResponse {
   status: boolean
   frozen: boolean
   response: string
+  /** Additive remote receipt. Unknown/absent reasons do not satisfy deletion. */
+  reason?: string | null
 }
 
 export interface DeleteTurnResponse {
@@ -86,6 +110,14 @@ export interface SessionListResponse {
   status: boolean
   count: number
   sessions: SessionMetaItem[]
+  retention_policy?: SessionRetentionPolicy | null
+}
+
+export interface SessionRetentionPolicy {
+  enabled: boolean
+  retention_days: number
+  empty_ttl_hours: number
+  scan_interval_seconds: number
 }
 
 export interface PinResponse {
@@ -102,7 +134,22 @@ export interface HistoryResponse {
   session_id: string
   count: number
   turns: ChatResponse[]
-  /** 独立于 turns（不参与分支下标）；无进行中轮次时为 null。 */
+  /** 历史读取前的账本下界（可重叠），旧服务端缺省安全回放 0。 */
+  replay_after?: number
+  generation?: string
+  last_turn_ref?: string
+  display_turn_indices?: number[]
+  retry_groups?: RetryGroup[]
+}
+
+/** Actual assets only; uploads and arbitrary filesystem paths are not deliverables. */
+export interface SessionFile { name: string; size: number; mtime: number }
+export interface SessionFilesResponse { status: boolean; files: SessionFile[] }
+
+export interface RetryGroup {
+  root_index: number
+  display_index: number
+  turn_indices: number[]
 }
 
 export interface BranchRequest {

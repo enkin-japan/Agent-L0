@@ -7,6 +7,7 @@ import SwiftUI
 /// 右键菜单保留同一组动作作为第二入口，后续还会往里放更多功能。
 struct MessageView: View {
     let message: ChatMessage
+    var auditOnly = false
     @EnvironmentObject var store: AgentStore
     #if os(macOS)
     @State private var hovering = false
@@ -73,11 +74,11 @@ struct MessageView: View {
                             Label(L("复制原文"), systemImage: "doc.on.doc")
                         }
                         // 分支操作只留在助手回复上（同一轮的分支语义，两处入口多余）
-                        if isLastUser, !store.isGenerating {
+                        if store.canEditMessage(message, auditOnly: auditOnly) {
                             Button {
                                 store.editLastTurn()
                             } label: {
-                                Label(L("编辑并重发（回退这一轮）"), systemImage: "pencil.and.outline")
+                                Label(L("编辑并重发（撤销最近一次尝试）"), systemImage: "pencil.and.outline")
                             }
                         }
                     }
@@ -85,14 +86,14 @@ struct MessageView: View {
                 HStack(spacing: Theme.s1) {
                     HStack(spacing: Theme.s1) {
                         CopyActionButton(text: message.text, help: L("复制原文"))
-                        if isLastUser, !store.isGenerating {
+                        if store.canEditMessage(message, auditOnly: auditOnly) {
                             MessageActionButton(icon: "pencil.and.outline",
-                                                help: L("编辑并重发（回退这一轮）")) {
+                                                help: L("编辑并重发（撤销最近一次尝试）")) {
                                 store.editLastTurn()
                             }
                         }
                     }
-                    .opacity(actionRowOpacity(alwaysVisible: isLastUser))
+                    .opacity(actionRowOpacity(alwaysVisible: isLastUser || store.canEditMessage(message, auditOnly: auditOnly)))
                     if let ts = message.timestamp {
                         Text(Timestamps.messageLabel(ts))
                             .font(.caption2)
@@ -108,12 +109,14 @@ struct MessageView: View {
     }
 
     private var isLastUser: Bool {
+        message.canModifyLatestAttempt(canonicalIndex: store.lastCanonicalIndex, auditOnly: auditOnly) &&
         message.id == store.messages.last(where: { $0.kind == .user })?.id
     }
 
     // MARK: - 助手气泡
 
     private var isLastAssistant: Bool {
+        message.canModifyLatestAttempt(canonicalIndex: store.lastCanonicalIndex, auditOnly: auditOnly) &&
         message.id == store.messages.last(where: { $0.kind == .assistant })?.id
     }
 
@@ -130,10 +133,11 @@ struct MessageView: View {
                                                 help: L("从这一轮分支出新会话")) {
                                 store.branch(fromTurnIndex: index)
                             }
+                            .disabled(store.selectedSessionIsDeleting)
                         }
-                        if isLastAssistant, !store.isGenerating {
+                        if isLastAssistant, !store.isGenerating, !store.selectedSessionIsDeleting {
                             MessageActionButton(icon: "arrow.clockwise",
-                                                help: L("重新生成回答")) {
+                                                help: store.retryActionTitle) {
                                 store.regenerateLastTurn()
                             }
                         }
@@ -197,12 +201,13 @@ struct MessageView: View {
                 } label: {
                     Label(L("从这一轮分支出新会话"), systemImage: "arrow.triangle.branch")
                 }
+                .disabled(store.selectedSessionIsDeleting)
             }
-            if isLastAssistant, !store.isGenerating {
+            if isLastAssistant, !store.isGenerating, !store.selectedSessionIsDeleting {
                 Button {
                     store.regenerateLastTurn()
                 } label: {
-                    Label(L("重新生成回答"), systemImage: "arrow.clockwise")
+                    Label(store.retryActionTitle, systemImage: "arrow.clockwise")
                 }
             }
         }

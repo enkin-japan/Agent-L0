@@ -1,0 +1,8 @@
+{"seq": 1, "turn_id": "t_kept", "ts": 1001, "type": "turn_queued", "data": {"prompt": "保留的输入"}}
+{"seq": 2, "turn_id": "t_kept", "ts": 1002, "type": "turn_started", "data": {}}
+{"seq": 3, "turn_id": "t_kept", "ts": 1003, "type": "turn_ended", "data": {"status": "success", "prompt": "保留的输入", "response": [{"role": "assistant", "content": "保留的答案"}], "turn_index": 0}}
+{"seq": 4, "turn_id": "t_discard", "ts": 1004, "type": "turn_queued", "data": {"prompt": "撤销的输入"}}
+{"seq": 5, "turn_id": "t_discard", "ts": 1005, "type": "turn_started", "data": {}}
+{"seq": 6, "turn_id": "t_discard", "ts": 1006, "type": "token_delta", "data": {"text": "撤销的预览"}}
+{"seq": 7, "turn_id": "t_discard", "ts": 1007, "type": "suspended", "data": {}}
+{"seq": 8, "turn_id": "t_discard", "ts": 1008, "type": "turn_ended", "data": {"status": "cancelled", "discarded": true, "prompt": "撤销的输入", "image": [], "audio": [], "ingested_text": "", "attachments": [], "enable_thinking": false, "thinking_budget": 2048, "max_tokens": 4096, "temperature": 0.2, "min_p": 0.05, "response": []}}

@@ -47,6 +47,58 @@ from ...core.backend_protocol import GenChunk
 _NEG_INF = float("-inf")
 
 
+class _StreamBridge:
+    """有界同步队列 + 异步空间通知：背压不阻塞引擎的事件循环。"""
+
+    def __init__(self, loop):
+        self._loop = loop
+        self._queue = _queue.Queue(maxsize=256)
+        self._space = asyncio.Event()
+        self._closed = threading.Event()
+        self._ready = threading.Condition()
+
+    @property
+    def closed(self):
+        return self._closed.is_set()
+
+    async def put(self, item):
+        while not self._closed.is_set():
+            # 先清通知再查队列，消费线程在检查前后腾出空间都不会丢唤醒。
+            self._space.clear()
+            try:
+                with self._ready:
+                    self._queue.put_nowait(item)
+                    self._ready.notify()
+                return
+            except _queue.Full:
+                await self._space.wait()
+        raise asyncio.CancelledError
+
+    def get(self, timeout):
+        deadline = time.monotonic() + timeout
+        with self._ready:
+            while True:
+                try:
+                    item = self._queue.get_nowait()
+                    break
+                except _queue.Empty:
+                    if self.closed:
+                        raise RuntimeError("CUDA 生成已停止（后端 shutdown）")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise
+                    self._ready.wait(remaining)
+        self._loop.call_soon_threadsafe(self._space.set)
+        return item
+
+    def close(self):
+        with self._ready:
+            self._closed.set()
+            self._ready.notify_all()
+        if self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._space.set)
+
+
 class CudaCacheHandle:
     """CacheHandle 的 vLLM 实现：纯记账（物理复用在引擎 APC 内）。"""
     __slots__ = ("token_ids",)
@@ -188,6 +240,11 @@ class CudaVLLMBackend:
         self._structural_tag_ok = True   # 同上（紧凑 DSL 方言下恒被拒，见 structural_tag_json）
         # 两段式思考预算：外部取消只知外层 request_id，段二真实 rid 经此表间接寻址
         self._rid_map: Dict[str, str] = {}
+        # 仅私有循环访问；shutdown 先取消/收拢生产者，再停止循环。
+        self._producers: Dict[str, tuple] = {}
+        self._shutdown_started = False
+        # 同步流提交与shutdown关闭入场必须线性化，不能把协程交给已停循环。
+        self._lifecycle_lock = threading.Lock()
 
     # ---- 装配（阻塞，跑在 load 的线程池里） ----
 
@@ -265,15 +322,29 @@ class CudaVLLMBackend:
         return None
 
     def shutdown(self) -> None:
-        eng, self._engine = self._engine, None
-        if eng is not None and self._loop is not None:
-            try:
-                if hasattr(eng, "shutdown"):
-                    self._loop.call_soon_threadsafe(eng.shutdown)
-            except Exception:
-                pass
-        if self._loop is not None:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        with self._lifecycle_lock:
+            if self._shutdown_started:
+                return
+            eng, self._engine = self._engine, None
+            if self._loop is None or not self._loop.is_running():
+                return
+            self._shutdown_started = True
+
+            async def _shutdown():
+                try:
+                    producers = list(self._producers.values())
+                    for task, bridge in producers:
+                        bridge.close()
+                        if not task.cancelling():
+                            task.cancel()
+                    await asyncio.gather(*(task for task, _ in producers),
+                                         return_exceptions=True)
+                    if eng is not None and hasattr(eng, "shutdown"):
+                        eng.shutdown()
+                finally:
+                    self._loop.stop()
+
+            asyncio.run_coroutine_threadsafe(_shutdown(), self._loop)
 
     # ---- 生成：私有循环 → 有界队列 → 同步迭代器 ----
 
@@ -288,13 +359,16 @@ class CudaVLLMBackend:
         sampling = sampling or {}
         features = features or {}
 
-        q: _queue.Queue = _queue.Queue(maxsize=256)
+        q = _StreamBridge(self._loop)
         request_id = uuid.uuid4().hex
-        fut = asyncio.run_coroutine_threadsafe(
-            self._produce(q, request_id, prompt, cache, images, audios,
-                          sampling, features),
-            self._loop)
-        _SENTINEL = object()
+        with self._lifecycle_lock:
+            if (self._shutdown_started or self._engine is None
+                    or self._loop is None or not self._loop.is_running()):
+                raise RuntimeError("CUDA 后端已 shutdown（不能受理生成）")
+            fut = asyncio.run_coroutine_threadsafe(
+                self._produce(q, request_id, prompt, cache, images, audios,
+                              sampling, features, self._engine),
+                self._loop)
         try:
             while True:
                 try:
@@ -307,21 +381,25 @@ class CudaVLLMBackend:
                     raise item
                 yield item
         finally:
-            if not fut.done():
-                asyncio.run_coroutine_threadsafe(
-                    self._abort(request_id), self._loop)
+            if not fut.done() and not q.closed:
+                # 先投递任务取消，再唤醒背压；反序会先进入abort，随后被cancel打断。
+                fut.cancel()
+                q.close()
 
-    async def _abort(self, request_id: str):
+    async def _abort(self, request_id: str, engine=None):
         try:
             # 两段式在飞时真实 rid 可能是 "<request_id>-p2"（映射表间接寻址）
-            await self._engine.abort(self._rid_map.get(request_id, request_id))
+            await (engine or self._engine).abort(
+                self._rid_map.get(request_id, request_id))
         except Exception:
             pass
 
-    async def _produce(self, q: _queue.Queue, request_id: str, prompt: str,
-                       cache, images, audios, sampling, features):
-        """私有循环内的生产者：喂引擎、逐段折算 GenChunk 入队。队列有界=背压；
-        put 在私有循环线程里阻塞是可接受的（该循环只服务生成）。"""
+    async def _produce(self, q: _StreamBridge, request_id: str, prompt: str,
+                       cache, images, audios, sampling, features, engine):
+        """私有循环内的生产者：喂引擎、逐段折算 GenChunk 入队。
+        满队列只挂起本任务，abort、引擎心跳及其他请求仍可运行。"""
+        task = asyncio.current_task()
+        self._producers[request_id] = (task, q)
         try:
             from vllm import SamplingParams
 
@@ -398,7 +476,7 @@ class CudaVLLMBackend:
                     gi["multi_modal_data"] = mm
                 prev_text = ""
                 comp = None
-                async for out in self._engine.generate(gi, sp_, rid):
+                async for out in engine.generate(gi, sp_, rid):
                     comp = out.outputs[0]
                     if t_first is None and comp.token_ids:
                         t_first = time.time()
@@ -414,7 +492,7 @@ class CudaVLLMBackend:
                     cached = getattr(out, "num_cached_tokens", None)
                     if cached is not None:
                         extra["reused_prefix"] = int(cached)   # T4R 仪表：0 也回吐
-                    q.put(GenChunk(
+                    await q.put(GenChunk(
                         text=seg,
                         delta=seg if features.get("want_delta") else None,
                         prompt_tokens=n_prompt,
@@ -454,7 +532,7 @@ class CudaVLLMBackend:
                             forced, add_special_tokens=False)
                         all_gen_ids += forced_ids
                         base_tokens = len(all_gen_ids)
-                        q.put(GenChunk(
+                        await q.put(GenChunk(
                             text=forced,
                             delta=forced if features.get("want_delta") else None,
                             prompt_tokens=n_prompt,
@@ -485,11 +563,28 @@ class CudaVLLMBackend:
             if st_used and guard is not None and all_gen_ids:
                 guard.masked_positions = _count_constrained_tokens(
                     all_gen_ids, self._tokenizer, constraint)
-            q.put(None)
+            await q.put(None)
+        except asyncio.CancelledError:
+            raise
         except BaseException as e:
-            q.put(e)
+            await q.put(e)
         finally:
-            self._rid_map.pop(request_id, None)
+            try:
+                if q.closed or task.cancelling():
+                    # close can mark the bridge while the producer is running,
+                    # before its queued Task.cancel callback executes. Cleanup
+                    # must survive that later cancellation and stay owned until
+                    # the engine has finished aborting, including during shutdown.
+                    cleanup = asyncio.create_task(self._abort(request_id, engine))
+                    while not cleanup.done():
+                        try:
+                            await asyncio.shield(cleanup)
+                        except asyncio.CancelledError:
+                            continue
+                    cleanup.result()
+            finally:
+                self._rid_map.pop(request_id, None)
+                self._producers.pop(request_id, None)
 
     @staticmethod
     def _peak_gb() -> float:

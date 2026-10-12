@@ -1,9 +1,9 @@
 import { Cpu, Loader2, PauseCircle, Clock, Square } from "lucide-react"
 
-import { cancelTask } from "@/api/agent"
+import { useChatStore } from "@/store/useChatStore"
 import { cn } from "@/lib/utils"
 import { convTitle, type Conversation } from "@/lib/agent-data"
-import { useT } from "@/store/useUiStore"
+import { useT, type SnapshotState, type SnapshotError } from "@/store/useUiStore"
 import type { TaskHandleInfo, TaskListResponse } from "@/types/agent-api"
 
 /**
@@ -13,17 +13,21 @@ import type { TaskHandleInfo, TaskListResponse } from "@/types/agent-api"
  */
 export function SchedulerStrip({
   tasks,
+  tasksState,
+  tasksError,
   conversations,
   activeId,
   onSelect,
 }: {
   tasks: TaskListResponse | null
+  tasksState: SnapshotState
+  tasksError: SnapshotError
   conversations: Conversation[]
   activeId: string
   onSelect: (id: string) => void
 }) {
   const t = useT()
-  const busy = (tasks?.running?.length ?? 0) > 0
+  const busy = tasksState === "fresh" && (tasks?.running?.length ?? 0) > 0
   const items = tasks?.tasks ?? []
 
   function label(id: string): string {
@@ -34,7 +38,8 @@ export function SchedulerStrip({
   function kindLabel(kind: string): string {
     if (kind === "chat") return t.scheduler.kindChat
     if (kind === "resume") return t.scheduler.kindResume
-    if (kind === "summary") return t.scheduler.kindSummary
+    if (kind === "summarize") return t.scheduler.kindSummary
+    if (kind === "prewarm") return t.scheduler.kindPrewarm
     return kind
   }
 
@@ -51,10 +56,17 @@ export function SchedulerStrip({
             )}
           />
           <span className="text-[11px] text-muted-foreground">
-            {busy ? t.scheduler.busy : t.scheduler.idle}
+            {tasksState === "unknown" ? t.scheduler.unknown
+              : tasksState === "stale" ? t.scheduler.stale
+              : busy ? t.scheduler.busy : t.scheduler.idle}
           </span>
         </span>
       </div>
+      {tasksState !== "fresh" && (
+        <p className="mt-2 px-0.5 text-[11px] text-muted-foreground">
+          {tasksError === "unauthorized" ? t.scheduler.unauthorized : t.scheduler.unavailable}
+        </p>
+      )}
 
       {/* 计数摘要（有值才显示，避免噪声） */}
       {tasks && (tasks.queued > 0 || tasks.suspended > 0) && (
@@ -68,11 +80,11 @@ export function SchedulerStrip({
         </div>
       )}
 
-      {items.length === 0 ? (
+      {items.length === 0 ? (tasksState === "fresh" && (
         <p className="mt-2 px-0.5 text-[11px] leading-relaxed text-muted-foreground/70">
           {t.scheduler.noTasks}
         </p>
-      ) : (
+      )) : (
         <ul className="mt-2 flex flex-col gap-1">
           {items.map((task) => (
             <TaskRow
@@ -81,6 +93,7 @@ export function SchedulerStrip({
               title={label(task.session_id)}
               kind={kindLabel(task.kind)}
               isActive={task.session_id === activeId}
+              controllable={tasksState === "fresh"}
               onClick={() => onSelect(task.session_id)}
             />
           ))}
@@ -110,20 +123,25 @@ function TaskRow({
   title,
   kind,
   isActive,
+  controllable,
   onClick,
 }: {
   task: TaskHandleInfo
   title: string
   kind: string
   isActive: boolean
+  controllable: boolean
   onClick: () => void
 }) {
   const t = useT()
+  const control = useChatStore((s) => s.controlRequests[task.session_id])
+  const pending = control && ["sending", "accepted"].includes(control.status)
   const running = task.status === "running"
   const suspended = task.status === "suspended"
-  // worker 级中止入口：运行中/排队中都可杀（排队轮已持会话锁，准入后第一个检查点即取消）。
+  // Journal-backed running/queued turns can request stopping future execution at a checkpoint.
   // 会话窗口不可用时（如输入被中断丢失后的空窗口）这里是唯一的手动中止通道。
-  const stoppable = running || task.status === "queued"
+  const hasNoTurn = task.kind === "summarize" || task.kind === "prewarm"
+  const stoppable = !hasNoTurn && (running || task.status === "queued")
 
   const icon = running ? (
     <Loader2 className="size-3 shrink-0 animate-spin text-chart-1" />
@@ -142,7 +160,7 @@ function TaskRow({
   function handleStop(e: React.MouseEvent) {
     e.stopPropagation()
     if (!window.confirm(t.confirm.stopWorkerTask)) return
-    void cancelTask(task.session_id).catch(() => {})
+    void useChatStore.getState().stopGenerating(task.session_id, "global")
   }
 
   return (
@@ -170,15 +188,18 @@ function TaskRow({
           <button
             type="button"
             onClick={handleStop}
-            title={t.scheduler.stopTask}
+            disabled={!controllable || !!pending}
+            title={t.input.stopTooltip}
             className="absolute right-1.5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-destructive/15 hover:text-destructive"
           >
             {/* 实心方块＝通用「停止」符号；描边空心方框会被误读成半成品/复选框 */}
             <Square className="size-2.5 fill-current" />
-            <span className="sr-only">{t.scheduler.stopTask}</span>
+            <span className="sr-only">{t.input.stopTooltip}</span>
           </button>
         )}
       </div>
+      {control && <p role="status" className="pl-6 text-[10px] text-muted-foreground">{control.message}</p>}
+      {hasNoTurn && <p className="pl-6 text-[10px] text-muted-foreground">{t.controls.noTurn}</p>}
       {duration && (
         <p className="pl-6 text-[10px] text-muted-foreground/60">{duration}</p>
       )}

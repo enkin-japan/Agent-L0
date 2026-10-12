@@ -14,6 +14,12 @@
   config 的通道）。
 """
 from pathlib import Path
+import asyncio
+import queue
+import sys
+import threading
+import time
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -186,3 +192,452 @@ def test_count_constrained_tokens_instrument():
     assert _count_constrained_tokens([11, 12], _FakeTok(), spec) == 0
     bad = {"begin": "nope", "end": "<tool_call|>", "schema": {}}
     assert _count_constrained_tokens(ids, _FakeTok(), bad) == 0
+
+
+# ---- ⑦ CPU 假引擎：同步消费桥的背压、结束与取消 ----
+
+class _FakeSamplingParams:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+
+def _completion(text, ids=None, finish=None):
+    return SimpleNamespace(outputs=[SimpleNamespace(
+        text=text, token_ids=ids or list(range(len(text))), finish_reason=finish)],
+        num_cached_tokens=0)
+
+
+@pytest.fixture
+def cuda_stream(monkeypatch):
+    """仅启动假引擎的私有循环；失败也排空队列，避免旧死锁遗留线程。"""
+    from framework.backends.cuda import backend as mod
+    queues = []
+    blocked = threading.Event()
+    original_queue = queue.Queue
+
+    class ObservedQueue(original_queue):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            queues.append(self)
+
+        def put(self, item, *args, **kwargs):
+            if self.full():
+                blocked.set()
+            return super().put(item, *args, **kwargs)
+
+    monkeypatch.setattr(mod._queue, "Queue", ObservedQueue)
+    monkeypatch.setitem(sys.modules, "vllm", SimpleNamespace(
+        SamplingParams=_FakeSamplingParams))
+    b = CudaVLLMBackend()
+    b._tokenizer = SimpleNamespace(encode=lambda text, **kw: [100, 101])
+    b._peak_gb = lambda: 0.0  # 不导入 torch，不探测 GPU
+    b._loop = asyncio.new_event_loop()
+    b._thread = threading.Thread(target=b._loop.run_forever, daemon=True)
+    b._thread.start()
+    streams = []
+
+    def start(engine, **kwargs):
+        b._engine = engine
+        stream = b.stream_generate("synthetic", cache=b.new_cache(), **kwargs)
+        streams.append(stream)
+        return stream
+
+    yield SimpleNamespace(backend=b, start=start, queues=queues, blocked=blocked)
+    for stream in streams:
+        stream.close()
+    # The original regression blocks the loop in Queue.put: release it before
+    # asking the loop to cancel pending fake tasks and stop.
+    deadline = time.monotonic() + 2
+    while b._thread.is_alive() and time.monotonic() < deadline:
+        for q in queues:
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                pass
+        if not b._rid_map:
+            break
+        time.sleep(0.001)
+    if b._thread.is_alive():
+        async def cleanup():
+            tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        asyncio.run_coroutine_threadsafe(cleanup(), b._loop).result(timeout=2)
+        b._loop.call_soon_threadsafe(b._loop.stop)
+    b._thread.join(timeout=2)
+    assert not b._thread.is_alive(), "fake CUDA loop cleanup failed"
+    for q in queues:
+        while not q.empty():
+            q.get_nowait()
+    b._loop.close()
+
+
+class _BurstEngine:
+    def __init__(self, count=300, error=False):
+        self.count = count
+        self.error = error
+        self.aborted = threading.Event()
+        self.stopped = threading.Event()
+        self.produced = 0
+        self.requests = []
+
+    async def generate(self, prompt, params, rid):
+        self.requests.append(rid)
+        for i in range(1, self.count + 1):
+            self.produced += 1
+            yield _completion("x" * i)
+            await asyncio.sleep(0)
+        if self.error:
+            raise ValueError("synthetic engine failure")
+
+    async def abort(self, rid):
+        self.abort_rid = rid
+        self.aborted.set()
+
+    def shutdown(self):
+        self.stopped.set()
+
+
+@pytest.mark.parametrize("count,error", [(300, False), (257, False), (257, True)])
+def test_cuda_full_queue_close_releases_loop_abort_and_next_request(cuda_stream, count, error):
+    """正文、结束哨兵和异常投递满队列都必须能取消；队列保持256上界。"""
+    engine = _BurstEngine(count, error)
+    stream = cuda_stream.start(engine)
+    assert next(stream).text == "x"
+    assert cuda_stream.blocked.wait(2), "producer never reached full queue"
+    q = cuda_stream.queues[0]
+    assert q.maxsize == q.qsize() == 256
+    assert engine.produced <= 258  # 一条已消费 + 256已排队 + 一条待投递
+    heartbeat = threading.Event()
+    cuda_stream.backend._loop.call_soon_threadsafe(heartbeat.set)
+    assert heartbeat.wait(0.3), "full queue starved private event loop"
+    stream.close()
+    assert engine.aborted.wait(1), "consumer close did not abort active request"
+    assert engine.abort_rid == engine.requests[-1]
+    next_engine = _BurstEngine(2)
+    next_stream = cuda_stream.start(next_engine)
+    assert [chunk.text for chunk in next_stream] == ["x", "x"]
+    assert not next_engine.aborted.is_set()
+
+
+def test_cuda_shutdown_releases_full_producer(cuda_stream):
+    engine = _BurstEngine()
+    stream = cuda_stream.start(engine)
+    next(stream)
+    assert cuda_stream.blocked.wait(2)
+    cuda_stream.backend.shutdown()
+    assert engine.stopped.wait(1), "shutdown queued behind blocking producer"
+    assert engine.aborted.wait(1), "shutdown did not abort in-flight request"
+    cuda_stream.backend._thread.join(timeout=1)
+    assert not cuda_stream.backend._thread.is_alive()
+
+
+def test_cuda_shutdown_wakes_consumer_waiting_for_first_chunk(cuda_stream):
+    class WaitingEngine(_BurstEngine):
+        async def generate(self, prompt, params, rid):
+            self.requests.append(rid)
+            self.started.set()
+            await asyncio.Event().wait()
+            yield _completion("unreachable")
+
+        async def abort(self, rid):
+            await asyncio.sleep(0.02)  # consumer wake/重复shutdown不应再取消abort
+            await super().abort(rid)
+
+    engine = WaitingEngine()
+    engine.started = threading.Event()
+    stream = cuda_stream.start(engine)
+    outcome = []
+    done = threading.Event()
+
+    def consume():
+        try:
+            next(stream)
+        except RuntimeError as error:
+            outcome.append(str(error))
+        finally:
+            done.set()
+
+    consumer = threading.Thread(target=consume, daemon=True)
+    consumer.start()
+    assert engine.started.wait(1)
+    cuda_stream.backend.shutdown()
+    cuda_stream.backend.shutdown()
+    assert done.wait(1), "shutdown left consumer in 600s Queue.get"
+    consumer.join(timeout=1)
+    assert outcome and "shutdown" in outcome[0]
+    assert engine.aborted.wait(1)
+    assert engine.stopped.wait(1)
+
+
+@pytest.mark.parametrize("count", [0, 1, 255, 256, 257, 300])
+def test_cuda_stream_capacity_boundaries_complete_in_order(cuda_stream, count):
+    engine = _BurstEngine(count)
+    chunks = list(cuda_stream.start(engine))
+    assert [c.text for c in chunks] == ["x"] * count
+    assert [c.generation_tokens for c in chunks] == list(range(1, count + 1))
+    assert not engine.aborted.is_set()
+    assert not cuda_stream.backend._rid_map
+
+
+def test_cuda_close_while_forced_thinking_end_waits_for_space(cuda_stream):
+    class ThinkingBurst(_BurstEngine):
+        async def generate(self, prompt, params, rid):
+            self.requests.append(rid)
+            for i in range(1, 258):
+                yield _completion("x" * i, list(range(i)),
+                                  "length" if i == 257 else None)
+                await asyncio.sleep(0)
+
+    engine = ThinkingBurst()
+    stream = cuda_stream.start(engine, sampling={"max_tokens": 1000},
+        features={"enable_thinking": True, "thinking_budget": 257,
+                  "thinking_end_token": "</think>"})
+    next(stream)
+    assert cuda_stream.blocked.wait(2)
+    stream.close()
+    assert engine.aborted.wait(1)
+    assert len(engine.requests) == 1, "cancelled thinking phase started phase two"
+
+
+def test_cuda_stream_order_exception_and_cache(cuda_stream):
+    engine = _BurstEngine(3, error=True)
+    stream = cuda_stream.start(engine, features={"want_delta": True})
+    chunks = [next(stream) for _ in range(3)]
+    assert [c.text for c in chunks] == ["x"] * 3
+    assert [c.delta for c in chunks] == ["x"] * 3
+    assert [c.generation_tokens for c in chunks] == [1, 2, 3]
+    assert all(c.extra == {"reused_prefix": 0} for c in chunks)
+    with pytest.raises(ValueError, match="synthetic engine failure"):
+        next(stream)
+
+
+def test_cuda_two_phase_forced_close_order_and_cache(cuda_stream):
+    class TwoPhase(_BurstEngine):
+        async def generate(self, prompt, params, rid):
+            self.requests.append((prompt, params.kwargs, rid))
+            if rid.endswith("-p2"):
+                yield _completion("answer", [20, 21], "stop")
+            else:
+                yield _completion("thought", [10, 11], "length")
+
+    engine = TwoPhase()
+    b = cuda_stream.backend
+    b._engine = engine
+    cache = b.new_cache()
+    chunks = list(b.stream_generate("synthetic", cache=cache,
+        sampling={"max_tokens": 8}, features={"want_delta": True,
+            "enable_thinking": True, "thinking_budget": 2,
+            "thinking_end_token": "</think>"}))
+    assert [c.text for c in chunks] == ["thought", "\n</think>", "answer"]
+    assert [c.generation_tokens for c in chunks] == [2, 4, 6]
+    assert chunks[1].extra == {"thinking_budget_forced_close": True}
+    assert engine.requests[0][1]["stop"] == ["</think>"]
+    assert engine.requests[1][1]["max_tokens"] == 4
+    assert engine.requests[1][0]["prompt_token_ids"] == [100, 101, 10, 11, 100, 101]
+    assert cache.token_ids == [100, 101, 10, 11, 100, 101, 20, 21]
+
+
+def test_cuda_two_phase_close_aborts_second_request(cuda_stream):
+    class TwoPhaseBurst(_BurstEngine):
+        async def generate(self, prompt, params, rid):
+            if not rid.endswith("-p2"):
+                self.requests.append(rid)
+                yield _completion("</think>", [10], "stop")
+            else:
+                async for chunk in super().generate(prompt, params, rid):
+                    yield chunk
+
+    engine = TwoPhaseBurst()
+    stream = cuda_stream.start(engine, sampling={"max_tokens": 1000},
+        features={"enable_thinking": True, "thinking_budget": 2,
+                  "thinking_end_token": "</think>"})
+    assert next(stream).text == "</think>"
+    assert cuda_stream.blocked.wait(2)
+    stream.close()
+    assert engine.aborted.wait(1)
+    assert engine.abort_rid == engine.requests[-1]
+    assert engine.abort_rid.endswith("-p2")
+
+
+def test_cuda_running_producer_waits_for_abort_despite_queued_cancel(cuda_stream, monkeypatch):
+    from framework.backends.cuda.backend import _StreamBridge
+    entered, release, abort_started = threading.Event(), threading.Event(), threading.Event()
+    finish_abort = asyncio.Event()
+
+    class Engine(_BurstEngine):
+        async def abort(self, rid):
+            abort_started.set()
+            await finish_abort.wait()
+            await super().abort(rid)
+
+    engine = Engine()
+    original = _StreamBridge.put
+    calls = 0
+
+    async def put(bridge, item):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            entered.set()
+            assert release.wait(2)
+        return await original(bridge, item)
+
+    monkeypatch.setattr(_StreamBridge, "put", put)
+    stream = cuda_stream.start(engine)
+    try:
+        next(stream)
+        assert entered.wait(1)
+        stream.close()
+        release.set()
+        assert abort_started.wait(1)
+        # Drain the already queued cancel callback before inspecting ownership.
+        async def heartbeat():
+            await asyncio.sleep(0)
+        asyncio.run_coroutine_threadsafe(heartbeat(), cuda_stream.backend._loop).result(timeout=1)
+        assert cuda_stream.backend._producers, "cleanup lost ownership before abort finished"
+        assert cuda_stream.backend._rid_map
+        cuda_stream.backend._loop.call_soon_threadsafe(finish_abort.set)
+        assert engine.aborted.wait(1)
+    finally:
+        release.set()
+        cuda_stream.backend._loop.call_soon_threadsafe(finish_abort.set)
+
+
+def test_cuda_close_does_not_interrupt_abort_cleanup(cuda_stream, monkeypatch):
+    from framework.backends.cuda.backend import _StreamBridge
+    started = threading.Event()
+    release = asyncio.Event()
+
+    class Engine(_BurstEngine):
+        async def abort(self, rid):
+            started.set()
+            await release.wait()
+            await super().abort(rid)
+
+    engine = Engine()
+    stream = cuda_stream.start(engine)
+    next(stream)
+    assert cuda_stream.blocked.wait(2)
+    original_close = _StreamBridge.close
+
+    def close(self):
+        original_close(self)
+        assert started.wait(1), "producer did not enter abort cleanup"
+
+    monkeypatch.setattr(_StreamBridge, "close", close)
+    stream.close()
+    b = cuda_stream.backend
+
+    async def tracked():
+        return bool(b._producers), bool(b._rid_map)
+
+    try:
+        assert asyncio.run_coroutine_threadsafe(tracked(), b._loop).result(1) == (True, True)
+        b.shutdown()
+        assert not engine.stopped.wait(0.05), "shutdown skipped unfinished abort"
+    finally:
+        b._loop.call_soon_threadsafe(release.set)
+    assert engine.aborted.wait(1), "abort cancelled midway through consumer close"
+    assert engine.stopped.wait(1)
+
+
+def test_cuda_shutdown_during_stream_admission_refuses_stopped_loop(cuda_stream, monkeypatch):
+    from framework.backends.cuda import backend as mod
+    entered = threading.Event()
+    release = threading.Event()
+    done = threading.Event()
+    bridges = []
+    original_init = mod._StreamBridge.__init__
+
+    def paused_init(self, loop):
+        original_init(self, loop)
+        bridges.append(self)
+        entered.set()
+        assert release.wait(2)
+
+    monkeypatch.setattr(mod._StreamBridge, "__init__", paused_init)
+    engine = _BurstEngine(1)
+    stream = cuda_stream.start(engine)
+    outcome = []
+
+    def consume():
+        try:
+            outcome.append(next(stream))
+        except RuntimeError as error:
+            outcome.append(str(error))
+        finally:
+            done.set()
+
+    consumer = threading.Thread(target=consume, daemon=True)
+    consumer.start()
+    assert entered.wait(1)
+    b = cuda_stream.backend
+    try:
+        b.shutdown()
+        assert engine.stopped.wait(1)
+        b._thread.join(1)
+        assert not b._thread.is_alive()
+        release.set()
+        assert done.wait(0.2), "stream submitted after shutdown and waited 600s"
+        assert len(outcome) == 1 and isinstance(outcome[0], str)
+        assert "shutdown" in outcome[0]
+        assert not engine.requests
+    finally:
+        release.set()
+        for bridge in bridges:
+            bridge.close()  # 唤醒失败实现中已进入get的消费者，不遗留线程
+        consumer.join(1)
+
+
+def test_cuda_admitted_stream_submits_before_shutdown_can_stop_loop(cuda_stream, monkeypatch):
+    from framework.backends.cuda import backend as mod
+    entered = threading.Event()
+    release = threading.Event()
+    consumed = threading.Event()
+    shutdown_returned = threading.Event()
+    bridges = []
+    original_submit = asyncio.run_coroutine_threadsafe
+
+    def paused_submit(coro, loop):
+        if coro.cr_code.co_name == "_produce":
+            bridges.append(coro.cr_frame.f_locals["q"])
+            entered.set()
+            assert release.wait(2)
+        return original_submit(coro, loop)
+
+    monkeypatch.setattr(mod.asyncio, "run_coroutine_threadsafe", paused_submit)
+    engine = _BurstEngine(1)
+    stream = cuda_stream.start(engine)
+    b = cuda_stream.backend
+
+    def consume():
+        try:
+            next(stream)
+        except RuntimeError:
+            pass  # shutdown允许唤醒已受理消费者
+        finally:
+            consumed.set()
+
+    def stop():
+        b.shutdown()
+        shutdown_returned.set()
+
+    consumer = threading.Thread(target=consume, daemon=True)
+    stopper = threading.Thread(target=stop, daemon=True)
+    consumer.start()
+    assert entered.wait(1)
+    stopper.start()
+    try:
+        assert not engine.stopped.wait(0.05), "shutdown overtook an admitted submission"
+        release.set()
+        assert shutdown_returned.wait(1)
+        assert consumed.wait(1), "admitted consumer left waiting on stopped loop"
+        assert engine.stopped.wait(1)
+    finally:
+        release.set()
+        for bridge in bridges:
+            bridge.close()
+        consumer.join(1)
+        stopper.join(1)

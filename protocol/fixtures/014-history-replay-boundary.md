@@ -1,0 +1,1 @@
+历史读取前 replay_after=1；/turn 返回时轮次已完结(last_seq=4)。恢复不得用4覆盖下界。历史可能已含该轮，重放 queued/ended 仍只保留一份问答。若 disk terminal 只有 status/turn_index 且历史还缺该轮，返回同一 history→turn→events 入口；不可渲染空答案。restore.json 由真实 Web/Swift store 假传输时序测试共用，events/expected 由双端 reducer 回放。

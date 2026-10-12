@@ -1,0 +1,21 @@
+{
+  "turn_state": "none",
+  "transcript": [
+    {
+      "role": "user",
+      "content": "保留的输入"
+    },
+    {
+      "role": "assistant",
+      "content": "保留的答案"
+    }
+  ],
+  "preview": {
+    "prompt": "",
+    "text": "",
+    "thinking": "",
+    "steps": [],
+    "task": null
+  },
+  "pending_tools": []
+}

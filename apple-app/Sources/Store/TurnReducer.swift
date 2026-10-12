@@ -122,10 +122,12 @@ enum TurnReducer {
         case "turn_ended":
             // 唯一权威终态:预览撤下,轮次消息(user 前置 + response 原样)并入 transcript
             var transcript = s.transcript
-            transcript.append(.object(["role": .string("user"),
-                                       "content": .string(env.str("prompt"))]))
-            if case .array(let response)? = d["response"] {
-                transcript.append(contentsOf: response)
+            if d["discarded"] != .bool(true) {
+                transcript.append(.object(["role": .string("user"),
+                                           "content": .string(env.str("prompt"))]))
+                if case .array(let response)? = d["response"] {
+                    transcript.append(contentsOf: response)
+                }
             }
             s = NormalizedState()
             s.transcript = transcript

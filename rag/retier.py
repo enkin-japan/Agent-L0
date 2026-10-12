@@ -17,13 +17,15 @@
      （中途计算面又换档/重启的窗口不许静默盖过）。
 
 安全（与 purge 端点同纪律）：wipe 只清向量库与 FTS 索引（派生物），原文
-storage/raw_files 是唯一真相、一个字节不动；分类路由描述先备份
-categories_backup.json 再清库。
+storage/raw_files 是唯一真相、一个字节不动；分类路由描述与过时标记分别耐久备份
+categories_backup.json / stale_backup.json 再清库。
 
 本模块**零第三方依赖**（backend venv 无 chromadb 也可金测试）：chroma/FTS/
 计算面/入库流水线全部由 rag_server 注入。
 """
 import json
+import os
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -64,7 +66,8 @@ class RetierManager:
                                                stale_at}} + 快照失败的库数（阶段复审
                                                m4：治理元数据只活在切片 metadata 里，
                                                不抢救就随 wipe 归零；哪个库快照失败
-                                               要计数上报，静默丢标记正是 m4 要防的）
+                                               要计数上报并拒绝清库，静默丢标记正是
+                                               m4 / R14 要防的）
       restore_stale(mapping) -> list[str]      重灌后按 source_path 重挂标记；返回没
                                                找到切片的路径（重灌中被自动路由迁移
                                                改了路径、或该篇重灌失败）
@@ -86,6 +89,8 @@ class RetierManager:
                  restore_stale: Callable[[dict], List[str]],
                  categories_backup: Path,
                  rebuild_marker: Path,
+                 stale_backup: Optional[Path] = None,
+                 write_drain_timeout: float = 300.0,
                  logger=None):
         self._fetch_live_identity = fetch_live_identity
         self._read_stamp = read_stamp
@@ -99,10 +104,35 @@ class RetierManager:
         self._restore_stale = restore_stale
         self._categories_backup = Path(categories_backup)
         self._rebuild_marker = Path(rebuild_marker)
+        self._stale_backup = Path(stale_backup or self._categories_backup.with_name("stale_backup.json"))
         self._log = logger
         self._lock = threading.Lock()          # 单飞：任一时刻至多一个重建
         self._state_lock = threading.Lock()    # progress 读写互斥（GET 与后台线程并发）
         self._progress = {"state": "idle"}
+        # Reserve at HTTP acceptance, before FastAPI starts BackgroundTasks. A running
+        # task and an accepted-but-delayed task both own one ticket until completion.
+        self._writes = threading.Condition()
+        self._accepted_writes = set()
+        self._accepting_writes = True
+        # BackgroundTasks may never start if sending its response is cancelled.
+        # Bound the wait and fail before inventory/wipe; never bypass the drain.
+        self._write_drain_timeout = write_drain_timeout
+        self._recovery_lock = threading.Lock()  # serialize edits to the existing backup
+
+    def acquire_write(self, op: str):
+        with self._writes:
+            if not self._accepting_writes or self.progress().get("state") == "running":
+                raise RetierRefused(409, f"知识库换档重建进行中，暂不受理{op}——请稍后再来。")
+            ticket = object()
+            self._accepted_writes.add(ticket)
+            self._set(writes_pending=len(self._accepted_writes))
+            return ticket
+
+    def release_write(self, ticket) -> None:
+        with self._writes:
+            self._accepted_writes.discard(ticket)
+            self._set(writes_pending=len(self._accepted_writes))
+            self._writes.notify_all()
 
     # ---------------- 状态面 ----------------
 
@@ -168,6 +198,8 @@ class RetierManager:
                      f"无需重建。修库场景请显式传 force=true。")
         if not self._lock.acquire(blocking=False):
             raise RetierRefused(409, "已有重建在跑（GET 本端点看进度）")
+        with self._writes:
+            self._accepting_writes = False
         with self._state_lock:
             self._progress = {
                 "state": "running", "phase": "starting",
@@ -181,19 +213,203 @@ class RetierManager:
                 "to": ident.get("embed_repo"),
                 "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             }
-        t = threading.Thread(target=self._run, args=(ident,), name="rag-retier", daemon=True)
         try:
+            t = threading.Thread(target=self._run, args=(ident,), name="rag-retier", daemon=True)
             t.start()
         except Exception as e:
             # 线程都起不来：单飞锁必须当场还回去，否则本进程余生全是 409（首评 S7）
-            self._lock.release()
             self._set(state="failed", error=f"重建线程启动失败：{e}")
+            with self._writes:
+                self._accepting_writes = True
+            self._lock.release()
             raise RetierRefused(500, f"重建线程启动失败：{e}")
         return self.progress()
 
     def _set(self, **kw) -> None:
         with self._state_lock:
             self._progress.update(kw)
+
+    @staticmethod
+    def _atomic_json(path: Path, data) -> None:
+        """Persist before destructive work: file fsync, atomic replace, directory fsync."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                             prefix=path.name + ".", delete=False) as f:
+                tmp = Path(f.name)
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            tmp.replace(path)
+            fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        finally:
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
+
+    @staticmethod
+    def raw_identity(path: Path) -> Optional[str]:
+        """Hard-link moves preserve this identity; path reuse/content changes do not."""
+        try:
+            stat = path.stat()
+            if not path.is_file():
+                return None
+            return f"{stat.st_dev}:{stat.st_ino}:{stat.st_mtime_ns}:{stat.st_size}"
+        except OSError:
+            return None
+
+    def _read_stale_recovery(self) -> dict:
+        if not self._rebuild_marker.exists() or not self._stale_backup.exists():
+            return {}
+        saved = json.loads(self._stale_backup.read_text(encoding="utf-8"))
+        if not isinstance(saved, dict) or any(not isinstance(v, dict) for v in saved.values()):
+            raise RuntimeError("过时标记耐久备份损坏，拒绝清库；请保留备份并修复后重试")
+        # Keys remain stable recovery slots. Never collapse two generations onto a
+        # move destination: a deleted document and its new occupant are different.
+        return saved
+
+    def _record_path(self, key: str, meta: dict) -> Optional[str]:
+        source = meta.get("_source_path", key)
+        identity = meta.get("_raw_id")
+        if not identity:
+            if meta.get("_deleted") or meta.get("_moved_to"):
+                raise RuntimeError(f"原文操作缺少身份，无法安全认领恢复资料: {source}")
+            identity = self.raw_identity(Path(source))
+            if not identity:
+                raise RuntimeError(f"原文缺失，无法建立恢复身份，拒绝清库: {source}")
+            meta["_raw_id"] = identity
+        if self.raw_identity(Path(source)) == identity:
+            return source
+        moved = meta.get("_moved_to")
+        if moved and self.raw_identity(Path(moved)) == identity:
+            return moved
+        if meta.get("_deleted"):
+            return None
+        raise RuntimeError(f"原文身份变化或无法确认迁移，恢复资料已保留: {source}")
+
+    def _find_record(self, saved: dict, source: str, *, missing: bool = False):
+        identity = self.raw_identity(Path(source))
+        if identity:
+            for key, meta in saved.items():
+                active = self._record_path(key, meta) if meta.get("_raw_id") == identity else None
+                if active is not None and Path(active).resolve() == Path(source).resolve():
+                    return key
+            for key, meta in saved.items():
+                origin = meta.get("_source_path", key)
+                if (not meta.get("_raw_id") and not meta.get("_deleted")
+                        and not meta.get("_moved_to") and Path(origin).resolve() == Path(source).resolve()):
+                    return key
+        elif missing:
+            for key, meta in saved.items():
+                if key == source or meta.get("_source_path", key) == source:
+                    return key
+        return None
+
+    def _new_record(self, saved: dict, source: str, meta: dict):
+        identity = self.raw_identity(Path(source))
+        key = source if source not in saved else f"{source}#raw={identity}"
+        if key in saved:
+            raise RuntimeError(f"恢复记录身份冲突，拒绝覆盖: {source}")
+        saved[key] = {**meta, "_source_path": source}
+        if identity:
+            saved[key]["_raw_id"] = identity
+        return key
+
+    def record_stale_change(self, source: str, reason: str, stale_at: str,
+                            *, live_matches: bool) -> bool:
+        with self._recovery_lock:
+            if not self._rebuild_marker.exists():
+                return False
+            saved = self._read_stale_recovery()
+            key = self._find_record(saved, source, missing=True)
+            if key is None:
+                if not live_matches:
+                    return False
+                key = self._new_record(saved, source, {})
+            if saved[key].get("_deleted") and self._record_path(key, saved[key]) is None:
+                return False
+            # Reason changes retain the entire in-flight removal/move identity.
+            saved[key].update(stale=reason, stale_at=stale_at, _override=True)
+            if not saved[key].get("_raw_id"):
+                identity = self.raw_identity(Path(source))
+                if identity:
+                    saved[key]["_raw_id"] = identity
+            self._atomic_json(self._stale_backup, saved)
+            return True
+
+    def record_raw_removal(self, path: Path, *, directory: bool = False) -> None:
+        with self._recovery_lock:
+            saved = self._read_stale_recovery()
+            changed = False
+            for key, meta in saved.items():
+                source = self._record_path(key, meta)
+                if source is None:
+                    continue
+                source_path = Path(source).resolve()
+                target = path.resolve()
+                if source_path == target or (directory and source_path.is_relative_to(target)):
+                    identity = meta.get("_raw_id") or self.raw_identity(Path(source))
+                    if not identity:
+                        raise RuntimeError(f"无法确认待删除原文身份，恢复资料已保留: {source}")
+                    meta.update(_deleted=True, _override=True, _raw_id=identity, _source_path=source)
+                    meta.pop("_moved_to", None)
+                    changed = True
+            if changed:
+                self._atomic_json(self._stale_backup, saved)
+
+    def record_raw_move(self, source: Path, destination: Path) -> None:
+        with self._recovery_lock:
+            saved = self._read_stale_recovery()
+            # A legacy missing original must not acquire the identity of an
+            # incoming document before the next rebuild's pre-wipe validation.
+            for old_key, meta in saved.items():
+                origin = Path(meta.get("_source_path", old_key))
+                if not meta.get("_raw_id") and origin.resolve() == destination.resolve():
+                    self._record_path(old_key, meta)
+            key = self._find_record(saved, str(source))
+            if key is not None:
+                identity = saved[key].get("_raw_id") or self.raw_identity(source)
+                if not identity:
+                    raise RuntimeError(f"无法确认待迁移原文身份，恢复资料已保留: {source}")
+                saved[key].update(_source_path=str(source), _moved_to=str(destination), _raw_id=identity)
+                saved[key].pop("_deleted", None)
+                self._atomic_json(self._stale_backup, saved)
+
+    def _restore_mapping(self, saved: dict) -> dict:
+        out = {}
+        for key, meta in saved.items():
+            source = self._record_path(key, meta)
+            if source is None:
+                continue
+            if source in out:
+                raise RuntimeError(f"多条恢复记录指向同一原文，拒绝猜测归属: {source}")
+            out[source] = {"stale": meta.get("stale", ""), "stale_at": meta.get("stale_at", "")}
+            if meta.get("_raw_id"):
+                out[source]["_raw_id"] = meta["_raw_id"]
+        return out
+
+    def _backup_stale(self, current: dict) -> dict:
+        with self._recovery_lock:
+            saved = self._read_stale_recovery()
+            for source, meta in current.items():
+                key = self._find_record(saved, source, missing=True)
+                if key is None:
+                    self._new_record(saved, source, meta)
+                elif not saved[key].get("_raw_id") and not saved[key].get("_deleted") and not saved[key].get("_moved_to"):
+                    identity = self.raw_identity(Path(source))
+                    if identity:
+                        saved[key]["_raw_id"] = identity
+                # Existing recovery records are authoritative while interrupted:
+                # governance writes update them before live mutations. Old chunks
+                # at a reused path carry no generation proof and cannot override.
+            mapping = self._restore_mapping(saved)
+            self._atomic_json(self._stale_backup, saved)
+            return mapping
 
     def _backup_categories(self, cats: List[dict], files: List[tuple]) -> List[dict]:
         """备份分类路由描述并回填缺口。防线（首评 C3/S5 + 阶段复审 m1 + 修正评审 C1）：
@@ -231,15 +447,18 @@ class RetierManager:
         to_disk = {c["db_name"]: c for c in old}
         to_disk.update({c.get("db_name"): c for c in cats if c.get("db_name")})
         if to_disk:
-            self._categories_backup.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._categories_backup.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(list(to_disk.values()), ensure_ascii=False,
-                                      indent=2) + "\n", encoding="utf-8")
-            tmp.replace(self._categories_backup)
+            self._atomic_json(self._categories_backup, list(to_disk.values()))
         return cats
 
     def _run(self, ident: dict) -> None:
         try:
+            with self._writes:
+                self._set(phase="drain_writes", writes_pending=len(self._accepted_writes))
+                drained = self._writes.wait_for(lambda: not self._accepted_writes,
+                                               timeout=self._write_drain_timeout)
+                if not drained:
+                    raise RuntimeError(f"等待已受理写入完成超时（{len(self._accepted_writes)} 项），"
+                                       "未清点/清库；请待写入完成后重试，未启动任务可重启恢复")
             # 1) 备份分类路由描述（清库会连 meta 库一起清）+ 原文清点。
             #    两者都先于清库：备份不出来/列不出原文，就什么都别删。
             self._set(phase="dump_categories")
@@ -247,9 +466,13 @@ class RetierManager:
             cats = self._backup_categories(self._dump_categories(), files)
             # 过时标记快照（阶段复审 m4）：治理元数据只活在切片 metadata 里，
             # 与分类备份同理必须先于清库抢救出来。快照整体失败会中止重建（此时
-            # 什么都还没删，方向安全）；单库失败计数上报——与重挂侧的 fail-open
-            # 刻意不对称：清库前失败零代价，清库后失败只剩记账可做。
+            # 什么都还没删，方向安全）；单库失败也中止，不把不完整快照当成功。
+            # 快照耐久落盘后才允许 wipe；中断后必须沿用旧快照恢复缺失元数据。
             stale_map, stale_dump_failed = self._dump_stale()
+            self._set(stale_dump_failed=stale_dump_failed)
+            if stale_dump_failed:
+                raise RuntimeError(f"过时标记快照失败（{stale_dump_failed} 个库），未清库，请重试")
+            stale_map = self._backup_stale(stale_map)
             self._set(docs_total=len(files), stale_total=len(stale_map),
                       stale_dump_failed=stale_dump_failed)
 
@@ -258,11 +481,10 @@ class RetierManager:
             #    一刻起库处于「重建中」，进程死在任何一步，重启后 status() 都会报
             #    interrupted——新戳在场 + 库是空的 ≠ 健康。
             self._set(phase="wipe")
-            self._rebuild_marker.parent.mkdir(parents=True, exist_ok=True)
-            self._rebuild_marker.write_text(json.dumps({
+            self._atomic_json(self._rebuild_marker, {
                 "to": ident.get("embed_repo"),
                 "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            }) + "\n", encoding="utf-8")
+            })
             self._wipe_store()
             self._reset_and_adopt()
 
@@ -302,17 +524,24 @@ class RetierManager:
 
             # 5) 重挂过时标记：按原 source_path 匹配新切片。匹配不到的（重灌中被
             #    自动路由迁移改了路径 / 该篇重灌失败）逐条记账——标记丢失要可见，
-            #    但元数据层的失败不拉倒整场重建（fail-open + 记账）。
+            #    元数据失败保留耐久备份/标记并报 failed，重试不会丢掉旧快照。
             if stale_map:
                 self._set(phase="restore_stale")
+                # Reinsertion may have moved a raw file. Re-read exact durable
+                # identities/targets instead of guessing its new path by basename.
+                with self._recovery_lock:
+                    stale_map = self._restore_mapping(self._read_stale_recovery())
+                self._set(stale_total=len(stale_map))
                 try:
                     lost = self._restore_stale(stale_map)
                 except Exception as e:
                     lost = sorted(stale_map)
                     if self._log:
-                        self._log.warning(f"⚠️ 过时标记整批重挂失败（标记丢失，原文无恙）: {e}")
+                        self._log.warning(f"⚠️ 过时标记整批重挂失败（耐久备份保留，原文无恙）: {e}")
                 self._set(stale_restored=len(stale_map) - len(lost),
                           stale_lost=sorted(lost)[:20])
+                if lost:
+                    raise RuntimeError(f"过时标记重挂失败（{len(lost)} 篇），耐久备份已保留，请重试")
 
             # 6) 事后戳断言：库戳必须已按活体身份重盖（保险④）
             self._set(phase="verify")
@@ -339,6 +568,8 @@ class RetierManager:
             if self._log:
                 self._log.error(f"❌ 换档重建失败：{e}")
         finally:
+            with self._writes:
+                self._accepting_writes = True
             self._lock.release()
 
 

@@ -5,6 +5,8 @@ RAG 知识库管理插件集：在 rag_search 检索之外，把 RAG 服务的
 删除类操作不可逆，标记 requires_approval=True：
 引擎会挂起调用并等待用户在前端授权后才真正执行。
 """
+import ipaddress
+import re
 import requests
 from ..base import BaseTool
 from ...utils.config_loader import rag_auth_headers
@@ -16,6 +18,25 @@ RAG_INSERT_URL = f"{RAG_BASE_URL}/api/v1/document/insert"
 RAG_CATEGORY_URL = f"{RAG_BASE_URL}/api/v1/category"
 RAG_DOC_DELETE_URL = f"{RAG_BASE_URL}/api/v1/document/delete"
 RAG_RECLASSIFY_URL = f"{RAG_BASE_URL}/api/v1/governance/reclassify"
+
+
+def _valid_category_id(name: str) -> bool:
+    # 数据面为独立进程/venv：保持其 ID 规则，HTTP 端仍是最终安全边界。
+    is_ipv4 = False
+    try:
+        is_ipv4 = isinstance(name, str) and isinstance(ipaddress.ip_address(name), ipaddress.IPv4Address)
+    except ValueError:
+        pass
+    return (isinstance(name, str)
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{1,510}[A-Za-z0-9]", name) is not None
+            and ".." not in name and not is_ipv4
+            and name != "meta_classification_db")
+
+
+def _category_rejection(name: str) -> str:
+    return (f"Category REJECTED: invalid category id {name!r}. Use 3–512 letters, digits, "
+            "dots, hyphens or underscores, starting and ending with a letter or digit; "
+            "consecutive dots, IPv4 addresses and the system routing table cannot be categories.")
 
 
 def _probe_rag_alive() -> bool:
@@ -156,6 +177,8 @@ class RAGInsertDocumentTool(BaseTool):
             return "System Error: document content is empty, nothing to insert."
 
         cat = (category or "").strip()
+        if cat and not _valid_category_id(cat):
+            return _category_rejection(cat)
         # [前置校验] 目标分类必须真实存在：这是数据正确性的硬约束（规则是代码），
         # 校验失败返回现有目录与下一步指引，让模型经自纠闭环走上正确的工具链
         ok, categories = _fetch_categories()
@@ -213,6 +236,8 @@ class RAGUpsertCategoryTool(BaseTool):
         return _RAG_ALIVE
 
     def execute(self, db_name: str, description: str) -> str:
+        if not _valid_category_id(db_name):
+            return _category_rejection(db_name)
         return _request("POST", RAG_CATEGORY_URL, json={"db_name": db_name, "description": description})
 
 
@@ -241,6 +266,8 @@ class RAGDeleteCategoryTool(BaseTool):
         return _RAG_ALIVE
 
     def execute(self, db_name: str) -> str:
+        if not _valid_category_id(db_name):
+            return _category_rejection(db_name)
         return _request("DELETE", f"{RAG_CATEGORY_URL}/{db_name}")
 
 

@@ -23,6 +23,55 @@ final class RetierMonitor: ObservableObject {
 
     /// 重建进行中的一行状态（菜单栏面板显示）；空闲 = nil。
     @Published private(set) var rebuildProgress: String?
+    @Published private(set) var isBusy = false
+    @Published private var recordedNotice: String?
+    private(set) var manualNotice: String? {
+        get { noticeConnection == connection() ? recordedNotice : nil }
+        set { noticeConnection = connection(); recordedNotice = newValue }
+    }
+
+    private let session: URLSession
+    private let confirmation: ((RagRetierStatus) -> Bool)?
+    private let errorSink: ((String) -> Void)?
+    private let notificationSink: ((String) -> Void)?
+    private let pause: (TimeInterval) async -> Void
+    private let now: () -> Date
+    private struct Connection: Equatable {
+        let base: URL
+        let authorization: String?
+    }
+    private var activeConnection: Connection?
+    private var noticeConnection: Connection?
+    private var submitted = false
+
+    init(session: URLSession = .shared,
+         confirmation: ((RagRetierStatus) -> Bool)? = nil,
+         errorSink: ((String) -> Void)? = nil,
+         notificationSink: ((String) -> Void)? = nil,
+         pause: @escaping (TimeInterval) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
+         now: @escaping () -> Date = Date.init) {
+        self.session = session; self.confirmation = confirmation
+        self.errorSink = errorSink; self.notificationSink = notificationSink
+        self.pause = pause; self.now = now
+    }
+
+    private func connection() -> Connection? {
+        guard let settings, let base = settings.baseURL else { return nil }
+        let key = settings.apiKey
+        return Connection(base: base, authorization: key.isEmpty ? nil : "Bearer \(key)")
+    }
+    private var connectionIsCurrent: Bool {
+        activeConnection != nil && activeConnection == connection()
+    }
+    private func connectionChanged() {
+        manualNotice = submitted
+            ? L("连接已更改。已发出的操作不会因此撤销；请切回原连接查看进度。")
+            : L("连接已更改，请重新检查后再操作。")
+    }
+
+    /// Explicit user entry shares the existing confirmation and follow pipeline.
+    func requestManualRebuild() async { await checkOnce(manual: true) }
+
 
     private weak var settings: AppSettings?
     private var loop: Task<Void, Never>?
@@ -63,29 +112,50 @@ final class RetierMonitor: ObservableObject {
         }
     }
 
-    private func checkOnce() async {
-        guard !following else { return }
-        // 首启引导没完成前不打扰（首审 S）：push.bootstrap 同款后置纪律——
-        // OnboardingView 还开着就弹一个知识库重建的模态框，是对新用户的伏击。
-        guard settings?.setupCompleted == true else { return }
-        // 网络失败静默跳过：backend 没起、用户没连隧道都是常态，不刷日志更不弹窗。
-        guard let status = await fetchStatus() else { return }
-
+    private func checkOnce(manual: Bool = false) async {
+        guard !isBusy, !following else { return }
+        guard manual || settings?.setupCompleted == true else { return }
+        guard let target = connection() else {
+            if manual { manualNotice = L("尚未配置可用连接。") }
+            return
+        }
+        isBusy = true; activeConnection = target; submitted = false
+        if manual { manualNotice = nil }
+        defer { isBusy = false; activeConnection = nil; submitted = false }
+        guard let status = await fetchStatus() else {
+            if !connectionIsCurrent { connectionChanged() }
+            else if manual { manualNotice = L("无法读取重建状态，请检查连接后重试。") }
+            return
+        }
         if status.rebuild.state == "running" {
-            // 别处（命令行直呼数据面端点等）已经在重建：不弹窗，但把进度接过来
-            // 显示到底，免得菜单栏对一场正在破坏性重建的事一无所知。
             await follow(assumeRunning: true)
             return
         }
-        // 判据是数据面的 needs_rebuild：真换档（mismatch）与中断残局（interrupted，
-        // 上一场重建死在半路——单看档位戳反而是「健康」假象）都要提示补跑。
-        guard status.needsRebuild == true, !snoozed else { return }
+        guard status.needsRebuild == true else {
+            if manual {
+                manualNotice = status.needsRebuild == false && status.availability == .reachable
+                    ? L("知识库目前无需重建。")
+                    : L("暂时无法确认是否需要重建，请检查计算服务后重试。")
+            }
+            return
+        }
+        guard manual || !snoozed else { return }
         await promptAndRebuild(status)
     }
 
     // MARK: - 提示与触发
 
-    private func promptAndRebuild(_ status: RetierStatus) async {
+    private func promptAndRebuild(_ status: RagRetierStatus) async {
+        let accepted = confirmation?(status) ?? presentConfirmation(status)
+        guard accepted else {
+            snoozed = true
+            manualNotice = L("已暂缓，可随时从知识库页面继续重建。")
+            return
+        }
+        await startRebuild(baselineStartedAt: status.rebuild.startedAt)
+    }
+
+    private func presentConfirmation(_ status: RagRetierStatus) -> Bool {
         let unknown = L("未知")
         let sep = L("：")   // 标点也过 L（首审 S）：英文界面不该出现全角冒号
         NSApp.activate()   // 菜单栏常驻形态下窗口可能全关着
@@ -104,11 +174,7 @@ final class RetierMonitor: ObservableObject {
         alert.addButton(withTitle: L("立即重建"))
         let later = alert.addButton(withTitle: L("稍后"))
         later.keyEquivalent = "\u{1b}"   // NSAlert 只给 "Cancel" 字面配 Esc，本地化按钮要自己接
-        guard alert.runModal() == .alertFirstButtonReturn else {
-            snoozed = true
-            return
-        }
-        await startRebuild(baselineStartedAt: status.rebuild.startedAt)
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     /// force 恒 false：force 是「两侧已同档也要重灌」的修库开关，用户从提示进来的
@@ -116,19 +182,24 @@ final class RetierMonitor: ObservableObject {
     private struct ForceBody: Encodable { let force: Bool }
 
     private func startRebuild(baselineStartedAt: String? = nil) async {
+        guard connectionIsCurrent else { connectionChanged(); return }
         guard var req = makeRequest("POST", "/api/v1/rag/retier/rebuild",
                                     body: ForceBody(force: false)) else { return }
         // POST 背后串着「backend 代理（25s）→ 数据面活体探查」；比代理再宽一档，
         // 让「代理先答」成为常态、URLSession 超时成为例外。
         req.timeoutInterval = 35
         do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
+            submitted = true
+            let (data, resp) = try await session.data(for: req)
+            guard connectionIsCurrent else { connectionChanged(); return }
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             // 409 = 已同档 / 已有重建在跑：都不是错误。转入 follow 求真相——在跑就
             // 接管进度显示到底；没在跑则把 409 的说明摆给用户（修正评审：sawRunning
             // 门修好假成功后，这条路曾退化回「一片寂静」——刚点了按钮必须有下文）。
             if code == 409 {
-                if await follow(baselineStartedAt: baselineStartedAt) == false {
+                let occurred = await follow(baselineStartedAt: baselineStartedAt)
+                guard connectionIsCurrent else { connectionChanged(); return }
+                if !occurred {
                     showError(detail(from: data, code: code))
                 }
                 return
@@ -137,7 +208,9 @@ final class RetierMonitor: ObservableObject {
             // 开跑但还没答完」翻译成一个 503 的**正常 HTTP 响应**——只有确认没在跑
             // （且 started_at 没变过=真没跑过）才把错误摆给用户。
             if code >= 500 {
-                if await follow(baselineStartedAt: baselineStartedAt) == false {
+                let occurred = await follow(baselineStartedAt: baselineStartedAt)
+                guard connectionIsCurrent else { connectionChanged(); return }
+                if !occurred {
                     showError(detail(from: data, code: code))
                 }
                 return
@@ -147,10 +220,15 @@ final class RetierMonitor: ObservableObject {
                 return
             }
         } catch {
+            guard connectionIsCurrent else { connectionChanged(); return }
             // 首审 Critical：超时/断连 ≠ 没开始——backend 可能已受理并spawn了重建线程。
             // 这里断言「失败」会让用户在一场进行中的破坏性重建旁边被告知“没在重建”。
             // 转入 follow 轮询求真相：真没开跑，follow 首拍即退；开跑了，进度如实呈现。
-            _ = await follow(baselineStartedAt: baselineStartedAt)
+            let occurred = await follow(baselineStartedAt: baselineStartedAt)
+            guard connectionIsCurrent else { connectionChanged(); return }
+            if !occurred {
+                manualNotice = L("请求是否受理尚未确认，请刷新状态后再决定是否重试。")
+            }
             return
         }
         // POST 2xx = 数据面亲口说 running：本场重建由我们发起，结局必须通知
@@ -171,7 +249,7 @@ final class RetierMonitor: ObservableObject {
             rebuildProgress = nil
         }
         var failures = 0
-        var last: RebuildInfo?
+        var last: RagRetierStatus.RebuildInfo?
         // 结局通知的门（阶段复审 m2）：数据面的 _progress 收尾后**停在终态、永不回
         // idle**，follow 首拍就可能读到上一场的残留 done/failed——没亲眼见过 running
         //（也没有 POST 2xx 的保证）就通知「重建完成」，是把旧结局当新结局报。
@@ -179,9 +257,11 @@ final class RetierMonitor: ObservableObject {
         // 终态但 started_at 已变，同样算「这场发生了」，不许假失败/假沉默。
         var sawRunning = assumeRunning
         var lastDone = -1
-        var lastAdvance = Date()
+        var lastAdvance = now()
         while !Task.isCancelled {
+            guard connectionIsCurrent else { connectionChanged(); return sawRunning }
             guard let status = await fetchStatus() else {
+                guard connectionIsCurrent else { connectionChanged(); return sawRunning }
                 // 重建期间数据面很忙，抖一两拍是正常的；连续失败到预算上限才放手。
                 failures += 1
                 if failures >= Self.pollFailureBudget {
@@ -192,7 +272,7 @@ final class RetierMonitor: ObservableObject {
                     }
                     return sawRunning
                 }
-                try? await Task.sleep(for: .seconds(Self.pollInterval))
+                await pause(Self.pollInterval)
                 continue
             }
             failures = 0
@@ -206,19 +286,19 @@ final class RetierMonitor: ObservableObject {
             let done = status.rebuild.docsDone ?? -1
             if done != lastDone {
                 lastDone = done
-                lastAdvance = Date()
-            } else if Date().timeIntervalSince(lastAdvance) > Self.stallBudget {
+                lastAdvance = now()
+            } else if now().timeIntervalSince(lastAdvance) > Self.stallBudget {
                 notifyStalled(L("进度长时间停滞——请检查数据面日志。"))
                 return true
             }
             rebuildProgress = progressLine(status.rebuild)
-            try? await Task.sleep(for: .seconds(Self.pollInterval))
+            await pause(Self.pollInterval)
         }
         if let last, sawRunning, last.state != "running" { notifyFinished(last) }
         return sawRunning
     }
 
-    private func progressLine(_ r: RebuildInfo) -> String {
+    private func progressLine(_ r: RagRetierStatus.RebuildInfo) -> String {
         // docs_total 在原文清点完成前是 null（dump_categories 阶段），这时只说在跑。
         guard let total = r.docsTotal else { return L("知识库重建中…") }
         return "\(L("知识库重建中…")) \(r.docsDone ?? 0)/\(total)"
@@ -229,7 +309,7 @@ final class RetierMonitor: ObservableObject {
     /// 重建是分钟级到小时级的活，用户早走开了——结局必须走系统通知，不是窗口。
     /// 授权在 PushManager.bootstrap 里统一申请过，这里只用不申请：没授权就静默作罢
     /// （为了一条运维通知再弹一次系统授权框是打扰）。
-    private func notifyFinished(_ r: RebuildInfo) {
+    private func notifyFinished(_ r: RagRetierStatus.RebuildInfo) {
         let body: String
         switch r.state {
         case "done":
@@ -251,16 +331,20 @@ final class RetierMonitor: ObservableObject {
         default:
             return
         }
+        manualNotice = body
         postNotification(body)
     }
 
     private func notifyStalled(_ why: String) {
-        postNotification("\(L("知识库重建中…"))\(L("，"))\(why)")
+        let body = "\(L("知识库重建中…"))\(L("，"))\(why)"
+        manualNotice = body
+        postNotification(body)
     }
 
     private func postNotification(_ body: String) {
         // app 自己的通知总开关也要认（首审 S）：其余本地通知路径全都先看它
         guard settings?.notifEnabled ?? false else { return }
+        if let notificationSink { notificationSink(body); return }
         // 闭包内重新取 current()（而不是捕获外面那个）：UNUserNotificationCenter 非
         // Sendable，捕获它会在 @Sendable 回调里报并发告警。
         UNUserNotificationCenter.current().getNotificationSettings { s in
@@ -277,6 +361,8 @@ final class RetierMonitor: ObservableObject {
     }
 
     private func showError(_ detail: String) {
+        manualNotice = detail
+        if let errorSink { errorSink(detail); return }
         NSApp.activate()
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -287,19 +373,18 @@ final class RetierMonitor: ObservableObject {
     }
 
     // MARK: - 网络（与 app 连 backend 同一套鉴权：Bearer settings.apiKey）
-    // 刻意用 URLSession.shared 而非 AgentClient 的自配置会话：这里全是低频短请求，
-    // 逐请求 timeoutInterval 已覆盖差异，不值得为运维轮询挂进聊天客户端的会话栈。
+    // Default transport remains URLSession.shared. Each operation captures its
+    // endpoint/auth once; later settings changes cannot retarget a confirmed rebuild.
 
     private func makeRequest(_ method: String, _ path: String,
                              body: Encodable? = nil) -> URLRequest? {
-        guard let settings, let base = settings.baseURL,
-              let url = URL(string: path, relativeTo: base) else { return nil }
+        guard let target = activeConnection,
+              let url = URL(string: path, relativeTo: target.base) else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.timeoutInterval = 10
-        let key = settings.apiKey
-        if !key.isEmpty {
-            req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        if let authorization = target.authorization {
+            req.setValue(authorization, forHTTPHeaderField: "Authorization")
         }
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -308,11 +393,12 @@ final class RetierMonitor: ObservableObject {
         return req
     }
 
-    private func fetchStatus() async -> RetierStatus? {
-        guard let req = makeRequest("GET", "/api/v1/rag/retier") else { return nil }
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        return try? JSONDecoder().decode(RetierStatus.self, from: data)
+    private func fetchStatus() async -> RagRetierStatus? {
+        guard connectionIsCurrent,
+              let req = makeRequest("GET", "/api/v1/rag/retier") else { return nil }
+        guard let (data, resp) = try? await session.data(for: req),
+              connectionIsCurrent, (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return try? JSONDecoder().decode(RagRetierStatus.self, from: data)
     }
 
     /// FastAPI 的错误体是 {"detail": ...}；解不出就退回状态码，不把整段 HTML/空串糊给用户。
@@ -324,52 +410,7 @@ final class RetierMonitor: ObservableObject {
         return "HTTP \(code)"
     }
 
-    // MARK: - 状态体（/api/v1/rag/retier 的解码面；判据在数据面，这里只读）
 
-    private struct TierInfo: Decodable {
-        let tier: String?
-    }
-
-    private struct RebuildInfo: Decodable {
-        /// idle | running | done | done_with_errors | failed
-        let state: String
-        let docsTotal: Int?      // 原文清点完成前为 null
-        let docsDone: Int?       // idle 态整个字段缺席
-        let docsFailed: Int?     // 总失败数（failed_docs 只展示前 20 条）
-        let failedDocs: [String]?
-        let staleTotal: Int?     // 过时标记：快照总数 / 重挂成数（丢失 = 差值）
-        let staleRestored: Int?
-        let startedAt: String?   // 本场开跑时刻：follow 的基线比对用
-        let error: String?
-
-        enum CodingKeys: String, CodingKey {
-            case state, error
-            case docsTotal = "docs_total"
-            case docsDone = "docs_done"
-            case docsFailed = "docs_failed"
-            case failedDocs = "failed_docs"
-            case staleTotal = "stale_total"
-            case staleRestored = "stale_restored"
-            case startedAt = "started_at"
-        }
-    }
-
-    private struct RetierStatus: Decodable {
-        let store: TierInfo?
-        let compute: TierInfo?
-        /// null = 无戳（新库）或计算面身份不全：不是「换档」，不提示。
-        let mismatch: Bool?
-        /// 上一场重建中途死掉（耐久标记在盘上）：档位戳看着健康，库其实是残的。
-        let interrupted: Bool?
-        /// app 的唯一提示判据：mismatch==true 或 interrupted（数据面统一判定）。
-        let needsRebuild: Bool?
-        let rebuild: RebuildInfo
-
-        enum CodingKeys: String, CodingKey {
-            case store, compute, mismatch, interrupted, rebuild
-            case needsRebuild = "needs_rebuild"
-        }
-    }
 }
 
 #endif

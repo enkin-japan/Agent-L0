@@ -66,7 +66,9 @@ def test_api_tool_submit_lands_pending_only(monkeypatch, tmp_path):
 def _stub_request(tmp_path):
     """confirm 路径的最小 app.state 假体：注册表收下工具、编排器刷新声明。"""
     registry = SimpleNamespace(tool_names=lambda: set(),
-                               load_tool=lambda tool: True)
+                               discard_unavailable=lambda name: None,
+                               queue_tool=lambda tool: None,
+                               load_tool=lambda tool, **kwargs: True)
     orchestrator = SimpleNamespace(refresh_tools_declaration=lambda: None)
     state = SimpleNamespace(mcp_registry=registry, orchestrator=orchestrator,
                             rebuild_skills=None)

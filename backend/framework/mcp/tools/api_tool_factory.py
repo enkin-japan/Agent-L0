@@ -139,6 +139,10 @@ class _ApiCore:
     #: 试调通道（/api-tools/test）：未保存的密钥直接挂实例，绕过 env/secrets 读取
     _secret_override: Optional[str] = None
 
+    def matches_declaration(self, declaration: Dict[str, Any]) -> bool:
+        """Compare static configuration only. Secret presence is not authentication."""
+        return self._decl == declaration
+
     def _bind(self, decl: Dict[str, Any]) -> None:
         self._decl = decl
         self.name = decl["name"]

@@ -242,7 +242,7 @@ def apply_ops(store, ops: List[Tuple[str, List[str]]]) -> int:
             _backup(note, backup_dir)
             try:
                 store.write(name, f"{STALE_MARK} {note.description}",
-                            note.type, note.body or "")
+                            note.type, note.body or "", valid_until=note.valid_until)
                 applied += 1
             except Exception as e:
                 print(f"[Dream] 标记 {name!r} 失败（跳过）: {e}")
@@ -252,7 +252,7 @@ def apply_ops(store, ops: List[Tuple[str, List[str]]]) -> int:
                 continue
             _backup(note, backup_dir)
             try:
-                store.write(name, desc, type_, body)
+                store.write(name, desc, type_, body, valid_until=note.valid_until)
             except Exception as e:
                 print(f"[Dream] 改写 {name!r} 失败（跳过）: {e}")
                 continue

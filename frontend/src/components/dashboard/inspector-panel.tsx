@@ -7,6 +7,7 @@ import {
   Circle,
   CircleSlash,
   Database,
+  Files,
   ListTodo,
   Loader2,
   Presentation,
@@ -17,6 +18,7 @@ import {
 } from "lucide-react"
 
 import { DeckPreview } from "@/components/deck/deck-preview"
+import { FilesPanel } from "./files-panel"
 
 import { getMemoryStatus, getTools } from "@/api/agent"
 import { cn } from "@/lib/utils"
@@ -30,7 +32,7 @@ import type {
 } from "@/types/agent-api"
 import { Button } from "@/components/ui/button"
 
-type Tab = "plan" | "deck" | "memory" | "context"
+type Tab = "plan" | "deck" | "files" | "memory" | "context"
 
 /**
  * 右侧检视面板：把后端既有机理提升为一等公民。
@@ -66,9 +68,10 @@ export function InspectorPanel({
       </header>
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-border px-2 py-2">
+      <div className="grid grid-cols-3 gap-1 border-b border-border px-2 py-2">
         <TabButton icon={ListTodo} label={t.inspector.tabPlan} active={tab === "plan"} onClick={() => setTab("plan")} />
         <TabButton icon={Presentation} label={t.inspector.tabDeck} active={tab === "deck"} onClick={() => setTab("deck")} />
+        <TabButton icon={Files} label={t.files.title} active={tab === "files"} onClick={() => setTab("files")} />
         <TabButton icon={Brain} label={t.inspector.tabMemory} active={tab === "memory"} onClick={() => setTab("memory")} />
         <TabButton icon={Wrench} label={t.inspector.tabContext} active={tab === "context"} onClick={() => setTab("context")} />
       </div>
@@ -76,6 +79,7 @@ export function InspectorPanel({
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4">
         {tab === "plan" && <PlanTab task={taskProgress} />}
         {tab === "deck" && <DeckPreview sessionId={conversation.id} />}
+        {tab === "files" && <FilesPanel sessionId={conversation.id} />}
         {tab === "memory" && <MemoryTab sessionId={conversation.id} />}
         {tab === "context" && <ToolsTab />}
       </div>

@@ -18,6 +18,9 @@
   过程事件由编排层发射——账本必传,先记账后分发。
 """
 import asyncio
+import hashlib
+import json
+import re
 from typing import Any, Dict, List, Optional
 
 from .journal import new_turn_id
@@ -31,6 +34,58 @@ class TurnConflict(Exception):
         self.reason = reason
 
 
+def _public_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _public_fields(v) for k, v in value.items() if not str(k).startswith("_")}
+    if isinstance(value, list):
+        return [_public_fields(v) for v in value]
+    return value
+
+
+def turn_reference(record: Dict[str, Any]) -> str:
+    """完整公开记录的opaque引用；派生字段不入hash，无整份JSON字符串副本。"""
+    public = _public_fields({k: v for k, v in record.items() if k not in {"turn_ref", "turn_index"}})
+    digest = hashlib.sha256()
+    encoder = json.JSONEncoder(ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    for chunk in encoder.iterencode(public):
+        digest.update(chunk.encode("utf-8"))
+    return "tr_" + digest.hexdigest()
+
+
+def retry_family_root(record: Dict[str, Any], index: int, previous_root: int) -> int:
+    """只接受由紧邻canonical parent继承的有效族；坏关系保留独立展示槽。"""
+    root, parent = record.get("retry_root_index"), record.get("retry_parent_index")
+    ref = record.get("retry_of")
+    if type(root) is int and type(parent) is int and 0 <= root <= parent == index - 1 \
+            and root == previous_root and isinstance(ref, str) and re.fullmatch(r"tr_[0-9a-f]{64}", ref):
+        return root
+    return index
+
+
+def retry_history_projection(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """同一验证遍历产展示winner及可展开审查的canonical族下标。"""
+    winners: Dict[int, int] = {}
+    members: Dict[int, List[int]] = {}
+    previous_root = -1
+    for index, record in enumerate(records):
+        root = retry_family_root(record, index, previous_root)
+        if root == index or record.get("status") == "success":
+            winners[root] = index
+        if root != index:
+            members.setdefault(root, [root]).append(index)
+        previous_root = root
+    return {
+        "display_turn_indices": list(winners.values()),
+        "retry_groups": [{"root_index": root, "display_index": winners[root], "turn_indices": indices}
+                         for root, indices in members.items()],
+    }
+
+
+def display_turn_indices(records: List[Dict[str, Any]]) -> List[int]:
+    """兼容包装：root占原槽，仅最新success重试替换winner。"""
+    return retry_history_projection(records)["display_turn_indices"]
+
+
 def public_turn(response_data: Dict[str, Any]) -> Dict[str, Any]:
     """剥掉内部账目键(`_` 前缀)得到可下发的轮次数据。
 
@@ -41,18 +96,26 @@ def public_turn(response_data: Dict[str, Any]) -> Dict[str, Any]:
     代价如实记:工具**参数**里若有正当的 `_` 前缀键(如 ES 的 _source),投影里
     也会被剥——只影响展示,不影响执行与落盘。
     """
-    def _strip(v: Any) -> Any:
-        if isinstance(v, dict):
-            return {k: _strip(x) for k, x in v.items() if not str(k).startswith("_")}
-        if isinstance(v, list):
-            return [_strip(x) for x in v]
-        return v
-    return _strip(response_data)
+    result = _public_fields(response_data)
+    if {"status", "prompt", "response"}.issubset(result) and not result.get("discarded") \
+            and result["status"] in {"success", "warning", "fail", "cancelled"}:
+        result["turn_ref"] = turn_reference(result)
+    return result
 
 
 def _restore_task(session, snapshot):
     """按轮初快照回滚会话的任务状态(引擎故障/用户取消时与 history 回滚同步)。"""
     session.task_state = TaskState.from_snapshot(snapshot) if snapshot else None
+
+
+async def _finish_worker_after_cancel(worker: asyncio.Task):
+    """失败受理已决定取消：重复cancel也不能丢失仍在写盘的线程结果。"""
+    while not worker.done():
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            continue
+    return worker.result()
 
 
 class TurnRunner:
@@ -84,6 +147,44 @@ class TurnRunner:
         return task
 
     # ---------- 新轮次:受理 ----------
+    async def delete_last_turn(self, session_manager, sid: str) -> Dict[str, Any]:
+        """删除历史末轮或撤销未落盘暂停轮；生命周期始终由本属主管理。"""
+        session = session_manager._all_sessions.get(sid)
+        if session is None:
+            return await session_manager.delete_last_turn(sid)
+        journal = session.journal
+        # 与受理相同的快路径：不能等运行轮释放锁后误删它的落盘结果。
+        if journal.turn_state in ("queued", "running"):
+            raise TurnConflict("turn_active")
+        target = (journal.current_turn_id, journal.turn_state, journal.seq)
+        async with session.lock:
+            if journal.turn_state in ("queued", "running"):
+                raise TurnConflict("turn_active")
+            if (journal.current_turn_id, journal.turn_state, journal.seq) != target:
+                raise TurnConflict("delete_target_changed")
+            result = {"status": False, "session_id": sid,
+                      "remaining_turns": None, "response": ""}
+            if journal.turn_state in ("awaiting_approval", "suspended"):
+                turn = session.pending_turn or session.suspended_turn
+                if turn is None:
+                    raise TurnConflict("delete_target_changed")
+                # 存储层撤销 write-ahead 并重建记忆，不截断上一条已完成历史。
+                await asyncio.to_thread(session_manager._discard_unlogged_turn_locked,
+                                        session, turn, result)
+                session.pending_tool_calls = None
+                session.pending_turn = None
+                session.suspended_turn = None
+                session.suspend_requested = False
+                session.cancel_requested = False
+                session.reset_activity()
+                self.scheduler.discard(sid)
+                journal.emit("turn_ended", {
+                    **public_turn(turn), "status": "cancelled", "response": [],
+                    "pending_tools": None, "discarded": True})
+                return result
+            return await asyncio.to_thread(session_manager._delete_last_turn_locked,
+                                            session, session.history_log, result)
+
     async def accept_turn(self, session, sid: str, *, prompt: str,
                           images: List[str], audios: List[str],
                           ingested_text: str, attachments: List[Any],
@@ -109,8 +210,21 @@ class TurnRunner:
             if journal.turn_state in ("queued", "running"):
                 raise TurnConflict("turn_active")
 
-            await self._abandon_paused_turn(session, sid)
+            return await self._accept_turn_locked(
+                session, sid, prompt=prompt, images=images, audios=audios,
+                ingested_text=ingested_text, attachments=attachments, gen=gen,
+                origin=origin, voice_transcripts=voice_transcripts, client_turn_id=client_turn_id)
 
+    async def _accept_turn_locked(self, session, sid: str, *, prompt: str,
+                                  images, audios, ingested_text, attachments, gen,
+                                  origin="chat", voice_transcripts=None, client_turn_id=None,
+                                  prepared_input=False, retry_of=None,
+                                  retry_root_index=None, retry_parent_index=None) -> Dict[str, Any]:
+        """普通提交与明确重试共用受理步骤；调用者已持session.lock。"""
+        journal = session.journal
+        await self._abandon_paused_turn(session, sid)
+
+        if not prepared_input:
             # 语音升格（方案 B）：纯音频消息客户端发空 prompt，把 ASR 转写升格为本轮
             # 用户文本——否则任务 goal / 会话搜索 / 斜杠分发全拿不到语音内容。落在斜杠
             # 分发**之前**：语音说「/剧本名 …」也能触发确定性分发。升格后把 ingested_text
@@ -139,39 +253,60 @@ class TurnRunner:
                 skills = _runtime.get_skill_registry()  # 重扫换了新表
             prompt, ingested_text = dispatch_slash_skill(prompt, ingested_text, skills)
 
-            # 将新解析的资源加入本会话的生命周期
-            session.images.extend(images)
-            session.audios.extend(audios)
+        # 将新解析的资源加入本会话的生命周期
+        session.images.extend(images)
+        session.audios.extend(audios)
 
-            # 本轮起点快照:引擎故障/用户取消时,history 与任务状态同步整轮回滚
-            session.cancel_requested = False
-            rollback_idx = len(session.history)
-            task_snapshot = session.task_state.snapshot() if session.task_state else None
-            session.add_user_message(prompt, images, audios, extra_text=ingested_text)
-            history_start_idx = len(session.history)
-            # 轮次预写标记(write-ahead):进程死亡时启动恢复补 fail 轮,用户输入不蒸发。
-            # turn_id 先于标记诞生并写入(B2):崩溃补发的 turn_ended 才有正主
-            tid = new_turn_id()
-            await asyncio.to_thread(session.write_inflight, prompt, gen, tid)
+        # 本轮起点快照:引擎故障/用户取消时,history 与任务状态同步整轮回滚
+        session.cancel_requested = False
+        rollback_idx = len(session.history)
+        task_snapshot = session.task_state.snapshot() if session.task_state else None
+        session.add_user_message(prompt, images, audios, extra_text=ingested_text)
+        history_start_idx = len(session.history)
+        # 轮次预写标记(write-ahead):进程死亡时启动恢复补 fail 轮,用户输入不蒸发。
+        # turn_id 先于标记诞生并写入(B2):崩溃补发的 turn_ended 才有正主
+        tid = new_turn_id()
+        input_snapshot = {"image": images, "audio": audios, "attachments": attachments,
+                          "ingested_text": ingested_text,
+                          **({"retry_of": retry_of, "retry_root_index": retry_root_index,
+                              "retry_parent_index": retry_parent_index} if retry_of else {})}
+        if prepared_input:
+            # 取消HTTP受理时，先等唯一预写线程完成，再由accept_retry回滚/清理。
+            writer = asyncio.create_task(asyncio.to_thread(session.write_inflight, prompt, gen, tid,
+                                                          input_snapshot=input_snapshot))
+            try:
+                await asyncio.shield(writer)
+            except asyncio.CancelledError:
+                try:
+                    await _finish_worker_after_cancel(writer)
+                except Exception:
+                    pass
+                raise
+        else:
+            await asyncio.to_thread(session.write_inflight, prompt, gen, tid, input_snapshot=input_snapshot)
 
-            env = journal.emit("turn_queued", {
-                "prompt": prompt,
-                "attachments": [
-                    {"name": getattr(a, "name", None) or (a.get("name") if isinstance(a, dict) else str(a)),
-                     "kind": (a.get("type") if isinstance(a, dict) else None) or "file"}
-                    for a in (attachments or [])
-                ],
-                "gen": dict(gen), "origin": origin,
-                # 提交幂等键(B3):随 turn_queued 落 journal,是重复提交判重的唯一持久真相
-                # (inflight.json 在 append_log 后即撤,不是已完结轮次的 durable 记录)
-                "client_turn_id": client_turn_id or None,
-            }, turn_id=tid)
+        env = journal.emit("turn_queued", {
+            "prompt": prompt,
+            "attachments": [
+                {"name": getattr(a, "name", None) or (a.get("name") if isinstance(a, dict) else str(a)),
+                 "kind": (a.get("type") if isinstance(a, dict) else None) or "file"}
+                for a in (attachments or [])
+            ],
+            "gen": dict(gen), "origin": origin,
+            # 提交幂等键(B3):随 turn_queued 落 journal,是重复提交判重的唯一持久真相
+            # (inflight.json 在 append_log 后即撤,不是已完结轮次的 durable 记录)
+            "client_turn_id": client_turn_id or None,
+            **({"retry_of": retry_of, "retry_root_index": retry_root_index,
+                "retry_parent_index": retry_parent_index} if retry_of else {}),
+        }, turn_id=tid)
 
         return {
             "turn_id": env["turn_id"], "seq": env["seq"],
             "prompt": prompt, "images": images, "audios": audios,
             "ingested_text": ingested_text, "attachments": attachments,
             "gen": gen, "origin": origin,
+            **({"retry_of": retry_of, "retry_root_index": retry_root_index,
+                "retry_parent_index": retry_parent_index} if retry_of else {}),
             "_rollback_idx": rollback_idx, "_task_snapshot": task_snapshot,
             "_history_start_idx": history_start_idx,
         }
@@ -180,7 +315,75 @@ class TurnRunner:
     # 上百条里程碑,按里程碑计窗口会把自己的 turn_queued 挤出去(首审 H2)
     _IDEM_TURN_WINDOW = 64
 
-    def lookup_client_turn(self, session, client_turn_id: str) -> Optional[Dict[str, Any]]:
+    async def accept_retry(self, session, sid: str, *, expected_turn_ref: str,
+                           client_turn_id: str) -> Dict[str, Any]:
+        """明确的新尝试：保留原存档，锁内按引用核验末轮并复用普通受理步骤。"""
+        if not client_turn_id:
+            raise TurnConflict("retry_key_required")
+        duplicate = await asyncio.to_thread(self.lookup_client_turn, session, client_turn_id,
+                                             include_failed=True)
+        if duplicate is not None:
+            return duplicate
+        if session.journal.turn_state != "none":
+            raise TurnConflict("turn_active")
+        async with session.lock:
+            duplicate = await asyncio.to_thread(self.lookup_client_turn, session, client_turn_id,
+                                                 include_failed=True)
+            if duplicate is not None:
+                return duplicate
+            if session.journal.turn_state != "none":
+                raise TurnConflict("turn_active")
+            snapshot = await asyncio.to_thread(session.retry_source_snapshot)
+            if snapshot is None:
+                raise TurnConflict("retry_source_missing")
+            source, parent_index, root_index = snapshot
+            if turn_reference(source) != expected_turn_ref:
+                raise TurnConflict("retry_source_changed")
+            if source.get("retry_input_unavailable") is True:
+                raise TurnConflict("retry_inputs_unavailable")
+            worker = asyncio.create_task(asyncio.to_thread(session.copy_retry_inputs, source))
+            try:
+                inputs = await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                try:
+                    inputs = await _finish_worker_after_cancel(worker)
+                except Exception:
+                    pass  # copy helper already cleaned its newly created files
+                else:
+                    cleanup = asyncio.create_task(asyncio.to_thread(session.cleanup_retry_inputs,
+                                                                    inputs["_retry_paths"]))
+                    await _finish_worker_after_cancel(cleanup)
+                raise
+            except (OSError, ValueError, TypeError):
+                raise TurnConflict("retry_inputs_unavailable") from None
+            created = inputs.pop("_retry_paths")
+            history = list(session.history)
+            images, audios = list(session.images), list(session.audios)
+            cancelled = session.cancel_requested
+            marker, marker_read = None, False
+            try:
+                marker = session.inflight_path.read_bytes() if session.inflight_path.exists() else None
+                marker_read = True
+                return await self._accept_turn_locked(
+                    session, sid, **inputs, prepared_input=True,
+                    retry_of=expected_turn_ref, retry_root_index=root_index,
+                    retry_parent_index=parent_index, client_turn_id=client_turn_id)
+            except BaseException:
+                session.history, session.images, session.audios = history, images, audios
+                session.cancel_requested = cancelled
+                try:
+                    if marker_read:
+                        if marker is None:
+                            session.clear_inflight()
+                        else:
+                            session.inflight_path.write_bytes(marker)
+                finally:
+                    cleanup = asyncio.create_task(asyncio.to_thread(session.cleanup_retry_inputs, created))
+                    await _finish_worker_after_cancel(cleanup)
+                raise
+
+    def lookup_client_turn(self, session, client_turn_id: str, *, include_failed: bool = False
+                           ) -> Optional[Dict[str, Any]]:
         """提交幂等键判重(B3)。命中返回 {turn_id, seq, duplicate: True},未命中 None。
 
         **必须在 `_prepare_turn` 之前调用**:摄入(落盘媒体/ASR/解析文档)发生在受理之前,
@@ -196,6 +399,8 @@ class TurnRunner:
         turn_ended 后见 turn_queued,按 turn_id 记状态即可判。无 turn_ended 记录
         (补发失败等罕见形态)同样放行重执行:宁重复,不吞话。
         seq 返回该轮 turn_queued 的 seq(客户端拿它当 after 游标,与首次 202 同语义)。
+        include_failed仅明确retry使用：全journal逐queued查key，fail/cancel/未知也命中，
+        不聚合ended_status；普通submit仍保留64轮窗口和原失败重发规则。
         """
         if not client_turn_id:
             return None
@@ -205,6 +410,32 @@ class TurnRunner:
             return {"turn_id": journal.current_turn_id,
                     "seq": journal.turn_first_seq, "duplicate": True}
         from .jsonl import iter_records_reversed
+        if include_failed:
+            # 明确retry：任意已受理同key均命中，不聚合全盘ended_status、不用普通尾窗。
+            try:
+                for rec in iter_records_reversed(journal.path, complete=True, reject_corruption=True):
+                    if rec.get("kind") == "journal_header" and set(rec) <= {"kind", "v"} and rec.get("v") == 1:
+                        continue
+                    if not isinstance(rec.get("type"), str) or not rec["type"]:
+                        raise ValueError("journal evidence has no event type")
+                    if rec["type"] != "turn_queued":
+                        continue
+                    data = rec.get("data")
+                    if not isinstance(data, dict):
+                        raise ValueError("queued journal evidence has invalid data")
+                    key = data.get("client_turn_id")
+                    if key is not None and not isinstance(key, str):
+                        raise ValueError("queued journal evidence has invalid client key")
+                    if "retry_of" in data and (not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", key)):
+                        raise ValueError("retry journal evidence lost its required client key")
+                    if type(rec.get("seq")) is not int or rec["seq"] <= 0 \
+                            or not isinstance(rec.get("turn_id"), str) or not rec["turn_id"]:
+                        raise ValueError("queued journal evidence has invalid receipt identity")
+                    if key == client_turn_id:
+                        return {"turn_id": rec["turn_id"], "seq": rec["seq"], "duplicate": True}
+            except (OSError, ValueError):
+                raise TurnConflict("retry_lookup_unavailable") from None
+            return None
         ended_status: Dict[Any, Any] = {}
         turns_seen = 0
         try:
@@ -218,7 +449,7 @@ class TurnRunner:
                     turns_seen += 1
                     if (rec.get("data") or {}).get("client_turn_id") == client_turn_id:
                         status = ended_status.get(rec.get("turn_id"))
-                        if status in ("fail", "cancelled", None):
+                        if not include_failed and status in ("fail", "cancelled", None):
                             return None
                         return {"turn_id": rec.get("turn_id"),
                                 "seq": rec.get("seq"), "duplicate": True}
@@ -246,6 +477,7 @@ class TurnRunner:
                 session.pending_turn["status"] = "warning"
                 session.pending_turn.setdefault("response", []).append(
                     {"role": "tool", "tool_responses": cancelled})
+                self._attach_execution_receipts(journal, session.pending_turn)
                 await asyncio.to_thread(session.append_log, session.pending_turn)
                 if journal.turn_state != "none":
                     journal.emit("turn_ended", {
@@ -261,6 +493,7 @@ class TurnRunner:
             susp.setdefault("response", []).append(
                 {"role": "system",
                  "content": "The suspended task was interrupted by a new user message and abandoned (not continued)."})
+            self._attach_execution_receipts(journal, susp)
             await asyncio.to_thread(session.append_log, susp)
             if journal.turn_state != "none":
                 journal.emit("turn_ended", {
@@ -332,6 +565,8 @@ class TurnRunner:
             "temperature": gen.get("temperature", 0.2),
             "min_p": gen.get("min_p", 0.05),
             "response": list(messages),
+            **({k: ctx[k] for k in ("retry_of", "retry_root_index", "retry_parent_index")}
+               if ctx.get("retry_of") else {}),
             **(metrics or {}),
         }
 
@@ -355,6 +590,7 @@ class TurnRunner:
         else:
             for k in ("_rollback_idx", "_task_snapshot", "_history_start_idx"):
                 response_data.pop(k, None)
+            self._attach_execution_receipts(journal, response_data)
             await asyncio.to_thread(session.append_log, response_data)
             await asyncio.to_thread(session.save_task)
             journal.emit("turn_ended", {
@@ -365,10 +601,13 @@ class TurnRunner:
 
     # ---------- 审批决议 ----------
     async def accept_approval(self, session, sid: str, approve: bool, *,
-                              expected_turn_id: str = None) -> str:
+                              expected_turn_id: str = None,
+                              expected_approval_seq: Optional[int] = None) -> str:
         """受理审批决议(短临界区):校验目标态 → 账本 resumed。返回 turn_id。
         expected_turn_id:远程决议(推送通知按钮)的防错批锚——迟到点击时当前等待
-        审批的可能已是另一个轮次,不匹配即拒,绝不把决议错递给后来者。"""
+        审批的可能已是另一个轮次,不匹配即拒。
+        expected_approval_seq:展示卡片的 awaiting_approval seq,绑定同轮中的批次；
+        两项均可省略以兼容旧调用方。"""
         journal = session.journal
         if journal.turn_state != "awaiting_approval":  # 锁外快路径(运行中不排队等锁)
             raise TurnConflict("no_pending_approval")
@@ -377,6 +616,10 @@ class TurnRunner:
                     or not session.pending_tool_calls or session.pending_turn is None:
                 raise TurnConflict("no_pending_approval")
             if expected_turn_id and journal.current_turn_id != expected_turn_id:
+                raise TurnConflict("approval_target_mismatch")
+            # 同一轮可有多批审批：轮次相同不代表展示的那批工具仍在等待。
+            # 使用 emit 记录的 awaiting_approval seq，后续进度事件不改批次身份。
+            if expected_approval_seq is not None and journal.approval_seq != expected_approval_seq:
                 raise TurnConflict("approval_target_mismatch")
             journal.emit("resumed", {"trigger": "approve" if approve else "deny"})
             return journal.current_turn_id
@@ -427,6 +670,8 @@ class TurnRunner:
             else:
                 session.pending_turn = None
                 await self._land_continuation(session, sid, turn)
+                if "execution_receipts" in turn:
+                    response_data["execution_receipts"] = turn["execution_receipts"]
         return response_data
 
     # ---------- 挂起恢复 ----------
@@ -460,6 +705,7 @@ class TurnRunner:
             try:
                 final_result = await self.orchestrator.run_turn(
                     session=session, journal=journal,
+                    keep_recent_calls=True,  # 同一轮挂起恢复：预算、拒批与重复指纹继续累计
                     compact_history=False,  # 轮中重入:本轮未落盘观察不参与压缩(防压缩桩落盘)
                     temperature=turn.get("temperature", 0.2),
                     min_p=turn.get("min_p", 0.05),
@@ -490,6 +736,8 @@ class TurnRunner:
             else:
                 session.suspended_turn = None
                 await self._land_continuation(session, sid, turn)
+                if "execution_receipts" in turn:
+                    response_data["execution_receipts"] = turn["execution_receipts"]
         return response_data
 
     # ---------- 续跑共用收尾 ----------
@@ -534,12 +782,22 @@ class TurnRunner:
         journal = session.journal
         for k in ("_rollback_idx", "_task_snapshot", "_history_start_idx"):
             turn.pop(k, None)
+        self._attach_execution_receipts(journal, turn)
         await asyncio.to_thread(session.append_log, turn)
         await asyncio.to_thread(session.save_task)
         journal.emit("turn_ended", {
             **public_turn(turn), "turn_index": session.disk_turn_count() - 1})
         if self._summarize is not None:
             await self._summarize(session, sid)
+
+    @staticmethod
+    def _attach_execution_receipts(journal, turn: Dict[str, Any]) -> None:
+        """终态只投影现有账本，不影响模型上下文回滚或撤销外部副作用。"""
+        receipts = journal.execution_receipts()
+        if receipts is None:
+            turn.pop("execution_receipts", None)  # 旧/崩溃缺失证据保持未知
+        else:
+            turn["execution_receipts"] = receipts
 
     @staticmethod
     def _stale_target(msg: str) -> Dict[str, Any]:

@@ -186,11 +186,15 @@ struct MenuBarPanel: View {
         Group {
             switch store.connState {
             case .connected:
-                Text("\(L("已连接")) · \(store.settings.baseURL?.host() ?? "")")
+                Text("\(L("后端已连接")) · \(store.settings.baseURL?.host() ?? "")")
             case .connecting:
                 Text(L("连接中…"))
             case .offline:
                 Text(L("未连接"))
+            case .unauthorized:
+                Text(L("服务可达 · 请检查连接密钥"))
+            case .reachable:
+                Text(L("服务可达 · 业务状态未知"))
             }
             if let label = sidecarLabel {
                 Text(label)

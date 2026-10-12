@@ -1,5 +1,26 @@
-from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field
+from typing import List, Dict, Any, Optional, Literal
+
+
+class ExecutionReceipt(BaseModel):
+    seq: int
+    ts: float
+    type: Literal["tool_started", "tool_result"]
+    name: str = Field(max_length=128)
+    call_id: str = Field(max_length=128)
+    detail: str = Field(max_length=2000)
+    status: Optional[str] = Field(default=None, max_length=32)
+    truncated: Optional[bool] = None
+
+
+class ExecutionReceipts(BaseModel):
+    items: List[ExecutionReceipt] = Field(max_length=64)
+    truncated: bool
+
+
+class RetryRequest(BaseModel):
+    expected_turn_ref: str = Field(pattern=r"^tr_[0-9a-f]{64}$")
+    client_turn_id: str = Field(pattern=r"^[A-Za-z0-9._:-]{8,128}$")
 
 class ChatResponse(BaseModel):
     """
@@ -21,6 +42,13 @@ class ChatResponse(BaseModel):
 
     # status == "pending_approval" 时非空：等待用户授权的敏感工具调用清单
     pending_tools: Optional[List[Dict[str, Any]]] = None
+    # 仅投影本轮账本工具开始/返回事实；缺失为未知，不宣称副作用已撤销。
+    execution_receipts: Optional[ExecutionReceipts] = None
+    turn_ref: Optional[str] = None
+    retry_of: Optional[str] = None
+    retry_root_index: Optional[int] = None
+    retry_parent_index: Optional[int] = None
+    retry_input_unavailable: Optional[bool] = None
 
     # MLX 性能指标
     prompt_tokens: Optional[int] = None
@@ -139,9 +167,12 @@ class ApprovalRequest(BaseModel):
     expected_turn_id（可选）：远程决议（推送通知按钮）的防错批锚——决议只对这个
     轮次有效；当前等待审批的轮次不是它时拒绝（409 approval_target_mismatch），
     防止迟到点击批到后续另一个审批请求。
+    expected_approval_seq（可选）：卡片对应 awaiting_approval 信封的 seq，
+    同轮后续审批批次不匹配时也拒绝；省略时保留旧客户端行为。
     """
     approve: bool
     expected_turn_id: Optional[str] = None
+    expected_approval_seq: Optional[int] = Field(default=None, strict=True, gt=0)
 
 
 class LocationReport(BaseModel):
@@ -191,6 +222,22 @@ class ApiToolSaveRequest(BaseModel):
 class ApiToolTestRequest(ApiToolSaveRequest):
     """试调请求：声明 + 一组实参，真实调用一次并回显响应（不落盘）。"""
     arguments: Optional[Dict[str, Any]] = None
+
+
+class ApiToolPatchRequest(BaseModel):
+    """Only supplied fields change; explicit null restores an optional default."""
+    model_config = {"extra": "forbid"}
+    description: Optional[str] = None
+    endpoint: Optional[str] = None
+    method: Optional[str] = None
+    params: Optional[Dict[str, Any]] = None
+    auth: Optional[Dict[str, Any]] = None
+    headers: Optional[Dict[str, Any]] = None
+    timeout: Optional[float] = None
+    requires_approval: Optional[bool] = None
+    enabled: Optional[bool] = None
+    canary: Optional[Dict[str, Any]] = None
+    secret: Optional[str] = None
 
 
 class PushRegisterRequest(BaseModel):
@@ -267,6 +314,7 @@ class DeleteSessionResponse(BaseModel):
     status: bool
     frozen: bool
     response: str
+    reason: Optional[str] = None
 
 class DeleteTurnResponse(BaseModel):
     """
@@ -288,11 +336,19 @@ class SessionMetaItem(BaseModel):
     parent_session_id: Optional[str] = None # 分支溯源（悬空仅装饰，不影响功能）
     active: bool = False                    # 调度器视角是否活跃（运行/排队/挂起）
 
+class SessionRetentionPolicy(BaseModel):
+    enabled: bool
+    retention_days: float
+    empty_ttl_hours: float
+    scan_interval_seconds: int
+
+
 class SessionListResponse(BaseModel):
     """会话索引响应体（GET /api/v1/sessions）"""
     status: bool
     count: int
     sessions: List[SessionMetaItem]
+    retention_policy: Optional[SessionRetentionPolicy] = None
 
 class PinRequest(BaseModel):
     """置/撤会话 pin 的请求体（pin 的会话不被自动清扫回收）"""
@@ -305,6 +361,12 @@ class PinResponse(BaseModel):
     pinned: bool
     response: str
 
+class RetryGroup(BaseModel):
+    root_index: int = Field(ge=0)
+    display_index: int = Field(ge=0)
+    turn_indices: List[int] = Field(min_length=2)
+
+
 class HistoryResponse(BaseModel):
     """
     会话历史节点列表响应体（供前端选取分支节点）
@@ -313,7 +375,12 @@ class HistoryResponse(BaseModel):
     session_id: str
     count: int
     turns: List[Dict[str, Any]]
-    # 进行中轮次预写标记（{prompt, started_at, gen}）；无则 None。独立于 turns（不参与分支下标）。
+    # 历史读取前的账本下界；可与已落盘轮重叠，客户端按 turn_index 去重。
+    replay_after: Optional[int] = None
+    generation: Optional[str] = None
+    last_turn_ref: Optional[str] = None
+    display_turn_indices: Optional[List[int]] = None
+    retry_groups: Optional[List[RetryGroup]] = None
 
 class BranchRequest(BaseModel):
     """

@@ -1,4 +1,5 @@
-import type { ChatResponse, ResponseMessage, ToolCall, ToolResponse } from "@/types/agent-api"
+import { getDict } from "@/lib/i18n"
+import type { ExecutionReceipts, ChatResponse, HistoryResponse, RetryGroup, ResponseMessage, ToolCall, ToolResponse } from "@/types/agent-api"
 
 export type ChatRole = "user" | "assistant" | "tool" | "system"
 
@@ -24,6 +25,8 @@ export type ChatMessage = {
   turnIndex?: number
   /** 真流式进行中的临时预览气泡：token 逐段填充，turn_end 到达后被权威消息替换。 */
   streaming?: boolean
+  /** Rollback withdraws previews, not external effects; null means unknown facts. */
+  executionFacts?: ExecutionReceipts | null
 }
 
 export type Conversation = {
@@ -37,6 +40,12 @@ export type Conversation = {
   historyLoaded: boolean
   /** 服务端已落盘的轮次数（分支下标的上界）。 */
   turnCount: number
+  /** Raw canonical coverage is independent of the displayed winner and session index. */
+  canonicalTurns?: Array<ChatResponse | undefined>
+  displayTurnIndices?: number[]
+  retryGroups?: RetryGroup[]
+  lastCanonicalTurn?: { index: number; prompt: string; turnRef?: string }
+  retrySyncError?: boolean
   /** 是否已 pin（落盘 meta.json）：pin 的会话不被后台自动清扫回收。 */
   pinned?: boolean
 }
@@ -149,17 +158,72 @@ export function mapResponseMessages(
   return out
 }
 
-/** 把历史接口返回的一轮 ChatResponse 还原成「用户消息 + 模型消息」序列。 */
-export function turnToMessages(turn: ChatResponse, turnIndex: number): ChatMessage[] {
+/** Bound the display projection even when an old/malformed peer sends oversized facts. */
+function executionFacts(value: ChatResponse["execution_receipts"]): ExecutionReceipts | null {
+  if (!value || !Array.isArray(value.items)) return null
+  let truncated = value.truncated === true || value.items.length > 64
+  const items = value.items.slice(-64).flatMap((item) => {
+    if (!item || !["tool_started", "tool_result"].includes(item.type)) { truncated = true; return [] }
+    const detail = typeof item.detail === "string" ? item.detail : ""
+    const name = typeof item.name === "string" ? item.name : ""
+    const cut = item.truncated === true || detail.length > 2000 || name.length > 128
+      || (item.call_id?.length ?? 0) > 128 || (item.status?.length ?? 0) > 32
+    if (cut) truncated = true
+    return [{ seq: item.seq, ts: item.ts, type: item.type, name: name.slice(0, 128), detail: detail.slice(0, 2000),
+      call_id: item.call_id?.slice(0, 128), status: item.status?.slice(0, 32), truncated: cut }]
+  })
+  return { items, truncated }
+}
+
+/** One canonical mapping for history and live terminal reconciliation. */
+export function turnToMessages(turn: ChatResponse, turnIndex: number, labels = getDict("en").store): ChatMessage[] {
   const attachments = attachmentsFromTurn(turn)
   const userMessage: ChatMessage = {
-    id: nextMessageId(),
-    role: "user",
-    content: turn.prompt,
-    attachments: attachments.length > 0 ? attachments : undefined,
-    turnIndex,
+    id: nextMessageId(), role: "user", content: turn.prompt,
+    attachments: attachments.length > 0 ? attachments : undefined, turnIndex,
   }
-  const systemVariant =
-    turn.status === "cancelled" || turn.status === "warning" ? "warning" : "error"
-  return [userMessage, ...mapResponseMessages(turn.response ?? [], turnIndex, systemVariant)]
+  if (turn.status === "cancelled" || turn.status === "fail") {
+    return [userMessage, { id: nextMessageId(), role: "system", turnIndex,
+      content: turn.status === "cancelled" ? labels.cancelled : labels.engineFail,
+      variant: turn.status === "cancelled" ? "warning" : "error",
+      executionFacts: executionFacts(turn.execution_receipts) }]
+  }
+  const messages = [userMessage, ...mapResponseMessages(turn.response ?? [], turnIndex,
+    turn.status === "warning" ? "warning" : "error")]
+  if (turn.status === "warning" && !messages.some((m) => m.role === "assistant" && m.content)) {
+    messages.push({ id: nextMessageId(), role: "assistant", content: labels.warningNoConclusion, variant: "warning", turnIndex })
+  }
+  return messages
+}
+
+/** Consume server projection only: validate bounds/duplicates, never rebuild retry families. */
+export function historyProjection(history: HistoryResponse, labels = getDict("en").store) {
+  const turns = history.turns ?? []
+  const validIndex = (index: number) => Number.isInteger(index) && index >= 0 && index < turns.length
+  const candidate = history.display_turn_indices
+  const validDisplay = Array.isArray(candidate) && candidate.every(validIndex)
+    && new Set(candidate).size === candidate.length && (turns.length === 0 || candidate.length > 0)
+  let displayTurnIndices = validDisplay ? candidate : turns.map((_, index) => index)
+  const used = new Set<number>()
+  let retryGroups = (validDisplay && Array.isArray(history.retry_groups) ? history.retry_groups : []).filter((group) => {
+    if (!group || !validIndex(group.root_index) || !displayTurnIndices.includes(group.display_index)
+        || !Array.isArray(group.turn_indices) || group.turn_indices.length < 2
+        || !group.turn_indices.every(validIndex) || new Set(group.turn_indices).size !== group.turn_indices.length
+        || group.turn_indices.some((index, position) => position > 0 && index <= group.turn_indices[position - 1])
+        || !group.turn_indices.includes(group.root_index) || !group.turn_indices.includes(group.display_index)
+        || group.turn_indices.some((index) => used.has(index))) return false
+    group.turn_indices.forEach((index) => used.add(index))
+    return true
+  })
+  // Optional/partial peer metadata must never hide an attempt without an audit entry.
+  // This checks visibility coverage only; family membership remains server-owned.
+  const visibleCoverage = new Set([...displayTurnIndices, ...used])
+  if (visibleCoverage.size !== turns.length) {
+    displayTurnIndices = turns.map((_, index) => index)
+    retryGroups = []
+  }
+  const tail = turns.at(-1)
+  return { canonicalTurns: turns, displayTurnIndices, retryGroups,
+    lastCanonicalTurn: tail ? { index: turns.length - 1, prompt: tail.prompt, turnRef: history.last_turn_ref ?? tail.turn_ref } : undefined,
+    messages: displayTurnIndices.flatMap((index) => turnToMessages(turns[index], index, labels)) }
 }

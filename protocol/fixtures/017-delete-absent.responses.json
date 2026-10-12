@@ -1,0 +1,5 @@
+{
+  "absent": {"status": false, "frozen": false, "reason": "not_found", "response": "Target is already absent"},
+  "deleted": {"status": true, "frozen": false, "response": "Deleted"},
+  "failed": {"status": false, "frozen": false, "response": "Deletion was rejected"}
+}

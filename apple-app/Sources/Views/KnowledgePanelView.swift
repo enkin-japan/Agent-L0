@@ -27,6 +27,9 @@ private var loadingList: some View {
 /// （原文入 storage/.trash，可手工找回），文案如实告知。
 struct KnowledgePanelView: View {
     @EnvironmentObject var store: AgentStore
+    #if os(macOS)
+    @EnvironmentObject var retier: RetierMonitor
+    #endif
     @Environment(\.dismiss) private var dismiss
 
     /// 嵌入模式（设置页内）：不套自己的 NavigationStack（复用设置页的外层栈推入，
@@ -35,6 +38,10 @@ struct KnowledgePanelView: View {
 
     @State private var categories: [RagCategory]?
     @State private var offline = false
+    @State private var overviewStale = false
+    @State private var serviceStatus: RagRetierStatus?
+    @State private var reloadID = UUID()
+    @State private var refreshing = false
 
     var body: some View {
         if embedded {
@@ -62,6 +69,39 @@ struct KnowledgePanelView: View {
             }
         }
         .navigationTitle(L("知识库"))
+        .safeAreaInset(edge: .top) {
+            // Keep this in the panel body: an embedded settings sheet can consume
+            // the navigation toolbar's primary action slot.
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(capabilityLabel).font(.caption).foregroundStyle(.secondary)
+                    if overviewStale {
+                        Text(L("知识库列表更新失败，显示最近一次记录。"))
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                    #if os(macOS)
+                    if let progress = retier.rebuildProgress { Text(progress).font(.caption) }
+                    if let notice = retier.manualNotice { Text(L("最近一次检查或操作结果：") + notice).font(.caption).foregroundStyle(.secondary) }
+                    #endif
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                #if os(macOS)
+                Button(L("检查并重建知识库")) {
+                    Task { await retier.requestManualRebuild(); await reload() }
+                }
+                .buttonStyle(.bordered)
+                .disabled(retier.isBusy)
+                #endif
+                Button { Task { await reload() } } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel(L("刷新知识库状态"))
+                .help(L("刷新知识库状态"))
+                .disabled(refreshing)
+            }
+            .padding(.horizontal).padding(.vertical, 8)
+        }
         .toolbar {
             if !embedded {
                 ToolbarItem(placement: .cancellationAction) {
@@ -70,15 +110,45 @@ struct KnowledgePanelView: View {
             }
         }
         .task { await reload() }
+        .onChange(of: store.client.map { ObjectIdentifier($0) }) {
+            reloadID = UUID(); refreshing = false; categories = nil; serviceStatus = nil
+            offline = false; overviewStale = false
+            Task { await reload() }
+        }
     }
 
     private func reload() async {
+        guard !refreshing else { return }
+        let id = UUID()
+        reloadID = id
+        refreshing = true
+        defer { if reloadID == id { refreshing = false } }
+        guard let client = store.client else { offline = true; serviceStatus = nil; return }
+        // Management can remain available while computation is offline. A failed
+        // computation-status request must not discard a successful document list.
+        async let status = try? client.ragRetierStatus()
         do {
-            categories = try await store.client?.ragOverview().categories
-            offline = false
+            let result = try await client.ragOverview()
+            guard reloadID == id, store.client === client else { return }
+            categories = result.categories
+            offline = false; overviewStale = false
         } catch {
-            categories = nil
-            offline = true
+            guard reloadID == id, store.client === client else { return }
+            overviewStale = categories != nil
+            offline = categories == nil
+        }
+        let fetched = await status
+        guard reloadID == id, store.client === client else { return }
+        serviceStatus = fetched
+    }
+
+    private var capabilityLabel: String {
+        switch serviceStatus?.availability ?? .unknown {
+        case .unknown: return L("知识库计算状态未知，刷新后重试。")
+        case .computeOffline: return L("知识库计算服务不可达；语义检索与新内容入库暂不可用。可继续管理已加载的文档。")
+        case .rebuilding: return L("知识库正在重建，语义检索与入库暂不可用。")
+        case .needsRebuild: return L("知识库需要重建，请先重建再使用语义检索。")
+        case .reachable: return L("知识库计算服务可达。")
         }
     }
 
@@ -147,6 +217,9 @@ struct KnowledgeDocumentsView: View {
     @State private var working = false
     @State private var multiSelection = Set<String>()   // RagDocument.id = sourcePath
     @State private var confirmBulkDelete = false
+    @State private var deleteFailures: [String: String] = [:]
+    @State private var deleteRequestID = UUID()
+    @State private var documentRequestID = UUID()
     #if os(iOS)
     @State private var editMode: EditMode = .inactive
     #endif
@@ -166,6 +239,20 @@ struct KnowledgeDocumentsView: View {
             }
         }
         .navigationTitle(category.name)
+        .safeAreaInset(edge: .top) {
+            if !deleteFailures.isEmpty {
+                Text(L("部分项目未确认删除，失败项仍保留选中，可检查后重试。"))
+                    .font(.caption).foregroundStyle(.orange).padding(8)
+            } else if failed, documents != nil {
+                Text(L("文档更新失败，显示最近一次记录。"))
+                    .font(.caption).foregroundStyle(.orange).padding(8)
+            }
+        }
+        .onChange(of: store.client.map { ObjectIdentifier($0) }) {
+            deleteRequestID = UUID(); documentRequestID = UUID(); working = false
+            documents = nil; failed = false; deleteFailures = [:]; multiSelection = []
+            Task { await reload() }
+        }
         .toolbar {
             ToolbarItem(placement: .destructiveAction) {
                 Button(role: .destructive) {
@@ -219,10 +306,14 @@ struct KnowledgeDocumentsView: View {
     }
 
     private func reload() async {
+        let request = UUID(); documentRequestID = request
+        guard let client = store.client else { failed = true; return }
         do {
-            documents = try await store.client?.ragDocuments(category: category.name).documents
-            failed = false
+            let result = try await client.ragDocuments(category: category.name)
+            guard store.client === client, documentRequestID == request else { return }
+            documents = result.documents; failed = false
         } catch {
+            guard store.client === client, documentRequestID == request else { return }
             failed = true
         }
     }
@@ -331,34 +422,29 @@ struct KnowledgeDocumentsView: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+            if let reason = deleteFailures[doc.sourcePath] { Text(reason).font(.caption2).foregroundStyle(.orange) }
         }
         .padding(.vertical, 2)
     }
 
-    private func delete(_ doc: RagDocument) async {
-        working = true
-        defer { working = false }
-        do {
-            try await store.client?.ragDeleteDocument(sourcePath: doc.sourcePath)
-            await reload()
-            await onChanged()
-        } catch {
-            failed = true
-        }
-    }
+    private func delete(_ doc: RagDocument) async { await deletePaths([doc.sourcePath]) }
 
-    private func bulkDelete() async {
-        working = true
-        defer { working = false }
-        // 逐篇串行（后端删除含归档改名，不宜并发同目录）；一篇失败不吞后续
-        for path in multiSelection {
-            try? await store.client?.ragDeleteDocument(sourcePath: path)
-        }
-        multiSelection.removeAll()
+    private func bulkDelete() async { await deletePaths(Array(multiSelection)) }
+
+    private func deletePaths(_ paths: [String]) async {
+        guard !working, let client = store.client else { return }
+        let request = UUID(); deleteRequestID = request; working = true
+        defer { if deleteRequestID == request { working = false } }
+        let result = await store.deleteKnowledgeDocuments(paths)
+        guard deleteRequestID == request, store.client === client, !result.obsolete else { return }
+        deleteFailures = result.failures
+        multiSelection.subtract(result.deleted)
+        documents?.removeAll { result.deleted.contains($0.sourcePath) }
         #if os(iOS)
-        editMode = .inactive
+        if multiSelection.isEmpty && result.failures.isEmpty { editMode = .inactive }
         #endif
         await reload()
+        guard deleteRequestID == request, store.client === client else { return }
         await onChanged()
     }
 

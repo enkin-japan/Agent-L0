@@ -311,11 +311,18 @@ struct SettingsView: View {
                         // 拨设备 A 的两把服务密钥（R5-6，只在 bundle 布局被消费；
                         // repo 布局由 dev 桥接读仓库 .env.local，这里填了也无害）
                         SecureField("INFER_API_KEY", text: sidecarKeyBinding(\.inferApiKey))
-                        SecureField("RAG_API_KEY", text: sidecarKeyBinding(\.ragApiKey))
+                        SecureField("RAG_COMPUTE_API_KEY", text: sidecarKeyBinding(\.ragComputeApiKey))
+                        Text(L("知识库计算服务使用算力端的 RAG_COMPUTE_API_KEY，与本机数据服务的密钥不同。"))
+                            .font(.caption).foregroundStyle(.secondary)
+                        DisclosureGroup(L("知识库数据服务密钥（高级）")) {
+                            SecureField("RAG_API_KEY", text: sidecarKeyBinding(\.ragApiKey))
+                            Text(L("本机数据服务留空时自动生成；旧版整库远端部署须填写远端的 RAG_API_KEY。修改计算服务密钥不会更改此项。"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         // 长度回显：SecureField 打点看不出存了什么——「存没存上/存的
                         // 是不是清洗后的值」必须可见（实机三轮 401 的教训）。与设备 A
                         // `.env.local` 里的字符数对得上即为正确。
-                        Text("\(L("已存长度"))：INFER \(store.settings.inferApiKey.count) · RAG \(store.settings.ragApiKey.count)")
+                        Text("\(L("已存长度"))：INFER \(store.settings.inferApiKey.count) · RAG COMPUTE \(store.settings.ragComputeApiKey.count)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         // 密钥是拉起时注入的（R5-6）：漏填/改错的实症是推理/RAG 一律
@@ -375,6 +382,13 @@ struct SettingsView: View {
                                 .foregroundStyle(Theme.warning)
                         }
                         LabeledContent(L("状态"), value: sidecarStateLabel)
+                        if sidecar.configuration?.incomplete == true {
+                            Text(L("设置已保存，算力端地址尚未配置。请填写上方地址后重启执行层。"))
+                                .font(.caption).foregroundStyle(Theme.warning)
+                        } else if sidecar.configuration?.status == "unknown" {
+                            Text(L("尚未读取到有效配置；保存设置不代表服务已就绪。"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         // 布局形态显性化（#85）：bundle 判据失败时会静默退 repo 布局，
                         // 密钥来源随之从钥匙串换成 .env.local——那正是 2026-08-10 全天
                         // 401 的根因。形态与密钥来源必须写在脸上，不能靠翻日志推断。

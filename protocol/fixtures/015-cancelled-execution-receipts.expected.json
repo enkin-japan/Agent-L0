@@ -1,0 +1,9 @@
+{
+  "turn_state": "none",
+  "transcript": [
+    {"role": "user", "content": "写入文件后停止"},
+    {"role": "system", "content": "本轮已被用户取消,未产生任何记忆变更。"}
+  ],
+  "preview": {"prompt": "", "text": "", "thinking": "", "steps": [], "task": null},
+  "pending_tools": []
+}

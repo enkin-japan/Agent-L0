@@ -1,4 +1,4 @@
-import { memo, useState } from "react"
+import { memo, useMemo, useState } from "react"
 import {
   AlertTriangle,
   Cpu,
@@ -13,7 +13,8 @@ import {
 
 import { cn } from "@/lib/utils"
 import type { ChatMessage as ChatMessageType } from "@/lib/agent-data"
-import type { ToolResponse } from "@/types/agent-api"
+import { turnToMessages } from "@/lib/agent-data"
+import type { ChatResponse, RetryGroup, ToolResponse } from "@/types/agent-api"
 import { useT } from "@/store/useUiStore"
 import { MarkdownContent } from "@/components/dashboard/markdown-content"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -100,18 +101,88 @@ function Thoughts({ text, label }: { text: string; label: string }) {
  *  非流式消息的 message 引用是稳定的（updateMessage 只重建目标消息），memo 让
  *  它们整棵跳过（含内部 MarkdownContent 的 remark 重解析）。回调 props 由
  *  ChatArea 用 useStableCallback 稳定，浅比较才有效——新增回调 prop 时同样处理。 */
+/** Shared tool observation renderer for ordinary transcripts and archived facts. */
+function ToolObservation({ tr, label }: { tr: ToolResponse; label: string }) {
+  const rendered = renderByHint(tr)
+  if (rendered) return <div>{rendered}</div>
+  return (
+    <div className="group/tool rounded-xl border border-border bg-muted/40 px-3 py-2">
+      <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <Wrench className="size-3.5" />{label}
+        <CopyButton text={tr.response} className="ml-auto opacity-0 transition-opacity focus-visible:opacity-100 group-hover/tool:opacity-100" />
+      </p>
+      <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground/80">{tr.response}</pre>
+    </div>
+  )
+}
+
+function ExecutionFacts({ facts }: { facts: NonNullable<ChatMessageType["executionFacts"]> | null }) {
+  const t = useT()
+  return (
+    <details className="mt-3 w-full rounded-xl border border-border bg-background/70 p-3 text-foreground">
+      <summary className="cursor-pointer text-xs font-medium">{t.execution.title}</summary>
+      <div className="mt-2 flex flex-col gap-2 text-xs">
+        <p className="text-muted-foreground">{t.execution.limits}</p>
+        <p className="text-muted-foreground">{t.execution.semantics}</p>
+        {!facts ? <p>{t.execution.unknown}</p> : facts.items.length === 0 ? <p>{t.execution.empty}</p> : null}
+        {facts?.truncated && <p className="text-chart-3">{t.execution.truncated}</p>}
+        {facts?.items.map((item, index) => (
+          <div key={`${item.seq}-${index}`}>
+            <ToolObservation tr={{ name: item.name, response: item.detail }}
+              label={item.type === "tool_started" ? t.execution.started(item.name) : t.execution.returned(item.name)} />
+            {item.status && <p className="mt-1 text-muted-foreground">{t.execution.sourceStatus(item.status)}</p>}
+            {item.truncated && <p className="mt-1 text-muted-foreground">{t.execution.truncated}</p>}
+          </div>
+        ))}
+      </div>
+    </details>
+  )
+}
+
+/** Audit reuses the canonical mapper and message renderer; no editing/execution controls. */
+export function RetryAttempts({ group, turns, onBranch }: {
+  group: RetryGroup; turns: Array<ChatResponse | undefined>; onBranch?: (index: number) => void
+}) {
+  const t = useT()
+  const attempts = useMemo(() => group.turn_indices.flatMap((index) => {
+    const turn = turns[index]
+    return turn ? [{ index, turn, messages: turnToMessages(turn, index, t.store) }] : []
+  }), [group, turns, t.store])
+  const latest = attempts.at(-1)?.turn
+  const status = (value: ChatResponse["status"]) => t.retry.statuses[value] ?? value
+  return (
+    <details className="rounded-xl border border-border bg-muted/20 px-3 py-2" data-retry-display-index={group.display_index}>
+      <summary className="cursor-pointer text-xs font-medium">{t.retry.title} · {latest ? t.retry.latest(status(latest.status)) : t.retry.timeUnknown}</summary>
+      <div className="mt-3 flex flex-col gap-5">
+        {attempts.map(({ index, turn, messages }) => (
+          <section key={index} data-canonical-index={index} className="flex flex-col gap-3">
+            <p className="text-xs text-muted-foreground">{t.retry.turn(index + 1)} · {status(turn.status)} · {typeof turn.timestamp === "number" && Number.isFinite(turn.timestamp)
+              ? new Date(turn.timestamp * 1000).toLocaleString() : t.retry.timeUnknown}
+              {index === group.display_index ? ` · ${t.retry.current}` : ""}</p>
+            {messages.map((message) => <ChatMessage key={message.id} message={message} onBranch={onBranch} editable={false} />)}
+          </section>
+        ))}
+      </div>
+    </details>
+  )
+}
+
 export const ChatMessage = memo(function ChatMessage({
   message,
   onBranch,
   editable = false,
   onEditSubmit,
   onDeleteTurn,
+  editPrompt,
+  editNote,
 }: {
   message: ChatMessageType
   onBranch?: (nodeIndex: number) => void
   editable?: boolean
   onEditSubmit?: (text: string) => void
   onDeleteTurn?: () => void
+  editPrompt?: string
+  editNote?: string
 }) {
   const t = useT()
   const [editing, setEditing] = useState(false)
@@ -130,7 +201,10 @@ export const ChatMessage = memo(function ChatMessage({
         )}
       >
         <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-        <span className="whitespace-pre-wrap leading-relaxed">{message.content}</span>
+        <div className="min-w-0 flex-1">
+          <span className="whitespace-pre-wrap leading-relaxed">{message.content}</span>
+          {message.executionFacts !== undefined && <ExecutionFacts facts={message.executionFacts} />}
+        </div>
       </div>
     )
   }
@@ -140,25 +214,9 @@ export const ChatMessage = memo(function ChatMessage({
     return (
       <div data-msg-id={message.id} className="flex w-full items-start gap-3 pl-11">
         <div className="flex max-w-[78%] flex-col gap-2">
-          {message.toolResponses?.map((tr, i) => {
-            const rendered = renderByHint(tr)
-            if (rendered) return <div key={i}>{rendered}</div>
-            return (
-              <div key={i} className="group/tool rounded-xl border border-border bg-muted/40 px-3 py-2">
-                <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                  <Wrench className="size-3.5" />
-                  {t.message.toolResult(tr.name)}
-                  <CopyButton
-                    text={tr.response}
-                    className="ml-auto opacity-0 transition-opacity focus-visible:opacity-100 group-hover/tool:opacity-100"
-                  />
-                </p>
-                <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground/80">
-                  {tr.response}
-                </pre>
-              </div>
-            )
-          })}
+          {message.toolResponses?.map((tr, i) => (
+            <ToolObservation key={i} tr={tr} label={t.message.toolResult(tr.name)} />
+          ))}
         </div>
       </div>
     )
@@ -283,6 +341,7 @@ export const ChatMessage = memo(function ChatMessage({
         </div>
 
         {/* 消息操作行：复制（所有有正文的消息）· 编辑/删除（最后一轮用户发言）· 分支（assistant） */}
+        {isUser && editable && editNote && <p className="mt-1 text-xs text-muted-foreground">{editNote}</p>}
         {!editing && !message.streaming && (message.content || (isUser && editable) || canBranch) && (
           <div className="mt-1 flex gap-0.5 opacity-100 transition-opacity hover-hover:opacity-0 hover-hover:group-hover/msg:opacity-100 focus-within:opacity-100">
             {message.content && (
@@ -303,7 +362,7 @@ export const ChatMessage = memo(function ChatMessage({
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={() => { setDraft(message.content ?? ""); setEditing(true) }}
+                      onClick={() => { setDraft(editPrompt ?? message.content ?? ""); setEditing(true) }}
                       className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       <Pencil className="size-3.5" />

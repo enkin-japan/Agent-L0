@@ -1,0 +1,5 @@
+{"seq":1,"turn_id":"t_receipts","ts":1001,"type":"turn_queued","data":{"prompt":"写入文件后停止"}}
+{"seq":2,"turn_id":"t_receipts","ts":1002,"type":"turn_started","data":{}}
+{"seq":3,"turn_id":"t_receipts","ts":1003,"type":"tool_started","data":{"name":"write_file","call_id":"write1","args":{"path":"report.txt"}}}
+{"seq":4,"turn_id":"t_receipts","ts":1004,"type":"tool_result","data":{"name":"write_file","call_id":"write1","response":"Tool returned after writing report.txt","status":"ok"}}
+{"seq":5,"turn_id":"t_receipts","ts":1005,"type":"turn_ended","data":{"status":"cancelled","prompt":"写入文件后停止","response":[{"role":"system","content":"本轮已被用户取消,未产生任何记忆变更。"}],"turn_index":0,"execution_receipts":{"items":[{"seq":3,"ts":1003,"type":"tool_started","name":"write_file","call_id":"write1","detail":"","truncated":true},{"seq":4,"ts":1004,"type":"tool_result","name":"write_file","call_id":"write1","detail":"Tool returned after writing report.txt","status":"ok"}],"truncated":true}}}

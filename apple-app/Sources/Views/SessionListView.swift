@@ -6,6 +6,9 @@ import SwiftUI
 /// store.select → navigationDestination 推入（selection 绑定在 iPhone 上同值重点不触发导航）。
 struct SessionListView: View {
     @EnvironmentObject var store: AgentStore
+    #if os(macOS)
+    @EnvironmentObject var sidecar: SidecarManager
+    #endif
     @State private var showSettings = false
     @State private var showSchedules = false
     @State private var renaming: SessionMetaItem?
@@ -13,12 +16,26 @@ struct SessionListView: View {
     // 多选（批量删除）：macOS 走 ⌘/⇧ 原生点选；iOS 长按菜单进编辑态圈选。
     @State private var multiSelection = Set<String>()
     @State private var confirmBulkDelete = false
+    @State private var deleting = false
+    @State private var deleteFailures: [String: String] = [:]
+    @State private var deleteRequestID = UUID()
+    @State private var deletionSelectionProjection: Set<String>?
     #if os(iOS)
     @State private var editMode: EditMode = .inactive
     #endif
 
     var body: some View {
         sessionList
+            .safeAreaInset(edge: .bottom) {
+                if deleting { ProgressView(L("正在删除所选项目…")).padding(8) }
+                else if !deleteFailures.isEmpty {
+                    Text(L("部分项目未确认删除，失败项仍保留选中，可检查后重试。"))
+                        .font(.caption).foregroundStyle(.orange).padding(8)
+                }
+            }
+            .onChange(of: store.client.map { ObjectIdentifier($0) }) {
+                deleteRequestID = UUID(); deleting = false; deleteFailures = [:]
+            }
             // 下拉刷新是 iOS 习语；macOS 上刷新控件收起与 List 更新天然打架
             //（实机反馈：等值守卫后仍有残影）——macOS 撤掉，改由探活循环顺带
             // 自动刷新列表（15s 一巡 + 等值守卫 = 不变零重建）
@@ -53,19 +70,31 @@ struct SessionListView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(connectionColor)
-                        .frame(width: 7, height: 7)
-                    Text(connectionLabel)
-                    Spacer()
-                    Text(Bundle.main.appVersionLabel)
+                VStack(alignment: .leading, spacing: 6) {
+                    #if os(macOS)
+                    if store.settings.sidecarEnabled, sidecar.configuration?.incomplete == true {
+                        Button { showSettings = true } label: {
+                            Label(L("算力端尚未配置 · 打开设置"), systemImage: "exclamationmark.triangle")
+                                .font(.caption).foregroundStyle(Theme.warning)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 14)
+                    }
+                    #endif
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(connectionColor)
+                            .frame(width: 7, height: 7)
+                        Text(connectionLabel)
+                        Spacer()
+                        Text(Bundle.main.appVersionLabel)
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .background(.bar)
                 }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-                .background(.bar)
             }
             .toolbar {
                 ToolbarItemGroup(placement: controlsPlacement) {
@@ -204,7 +233,7 @@ struct SessionListView: View {
                     } label: {
                         Text("\(L("删除所选"))（\(multiSelection.count)）")
                     }
-                    .disabled(multiSelection.isEmpty)
+                    .disabled(multiSelection.isEmpty || deleting)
                     Spacer()
                     Button(L("完成")) {
                         editMode = .inactive
@@ -217,6 +246,8 @@ struct SessionListView: View {
                             titleVisibility: .visible) {
             Button(L("删除"), role: .destructive) { bulkDelete() }
             Button(L("取消"), role: .cancel) {}
+        } message: {
+            Text(L("删除会话记录不会撤销已经发出的操作。"))
         }
         #else
         // Set 选择 = ⌘ 点选 / ⇧ 范围选免费获得；单选仍即点即入会话（onChange 分流）。
@@ -247,6 +278,10 @@ struct SessionListView: View {
             }
         }
         .onChange(of: multiSelection) {
+            if let projected = deletionSelectionProjection {
+                deletionSelectionProjection = nil
+                if projected == multiSelection { return }
+            }
             if multiSelection.count == 1, let id = multiSelection.first,
                id != store.selectedSessionId {
                 store.select(sessionId: id)
@@ -262,6 +297,8 @@ struct SessionListView: View {
                             titleVisibility: .visible) {
             Button(L("删除"), role: .destructive) { bulkDelete() }
             Button(L("取消"), role: .cancel) {}
+        } message: {
+            Text(L("删除会话记录不会撤销已经发出的操作。"))
         }
         #endif
     }
@@ -270,42 +307,75 @@ struct SessionListView: View {
         "\(L("确认删除所选会话？"))（\(multiSelection.count)）\(L("（不可恢复）"))"
     }
 
-    /// 批量删除：逐条走既有单删链路（后端逐会话落盘删除，无批量端点——个人量级够用）。
+    /// Only confirmed items leave the selection; a retry contains only remaining failures.
     private func bulkDelete() {
         let items = store.sessions.filter { multiSelection.contains($0.sessionId) }
-        items.forEach { store.deleteSession($0) }
-        multiSelection.removeAll()
+        Task { await deleteItems(items) }
+    }
+
+    private func deleteItems(_ items: [SessionMetaItem]) async {
+        guard !deleting, let client = store.client else { return }
+        let request = UUID(); deleteRequestID = request; deleting = true
+        defer { if deleteRequestID == request { deleting = false } }
+        let result = await store.deleteSessions(items)
+        guard deleteRequestID == request, store.client === client, !result.obsolete else { return }
+        let remaining = multiSelection.subtracting(result.deleted)
+        // Receipt projection must not navigate away from a newer active incarnation.
+        if store.selectedSessionId != nil, remaining != multiSelection {
+            deletionSelectionProjection = remaining
+        }
+        multiSelection = remaining
+        deleteFailures = result.failures
         #if os(iOS)
-        editMode = .inactive
+        if remaining.isEmpty && result.failures.isEmpty { editMode = .inactive }
         #endif
     }
 
     /// 任务中心：全局调度快照（跨会话的跑/排队/挂起），体现「重 task 轻会话」。
     @ViewBuilder
     private var taskCenterSection: some View {
-        if !store.globalTasks.isEmpty {
-            Section(L("任务")) {
-                ForEach(store.globalTasks) { task in
-                    HStack(spacing: 8) {
-                        taskStatusIcon(task.status)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(sessionTitle(task.sessionId)).lineLimit(1).font(.callout)
-                            Text(taskDetail(task))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if task.status == "suspended" {
-                            Button(L("恢复")) {
-                                store.resumeTask(sessionId: task.sessionId)
-                            }
-                            .font(.caption)
-                            .buttonStyle(.borderless)
+        Section(L("任务")) {
+            if store.globalTasksFreshness == .unknown {
+                Text(L("任务状态尚未确认，请等待状态同步。"))
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if store.globalTasksFreshness == .stale {
+                Text(L("任务状态更新失败，显示最近一次记录。"))
+                    .font(.caption).foregroundStyle(.orange)
+            } else if store.globalTasks.isEmpty {
+                Text(L("当前没有活动任务"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(store.globalTasks) { task in
+                HStack(spacing: 8) {
+                    taskStatusIcon(task.status)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(sessionTitle(task.sessionId)).lineLimit(1).font(.callout)
+                        Text(taskDetail(task)).font(.caption2).foregroundStyle(.secondary)
+                        if !AgentStore.hasControllableChat(kind: task.kind) {
+                            Text(L("后台维护，无法确认可控制的对话轮次。"))
+                                .font(.caption2).foregroundStyle(.secondary)
                         }
                     }
-                    .contentShape(Rectangle())
-                    .onTapGesture { store.select(sessionId: task.sessionId) }
+                    Spacer()
+                    Group {
+                      if AgentStore.hasControllableChat(kind: task.kind) {
+                        if task.status == "suspended" {
+                            Button(L("恢复")) { store.controlTask(sessionId: task.sessionId, kind: .resume) }
+                                .font(.caption).buttonStyle(.borderless)
+                        } else if task.status == "running" {
+                            Button(L("挂起")) { store.controlTask(sessionId: task.sessionId, kind: .suspend) }
+                                .font(.caption).buttonStyle(.borderless)
+                        }
+                        if AgentStore.canCancelTask(phase: task.status) {
+                            Button(L("停止")) { store.controlTask(sessionId: task.sessionId, kind: .cancel) }
+                                .font(.caption).buttonStyle(.borderless)
+                        }
+                      }
+                    }
+                    .disabled(store.globalTasksFreshness != .fresh || store.controlRequest != nil || store.isSessionDeleting(task.sessionId))
                 }
+                .contentShape(Rectangle())
+                .onTapGesture { store.select(sessionId: task.sessionId) }
             }
         }
     }
@@ -344,6 +414,7 @@ struct SessionListView: View {
         case "chat": return L("对话")
         case "resume": return L("续跑")
         case "summarize": return L("记忆压缩")
+        case "prewarm": return L("后台维护")
         case "scheduled": return L("定时任务")
         case "approval": return L("审批续跑")
         default: return kind ?? L("任务")
@@ -366,9 +437,12 @@ struct SessionListView: View {
                 store.togglePin(item)
             }
             Button(L("删除会话"), role: .destructive) {
-                store.deleteSession(item)
+                Task { await deleteItems([item]) }
             }
+            .disabled(deleting || store.isSessionDeleting(item.sessionId) || store.hasSubmissionInFlight(item.sessionId))
+            .help(L("删除会话记录不会撤销已经发出的操作。"))
         }
+        .disabled(store.isSessionDeleting(item.sessionId))
     }
 
     private var controlsPlacement: ToolbarItemPlacement {
@@ -385,15 +459,18 @@ struct SessionListView: View {
         switch store.connState {
         case .connected: return Theme.success
         case .connecting: return Theme.warning
+        case .unauthorized, .reachable: return Theme.warning
         case .offline: return .red
         }
     }
 
     private var connectionLabel: String {
         switch store.connState {
-        case .connected: return L("已连接")
+        case .connected: return L("后端已连接")
         case .connecting: return L("连接中…")
         case .offline: return L("未连接")
+        case .unauthorized: return L("服务可达 · 请检查连接密钥")
+        case .reachable: return L("服务可达 · 业务状态未知")
         }
     }
 

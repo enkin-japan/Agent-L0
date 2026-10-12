@@ -7,7 +7,7 @@
 2. **写前先修尾**。进程崩溃会在文件尾留下半截 JSON(且可能切在 UTF-8 多字节字符
    中间);重启后的第一件事又是往同一文件追加恢复记录——不修尾就把残字节和新记录
    粘成一行垃圾,一条坏行同时污染上面四路口径。`append_record` 因此内建 `repair_tail`。
-3. **坏内容永不抛,I/O 错误原样抛**。「文件是空的」与「读不动」必须可区分:上游各有
+3. **缺省坏内容不抛,I/O 错误原样抛**。「文件是空的」与「读不动」必须可区分:上游各有
    自己的 try 纪律,把 OSError 吞成空迭代会让磁盘故障表现为「会话历史没了」。
 4. **绝不用 splitlines()**。它把 \\r / \\x0b / \\x0c / U+0085 / U+2028 也当行界,而
    本仓记录正文里出现这些字符是常态——行界只有 b"\\n" 一个。二进制读、按 b"\\n" 切。
@@ -15,9 +15,12 @@
 坏行是仪表数据不是异常:跳过 + 每路径每类至多告警一次 + 计入 `bad_line_stats`
 (累计数始终准确,只是不重复刷屏;唯一例外是 `iter_records_reversed`——高频探询,
 不计数不告警,见其 docstring)。`strict=True` 反过来——坏行抛 ValueError。
-⚠️ strict **只供离线校验与测试**,绝不进生产读者:各读者对异常的既有处置互不相同
+⚠️ forward strict **只供离线校验与测试**,绝不进既有生产读者:各读者对异常的既有处置互不相同
 (吞成 None/0/上抛),strict 一开「口径唯一」当场破裂。故它只是显式参数,没有
 config 旋钮(首审 M7:全局旋钮会让四个读者四种行为)。
+反向读取另有显式 complete/reject_corruption 模式，仅供明确retry的查重守卫：
+该消费者将坏证据拒绝为未知，不能沿普通恢复读者的跳坏行纪律当作查无。
+这两个参数缺省为False，不改变普通反向窗口/容错，也不启用全局strict配置。
 """
 import json
 import os
@@ -223,7 +226,8 @@ def append_record(path: PathArg, obj: Any, *, default=str) -> None:
         f.write(line.encode("utf-8") + b"\n")
 
 
-def iter_records_reversed(path: PathArg, *, max_bytes: int = 4 * 1024 * 1024):
+def iter_records_reversed(path: PathArg, *, max_bytes: int = 4 * 1024 * 1024,
+                          complete: bool = False, reject_corruption: bool = False):
     """从文件尾向前逐条产出有效记录对象(dict),**新在前**;消费方随时 break。
 
     供「最近的记录里找某条」类回查(如提交幂等键对 turn_queued 判重):按块(64KB)向前
@@ -233,8 +237,12 @@ def iter_records_reversed(path: PathArg, *, max_bytes: int = 4 * 1024 * 1024):
     bad_line_stats**(高频探询,不该把同一条坏行反复计数;模块头的计数纪律对本函数
     例外)。**不返回 Record**:反向窗口无从得知全局 index,造一个局部序号出去就是给
     下标口径开第二个出处。文件不存在/NotADirectory → 空;其余 I/O 错误原样上抛。
+
+    明确retry守卫可显式 complete=True忽略max_bytes（含0/负值）扫描到文件头；
+    reject_corruption=True复用同一parse将坏UTF8/JSON/非对象变为ValueError，不回显
+    记录内容，不统计重复坏行。ASCII空白行仍跳过。两个选项均不改变其它调用方默认。
     """
-    if max_bytes <= 0:
+    if not complete and max_bytes <= 0:
         return
     p = Path(path)
     try:
@@ -248,18 +256,27 @@ def iter_records_reversed(path: PathArg, *, max_bytes: int = 4 * 1024 * 1024):
         try:
             obj = json.loads(seg.decode("utf-8"))
         except Exception:
+            if reject_corruption:
+                raise ValueError("JSONL evidence contains an invalid UTF-8/JSON record") from None
             return None
-        return obj if isinstance(obj, dict) else None
+        if isinstance(obj, dict):
+            return obj
+        if reject_corruption:
+            raise ValueError("JSONL evidence contains a non-object record")
+        return None
 
     with f:
         size = os.fstat(f.fileno()).st_size
-        floor = max(0, size - max_bytes)
+        floor = 0 if complete else max(0, size - max_bytes)
         pos = size
         carry = b""                      # 当前块首段(其开头可能还在更前面的块里)
         while pos > floor:
             start = max(floor, pos - _BLOCK)
             f.seek(start)
-            block = f.read(pos - start) + carry
+            chunk = f.read(pos - start)
+            if complete and len(chunk) != pos - start:
+                raise OSError("JSONL evidence changed during complete read")
+            block = chunk + carry
             pos = start
             segs = block.split(b"\n")
             carry = segs[0]
@@ -268,11 +285,11 @@ def iter_records_reversed(path: PathArg, *, max_bytes: int = 4 * 1024 * 1024):
                 if obj is not None:
                     yield obj
         if carry:
-            complete = pos == 0          # 到文件头:首段就是完整首行
-            if not complete:             # 到窗口上限:前一字节是换行才算完整行
+            line_complete = pos == 0     # 到文件头:首段就是完整首行
+            if not line_complete:        # 到窗口上限:前一字节是换行才算完整行
                 f.seek(pos - 1)
-                complete = f.read(1) == b"\n"
-            if complete:
+                line_complete = f.read(1) == b"\n"
+            if line_complete:
                 obj = _parse(carry)
                 if obj is not None:
                     yield obj

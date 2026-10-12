@@ -551,16 +551,17 @@ class Orchestrator:
 
         task = session.task_state
         if task is not None and not keep_recent_calls:
-            task.recent_calls = []  # 重复调用拦截按轮生效（审批续跑保留：刚执行的调用不可立即复发）
-        # 总迭代熔断的累计分母（跨审批续跑存续，见 session.carried_iterations）：
-        # keep_recent_calls 仅在审批续跑时为真——新用户轮次归零，续跑沿用先前累计值，
+            task.recent_calls = []  # 重复调用拦截按轮生效（审批/挂起续跑保留）
+        # 总迭代熔断的累计分母（跨审批/挂起续跑存续，见 session.carried_iterations）：
+        # keep_recent_calls 在轮中续跑时为真——新用户轮次归零，续跑沿用先前累计值，
         # 使「反复吐坏写→弹审批→续跑」的循环仍被同一个 max_total_iterations 保险丝罩住。
         if not keep_recent_calls:
             session.carried_iterations = 0
             session.carried_turn_stats = {}
-            # [D2 谎报围堵] 拒批指纹按轮生效：新用户轮清零，审批续跑沿用（拒了就是拒了）
+            # [D2 谎报围堵] 拒批指纹按轮生效：新用户轮清零，审批/挂起续跑沿用
             session.denied_call_fps = set()
-        no_task_calls: List[str] = []  # 无任务态下的调用指纹（同样拦截重复）
+        # 无任务态指纹也属于整轮：不能靠暂停/审批重入清掉重复调用屏障。
+        no_task_calls: List[str] = list(session.carried_turn_stats.get("no_task_calls") or [])
         turn_start_idx = len(session.history)  # 本轮起点：收尾时扫描本轮工具产出的资产链接
         parse_errors: Dict[str, int] = {}  # 本轮坏调用原文 -> 次数（断环 + 升级纠错）
         nudged = False
@@ -568,7 +569,7 @@ class Orchestrator:
         metrics: Dict[str, Any] = {}
         # [仪表 Phase 0] 整轮累计口径：ReAct 循环内多次生成的分解求和 + 废轮计数。
         # 每次生成后 stamp 进当前 metrics dict（该 dict 会随任一返回路径带出）。
-        # 审批把一轮切成多个 run_turn 段：从 session.carried_turn_stats 播种续算，
+        # 审批/挂起把一轮切成多个 run_turn 段：从 session.carried_turn_stats 播种续算，
         # 使 history.jsonl 最终落盘的 metrics 是整轮口径而非末段（实测被低估 8 倍）。
         _carried = getattr(session, "carried_turn_stats", None) or {}
         turn_breakdown: Dict[str, int] = dict(_carried.get("breakdown") or {})
@@ -587,19 +588,7 @@ class Orchestrator:
             if responses_:
                 session.add_tool_message(responses_)
             session.pending_tool_calls = phys_calls_
-            # 累积本次 run_turn 已消耗的迭代到会话上：审批续跑（新 run_turn）在此基础上
-            # 继续计数，总迭代熔断跨审批循环持续生效（防审批死循环绕过保险丝）。
-            session.carried_iterations += iterations
-            # 仪表随行暂存：续跑段在此基础上继续累计（整轮口径，见 run_turn 播种处）
-            session.carried_turn_stats = {
-                "breakdown": dict(turn_breakdown),
-                "gen_tokens": turn_gen_tokens,
-                "spec": dict(turn_spec),
-                "parse_errors": carried_parse_errors + sum(parse_errors.values()),
-                # [F6] 子沙箱/护栏用量同样跨审批续算：否则续跑段的保险丝分母会
-                # 把前几段烧掉的子生成忘个干净，「弹审批→续跑」又成了绕过路径。
-                "usage": dict(turn_usage),
-            }
+            _carry_turn_state()
             names = "、".join(c.get("name") for c in approval_needed_)
             session.set_activity(f"等待授权：{names}", phase="awaiting_approval")
             _exit_audit()   # 挂起态也记：用户改发新消息时这份 metrics 会被当作 turn_ended 落盘
@@ -635,6 +624,19 @@ class Orchestrator:
                       "goal_verify_generations", "goal_verify_generation_tokens"):
                 if turn_usage.get(k):
                     metrics[k] = turn_usage[k]
+
+        def _carry_turn_state() -> None:
+            """审批/挂起共用检查点；先stamp再转存，当前段iterations只计一次。"""
+            _stamp_turn_stats()
+            session.carried_iterations += iterations
+            session.carried_turn_stats = {
+                "breakdown": dict(turn_breakdown),
+                "gen_tokens": turn_gen_tokens,
+                "spec": dict(turn_spec),
+                "parse_errors": carried_parse_errors + sum(parse_errors.values()),
+                "usage": dict(turn_usage),
+                "no_task_calls": list(no_task_calls),
+            }
         # 有界恢复计数（T2-5 地基，承载 T1-2/T1-3；到顶即放行，杜绝新增分支造成死循环）
         max_tokens_override: Optional[int] = None   # T1-3：非 None 时本轮后续生成用升档上限
         max_tokens_recoveries = 0                    # T1-3：多轮「接着写」已用次数
@@ -774,6 +776,7 @@ class Orchestrator:
             #     恢复时路由再次进入 run_turn，从 task_state + 已提交 history 续跑。 ---
             if session.suspend_requested:
                 session.suspend_requested = False
+                _carry_turn_state()
                 session.set_activity("已挂起（可恢复）", phase="suspended")
                 _exit_audit()   # 同 pending_approval：挂起轮被弃时这份 metrics 就是终态
                 return {"status": "suspended", "response": "任务已挂起，可稍后恢复。", "metrics": metrics}
@@ -1751,10 +1754,14 @@ class Orchestrator:
         resume_failure = False
         if approved:
             task = session.task_state
-            tracker = task.recent_calls if task is not None else []
+            # 无计划的批准调用也要进入整轮重复屏障，随后run_turn从同一携带态恢复。
+            tracker = task.recent_calls if task is not None else list(
+                session.carried_turn_stats.get("no_task_calls") or [])
             # 批准的敏感调用同样经账本发事件（修复旧实现漏发 tool_started/result 的洞）
             responses = await self._execute_physical(session, pending_calls, tracker, {},
                                                      journal=journal)
+            if task is None:
+                session.carried_turn_stats["no_task_calls"] = tracker
             # [D2 谎报围堵] 续跑轮的三态起点必须带上刚执行的批准调用（否则续跑里的
             # "已执行完毕"会被零证据声明门误推）——判据与主循环扫描完全一致
             for c, r in zip(pending_calls, responses):

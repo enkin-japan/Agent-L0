@@ -186,15 +186,16 @@ def test_tool_description_carries_the_cli_norm():
 
 
 def test_description_is_honest_about_when_help_is_free():
-    """★ `--help` 的成本**取决于首命令**：`_is_readonly` 只看第一个 token，所以
-    `ls --help` / `grep --help` / `git --help` 都免审批，而 `brew --help` /
-    `docker --help` 要弹一次——恰恰是「命令不熟」这个唯一需要它的场景。
+    """★ `--help` 的成本取决于已审定命令形态：`ls --help` / `grep --help`
+    免审批；git help 的查看器、brew/docker 及未知形态继续走审批。
     原文案写死「NOT on the read-only whitelist」，对白名单里的命令是假话（首审 #15）。
     """
     d = ShellExecTool.description
     assert "--help" in d
     assert "free only when" in d                     # 条件成立才免费，不是一律不免费
     assert "one extra approval" in d
+    assert "exact command form" in d
+    assert "git status, ..." not in d
 
 
 @pytest.mark.parametrize("cmd,rc,stderr,want", [

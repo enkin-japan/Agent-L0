@@ -30,8 +30,9 @@ struct RegistrationsPanelView: View {
     @Environment(\.dismiss) private var dismiss
     var embedded = false
 
-    @State private var items: [RegistrationItem]?
-    @State private var failed = false
+    @StateObject private var listing = RegistrationSetupState()
+    private var items: [RegistrationItem]? { listing.items }
+    private var failed: Bool { listing.queueError != nil }
     /// 展开看声明全文的注册单 id
     @State private var expanded: Set<String> = []
     /// 正在确认/驳回的注册单 id（操作期禁点，防重复放行）
@@ -39,6 +40,9 @@ struct RegistrationsPanelView: View {
     @State private var pendingReject: RegistrationItem?
     @State private var errorText: String?
     @State private var notice: String?
+    @State private var editor: ApiToolEditorPresentation?
+    private var loadedClient: AgentClient? { listing.client }
+
 
     var body: some View {
         if embedded {
@@ -53,8 +57,8 @@ struct RegistrationsPanelView: View {
 
     private var content: some View {
         Group {
-            if let items {
-                queueList(items)
+            if items != nil || !listing.tools.isEmpty {
+                queueList(items ?? [])
             } else if failed {
                 registrationsHintList(L("加载失败"), icon: "exclamationmark.triangle")
             } else {
@@ -76,6 +80,25 @@ struct RegistrationsPanelView: View {
             }
         }
         .task { await reload() }
+        .onChange(of: store.client.map { ObjectIdentifier($0) }) { _, _ in
+            listing.invalidate(); editor = nil
+            busyId = nil; pendingReject = nil; notice = nil; errorText = nil
+            Task { await reload() }
+        }
+        .safeAreaInset(edge: .top) {
+            Button { Task { await reload() } } label: {
+                Label(L("刷新"), systemImage: "arrow.clockwise")
+            }.padding(6).disabled(busyId != nil)
+        }
+        .sheet(item: $editor) { presentation in
+            ApiToolEditorView(draft: presentation.draft, targetClient: presentation.client,
+                presentationIsCurrent: { editor?.id == presentation.id },
+                onClose: { if editor?.id == presentation.id { editor = nil } }) { message in
+                    notice = message
+                    Task { await reload() }
+                }.environmentObject(store)
+        }
+        .onDisappear { if editor == nil { listing.invalidate() } }
         .confirmationDialog(L("确认驳回该注册单？"), isPresented: .init(
             get: { pendingReject != nil }, set: { if !$0 { pendingReject = nil } }),
             titleVisibility: .visible) {
@@ -94,52 +117,73 @@ struct RegistrationsPanelView: View {
     // MARK: 数据
 
     private func reload() async {
-        do {
-            items = try await store.client?.listRegistrations() ?? []
-            failed = false
-        } catch {
-            items = nil
-            failed = true
-        }
+        await listing.reload(client: store.client, currentClient: { store.client })
     }
 
     private func confirm(_ item: RegistrationItem) async {
+        guard busyId == nil, let client = loadedClient, store.client === client else { return }
         busyId = item.id
-        defer { busyId = nil }
+        defer { if store.client === client { busyId = nil } }
+        let operation = ApiToolOperation(client: client) { store.client === client && listing.isCurrent(client) }
         do {
-            let res = try await store.client?.confirmRegistration(id: item.id)
-            let detail = res?.detail
-            switch res?.effect {
+            let res = try await operation.perform { try await $0.confirmRegistration(id: item.id) }
+            let detail = res.detail
+            let message: String
+            switch res.effect {
             case "registered":
-                notice = L("已确认并上架")
+                message = item.isApiTool ? L("已保存并加入工具清单；远程连接尚未验证。") : L("已确认并上架")
             case "saved":
-                notice = L("已确认并保存")
-            // 探活未过：后端把原因写在 detail 里，原话转述（多半是密钥没录）
+                message = L("已确认并保存")
+            // Availability is local configuration checking, not a remote API test.
             case "saved_unavailable", "unavailable":
-                notice = detail ?? L("已保存但探活未过（检查密钥），补齐后重扫可上架")
+                message = detail ?? (item.isApiTool
+                    ? L("声明已保存，尚未加入工具清单；请补齐密钥等配置后再次保存。远程连接尚未验证。")
+                    : L("已保存，但依赖工具尚未就绪。"))
             case "restart_required":
-                notice = L("已保存；该工具已在运行中，重启后端后生效")
+                message = L("已保存。工具继续运行；请在清单查看新配置是否需要重启后生效。")
             case "saved_norebuild":
-                notice = L("已保存（重启后端后生效）")
+                message = L("已保存（重启后端后生效）")
             default:
-                notice = detail ?? L("已确认")
+                message = detail ?? L("已确认")
             }
+            listing.removePending(item.id)
             errorText = nil
             await reload()
+            guard store.client === client else { return }
+            if item.isApiTool {
+                // Reopen the authoritative saved declaration, never reconstruct a
+                // second declaration from the pending form or accept a key in chat.
+                let tools = try await operation.perform { try await $0.listApiTools().tools }
+                if let saved = tools.first(where: { $0.name == item.name && $0.isUserOwned && $0.problem == nil }) {
+                    notice = nil
+                    editor = ApiToolEditorPresentation(draft: ApiToolDraft(item: saved), client: client)
+                    return
+                }
+            }
+            notice = message
+        } catch is CancellationError {
+            return
         } catch {
+            guard store.client === client else { return }
             errorText = error.localizedDescription
         }
     }
 
     private func reject(_ item: RegistrationItem) async {
+        guard busyId == nil, let client = loadedClient, store.client === client else { return }
         busyId = item.id
-        defer { busyId = nil }
+        defer { if store.client === client { busyId = nil } }
+        let operation = ApiToolOperation(client: client) { store.client === client && listing.isCurrent(client) }
         do {
-            _ = try await store.client?.rejectRegistration(id: item.id)
+            _ = try await operation.perform { try await $0.rejectRegistration(id: item.id) }
+            listing.removePending(item.id)
             notice = L("已驳回")
             errorText = nil
             await reload()
+        } catch is CancellationError {
+            return
         } catch {
+            guard store.client === client else { return }
             errorText = error.localizedDescription
         }
     }
@@ -156,7 +200,33 @@ struct RegistrationsPanelView: View {
                         .textSelection(.enabled)
                 }
             }
-            if list.isEmpty {
+            if let queueError = listing.queueError {
+                Section { Text(L("待确认清单暂不可用：") + queueError).font(.caption).foregroundStyle(.secondary) }
+            }
+            if let toolsError = listing.toolsError {
+                Section { Text(L("继续配置清单暂不可用：") + toolsError).font(.caption).foregroundStyle(.secondary) }
+            }
+            let unfinished = listing.tools.filter(\.needsSetup)
+            if !unfinished.isEmpty {
+                Section {
+                    ForEach(unfinished) { tool in
+                        Button {
+                            guard let client = loadedClient, store.client === client else { return }
+                            editor = ApiToolEditorPresentation(draft: ApiToolDraft(item: tool), client: client)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(tool.name ?? tool.file).fontWeight(.medium)
+                                Text(tool.registered && tool.runtimeDeclarationCurrent == false
+                                     ? L("已保存新配置，运行版本待重启更新") : L("已保存，继续配置密钥并保存"))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.disabled(busyId != nil)
+                    }
+                } header: { Text(L("继续完成配置")) } footer: {
+                    Text(L("声明已保留，无需重新填写。密钥只在设置表单录入；试调须由你显式发起。"))
+                }
+            }
+            if list.isEmpty && items != nil && !failed {
                 Section {
                     Label(L("没有待确认的注册单"), systemImage: "tray")
                         .foregroundStyle(.secondary)
@@ -168,7 +238,7 @@ struct RegistrationsPanelView: View {
                 Section {
                     ForEach(list) { item in card(item) }
                 } footer: {
-                    Text(L("模型起草的声明不会自动生效——确认才上架，驳回即丢弃。密钥永远不走对话，只在 API 工具页的密钥框录入。"))
+                    Text(L("先审阅并确认保存，再为同一个工具补齐密钥等配置。密钥永远不走对话；试调可能产生实际操作。"))
                         .font(.caption)
                 }
             }
@@ -211,9 +281,9 @@ struct RegistrationsPanelView: View {
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 3))
     }
 
-    /// 密钥未录的显眼警示：确认能过，但工具探活多半不通——先去密钥框补值再确认。
+    /// Confirmation saves this declaration before opening its existing settings form.
     private func secretWarning(_ env: String) -> some View {
-        Label(L("确认前请先到 API 工具页密钥框为 ") + env + L(" 录入密钥"),
+        Label(L("确认保存后，将为同一个工具配置密钥：") + env,
               systemImage: "key")
             .font(.caption)
             .foregroundStyle(Theme.warning)

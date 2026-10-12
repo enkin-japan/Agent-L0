@@ -139,7 +139,7 @@ struct ComposerView: View {
                         .symbolEffect(.pulse, isActive: recorder.isRecording)
                 }
                 .buttonStyle(.plain)
-                .disabled(store.isGenerating)
+                .disabled(store.isGenerating || store.selectedSessionIsDeleting)
                 .help(L("语音输入（松开即作为音频附件发送给后端转写）"))
 
                 TextField(L("给 Agent 发消息…"), text: $draft, axis: .vertical)
@@ -205,7 +205,8 @@ struct ComposerView: View {
                             .foregroundStyle(.red)
                     }
                     .buttonStyle(.plain)
-                    .help(L("取消本轮（后端整轮回滚）"))
+                    .disabled(store.controlRequest != nil || store.selectedSessionIsDeleting)
+                    .help(L("停止后续执行（已完成的副作用不会自动撤销）"))
                 } else {
                     Button(action: send) {
                         Image(systemName: "arrow.up.circle.fill")
@@ -304,7 +305,7 @@ struct ComposerView: View {
         }
         .menuIndicator(.hidden)
         .buttonStyle(.plain)
-        .disabled(store.isGenerating)
+        .disabled(store.isGenerating || store.selectedSessionIsDeleting)
         .help(L("添加附件（图片 / PDF / 文档 / 音频）"))
     }
 
@@ -386,7 +387,7 @@ struct ComposerView: View {
     // MARK: - 发送
 
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !uploads.isEmpty
+        !store.selectedSessionIsDeleting && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !uploads.isEmpty)
     }
 
     /// 发送入口：暂停态（待审批 / 已挂起）先弹确认，其余直发。

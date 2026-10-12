@@ -1,13 +1,6 @@
 import { useEffect, useState } from "react"
 import { CalendarClock, Loader2, Play, Square, Trash2, MessageSquareText } from "lucide-react"
 
-import {
-  cancelScheduleRun,
-  deleteSchedule,
-  getScheduleRuns,
-  runScheduleNow,
-  toggleSchedule,
-} from "@/api/agent"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -25,69 +18,41 @@ import type { ScheduleRun, ScheduleSpec, ScheduledTask } from "@/types/agent-api
  * 定时任务条（侧栏，置于 Worker 状态条下方）：落盘任务实体的常显列表。
  * 创建/编辑走对话（schedule_* 工具 + 审批卡片）；这里是不经过模型的直接控制面——
  * 启停 / 立即运行 / 中止本次运行 / 删除 / 运行历史（点击跳转专属会话查看全文）。
- * 数据来自 useUiStore 的 10s 轮询（服务端落盘状态是唯一真相，天然免疫模型谎报）。
+ * 数据来自 useUiStore 的既有 feed + 30s 快照（服务端落盘状态是唯一真相，天然免疫模型谎报）。
  */
-export function ScheduleStrip({
-  onOpenSession,
-}: {
-  onOpenSession: (sessionId: string, title: string) => void
+export function ScheduleStrip({ onOpenSession }: { onOpenSession: (sessionId: string, title: string) => void }) {
+  const schedules = useUiStore((s) => s.schedules)
+  const state = useUiStore((s) => s.schedulesState)
+  const error = useUiStore((s) => s.schedulesError)
+  const refresh = useUiStore((s) => s.refreshSchedules)
+  const [detailId, setDetailId] = useState<string | null>(null)
+  const items = schedules?.schedules ?? []
+  const detail = items.find((x) => x.id === detailId)
+  return <>
+    <ScheduleListView items={items} state={state} error={error} onRefresh={() => void refresh()} onSelect={setDetailId} />
+    {detail && <ScheduleDetailDialog task={detail} onClose={() => setDetailId(null)} onOpenSession={onOpenSession} />}
+  </>
+}
+
+export function ScheduleListView({ items, state, error, onRefresh, onSelect }: {
+  items: ScheduledTask[]; state: "unknown" | "fresh" | "stale"; error: "unauthorized" | "unavailable" | null
+  onRefresh: () => void; onSelect: (id: string) => void
 }) {
   const t = useT()
-  const schedules = useUiStore((s) => s.schedules)
-  const [detailId, setDetailId] = useState<string | null>(null)
-
-  const items = schedules?.schedules ?? []
-  if (items.length === 0) return null // 无任务时不占侧栏空间（入口是对话，不需要空态引导常驻）
-
-  const detail = items.find((x) => x.id === detailId) ?? null
-
-  return (
-    <div className="rounded-2xl border border-border bg-card/60 p-3">
-      <div className="flex items-center gap-2 px-0.5">
-        <CalendarClock className="size-3.5 text-muted-foreground" />
-        <span className="text-xs font-semibold tracking-wide">{t.schedule.title}</span>
-        <span className="ml-auto text-[11px] text-muted-foreground">{items.length}</span>
-      </div>
-      <ul className="mt-2 flex flex-col gap-1">
-        {items.map((task) => (
-          <li key={task.id}>
-            <button
-              type="button"
-              onClick={() => setDetailId(task.id)}
-              className="flex w-full items-center gap-1.5 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-accent/60"
-            >
-              {task.running ? (
-                <Loader2 className="size-3 shrink-0 animate-spin text-chart-1" />
-              ) : (
-                <span
-                  className={cn(
-                    "size-1.5 shrink-0 rounded-full",
-                    task.enabled ? "bg-chart-2" : "bg-muted-foreground/40",
-                  )}
-                />
-              )}
-              <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{task.name}</span>
-              <span className="shrink-0 text-[10px] text-muted-foreground/70">
-                {task.running
-                  ? t.schedule.runningNow
-                  : task.enabled
-                    ? t.schedule.nextRun(formatTs(task.next_run))
-                    : t.schedule.paused}
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
-
-      {detail && (
-        <ScheduleDetailDialog
-          task={detail}
-          onClose={() => setDetailId(null)}
-          onOpenSession={onOpenSession}
-        />
-      )}
-    </div>
-  )
+  if (!items.length && state === "fresh" && !error) return null
+  return <div className="rounded-2xl border border-border bg-card/60 p-3">
+    <div className="flex items-center gap-2 px-0.5"><CalendarClock className="size-3.5" /><span className="text-xs font-semibold">{t.schedule.title}</span><span className="ml-auto text-xs">{items.length}</span></div>
+    {state !== "fresh" && <p role="status" className="mt-2 text-xs text-muted-foreground">{state === "unknown" ? t.management.schedulesUnknown : t.management.stale}</p>}
+    {error && <p role="status" className="mt-1 text-xs text-destructive">{error === "unauthorized" ? t.management.unauthorized : t.management.unavailable}</p>}
+    {state !== "fresh" && <button type="button" className="mt-1 text-xs underline" onClick={onRefresh}>{t.management.retry}</button>}
+    <ul className="mt-2 flex flex-col gap-1">{items.map((task) => <li key={task.id}>
+      <button type="button" onClick={() => onSelect(task.id)} className="flex w-full items-center gap-1.5 rounded-lg px-1.5 py-1 text-left hover:bg-accent/60">
+        {task.running ? <Loader2 className="size-3 shrink-0 animate-spin text-chart-1" /> : <span className={cn("size-1.5 shrink-0 rounded-full", task.enabled ? "bg-chart-2" : "bg-muted-foreground/40")} />}
+        <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{task.name}</span>
+        <span className="shrink-0 text-[10px] text-muted-foreground">{task.running ? t.schedule.runningNow : task.enabled ? t.schedule.nextRun(formatTs(task.next_run)) : t.schedule.paused}</span>
+      </button>
+    </li>)}</ul>
+  </div>
 }
 
 /** epoch 秒 → 本地简洁时刻（今天只显示 HH:MM，其余带月日）。 */
@@ -133,21 +98,16 @@ function ScheduleDetailDialog({
   onOpenSession: (sessionId: string, title: string) => void
 }) {
   const t = useT()
-  const refreshSchedules = useUiStore((s) => s.refreshSchedules)
-  const [runs, setRuns] = useState<ScheduleRun[] | null>(null)
-
-  // 打开即拉取运行历史（任务在运行中时随轮询周期性刷新）
-  useEffect(() => {
-    let stale = false
-    getScheduleRuns(task.id)
-      .then((r) => { if (!stale) setRuns(r.runs) })
-      .catch(() => { if (!stale) setRuns([]) })
-    return () => { stale = true }
-  }, [task.id, task.running, task.last_run?.run_id])
-
-  function act(fn: () => Promise<unknown>) {
-    void fn().finally(refreshSchedules)
-  }
+  const watchRuns = useUiStore((s) => s.watchScheduleRuns)
+  const runSnapshot = useUiStore((s) => s.scheduleRuns)
+  const action = useUiStore((s) => s.scheduleAction)
+  const listState = useUiStore((s) => s.schedulesState)
+  const actSchedule = useUiStore((s) => s.actSchedule)
+  const refreshRuns = useUiStore((s) => s.refreshScheduleRuns)
+  const runsState = runSnapshot?.id === task.id ? runSnapshot : null
+  const feedback = action?.id === task.id ? action : null
+  const disabled = listState !== "fresh" || feedback?.status === "sending"
+  useEffect(() => watchRuns(task.id), [task.id, watchRuns])
 
   const sessionId = `schedule_${task.id}`
 
@@ -162,6 +122,8 @@ function ScheduleDetailDialog({
           <DialogDescription>{specLabel(task.spec, t)} · {t.schedule.nextRun(formatTs(task.next_run))}</DialogDescription>
         </DialogHeader>
 
+        {feedback && <p role="status" className="text-xs text-muted-foreground">{feedback.message}</p>}
+        {listState !== "fresh" && <p role="status" className="text-xs text-muted-foreground">{t.management.stale}</p>}
         {/* 任务指令（模型每次运行执行的原文） */}
         <div>
           <p className="mb-1 text-xs font-semibold text-muted-foreground">{t.schedule.promptLabel}</p>
@@ -176,7 +138,8 @@ function ScheduleDetailDialog({
           <label className="mr-auto flex items-center gap-2 text-xs">
             <Switch
               checked={task.enabled}
-              onCheckedChange={(v) => act(() => toggleSchedule(task.id, v))}
+              disabled={disabled}
+              onCheckedChange={(v) => void actSchedule(task.id, "toggle", v)}
             />
             {t.schedule.enableLabel}
           </label>
@@ -184,7 +147,8 @@ function ScheduleDetailDialog({
             <Button
               variant="outline"
               size="xs"
-              onClick={() => act(() => cancelScheduleRun(task.id))}
+              disabled={disabled}
+              onClick={() => void actSchedule(task.id, "cancel")}
             >
               <Square className="size-3" /> {t.schedule.cancelRun}
             </Button>
@@ -192,7 +156,8 @@ function ScheduleDetailDialog({
             <Button
               variant="outline"
               size="xs"
-              onClick={() => act(() => runScheduleNow(task.id))}
+              disabled={disabled}
+              onClick={() => void actSchedule(task.id, "run")}
             >
               <Play className="size-3" /> {t.schedule.runNow}
             </Button>
@@ -200,10 +165,10 @@ function ScheduleDetailDialog({
           <Button
             variant="destructive"
             size="xs"
-            onClick={() => {
+            disabled={disabled}
+            onClick={async () => {
               if (!window.confirm(t.confirm.deleteSchedule)) return
-              act(() => deleteSchedule(task.id))
-              onClose()
+              if (await actSchedule(task.id, "delete")) onClose()
             }}
           >
             <Trash2 className="size-3" /> {t.schedule.delete}
@@ -222,10 +187,26 @@ function ScheduleDetailDialog({
           <MessageSquareText className="size-3.5" /> {t.schedule.openSession}
         </Button>
 
-        {/* 运行历史（新在前）：状态徽章 + 时刻 + 耗时 + 摘要 */}
+        <ScheduleRunsView snapshot={runsState} onRefresh={() => void refreshRuns()} />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** One history renderer; the live dialog and CPU SSR use this same component. */
+export function ScheduleRunsView({ snapshot, onRefresh }: {
+  snapshot: { data: ScheduleRun[] | null; state: "loading" | "unknown" | "stale" | "fresh"; error: "unauthorized" | "unavailable" | null } | null
+  onRefresh: () => void
+}) {
+  const t = useT()
+  const runs = snapshot?.data ?? null
+  return (
         <div>
           <p className="mb-1 text-xs font-semibold text-muted-foreground">{t.schedule.history}</p>
-          {runs === null ? (
+          {snapshot?.error && <p role="status" className="text-xs text-destructive">{runs === null ? t.management.runsUnknown : t.management.runsFailed}</p>}
+          {snapshot?.state === "stale" && <p className="text-xs text-muted-foreground">{t.management.stale}</p>}
+          {snapshot?.error && <button type="button" className="text-xs underline" onClick={onRefresh}>{t.management.retry}</button>}
+          {snapshot?.state === "unknown" ? <p className="text-xs text-muted-foreground">{t.management.runsUnknown}</p> : runs === null ? (
             <Loader2 className="mx-auto my-2 size-4 animate-spin text-muted-foreground" />
           ) : runs.length === 0 ? (
             <p className="text-xs text-muted-foreground/70">{t.schedule.historyEmpty}</p>
@@ -254,7 +235,5 @@ function ScheduleDetailDialog({
             </ul>
           )}
         </div>
-      </DialogContent>
-    </Dialog>
   )
 }

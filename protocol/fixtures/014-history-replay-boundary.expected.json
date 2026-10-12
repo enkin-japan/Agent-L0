@@ -1,0 +1,21 @@
+{
+  "turn_state": "none",
+  "transcript": [
+    {
+      "role": "user",
+      "content": "restore prompt"
+    },
+    {
+      "role": "assistant",
+      "content": "restore answer"
+    }
+  ],
+  "preview": {
+    "prompt": "",
+    "text": "",
+    "thinking": "",
+    "steps": [],
+    "task": null
+  },
+  "pending_tools": []
+}

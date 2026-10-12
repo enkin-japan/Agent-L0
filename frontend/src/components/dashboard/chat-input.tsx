@@ -78,6 +78,9 @@ export function ChatInput({
   disabled,
   approvalPending = false,
   canSuspend = false,
+  canStop = false,
+  stopPending = false,
+  suspendPending = false,
   thinkingEnabled,
 }: {
   onSend: (value: string, files: File[]) => void
@@ -90,6 +93,9 @@ export function ChatInput({
   approvalPending?: boolean
   /** 生成中且可挂起：在停止按钮旁显示"挂起"按钮 */
   canSuspend?: boolean
+  canStop?: boolean
+  stopPending?: boolean
+  suspendPending?: boolean
   thinkingEnabled: boolean
 }) {
   const t = useT()
@@ -388,23 +394,23 @@ export function ChatInput({
               {canSuspend && onSuspend && (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button size="icon" variant="outline" className="size-9 rounded-xl" onClick={onSuspend}>
+                    <Button size="icon" variant="outline" className="size-9 rounded-xl" onClick={onSuspend} disabled={suspendPending}>
                       <Pause className="size-4" />
-                      <span className="sr-only">Suspend task</span>
+                      <span className="sr-only">{t.input.suspendTooltip}</span>
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>{t.input.suspendTooltip}</TooltipContent>
                 </Tooltip>
               )}
-              <Tooltip>
+              {canStop && <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button size="icon" variant="outline" className="size-9 rounded-xl" onClick={onStop}>
+                  <Button size="icon" variant="outline" className="size-9 rounded-xl" onClick={onStop} disabled={stopPending}>
                     <Square className="size-4" />
                     <span className="sr-only">{t.input.stopTooltip}</span>
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>{t.input.stopTooltip}</TooltipContent>
-              </Tooltip>
+              </Tooltip>}
             </div>
           ) : (
             <Button size="icon" className="size-9 rounded-xl" disabled={!canSend} onClick={submit}>

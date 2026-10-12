@@ -116,7 +116,7 @@ print("== ④ 重建窗口写入冻结（m5，覆盖全部写端点的直接可�
 with srv.RETIER._state_lock:                 # 模拟在建窗口（加锁改，别裸摸）
     srv.RETIER._progress["state"] = "running"
 _frozen = [
-    ("建分类", lambda: srv.upsert_category(srv.CategoryItem(db_name="x", description="d"))),
+    ("建分类", lambda: srv.upsert_category(srv.CategoryItem(db_name="frozen", description="d"))),
     ("删路由", lambda: srv.delete_category("faq")),
     ("purge", lambda: srv.purge_category("faq")),
     ("stale", lambda: srv.mark_document_stale(srv.StaleRequest(source_path=_sp, reason="r"))),

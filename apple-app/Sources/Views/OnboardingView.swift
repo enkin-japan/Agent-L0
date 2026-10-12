@@ -34,7 +34,7 @@ struct OnboardingView: View {
             #if os(macOS)
             computeHost = settings.computeHost
             inferKey = settings.inferApiKey
-            ragKey = settings.ragApiKey
+            ragKey = settings.ragComputeApiKey
             #else
             urlText = settings.baseURLString
             keyText = settings.apiKey
@@ -62,7 +62,7 @@ struct OnboardingView: View {
             TextField(L("算力端地址"), text: $computeHost, prompt: Text("100.x.y.z"))
                 .autocorrectionDisabled()
             SecureField("INFER_API_KEY", text: $inferKey)
-            SecureField("RAG_API_KEY", text: $ragKey)
+            SecureField("RAG_COMPUTE_API_KEY", text: $ragKey)
             Text(L("与算力端 .env.local 同值（keygen 会打印）。"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -73,8 +73,10 @@ struct OnboardingView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         Section {
-            Button(L("完成")) { completeBuiltIn() }
+            Button(L("保存设置")) { completeBuiltIn() }
                 .buttonStyle(.borderedProminent)
+            Text(L("保存后会检查连接与鉴权；尚未配置或离线的服务会单独提示。"))
+                .font(.caption).foregroundStyle(.secondary)
             if fieldsEmpty {
                 Text(L("分离部署需填写，可稍后在设置中补"))
                     .font(.caption)
@@ -92,7 +94,7 @@ struct OnboardingView: View {
     private func completeBuiltIn() {
         settings.computeHost = computeHost.trimmingCharacters(in: .whitespacesAndNewlines)
         settings.inferApiKey = SidecarManager.cleanKey(inferKey)
-        settings.ragApiKey = SidecarManager.cleanKey(ragKey)
+        settings.ragComputeApiKey = SidecarManager.cleanKey(ragKey)
         // AGENT 密钥本会在 autostart 里首次生成（SidecarManager R5-6）。但那是异步、
         // 发生在 applySettings 建好客户端之后——客户端会带空 key 而后端要求生成的 key，
         // 落地就是引导完成即 401（B 要消除的「手动重启 1-2 次」痛点）。这里先同步生成
@@ -128,8 +130,10 @@ struct OnboardingView: View {
             SecureField(L("AGENT_API_KEY（存入钥匙串）"), text: $keyText)
         }
         Section {
-            Button(L("完成")) { complete() }
+            Button(L("保存设置")) { complete() }
                 .buttonStyle(.borderedProminent)
+            Text(L("保存后会检查连接与鉴权；尚未配置或离线的服务会单独提示。"))
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 

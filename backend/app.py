@@ -20,6 +20,7 @@ from framework.core.orchestrator import Orchestrator
 from framework.core.scheduler import TaskScheduler, ClassPolicy
 from framework.core.turn_runner import TurnRunner
 from framework.memory.session import SessionManager
+from framework.memory.retention import session_cleanup_policy
 from framework.ingestion import Ingestion
 from framework.utils.file_handler import FileHandler
 from framework.utils.path_resolver import resolve_model_path, resolve_tokenizer_only_path
@@ -157,9 +158,10 @@ async def _session_cleanup_loop(session_manager, cfg: dict, sediment_on_expire: 
     """确定性磁盘回收（session_cleanup）：周期性回收过期会话（pin/调度活跃/进行中一律跳过）。
     先 sleep 再扫——启动不被拖慢，且 recover_inflight_turns 已在装配阶段先行完成。
     单目录异常在 delete_session 内隔离，整轮异常在此隔离，绝不掀翻循环。"""
-    interval = int(cfg.get("scan_interval_seconds", 3600))
-    retention_days = float(cfg.get("retention_days", 30))
-    empty_ttl_hours = float(cfg.get("empty_ttl_hours", 24))
+    cfg = session_cleanup_policy(cfg)
+    interval = cfg["scan_interval_seconds"]
+    retention_days = cfg["retention_days"]
+    empty_ttl_hours = cfg["empty_ttl_hours"]
     while True:
         try:
             await asyncio.sleep(interval)
@@ -606,15 +608,16 @@ async def lifespan(app: FastAPI):
 
     # 6.1 清理层：确定性磁盘回收的后台清扫（默认自动过期、pin 才长留；见 config.session_cleanup）。
     #     依赖 session_manager.scheduler（已于上方注入），故置于其后；recover_inflight_turns 已先行。
-    cleanup_cfg = config.get("session_cleanup") or {}
+    cleanup_cfg = session_cleanup_policy(config.get("session_cleanup") or {})
+    app.state.session_cleanup_policy = cleanup_cfg
     cleanup_task = None
-    if cleanup_cfg.get("enabled", True):
+    if cleanup_cfg["enabled"]:
         cleanup_task = asyncio.create_task(_session_cleanup_loop(
             session_manager, cleanup_cfg, orchestrator.sediment_to_rag))
         app.state.cleanup_task = cleanup_task
-        print(f"🧹 [System] 会话自动清理已启用（保留 {cleanup_cfg.get('retention_days', 30)} 天 / "
-              f"空壳 {cleanup_cfg.get('empty_ttl_hours', 24)} 小时 / "
-              f"周期 {cleanup_cfg.get('scan_interval_seconds', 3600)}s）")
+        print(f"🧹 [System] 会话自动清理已启用（保留 {cleanup_cfg['retention_days']} 天 / "
+              f"空壳 {cleanup_cfg['empty_ttl_hours']} 小时 / "
+              f"周期 {cleanup_cfg['scan_interval_seconds']}s）")
 
     # 7. 定时任务层：触发扫描循环（due 任务经 kind="scheduled"/priority=-1 无人值守执行，
     #    交互任务到达时被 suspend 抢占让位，见 framework/schedule/runner.py）

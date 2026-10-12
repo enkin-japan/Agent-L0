@@ -23,9 +23,13 @@ final class AgentClient {
     /// 阻塞式长调用（/task/resume：续跑可能多步耗时）专用超时。
     private let longTimeout: TimeInterval = 3600
 
-    init(baseURL: URL, apiKey: String) {
+    init(baseURL: URL, apiKey: String, session: URLSession? = nil) {
         self.baseURL = baseURL
         self.apiKey = apiKey
+        if let session {
+            self.session = session
+            return
+        }
         let config = URLSessionConfiguration.default
         // SSE 心跳 15s 一帧，120s 收不到任何字节才算断（远宽于心跳间隔）
         config.timeoutIntervalForRequest = 120
@@ -88,11 +92,26 @@ final class AgentClient {
         return (response as? HTTPURLResponse)?.statusCode == 200
     }
 
+    func backendAccess() async -> BackendAccess {
+        guard (try? await health()) == true else { return .offline }
+        do {
+            let index = try await sessionIndex(timeout: 5)
+            return index.status ? .authenticated : .reachable
+        } catch AgentError.http(let code, _) where code == 401 || code == 403 {
+            return .unauthorized
+        } catch {
+            return .reachable
+        }
+    }
+
     // MARK: - 会话
 
     func listSessions() async throws -> [SessionMetaItem] {
-        let res: SessionListResponse = try await send(try request("GET", "/api/v1/sessions"))
-        return res.sessions
+        try await sessionIndex().sessions
+    }
+
+    func sessionIndex(timeout: TimeInterval? = nil) async throws -> SessionListResponse {
+        try await send(try request("GET", "/api/v1/sessions", timeout: timeout))
     }
 
     func history(sessionId: String) async throws -> HistoryResponse {
@@ -110,7 +129,9 @@ final class AgentClient {
     struct PinBody: Encodable { let pinned: Bool }
 
     func setPin(sessionId: String, pinned: Bool) async throws -> PinResponse {
-        try await send(try request("PATCH", "/api/v1/chat/\(sessionId)/pin", json: PinBody(pinned: pinned)))
+        let result: PinResponse = try await send(try request("PATCH", "/api/v1/chat/\(sessionId)/pin", json: PinBody(pinned: pinned)))
+        guard result.status else { throw AgentError.http(409, result.response ?? "无法修改保留状态") }
+        return result
     }
 
     struct MetaBody: Encodable { let title: String? }
@@ -131,14 +152,28 @@ final class AgentClient {
         return try await acceptedOrConflict(req)
     }
 
+    struct RetryBody: Encodable {
+        let expected_turn_ref: String
+        let client_turn_id: String
+    }
+
+    /// Canonical task retry: backend copies complete inputs/settings; no DELETE or text fallback.
+    func submitRetry(sessionId: String, sourceRef: String, clientTurnId: String) async throws -> TurnAccepted {
+        let req = try request("POST", "/api/v1/chat/\(sessionId)/turns/retry",
+                              json: RetryBody(expected_turn_ref: sourceRef, client_turn_id: clientTurnId))
+        return try await acceptedOrConflict(req)
+    }
+
     /// 审批决议(202 受理即返):结果经事件流回来(resumed → … → turn_ended)。
-    /// expectedTurnId:远程决议(通知按钮/灵动岛)带上,目标轮已换时 409 防错批;
-    /// App 内实时审批卡不带(nil),行为与旧版完全一致。
+    /// expectedTurnId:实时卡片与远程决议均携带展示轮次，目标已换时 409 防错批；
+    /// 保持可选以兼容旧调用方。
     func submitApproval(sessionId: String, approve: Bool,
-                        expectedTurnId: String? = nil) async throws -> TurnAccepted {
+                        expectedTurnId: String? = nil,
+                        expectedApprovalSeq: Int? = nil) async throws -> TurnAccepted {
         let req = try request("POST", "/api/v1/chat/\(sessionId)/turns/approval",
                               json: ApprovalBody(approve: approve,
-                                                 expected_turn_id: expectedTurnId))
+                                                 expected_turn_id: expectedTurnId,
+                                                 expected_approval_seq: expectedApprovalSeq))
         return try await acceptedOrConflict(req)
     }
 
@@ -252,6 +287,7 @@ final class AgentClient {
     struct ApprovalBody: Encodable {
         let approve: Bool
         let expected_turn_id: String?
+        let expected_approval_seq: Int?
     }
 
     // MARK: - 推送注册面（iOS APNs；macOS 本地通知不经后端）
@@ -380,6 +416,10 @@ final class AgentClient {
         try await send(try request("GET", "/api/v1/rag/overview"))
     }
 
+    func ragRetierStatus() async throws -> RagRetierStatus {
+        try await send(try request("GET", "/api/v1/rag/retier", timeout: 10))
+    }
+
     func ragDocuments(category: String) async throws -> RagDocumentsResponse {
         let encoded = category.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? category
         return try await send(try request("GET", "/api/v1/rag/documents?category=\(encoded)"))
@@ -389,14 +429,18 @@ final class AgentClient {
 
     @discardableResult
     func ragDeleteDocument(sourcePath: String) async throws -> RagActionResponse {
-        try await send(try request("DELETE", "/api/v1/rag/document",
+        let result: RagActionResponse = try await send(try request("DELETE", "/api/v1/rag/document",
                                    json: RagDeleteBody(source_path: sourcePath)))
+        guard result.status != false else { throw AgentError.http(200, result.msg ?? L("删除未被受理。")) }
+        return result
     }
 
     @discardableResult
     func ragPurgeCategory(_ name: String) async throws -> RagActionResponse {
         let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
-        return try await send(try request("DELETE", "/api/v1/rag/category/\(encoded)"))
+        let result: RagActionResponse = try await send(try request("DELETE", "/api/v1/rag/category/\(encoded)"))
+        guard result.status != false else { throw AgentError.http(200, result.msg ?? L("删除未被受理。")) }
+        return result
     }
 
     // MARK: - 私人 API 工具管理（声明式工具工厂表单面；校验/落盘/注册全在后端）
@@ -422,6 +466,10 @@ final class AgentClient {
 
     func saveApiTool(_ body: ApiToolSaveBody) async throws -> ApiToolActionResponse {
         try await send(try request("POST", "/api/v1/api-tools", json: body))
+    }
+
+    func updateApiTool(name: String, changes: [String: JSONValue]) async throws -> ApiToolActionResponse {
+        try await send(try request("PATCH", "/api/v1/api-tools/\(name)", json: changes))
     }
 
     func testApiTool(_ body: ApiToolSaveBody) async throws -> ApiToolTestResponse {
@@ -485,6 +533,7 @@ final class AgentClient {
 
     func listSchedules() async throws -> [ScheduledTask] {
         let res: ScheduleListResponse = try await send(try request("GET", "/api/v1/schedules"))
+        guard res.status else { throw AgentError.http(200, L("定时任务读取未被受理，请刷新重试。")) }
         return res.schedules
     }
 
@@ -510,6 +559,7 @@ final class AgentClient {
     func scheduleRuns(id: String, limit: Int = 20) async throws -> [ScheduleRun] {
         let res: ScheduleRunsResponse = try await send(
             try request("GET", "/api/v1/schedules/\(id)/runs?limit=\(limit)"))
+        guard res.status else { throw AgentError.http(200, L("运行历史读取未被受理，请刷新重试。")) }
         return res.runs
     }
 

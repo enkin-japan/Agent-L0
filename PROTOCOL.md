@@ -144,9 +144,17 @@
 }
 ```
 
-新增字段仅 `turn_index`(落盘后该轮在 `history.jsonl` 中的下标,分支定位用;
+基础定位字段 `turn_index`(落盘后该轮在 `history.jsonl` 中的下标,分支定位用;
 暂停态放弃收尾的轮同样落盘并占下标)。SSE 实时下发**全量**;journal 持久化瘦身为
 `{status, turn_index}`(重启后重放旧轮靠 `/history` 补全,客户端本就如此加载)。
+
+`discarded: true`（可选扩展，2026-10-11）：删除尚未落盘的 awaiting_approval /
+suspended 轮时，TurnRunner 发 `turn_ended`，status 为 cancelled，response 为空，
+**不带 turn_index**，不新增 history 记录。客户端仍清空预览、审批卡与挂起状态，
+但不追加 transcript / 历史消息、不增加轮数；标记在 journal 的瘦身记录中保留，
+重启重放同样适用。turn_index 始终只指已落盘历史下标，不用哨兵或下一条可复用
+下标代替。既有终态无此标记时沿用原对账语义。旧客户端可忽略新增字段并收起卡片，
+但需要更新客户端才能避免临时显示取消存档；重新加载 `/history` 后以实际历史为准。
 
 `timestamp`(additive,2026-07-17;不升版本):轮次完结的 epoch 秒,落盘时由
 `append_log` 盖章——落盘是唯一漏斗,故 `/chat` 响应、`turn_ended` 事件与
@@ -158,6 +166,30 @@
 按桶归因回父轮。**可选,只在非零时出现**;客户端按未知字段规矩忽略即可。
 注意 `sub_generation_tokens` 是跨模型合计(excel 的视觉 QA 可能路由到专职视觉端点),
 是算力量级仪表,不是单一 tokenizer 口径。
+
+`execution_receipts`（可选 additive，2026-10-11 R16）：TurnRunner在正常最终落盘点
+从同轮内存journal投影已有tool_started/tool_result，随history与turn_ended保存。
+这份数据只作执行事实凭据，不进模型上下文，不参与任务恢复，不新增账本/端点。
+取消和失败仍回滚模型上下文；磁盘、网络或其他外部副作用不因此自动撤销。
+
+形状：
+{"items":[{"seq":3,"ts":1003.0,"type":"tool_started","name":"write_file",
+"call_id":"id","detail":"","truncated":true},
+{"seq":4,"ts":1004.0,"type":"tool_result","name":"write_file","call_id":"id",
+"detail":"工具返回文本","status":"ok"}],"truncated":true}
+
+- items仅包含同轮最近最多64条真实开始/返回事件，按原seq顺序；ts为原事件时间。
+- name/call_id最多128字符，detail最多2000字符，status最多32字符；不把完整args复制
+  进凭据。开始事件detail为空，省略非空args时该item及整体truncated=true。
+- 超64条、字段截断、源事件已标截断：整体truncated=true；字段截断或参数省略也在
+  对应item标truncated=true。数量截断表示只保留尾部，不能宣称整轮完整操作清单。
+- tool_started只证明调用开始，tool_result只证明工具返回；status=ok沿用现有返回
+  状态，不保证外部操作成功。未配对的started也保留，不能推导操作没产生副作用。
+- 完整可确认的本轮ring无工具事件时items=[]，仅表示未观察到工具事件；不能推导
+  所有副作用为零。旧历史/崩溃恢复无该字段，或无法确认轮首身份，保持未知。
+- journal.jsonl的turn_ended继续瘦身；重启后经既有history入口读取完整凭据。
+- R11显式删除暂停轮仍discarded，不新增历史记录；此改动不改变其删除语义。
+- 015-cancelled-execution-receipts为新增夹具；顶层未知字段可由旧归约器忽略。
 
 #### 2.3.1 工具观察的渲染格 `render`(additive,2026-07-16;不升版本)
 
@@ -266,7 +298,37 @@ GET /api/v1/chat/{sid}/turn
 
 **客户端标准恢复流程**(刷新/杀进程/切后台回来,一律同一条路):
 `GET /turn` 立即渲染当前状态(含审批卡/挂起横幅/进行中预览)→
-`GET /events?after=turn.first_seq-1`(要完整时间线)或 `?after=last_seq`(只要后续)。
+`GET /events` 的初次 after 按下述历史读取边界取下界；已有消费游标的断线仍续播。
+
+#### 历史与重放的读取边界（additive，2026-10-11，不升版本）
+
+`GET /api/v1/chat/{sid}/history` 新增可选 `replay_after`（int）和 `generation`
+（与 `/turn` 同源）。`replay_after` 是**读取历史之前**的账本游标下界，不能声称
+历史恰好截止于它；两者可能重叠。缺会话为 0，冷会话沿用 `/turn` 的只读账本水位。
+读取不等待正在生成的轮次锁，不改变既有 `turns` / `count` / `last_seq` 语义。
+
+初次恢复按 `history → /turn → /events` 串行：`after = min(replay_after,
+turn.first_seq - 1)`（有活轮），否则 `min(replay_after, last_seq)`；`turn=null`
+不可把历史下界推进到后来 `last_seq`。旧服务端无新字段时下界取 0，再按既有
+`turn_index` 去重。已经消费事件的临时断线仍带消费游标续播。历史失败不得标记
+加载成功；切会话或换客户端使旧恢复/提交回包失去当前投影写权（包括 A→B→A）。
+
+持久化瘦身的 `turn_ended` 若对应历史已存在，收掉该轮预览后跳过重复渲染；若
+对应历史缺失，断开本次附着，合并返回**同一** history→turn→events 恢复入口。
+不得把 thin 终态渲染成空答复或增加已知轮数，不增设终态恢复端点/独立轮询。
+历史已经含轮次而 journal 尚未 emit terminal 的窗口也按 turn_index 收敛。
+单附着句柄属于一次选中/客户端 incarnation；旧 task 的退出不能清掉新句柄。
+历史重放也不得认领新的在途提交：乐观气泡按既有 `turn_queued.client_turn_id`
+或 202 的 `turn_id` 绑定，**相同 prompt 不是身份凭据**。未绑定终态保留新提交的
+outbox / 气泡 / 提交中标志；终态比 202 先到时，后来的回执据轮次身份收敛。
+outbox 在 202 或其绑定终态清仓，历史文字相同不推断已受理；未知身份回同一
+恢复入口或保留凭据供确认重发，不猜测归属。当前提交的 202/queued seq 也是
+已知下界；首附着在受理后才读取历史时，after 还须不大于该 seq - 1，以回放身份
+收编已完成提交的乐观气泡。`client_turn_id` 是已有 additive
+提交幂等键与 journal 字段，本文仅明确其客户端使用，不改变字段语义。
+
+共享 `014-history-replay-boundary.restore.json` 与事件夹具分别由两端真实 store
+合成网络时序测试及 reducer 回放消费，覆盖缺轮/重叠/瘦身重放恢复。
 
 ### 2.6 提交与控制
 
@@ -274,7 +336,7 @@ GET /api/v1/chat/{sid}/turn
 POST /api/v1/chat/{sid}/turns              multipart,字段与现行 /stream 相同
   → 202 {"status": true, "turn_id": "t_…", "seq": 118}     受理即返,不长连
   → 409 {"status": false, "reason": "turn_active"}          已有未 ended 轮(队不进同会话)
-  可选字段 client_turn_id(2026-08-22 起,additive;提交幂等键,**仅本端点**——
+  可选字段 client_turn_id(2026-08-22 起,additive;提交幂等键,此处为普通提交策略——
   阻塞式 /chat/{sid} 不受理该字段):蜂窝网下请求完整抵达而 202 回程丢失是常态,
   用户手动重发若被当成新提交就是一次货真价实的重复执行(可能带审批副作用)。
   键形状:`[A-Za-z0-9._:-]{8,128}`(不合形状按未带键受理)。带同键的重发 →
@@ -284,8 +346,8 @@ POST /api/v1/chat/{sid}/turns              multipart,字段与现行 /stream 相
   判重语义:键随 turn_queued 落 journal(已完结轮的唯一持久真相,文件尾反向回查,
   近 **64 轮**内有效——幂等键防分钟级手动重发,不做无限期查重);同键撞上仍活跃的
   原轮回 202 而非 409(同一次提交的重试应引导附着,不是冲突;真并发双提交由受理
-  冲突分支二次判重兜住);**fail/cancelled 的原轮不算命中**——那一轮没有产出,
-  崩溃恢复文案明说「可直接重发」,吞掉这次重发等于把收敛承诺变谎话。
+  冲突分支二次判重兜住);**fail/cancelled 的原轮不算命中**（保留普通提交的既有兼容策略）。
+  这只表示模型上下文已回滚，不代表工具没有外部副作用；界面不得据此承诺安全重做。
   客户端键纪律:键随 outbox 持久,**同会话同文的纯文本重发复用旧键**;带附件的提交
   **不复用也不存键**(键只比对得了文本,同文换附件被判重会静默丢附件);网络类失败
   不清 outbox(真 409 才清),对账提示不清键(只标记已提示);换了内容即换键。
@@ -302,9 +364,101 @@ POST /api/v1/chat/{sid}/task/cancel        (不变)信号语义,结果以 turn_e
 POST /api/v1/chat/{sid}/task/suspend       (不变)信号语义,结果以 suspended 事件入流
 ```
 
+控制请求的界面反馈不新增轮次状态：发送中、已受理等待安全点与拒绝原因属于
+当前请求的投影。HTTP 成功不等于已暂停/已停止，状态仍由后续账本事件确认；
+不得用固定超时清掉等待提示来模拟完成。挂起仅对 running 提供，停止仅对
+queued/running 提供；paused 继续使用已有恢复/放弃入口。请求绑定客户端、选中
+会话代次、轮次和发送前已观察的 seq 下界，旧重放不能确认新请求。现有 cancel /
+suspend 端点仍按会话控制，这些客户端绑定不构成服务端 expected_turn_id 保证。
+停止只阻止后续执行，已完成的磁盘、网络等副作用不会自动撤销。
+
 注:`POST /turns` 对暂停态旧轮的"发新消息=放弃"语义**由服务端执行**
 (先收尾旧轮再受理新轮,事件序:旧轮 `turn_ended{warning}` → 新轮 `turn_queued`),
 客户端不做本地模拟。
+
+`POST /turns/approval` 的追加可选字段 `expected_approval_seq`（2026-10-11，
+additive，不升版本）：取卡片所展示的 `awaiting_approval` **信封 seq**，与可选
+`expected_turn_id` 一起绑定决议对象。同一轮可反复等待审批；当前审批批次的 seq
+与请求不符时也返回 409 `approval_target_mismatch`，不执行该批工具。该身份由
+账本 `emit` 单点记录，后续进度/增量事件不会改变它；不能拿 `/turn.last_seq`
+代替。恢复仍从 `GET /turn` 返回的 `turn.first_seq` 之前附着重放，取得真实审批事件的 seq。
+字段为正整数或 null；省略/null 保留旧客户端行为，未知请求字段沿用忽略策略。
+现有 `expected_turn_id` 的字段语义、事件负载和 v1 信封均保持不变。
+
+#### 显式任务重试（additive，2026-10-11，不升版本）
+
+```
+POST /api/v1/chat/{sid}/turns/retry
+JSON {expected_turn_ref: opaque string, client_turn_id: fresh command key}
+```
+
+返回原202 {status,turn_id,seq[,duplicate:true]}。每次明确重试为同会话新轮；完整输入
+由后端从末条canonical存档读取并独立复制，原轮/输出/全部工具过程保持可审查。
+不重放旧tool_calls；仍走普通编排/预算/审批/sandbox。相同retry key判重先于源引用，
+fail/cancelled也不重复执行；新点击使用新key，不能复用原提交键。
+
+缺会话404；无存档/过期source/活跃或暂停轮/缺失或不属于本会话输入的媒体拒绝，
+不删除原轮、不触发模型/工具。不支持此能力的旧服务/缺token必须显式失败，禁止先删
+历史或纯文本fallback。ASR/slash已固化的prepared输入不会再摄入/重复注入。
+
+可选 additive 字段：
+
+- full public terminal.turn_ref：完整公开record确定性hash；排除内部键及顶层
+  turn_ref/turn_index派生字段，包含timestamp/input/gen/response/receipt等公开内容。
+- HistoryResponse.last_turn_ref：由实际返回raw turns末行同一快照派生；旧行无timestamp
+  或原turn_id也可使用。raw turns不为该字段被重写。
+- retry_of：即时parent的内容ref（审计关联，分支复制路径变化后不能当永久root）。
+- retry_root_index/retry_parent_index：真实canonical有效行下标，随retry queued/终态/
+  raw history持久；只从锁内原源记录推导，客户端不能提供索引作为许可。
+- HistoryResponse.display_turn_indices：同一raw快照纯投影；root占原槽，只有最新
+  status=success尝试替换该族显示winner。fail/cancelled/warning保留此前答案；
+  全部尝试仍在raw turns/count/journal，供开发者和Agent审查。旧行各自显示。
+  root/parent类型、范围、紧邻parent、同族继承或retry_of形状不合法时该行独立显示，
+  不能吞其它记录。原count/turn_index/下标语义不改。
+
+Branch必须用display winner真实canonical下标，而不是display数组位置；前缀分支
+保持root/parent关系，media重挂导致内容hash改变不损坏族展示。只受控改写明确
+input old→new的ingested provenance，不改工具receipt的历史陈述或扩张assets复制。
+未知/外部/失效provenance不能静默重新读取。
+
+无未落盘暂停轮时，DELETE last仍只撤销canonical尾尝试，去掉其独立媒体并重算剩余
+winner，不隐式批删root或审计行。有 awaiting_approval/suspended 活轮时仍沿 §2.3
+的 discarded 规则撤销该活轮；编辑取该活轮的原始 prompt，不能错用前一条存档。
+客户端应标“撤销/编辑最近一次尝试”；原D1编辑并重发语义不变。
+
+整会话 `DELETE /api/v1/chat/{session_id}` 的回执可附加 `reason: "not_found"`：
+仅在服务端确认目标既无热实例、也无目录时返回。原 `status: false` 保持不变；
+客户端可凭此明确缺席回执移除本地空会话或失效缓存。其它失败（包括无 reason 的
+旧端失败）仍保留条目，不能根据显示文案或本地轮数猜测缺席。该回执不保证未来或
+其它客户端不能用同一 ID 发起新请求。共享 HTTP 夹具见 `017-delete-absent.responses.json`。
+
+016-task-retry-inputs.events.jsonl + expected.json守护原审批与additive兼容；
+016-task-retry-inputs.history.json守root success→fail→success→warning→cancel→success
+→ordinary及每个prefix投影。字节复制、失败清理、source guards、branch输入独立性
+由CPU真实TurnRunner/session测试守护。
+
+明确retry幂等为严格全journal流式key查找（额外内存常量，不累计终态dict）；普通submit
+的近64轮窗口与failed/cancelled可重发策略保持。磁盘查重失败、坏 JSON/UTF-8/非对象行或畸形受理见证时明确拒绝，而非
+当成查无。显式重试扫描不受普通读取的 4 MiB 尾窗限制；缺失整个 journal 的旧会话
+保持兼容，不承诺外部删除账本后的永久恰好一次。很旧/全新retry key会扫描更长journal，代价为后台线程磁盘时间。
+受理在复制或write-ahead阶段被重复取消时先等实际worker完成，再清理本次新文件/
+恢复模型内存与旧marker，不允许已退出请求的线程在cleanup之后再落盘。
+
+`retry_groups`（HistoryResponse可选additive）为 [{root_index,display_index,turn_indices}]，
+仅返回包含>=2条真实canonical记录的合法族。与display_turn_indices共用同一合法性
+验证遍历和同一raw快照；只传真实下标，不复制完整record，不是第二账本。客户端
+可在winner旁显示“尝试记录”折叠入口，按turn_indices用既有renderer呈现每次输入、
+结果及execution_receipts（包括fail/cancel/warning）。不得各自重写root合法性算法，
+不得因展开记录自动重执行。若可选 groups 缺失、畸形或不能让所有隐藏 raw 记录
+通过审计入口访问，客户端退回全部 raw 展示，不能静默隐藏记录；这里只检查可见
+覆盖，不重写服务端族算法。旧客户端忽略该字段兼容。
+
+
+新受理轮的崩溃防丢标记保留完整输入及生成设置；重试另保留已验证的尝试关系。
+恢复仅补 fail 存档，不重新摄入、复制或执行工具。遗留标记未保存完整输入时，
+新恢复行用可选 `retry_input_unavailable: true` 如实标注；新显式 retry 返回
+`retry_inputs_unavailable`，请用户检查记录并重新附上所需输入，不静默降为纯文本。
+此约束不按字段缺席泛拦普通旧历史，同 key 已受理回执仍先于源校验判重。
 
 ### 2.7 全局任务 feed(Phase 3)
 

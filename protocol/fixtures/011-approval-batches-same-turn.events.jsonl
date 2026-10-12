@@ -1,0 +1,9 @@
+{"seq": 1, "turn_id": "t_same_turn", "ts": 1.0, "type": "turn_queued", "data": {"prompt": "同轮两批审批"}}
+{"seq": 2, "turn_id": "t_same_turn", "ts": 1.0, "type": "turn_started", "data": {}}
+{"seq": 3, "turn_id": "t_same_turn", "ts": 1.0, "type": "awaiting_approval", "data": {"pending_tools": [{"name": "danger_op", "arguments": {"target": "A"}}]}}
+{"seq": 4, "turn_id": "t_same_turn", "ts": 1.0, "type": "resumed", "data": {"trigger": "approve"}}
+{"seq": 5, "turn_id": "t_same_turn", "ts": 1.0, "type": "turn_started", "data": {}}
+{"seq": 6, "turn_id": "t_same_turn", "ts": 1.0, "type": "tool_started", "data": {"call_id": "a", "name": "danger_op", "args": {"target": "A"}}}
+{"seq": 7, "turn_id": "t_same_turn", "ts": 1.0, "type": "tool_result", "data": {"call_id": "a", "name": "danger_op", "response": "done-A", "status": "ok"}}
+{"seq": 8, "turn_id": "t_same_turn", "ts": 1.0, "type": "iteration_started", "data": {"n": 2, "thinking": false}}
+{"seq": 9, "turn_id": "t_same_turn", "ts": 1.0, "type": "awaiting_approval", "data": {"pending_tools": [{"name": "danger_op", "arguments": {"target": "B"}}]}}

@@ -1,23 +1,32 @@
 import { create } from "zustand"
 
-import { attachGlobalFeed, getTasks, listSchedules } from "@/api/agent"
+import { attachGlobalFeed, getTasks, getSessionFiles, HttpError, listSchedules, getScheduleRuns,
+  toggleSchedule, runScheduleNow, cancelScheduleRun, deleteSchedule } from "@/api/agent"
 import { feedFence, type FeedFenceState } from "@/lib/feed-fence"
 import { detectLang, getDict, type Dict, type Lang } from "@/lib/i18n"
-import type { ScheduleListResponse, TaskListResponse } from "@/types/agent-api"
+import type { ScheduleListResponse, ScheduleRun, SessionFile, TaskListResponse } from "@/types/agent-api"
 
 export type Theme = "light" | "dark" | "system"
+export type SnapshotState = "unknown" | "fresh" | "stale"
+export type SnapshotError = "unauthorized" | "unavailable" | null
 
 const LANG_KEY = "macagent-lang"
 const THEME_KEY = "macagent-theme"
 
 function loadLang(): Lang {
-  const s = localStorage.getItem(LANG_KEY)
-  return s === "zh" || s === "ja" || s === "en" ? s : detectLang()
+  try {
+    const s = localStorage.getItem(LANG_KEY)
+    if (s === "zh" || s === "ja" || s === "en") return s
+  } catch { /* 浏览器可能禁止存储；偏好缺席不应阻止页面加载。 */ }
+  return detectLang()
 }
 
 function loadTheme(): Theme {
-  const s = localStorage.getItem(THEME_KEY)
-  return s === "light" || s === "dark" || s === "system" ? s : "system"
+  try {
+    const s = localStorage.getItem(THEME_KEY)
+    if (s === "light" || s === "dark" || s === "system") return s
+  } catch { /* 禁止存储时使用系统外观。 */ }
+  return "system"
 }
 
 /** 应用主题到 <html>：显式 light/dark 覆写；system 两个类都不加，交给 CSS 的 prefers-color-scheme。 */
@@ -33,25 +42,44 @@ interface UiState {
   theme: Theme
   /** 全局单 worker 调度快照（跨会话），驱动侧栏的 Worker 状态条（低频轮询）。 */
   tasks: TaskListResponse | null
+  tasksState: SnapshotState
+  tasksError: SnapshotError
   /** 定时任务清单（落盘实体），驱动侧栏 Schedules 条（更低频轮询）。 */
   schedules: ScheduleListResponse | null
+  schedulesState: SnapshotState
+  schedulesError: SnapshotError
+  scheduleRuns: { id: string; data: ScheduleRun[] | null; state: SnapshotState | "loading"; error: SnapshotError } | null
+  scheduleAction: { id: string; status: "sending" | "accepted" | "rejected" | "failed"; message: string } | null
+  files: { sessionId: string; data: SessionFile[] | null; state: SnapshotState | "loading"; error: SnapshotError } | null
+  watchFiles: (sessionId: string) => () => void
+  isWatchingFiles: (sessionId: string) => boolean
+  observeFilesTerminal: (sessionId: string, seq: number) => void
+  refreshFiles: () => Promise<void>
   setLang: (l: Lang) => void
   setTheme: (t: Theme) => void
   startSchedulerPolling: () => void
   stopSchedulerPolling: () => void
-  startSchedulePolling: () => void
-  stopSchedulePolling: () => void
   /** 操作后（启停/运行/删除）立刻刷一次清单，不等下个轮询周期。 */
-  refreshSchedules: () => void
+  refreshSchedules: () => Promise<void>
+  watchScheduleRuns: (id: string) => () => void
+  refreshScheduleRuns: () => Promise<void>
+  actSchedule: (id: string, action: "toggle" | "run" | "cancel" | "delete", enabled?: boolean) => Promise<boolean>
 }
 
 let schedulerTimer: ReturnType<typeof setInterval> | null = null
-let scheduleTimer: ReturnType<typeof setInterval> | null = null
+let schedulerGeneration = 0
+let tasksRequest = 0
+let filesRequest = 0
+let filesObserver: { sessionId: string; token: object; lastTerminalSeq: number } | null = null
+let schedulesRequest = 0
+let runsRequest = 0
+let actionRequest = 0
+let runsObserver: { id: string } | null = null
 
 // ---- 全局任务 feed(Phase 3b):跨会话生命周期事件的长连,断线静默退避重连 ----
 let feedCtl: AbortController | null = null
 
-function startFeed(onLifecycle: () => void) {
+function startFeed(onLifecycle: (invalidateSessionPolicy?: boolean) => void) {
   if (feedCtl) return
   const ctl = new AbortController()
   feedCtl = ctl
@@ -73,6 +101,10 @@ function startFeed(onLifecycle: () => void) {
           if (item.type === "stream_attached") {
             // 代际围栏（B2）：后端重启 → feed_seq 归零 → 旧游标作废，清零重连
             if (feedFence(fence, item.data?.generation) === "reanchor") {
+              void import("@/store/useChatStore").then(({ useChatStore }) => {
+                if (!ctl.signal.aborted) useChatStore.getState().invalidateTaskControls()
+              })
+              onLifecycle(true)
               cursor = 0
               reanchor = true
               break
@@ -82,6 +114,13 @@ function startFeed(onLifecycle: () => void) {
           if (typeof item.feed_seq === "number" && item.feed_seq > 0) {
             if (item.feed_seq <= cursor) continue
             cursor = item.feed_seq
+          }
+          if (item.session_id && typeof item.seq === "number") {
+            const id = item.session_id, seq = item.seq
+            void import("@/store/useChatStore").then(({ useChatStore }) => {
+              if (!ctl.signal.aborted) useChatStore.getState().observeTaskEvent(id,
+                { type: item.type, seq, turn_id: item.turn_id ?? null })
+            })
           }
           refresh()
         }
@@ -112,8 +151,9 @@ function stopFeed() {
  * 刷新页面后本地 suspendedSessions 丢失，而后端任务仍挂着——不对账的话恢复入口就此消失。
  * 动态 import 避免 useUiStore ↔ useChatStore 模块级循环依赖。
  */
-function syncSuspendedSessions(t: TaskListResponse) {
+function syncSuspendedSessions(t: TaskListResponse, isCurrent: () => boolean) {
   void import("@/store/useChatStore").then(({ useChatStore, locallyAbandonedSuspended }) => {
+    if (!isCurrent()) return
     const backendSuspended = new Set<string>()
     for (const h of t.tasks ?? []) {
       if (h.status === "suspended" && typeof h.session_id === "string") {
@@ -140,7 +180,52 @@ export const useUiStore = create<UiState>((set) => ({
   lang: loadLang(),
   theme: loadTheme(),
   tasks: null,
+  tasksState: "unknown",
+  tasksError: null,
   schedules: null,
+  schedulesState: "unknown",
+  schedulesError: null,
+  scheduleRuns: null,
+  scheduleAction: null,
+  files: null,
+
+  watchFiles: (sessionId) => {
+    const observer = { sessionId, token: {}, lastTerminalSeq: 0 }
+    filesObserver = observer
+    void useUiStore.getState().refreshFiles()
+    return () => { if (filesObserver === observer) { filesObserver = null; filesRequest++ } }
+  },
+  isWatchingFiles: (sessionId) => filesObserver?.sessionId === sessionId,
+  observeFilesTerminal: (sessionId, seq) => {
+    const observer = filesObserver
+    // Snapshot cursors describe task projection, not delivery of a file-refresh
+    // doorbell. Retain only this observer's actually consumed terminal watermark.
+    if (!observer || observer.sessionId !== sessionId || !Number.isFinite(seq) || seq <= observer.lastTerminalSeq) return
+    observer.lastTerminalSeq = seq
+    void useUiStore.getState().refreshFiles()
+  },
+  refreshFiles: async () => {
+    const observer = filesObserver
+    if (!observer) return
+    const request = ++filesRequest
+    const { useChatStore: chat } = await import("@/store/useChatStore")
+    const version = chat.getState().selectionVersion
+    const current = () => filesObserver === observer && filesRequest === request
+      && chat.getState().activeId === observer.sessionId && chat.getState().selectionVersion === version
+    if (!current()) return
+    set((s) => ({ files: { sessionId: observer.sessionId, data: s.files?.sessionId === observer.sessionId ? s.files.data : null,
+      state: "loading", error: null } }))
+    try {
+      const response = await getSessionFiles(observer.sessionId)
+      if (!current()) return
+      if (!response.status || !Array.isArray(response.files)) throw new Error("File snapshot unavailable")
+      set({ files: { sessionId: observer.sessionId, data: response.files, state: "fresh", error: null } })
+    } catch (error) {
+      if (!current()) return
+      set((s) => ({ files: { sessionId: observer.sessionId, data: s.files?.data ?? null,
+        state: s.files?.data !== null ? "stale" : "unknown", error: error instanceof HttpError && [401, 403].includes(error.status) ? "unauthorized" : "unavailable" } }))
+    }
+  },
 
   setLang: (lang) => {
     try { localStorage.setItem(LANG_KEY, lang) } catch { /* 忽略配额错误 */ }
@@ -155,13 +240,37 @@ export const useUiStore = create<UiState>((set) => ({
 
   startSchedulerPolling: () => {
     if (schedulerTimer) return
-    const tick = () => {
+    const generation = ++schedulerGeneration
+    set((s) => ({ tasksState: s.tasks ? "stale" : "unknown", schedulesState: s.schedules ? "stale" : "unknown" }))
+    const tick = (invalidateSessionPolicy = false) => {
+      if (generation !== schedulerGeneration) return
+      const request = ++tasksRequest
+      const isCurrent = () => generation === schedulerGeneration && request === tasksRequest
+      if (invalidateSessionPolicy) {
+        set((s) => ({ tasksState: s.tasks ? "stale" : "unknown", schedulesState: s.schedules ? "stale" : "unknown" }))
+      }
+      // The existing feed doorbell + 30s fallback also refresh schedule definitions/runs.
+      void useUiStore.getState().refreshSchedules()
+      // Reuse the existing feed + slow snapshot loop for session metadata too.
+      // A new backend generation must not keep advertising the previous policy.
+      void import("@/store/useChatStore").then(({ useChatStore }) => {
+        if (generation !== schedulerGeneration) return
+        if (invalidateSessionPolicy) useChatStore.setState({ retentionPolicy: null })
+        void useChatStore.getState().reconcileSessions()
+      })
       getTasks()
         .then((t) => {
-          set({ tasks: t })
-          syncSuspendedSessions(t)
+          if (!isCurrent()) return
+          if (!t.status) throw new Error("Task snapshot unavailable")
+          set({ tasks: t, tasksState: "fresh", tasksError: null })
+          syncSuspendedSessions(t, isCurrent)
         })
-        .catch(() => set({ tasks: null }))
+        .catch((error: unknown) => {
+          if (!isCurrent()) return
+          set((s) => ({ tasksState: s.tasks ? "stale" : "unknown",
+            tasksError: error instanceof HttpError && [401, 403].includes(error.status)
+              ? "unauthorized" : "unavailable" }))
+        })
     }
     tick()
     // Phase 3b:全局 feed 驱动——生命周期事件到达即刷新快照(去抖),
@@ -172,35 +281,88 @@ export const useUiStore = create<UiState>((set) => ({
   },
 
   stopSchedulerPolling: () => {
+    schedulerGeneration += 1
     if (schedulerTimer) {
       clearInterval(schedulerTimer)
       schedulerTimer = null
     }
     stopFeed()
+    set((s) => ({ schedulesState: s.schedules ? "stale" : "unknown" }))
   },
 
-  startSchedulePolling: () => {
-    if (scheduleTimer) return
-    const tick = () => {
-      listSchedules()
-        .then((s) => set({ schedules: s }))
-        .catch(() => set({ schedules: null }))
+  refreshSchedules: async () => {
+    const request = ++schedulesRequest, generation = schedulerGeneration
+    const current = () => request === schedulesRequest && generation === schedulerGeneration
+    try {
+      const response = await listSchedules()
+      if (!current()) return
+      if (!response.status || !Array.isArray(response.schedules)) throw new Error("Schedule snapshot unavailable")
+      set({ schedules: response, schedulesState: "fresh", schedulesError: null })
+      if (runsObserver) void useUiStore.getState().refreshScheduleRuns()
+    } catch (error) {
+      if (!current()) return
+      set((s) => ({ schedulesState: s.schedules ? "stale" : "unknown",
+        schedulesError: error instanceof HttpError && [401, 403].includes(error.status) ? "unauthorized" : "unavailable" }))
     }
-    tick()
-    scheduleTimer = setInterval(tick, 10000)
   },
-
-  stopSchedulePolling: () => {
-    if (scheduleTimer) {
-      clearInterval(scheduleTimer)
-      scheduleTimer = null
+  watchScheduleRuns: (id) => {
+    const observer = { id }; runsObserver = observer; actionRequest++
+    set({ scheduleAction: null })
+    void useUiStore.getState().refreshScheduleRuns()
+    return () => { if (runsObserver === observer) { runsObserver = null; runsRequest++; actionRequest++ } }
+  },
+  refreshScheduleRuns: async () => {
+    const observer = runsObserver
+    if (!observer) return
+    const request = ++runsRequest, generation = schedulerGeneration
+    const current = () => runsObserver === observer && request === runsRequest && generation === schedulerGeneration
+    set((s) => ({ scheduleRuns: { id: observer.id, data: s.scheduleRuns?.id === observer.id ? s.scheduleRuns.data : null,
+      state: "loading", error: null } }))
+    try {
+      const response = await getScheduleRuns(observer.id)
+      if (!current()) return
+      if (!response.status || !Array.isArray(response.runs)) throw new Error("Run history unavailable")
+      set({ scheduleRuns: { id: observer.id, data: response.runs, state: "fresh", error: null } })
+    } catch (error) {
+      if (!current()) return
+      set((s) => ({ scheduleRuns: { id: observer.id, data: s.scheduleRuns?.data ?? null,
+        state: s.scheduleRuns?.data !== null ? "stale" : "unknown",
+        error: error instanceof HttpError && [401, 403].includes(error.status) ? "unauthorized" : "unavailable" } }))
     }
   },
-
-  refreshSchedules: () => {
-    listSchedules()
-      .then((s) => set({ schedules: s }))
-      .catch(() => { /* 下个轮询周期自愈 */ })
+  actSchedule: async (id, action, enabled) => {
+    const observer = runsObserver
+    if (!observer || observer.id !== id || useUiStore.getState().scheduleAction?.status === "sending") return false
+    const request = ++actionRequest, generation = schedulerGeneration
+    const current = () => runsObserver === observer && request === actionRequest && generation === schedulerGeneration
+    const feedback = (status: NonNullable<UiState["scheduleAction"]>["status"], message: string) => {
+      if (current()) set({ scheduleAction: { id, status, message } })
+    }
+    if (useUiStore.getState().schedulesState !== "fresh") { feedback("rejected", currentDict().management.snapshotUnknown); return false }
+    feedback("sending", currentDict().management.sending)
+    try {
+      const chat = await import("@/store/useChatStore")
+      let response
+      try {
+        response = await chat.useChatStore.getState().withSessionWrite(`schedule_${id}`, () =>
+          action === "toggle" ? toggleSchedule(id, !!enabled) : action === "run" ? runScheduleNow(id)
+            : action === "cancel" ? cancelScheduleRun(id) : deleteSchedule(id))
+      } catch (error) {
+        if (error instanceof chat.PendingDeletionError) { feedback("rejected", error.message); return false }
+        throw error
+      }
+      if (!current()) return false
+      if (!response.status) { feedback("rejected", response.response || currentDict().management.rejected); return false }
+      feedback("accepted", response.response || currentDict().management.accepted)
+      return true
+    } catch (error) {
+      if (!current()) return false
+      feedback("failed", currentDict().management.failed(error instanceof Error ? error.message : "HTTP failed"))
+      return false
+    } finally {
+      // A lifecycle snapshot remains authoritative; acknowledgements do not toggle running.
+      if (generation === schedulerGeneration) void useUiStore.getState().refreshSchedules()
+    }
   },
 }))
 

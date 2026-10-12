@@ -14,13 +14,20 @@ rag 独立 venv（backend venv 无 chromadb）：retier.py 零三方依赖，按
 （fts_index 测试同惯例）；全部副作用经注入的假回调，可逐步断言调用顺序。
 """
 import importlib.util
+import ast
+import asyncio
 import json
 import sys
 import threading
 import time
 from pathlib import Path
+from contextlib import contextmanager
+from types import SimpleNamespace
+from typing import Optional
 
 import pytest
+from fastapi import BackgroundTasks, HTTPException, Body
+from starlette.responses import Response
 
 RAG_ROOT = Path(__file__).resolve().parents[2] / "rag"
 
@@ -71,6 +78,13 @@ class Harness:
             (tmp_path / "raw_files/faq/doc1_ab.txt", "faq"),
             (tmp_path / "raw_files/faq/doc2_cd.txt", "faq"),
             (tmp_path / "unclassified_raw/doc3_ef.txt", None)]
+        # Retier must prove every governance record owns an existing original
+        # before wipe. Fake callbacks still operate on real temporary raw files.
+        for path, _ in self.files:
+            path = Path(path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                path.write_text("synthetic original", encoding="utf-8")
         self.cats = cats if cats is not None else [
             {"db_name": "faq", "description": "常见问题"},
             {"db_name": "unclassified_db", "description": "池"}]
@@ -317,13 +331,15 @@ def test_interrupted_marker_reports_and_unblocks_retry(tmp_path):
     assert st2["interrupted"] is False and st2["needs_rebuild"] is False
 
 
-def test_thread_start_failure_releases_single_flight(tmp_path, monkeypatch):
+@pytest.mark.parametrize("failure_at", ["construct", "start"])
+def test_thread_start_failure_releases_single_flight(tmp_path, monkeypatch, failure_at):
     # 首评 S7：线程起不来必须还锁，否则本进程余生全是 409
     h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A)
 
     class _DeadThread:
         def __init__(self, *a, **k):
-            pass
+            if failure_at == "construct":
+                raise RuntimeError("can't construct thread")
 
         def start(self):
             raise RuntimeError("can't start new thread")
@@ -331,6 +347,9 @@ def test_thread_start_failure_releases_single_flight(tmp_path, monkeypatch):
     with pytest.raises(retier.RetierRefused) as ei:
         h.mgr.start_rebuild()
     assert ei.value.code == 500
+    assert h.mgr.progress()["state"] == "failed"
+    ticket = h.mgr.acquire_write("thread failure recovered")
+    h.mgr.release_write(ticket)
     monkeypatch.undo()
     assert h.mgr.start_rebuild()["state"] == "running"   # 锁已还，能再来
     deadline = time.time() + 5
@@ -362,7 +381,7 @@ def test_backup_and_inventory_precede_wipe(tmp_path):
 
 def test_stale_snapshot_before_wipe_and_restore_after_reinsert(tmp_path):
     h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A)
-    h.stale_map = {"/x/a_1.txt": {"stale": "旧合同", "stale_at": "2026-08-01"}}
+    h.stale_map = {str(h.files[0][0]): {"stale": "旧合同", "stale_at": "2026-08-01"}}
     out = h.run_and_wait()
     assert out["state"] == "done"
     order = [c for c in h.calls if c in ("dump_stale", "wipe") or c.startswith("restore_stale")]
@@ -375,10 +394,13 @@ def test_stale_snapshot_before_wipe_and_restore_after_reinsert(tmp_path):
 
 def test_stale_lost_paths_are_booked(tmp_path):
     h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A)
-    h.stale_map = {"/x/a.txt": {"stale": "r"}, "/x/b.txt": {"stale": "r"}}
-    h.stale_lost = ["/x/b.txt"]     # 重灌中被自动路由迁移改了路径
+    first, second = (str(path) for path, _ in h.files[:2])
+    h.stale_map = {first: {"stale": "r"}, second: {"stale": "r"}}
+    h.stale_lost = [second]        # 注入重挂失败，必须实际到达 restore 回调
     out = h.run_and_wait()
-    assert out["stale_restored"] == 1 and out["stale_lost"] == ["/x/b.txt"]
+    assert out["state"] == "failed" and h.marker.exists()
+    assert out["stale_restored"] == 1 and out["stale_lost"] == [second]
+    assert "wipe" in h.calls and "restore_stale:2" in h.calls
 
 
 def test_partial_dump_preserves_handwritten_backup_entries(tmp_path):
@@ -430,13 +452,14 @@ def test_malformed_backup_does_not_block_rebuild(tmp_path):
     assert h2.run_and_wait()["state"] == "done"
 
 
-def test_stale_dump_failure_is_booked_as_errors(tmp_path):
-    # 修正评审 S：单库快照失败=该库标记静默丢失——必须计数上报并降级 done_with_errors
+def test_stale_dump_failure_is_booked_without_wipe(tmp_path):
+    # R14：快照失败仍在非破坏阶段；拒绝清库并如实失败，不能完成后丢治理标记。
     h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A)
     h.mgr._dump_stale = lambda: ({}, 2)
     out = h.run_and_wait()
-    assert out["state"] == "done_with_errors"
+    assert out["state"] == "failed"
     assert out["stale_dump_failed"] == 2
+    assert "wipe" not in h.calls
 
 
 def test_deleted_category_with_no_files_stays_deleted(tmp_path):
@@ -465,3 +488,366 @@ def test_status_reports_mismatch_and_compute_error(tmp_path):
     st2 = h2.mgr.status()
     assert st2["mismatch"] is None and st2["compute"] is None
     assert "compute down" in st2["compute_error"]
+
+
+# The backend gate executes actual server functions without importing Chroma.
+def server_functions(namespace, names):
+    path = RAG_ROOT / "rag_server.py"
+    tree = ast.parse(path.read_text())
+    nodes = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+             and n.name in names]
+    assert {n.name for n in nodes} == set(names)
+    for n in nodes:
+        n.decorator_list = []
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec"), namespace)
+    if "_write_scope" in names:
+        namespace["_write_scope"] = contextmanager(namespace["_write_scope"])
+    return SimpleNamespace(**namespace)
+
+
+def write_functions(h):
+    return server_functions(dict(RETIER=h.mgr, RetierRefused=retier.RetierRefused,
+                                 HTTPException=HTTPException, BackgroundTasks=BackgroundTasks),
+        ["_acquire_write", "_write_scope", "_run_accepted_write", "_queue_accepted_write"])
+
+
+def finish(h):
+    deadline = time.monotonic() + 5
+    while h.mgr.progress()["state"] == "running" and time.monotonic() < deadline:
+        time.sleep(.005)
+    assert h.mgr.progress()["state"] != "running"
+    return h.mgr.progress()
+
+
+def test_actual_background_admission_drains_before_inventory(tmp_path):
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A, files=[])
+    server = write_functions(h)
+    bg = BackgroundTasks()
+    inventory = threading.Event()
+    real_list = h.mgr._list_raw_files
+    h.mgr._list_raw_files = lambda: (inventory.set(), real_list())[1]
+    def accepted():
+        h.files.append((tmp_path / "raw_files/faq/accepted.txt", "faq"))
+    server._queue_accepted_write(bg, "入库", accepted)
+    h.mgr.start_rebuild()
+    try:
+        assert not inventory.wait(.1), "accepted-but-not-started task must precede snapshot"
+        with pytest.raises(HTTPException) as err:
+            server._queue_accepted_write(BackgroundTasks(), "重分拣", accepted)
+        assert err.value.status_code == 409
+    finally:
+        asyncio.run(bg())
+        out = finish(h)
+    assert out["state"] == "done" and out["docs_total"] == 1
+
+
+def test_actual_sync_mutation_scope_drains_before_snapshot(tmp_path):
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A)
+    server = write_functions(h)
+    inventory = threading.Event()
+    h.mgr._list_raw_files = lambda: (inventory.set(), list(h.files))[1]
+    with server._write_scope("过时标记"):
+        h.mgr.start_rebuild()
+        assert not inventory.wait(.1)
+        with pytest.raises(HTTPException):
+            with server._write_scope("删除文档"):
+                pytest.fail("maintenance admitted a new writer")
+    assert finish(h)["state"] == "done"
+
+
+@pytest.mark.parametrize("entry", ["upsert_category", "delete_category", "purge_category",
+                                  "delete_document_by_path", "mark_document_stale"])
+def test_actual_mutation_entries_use_same_gate(tmp_path, entry):
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A)
+    ticket = h.mgr.acquire_write("held")
+    h.mgr.start_rebuild()
+    def forbidden(*args, **kwargs):
+        pytest.fail("closed maintenance gate reached data/compute write")
+    ns = vars(write_functions(h)).copy()
+    ns.update(Path=Path, Optional=Optional, Body=Body, CategoryItem=SimpleNamespace,
+              StaleRequest=SimpleNamespace, _category_raw_dir=lambda p: tmp_path,
+              _checked_storage_path=lambda p: p, TRASH_DIR=tmp_path,
+              get_chroma_collection=forbidden, get_embeddings=forbidden,
+              get_chroma_client=forbidden)
+    server = server_functions(ns, [entry])
+    argument = (SimpleNamespace(db_name="faq", description="d") if entry == "upsert_category"
+                else SimpleNamespace(source_path="/synthetic", reason="r") if entry == "mark_document_stale"
+                else "faq")
+    try:
+        with pytest.raises(HTTPException) as err:
+            asyncio.run(getattr(server, entry)(argument))
+        assert err.value.status_code == 409
+    finally:
+        h.mgr.release_write(ticket)
+        finish(h)
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, asyncio.CancelledError])
+def test_background_failure_releases_ticket(tmp_path, failure):
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A)
+    server = write_functions(h)
+    bg = BackgroundTasks()
+    def fail():
+        raise failure("failed write")
+    server._queue_accepted_write(bg, "入库", fail)
+    with pytest.raises(failure):
+        asyncio.run(bg())
+    assert h.run_and_wait()["state"] == "done"
+
+
+@pytest.mark.parametrize("failure", [OSError, asyncio.CancelledError])
+def test_response_failure_before_background_start_fails_drain_without_wipe(tmp_path, failure):
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A)
+    server = write_functions(h)
+    bg = BackgroundTasks()
+    invoked = []
+    server._queue_accepted_write(bg, "入库", lambda: invoked.append(True))
+    async def send(message):
+        raise failure("response interrupted")
+    with pytest.raises(failure):
+        asyncio.run(Response("accepted", background=bg)({"type": "http"}, None, send))
+    assert not invoked
+    h.mgr._write_drain_timeout = .02
+    h.mgr.start_rebuild()
+    out = finish(h)
+    assert out["state"] == "failed" and out["phase"] == "drain_writes"
+    assert out["writes_pending"] == 1
+    assert "wipe" not in h.calls and "list_files" not in h.calls
+    # Failure reopens admission without discarding the outstanding ticket. A late
+    # task can still finish; a retry then drains and completes normally.
+    with server._write_scope("其他写入"):
+        pass
+    # Repeated attempts must still fail before snapshot; the old ticket is never
+    # dropped to fabricate an empty queue after a prior timeout.
+    assert h.run_and_wait()["state"] == "failed"
+    assert "wipe" not in h.calls and "list_files" not in h.calls
+    asyncio.run(bg())
+    assert h.run_and_wait()["state"] == "done"
+
+
+def test_background_schedule_failure_releases_ticket(tmp_path):
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A)
+    server = write_functions(h)
+    class FailedTasks:
+        def add_task(self, *args, **kwargs):
+            raise RuntimeError("cannot schedule")
+    with pytest.raises(RuntimeError):
+        server._queue_accepted_write(FailedTasks(), "入库", lambda: None)
+    assert h.run_and_wait()["state"] == "done"
+
+
+def test_stale_backup_failure_keeps_previous_bytes_and_no_wipe(tmp_path, monkeypatch):
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A)
+    h.stale_map = {str(h.files[0][0]): {"stale": "reason"}}
+    h.mgr._stale_backup.parent.mkdir(parents=True)
+    h.mgr._stale_backup.write_bytes(b'{"previous": {"stale": "saved"}}')
+    original = h.mgr._stale_backup.read_bytes()
+    real_dump = json.dump
+    def fail_json(data, file, **kwargs):
+        if Path(file.name).name.startswith("stale_backup.json."):
+            file.write('{"partial":')
+            raise OSError("fault writing snapshot")
+        return real_dump(data, file, **kwargs)
+    monkeypatch.setattr(retier.json, "dump", fail_json)
+    out = h.run_and_wait()
+    assert out["state"] == "failed" and "wipe" not in h.calls
+    assert "fault writing snapshot" in out["error"]
+    assert h.mgr._stale_backup.read_bytes() == original
+
+
+@pytest.mark.parametrize("action", ["clear", "update", "delete", "move", "failed_delete"])
+def test_failed_recovery_governance_preserves_unrelated_metadata(tmp_path, action):
+    source = tmp_path / "raw/first.txt"
+    source.parent.mkdir()
+    source.write_text("first original")
+    other = tmp_path / "raw/other.txt"
+    other.write_text("other original")
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A,
+                files=[(source, "faq"), (other, "faq")])
+    h.stale_map = {str(source): {"stale": "old"}, str(other): {"stale": "other old"}}
+    h.stale_lost = [str(source), str(other)]
+    assert h.run_and_wait()["state"] == "failed"
+    expected_path = str(source)
+    if action in ("clear", "update"):
+        h.mgr.record_stale_change(str(source), "" if action == "clear" else "new", "date",
+                                  live_matches=False)
+    elif action in ("delete", "failed_delete"):
+        h.mgr.record_raw_removal(source)
+        if action == "delete":
+            source.unlink()
+    else:
+        moved = tmp_path / "raw/moved.txt"
+        h.mgr.record_raw_move(source, moved)
+        source.rename(moved)
+        expected_path = str(moved)
+    # The fake live dump still contains old chunks. A governance override/alias
+    # must survive that dump, as well as a fresh manager's disk recovery read.
+    seen = {}
+    h.mgr._restore_stale = lambda mapping: (seen.update(mapping), [])[1]
+    assert h.run_and_wait()["state"] == "done"
+    assert seen[str(other)]["stale"] == "other old"
+    if action == "delete":
+        assert str(source) not in seen
+    else:
+        assert seen[expected_path]["stale"] == ("" if action == "clear" else "new" if action == "update" else "old")
+    if action == "move":
+        assert str(source) not in seen
+
+
+def test_actual_stale_entry_updates_failed_recovery_backup(tmp_path):
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A)
+    source = str(h.files[0][0])
+    h.stale_map = {source: {"stale": "old"}}
+    h.stale_lost = [source]
+    assert h.run_and_wait()["state"] == "failed"
+    class Collection:
+        name = "faq"
+        def get(self, **kwargs):
+            return {"ids": ["chunk"], "metadatas": [{"source_path": source, "stale": "old"}]}
+        def update(self, **kwargs):
+            assert kwargs["metadatas"][0]["stale"] == ""
+    ns = vars(write_functions(h)).copy()
+    ns.update(StaleRequest=SimpleNamespace, time=time,
+              get_chroma_client=lambda: SimpleNamespace(list_collections=lambda: [SimpleNamespace(name="faq")],
+                                                       get_collection=lambda name: Collection()),
+              get_chroma_collection=lambda name: Collection(), logger=SimpleNamespace(error=lambda text: None))
+    server = server_functions(ns, ["mark_document_stale"])
+    out = asyncio.run(server.mark_document_stale(SimpleNamespace(source_path=source, reason="")))
+    assert out["recovery_updated"] and out["updated_chunks"] == 1
+    saved = json.loads(h.mgr._stale_backup.read_text())
+    assert saved[source]["stale"] == "" and saved[source]["_override"]
+
+
+def test_concurrent_failed_governance_updates_do_not_overwrite_each_other(tmp_path):
+    first, second = str(tmp_path / "first.txt"), str(tmp_path / "second.txt")
+    Path(first).write_text("first original")
+    Path(second).write_text("second original")
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A)
+    h.stale_map = {first: {"stale": "old first"}, second: {"stale": "old second"}}
+    h.stale_lost = [first, second]
+    assert h.run_and_wait()["state"] == "failed"
+    entered, release, second_done = threading.Event(), threading.Event(), threading.Event()
+    atomic = h.mgr._atomic_json
+    errors = []
+    def blocked(path, data):
+        if data[first]["stale"] == "" and data[second]["stale"] == "old second":
+            entered.set()
+            assert release.wait(5)
+        atomic(path, data)
+    h.mgr._atomic_json = blocked
+    def update(source, reason, done=None):
+        try:
+            h.mgr.record_stale_change(source, reason, "date", live_matches=False)
+        except BaseException as err:
+            errors.append(err)
+        finally:
+            if done:
+                done.set()
+    one = threading.Thread(target=update, args=(first, ""))
+    two = threading.Thread(target=update, args=(second, "new second", second_done))
+    one.start()
+    assert entered.wait(2)
+    two.start()
+    try:
+        assert not second_done.wait(.05), "second edit read an obsolete snapshot while first edit was pending"
+    finally:
+        release.set()
+        one.join(5)
+        two.join(5)
+    assert not errors and not one.is_alive() and not two.is_alive()
+    saved = json.loads(h.mgr._stale_backup.read_text())
+    assert saved[first]["stale"] == "" and saved[second]["stale"] == "new second"
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_raw_generation_reuse_never_overwrites_migration_identity(tmp_path, reverse):
+    a, b = tmp_path / "pool/same.txt", tmp_path / "faq/same.txt"
+    a.parent.mkdir()
+    b.parent.mkdir()
+    a.write_text("A")
+    b.write_text("B")
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A, files=[(a, None), (b, "faq")])
+    h.stale_map = {str(a): {"stale": "stale A"}, str(b): {"stale": "stale B"}}
+    h.stale_lost = list(h.stale_map)
+    assert h.run_and_wait()["state"] == "failed"
+    saved = json.loads(h.mgr._stale_backup.read_text())
+    keys = [str(b), str(a)] if reverse else [str(a), str(b)]
+    h.mgr._atomic_json(h.mgr._stale_backup, {key: saved[key] for key in keys})
+    h.mgr.record_raw_removal(b)
+    b.rename(tmp_path / "archived-B.txt")
+    h.mgr.record_raw_move(a, b)
+    a.rename(b)
+    h.files = [(b, "faq")]
+    seen = {}
+    h.mgr._restore_stale = lambda mapping: (seen.update(mapping), [])[1]
+    assert h.run_and_wait()["state"] == "done"
+    assert list(seen) == [str(b)] and seen[str(b)]["stale"] == "stale A"
+
+
+def test_reason_edit_retains_pending_removal_identity(tmp_path):
+    a = tmp_path / "original.txt"
+    a.write_text("original")
+    h = Harness(tmp_path, ident=IDENT_B, stamp=STAMP_A, files=[(a, "faq")])
+    h.stale_map = {str(a): {"stale": "old"}}
+    h.stale_lost = [str(a)]
+    assert h.run_and_wait()["state"] == "failed"
+    h.mgr.record_raw_removal(a)
+    h.mgr.record_stale_change(str(a), "", "", live_matches=True)
+    saved = json.loads(h.mgr._stale_backup.read_text())
+    assert saved[str(a)]["_deleted"] and saved[str(a)]["_raw_id"]
+    a.rename(tmp_path / "archived.txt")
+    h.files = []
+    assert h.run_and_wait()["state"] == "done"
+
+
+@pytest.mark.parametrize("wrong_generation", [False, True])
+def test_actual_restore_requires_exact_path_and_raw_identity(tmp_path, wrong_generation):
+    a, b = tmp_path / "pool/same.txt", tmp_path / "faq/same.txt"
+    a.parent.mkdir()
+    b.parent.mkdir()
+    a.write_text("A")
+    b.write_text("B")
+    old_identity = retier.RetierManager.raw_identity(a)
+    if wrong_generation:
+        a.rename(tmp_path / "old-A.txt")
+        a.write_text("new A")
+    updated = []
+    class Collection:
+        def get(self, where):
+            found = where["source_path"] == str(a if wrong_generation else b)
+            return {"ids": ["chunk"] if found else [], "metadatas": [{}] if found else []}
+        def update(self, **kwargs):
+            updated.append(kwargs)
+    ns = dict(Path=Path, RetierManager=retier.RetierManager, RAW_FILES_DIR=tmp_path,
+              UNCLASSIFIED_DIR=a.parent, logger=SimpleNamespace(warning=lambda text: None),
+              get_chroma_client=lambda: SimpleNamespace(list_collections=lambda: [SimpleNamespace(name="faq")]),
+              get_chroma_collection=lambda name: Collection())
+    server = server_functions(ns, ["_retier_restore_stale"])
+    result = server._retier_restore_stale({str(a): {"stale": "only A", "_raw_id": old_identity}})
+    assert result == [str(a)] and not updated
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_missing_plain_identity_fails_before_wipe_or_future_move(tmp_path, legacy):
+    missing, other = tmp_path / "faq/same.txt", tmp_path / "pool/same.txt"
+    missing.parent.mkdir()
+    other.parent.mkdir()
+    other.write_text("different B")
+    h = Harness(tmp_path, ident=IDENT_B, files=[(other, None)])
+    unknown = {str(missing): {"stale": "only missing A", "stale_at": "date"}}
+    h.mgr._atomic_json(h.mgr._stale_backup, unknown if legacy else {"previous": {"stale": "keep"}})
+    if legacy:
+        h.marker.parent.mkdir(parents=True)
+        h.marker.write_text('{}')
+    else:
+        h.stale_map = unknown
+    original = h.mgr._stale_backup.read_bytes()
+    def move(path, category):
+        h.mgr.record_raw_move(path, missing)
+        path.rename(missing)
+    h.mgr._insert_document = move
+    result = h.run_and_wait(force=True)
+    assert result["state"] == "failed" and "原文缺失" in result["error"]
+    assert "wipe" not in h.calls
+    assert other.read_text() == "different B" and not missing.exists()
+    assert h.mgr._stale_backup.read_bytes() == original

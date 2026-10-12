@@ -1,6 +1,33 @@
 import Foundation
 import UserNotifications
 
+/// 审批卡片捕获的账本身份；seq 区分同一轮中后续的一批审批。
+struct PendingApprovalTarget: Equatable {
+    let sessionId: String
+    let turnId: String
+    let seq: Int
+}
+
+struct RetryConfirmationTarget: Equatable {
+    let id: UUID
+    let sessionId: String
+    let sourceRef: String
+    let canonicalRef: String
+    let canonicalIndex: Int
+    let sourcePrompt: String
+    let isResend: Bool
+    let clientTurnId: String
+    let selectionEpoch: UUID
+    let clientIdentity: ObjectIdentifier
+}
+
+private struct EditableAttemptTarget: Equatable {
+    let prompt: String
+    let pausedTurnId: String?
+    let canonicalCount: Int
+    let canonicalRef: String?
+}
+
 /// 应用主状态（@MainActor）：会话列表 + 当前会话消息 + 活跃轮直播态 + 任务控制。
 /// 账本协议（PROTOCOL.md）：发送/审批/恢复一律 202 受理即返,过程与终态从
 /// GET /events 附着流回来——store 是账本事件的归约器投影(TurnReducer)＋UI 副作用。
@@ -13,6 +40,7 @@ final class AgentStore: ObservableObject {
     @Published var connState: ConnState = .connecting
     // 会话
     @Published var sessions: [SessionMetaItem] = []
+    @Published var retentionPolicy: SessionRetentionPolicy?
     /// 剧本清单（斜杠候选提示）：随会话列表一并加载，含缺依赖者（候选里灰显）
     @Published var skills: [SkillItem] = []
     /// 持久化选中会话：杀进程/重启后自动回到原直播视图（铁律 4 的 ≤1s 恢复语义，
@@ -26,39 +54,91 @@ final class AgentStore: ObservableObject {
         }
     }
     @Published var messages: [ChatMessage] = []
-    // 活跃轮直播态（预览;turn_ended 权威对账后清空）
-    @Published var isGenerating = false {
-        // 生成结束（挂起生效/轮次收尾/断开）即撤下挂起转圈：挂起的可见终点只有这两个
-        didSet { if !isGenerating { suspendPending = false } }
+    @Published private(set) var canonicalTurns: [Turn] = []
+    @Published private(set) var retryGroups: [RetryGroup] = []
+    @Published private(set) var lastTurnRef: String?
+    @Published var retryConfirmationTarget: RetryConfirmationTarget?
+    @Published private(set) var retryStatusNotice: String?
+    @Published private(set) var historyProjectionNeedsRefresh = false
+    private var retryConfirmationId: UUID?
+    var lastCanonicalIndex: Int? { canonicalTurns.isEmpty ? nil : canonicalTurns.count - 1 }
+    var retryActionTitle: String {
+        guard let sid = selectedSessionId else { return L("重试最近一次尝试") }
+        let pending = outboxAll()[sid]
+        return L(pending?["operation"] == "retry" && pending?["retry_uncertain"] != "0"
+                 ? "重发未确认的重试" : "重试最近一次尝试")
     }
+
+    private var editableAttemptTarget: EditableAttemptTarget? {
+        guard !isGenerating, controlRequest == nil, !selectedSessionIsDeleting else { return nil }
+        if ledgerPhase == "awaiting_approval" || ledgerPhase == "suspended" {
+            guard let id = liveTurnId, let prompt = liveRawPrompt else { return nil }
+            return EditableAttemptTarget(prompt: prompt, pausedTurnId: id,
+                canonicalCount: canonicalTurns.count, canonicalRef: lastTurnRef)
+        }
+        guard ledgerPhase == "none", !historyProjectionNeedsRefresh,
+              let prompt = canonicalTurns.last?.prompt else { return nil }
+        return EditableAttemptTarget(prompt: prompt, pausedTurnId: nil,
+            canonicalCount: canonicalTurns.count, canonicalRef: lastTurnRef)
+    }
+
+    var canEditLastAttempt: Bool { editableAttemptTarget != nil }
+
+    func canEditMessage(_ message: ChatMessage, auditOnly: Bool) -> Bool {
+        guard !auditOnly, let source = editableAttemptTarget else { return false }
+        if source.pausedTurnId != nil { return message.id == liveUserMessageId }
+        return message.canModifyLatestAttempt(canonicalIndex: lastCanonicalIndex, auditOnly: false) &&
+            message.id == messages.last(where: { $0.kind == .user })?.id
+    }
+
+    private func ownsEditReply(_ source: EditableAttemptTarget) -> Bool {
+        guard !isGenerating, controlRequest == nil, canonicalTurns.count == source.canonicalCount,
+              lastTurnRef == source.canonicalRef else { return false }
+        if let id = source.pausedTurnId {
+            return liveTurnId == id || (liveTurnId == nil && lastEndedId == id && ledgerPhase == "none")
+        }
+        return ledgerPhase == "none"
+    }
+
+    // 活跃轮直播态（预览;turn_ended 权威对账后清空）
+    @Published var isGenerating = false
     @Published var streamText = ""
     @Published var thinkingText = ""
     @Published var liveSteps: [String] = []
     @Published var activity: LiveActivity?
     @Published var taskSnapshot: TaskSnapshot?
-    // 暂停态
     @Published var pendingTools: [PendingTool]?
-    @Published var isSuspended = false {
-        didSet { if isSuspended { suspendPending = false } }
+    @Published private(set) var pendingApprovalTarget: PendingApprovalTarget?
+    @Published var isSuspended = false
+    @Published private(set) var ledgerPhase = "none"
+    enum ControlKind { case cancel, suspend, resume }
+    struct ControlRequest {
+        let id: UUID
+        let kind: ControlKind
+        let turnId: String
+        /// Fixed at dispatch, never advanced by later recovery snapshots or replay.
+        let observedSeq: Int
+        var accepted: Bool
     }
-    /// 挂起已受理、等事件确认（UI 在按钮原位显示转圈）。复位有三条路：suspended 事件
-    /// 翻真 isSuspended、任何生成结束翻假 isGenerating、以及断连兜底的计时器——
-    /// 事件流断在半途时不能把转圈永远留在界面上。
-    @Published var suspendPending = false {
-        didSet {
-            suspendPendingTask?.cancel()
-            guard suspendPending else { return }
-            suspendPendingTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 15_000_000_000)
-                if !Task.isCancelled { self?.suspendPending = false }
-            }
+    @Published private(set) var controlRequest: ControlRequest?
+    var suspendPending: Bool { controlRequest?.kind == .suspend }
+    static func hasControllableChat(kind: String?) -> Bool { kind != "summarize" && kind != "prewarm" }
+    static func canCancelTask(phase: String) -> Bool { ["queued", "running"].contains(phase) }
+    var canSuspend: Bool { ledgerPhase == "running" && liveTurnId != nil && controlRequest == nil && !selectedSessionIsDeleting }
+    var controlFeedback: String? {
+        guard let controlRequest else { return nil }
+        if !controlRequest.accepted { return L("正在发送控制请求…") }
+        switch controlRequest.kind {
+        case .suspend: return L("挂起已受理，等待工具结束后的安全点。")
+        case .cancel: return L("停止已受理，等待安全点确认；已完成的副作用不会自动撤销。")
+        case .resume: return L("恢复已受理，等待账本确认继续执行。")
         }
     }
-    // 错误横幅（自动消失的 toast 语义）
+    // 普通错误自动消失；未完成的历史同步保留提示直到明确恢复。
     @Published var errorMessage: String? {
         didSet {
             errorDismissTask?.cancel()
-            guard errorMessage != nil else { return }
+            guard errorMessage != nil, errorMessage != incompleteHistoryError else { return }
             errorDismissTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 6_000_000_000)
                 if !Task.isCancelled { self?.errorMessage = nil }
@@ -77,6 +157,47 @@ final class AgentStore: ObservableObject {
     @Published var showInspector = false
     // 任务中心：全局调度快照（跨会话，监听循环持续刷新）
     @Published var globalTasks: [TaskHandleInfo] = []
+    enum TaskSnapshotFreshness { case unknown, fresh, stale }
+    @Published private(set) var globalTasksFreshness: TaskSnapshotFreshness = .unknown
+    private var globalSnapshotRequest = UUID()
+
+    @Published private(set) var schedules: [ScheduledTask] = []
+    @Published private(set) var schedulesFreshness: TaskSnapshotFreshness = .unknown
+    @Published private(set) var schedulesError: String?
+    @Published private(set) var schedulesLoading = false
+    @Published private(set) var scheduleRunHistory: [String: [ScheduleRun]] = [:]
+    @Published private(set) var scheduleRunsFreshness: [String: TaskSnapshotFreshness] = [:]
+    @Published private(set) var scheduleRunsError: [String: String] = [:]
+    private var schedulesRequest = UUID()
+    private var scheduleRunsRequests: [String: UUID] = [:]
+    @Published private(set) var deletingSessionIDs: Set<String> = []
+    private var sessionDeleteRequests: [String: UUID] = [:]
+    private var submissionIntentEpoch = UUID()
+    private struct SubmissionHTTP { let sessionId: String; let client: ObjectIdentifier }
+    @Published private var submissionHTTPRequests: [String: SubmissionHTTP] = [:]
+    func hasSubmissionInFlight(_ sid: String) -> Bool {
+        guard let client else { return false }
+        return submissionHTTPRequests.values.contains { $0.sessionId == sid && $0.client == ObjectIdentifier(client) }
+    }
+
+    private func shouldBlockSubmission(_ sid: String, client: AgentClient, receipt: String,
+                                       epoch: UUID) -> Bool {
+        guard self.client === client, isSessionDeleting(sid) else { return false }
+        if outboxAll()[sid]?["receipt"] == receipt { outboxClear(sessionId: sid) }
+        if isCurrent(sid, epoch, client), optimisticReceipt == receipt {
+            throwSubmissionFailure(receipt: receipt)
+            errorMessage = L("会话正在删除，请等待删除结果后再操作。")
+        }
+        return true
+    }
+
+    func isSessionDeleting(_ sid: String) -> Bool { deletingSessionIDs.contains(sid) }
+    var selectedSessionIsDeleting: Bool { selectedSessionId.map(isSessionDeleting) ?? false }
+    private func rejectDeletingSession(_ sid: String) -> Bool {
+        guard isSessionDeleting(sid) else { return false }
+        errorMessage = L("会话正在删除，请等待删除结果后再操作。")
+        return true
+    }
     // 内容搜索
     @Published var searchQuery = ""
     @Published var searchResults: [SearchHit]?
@@ -84,7 +205,6 @@ final class AgentStore: ObservableObject {
     /// App 是否前台活跃（RootView 从 scenePhase 同步）：后台完结的轮次发本地通知
     var isAppActive = true
     private var errorDismissTask: Task<Void, Never>?
-    private var suspendPendingTask: Task<Void, Never>?
     /// 会话历史缓存（内容搜索用）：last_updated 不变即命中
     private var historyCache: [String: (updated: Double, turns: [Turn])] = [:]
 
@@ -100,17 +220,52 @@ final class AgentStore: ObservableObject {
     private var monitorTask: Task<Void, Never>?
     private var connMonitorTask: Task<Void, Never>?
     private var connFailures = 0
+    private var connectionRequest = 0
     /// 通知去重：同一会话 30s 内只报一次（自发轮次与全局监听两条路径都会命中完结）。
     private var notifiedAt: [String: Date] = [:]
 
     // ---- 附着流簿记（单附着策略：只对选中会话保持一条 /events 长连） ----
     private var attachTask: Task<Void, Never>?
+    private var attachmentId: UUID?
+    private var selectionEpoch = UUID()
+    private var replayAfter: Int?
+    private var recoveryTask: Task<Bool, Never>?
+    private var recoveryId: UUID?
+    // Distinguish no requirement from a thin terminal with an unknown/invalid index.
+    private struct MissingThinRecord { let index: Int? }
+    private var missingThinRecord: MissingThinRecord?
+    private var incompleteHistoryError: String?
+    private func clearIncompleteHistoryError() {
+        if let recorded = incompleteHistoryError, errorMessage == recorded { errorMessage = nil }
+        incompleteHistoryError = nil
+    }
+
+    private func canonicalIndex(_ value: JSONValue?) -> Int? {
+        guard case .number(let n)? = value, n.isFinite,
+              n >= 0, n < Double(Int.max), n.rounded(.towardZero) == n else { return nil }
+        return Int(n)
+    }
+
+    private func isCurrent(_ sid: String, _ epoch: UUID, _ client: AgentClient) -> Bool {
+        selectedSessionId == sid && selectionEpoch == epoch && self.client === client
+    }
     /// 已消费的最大账本 seq（重连游标；换会话时归零重定位）。
     private var cursor = 0
     /// 归约器状态（活跃轮的规范形投影;fixtures 锁定其行为）。
     private var live = NormalizedState()
     /// 本端乐观追加的用户气泡（turn_queued 到达时收编,不重复建）。
+    private var optimisticOperation: String?
     private var optimisticPrompt: String?
+    private var optimisticClientTurnId: String?
+    private var optimisticReceipt: String?
+    private var optimisticUserMessageId: UUID?
+    private var optimisticTurnId: String?
+    private var optimisticFirstSeq: Int?
+    private var liveRawPrompt: String?
+    private var liveTurnId: String?
+    private var liveOutboxReceipt: String?
+    private var lastEndedId: String?
+    private var liveUserMessageId: UUID?
     /// 发送暂存（outbox）：提交前落 UserDefaults,202 受理即清——App 在 multipart
     /// 上传途中被杀时,这是唯一能证明"有话没送达"的凭据。
     private let outboxKey = "macagent.outbox"
@@ -140,57 +295,89 @@ final class AgentStore: ObservableObject {
 
     /// 设置变更后重建客户端并重新对账（选中会话重新附着）。
     func applySettings() {
+        detach()
         client = settings.makeClient()
+        clearHistoryProjection()
+        globalTasks = []
+        globalTasksFreshness = .unknown
+        globalSnapshotRequest = UUID()
+        schedulesRequest = UUID(); scheduleRunsRequests.removeAll()
+        schedules = []; schedulesFreshness = .unknown; schedulesError = nil; schedulesLoading = false
+        scheduleRunHistory = [:]; scheduleRunsFreshness = [:]; scheduleRunsError = [:]
+        sessionDeleteRequests.removeAll(); deletingSessionIDs.removeAll(); submissionHTTPRequests.removeAll()
         startGlobalMonitor()       // client 换了，监听循环重启
         startConnectionMonitor()   // 连接探活同理重启（失败计数清零 → 黄灯重试）
         // 可能换了后端：旧列表立即撤下，摆新地址的快照（没有就空着等真相）
         sessions = []
+        retentionPolicy = nil
         restoreSessionsSnapshot()
         let sid = selectedSessionId
-        detach()
+        let epoch = selectionEpoch
+        let appliedClient = client
         messages = []
         Task {
             await refreshConnection()
+            guard selectionEpoch == epoch, client === appliedClient else { return }
             await loadSessions()
+            guard selectionEpoch == epoch, client === appliedClient else { return }
             if let sid { await open(sessionId: sid) }
         }
     }
 
     func refreshConnection() async {
         guard let client else { connectionOK = false; connState = .offline; return }
-        let ok = (try? await client.health()) ?? false
-        connectionOK = ok
-        if ok { connState = .connected; connFailures = 0 }
+        connectionRequest += 1
+        let request = connectionRequest
+        let access = await client.backendAccess()
+        guard !Task.isCancelled, self.client === client, request == connectionRequest else { return }
+        recordBackendAccess(access)
     }
 
     // MARK: - 连接状态监控（实机反馈：信号原来只在设置页关闭时刷一次，静态且滞后）
 
-    /// 三态：连接中（黄，还在尝试）/ 已连接（绿）/ 未连接（红，连续失败 ~20s 判放弃）。
-    enum ConnState { case connecting, connected, offline }
+    /// Backend access only; an authenticated API does not prove every compute capability.
+    enum ConnState { case connecting, connected, offline, unauthorized, reachable }
 
-    /// 常驻探活循环：通了 15s 一巡（廉价 /health），断了 2s 一巡追赶 sidecar 启动；
+    private func recordBackendAccess(_ access: BackendAccess) {
+        connectionOK = access == .authenticated
+        switch access {
+        case .authenticated: connFailures = 0; connState = .connected
+        case .unauthorized: connFailures = 0; connState = .unauthorized
+        case .reachable: connFailures = 0; connState = .reachable
+        case .offline:
+            connFailures += 1
+            connState = connFailures >= 10 ? .offline : .connecting
+        }
+    }
+
+    /// Existing monitor verifies reachability and backend authentication every 15s;
+    /// unreachable services retry every 2s to follow sidecar startup.
     /// 连续 10 次失败（约 20s）才降级红灯——短暂波动/启动窗口都算「连接中」。
     func startConnectionMonitor() {
         connMonitorTask?.cancel()
+        connectionRequest += 1
         connFailures = 0
-        if connState != .connected { connState = .connecting }
+        connState = .connecting
+        connectionOK = nil
         connMonitorTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                let ok = (try? await self.client?.health()) ?? false
-                if Task.isCancelled { return }
-                self.connectionOK = ok
-                if ok {
-                    self.connFailures = 0
-                    self.connState = .connected
+                guard let client = self.client else { return }
+                self.connectionRequest += 1
+                let request = self.connectionRequest
+                let access = await client.backendAccess()
+                if Task.isCancelled || self.client !== client { return }
+                if request != self.connectionRequest {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    continue
+                }
+                self.recordBackendAccess(access)
+                if access == .authenticated {
                     // 顺带巡刷会话列表（macOS 无下拉刷新后的自动更新通道）：
                     // 等值守卫兜底，列表没变不会引起任何视图重建
                     await self.loadSessions()
-                } else {
-                    self.connFailures += 1
-                    self.connState = self.connFailures >= 10 ? .offline : .connecting
                 }
-                try? await Task.sleep(nanoseconds: ok ? 15_000_000_000 : 2_000_000_000)
+                try? await Task.sleep(nanoseconds: access == .offline ? 2_000_000_000 : 15_000_000_000)
             }
         }
     }
@@ -200,7 +387,10 @@ final class AgentStore: ObservableObject {
     func loadSessions() async {
         guard let client else { return }
         do {
-            var items = try await client.listSessions()
+            let index = try await client.sessionIndex()
+            guard self.client === client else { return }
+            retentionPolicy = index.retentionPolicy
+            var items = index.sessions
             items.sort {
                 if ($0.pinned ?? false) != ($1.pinned ?? false) { return $0.pinned ?? false }
                 return ($0.lastUpdated ?? 0) > ($1.lastUpdated ?? 0)
@@ -212,11 +402,12 @@ final class AgentStore: ObservableObject {
                 saveSessionsSnapshot()   // 只有真变了才落快照（探活 15s 一巡，别空写）
             }
         } catch {
+            guard self.client === client else { return }
             errorMessage = L("会话列表加载失败：") + error.localizedDescription
         }
         // 剧本清单搭车刷新：变动频率极低（装依赖/加剧本），无须独立轮询；
         // 拉不到就保持旧值——候选提示是锦上添花，不值得为它弹错误横幅
-        if let fetched = try? await client.skills() {
+        if let fetched = try? await client.skills(), self.client === client {
             skills = fetched
         }
     }
@@ -240,6 +431,7 @@ final class AgentStore: ObservableObject {
     func newSession() {
         detach()
         selectedSessionId = Self.makeSessionId()
+        clearHistoryProjection()
         messages = []
         knownTurnCount = 0
     }
@@ -257,61 +449,179 @@ final class AgentStore: ObservableObject {
         guard sessionId != selectedSessionId else { return }
         detach()
         selectedSessionId = sessionId
+        clearHistoryProjection()
         messages = []
         Task { await open(sessionId: sessionId) }
     }
 
     /// 统一恢复入口：历史（落盘轮）→ outbox 回收提示 → 附着（活跃轮重放 + 实时续播）。
     private func open(sessionId: String) async {
-        await loadHistory(sessionId: sessionId)
-        guard selectedSessionId == sessionId else { return }
+        guard let client, selectedSessionId == sessionId else { return }
+        let epoch = selectionEpoch
+        if let recoveryTask {
+            guard await recoveryTask.value, isCurrent(sessionId, epoch, client) else { return }
+        } else {
+            let id = UUID()
+            recoveryId = id
+            let task = Task { await self.loadHistory(sessionId: sessionId) }
+            recoveryTask = task
+            let loaded = await task.value
+            if recoveryId == id { recoveryTask = nil; recoveryId = nil }
+            guard loaded, isCurrent(sessionId, epoch, client) else { return }
+        }
         // 发送暂存回收：上次 App 可能死在 multipart 上传途中——凭据仅剩 outbox
-        if let pending = outboxRead(sessionId: sessionId) {
+        if optimisticReceipt == nil, let pending = outboxRead(sessionId: sessionId) {
             // **不清条目**（首审 H3）：清了键,用户按提示重发就换新键 = 服务端判不了重,
             // 恰好在「杀 App 后重开」这条移动端主路上把幂等做没了。提示只出一次
             // (hinted 标记),条目留到 202/turn_ended 对账清仓。
-            let lastPrompt = messages.last(where: { $0.kind == .user })?.text
-            if lastPrompt == pending.prompt {
-                outboxClear(sessionId: sessionId)     // 那条话其实已落盘:凭据兑现
-            } else if !pending.hinted {
+            if !pending.hinted {
                 outboxMarkHinted(sessionId: sessionId)
-                messages.append(.system(L("上次可能有一条消息未送达：「") + pending.prompt + L("」——请确认后按需重发。")))
+                if outboxAll()[sessionId]?["operation"] == "retry" {
+                    messages.append(.system(L("上次任务重试可能已受理；请查看尝试记录，再确认是否重发同一次重试。")))
+                } else {
+                    messages.append(.system(L("上次可能有一条消息未送达：「") + pending.prompt + L("」——请确认后按需重发。")))
+                }
             }
         }
         ensureAttached(sessionId: sessionId)
     }
 
-    private func loadHistory(sessionId: String) async {
-        guard let client else { return }
+    @discardableResult
+    private func loadHistory(sessionId: String) async -> Bool {
+        guard let client, selectedSessionId == sessionId else { return false }
+        let epoch = selectionEpoch
         do {
             let history = try await client.history(sessionId: sessionId)
-            guard selectedSessionId == sessionId else { return }
-            messages = history.turns.enumerated().flatMap { index, turn in
-                ChatMessage.from(turn: turn, turnIndex: index)
+            guard history.status else { throw AgentError.http(200, L("历史读取未被受理。")) }
+            guard isCurrent(sessionId, epoch, client), !Task.isCancelled else { return false }
+            if let required = missingThinRecord,
+               required.index.map({ history.turns.indices.contains($0) }) != true {
+                // A successful HTTP response is not a complete canonical projection.
+                // Keep the prior display and newer submit; stop before reattaching.
+                historyProjectionNeedsRefresh = true
+                incompleteHistoryError = L("历史记录尚不完整；原展示已保留，请手动同步后再继续。")
+                errorMessage = incompleteHistoryError
+                return false
             }
+            clearIncompleteHistoryError()
+            missingThinRecord = nil
+            // Preserve only the current submit's optimistic bubble until terminal reconciliation.
+            let optimistic = optimisticReceipt == nil ? [] : messages.filter { $0.id == optimisticUserMessageId }
+            let displayed = HistoryProjection.indices(history)
+            canonicalTurns = history.turns
+            lastTurnRef = history.lastTurnRef
+            retryGroups = HistoryProjection.groups(history, displayed: displayed)
+            messages = displayed.flatMap { index in
+                ChatMessage.from(turn: history.turns[index], turnIndex: index)
+            } + optimistic
+            retryStatusNotice = nil
+            historyProjectionNeedsRefresh = false
             knownTurnCount = history.turns.count
-            // deck 探测（404=无，非错误）：有则聊天工具栏出现查看入口
-            deck = try? await client.deck(sessionId: sessionId)
+            replayAfter = min(history.replayAfter ?? 0, optimisticFirstSeq.map { $0 - 1 } ?? Int.max)
+            // A just-accepted submit can already be in history before its first attachment.
+            // Replaying its known queued identity reconciles the optimistic bubble without guessing text.
+            cursor = replayAfter ?? 0
+            let fetchedDeck = try? await client.deck(sessionId: sessionId)
+            guard isCurrent(sessionId, epoch, client), !Task.isCancelled else { return false }
+            deck = fetchedDeck
+            return true
         } catch {
+            guard isCurrent(sessionId, epoch, client), !Task.isCancelled else { return false }
             errorMessage = L("历史加载失败：") + error.localizedDescription
+            return false
         }
     }
 
-    func deleteSession(_ item: SessionMetaItem) {
-        Task {
-            _ = try? await client?.deleteSession(sessionId: item.sessionId)
-            if selectedSessionId == item.sessionId {
-                detach()
-                selectedSessionId = nil
-                messages = []
+    struct ManagementDeleteResult {
+        var deleted: Set<String> = []
+        var failures: [String: String] = [:]
+        var obsolete = false
+        var failedIDs: Set<String> { Set(failures.keys) }
+    }
+
+    /// One awaited receipt per resource. Failure is never projected as deletion.
+    private func collectDeleteReceipts(_ ids: [String], client: AgentClient,
+        action: (AgentClient, String) async throws -> (Bool, String?)) async -> ManagementDeleteResult {
+        var result = ManagementDeleteResult()
+        for id in ids {
+            guard self.client === client else { result.obsolete = true; break }
+            do {
+                let (accepted, reason) = try await action(client, id)
+                guard self.client === client else { result.obsolete = true; break }
+                if accepted { result.deleted.insert(id) }
+                else { result.failures[id] = reason ?? L("删除未被受理，请检查后重试。") }
+            } catch {
+                guard self.client === client else { result.obsolete = true; break }
+                result.failures[id] = L("删除未确认：") + error.localizedDescription
             }
-            await loadSessions()
+        }
+        return result
+    }
+
+    func deleteSession(_ item: SessionMetaItem) async -> ManagementDeleteResult {
+        await deleteSessions([item])
+    }
+
+    func deleteSessions(_ items: [SessionMetaItem]) async -> ManagementDeleteResult {
+        let ids = Array(Set(items.map(\.sessionId))).sorted()
+        guard let client else { return ManagementDeleteResult(failures: Dictionary(uniqueKeysWithValues: ids.map { ($0, L("连接状态未知，请刷新后重试。")) })) }
+        let epoch = selectionEpoch, selected = selectedSessionId
+        let receipt = optimisticReceipt, intent = submissionIntentEpoch
+        let savedReceipt = selected.flatMap { outboxAll()[$0]?["receipt"] }
+        let savedReceipts = Dictionary(uniqueKeysWithValues: ids.compactMap { id in outboxAll()[id]?["receipt"].map { (id, $0) } })
+        let operation = UUID()
+        let available = ids.filter { !isSessionDeleting($0) && !hasSubmissionInFlight($0) }
+        let blocked = ids.filter { isSessionDeleting($0) || hasSubmissionInFlight($0) }
+        for id in available { sessionDeleteRequests[id] = operation; deletingSessionIDs.insert(id) }
+        defer {
+            for id in available where sessionDeleteRequests[id] == operation {
+                sessionDeleteRequests[id] = nil; deletingSessionIDs.remove(id)
+            }
+        }
+        var result = await collectDeleteReceipts(available, client: client) { client, id in
+            let response = try await client.deleteSession(sessionId: id)
+            return (response.status || response.reason == "not_found", response.response)
+        }
+        for id in blocked {
+            result.failures[id] = isSessionDeleting(id)
+                ? L("会话正在删除，请等待删除结果后再操作。")
+                : L("会话有正在提交的请求，本次未删除。请等待结果后重试。")
+        }
+        guard self.client === client, !result.obsolete else { return result }
+        if let sid = selected, result.deleted.contains(sid), isCurrent(sid, epoch, client),
+           submissionIntentEpoch == intent,
+           (optimisticReceipt == nil || optimisticReceipt == receipt),
+           (outboxAll()[sid]?["receipt"] == nil || outboxAll()[sid]?["receipt"] == savedReceipt) {
+            detach(); selectedSessionId = nil; clearHistoryProjection(); knownTurnCount = 0; messages = []
+        }
+        for id in result.deleted where outboxAll()[id]?["receipt"] == savedReceipts[id] {
+            outboxClear(sessionId: id)
+        }
+        sessions.removeAll { result.deleted.contains($0.sessionId) }
+        await loadSessions()
+        return result
+    }
+
+    func deleteKnowledgeDocuments(_ paths: [String]) async -> ManagementDeleteResult {
+        let ids = Array(Set(paths)).sorted()
+        guard let client else { return ManagementDeleteResult(failures: Dictionary(uniqueKeysWithValues: ids.map { ($0, L("连接状态未知，请刷新后重试。")) })) }
+        return await collectDeleteReceipts(ids, client: client) { client, path in
+            let response = try await client.ragDeleteDocument(sourcePath: path)
+            // Legacy endpoint confirms by HTTP; explicit business refusals throw in API.
+            return (true, response.msg)
         }
     }
 
     func togglePin(_ item: SessionMetaItem) {
+        guard let client, !rejectDeletingSession(item.sessionId) else { return }
         Task {
-            _ = try? await client?.setPin(sessionId: item.sessionId, pinned: !(item.pinned ?? false))
+            guard self.client === client, !rejectDeletingSession(item.sessionId) else { return }
+            do {
+                _ = try await client.setPin(sessionId: item.sessionId, pinned: !(item.pinned ?? false))
+            } catch {
+                guard self.client === client else { return }
+                errorMessage = L("保留状态保存失败，请重试。")
+            }
             await loadSessions()
         }
     }
@@ -328,8 +638,10 @@ final class AgentStore: ObservableObject {
     /// 会话改名(服务端一等,Phase 4b:双端同源)——写后端后刷新列表。
     func rename(_ item: SessionMetaItem, to title: String) {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let client, !rejectDeletingSession(item.sessionId) else { return }
         Task {
-            _ = try? await client?.renameSession(sessionId: item.sessionId, title: trimmed)
+            guard self.client === client, !rejectDeletingSession(item.sessionId) else { return }
+            _ = try? await client.renameSession(sessionId: item.sessionId, title: trimmed)
             await loadSessions()
         }
     }
@@ -345,8 +657,10 @@ final class AgentStore: ObservableObject {
             sid = Self.makeSessionId()
             selectedSessionId = sid
         }
+        guard !rejectDeletingSession(sid) else { return }
         // 首轮自动命名（实机反馈：新会话在侧栏顶着随机 id 很生硬）——用首条提问的
         // 首行截断当标题，写到服务端 meta（双端同源），用户随时可改名覆盖。
+        let epoch = selectionEpoch
         let firstTurn = knownTurnCount == 0
             && !messages.contains(where: { $0.kind == .user || $0.kind == .assistant })
 
@@ -357,6 +671,7 @@ final class AgentStore: ObservableObject {
         let userMessage = ChatMessage.user(bubble)
         let bubbleId = userMessage.id
         messages.append(userMessage)
+        optimisticUserMessageId = bubbleId
         optimisticPrompt = prompt
         // 键纪律(B3):纯文本同文重发复用旧键;**带附件不复用也不存键**——键只比对得了
         // 文本,同文换附件若被判重,新附件会被静默丢弃(首审 M6)
@@ -364,47 +679,58 @@ final class AgentStore: ObservableObject {
                                            : UUID().uuidString.lowercased()
         outboxWrite(sessionId: sid, prompt: prompt,
                     key: uploads.isEmpty ? clientTurnId : nil)
+        let submittedReceipt = outboxAll()[sid]!["receipt"]!
+        submissionIntentEpoch = UUID()
+        optimisticReceipt = submittedReceipt
+        optimisticOperation = "send"
+        optimisticClientTurnId = clientTurnId
+        optimisticTurnId = nil
+        optimisticFirstSeq = nil
         resetPreview()
         isGenerating = true
 
         var params = ChatParams(prompt: prompt)
         params.clientTurnId = clientTurnId
         params.enableThinking = thinking
+        submissionHTTPRequests[submittedReceipt] = SubmissionHTTP(sessionId: sid, client: ObjectIdentifier(client))
         Task { [weak self] in
+            defer { self?.submissionHTTPRequests[submittedReceipt] = nil }
+            guard self?.shouldBlockSubmission(sid, client: client, receipt: submittedReceipt, epoch: epoch) != true else { return }
             do {
                 let accepted = try await client.submitTurn(sessionId: sid, params: params, files: uploads)
+                self?.submissionHTTPRequests[submittedReceipt] = nil
                 guard let self else { return }
-                self.outboxClear(sessionId: sid)
-                if accepted.duplicate == true {
-                    // 判重命中(首审 M11):返回的是既有轮,可能早已完结——干等事件会永远
-                    // 转圈。撤乐观气泡,走统一恢复入口重新对账。
-                    self.optimisticPrompt = nil
-                    self.messages.removeAll { $0.id == bubbleId }
-                    self.isGenerating = false
-                    await self.open(sessionId: sid)
-                    return
+                if self.client === client, self.outboxAll()[sid]?["receipt"] == submittedReceipt {
+                    self.outboxClear(sessionId: sid)
                 }
-                self.ensureAttached(sessionId: sid)  // 首条消息后会话才在服务端存在
-                if firstTurn {
+                guard self.isCurrent(sid, epoch, client) else { return }
+                if firstTurn && accepted.duplicate != true {
                     let title = Self.autoTitle(from: prompt)
                     if !title.isEmpty {
                         _ = try? await client.renameSession(sessionId: sid, title: title)
+                        guard self.isCurrent(sid, epoch, client) else { return }
                         await self.loadSessions()
                     }
                 }
+                await self.acceptSubmission(accepted, sessionId: sid, epoch: epoch, client: client,
+                                            receipt: submittedReceipt, bubbleId: bubbleId)
             } catch let conflict as TurnConflictError {
+                self?.submissionHTTPRequests[submittedReceipt] = nil
                 guard let self else { return }
-                self.outboxClear(sessionId: sid)
-                self.optimisticPrompt = nil
+                if self.client === client, self.outboxAll()[sid]?["receipt"] == submittedReceipt { self.outboxClear(sessionId: sid) }
+                guard self.isCurrent(sid, epoch, client), self.optimisticReceipt == submittedReceipt, self.optimisticTurnId == nil else { return }
+                self.clearOptimistic()
                 self.messages.removeAll { $0.id == bubbleId }
                 self.isGenerating = false
                 _ = conflict
                 self.errorMessage = L("该会话已有正在进行的轮次，请等它完结后再发送。")
             } catch {
+                self?.submissionHTTPRequests[submittedReceipt] = nil
                 guard let self else { return }
+                guard self.isCurrent(sid, epoch, client), self.optimisticReceipt == submittedReceipt, self.optimisticTurnId == nil else { return }
                 // 网络类失败**不清 outbox**（B3）:请求可能已达、只是 202 回程丢了——
                 // 键留着,用户重发同文即复用,服务端判重不二次执行。真冲突(409)才清。
-                self.optimisticPrompt = nil
+                self.clearOptimistic()
                 self.messages.removeAll { $0.id == bubbleId }
                 self.isGenerating = false
                 self.errorMessage = L("发送失败：") + error.localizedDescription
@@ -412,24 +738,76 @@ final class AgentStore: ObservableObject {
         }
     }
 
+    /// Common R15 acceptance ownership for plain submit and canonical retry.
+    private func acceptSubmission(_ accepted: TurnAccepted, sessionId sid: String, epoch: UUID,
+                                  client: AgentClient, receipt: String, bubbleId: UUID?) async {
+        guard accepted.status else { throwSubmissionFailure(receipt: receipt); return }
+        if self.client === client, outboxAll()[sid]?["receipt"] == receipt { outboxClear(sessionId: sid) }
+        guard isCurrent(sid, epoch, client), optimisticReceipt == receipt else { return }
+        if accepted.duplicate == true {
+            if let bubbleId { messages.removeAll { $0.id == bubbleId } }
+            clearOptimistic()
+            isGenerating = false
+            recoverHistoryProjection(sessionId: sid)
+            return
+        }
+        optimisticTurnId = accepted.turnId
+        optimisticFirstSeq = accepted.seq
+        if let turnId = accepted.turnId, lastEndedId == turnId {
+            if let bubbleId { messages.removeAll { $0.id == bubbleId } }
+            clearOptimistic()
+            isGenerating = false
+        } else if let turnId = accepted.turnId, liveTurnId == turnId {
+            if let queuedUser = liveUserMessageId, queuedUser != bubbleId {
+                messages.removeAll { $0.id == queuedUser }
+            }
+            liveUserMessageId = bubbleId
+        } else if accepted.turnId != nil, let seq = accepted.seq, cursor >= seq {
+            recoverHistoryProjection(sessionId: sid)
+            return
+        }
+        ensureAttached(sessionId: sid)
+    }
+
+    private func throwSubmissionFailure(receipt: String) {
+        guard optimisticReceipt == receipt else { return }
+        if let bubble = optimisticUserMessageId { messages.removeAll { $0.id == bubble } }
+        clearOptimistic()
+        isGenerating = false
+        errorMessage = L("请求未被受理；原记录已保留。")
+    }
+
     // MARK: - 审批 / 任务控制
 
-    func decideApproval(approve: Bool) {
-        guard let client, let sid = selectedSessionId else { return }
+    func decideApproval(approve: Bool, target: PendingApprovalTarget) {
+        guard let client, selectedSessionId == target.sessionId,
+              pendingApprovalTarget == target, pendingTools?.isEmpty == false else { return }
+        let sid = target.sessionId
+        guard !rejectDeletingSession(sid) else { return }
+        let epoch = selectionEpoch
         let tools = pendingTools
         pendingTools = nil
         isGenerating = true   // 乐观;事件流的 resumed/turn_started 确认
         Task { [weak self] in
             do {
-                _ = try await client.submitApproval(sessionId: sid, approve: approve)
+                guard let self, self.isCurrent(sid, epoch, client) else { return }
+                if self.rejectDeletingSession(sid) {
+                    if self.pendingApprovalTarget == target { self.pendingTools = tools; self.isGenerating = false }
+                    return
+                }
+                _ = try await client.submitApproval(sessionId: sid, approve: approve,
+                                                    expectedTurnId: target.turnId,
+                                                    expectedApprovalSeq: target.seq)
             } catch is TurnConflictError {
                 // 决议目标已不存在（另一端已处理/已过期）：以服务端为准重载
-                guard let self else { return }
+                guard let self, self.isCurrent(sid, epoch, client),
+                      self.pendingApprovalTarget == target else { return }
                 self.detach()
                 self.messages = []
                 await self.open(sessionId: sid)
             } catch {
-                guard let self else { return }
+                guard let self, self.isCurrent(sid, epoch, client),
+                      self.pendingApprovalTarget == target else { return }
                 self.isGenerating = false
                 self.pendingTools = tools
                 self.errorMessage = L("审批提交失败：") + error.localizedDescription
@@ -437,87 +815,215 @@ final class AgentStore: ObservableObject {
         }
     }
 
-    /// 真取消：后端在最近检查点停止并整轮回滚；turn_ended(cancelled) 从事件流回来收尾。
-    func cancelGeneration() {
-        guard let client, let sid = selectedSessionId else { return }
-        Task { _ = try? await client.cancelTask(sessionId: sid) }
+    /// The server controls the current session; captured identity fences only client projection writes.
+    func cancelGeneration() { requestControl(.cancel) }
+    func suspendTask() { requestControl(.suspend) }
+
+    func resumeTask(sessionId: String? = nil) {
+        if let sessionId, sessionId != selectedSessionId {
+            controlTask(sessionId: sessionId, kind: .resume)
+        } else { requestControl(.resume) }
     }
 
-    /// 挂起（同步判定 + 异步生效）：后端 status=false 时 response 是原因（待审批期
-    /// worker 已让出，"挂不起来"是正确语义），必须摆给用户——静默吞掉会让按钮看着像坏的。
-    /// status=true 只是受理，真正生效由事件流的 suspended 回来确认，其间按钮位转圈。
-    func suspendTask() {
-        guard let client, let sid = selectedSessionId else { return }
+    /// Task center uses one read of /turn for an unselected session, then existing session control APIs.
+    /// No additional attachment or polling loop is introduced.
+    func controlTask(sessionId sid: String, kind: ControlKind) {
+        guard let client else { return }
+        guard !rejectDeletingSession(sid) else { return }
+        if sid != selectedSessionId { select(sessionId: sid) }
+        let epoch = selectionEpoch
         Task { [weak self] in
             do {
-                let res = try await client.suspendTask(sessionId: sid)
-                guard let self else { return }
-                if res.status {
-                    self.suspendPending = true
+                let snapshot = try await client.turnState(sessionId: sid)
+                guard let self, self.isCurrent(sid, epoch, client) else { return }
+                guard snapshot.status, let turn = snapshot.turn, let turnId = turn.turnId,
+                      !turnId.isEmpty else {
+                    self.errorMessage = L("无法确认任务轮次，请刷新后再操作。")
+                    return
+                }
+                self.requestControl(kind, confirmedTurn: (turnId, turn.state,
+                    max(snapshot.lastSeq ?? 0, turn.lastSeq ?? 0)))
+            } catch {
+                guard let self, self.isCurrent(sid, epoch, client) else { return }
+                self.errorMessage = L("控制请求失败：") + error.localizedDescription
+            }
+        }
+    }
+
+    private func requestControl(_ kind: ControlKind, confirmedTurn: (String, String, Int)? = nil) {
+        guard let client, let sid = selectedSessionId, controlRequest == nil else { return }
+        guard !rejectDeletingSession(sid) else { return }
+        let snapshotIsCurrent = confirmedTurn.map { $0.2 >= cursor } ?? false
+        let turnId = snapshotIsCurrent ? confirmedTurn?.0 : liveTurnId
+        let phase = snapshotIsCurrent ? (confirmedTurn?.1 ?? ledgerPhase) : ledgerPhase
+        let observedSeq = max(cursor, confirmedTurn?.2 ?? 0)
+        guard let turnId, !turnId.isEmpty,
+              (kind == .suspend ? phase == "running" : kind == .resume ? phase == "suspended" : Self.canCancelTask(phase: phase)) else {
+            errorMessage = L("当前任务状态不支持此操作。")
+            return
+        }
+        // A newer ledger round supersedes a one-shot task-center snapshot.
+        guard lastEndedId != turnId,
+              liveTurnId == nil || liveTurnId == turnId || snapshotIsCurrent else { return }
+        let id = UUID(), epoch = selectionEpoch
+        controlRequest = ControlRequest(id: id, kind: kind, turnId: turnId, observedSeq: observedSeq, accepted: false)
+        Task { [weak self] in
+            do {
+                guard let self, self.isCurrent(sid, epoch, client), self.controlRequest?.id == id else { return }
+                if self.rejectDeletingSession(sid) { self.controlRequest = nil; return }
+                let accepted: Bool
+                let reason: String?
+                switch kind {
+                case .cancel:
+                    let result = try await client.cancelTask(sessionId: sid)
+                    accepted = result.status; reason = result.response
+                case .suspend:
+                    let result = try await client.suspendTask(sessionId: sid)
+                    accepted = result.status; reason = result.response
+                case .resume:
+                    let result = try await client.submitResume(sessionId: sid)
+                    accepted = result.status; reason = nil
+                }
+                guard self.isCurrent(sid, epoch, client), self.controlRequest?.id == id,
+                      self.liveTurnId == nil || self.liveTurnId == turnId || self.cursor <= observedSeq else { return }
+                if accepted {
+                    self.controlRequest?.accepted = true
+                    self.ensureAttached(sessionId: sid)
                 } else {
-                    self.suspendPending = false
-                    self.errorMessage = res.response ?? L("当前无法挂起该任务。")
+                    self.controlRequest = nil
+                    self.errorMessage = reason ?? L("控制请求未被受理。")
                 }
             } catch {
-                guard let self else { return }
-                self.suspendPending = false
-                self.errorMessage = L("挂起请求未送达：") + error.localizedDescription
+                guard let self, self.isCurrent(sid, epoch, client), self.controlRequest?.id == id,
+                      self.liveTurnId == nil || self.liveTurnId == turnId || self.cursor <= observedSeq else { return }
+                self.controlRequest = nil
+                self.errorMessage = L("控制请求失败：") + error.localizedDescription
             }
         }
     }
 
-    /// 恢复挂起任务（202 受理,续跑过程走事件流）。默认当前会话；任务中心可对任意会话恢复。
-    func resumeTask(sessionId: String? = nil) {
-        guard let client else { return }
-        let sid: String
-        if let sessionId, sessionId != selectedSessionId {
-            select(sessionId: sessionId)
-            sid = sessionId
-        } else {
-            guard let current = selectedSessionId else { return }
-            sid = current
+    /// Existing UI entry now opens a bound confirmation, never DELETE+plain text fallback.
+    func regenerateLastTurn() { requestRetryConfirmation() }
+
+    func requestRetryConfirmation() {
+        guard !isGenerating, !isSuspended, ledgerPhase != "awaiting_approval",
+              !historyProjectionNeedsRefresh, pendingTools?.isEmpty != false, let client, let sid = selectedSessionId else { return }
+        guard !rejectDeletingSession(sid) else { return }
+        guard let canonicalRef = lastTurnRef, !canonicalRef.isEmpty, !canonicalTurns.isEmpty else {
+            errorMessage = L("此服务未提供可重试的任务引用；原记录未删除。")
+            return
         }
-        isSuspended = false
+        let pending = outboxAll()[sid]
+        let uncertain = pending?["operation"] == "retry" && pending?["retry_uncertain"] != "0"
+        let source = uncertain ? (pending?["source_ref"] ?? canonicalRef) : canonicalRef
+        let key = uncertain ? (pending?["key"] ?? UUID().uuidString.lowercased()) : UUID().uuidString.lowercased()
+        let target = RetryConfirmationTarget(id: UUID(), sessionId: sid, sourceRef: source,
+            canonicalRef: canonicalRef, canonicalIndex: canonicalTurns.count - 1,
+            sourcePrompt: (uncertain ? pending?["prompt"] : canonicalTurns.last?.prompt) ?? "",
+            isResend: uncertain, clientTurnId: key, selectionEpoch: selectionEpoch,
+            clientIdentity: ObjectIdentifier(client))
+        retryConfirmationId = target.id
+        retryConfirmationTarget = target
+    }
+
+    func cancelRetryConfirmation() { retryConfirmationId = nil; retryConfirmationTarget = nil }
+
+    func confirmRetry(_ target: RetryConfirmationTarget) {
+        retryConfirmationTarget = nil
+        guard let client, retryConfirmationId == target.id,
+              isCurrent(target.sessionId, target.selectionEpoch, client),
+              ObjectIdentifier(client) == target.clientIdentity, lastTurnRef == target.canonicalRef,
+              lastCanonicalIndex == target.canonicalIndex,
+              !isGenerating, !isSuspended, ledgerPhase != "awaiting_approval",
+              !historyProjectionNeedsRefresh, pendingTools?.isEmpty != false else {
+            retryConfirmationId = nil
+            errorMessage = L("任务已变化，重试确认已失效，请重新确认。")
+            return
+        }
+        retryConfirmationId = nil
+        let sid = target.sessionId, epoch = selectionEpoch
+        guard !rejectDeletingSession(sid) else { return }
+        let prompt = canonicalTurns.last?.prompt ?? ""
+        outboxWrite(sessionId: sid, prompt: prompt, key: target.clientTurnId,
+                    operation: "retry", sourceRef: target.sourceRef)
+        let receipt = outboxAll()[sid]!["receipt"]!
+        submissionIntentEpoch = UUID()
+        optimisticReceipt = receipt
+        optimisticOperation = "retry"
+        optimisticPrompt = prompt
+        optimisticClientTurnId = target.clientTurnId
+        optimisticUserMessageId = nil
+        optimisticTurnId = nil
+        optimisticFirstSeq = nil
         isGenerating = true
-        errorMessage = nil
+        resetPreview()
+        submissionHTTPRequests[receipt] = SubmissionHTTP(sessionId: sid, client: ObjectIdentifier(client))
         Task { [weak self] in
+            defer { self?.submissionHTTPRequests[receipt] = nil }
+            guard self?.shouldBlockSubmission(sid, client: client, receipt: receipt, epoch: epoch) != true else { return }
             do {
-                _ = try await client.submitResume(sessionId: sid)
-                self?.ensureAttached(sessionId: sid)
-            } catch is TurnConflictError {
-                // 挂起句柄已不存在（已被恢复/回收）：以服务端为准重载
+                let accepted = try await client.submitRetry(sessionId: sid, sourceRef: target.sourceRef,
+                                                            clientTurnId: target.clientTurnId)
+                self?.submissionHTTPRequests[receipt] = nil
                 guard let self else { return }
-                self.detach()
-                self.messages = []
-                await self.open(sessionId: sid)
+                await self.acceptSubmission(accepted, sessionId: sid, epoch: epoch, client: client,
+                                            receipt: receipt, bubbleId: nil)
             } catch {
-                guard let self else { return }
+                self?.submissionHTTPRequests[receipt] = nil
+                guard let self, self.isCurrent(sid, epoch, client),
+                      self.optimisticReceipt == receipt, self.optimisticTurnId == nil else { return }
+                self.clearOptimistic()
                 self.isGenerating = false
-                self.isSuspended = true
-                self.errorMessage = L("恢复提交失败：") + error.localizedDescription
+                if let conflict = error as? TurnConflictError {
+                    if conflict.reason != "retry_lookup_unavailable" { self.markRetryRejected(sessionId: sid, receipt: receipt) }
+                    switch conflict.reason {
+                    case "retry_inputs_unavailable":
+                        self.errorMessage = L("重试所需输入或附件不完整。请检查尝试记录，并重新附上所需输入。")
+                    case "retry_source_changed":
+                        self.historyProjectionNeedsRefresh = true
+                        self.errorMessage = L("任务已变化，请先同步尝试记录，再确认重试。")
+                    case "retry_lookup_unavailable":
+                        self.historyProjectionNeedsRefresh = true
+                        self.errorMessage = L("目前无法核验重试是否已受理。请先检查尝试记录，再决定是否重发。")
+                    default:
+                        self.errorMessage = L("任务重试未确认；原记录已保留：") + error.localizedDescription
+                    }
+                } else if case AgentError.http(404, _) = error {
+                    self.markRetryRejected(sessionId: sid, receipt: receipt)
+                    self.errorMessage = L("此服务不支持任务重试；原记录未删除。")
+                } else { self.errorMessage = L("任务重试未确认；原记录已保留：") + error.localizedDescription }
             }
         }
     }
 
-    /// 重新生成上一轮回答：取回上一条用户输入 → 回退最后一轮 → 原文自动重发。
-    /// （原轮附件随回退清理，重发不含附件。）
-    func regenerateLastTurn() {
-        guard !isGenerating, let client, let sid = selectedSessionId,
-              let lastUser = messages.last(where: { $0.kind == .user }) else { return }
-        var text = lastUser.text
-        if let range = text.range(of: "\n📎 ") {
-            text = String(text[..<range.lowerBound])
-        }
-        Task {
-            let res = try? await client.deleteLastTurn(sessionId: sid)
-            guard res?.status == true else {
-                errorMessage = res?.response ?? L("回退失败")
-                return
-            }
-            messages = []
-            await loadHistory(sessionId: sid)
-            send(prompt: text, uploads: [], thinking: false)
-        }
+    private func markRetryRejected(sessionId: String, receipt: String) {
+        var all = outboxAll()
+        guard all[sessionId]?["receipt"] == receipt else { return }
+        all[sessionId]?["retry_uncertain"] = "0"
+        UserDefaults.standard.set(all, forKey: outboxKey)
+    }
+
+    private func clearHistoryProjection() {
+        canonicalTurns = []; retryGroups = []; lastTurnRef = nil
+        retryStatusNotice = nil; historyProjectionNeedsRefresh = false
+    }
+
+    /// Re-enter the existing history -> turn -> events path, retaining newer outbox ownership.
+    private func recoverHistoryProjection(sessionId: String) {
+        guard selectedSessionId == sessionId else { return }
+        historyProjectionNeedsRefresh = true
+        attachmentId = nil
+        attachTask?.cancel(); attachTask = nil; attachedSessionId = nil
+        replayAfter = nil
+        // open/loadHistory preserve optimistic receipt/bubble and original display on failure.
+        Task { await open(sessionId: sessionId) }
+    }
+
+    func refreshDisplayedHistory() {
+        guard let sid = selectedSessionId else { return }
+        clearIncompleteHistoryError()
+        // Manual sync retries the same coverage requirement; it cannot waive it.
+        recoverHistoryProjection(sessionId: sid)
     }
 
     // MARK: - 事件附着（账本协议核心）
@@ -527,36 +1033,62 @@ final class AgentStore: ObservableObject {
     private var attachedSessionId: String?
 
     private func ensureAttached(sessionId: String) {
+        guard selectedSessionId == sessionId, let client else { return }
         guard !(attachedSessionId == sessionId && attachTask != nil) else { return }
+        if replayAfter == nil {
+            Task { await open(sessionId: sessionId) }
+            return
+        }
         attachTask?.cancel()
+        let id = UUID(), epoch = selectionEpoch
+        attachmentId = id
         attachedSessionId = sessionId
         attachTask = Task { [weak self] in
-            await self?.attachLoop(sessionId: sessionId)
-            self?.attachEnded(sessionId: sessionId)
+            await self?.attachLoop(sessionId: sessionId, epoch: epoch, client: client, id: id)
+            self?.attachEnded(id: id)
         }
     }
 
-    /// 附着循环自然退出（404/会话删除）后的句柄自清（被 detach 取代的旧任务不越权）。
-    private func attachEnded(sessionId: String) {
-        if attachedSessionId == sessionId {
+    /// Cleanup belongs to one task incarnation, including A -> B -> A.
+    private func attachEnded(id: UUID) {
+        if attachmentId == id {
             attachedSessionId = nil
+            attachmentId = nil
             attachTask = nil
         }
     }
 
     /// 断开附着并清空活跃轮簿记（换会话/设置变更时）。
     private func detach() {
+        selectionEpoch = UUID()
+        cancelRetryConfirmation()
+        controlRequest = nil
+        ledgerPhase = "none"
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        recoveryId = nil
+        attachmentId = nil
+        replayAfter = nil
+        missingThinRecord = nil
+        incompleteHistoryError = nil
+        pendingApprovalTarget = nil
         attachTask?.cancel()
         attachTask = nil
         attachedSessionId = nil
         cursor = 0
         live = NormalizedState()
-        optimisticPrompt = nil
+        clearOptimistic()
+        liveUserMessageId = nil
+        liveTurnId = nil
+        liveRawPrompt = nil
+        liveOutboxReceipt = nil
+        lastEndedId = nil
         isGenerating = false
         streamText = ""
         thinkingText = ""
         streamBuffer = ""
         thinkingBuffer = ""
+        flushScheduled = false
         liveSteps = []
         activity = nil
         taskSnapshot = nil
@@ -567,36 +1099,47 @@ final class AgentStore: ObservableObject {
         composerPrefill = nil
     }
 
-    private func attachLoop(sessionId: String) async {
-        guard let client else { return }
+    private func attachLoop(sessionId: String, epoch: UUID, client: AgentClient, id: UUID) async {
         var backoff: UInt64 = 1_000_000_000
-        while !Task.isCancelled && selectedSessionId == sessionId {
+        var anchored = false
+        func ownsAttachment() -> Bool {
+            !Task.isCancelled && isCurrent(sessionId, epoch, client) && attachmentId == id
+        }
+        while ownsAttachment() {
             do {
                 var after = cursor
-                if after == 0 {
-                    // 初次附着:/turn 定游标——有活跃轮从轮首整段重放(完整重建直播视图
-                    // 含审批卡),无活跃轮从账本末尾只收新事件(落盘轮次由 /history 提供)。
+                if !anchored {
                     let ts = try await client.turnState(sessionId: sessionId)
-                    after = ts.turn.flatMap { ($0.firstSeq ?? 1) - 1 } ?? (ts.lastSeq ?? 0)
+                    guard ownsAttachment() else { return }
+                    after = min(replayAfter ?? 0, ts.turn.flatMap { ($0.firstSeq ?? 1) - 1 } ?? (ts.lastSeq ?? 0))
                     cursor = after
-                    if ts.turn == nil {
-                        isGenerating = false
-                    }
+                    anchored = true
+                    if ts.turn == nil && optimisticReceipt == nil { isGenerating = false }
                 }
                 for try await env in try client.attachEvents(sessionId: sessionId, after: after) {
+                    guard ownsAttachment() else { return }
                     backoff = 1_000_000_000
-                    guard !Task.isCancelled, selectedSessionId == sessionId else { return }
                     if env.seq > 0 {
-                        if env.seq <= cursor { continue }  // 重连重放的重复事件
+                        if env.seq <= cursor { continue }
                         cursor = env.seq
+                    }
+                    if env.type == "turn_ended", env.data["discarded"] != .bool(true),
+                       (env.data["prompt"] == nil || env.data["response"] == nil) {
+                        let index = canonicalIndex(env.data["turn_index"])
+                        if index == nil || index! < 0 || index! >= knownTurnCount {
+                            // One same-entrance load must cover this record before reattachment.
+                            missingThinRecord = MissingThinRecord(index: index)
+                            recoverHistoryProjection(sessionId: sessionId)
+                            return
+                        }
                     }
                     dispatch(env, sessionId: sessionId)
                 }
-                return  // 服务端正常收流（会话被删除）：结束附着
+                return
             } catch {
-                if Task.isCancelled || selectedSessionId != sessionId { return }
-                if case AgentError.http(404, _) = error { return }  // 会话尚不存在:首条消息受理后再附着
-                // 断开是常态：静默指数退避重连（游标在,断线期间的事件重连即补）
+                if !ownsAttachment() { return }
+                if case AgentError.http(404, _) = error { return }
+                if case SSEError.badStatus(404) = error { return }
                 try? await Task.sleep(nanoseconds: backoff)
                 backoff = min(backoff * 2, 10_000_000_000)
             }
@@ -607,14 +1150,32 @@ final class AgentStore: ObservableObject {
     private func dispatch(_ env: EventEnvelope, sessionId: String) {
         if env.type == "stream_attached" { return }
         live = TurnReducer.reduce(live, env)
+        ledgerPhase = live.turnState
+        if let request = controlRequest {
+            let newerThanRequest = env.seq > request.observedSeq
+            let newRound = newerThanRequest && env.type == "turn_queued" && env.turnId != request.turnId
+            let matchesAction: Bool
+            switch request.kind {
+            case .cancel: matchesAction = env.type == "turn_ended"
+            case .suspend: matchesAction = ["suspended", "turn_ended"].contains(env.type)
+            case .resume: matchesAction = ["resumed", "turn_started", "turn_ended"].contains(env.type)
+            }
+            let confirmed = newerThanRequest && env.turnId == request.turnId && matchesAction
+            if newRound || confirmed { controlRequest = nil }
+        }
         // transcript 是夹具口径的对账字段，UI 从不读取——长期附着下随轮次无界累积
         // （每轮完整 response 含工具结果），store 层不留存。归约器保持纯函数，夹具不受影响。
         if !live.transcript.isEmpty { live.transcript.removeAll() }
+
+        if ["turn_queued", "turn_started", "resumed", "suspended", "turn_ended"].contains(env.type) {
+            pendingApprovalTarget = nil
+        }
 
         switch env.type {
         case "turn_queued":
             onTurnQueued(env)
         case "turn_started", "resumed":
+            if liveTurnId == nil { liveTurnId = env.turnId }
             isGenerating = true
             pendingTools = nil
             isSuspended = false
@@ -642,12 +1203,15 @@ final class AgentStore: ObservableObject {
             flushStreamNow()
             isGenerating = false
             pendingTools = env.decode([PendingTool].self, at: "pending_tools") ?? []
+            pendingApprovalTarget = env.turnId.flatMap { id in
+                id.isEmpty ? nil : PendingApprovalTarget(sessionId: sessionId, turnId: id, seq: env.seq)
+            }
         case "suspended":
+            if liveTurnId == nil { liveTurnId = env.turnId }
             flushStreamNow()
             isGenerating = false
             isSuspended = true
         case "turn_ended":
-            outboxClear(sessionId: sessionId)   // 轮次权威完结:发送凭据兑现(对齐 web)
             onTurnEnded(env, sessionId: sessionId)
         case "location_request":
             // 客户端反查(get_location 工具):本端即"用户正在用的设备",取一次定位回 POST。
@@ -686,41 +1250,98 @@ final class AgentStore: ObservableObject {
     private func onTurnQueued(_ env: EventEnvelope) {
         resetPreview()
         isGenerating = true
-        if optimisticPrompt != nil {
-            optimisticPrompt = nil  // 气泡已在 send 时追加
+        liveTurnId = env.turnId
+        if case .string(let prompt)? = env.data["prompt"] { liveRawPrompt = prompt }
+        else { liveRawPrompt = nil }
+        let clientTurnId = env.str("client_turn_id")
+        if !clientTurnId.isEmpty, let sid = selectedSessionId,
+           outboxAll()[sid]?["key"] == clientTurnId {
+            liveOutboxReceipt = outboxAll()[sid]?["receipt"]
+        } else { liveOutboxReceipt = nil }
+        if optimisticReceipt != nil,
+           ((env.turnId != nil && optimisticTurnId == env.turnId) || (!clientTurnId.isEmpty && optimisticClientTurnId == clientTurnId)) {
+            liveUserMessageId = optimisticUserMessageId
+            optimisticTurnId = env.turnId
+            optimisticFirstSeq = env.seq
         } else {
             let prompt = env.str("prompt")
-            if !prompt.isEmpty { messages.append(.user(prompt)) }
+            liveUserMessageId = nil
+            if !prompt.isEmpty && env.data["retry_of"] == nil {
+                let message = ChatMessage.user(prompt)
+                messages.append(message)
+                liveUserMessageId = message.id
+            }
         }
+    }
+
+    private func clearOptimistic() {
+        optimisticOperation = nil
+        optimisticPrompt = nil
+        optimisticClientTurnId = nil
+        optimisticReceipt = nil
+        optimisticUserMessageId = nil
+        optimisticTurnId = nil
+        optimisticFirstSeq = nil
     }
 
     /// 权威终态：撤下直播预览,按 turn_ended 的完整轮次记录对账（终态仅 4 种,
     /// 暂停态走 awaiting_approval/suspended 事件,不再经由 turn_end）。
     private func onTurnEnded(_ env: EventEnvelope, sessionId: String) {
-        guard let turn = env.decode(Turn.self) else { return }
+        let discarded = env.data["discarded"] == .bool(true)
+        let index = canonicalIndex(env.data["turn_index"])
+        let archived = index.map { $0 >= 0 && $0 < knownTurnCount } ?? false
+        let turn = discarded || archived ? nil : env.decode(Turn.self)
+        let retryTerminal = env.data["retry_of"] != nil || turn?.retryOf != nil ||
+            (optimisticOperation == "retry" && optimisticTurnId == env.turnId && env.turnId != nil)
+        guard discarded || archived || turn != nil else { return }
+        if let id = env.turnId { lastEndedId = id }
+        if let turnId = env.turnId, liveTurnId == turnId {
+            if let id = liveUserMessageId { messages.removeAll { $0.id == id } }
+            if let receipt = liveOutboxReceipt, outboxAll()[sessionId]?["receipt"] == receipt {
+                outboxClear(sessionId: sessionId)
+            }
+            liveUserMessageId = nil
+            liveTurnId = nil
+            liveRawPrompt = nil
+            liveOutboxReceipt = nil
+        }
+        if let turnId = env.turnId, optimisticTurnId == turnId {
+            if let id = optimisticUserMessageId { messages.removeAll { $0.id == id } }
+            if let receipt = optimisticReceipt, outboxAll()[sessionId]?["receipt"] == receipt {
+                outboxClear(sessionId: sessionId)
+            }
+            clearOptimistic()
+        }
         resetPreview()
-        isGenerating = false
+        isGenerating = optimisticReceipt != nil
         pendingTools = nil
         isSuspended = false
 
-        let turnIndex: Int
-        if case .number(let idx)? = env.data["turn_index"] {
-            turnIndex = Int(idx)
-        } else {
-            turnIndex = knownTurnCount
+        if !discarded {
+            if !archived { retryConfirmationId = nil }
+            let turnIndex = index ?? knownTurnCount
+            if let turn, !retryTerminal {
+                lastTurnRef = turn.turnRef
+                if turnIndex == canonicalTurns.count { canonicalTurns.append(turn) }
+                // Authoritative full record includes the prompt even if queued was not replayed.
+                messages.append(contentsOf: ChatMessage.from(turn: turn, turnIndex: turnIndex))
+            }
+            knownTurnCount = max(knownTurnCount, turnIndex + 1)
         }
-        messages.append(contentsOf: ChatMessage.from(
-            turn: turn, includePrompt: false, turnIndex: turnIndex))
-        knownTurnCount = turnIndex + 1
 
-        // 后台完结的通知统一走全局 feed 监听（handleFeedLifecycle）——自发轮次那条
-        // 快路径已并入，双路径 30s 去重的补丁不再需要。
+        if retryTerminal && !archived && !discarded {
+            retryStatusNotice = L("最近一次尝试：") + ChatMessage.statusLabel(env.str("status"))
+            recoverHistoryProjection(sessionId: sessionId)
+        }
+
+        guard let client else { return }
+        let epoch = selectionEpoch
         Task {
             await loadSessions()
-            // 本轮可能刚生成/更新了 deck
-            if let client, let sid = selectedSessionId, sid == sessionId {
-                deck = try? await client.deck(sessionId: sid)
-            }
+            guard isCurrent(sessionId, epoch, client) else { return }
+            let fetchedDeck = try? await client.deck(sessionId: sessionId)
+            guard isCurrent(sessionId, epoch, client) else { return }
+            deck = fetchedDeck
         }
     }
 
@@ -780,9 +1401,11 @@ final class AgentStore: ObservableObject {
         return out
     }
 
-    private func outboxWrite(sessionId: String, prompt: String, key: String? = nil) {
+    private func outboxWrite(sessionId: String, prompt: String, key: String? = nil,
+                             operation: String = "send", sourceRef: String? = nil) {
         var all = outboxAll()
-        var entry = ["prompt": prompt]
+        var entry = ["prompt": prompt, "receipt": UUID().uuidString, "operation": operation]
+        if let sourceRef { entry["source_ref"] = sourceRef; entry["retry_uncertain"] = "1" }
         if let key { entry["key"] = key }
         all[sessionId] = entry
         UserDefaults.standard.set(all, forKey: outboxKey)
@@ -805,7 +1428,8 @@ final class AgentStore: ObservableObject {
     /// 换了内容才换键。蜂窝网下「请求已达、202 回程丢失」是常态,不复用键的重发
     /// 就是一次货真价实的重复执行(可能带审批副作用)。
     private func outboxKeyFor(sessionId: String, prompt: String) -> String {
-        if let pending = outboxRead(sessionId: sessionId), pending.prompt == prompt,
+        if outboxAll()[sessionId]?["operation"] != "retry",
+           let pending = outboxRead(sessionId: sessionId), pending.prompt == prompt,
            let k = pending.key { return k }
         return UUID().uuidString.lowercased()
     }
@@ -894,10 +1518,91 @@ final class AgentStore: ObservableObject {
     }
 
     /// 任务中心快照刷新(/tasks 仍是秒数等数据的权威;feed 只当"该刷新了"的门铃)。
-    private func refreshGlobalSnapshot() async {
+    func refreshGlobalSnapshot() async {
         guard let client else { return }
-        if let snap = try? await client.globalTasks() {
-            globalTasks = snap.tasks
+        async let scheduled: Void = refreshSchedules(client: client)
+        let request = UUID()
+        globalSnapshotRequest = request
+        do {
+            let snap = try await client.globalTasks()
+            guard self.client === client, globalSnapshotRequest == request else { return }
+            if snap.status {
+                globalTasks = snap.tasks; globalTasksFreshness = .fresh
+            } else {
+                globalTasksFreshness = globalTasksFreshness == .unknown ? .unknown : .stale
+            }
+        } catch {
+            guard self.client === client, globalSnapshotRequest == request else { return }
+            globalTasksFreshness = globalTasksFreshness == .unknown ? .unknown : .stale
+        }
+        await scheduled
+    }
+
+    /// Authoritative schedule snapshots share the feed + existing 30s fallback.
+    func refreshSchedules() async {
+        guard let client else { return }
+        await refreshSchedules(client: client)
+    }
+
+    private func refreshSchedules(client: AgentClient) async {
+        guard self.client === client else { return }
+        let request = UUID(); schedulesRequest = request; schedulesLoading = true
+        defer { if self.client === client, schedulesRequest == request { schedulesLoading = false } }
+        do {
+            let fetched = try await client.listSchedules()
+            guard self.client === client, schedulesRequest == request else { return }
+            schedules = fetched; schedulesFreshness = .fresh; schedulesError = nil
+            let liveIDs = Set(fetched.map(\.id))
+            scheduleRunHistory = scheduleRunHistory.filter { liveIDs.contains($0.key) }
+            scheduleRunsFreshness = scheduleRunsFreshness.filter { liveIDs.contains($0.key) }
+            scheduleRunsError = scheduleRunsError.filter { liveIDs.contains($0.key) }
+            scheduleRunsRequests = scheduleRunsRequests.filter { liveIDs.contains($0.key) }
+            for id in scheduleRunHistory.keys.sorted() {
+                guard self.client === client, schedulesRequest == request else { return }
+                await refreshScheduleRuns(id)
+            }
+        } catch {
+            guard self.client === client, schedulesRequest == request else { return }
+            schedulesFreshness = schedulesFreshness == .unknown ? .unknown : .stale
+            schedulesError = L("定时任务更新失败，最近记录可能已过时。")
+        }
+    }
+
+    enum ScheduleMutation { case enabled(Bool), runNow, cancelRun, delete }
+    func canMutateSchedule(_ id: String) -> Bool {
+        schedulesFreshness == .fresh && schedules.contains { $0.id == id } &&
+            !isSessionDeleting("schedule_" + id) && !hasSubmissionInFlight("schedule_" + id)
+    }
+    func mutateSchedule(_ id: String, mutation: ScheduleMutation) async throws -> ScheduleActionResponse {
+        guard let client else { throw AgentError.http(0, L("连接状态未知，请刷新后重试。")) }
+        guard canMutateSchedule(id) else {
+            let reason = isSessionDeleting("schedule_" + id)
+                ? L("会话正在删除，请等待删除结果后再操作。")
+                : L("定时任务状态尚未确认或正在提交请求，请刷新后重试。")
+            throw AgentError.http(409, reason)
+        }
+        let receipt = UUID().uuidString
+        submissionHTTPRequests[receipt] = SubmissionHTTP(sessionId: "schedule_" + id, client: ObjectIdentifier(client))
+        defer { submissionHTTPRequests[receipt] = nil }
+        switch mutation {
+        case .enabled(let enabled): return try await client.toggleSchedule(id: id, enabled: enabled)
+        case .runNow: return try await client.runScheduleNow(id: id)
+        case .cancelRun: return try await client.cancelScheduleRun(id: id)
+        case .delete: return try await client.deleteSchedule(id: id)
+        }
+    }
+
+    func refreshScheduleRuns(_ id: String) async {
+        guard let client else { return }
+        let request = UUID(); scheduleRunsRequests[id] = request
+        do {
+            let fetched = try await client.scheduleRuns(id: id)
+            guard self.client === client, scheduleRunsRequests[id] == request else { return }
+            scheduleRunHistory[id] = fetched; scheduleRunsFreshness[id] = .fresh; scheduleRunsError[id] = nil
+        } catch {
+            guard self.client === client, scheduleRunsRequests[id] == request else { return }
+            scheduleRunsFreshness[id] = scheduleRunsFreshness[id] == .fresh || scheduleRunsFreshness[id] == .stale ? .stale : .unknown
+            scheduleRunsError[id] = L("运行历史更新失败，最近记录可能已过时。")
         }
     }
 
@@ -994,22 +1699,26 @@ final class AgentStore: ObservableObject {
 
     /// 编辑并重发：取回上一条用户输入 → 删除最后一轮（后端回退记忆/KV）→ 回填输入框。
     func editLastTurn() {
-        guard !isGenerating, let client, let sid = selectedSessionId,
-              let lastUser = messages.last(where: { $0.kind == .user }) else { return }
-        var text = lastUser.text
-        if let range = text.range(of: "\n📎 ") {  // 剥掉气泡里的附件标注行
-            text = String(text[..<range.lowerBound])
-        }
+        guard let client, let sid = selectedSessionId else { return }
+        guard !rejectDeletingSession(sid), let source = editableAttemptTarget else { return }
+        let epoch = selectionEpoch
         Task {
+            // The captured queued/canonical source must still be the target before sending DELETE.
+            guard isCurrent(sid, epoch, client), !rejectDeletingSession(sid), editableAttemptTarget == source else { return }
             let res = try? await client.deleteLastTurn(sessionId: sid)
+            guard isCurrent(sid, epoch, client), ownsEditReply(source) else { return }
             if res?.status != true {
                 errorMessage = res?.response ?? L("回退失败")
                 return
             }
-            messages = []
-            await loadHistory(sessionId: sid)
+            detach()
+            let recoveredEpoch = selectionEpoch
+            await open(sessionId: sid)
+            guard isCurrent(sid, recoveredEpoch, client) else { return }
             await loadSessions()
-            composerPrefill = text
+            guard isCurrent(sid, recoveredEpoch, client) else { return }
+            // These are raw inputs, not decorated user bubbles; literal newline/📎 is user content.
+            composerPrefill = source.prompt
         }
     }
 
@@ -1018,16 +1727,22 @@ final class AgentStore: ObservableObject {
     /// 从指定落盘轮次分支出新会话并切换过去（后端复制 [0, index] 并尽量热复用 KV）。
     func branch(fromTurnIndex index: Int) {
         guard let client, let sid = selectedSessionId else { return }
+        guard !rejectDeletingSession(sid) else { return }
+        let epoch = selectionEpoch
         Task {
+            guard isCurrent(sid, epoch, client), !rejectDeletingSession(sid) else { return }
             do {
                 let res = try await client.branchSession(sessionId: sid, nodeIndex: index)
+                guard isCurrent(sid, epoch, client) else { return }
                 guard res.status, let newId = res.sessionId else {
                     errorMessage = res.response ?? L("分支失败")
                     return
                 }
                 await loadSessions()
+                guard isCurrent(sid, epoch, client) else { return }
                 select(sessionId: newId)
             } catch {
+                guard isCurrent(sid, epoch, client) else { return }
                 errorMessage = L("分支失败：") + error.localizedDescription
             }
         }
@@ -1036,16 +1751,22 @@ final class AgentStore: ObservableObject {
     /// 删除最后一轮问答（后端同步回退内存记忆与 KV），完成后重拉历史对账。
     func deleteLastTurn() {
         guard let client, let sid = selectedSessionId, !isGenerating else { return }
+        guard !rejectDeletingSession(sid) else { return }
+        let epoch = selectionEpoch
         Task {
+            guard isCurrent(sid, epoch, client), !rejectDeletingSession(sid) else { return }
             do {
                 let res = try await client.deleteLastTurn(sessionId: sid)
+                guard isCurrent(sid, epoch, client) else { return }
                 if !res.status {
                     errorMessage = res.response ?? "回退失败"
+                    return
                 }
-                messages = []
-                await loadHistory(sessionId: sid)
+                detach()
+                await open(sessionId: sid)
                 await loadSessions()
             } catch {
+                guard isCurrent(sid, epoch, client) else { return }
                 errorMessage = L("回退失败：") + error.localizedDescription
             }
         }
@@ -1062,9 +1783,10 @@ final class AgentStore: ObservableObject {
     private func scheduleStreamFlush() {
         guard !flushScheduled else { return }
         flushScheduled = true
+        let epoch = selectionEpoch
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 90_000_000)
-            guard let self else { return }
+            guard let self, self.selectionEpoch == epoch else { return }
             self.flushScheduled = false
             self.flushStreamNow()
         }

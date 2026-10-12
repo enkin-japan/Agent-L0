@@ -1,6 +1,8 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import type { TurnStateKind } from "@/types/protocol"
+
+import { Fragment, useEffect, useRef, useState } from "react"
 import {
   BrainCircuit,
   Check,
@@ -25,13 +27,14 @@ import { convTitle } from "@/lib/agent-data"
 import { conversationToMarkdown, exportFilename } from "@/lib/export"
 import { downloadText, useStableCallback } from "@/lib/utils"
 import type { LiveActivity, PendingTool, TaskSnapshot } from "@/types/agent-api"
-import type { LastMetrics } from "@/store/useChatStore"
+import type { TaskControlView, LastMetrics } from "@/store/useChatStore"
+import { useChatStore } from "@/store/useChatStore"
 import { useT } from "@/store/useUiStore"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ChatInput } from "@/components/dashboard/chat-input"
-import { ChatMessage } from "@/components/dashboard/chat-message"
+import { ChatMessage, RetryAttempts } from "@/components/dashboard/chat-message"
 import { ChatNavigator, type NavigatorItem } from "@/components/dashboard/chat-navigator"
 
 const _STEP_MARK: Record<string, string> = { tool: "🛠", plan: "📋", note: "⚠" }
@@ -41,18 +44,20 @@ const _STEP_MARK: Record<string, string> = { tool: "🛠", plan: "📋", note: "
  *  ChatNavigator 的测量 effect（ResizeObserver + getBoundingClientRect）会每个
  *  token 重跑一遍,这是掉帧与分配churn的来源之一。 */
 function useUserItems(messages: Conversation["messages"]): NavigatorItem[] {
-  const ref = useRef<NavigatorItem[]>([])
   const next = messages
     .filter((m) => m.role === "user")
     .map((m) => ({ id: m.id, content: m.content ?? "" }))
-  const prev = ref.current
+  const [items, setItems] = useState<NavigatorItem[]>(next)
+  // 只在目录内容变化时更新当前组件的 state；React 会在提交前重渲染，
+  // 避免渲染期读写 ref，也不让流式 token 触发导航测量。
   if (
-    next.length !== prev.length ||
-    next.some((it, i) => it.id !== prev[i].id || it.content !== prev[i].content)
+    next.length !== items.length ||
+    next.some((it, i) => it.id !== items[i].id || it.content !== items[i].content)
   ) {
-    ref.current = next
+    setItems(next)
+    return next
   }
-  return ref.current
+  return items
 }
 
 /** 实时步骤流卡片：SSE task_progress 推送，展示"当前在做什么"+ 最近完成动作。
@@ -91,6 +96,9 @@ export function ChatArea({
   conversation,
   thinkingEnabled,
   generating,
+  turnPhase,
+  control,
+  managementPending = false,
   notice,
   metrics,
   sidebarHidden,
@@ -117,6 +125,9 @@ export function ChatArea({
   conversation: Conversation
   thinkingEnabled: boolean
   generating: boolean
+  turnPhase: TurnStateKind | "unknown"
+  control: TaskControlView | null
+  managementPending?: boolean
   notice: string | null
   metrics: LastMetrics | null
   sidebarHidden: boolean
@@ -148,6 +159,7 @@ export function ChatArea({
   const userMessages = useUserItems(conversation.messages)
 
   const lastUserMessageId = userMessages.at(-1)?.id
+  const pausedTurn = turnPhase === "awaiting_approval" || turnPhase === "suspended"
 
   // 传进 memo 化 ChatMessage 的回调必须身份稳定，否则浅比较永远不等、memo 失效
   const stableBranch = useStableCallback(onBranch)
@@ -287,6 +299,11 @@ export function ChatArea({
       )}
 
       {/* Messages + Navigator */}
+      {conversation.retrySyncError && (
+        <p role="status" className="mx-auto mt-3 w-full max-w-3xl px-4 text-xs text-muted-foreground">
+          {t.retry.syncFailed} <button type="button" className="underline" onClick={() => void useChatStore.getState().loadHistory(conversation.id)}>{t.retry.syncAgain}</button>
+        </p>
+      )}
       <div className="relative min-h-0 flex-1">
         <div ref={scrollRef} className="h-full overflow-y-auto">
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8">
@@ -300,15 +317,23 @@ export function ChatArea({
               </div>
             )}
 
-            {conversation.messages.map((message) => (
+            {conversation.messages.map((message, index) => (
+              <Fragment key={message.id}>
               <ChatMessage
-                key={message.id}
                 message={message}
-                onBranch={stableBranch}
-                editable={message.id === lastUserMessageId && !generating}
+                onBranch={managementPending ? undefined : stableBranch}
+                editable={message.id === lastUserMessageId && !generating && !managementPending}
                 onEditSubmit={stableEditSubmit}
                 onDeleteTurn={stableDeleteTurn}
+                editPrompt={pausedTurn ? undefined : conversation.lastCanonicalTurn?.prompt}
+                editNote={!pausedTurn && conversation.retryGroups?.some((group) => group.display_index === message.turnIndex)
+                  && conversation.lastCanonicalTurn ? t.retry.editLatest(conversation.lastCanonicalTurn.index + 1) : undefined}
               />
+              {message.turnIndex !== undefined && conversation.messages[index + 1]?.turnIndex !== message.turnIndex
+                && conversation.retryGroups?.filter((group) => group.display_index === message.turnIndex).map((group) => (
+                  <RetryAttempts key={group.root_index} group={group} turns={conversation.canonicalTurns ?? []} onBranch={managementPending ? undefined : stableBranch} />
+                ))}
+              </Fragment>
             ))}
 
             {/* 实时步骤流：生成期间展示"当前动作 + 最近步骤"；无步骤时回退为打字指示 */}
@@ -359,10 +384,10 @@ export function ChatArea({
               ))}
             </div>
             <div className="mt-3 flex justify-end gap-2">
-              <Button variant="outline" size="sm" className="rounded-lg" onClick={() => onApproval(false)}>
+              <Button variant="outline" size="sm" className="rounded-lg" disabled={managementPending} onClick={() => onApproval(false)}>
                 {t.approval.reject}
               </Button>
-              <Button variant="destructive" size="sm" className="rounded-lg" onClick={() => onApproval(true)}>
+              <Button variant="destructive" size="sm" className="rounded-lg" disabled={managementPending} onClick={() => onApproval(true)}>
                 {t.approval.allow}
               </Button>
             </div>
@@ -380,10 +405,10 @@ export function ChatArea({
             </p>
             <p className="mt-1 text-xs leading-relaxed text-chart-5/80">{t.suspended.desc}</p>
             <div className="mt-3 flex justify-end gap-2">
-              <Button variant="outline" size="sm" className="rounded-lg" onClick={onAbandon}>
+              <Button variant="outline" size="sm" className="rounded-lg" disabled={managementPending} onClick={onAbandon}>
                 {t.suspended.abandon}
               </Button>
-              <Button size="sm" className="gap-1.5 rounded-lg" onClick={onResume}>
+              <Button size="sm" className="gap-1.5 rounded-lg" onClick={onResume} disabled={managementPending || (control?.action === "resume" && ["sending", "accepted"].includes(control.status))}>
                 <Play className="size-3.5" />
                 {t.suspended.resume}
               </Button>
@@ -392,14 +417,28 @@ export function ChatArea({
         </div>
       )}
 
+      {/* A transport acknowledgement is not a journal pause/terminal. */}
+      {control && (
+        <p role="status" className="mx-auto mb-2 w-full max-w-3xl px-4 text-xs text-muted-foreground">{control.message}</p>
+      )}
+      {generating && !control && (
+        <p role="status" className="mx-auto mb-2 w-full max-w-3xl px-4 text-xs text-muted-foreground">
+          {turnPhase === "queued" ? t.controls.queued : turnPhase === "running" ? t.controls.running : t.controls.stateUnknown}
+        </p>
+      )}
       {/* Input */}
+      {managementPending && <p role="status" className="mx-auto mb-2 w-full max-w-3xl px-4 text-xs text-muted-foreground">{t.management.deletePending}</p>}
       <ChatInput
         onSend={onSend}
         onStop={onStop}
         onSuspend={onSuspend}
-        disabled={generating || !!(pendingTools && pendingTools.length > 0)}
+        disabled={managementPending || generating || !!(pendingTools && pendingTools.length > 0)
+          || (control?.action === "resume" && ["sending", "accepted"].includes(control.status))}
         approvalPending={!generating && !!(pendingTools && pendingTools.length > 0)}
-        canSuspend={generating}
+        canStop={!managementPending && (turnPhase === "queued" || turnPhase === "running")}
+        canSuspend={!managementPending && turnPhase === "running"}
+        stopPending={control?.action === "cancel" && ["sending", "accepted"].includes(control.status)}
+        suspendPending={!!control && ["sending", "accepted"].includes(control.status)}
         thinkingEnabled={thinkingEnabled}
       />
     </main>

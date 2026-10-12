@@ -1,0 +1,52 @@
+{
+  "session_id": "A",
+  "history_before": {
+    "status": true,
+    "session_id": "A",
+    "count": 0,
+    "turns": [],
+    "replay_after": 1,
+    "generation": "test-boot"
+  },
+  "history_including": {
+    "status": true,
+    "session_id": "A",
+    "count": 1,
+    "turns": [
+      {
+        "status": "success",
+        "prompt": "restore prompt",
+        "response": [
+          {
+            "role": "assistant",
+            "content": "restore answer"
+          }
+        ],
+        "turn_index": 0
+      }
+    ],
+    "replay_after": 1,
+    "generation": "test-boot"
+  },
+  "turn_after": {
+    "status": true,
+    "turn": null,
+    "last_seq": 4,
+    "generation": "test-boot"
+  },
+  "expected_after": 1,
+  "expected_messages": [
+    "restore prompt",
+    "restore answer"
+  ],
+  "thin_terminal": {
+    "seq": 4,
+    "turn_id": "t_restore",
+    "ts": 3,
+    "type": "turn_ended",
+    "data": {
+      "status": "success",
+      "turn_index": 0
+    }
+  }
+}

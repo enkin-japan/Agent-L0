@@ -150,8 +150,9 @@ export function reduceTurnEvent(state: NormalizedState, env: EventEnvelope): Nor
         turn_state: "none",
         transcript: [
           ...state.transcript,
-          { role: "user", content: String(d.prompt ?? "") },
-          ...response,
+          ...(d.discarded === true ? [] : [
+            { role: "user", content: String(d.prompt ?? "") }, ...response,
+          ]),
         ],
         preview: emptyPreview(),
         pending_tools: [],

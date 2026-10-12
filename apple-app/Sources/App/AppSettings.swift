@@ -106,6 +106,13 @@ final class AppSettings: ObservableObject {
     @Published var ragApiKey: String {
         didSet { Keychain.save("rag-api-key", ragApiKey) }
     }
+    /// 数据面与计算面分开保存；旧 rag-api-key 账户仍供数据面/过渡拓扑使用。
+    @Published var ragComputeApiKey: String {
+        didSet {
+            Keychain.save("rag-compute-api-key", ragComputeApiKey)
+            UserDefaults.standard.set(true, forKey: "sidecar.ragComputeKeyConfigured")
+        }
+    }
     /// 算力端地址（非密钥，UserDefaults）：填算力机的 Tailscale IP，注入 backend 子进程
     /// 环境覆盖包内 config.yaml 里的计算面 host——换算力机零重打包。空 = 按内置配置。
     /// 一键两职：非空时同时覆盖 INFER_REMOTE_HOST 与 RAG_COMPUTE_HOST（两个服务在同一台
@@ -152,7 +159,19 @@ final class AppSettings: ObservableObject {
         sidecarEnabled = ud.object(forKey: "sidecar.enabled") as? Bool ?? false
         sidecarRepoRoot = ud.string(forKey: "sidecar.repoRoot") ?? ""
         inferApiKey = Keychain.load("infer-api-key")
-        ragApiKey = Keychain.load("rag-api-key")
+        let storedRagDataKey = Keychain.load("rag-api-key")
+        ragApiKey = storedRagDataKey
+        let computeConfigured = ud.bool(forKey: "sidecar.ragComputeKeyConfigured")
+        let restoredComputeKey = ServiceCredentials.restoredCompute(
+            saved: Keychain.load("rag-compute-api-key"), legacyData: storedRagDataKey,
+            configured: computeConfigured)
+        ragComputeApiKey = restoredComputeKey
+        if !computeConfigured {
+            // Complete migration once, including an empty legacy account. A data
+            // key generated later by the sidecar is never a legacy compute key.
+            if !restoredComputeKey.isEmpty { Keychain.save("rag-compute-api-key", restoredComputeKey) }
+            ud.set(true, forKey: "sidecar.ragComputeKeyConfigured")
+        }
         computeHost = ud.string(forKey: "sidecar.computeHost") ?? ""
         kvPersistEnabled = ud.object(forKey: "agent.kvPersist") as? Bool ?? false
         // 加载时同样钳制：手工写坏的 defaults / 老版本残值不该绕过范围

@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react"
+import { useMemo, useRef, useState } from "react"
+import type { DeletionReceipt } from "@/store/useChatStore"
 import {
   BrainCircuit,
   Cpu,
@@ -25,15 +26,17 @@ import { useT, useUiStore, type Theme } from "@/store/useUiStore"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Switch } from "@/components/ui/switch"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { Field, FieldLabel } from "@/components/ui/field"
 import { SchedulerStrip } from "@/components/dashboard/scheduler-strip"
 import { ScheduleStrip } from "@/components/dashboard/schedule-strip"
+import { SessionRetentionNotice } from "@/components/dashboard/session-retention-notice"
+import type { SessionRetentionPolicy } from "@/types/agent-api"
 
 type AgentSidebarProps = {
   conversations: Conversation[]
+  retentionPolicy?: SessionRetentionPolicy | null
   activeId: string
   onSelect: (id: string) => void
   onNewChat: (workspaceId: string | null) => void
@@ -41,7 +44,9 @@ type AgentSidebarProps = {
   onOpenScheduleSession: (sessionId: string, title: string) => void
   onRename: (id: string, title: string) => void
   onDelete: (id: string) => void
-  onDeleteMany: (ids: string[]) => void
+  onDeleteMany: (ids: string[]) => Promise<DeletionReceipt[] | null>
+  deletingSessions?: Record<string, boolean>
+  deletionResults?: Record<string, DeletionReceipt>
   onTogglePin: (id: string, pinned: boolean) => void
   onCollapse: () => void
   thinkingEnabled: boolean
@@ -49,16 +54,22 @@ type AgentSidebarProps = {
 }
 
 export function AgentSidebar({
-  conversations, activeId, onSelect, onNewChat, onOpenScheduleSession,
+  conversations, retentionPolicy, activeId, onSelect, onNewChat, onOpenScheduleSession,
   onRename, onDelete, onDeleteMany, onTogglePin, onCollapse,
+  deletingSessions = {}, deletionResults = {},
   thinkingEnabled, onThinkingChange,
 }: AgentSidebarProps) {
   const t = useT()
   const tasks = useUiStore((s) => s.tasks)
+  const tasksState = useUiStore((s) => s.tasksState)
+  const tasksError = useUiStore((s) => s.tasksError)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [deletingSelected, setDeletingSelected] = useState(false)
+  const [deleteFeedback, setDeleteFeedback] = useState<string | null>(null)
+  const selectionScope = useRef(0)
 
   const filteredConversations = useMemo(() =>
     conversations.filter((c) =>
@@ -84,13 +95,29 @@ export function AgentSidebar({
   }
 
   function exitSelectMode() {
+    selectionScope.current++
+    setDeletingSelected(false)
+    setDeleteFeedback(null)
     setSelectMode(false)
     setSelectedIds(new Set())
   }
 
-  function confirmDeleteSelected() {
-    onDeleteMany([...selectedIds])
-    exitSelectMode()
+  async function confirmDeleteSelected() {
+    if (deletingSelected) return
+    const scope = selectionScope.current
+    setDeletingSelected(true); setDeleteFeedback(null)
+    try {
+      const receipts = await onDeleteMany([...selectedIds])
+      if (scope !== selectionScope.current || receipts === null) return
+      const completed = new Set(receipts.filter((r) => r.status === "deleted").map((r) => r.id))
+      // Remove only confirmed successes from the *current* selection. Failed
+      // targets and choices added while waiting remain available for retry.
+      setSelectedIds((current) => new Set([...current].filter((id) => !completed.has(id))))
+      const incomplete = receipts.filter((r) => r.status !== "deleted")
+      setDeleteFeedback(incomplete.length ? incomplete.map((r) => `${r.id}: ${r.message}`).join("\n") : t.management.deleteComplete)
+    } catch (error) {
+      if (scope === selectionScope.current) setDeleteFeedback(t.management.failed(error instanceof Error ? error.message : "HTTP failed"))
+    } finally { if (scope === selectionScope.current) setDeletingSelected(false) }
   }
 
   function renderChatItem(conversation: Conversation) {
@@ -138,7 +165,7 @@ export function AgentSidebar({
                     : <><Pin className="mr-2 size-4" /> {t.workspace.pin}</>}
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => onRename(conversation.id, prompt(t.workspace.renamePrompt, convTitle(conversation.title, t.store.newChatTitle)) || conversation.title)}><Pencil className="mr-2 size-4" /> {t.workspace.rename}</DropdownMenuItem>
-                <DropdownMenuItem className="text-destructive" onClick={() => onDelete(conversation.id)}><Trash2 className="mr-2 size-4" /> {t.workspace.delete}</DropdownMenuItem>
+                <DropdownMenuItem className="text-destructive" disabled={!!deletingSessions[conversation.id]} onClick={() => onDelete(conversation.id)}><Trash2 className="mr-2 size-4" /> {t.workspace.delete}</DropdownMenuItem>
               </DropdownMenuGroup>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -177,7 +204,8 @@ export function AgentSidebar({
 
       {/* Worker 状态条（pillar A） */}
       <div className="px-2 mb-3">
-        <SchedulerStrip tasks={tasks} conversations={conversations} activeId={activeId} onSelect={onSelect} />
+        <SchedulerStrip tasks={tasks} tasksState={tasksState} tasksError={tasksError}
+          conversations={conversations} activeId={activeId} onSelect={onSelect} />
       </div>
 
       {/* 定时任务条（落盘实体；无任务时自隐藏） */}
@@ -200,7 +228,13 @@ export function AgentSidebar({
             </button>
           )}
         </div>
-        <div className="space-y-1">{recentChats.map(renderChatItem)}</div>
+        <div className="space-y-1">{recentChats.map((conversation) => <div key={conversation.id}>
+              {renderChatItem(conversation)}
+              {deletingSessions[conversation.id] ? <p role="status" className="px-3 text-xs text-muted-foreground">{t.management.deletePending}</p>
+                : deletionResults[conversation.id] && deletionResults[conversation.id].status !== "deleted"
+                  ? <p role="status" className="whitespace-pre-wrap px-3 text-xs text-muted-foreground">{deletionResults[conversation.id].message}</p> : null}
+            </div>)}</div>
+        <div className="mt-3"><SessionRetentionNotice policy={retentionPolicy} text={t.retention} /></div>
       </ScrollArea>
 
       {/* 批量删除操作条：仅选择模式且有选中时出现 */}
@@ -210,11 +244,13 @@ export function AgentSidebar({
             variant="destructive"
             className="w-full justify-center gap-2 rounded-xl"
             onClick={confirmDeleteSelected}
+            disabled={deletingSelected}
           >
             <Trash2 className="size-4" /> {t.sidebar.deleteSelected} ({selectedIds.size})
           </Button>
         </div>
       )}
+      {deleteFeedback && <p role="status" className="whitespace-pre-wrap px-3 pt-2 text-xs text-muted-foreground">{deleteFeedback}</p>}
 
       {/* Deep Thinking 开关（对应接口 enable_thinking） */}
       <div className="px-2 pt-3">

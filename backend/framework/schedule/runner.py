@@ -18,6 +18,7 @@ import uuid
 from typing import Any, Dict, Optional
 
 from .store import ScheduleStore
+from ..core.turn_runner import TurnRunner, public_turn
 
 # 无人值守运行的固定生成参数（对齐 chat 端点默认值）
 _GEN = {"temperature": 0.2, "min_p": 0.05, "enable_thinking": False,
@@ -134,10 +135,12 @@ class ScheduleRunner:
                     session.pending_turn["status"] = "warning"
                     session.pending_turn.setdefault("response", []).append(
                         {"role": "tool", "tool_responses": cancelled})
+                    TurnRunner._attach_execution_receipts(session.journal, session.pending_turn)
                     await asyncio.to_thread(session.append_log, session.pending_turn)
                     if session.journal.turn_state != "none":
                         session.journal.emit("turn_ended", {
-                            "status": "warning", "turn_index": session.disk_turn_count() - 1})
+                            **public_turn(session.pending_turn),
+                            "turn_index": session.disk_turn_count() - 1})
                     session.pending_turn = None
             if session.suspended_turn is not None:
                 susp = session.suspended_turn
@@ -147,10 +150,11 @@ class ScheduleRunner:
                 susp.setdefault("response", []).append(
                     {"role": "system",
                      "content": "The suspended task was interrupted by a new scheduled run and abandoned."})
+                TurnRunner._attach_execution_receipts(session.journal, susp)
                 await asyncio.to_thread(session.append_log, susp)
                 if session.journal.turn_state != "none":
                     session.journal.emit("turn_ended", {
-                        "status": "warning", "turn_index": session.disk_turn_count() - 1})
+                        **public_turn(susp), "turn_index": session.disk_turn_count() - 1})
                 session.suspended_turn = None
                 session.suspend_requested = False
                 session.task_state = None
@@ -197,7 +201,8 @@ class ScheduleRunner:
                         journal.emit("turn_started", {})
                         # 轮中重入：本轮未落盘观察不参与压缩（防压缩桩落盘）
                         final_result = await self.orchestrator.run_turn(
-                            session=session, journal=journal, compact_history=False, **_GEN)
+                            session=session, journal=journal, keep_recent_calls=True,
+                            compact_history=False, **_GEN)
                         continue
                     if status == "pending_approval":
                         denies += 1
@@ -251,9 +256,9 @@ class ScheduleRunner:
                 session.cancel_requested = False
                 await self.scheduler.release(sid)
 
+            TurnRunner._attach_execution_receipts(journal, response_data)
             await asyncio.to_thread(session.append_log, response_data)
             await asyncio.to_thread(session.save_task)
-            from ..core.turn_runner import public_turn
             journal.emit("turn_ended", {
                 # 与交互轮同一下发投影(首审 L12):原先这里顶层剥、交互轮递归剥,
                 # 同一 turn_ended 契约两种形状,定时轮会把 tool_responses 里的

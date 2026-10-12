@@ -1,6 +1,16 @@
 import SwiftUI
 
-/// 敏感工具审批卡片：pending_approval 终态时出现，决议走 /approval/stream 续跑。
+/// 一次序列化生成摘要和全文，保证展开审阅与摘要使用同一份待执行参数。
+struct ApprovalArguments {
+    let fullText: String
+    var summary: String { fullText.count > 500 ? String(fullText.prefix(500)) + "…" : fullText }
+
+    init(_ arguments: [String: JSONValue]) {
+        fullText = arguments.compact(max: Int.max)
+    }
+}
+
+/// 敏感工具审批卡片：账本 awaiting_approval 时出现，决议受理后由事件流续跑。
 struct ApprovalCard: View {
     let tools: [PendingTool]
     let onDecision: (Bool) -> Void
@@ -16,10 +26,20 @@ struct ApprovalCard: View {
                         .font(.system(.callout, design: .monospaced))
                         .bold()
                     if let args = tool.arguments, !args.isEmpty {
-                        Text(args.compact(max: 500))
+                        let presentation = ApprovalArguments(args)
+                        Text(presentation.summary)
                             .font(.system(.caption, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
+                        if presentation.fullText.count > 500 {
+                            DisclosureGroup("完整参数") {
+                                Text(presentation.fullText)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
                     }
                 }
                 .padding(Theme.s2)

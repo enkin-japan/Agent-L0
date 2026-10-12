@@ -1,0 +1,29 @@
+{
+  "turn_state": "awaiting_approval",
+  "transcript": [
+    {
+      "role": "user",
+      "content": "读取PDF、图片和语音并汇总"
+    },
+    {
+      "role": "assistant",
+      "content": "旧尝试的答案"
+    }
+  ],
+  "preview": {
+    "prompt": "读取PDF、图片和语音并汇总",
+    "text": "",
+    "thinking": "",
+    "steps": [],
+    "task": null
+  },
+  "pending_tools": [
+    {
+      "name": "write_file",
+      "arguments": {
+        "path": "report.txt",
+        "content": "new attempt"
+      }
+    }
+  ]
+}

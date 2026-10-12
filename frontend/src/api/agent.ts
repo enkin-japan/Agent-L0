@@ -6,20 +6,18 @@ import type {
   BranchResponse,
   CancelResponse,
   ChatRequestParams,
-  ChatResponse,
   DeleteSessionResponse,
   DeleteTurnResponse,
   HistoryResponse,
   SessionListResponse,
   PinResponse,
-  LiveActivity,
   MemoryStatusResponse,
   ScheduleActionResponse,
   ScheduleListResponse,
   ScheduleRunsResponse,
+  SessionFilesResponse,
   SystemPromptResponse,
   TaskListResponse,
-  TaskSnapshot,
   TaskStatusResponse,
   ToolsResponse,
 } from "@/types/agent-api"
@@ -31,6 +29,19 @@ import { parseSSE } from "./sse"
 // 前端对 Tailscale 内网开放时，其他设备无需直连 Agent 端口。
 // 鉴权：Authorization Bearer 由代理（dev: Vite / prod: Nginx）注入，前端不持有 key。
 const BASE_URL: string = import.meta.env.VITE_AGENT_API_BASE ?? ""
+
+export async function getSessionFiles(sessionId: string): Promise<SessionFilesResponse> {
+  const res = await fetch(`${BASE_URL}/api/v1/files/${encodeURIComponent(sessionId)}`)
+  if (!res.ok) throw new HttpError(res.status)
+  return res.json()
+}
+
+/** Keep browser downloads on the authenticated same-origin whitelist route. */
+export function sessionAssetUrl(sessionId: string, name: string, mtime: number): string | null {
+  const valid = (value: string) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) && !value.includes("..")
+  if (!valid(sessionId) || !valid(name) || !Number.isFinite(mtime)) return null
+  return `/api/v1/files/${encodeURIComponent(sessionId)}/assets/${encodeURIComponent(name)}?mtime=${encodeURIComponent(String(mtime))}`
+}
 
 /** 带状态码的传输错误。调用方要区分状态时读 `status`,别去匹配 message——
  *  catch 块往往连 JSON.parse / 归约器的异常一起罩着,而那些异常的文本里
@@ -95,11 +106,11 @@ export async function submitTurn(
 }
 
 /** 审批决议（202 受理即返）：结果经事件流回来（resumed → … → turn_ended）。 */
-export async function submitApproval(sessionId: string, approve: boolean): Promise<TurnAccepted> {
+export async function submitApproval(sessionId: string, approve: boolean, expectedTurnId?: string, expectedApprovalSeq?: number): Promise<TurnAccepted> {
   const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}/turns/approval`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ approve }),
+    body: JSON.stringify({ approve, expected_turn_id: expectedTurnId, expected_approval_seq: expectedApprovalSeq }),
   })
   return acceptedOrConflict(res)
 }
@@ -115,6 +126,8 @@ export async function submitResume(sessionId: string): Promise<TurnAccepted> {
 /** 全局任务 feed 信封（PROTOCOL.md §2.7）：跨会话生命周期事件 + 独立 feed_seq 游标。 */
 export interface FeedEnvelope {
   feed_seq: number
+  /** Source session journal cursor (independent of feed_seq). */
+  seq?: number
   session_id?: string
   turn_id?: string | null
   ts?: number
@@ -223,7 +236,9 @@ export async function setSessionPin(
     body: JSON.stringify({ pinned }),
   })
   if (!res.ok) throw new HttpError(res.status)
-  return res.json()
+  const result: PinResponse = await res.json()
+  if (!result.status) throw new Error(result.response)
+  return result
 }
 
 /** 模型当前可注册的工具清单（服务启动时探活确定，运行期间不变）。 */
@@ -268,7 +283,7 @@ export async function getTaskStatus(
   return res.json()
 }
 
-/** 真取消：后端在最近的检查点停止生成，整轮回滚（区别于仅中断前端等待）。 */
+/** Stop future execution at a checkpoint; completed external effects are not undone. */
 export async function cancelTask(sessionId: string): Promise<CancelResponse> {
   const res = await fetch(`${BASE_URL}/api/v1/chat/${sessionId}/task/cancel`, {
     method: "POST",

@@ -19,10 +19,7 @@ export function DeckPrint() {
   const sessionId = new URLSearchParams(window.location.search).get("session") ?? ""
 
   useEffect(() => {
-    if (!sessionId) {
-      setError("missing ?session=")
-      return
-    }
+    if (!sessionId) return
     getDeck(sessionId)
       .then((d) => {
         if (!d) setError("no deck")
@@ -34,7 +31,8 @@ export function DeckPrint() {
       .catch((e) => setError(String(e)))
   }, [sessionId])
 
-  if (error) return <div id="deck-print-error">{error}</div>
+  const displayError = sessionId ? error : "missing ?session="
+  if (displayError) return <div id="deck-print-error">{displayError}</div>
   if (!deck) return <div id="deck-print-loading">loading…</div>
 
   return (

@@ -1,0 +1,5 @@
+# 同会话明确任务重试，成功替换展示
+
+保留所有canonical历史及工具过程，每次重试复制完整input/gen并追加可审查记录。retry_of是即时parent内容引用；retry_root_index/retry_parent_index是canonical有效行下标，跨前缀分支保持关系。只有status=success替换root原展示槽，fail/cancel/warning保留此前答案。用户branch/delete使用真实canonical下标，绝不能把display数组下标当记录下标。
+
+events夹具显示新尝试仍经过普通单审批闸；history.json锁同一raw快照的display_turn_indices及逐条前缀投影。图片/音频/PDF字节独立复制、删除不损坏原inputs和branch provenance由后端CPU临时文件测试守护。路径均为合成资料，旧归约器可忽略additive族字段。

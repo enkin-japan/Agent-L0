@@ -1,0 +1,322 @@
+{
+  "turns": [
+    {
+      "status": "success",
+      "prompt": "读取PDF、图片和语音并汇总",
+      "image": [
+        "/synthetic/session/image/page.png"
+      ],
+      "audio": [
+        "/synthetic/session/audio/memo.wav"
+      ],
+      "attachments": [
+        {
+          "path": "/synthetic/session/attach/report.pdf",
+          "type": "pdf",
+          "name": "report.pdf"
+        }
+      ],
+      "ingested_text": "PDF全文与语音转写 [Original file: /synthetic/session/attach/report.pdf]",
+      "enable_thinking": true,
+      "thinking_budget": 1536,
+      "max_tokens": 2049,
+      "temperature": 0.37,
+      "min_p": 0.08,
+      "response": [
+        {
+          "role": "assistant",
+          "content": "旧尝试的答案"
+        }
+      ]
+    },
+    {
+      "status": "fail",
+      "prompt": "读取PDF、图片和语音并汇总",
+      "image": [
+        "/synthetic/session/image/page.png"
+      ],
+      "audio": [
+        "/synthetic/session/audio/memo.wav"
+      ],
+      "attachments": [
+        {
+          "path": "/synthetic/session/attach/report.pdf",
+          "type": "pdf",
+          "name": "report.pdf"
+        }
+      ],
+      "ingested_text": "PDF全文与语音转写 [Original file: /synthetic/session/attach/report.pdf]",
+      "enable_thinking": true,
+      "thinking_budget": 1536,
+      "max_tokens": 2049,
+      "temperature": 0.37,
+      "min_p": 0.08,
+      "response": [
+        {
+          "role": "assistant",
+          "content": "旧尝试的答案"
+        }
+      ],
+      "retry_of": "tr_3148a9e7d3886b6a8099b3a708dfce6e040c694d9d77c74b0b4e014d59d3ae49",
+      "retry_root_index": 0,
+      "retry_parent_index": 0
+    },
+    {
+      "status": "success",
+      "prompt": "读取PDF、图片和语音并汇总",
+      "image": [
+        "/synthetic/session/image/page.png"
+      ],
+      "audio": [
+        "/synthetic/session/audio/memo.wav"
+      ],
+      "attachments": [
+        {
+          "path": "/synthetic/session/attach/report.pdf",
+          "type": "pdf",
+          "name": "report.pdf"
+        }
+      ],
+      "ingested_text": "PDF全文与语音转写 [Original file: /synthetic/session/attach/report.pdf]",
+      "enable_thinking": true,
+      "thinking_budget": 1536,
+      "max_tokens": 2049,
+      "temperature": 0.37,
+      "min_p": 0.08,
+      "response": [
+        {
+          "role": "assistant",
+          "content": "旧尝试的答案"
+        }
+      ],
+      "retry_of": "tr_043ac49ad6e66481257e5167b2f435058ff887e6c19b81dc9ca4acd5ea1c6ae0",
+      "retry_root_index": 0,
+      "retry_parent_index": 1
+    },
+    {
+      "status": "warning",
+      "prompt": "读取PDF、图片和语音并汇总",
+      "image": [
+        "/synthetic/session/image/page.png"
+      ],
+      "audio": [
+        "/synthetic/session/audio/memo.wav"
+      ],
+      "attachments": [
+        {
+          "path": "/synthetic/session/attach/report.pdf",
+          "type": "pdf",
+          "name": "report.pdf"
+        }
+      ],
+      "ingested_text": "PDF全文与语音转写 [Original file: /synthetic/session/attach/report.pdf]",
+      "enable_thinking": true,
+      "thinking_budget": 1536,
+      "max_tokens": 2049,
+      "temperature": 0.37,
+      "min_p": 0.08,
+      "response": [
+        {
+          "role": "assistant",
+          "content": "旧尝试的答案"
+        }
+      ],
+      "retry_of": "tr_c30bb9afc6db5c6c81ebb9b7ad592c0afdd4de43d0bf63d7da9a06ed5ef76f7a",
+      "retry_root_index": 0,
+      "retry_parent_index": 2
+    },
+    {
+      "status": "cancelled",
+      "prompt": "读取PDF、图片和语音并汇总",
+      "image": [
+        "/synthetic/session/image/page.png"
+      ],
+      "audio": [
+        "/synthetic/session/audio/memo.wav"
+      ],
+      "attachments": [
+        {
+          "path": "/synthetic/session/attach/report.pdf",
+          "type": "pdf",
+          "name": "report.pdf"
+        }
+      ],
+      "ingested_text": "PDF全文与语音转写 [Original file: /synthetic/session/attach/report.pdf]",
+      "enable_thinking": true,
+      "thinking_budget": 1536,
+      "max_tokens": 2049,
+      "temperature": 0.37,
+      "min_p": 0.08,
+      "response": [
+        {
+          "role": "assistant",
+          "content": "旧尝试的答案"
+        }
+      ],
+      "retry_of": "tr_98f637f9f50902b8a138f0df203cdf66bb9915b357c0373a56bff17d890f58cc",
+      "retry_root_index": 0,
+      "retry_parent_index": 3
+    },
+    {
+      "status": "success",
+      "prompt": "读取PDF、图片和语音并汇总",
+      "image": [
+        "/synthetic/session/image/page.png"
+      ],
+      "audio": [
+        "/synthetic/session/audio/memo.wav"
+      ],
+      "attachments": [
+        {
+          "path": "/synthetic/session/attach/report.pdf",
+          "type": "pdf",
+          "name": "report.pdf"
+        }
+      ],
+      "ingested_text": "PDF全文与语音转写 [Original file: /synthetic/session/attach/report.pdf]",
+      "enable_thinking": true,
+      "thinking_budget": 1536,
+      "max_tokens": 2049,
+      "temperature": 0.37,
+      "min_p": 0.08,
+      "response": [
+        {
+          "role": "assistant",
+          "content": "旧尝试的答案"
+        }
+      ],
+      "retry_of": "tr_41fa113537cc208f64bc63b79ff036bf257bb7615c88b7888cb56241959c0aaa",
+      "retry_root_index": 0,
+      "retry_parent_index": 4
+    },
+    {
+      "status": "success",
+      "prompt": "另一个普通任务",
+      "response": [
+        {
+          "role": "assistant",
+          "content": "普通答案"
+        }
+      ]
+    }
+  ],
+  "display_turn_indices": [
+    5,
+    6
+  ],
+  "prefix_display_turn_indices": [
+    [
+      0
+    ],
+    [
+      0
+    ],
+    [
+      2
+    ],
+    [
+      2
+    ],
+    [
+      2
+    ],
+    [
+      5
+    ],
+    [
+      5,
+      6
+    ]
+  ],
+  "retry_groups": [
+    {
+      "root_index": 0,
+      "display_index": 5,
+      "turn_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    }
+  ],
+  "prefix_retry_groups": [
+    [],
+    [
+      {
+        "root_index": 0,
+        "display_index": 0,
+        "turn_indices": [
+          0,
+          1
+        ]
+      }
+    ],
+    [
+      {
+        "root_index": 0,
+        "display_index": 2,
+        "turn_indices": [
+          0,
+          1,
+          2
+        ]
+      }
+    ],
+    [
+      {
+        "root_index": 0,
+        "display_index": 2,
+        "turn_indices": [
+          0,
+          1,
+          2,
+          3
+        ]
+      }
+    ],
+    [
+      {
+        "root_index": 0,
+        "display_index": 2,
+        "turn_indices": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      }
+    ],
+    [
+      {
+        "root_index": 0,
+        "display_index": 5,
+        "turn_indices": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      }
+    ],
+    [
+      {
+        "root_index": 0,
+        "display_index": 5,
+        "turn_indices": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      }
+    ]
+  ]
+}

@@ -68,8 +68,28 @@ def test_rag_server_sync_points_pinned():
     for anchor in ("FTS.add_chunks(target_category, ids, chunks",
                    "FTS.delete_ids(ids)",
                    "FTS.delete_where_source(sp)",
-                   "FTS.delete_where_source(str(file))",
+                   "auto_classify_and_insert(content, title, existing_source_path=str(file))",
                    "FTS.delete_where_source(source_path)",
                    "FTS.drop_db(db_name)",
                    "FTS.search(req.query, req.optimized_query"):
         assert anchor in src, f"rag_server 缺 FTS 同步点: {anchor}"
+
+
+def test_reclassification_delegates_cleanup_with_original_source(tmp_path):
+    """The shared reindex path needs the old source to remove both vector and FTS rows."""
+    import ast
+    from types import SimpleNamespace
+    tree = ast.parse((RAG_ROOT / "rag_server.py").read_text())
+    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "reclassify_background_task")
+    original = tmp_path / "sample_abcd.txt"
+    original.write_text("synthetic original")
+    calls = []
+    scope = {"UNCLASSIFIED_DIR": tmp_path, "_category_raw_dir": lambda name: tmp_path,
+             "_checked_storage_path": lambda path, root: path,
+             "logger": SimpleNamespace(info=lambda *args: None),
+             "auto_classify_and_insert": lambda content, title, **kwargs: calls.append((content, title, kwargs))}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), "<production reclassify>", "exec"), scope)
+    scope["reclassify_background_task"]()
+    assert calls == [("synthetic original", "sample", {"existing_source_path": str(original)})]
+    assert original.exists()  # The shared owner, not this caller, migrates/deletes the file.

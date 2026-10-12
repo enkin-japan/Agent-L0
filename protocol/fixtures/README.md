@@ -10,7 +10,10 @@ web(vitest)与原生 app(XCTest)各自实现 `reduce(state, event)`,**读取同�
 <name>.events.jsonl      一行一个事件信封(客户端 attach 后收到的序列,含增量事件)
 <name>.expected.json     归约终态(NormalizedState,形状见 PROTOCOL.md §5)
 <name>.md                (可选)场景说明与断言意图
+<name>.responses.json    HTTP 管理回执；由端点/客户端请求测试读取，不作为事件流归约
 ```
+
+`017-delete-absent.responses.json` 区分明确缺席、成功删除和一般失败；不增加事件归约夹具数量。
 
 ## 录制（2026-08-28 起,手工构造之外的第二条路）
 
@@ -59,6 +62,13 @@ web(vitest)与原生 app(XCTest)各自实现 `reduce(state, event)`,**读取同�
 | `007-render-hint` | **工具渲染格**:观察带 `render:{hint,payload}`(R3)穿过两端归约器不被吞。**守卫夹具**——实现前就是绿的,详见 `007-render-hint.md` |
 | `008-cloud-degraded` | **云端导师降级轮**(⑤′-1):真实会发出的新事件类型 `cloud_degraded` 被忽略、`turn_ended` 顶层 additive 字段 `cloud_degraded`/`cloud_consult_ok` 不破坏归约、带「本地作答」标注的答复原样进 transcript。守卫夹具,详见 `008-cloud-degraded.md` |
 | `009-upgrade-triggered` | **编排层代发起云端咨询**(⑤′-3):新事件 `upgrade_triggered` 被忽略;无 iteration_started 直接到 `awaiting_approval`,审批卡照常重建(代发起与模型发起在协议面不可区分)。守卫夹具,详见 `009-upgrade-triggered.md` |
+| `010-approval-replaced-long-arguments` | 旧审批卡与后续轮次隔离，完整长参数保留 |
+| `011-approval-batches-same-turn` | 同轮不同审批批次按事件 seq 绑定 |
+| `012-discard-paused-approval` | 撤销待审批轮只清空临时状态，不新增历史 |
+| `013-discard-paused-suspended` | 撤销挂起轮只清空临时状态，不新增历史 |
+| `014-history-replay-boundary` | 历史下界与后来 turn=null 的完结窗口；restore.json 由真实 Web/Swift store 时序测试共享，覆盖重叠去重与 thin terminal 回同一恢复入口 |
+| `015-cancelled-execution-receipts` | 工具返回后取消，模型上下文回滚但执行事实保留，参数省略如实标注 |
+| `016-task-retry-inputs` | 重试保留输入及审批；history.json 锁定成功替换展示、失败保留旧版与所有尝试下标 |
 
 ## 为什么 005/006 建在 002(暂停态)而不是 001(完整轮)上
 

@@ -1,6 +1,7 @@
 from pathlib import Path
 import importlib
 import inspect
+from threading import RLock
 from typing import Dict, List, Any
 from .base import BaseTool
 
@@ -15,6 +16,7 @@ class MCPRegistry:
         # 探活未过的工具实例留档（D 阶段热重扫）：依赖后装（LibreOffice 案）时经
         # rescan_unavailable 重探补注册，不必重启执行层
         self._discarded: List[BaseTool] = []
+        self._candidate_lock = RLock()
         self._load_all_tools()
 
     def _load_all_tools(self):
@@ -54,55 +56,89 @@ class MCPRegistry:
 
     def register(self, tool: BaseTool):
         """注册单个工具实例"""
-        self._tools[tool.name] = tool
-        self._schemas.append(tool.get_schema())
-        print(f"[MCP] ✅ 成功加载工具: {tool.name}")
+        with self._candidate_lock:
+            self._tools[tool.name] = tool
+            self._schemas.append(tool.get_schema())
+            print(f"[MCP] ✅ 成功加载工具: {tool.name}")
 
-    def load_tool(self, tool: BaseTool) -> bool:
-        """补注册单个工具，走与目录扫描同一条探活路径。返回是否注册成功。
+    def discard_unavailable(self, name: str) -> None:
+        """Withdraw pending candidates only; running instances still require restart."""
+        with self._candidate_lock:
+            self._discarded = [old for old in self._discarded if old.name != name]
 
-        用于「探活依赖的东西在目录扫描时还没装配好」的工具——目前仅 skill_invoke：
-        它的探活要看剧本表，而剧本表的 requires 探活要看工具表，两表互为前置，
-        只能两段装配（见 app.py 装配处）。
+    def queue_tool(self, tool: BaseTool) -> None:
+        """Reserve the latest candidate before handing its probe to a worker."""
+        with self._candidate_lock:
+            self.discard_unavailable(tool.name)
+            self._discarded.append(tool)
+
+    def load_tool(self, tool: BaseTool, *, queued: bool = False) -> bool:
+        """Probe a candidate and register it only while it is still current.
+
+        API saves reserve synchronously before dispatching this method to a
+        thread, so a subsequent disable/delete also revokes a not-yet-run probe.
+        Availability checks run outside the lock; only candidate ownership and
+        registration are atomic. No network call or tool execution is added.
         """
+        if not queued:
+            self.queue_tool(tool)
         try:
             ok = tool.is_available()
-        except Exception as e:  # 探活异常按不可用（目录扫描/重扫同一 fail-safe 口径）
+        except Exception as e:
             print(f"[MCP] ⚠️ 工具 {tool.name} 探活异常，视为不可用: {e}")
             ok = False
-        if not ok:
-            print(f"[MCP] ⛔ 工具 {tool.name} 不可用（依赖服务探活失败），已舍弃。")
-            self._discarded.append(tool)
-            return False
-        self.register(tool)
-        return True
+        with self._candidate_lock:
+            if not any(old is tool for old in self._discarded):
+                return self._tools.get(tool.name) is tool
+            if not ok:
+                print(f"[MCP] ⛔ 工具 {tool.name} 不可用（依赖服务探活失败），已舍弃。")
+                return False
+            self._discarded = [old for old in self._discarded if old is not tool]
+            self.register(tool)
+            return True
 
     def rescan_unavailable(self) -> List[str]:
-        """重探启动时被舍弃的工具，新通过者补注册（**只增不删**）。
+        """Reprobe pending candidates; only add, never replace running instances.
 
-        只增的原因：删除/替换会与进行中轮次的工具执行竞态；「服务死了」的方向本就
-        由执行期真实报错兜底，不归重扫管。返回本次新注册的工具名列表。
-        探活异常按不可用处理（与目录扫描同一 fail-safe 口径），实例留档下次再试。
+        A concurrent save may replace a candidate and disable/delete may revoke
+        one. Never reinsert an obsolete snapshot after its slow probe returns.
         """
         newly: List[str] = []
-        still: List[BaseTool] = []
-        for tool in self._discarded:
+        with self._candidate_lock:
+            candidates = list(self._discarded)
+        for tool in candidates:
             try:
                 ok = tool.is_available()
             except Exception as e:
                 print(f"[MCP] ⚠️ 工具 {tool.name} 重探异常，仍视为不可用: {e}")
                 ok = False
-            if ok:
-                self.register(tool)
-                newly.append(tool.name)
-            else:
-                still.append(tool)
-        self._discarded = still
+            with self._candidate_lock:
+                if not any(old is tool for old in self._discarded):
+                    continue
+                if tool.name in self._tools:
+                    self._discarded = [old for old in self._discarded if old is not tool]
+                    continue  # Rescan only adds; running instances keep their identity.
+                if ok:
+                    self._discarded = [old for old in self._discarded if old is not tool]
+                    self.register(tool)
+                    newly.append(tool.name)
         return newly
 
     def tool_names(self) -> set:
         """已注册的工具名集合（skill 剧本的 requires 探活据此判定）。"""
-        return set(self._tools)
+        with self._candidate_lock:
+            return set(self._tools)
+
+    def declaration_matches(self, name: str, declaration: dict) -> "bool | None":
+        """Read-only saved/runtime comparison, when supported; no availability probe."""
+        matcher = getattr(self._tools.get(name), "matches_declaration", None)
+        if not callable(matcher):
+            return None
+        try:
+            result = matcher(declaration)
+            return result if isinstance(result, bool) else None
+        except Exception:
+            return None
 
     def get_all_schemas(self) -> List[Dict[str, Any]]:
         """供给 LLM 的系统提示词使用的工具描述清单"""

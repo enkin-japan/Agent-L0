@@ -6,11 +6,78 @@ import re
 import time
 import uuid
 import shutil
+import copy
+import stat
+import threading
 from typing import List, Dict, Any, Optional
 
 from ..core.jsonl import append_record, count_records, iter_records
 from ..core.task_state import TaskState
 from ..utils.config_loader import kv_persist_enabled
+
+
+_RETRY_GEN_DEFAULTS = {"enable_thinking": False, "thinking_budget": 2048, "max_tokens": 4096,
+                       "temperature": 0.2, "min_p": 0.05}
+
+
+def _retry_generation_parameters(record: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: record.get(key, default) for key, default in _RETRY_GEN_DEFAULTS.items()}
+
+
+def _retry_source_snapshot_at(history_log: Path):
+    """流式读取末条canonical及其经共享规则验证的root，不创建会话/模型。"""
+    from ..core.turn_runner import retry_family_root
+    previous_root, latest = -1, None
+    for rec in iter_records(history_log):
+        root = retry_family_root(rec.obj, rec.index, previous_root)
+        latest = (rec.obj, rec.index, root)
+        previous_root = root
+    return latest
+
+
+def _recover_inflight_inputs(data: Dict[str, Any], session_dir: Path, gen: Dict[str, Any]):
+    """只读取marker字段及原历史关系；不访问/复制媒体，不获得执行或续跑权。"""
+    snapshot = data.get("input_snapshot")
+    if not isinstance(snapshot, dict):
+        return {}, False, False
+    fields, complete = {}, True
+    for key in ("image", "audio"):
+        value = snapshot.get(key)
+        if isinstance(value, list) and all(isinstance(p, str) and p for p in value):
+            fields[key] = value
+        else:
+            complete = False
+    attachments = snapshot.get("attachments")
+    if isinstance(attachments, list) and all(isinstance(a, dict) and isinstance(a.get("path"), str)
+                                             and a["path"] for a in attachments):
+        fields["attachments"] = attachments
+    else:
+        complete = False
+    if isinstance(snapshot.get("ingested_text"), str):
+        fields["ingested_text"] = snapshot["ingested_text"]
+    else:
+        complete = False
+    relation_keys = ("retry_of", "retry_root_index", "retry_parent_index")
+    bad_relation = False
+    if any(key in snapshot for key in relation_keys):
+        from ..core.turn_runner import turn_reference
+        try:
+            parent = _retry_source_snapshot_at(session_dir / "history.jsonl")
+            valid = (complete and parent is not None
+                     and type(snapshot.get("retry_parent_index")) is int
+                     and type(snapshot.get("retry_root_index")) is int
+                     and snapshot["retry_parent_index"] == parent[1]
+                     and snapshot["retry_root_index"] == parent[2]
+                     and snapshot.get("retry_of") == turn_reference(parent[0])
+                     and str(data.get("prompt", "")) == str(parent[0].get("prompt") or "")
+                     and gen == _retry_generation_parameters(parent[0]))
+        except (OSError, ValueError, TypeError):
+            valid = False
+        if valid:
+            fields.update({key: snapshot[key] for key in relation_keys})
+        else:
+            bad_relation = True
+    return fields, complete, bad_relation
 
 
 def _strip_internal_meta(response_data: dict) -> dict:
@@ -554,6 +621,83 @@ class ChatSession:
         except Exception:
             return 0
 
+    def retry_source_snapshot(self):
+        """流式核验族关系，只保留末行和整数状态，不再载入全量history。"""
+        return _retry_source_snapshot_at(self.history_log)
+
+    @staticmethod
+    def _copy_retry_file(source: Path, destination: Path) -> None:
+        """独立字节副本，拒绝文件末级symlink及校验后被替换的源。"""
+        expected = source.stat()
+        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as src:
+            actual = os.fstat(src.fileno())
+            if not stat.S_ISREG(actual.st_mode) or (actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino):
+                raise OSError("retry input changed during copy")
+            with destination.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+
+    @staticmethod
+    def cleanup_retry_inputs(paths: List[Path]) -> None:
+        """仅清理本次复制创建的唯一新路径，不扫描或删除源资料。"""
+        failure = None
+        for path in paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                failure = failure or exc
+        if failure is not None:
+            raise failure
+
+    def copy_retry_inputs(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """复用存档输入，先验证全部归属，再独立复制并改写provenance。"""
+        images, audios = list(record.get("image") or []), list(record.get("audio") or [])
+        attachments = copy.deepcopy(record.get("attachments") or [])
+        if any(not isinstance(a, dict) or not a.get("path") for a in attachments):
+            raise OSError("retry attachment is unavailable")
+        raw_paths = images + audios + [a["path"] for a in attachments]
+        roots = (self.image_dir, self.audio_dir, self.attach_dir)
+        owned = {}
+        for value in raw_paths:
+            if not isinstance(value, str) or not value:
+                raise OSError("retry input path is unavailable")
+            path = Path(value)
+            resolved = path.resolve(strict=True)
+            root = next((r for r in roots if resolved.is_relative_to(r.resolve())), None)
+            if root is None or not resolved.is_file() or root.is_symlink() \
+                    or any(p.is_symlink() for p in (path, *path.parents) if p != self.session_dir.parent):
+                raise OSError("retry input is outside owned input directories")
+            owned[value] = (resolved, root)
+        ingested = str(record.get("ingested_text") or "")
+        # 仅信已登记的输入handle。旧分支的未知/外部provenance不能静默重新读取。
+        for handle in re.findall(r"\[Original (?:file|audio):\s*([^;\]\n]+)", ingested):
+            if handle.strip() not in owned:
+                raise OSError("retry provenance input is unavailable")
+        created: List[Path] = []
+        copies, rewrites = {}, {}
+        try:
+            for raw, (src, root) in owned.items():
+                if src not in copies:
+                    dst = root / ("retry_" + uuid.uuid4().hex + src.suffix[:32])
+                    # 先排他创建再登记所有权：名字碰撞不能在失败清理时删别人的文件。
+                    dst.open("xb").close()
+                    created.append(dst)
+                    self._copy_retry_file(src, dst)
+                    copies[src] = str(dst)
+                rewrites[raw] = copies[src]
+            for item in attachments:
+                item["path"] = rewrites[item["path"]]
+            if rewrites:
+                matcher = re.compile("|".join(re.escape(p) for p in sorted(rewrites, key=len, reverse=True)))
+                ingested = matcher.sub(lambda m: rewrites[m.group()], ingested)
+            return {"prompt": str(record.get("prompt") or ""),
+                    "images": [rewrites[p] for p in images], "audios": [rewrites[p] for p in audios],
+                    "attachments": attachments, "ingested_text": ingested, "_retry_paths": created,
+                    "gen": _retry_generation_parameters(record)}
+        except BaseException:
+            self.cleanup_retry_inputs(created)
+            raise
+
     # --- 轮次预写标记（write-ahead）：进行中的轮次防丢 ---
     # 用户消息在轮次完结前只活在内存里，进程死亡（重启/崩溃）会让输入无痕蒸发、
     # 前端重拉历史得到空会话。轮次开始即落 inflight.json（prompt + 生成参数），
@@ -564,15 +708,19 @@ class ChatSession:
     def inflight_path(self) -> Path:
         return self.session_dir / "inflight.json"
 
-    def write_inflight(self, prompt: str, gen: dict, turn_id: Optional[str] = None):
+    def write_inflight(self, prompt: str, gen: dict, turn_id: Optional[str] = None, *,
+                       input_snapshot: Optional[Dict[str, Any]] = None):
         if not self.session_dir.exists():
             return
         # turn_id（B2）:崩溃恢复补发的 turn_ended 要能指认正主——没有它,补发事件的
         # turn_id 为 null,纯事件流消费者只能靠「会话级 turn_ended」语义收敛
         payload = {"prompt": prompt, "gen": gen, "turn_id": turn_id,
                    "started_at": time.time()}
+        # 仍只有crash防丢职责；新受理保留prepared输入，不持有续跑/执行权。
+        if input_snapshot is not None:
+            payload["input_snapshot"] = copy.deepcopy(input_snapshot)
         tmp = self.inflight_path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, default=str), encoding="utf-8")
         tmp.replace(self.inflight_path)
 
     def clear_inflight(self):
@@ -636,6 +784,9 @@ class SessionManager:
         self.sessions_dir = sessions_dir
         self.idle_timeout = idle_timeout # 默认 30 分钟未交互则转入冷状态
         self._all_sessions: Dict[str, ChatSession] = {}
+        # 单个有界互斥：metadata 读改写与最后的本地回收判定/删除排序。
+        # 不跨 await、沉淀、freeze 或后端网络 I/O 持有。
+        self._metadata_lock = threading.Lock()
         # 任务调度器（由 app 装配时注入）：驱逐器据此避免冻结掉调度活跃
         # （排队/运行/挂起）会话的内存 KV。挂起任务的 KV 按设计常驻内存，必须钉住不冻。
         self.scheduler = None
@@ -658,20 +809,43 @@ class SessionManager:
                 data = json.loads(marker.read_text(encoding="utf-8"))
             except Exception:
                 data = {}
-            gen = data.get("gen") or {}
+            if not isinstance(data, dict):
+                data = {}
+            raw_gen = data.get("gen")
+            gen, valid_gen = {}, isinstance(raw_gen, dict)
+            for key, default in _RETRY_GEN_DEFAULTS.items():
+                try:
+                    gen[key] = type(default)((raw_gen if isinstance(raw_gen, dict) else {}).get(key, default))
+                except (TypeError, ValueError, OverflowError):
+                    gen[key], valid_gen = default, False
+            inputs, complete_inputs, bad_relation = _recover_inflight_inputs(data, d, gen)
+            # An empty string is valid multimodal input; absent/non-text prompt is unknown.
+            valid_prompt = isinstance(data.get("prompt"), str)
             turn = {
                 "status": "fail",
-                "prompt": str(data.get("prompt", "")),
+                "prompt": data["prompt"] if valid_prompt else "",
                 "image": [], "audio": [], "ingested_text": "", "attachments": [],
-                "enable_thinking": bool(gen.get("enable_thinking", False)),
-                "thinking_budget": int(gen.get("thinking_budget", 2048)),
-                "max_tokens": int(gen.get("max_tokens", 4096)),
-                "temperature": float(gen.get("temperature", 0.2)),
-                "min_p": float(gen.get("min_p", 0.05)),
+                **gen,
                 "response": [{"role": "system",
                               "content": "服务在本轮执行中被重启/中断，任务未完成，未产生任何记忆变更。"
                                          "您的输入已保留在上方，可直接重发。"}],
             }
+            turn.update(inputs)
+            if not complete_inputs or not valid_gen or not valid_prompt:
+                turn["retry_input_unavailable"] = True
+                turn["response"][0]["content"] = (
+                    "服务在本轮执行中被中断，本轮已标记失败。旧或不完整预写记录无法校验完整输入，"
+                    "请重新附上原文件及输入后再提交，不能自动仅用文本重试。")
+                for key in ("retry_of", "retry_root_index", "retry_parent_index"):
+                    turn.pop(key, None)
+            elif bad_relation:
+                turn["response"][0]["content"] = (
+                    "本轮执行被中断并已标记失败。输入字段已保留，但重试关联无法通过原历史校验，"
+                    "不确定属于原任务；不会自动执行，请核对原轮后重新发起。")
+            else:
+                turn["response"][0]["content"] = (
+                    "本轮执行被中断，任务未完成；原始输入与设置已保留，不会自动重新执行。"
+                    "请确认后发起新的显式重试。")
             try:
                 # 写前修尾（B1 的要害现场）：产生断尾的那次崩溃，重启后第一件事就是走到
                 # 这里往同一个文件追加 fail 轮——不修尾正好把残字节和新记录粘成一行垃圾
@@ -796,6 +970,11 @@ class SessionManager:
             self.scheduler.discard(session_id)  # 清理调度句柄，防止状态表泄漏
 
         session_dir = self.sessions_dir / session_id
+        self._drop_persisted_cache(session_dir)
+        with self._metadata_lock:
+            return self._delete_session_files(session_id, result)
+
+    def _drop_persisted_cache(self, session_dir: Path) -> None:
         # Q9-a：远程后端的 KV 落盘产物在服务端 kvstore/，不随本地目录删除——
         # best-effort 通知清理（失败无害：服务端文件本可随时清空）
         if self.backend is not None and hasattr(self.backend, "drop_persisted"):
@@ -803,6 +982,10 @@ class SessionManager:
                 self.backend.drop_persisted(str(session_dir / "kv_cache.safetensors"))
             except Exception:
                 pass
+
+    def _delete_session_files(self, session_id: str, result: dict) -> dict:
+        """纯本地删除存储操作；调用方持 metadata 互斥，手动删除/TTL 回收共用。"""
+        session_dir = self.sessions_dir / session_id
         if session_dir.exists():
             try:
                 shutil.rmtree(session_dir)
@@ -818,6 +1001,7 @@ class SessionManager:
                 result["response"] = f"✅ session {session_id} 删除成功"
             else:
                 result["status"] = False
+                result["reason"] = "not_found"
                 result["response"] = f"❌ 未发现session {session_id} : 请确认该会话是否存在"
         return result
 
@@ -829,6 +1013,11 @@ class SessionManager:
         """会话元数据落盘(读-改-写 meta.json,保留血缘等其余字段,不经 save_meta 以免覆盖)。
         title:用户改名(服务端一等,双端同源;空串=清除改名回退派生标题);
         pinned:置/撤保留(pin 的会话不被自动清扫)。返回是否落盘成功。"""
+        with self._metadata_lock:
+            return self._set_meta_locked(session_id, title=title, pinned=pinned)
+
+    def _set_meta_locked(self, session_id: str, *, title: Optional[str],
+                         pinned: Optional[bool]) -> bool:
         session_dir = self.sessions_dir / session_id
         if not session_dir.is_dir():
             return False
@@ -919,57 +1108,15 @@ class SessionManager:
     async def prune_expired_sessions(self, retention_days: float, empty_ttl_hours: float,
                                      sediment_on_expire: bool = False) -> List[str]:
         """确定性磁盘回收：pin / 调度活跃 / 进行中 一律跳过；有内容会话按最后更新时间过期，
-        空壳（无历史/0 轮）按创建时间过期。复用 delete_session（并发安全）。返回被回收的 id 列表。
-        先物化候选再删除——避免边遍历边 rmtree。"""
+        空壳（无历史/0 轮）按创建时间过期。返回被回收的 id 列表。
+        先物化候选避免边遍历边 rmtree；候选不代表授权，删除前须再次核对保留条件。"""
         now = time.time()
         content_cutoff = retention_days * 86400.0
         empty_cutoff = empty_ttl_hours * 3600.0
-        scheduler = self.scheduler
         candidates: List[str] = []
         for d in list(self.sessions_dir.iterdir()):
-            if not d.is_dir():
-                continue
-            sid = d.name
-            # 定时任务的执行会话（schedule_{id}）由 ScheduleStore 独立管理、前端反向映射也豁免——
-            # 一律不回收，避免删掉低频计划的执行日志（与前端对账策略对齐）
-            if sid.startswith("schedule_"):
-                continue
-            # 进行中（预写标记在轮首写、append_log 清）——绝不碰
-            if (d / "inflight.json").exists():
-                continue
-            # 调度活跃（运行/排队/挂起）——钉住不删
-            if scheduler is not None and scheduler.is_active(sid):
-                continue
-            meta: Dict[str, Any] = {}
-            meta_file = d / "meta.json"
-            if meta_file.exists():
-                try:
-                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
-                except Exception:
-                    meta = {}
-            if meta.get("pinned"):
-                continue
-            hist = d / "history.jsonl"
-            try:
-                has_content = hist.exists() and hist.stat().st_size > 0
-            except OSError:
-                has_content = False
-            if has_content:
-                try:
-                    if (now - hist.stat().st_mtime) <= content_cutoff:
-                        continue
-                except OSError:
-                    continue
-            else:
-                created = meta.get("created_at")
-                if created is None:
-                    try:
-                        created = d.stat().st_ctime
-                    except OSError:
-                        continue
-                if (now - float(created)) <= empty_cutoff:
-                    continue
-            candidates.append(sid)
+            if self._session_expired(d.name, now, content_cutoff, empty_cutoff):
+                candidates.append(d.name)
 
         reaped: List[str] = []
         # 回收前的最后一次沉淀（波 F5）：目录一 rmtree，原文就再没有第二处可取。
@@ -992,12 +1139,78 @@ class SessionManager:
                     sediment_live = False
                     print("[Cleanup] 回收前沉淀失败（RAG 不可达），本轮剩余会话不再尝试")
             try:
-                res = await self.delete_session(sid)
+                res = await self._prune_expired_session(sid, content_cutoff, empty_cutoff)
                 if res.get("status"):
                     reaped.append(sid)
             except Exception as e:
                 print(f"[Cleanup] 回收会话失败 {sid}: {e}")
         return reaped
+
+    def _session_expired(self, sid: str, now: float, content_cutoff: float,
+                         empty_cutoff: float, *, check_lock: bool = True) -> bool:
+        """回收条件的唯一口径；删除临界区再次读取，不相信旧候选快照。"""
+        d = self.sessions_dir / sid
+        if not d.is_dir() or sid.startswith("schedule_") or (d / "inflight.json").exists():
+            return False
+        if self.scheduler is not None and self.scheduler.is_active(sid):
+            return False
+        session = self._all_sessions.get(sid)
+        if session is not None:
+            # accept 尚未写 inflight / scheduler 尚未 acquire 的窗口也应受保护。
+            if (check_lock and session.lock.locked()) or session.journal.turn_state != "none":
+                return False
+        meta: Dict[str, Any] = {}
+        try:
+            if (d / "meta.json").exists():
+                meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        if meta.get("pinned"):
+            return False
+        hist = d / "history.jsonl"
+        try:
+            if hist.exists() and hist.stat().st_size > 0:
+                return (now - hist.stat().st_mtime) > content_cutoff
+            created = meta.get("created_at")
+            if created is None:
+                created = d.stat().st_ctime
+            return (now - float(created)) > empty_cutoff
+        except (OSError, TypeError, ValueError):
+            return False
+
+    async def _prune_expired_session(self, sid: str, content_cutoff: float,
+                                     empty_cutoff: float) -> dict:
+        """后台回收不取消/等待活跃轮，只在空闲会话的实际删除边界复核。"""
+        result = {"status": False, "frozen": False, "response": ""}
+        session = self._all_sessions.get(sid)
+        if session is not None:
+            if session.lock.locked():
+                return result
+            async with session.lock:
+                if not self._session_expired(sid, time.time(), content_cutoff,
+                                             empty_cutoff, check_lock=False):
+                    return result
+                # freeze 可含后端 I/O，绝不能在 metadata 线程锁内执行。
+                # 期间若成功 pin，最后复核会保留磁盘与会话；转冷仅属正常缓存冷却。
+                session.freeze()
+                with self._metadata_lock:
+                    if not self._session_expired(sid, time.time(), content_cutoff,
+                                                 empty_cutoff, check_lock=False):
+                        return result
+                    result["frozen"] = True
+                    self._delete_session_files(sid, result)
+                    if result["status"]:
+                        self._all_sessions.pop(sid, None)
+                        session.journal.close()
+                        if self.scheduler is not None:
+                            self.scheduler.discard(sid)
+        else:
+            with self._metadata_lock:
+                if self._session_expired(sid, time.time(), content_cutoff, empty_cutoff):
+                    self._delete_session_files(sid, result)
+        if result["status"]:
+            self._drop_persisted_cache(self.sessions_dir / sid)
+        return result
 
     # ==========================================
     # 轮次回退能力（删除最后一轮：内存、KV、落盘三方同步）
@@ -1024,7 +1237,7 @@ class SessionManager:
         - 落盘：截断 history.jsonl 的最后一行，并物理删除该轮的媒体文件；
         - 内存（热会话）：按截断后的日志整体重建，防止冷启动后不同步；
         - KV Cache：保留不动，下次推理经前缀匹配自动裁剪对齐（与分支复用同一机制）；
-        - 挂起审批轮：尚未落盘，直接回滚内存并丢弃挂起状态。
+        暂停轮的生命周期撤销由 TurnRunner 处理，本方法只负责普通历史存储操作。
         """
         result: Dict[str, Any] = {
             "status": False,
@@ -1036,34 +1249,13 @@ class SessionManager:
         session = self._all_sessions.get(session_id)
 
         if session is not None:
-            # 与对话/审批接口互斥：等待进行中的轮次完整结束后再回退
+            # TurnRunner 的 HTTP 入口负责锁外冲突快路径与暂停轮分流。
             async with session.lock:
                 return await asyncio.to_thread(self._delete_last_turn_locked, session, history_log, result)
         return await asyncio.to_thread(self._delete_last_turn_locked, None, history_log, result)
 
     def _delete_last_turn_locked(self, session: Optional[ChatSession], history_log: Path, result: Dict[str, Any]) -> Dict[str, Any]:
         session_id = result["session_id"]
-
-        # 1. 未落盘的挂起中轮次（等待审批 / 已挂起，仅存内存）：丢弃挂起状态，
-        #    以日志为准整体重建内存（history 与 images/audios 引用一并回退）
-        if session is not None and (session.pending_tool_calls or session.pending_turn or session.suspended_turn):
-            pending = session.pending_turn or session.suspended_turn or {}
-            session.pending_tool_calls = None
-            session.pending_turn = None
-            session.suspended_turn = None
-            session.suspend_requested = False
-            if self.scheduler is not None:
-                self.scheduler.discard(session_id)  # 清理残留调度句柄
-            session.clear_task()  # 该轮任务上下文一并回退
-            session.rebuild_from_log()
-            self._delete_turn_media(session_id, pending)
-            remaining = count_records(history_log)   # 唯一口径（B1）
-            result.update({
-                "status": True,
-                "remaining_turns": remaining,
-                "response": "✅ 已撤销等待审批的未完结轮次",
-            })
-            return result
 
         # 2. 常规轮次：截断日志最后一行
         if not history_log.exists():
@@ -1107,6 +1299,17 @@ class SessionManager:
             "response": f"✅ 已删除会话 {session_id} 的最后一轮（剩余 {len(lines)} 轮）",
         })
         return result
+
+    def _discard_unlogged_turn_locked(self, session: ChatSession, turn: Dict[str, Any],
+                                      result: Dict[str, Any]) -> None:
+        """撤销未落盘轮的存储操作；须由 TurnRunner 在会话锁内调用。"""
+        # 必须严格撤销，不能使用忽略异常的 clear_inflight 后宣称成功。
+        session.inflight_path.unlink(missing_ok=True)
+        session.clear_task()
+        session.rebuild_from_log()
+        self._delete_turn_media(session.session_id, turn)
+        result.update({"status": True, "remaining_turns": count_records(session.history_log),
+                       "response": "✅ 已撤销未完结轮次"})
 
     def _relink_spill(self, line: str, parent_dir: Path, new_dir: Path) -> str:
         """把一条历史行里父会话的 spill 路径搬到分支目录（硬链接 + 文本前缀替换）。
@@ -1253,17 +1456,26 @@ class SessionManager:
                 except Exception:
                     out.write(line if line.endswith("\n") else line + "\n")
                     continue
+                input_rewrites = {}
                 if turn.get("image"):
+                    old = list(turn["image"])
                     turn["image"] = [self._relink_media(str(p), new_image_dir) for p in turn["image"]]
+                    input_rewrites.update(zip(old, turn["image"]))
                 if turn.get("audio"):
+                    old = list(turn["audio"])
                     turn["audio"] = [self._relink_media(str(p), new_audio_dir) for p in turn["audio"]]
+                    input_rewrites.update(zip(old, turn["audio"]))
                 # 原始附件（音频/PDF/文档/代码）重挂到分支目录，保证分支自包含、逃生舱可用。
-                # 注：ingested_text 里的 provenance 路径仍指向父目录（best-effort，父文件经
-                # 硬链接共享数据块不会因父会话删除而失效，除非父目录整体被删）。
+                # 只重挂明确输入映射，不猜外部handle，不改工具receipt中的历史陈述。
                 if turn.get("attachments"):
                     for a in turn["attachments"]:
                         if isinstance(a, dict) and a.get("path"):
+                            old = a["path"]
                             a["path"] = self._relink_media(str(a["path"]), new_attach_dir)
+                            input_rewrites[old] = a["path"]
+                if input_rewrites and isinstance(turn.get("ingested_text"), str):
+                    matcher = re.compile("|".join(re.escape(p) for p in sorted(input_rewrites, key=len, reverse=True)))
+                    turn["ingested_text"] = matcher.sub(lambda m: input_rewrites[m.group()], turn["ingested_text"])
                 line = json.dumps(turn, ensure_ascii=False)
                 # 超长观察的落盘路径（波 C1）只活在观察**正文**里（中缝那句
                 # `file_extract(path="…")`），不是结构化字段，故这里只能做前缀替换。
