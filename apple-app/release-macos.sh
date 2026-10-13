@@ -26,7 +26,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-RELEASE_REPO="enkin-japan/Agent-L0-macOS-app"
+RELEASE_REPO="enkin-japan/Agent-L0"
+# 已安装的 build 74 及更早版本仍请求旧 feed；仅镜像 XML，文件统一从新仓库下载。
+LEGACY_RELEASE_REPO="enkin-japan/Agent-L0-macOS-app"
 FEED_TAG="updates"
 DL_PREFIX="https://github.com/${RELEASE_REPO}/releases/download/${FEED_TAG}/"
 SPARKLE_BIN="build/sparkle-tools/bin"
@@ -139,14 +141,21 @@ gh release view "$FEED_TAG" -R "$RELEASE_REPO" >/dev/null 2>&1 || \
   gh release create "$FEED_TAG" -R "$RELEASE_REPO" \
     --title "MacAgent 更新通道" \
     --notes "滚动更新通道：appcast.xml（Sparkle 订阅源）+ 各版本 DMG + delta 补丁。新设备装机请下最新的 MacAgent-<版本>-<构建号>.dmg。"
-UPLOADS=("$DMG" "$ARCHIVE_DIR/appcast.xml")
+UPLOADS=("$DMG")
 n_delta=0
 for d in "$ARCHIVE_DIR"/*.delta; do [ -e "$d" ] && { UPLOADS+=("$d"); n_delta=$((n_delta+1)); }; done
 # delta 是显式发布目标（补丁式更新）：零 delta 要说出来，回归不许静默（复审 nit）。
 # 注：脏基线（≤71 版，运行时带 dSYM xattr）做 before-tree 时 generate_appcast 照旧
 # 差分失败——首份 delta 预期出现在两侧都是净树的版本对（72→73），见 bundle-macos.sh。
 [ "$n_delta" -gt 0 ] || echo "   ⚠️ 本次无 delta 补丁（老设备将全量下载）"
+# 文件全部上传成功后才发布 feed，避免客户端看到尚不可下载的版本。
 gh release upload "$FEED_TAG" -R "$RELEASE_REPO" --clobber "${UPLOADS[@]}"
+gh release upload "$FEED_TAG" -R "$RELEASE_REPO" --clobber "$ARCHIVE_DIR/appcast.xml"
+# 保留旧客户端的更新入口。XML 中的下载 URL 仍由 DL_PREFIX 指向正式仓库。
+gh release upload "$FEED_TAG" -R "$LEGACY_RELEASE_REPO" --clobber "$ARCHIVE_DIR/appcast.xml" || {
+  echo "❌ 正式仓库已发布，但旧版 Sparkle 兼容 feed 同步失败；请补传 appcast.xml 后再结束发布。" >&2
+  exit 1
+}
 
 echo "== ⑦ 本机重装钉票版 =="
 # 发布全部落定后才动本机（复审 S1：本机便利步骤失败不许废掉已完成的付费公证发布）。

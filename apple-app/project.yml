@@ -53,7 +53,7 @@ targets:
       properties:
         CFBundleDisplayName: MacAgent
         # Sparkle 更新源：公共发布仓的滚动 release（tag=updates），appcast+DMG+delta 同处
-        SUFeedURL: https://github.com/enkin-japan/Agent-L0-macOS-app/releases/download/updates/appcast.xml
+        SUFeedURL: https://github.com/enkin-japan/Agent-L0/releases/download/updates/appcast.xml
         # EdDSA 公钥（私钥在构建机钥匙串，永不入仓库）
         SUPublicEDKey: rO8YyJT++AQ8w9YIhWVaY2YTlLvdSZIXCZrPeR1A2jI=
         SUEnableAutomaticChecks: true

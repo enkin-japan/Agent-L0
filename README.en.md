@@ -2,6 +2,8 @@
 
 [简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md)
 
+[Download MacAgent for macOS](https://github.com/enkin-japan/Agent-L0/releases/tag/updates).
+
 Agent is a local-first AI assistant for your desktop. Give it a task in plain language: research a topic, make sense of your documents, organize files, or work through a longer task step by step.
 
 Use Agent from the macOS app, an iPhone or iPad, or a web browser. Models can run on your Apple Silicon Mac or on another computer with MLX or CUDA. Which features are available depends on the model, connected services, and permissions you grant.

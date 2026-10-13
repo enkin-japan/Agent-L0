@@ -57,6 +57,16 @@ xcodebuild -project MacAgentClient.xcodeproj -scheme MacAgent-iOS -configuration
 
 真实模型、服务鉴权、设备交互与推送交付需要独立联调，编译成功不能替代这些验收。
 
+## macOS 下载与自动更新
+
+安装包统一发布在 [Agent-L0 Releases](https://github.com/enkin-japan/Agent-L0/releases/tag/updates)，
+应用内更新使用同一 Release 中的 Sparkle `appcast.xml`。
+
+`./release-macos.sh` 负责构建、签名、公证及上传。先上传安装包和补丁，再更新清单。
+迁移前已安装的 build 74 及更早版本仍读取旧仓库地址，因此发布脚本会把同一份清单同步到
+旧仓库作为兼容入口；清单中的文件下载地址统一指向 `Agent-L0`。后续新构建直接使用新地址。
+迁移现有安装包时只改变下载位置，不修改已签名的二进制或覆盖同构建号的内容。
+
 ## TestFlight 发布（iOS）
 
 ```bash

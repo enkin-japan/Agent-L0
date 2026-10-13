@@ -2,6 +2,8 @@
 
 [简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md)
 
+macOS 安装包：[前往下载](https://github.com/enkin-japan/Agent-L0/releases/tag/updates)。
+
 Agent 是一个本地优先的 AI 桌面助手。用自然语言交代任务，让它帮你查资料、整理文档、处理文件，或完成需要多个步骤的工作。
 
 你可以通过 macOS、iOS 或浏览器使用它。模型可以运行在自己的 Apple Silicon Mac 上，也可以交给另一台支持 MLX 或 CUDA 的电脑处理。

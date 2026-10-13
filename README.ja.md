@@ -2,6 +2,8 @@
 
 [简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md)
 
+[macOS 版をダウンロード](https://github.com/enkin-japan/Agent-L0/releases/tag/updates)
+
 Agent は、Mac やブラウザーから使えるローカル優先の AI デスクトップアシスタントです。調べものや資料の整理、ファイルの作成など、いくつかの手順が必要な作業も自然な言葉で頼めます。iPhone と iPad からも、稼働中の Agent に接続して利用できます。
 
 モデルは Apple Silicon 搭載の Mac で動かすほか、MLX または CUDA に対応する別の PC に任せることもできます。
