@@ -15,6 +15,7 @@ SOURCE = Path(__file__).parent
 spec = importlib.util.spec_from_file_location('ctl_switch_test', SOURCE / 'compute_ctl.py')
 ctl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ctl)
+GEMMA = 'RedHatAI/gemma-4-26B-A4B-it-NVFP4'
 QWEN = 'RedHatAI/Qwen3.8-27B-INT4'
 REVISION = '91bd022d5b49442a868bc35008f6c21e1860edfa'
 
@@ -28,7 +29,7 @@ class SwitchTests(unittest.TestCase):
         self.stack.enter_context(patch.object(ctl, 'STATE', self.root / 'state'))
         self.stack.enter_context(patch.object(ctl, 'ROOT', self.root))
         self.stack.enter_context(patch.object(ctl, 'registered_models', return_value={
-            ctl.MODEL: {'revision': 'a' * 40, 'dialect': 'gemma4'},
+            GEMMA: {'revision': 'a' * 40, 'dialect': 'gemma4'},
             QWEN: {'revision': REVISION, 'dialect': 'qwen35', 'cuda_deployment': {'supports_mtp': True}},
         }))
         files = ['config.yaml', 'devctl.sh', 'backend/scripts/fetch_model.py',
@@ -45,7 +46,7 @@ class SwitchTests(unittest.TestCase):
         # therefore also prove the live legacy VM stays switchable under the new code.
         self.lease = {'session': 'agent-demo-0123456789ab', 'endpoint': 'owned-endpoint',
                       'state': 'ready', 'deadline': time.time() + 3600, 'retain': True,
-                      'model': ctl.MODEL, 'options': {'model': ctl.MODEL},
+                      'model': GEMMA, 'options': {'model': GEMMA},
                       'tailnet': {'id': 'synthetic-node'}, 'supervision': {'state': 'active', 'pid': 123}}
         ctl.save_state(self.lease)
         self.stack.enter_context(patch.object(ctl, 'server_sessions', return_value={
@@ -103,14 +104,14 @@ class SwitchTests(unittest.TestCase):
         self.assertEqual(actual['attention_backend'], 'TRITON_ATTN')
         self.assertEqual(actual['kv_cache_dtype'], 'bfloat16')
         self.assertEqual(actual['revision'], REVISION)
-        actual = ctl.deployment_options(self.args(model=ctl.MODEL, speculative='off'))
+        actual = ctl.deployment_options(self.args(model=GEMMA, speculative='off'))
         self.assertIsNone(actual['speculative_config'])
         self.assertEqual((actual['attention_backend'], actual['kv_cache_dtype']), ('auto', 'auto'))
         actual = ctl.deployment_options(self.args(attention_backend='flashinfer', kv_cache_dtype='fp8'))
         self.assertEqual((actual['attention_backend'], actual['kv_cache_dtype']), ('FLASHINFER', 'fp8'))
 
     def test_invalid_mtp_is_rejected_before_any_cli_or_state_change(self):
-        for updates in [dict(model=ctl.MODEL), dict(draft_tokens=0), dict(draft_tokens=6),
+        for updates in [dict(model=GEMMA), dict(draft_tokens=0), dict(draft_tokens=6),
                         dict(speculative='off', draft_tokens=2), dict(attention_backend='bad'),
                         dict(kv_cache_dtype='bad')]:
             with self.subTest(updates=updates), patch.object(ctl, 'cli') as cli:
@@ -248,7 +249,7 @@ class SwitchTests(unittest.TestCase):
         result, _, _ = self.worker(args, data, late_ready)
         self.assertEqual(result, 1)
         self.assertEqual(ctl.current()['state'], 'stopped')
-        self.assertEqual(ctl.current()['model'], ctl.MODEL)
+        self.assertEqual(ctl.current()['model'], GEMMA)
 
     def test_stop_priority_mutation_is_detected_without_changing_sources(self):
         import hashlib

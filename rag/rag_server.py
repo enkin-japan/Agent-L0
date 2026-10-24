@@ -95,6 +95,19 @@ COMPUTE_CFG = RAG_CFG.get("compute") or {}
 COMPUTE_HOST = os.environ.get("RAG_COMPUTE_HOST", "").strip() or (COMPUTE_CFG.get("host") or "").strip()
 COMPUTE_PORT = int(COMPUTE_CFG.get("port") or 14162)
 SPLIT_MODE = bool(COMPUTE_HOST)
+if SPLIT_MODE:
+    # 算力端固定 MagicDNS 名：系统解析缓存了「无此主机」时改问 Tailscale 解析器。单一实现在
+    # backend（仓库与 app 包里都与 rag/ 同级），按路径加载，不把 backend 塞进 sys.path。
+    # 只是回退：文件缺失（rag/ 单独部署）时照常启动，退回系统解析。
+    import importlib.util
+    try:
+        _dns_spec = importlib.util.spec_from_file_location(
+            "tailnet_dns", Path(__file__).resolve().parent.parent / "backend/framework/utils/tailnet_dns.py")
+        _tailnet_dns = importlib.util.module_from_spec(_dns_spec)
+        _dns_spec.loader.exec_module(_tailnet_dns)
+        _tailnet_dns.install([COMPUTE_HOST])
+    except (OSError, AttributeError) as _exc:
+        print(f"[RAG] tailnet DNS 回退未启用（{type(_exc).__name__}）；算力端名只走系统解析")
 
 # ── 阈值：tuning 全局兜底立即生效；档位 thresholds 随计算面身份到位时覆盖 ──────
 # （余弦分布随模型尺寸变，三阈值须逐档标定、跟档位走。融合模式启动即覆盖；拆分模式
@@ -1755,4 +1768,6 @@ if __name__ == "__main__":
     import uvicorn
     _enforce_bind_guardrail()   # 先于加载模型：省掉几十秒权重加载才发现配置错
     _preflight_bind_addr()      # 密钥护栏之后：绑定地址不属本机立即拒启
+    # 算力面拨号全是同步 requests，经 socket.getaddrinfo 走 tailnet_dns 回退；若在此加异步
+    # 客户端，须同 backend/app.py 一样传 loop="asyncio"（uvloop 在 libuv 内解析，绕过回退）
     uvicorn.run(app, host=RAG_HOST, port=RAG_PORT, reload=False)

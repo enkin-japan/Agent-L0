@@ -38,10 +38,11 @@ Colab 上只使用合成提示与测试资料。
 ./colab/deploy.sh <命令> --help            # 每个命令只接受与它相关的选项
 ```
 
-`start` / `switch` 的部署选项：`--model <完整 repo>`、`--quantization none|fp8`、
-`--speculative off|mtp`（默认 off）、`--draft-tokens 1..5`（只配 mtp，默认 3）、
+`start` / `switch` 的部署选项：`--model <完整 repo>`（默认 `RedHatAI/Qwen3.8-27B-INT4`）、`--quantization none|fp8`、
+`--speculative off|mtp`（默认按模型：注册表标明 `supports_mtp` 的开 mtp，如 Qwen3.8-27B；其余关，如 gemma-4 系列）、
+`--draft-tokens 1..5`（只配 mtp，默认 3）、
 `--attention-backend auto|triton|flashinfer`、`--kv-cache-dtype auto|bfloat16|fp8`、
-`--max-model-len`（默认 32768）、`--gpu-memory`（默认 0.72）、`--stall-timeout`（默认 600 秒）、
+`--max-model-len`（默认 65536）、`--gpu-memory`（默认 0.72）、`--stall-timeout`（默认 600 秒）、
 `--bootstrap-timeout`（默认 3600 秒）、`--poll-interval`（默认 10 秒）。`start` 另有 `--minutes`（1–240）、
 `--hostname`（默认 `agent-compute`）、`--auth-key`、`--retain`、`--foreground`、`--health-interval`（默认 60 秒）。
 默认值和取值范围各只在 `compute_ctl.py` 的 `DEFAULTS` / `LIMITS` 里定义一次。
@@ -58,11 +59,14 @@ Colab 上只使用合成提示与测试资料。
 INT4 权重，自带原生 MTP 头，无需另下 MLX drafter；`--quantization none` 表示不再在线二次量化。
 
 ```bash
-# 新建 VM（仅在没有现存租约时）
-./colab/deploy.sh start --retain --model RedHatAI/Qwen3.8-27B-INT4 \
-  --speculative mtp --draft-tokens 3 --gpu-memory 0.85 --max-model-len 32768
+# 新建 VM（仅在没有现存租约时）：默认即 Qwen3.8-27B + MTP 3 + 上下文 65536 + 显存 0.72
+./colab/deploy.sh start --retain
+
+# Gemma 4 26B（默认不开 MTP）
+./colab/deploy.sh start --retain --model RedHatAI/gemma-4-26B-A4B-it-NVFP4
 
 # 复用已有 READY VM：后台切换推理，保留 VM、Tailnet 名称和 RAG 服务
+# （switch 不带 --model 时同样切到默认模型）
 ./colab/deploy.sh switch --model RedHatAI/Qwen3.8-27B-INT4 \
   --speculative mtp --draft-tokens 3 --gpu-memory 0.85 --max-model-len 32768
 
@@ -71,6 +75,10 @@ INT4 权重，自带原生 MTP 头，无需另下 MLX drafter；`--quantization 
   --speculative off --attention-backend triton --kv-cache-dtype bfloat16 \
   --gpu-memory 0.85 --max-model-len 32768
 ```
+
+默认组合的依据：2026-10-24 在 A100 40GB 上以 Qwen3.8-27B INT4 + MTP 3、上下文 65536、显存 0.72 启动，
+权重 18.5 GiB，vLLM 报 KV cache 101,344 token，即单请求 65,536 token 的 1.55 倍，加载与鉴权检查均通过
+（该次 VM 随后因本机 DNS 缓存被误回收，没有测吞吐；吞吐数据见下方 32768 / 0.85 的记录）。
 
 Qwen+MTP 的 auto 解析为 **TRITON_ATTN + bfloat16**（此前 A100 实测的组合）；其他模型保持原有 auto 行为。
 MTP 只允许注册表明确声明 `supports_mtp` 的模型。服务并发与 vLLM `max_num_seqs` 均设为 1，避免只限 HTTP
@@ -138,8 +146,17 @@ Colab 自身仍可能回收实例，Mac 休眠/断网也会中断监督；手动
 
 计算端默认使用固定名称 `agent-compute.<tailnet>.ts.net`，可用 `--hostname` 改名。**MagicDNS 固定的是名称，
 不是 IP**；临时节点重建后 IP 可能变化。Mac/iPhone 应在同一 tailnet 并接受 Tailscale DNS 设置。VM 的
-`--accept-dns=false` 只表示 VM 不接管自身 DNS。READY 前会核对新节点获配的名称精确匹配，并通过 Mac 系统解析器
-确认名称指向本次 VM；名称冲突产生 `-1` 后缀会失败并释放 VM。参见
+`--accept-dns=false` 只表示 VM 不接管自身 DNS。READY 前会核对新节点获配的名称精确匹配，并以本机
+`tailscale status` 为准确认该名称在 tailnet 中指向本次 VM；名称冲突产生 `-1` 后缀会失败并释放 VM。
+
+两台 VM 之间这个名称并不存在，期间 Mac 上的查询会让系统解析器（mDNSResponder）缓存「无此主机」，
+且可能远长于空窗（2026-10-24 实测超过 20 分钟，同时 100.100.100.100 早已给出新地址）。因此 Mac 系统解析器
+只作为附加检查：结果不对时 VM 照常 READY，日志给出刷新命令（`sudo dscacheutil -flushcache; sudo killall -HUP
+mDNSResponder`），`status` 中记为 `local_dns: stale`（READY 时的快照，之后不再刷新）。本机 Tailscale 状态
+读不到时同样不回收，记为 `unknown`：VM 记录自身身份时已拒绝任何带后缀的名字。App 的后端和 RAG 进程对
+**所配置的**算力端 `*.ts.net` 全名，在系统解析失败时改问 Tailscale 自身解析器
+（`backend/framework/utils/tailnet_dns.py`），不需要手动刷新；其他 tailnet 名不受影响，App 设置里只填短名
+（如 `agent-compute`）时也不生效。参见
 [临时节点](https://tailscale.com/docs/features/ephemeral-nodes)、[MagicDNS](https://tailscale.com/docs/features/magicdns)
 与[机器名称冲突](https://tailscale.com/docs/concepts/machine-names)。
 

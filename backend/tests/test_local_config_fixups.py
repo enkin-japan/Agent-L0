@@ -123,9 +123,14 @@ _ADDED_0824 = (
 
 def test_registry_matches_d20_roster():
     entries = {e.get("repo"): e for e in _registry()}
-    # 6 MLX 保留档 + 3 CUDA 部署形态 = 9（D.20）+ 3 Ornith-1.5（08-24）= 12；
+    # D.20 9 + Ornith-1.5 3 + 本次正式 CUDA Qwen MTP 1 = 13；
     # 长度钉防"静默加档不触钉"
-    assert len(entries) == 12, f"注册表应为 12 条（D.20 9 + 08-24 3），实际 {len(entries)}: {sorted(entries)}"
+    assert len(entries) == 13, f"注册表应为 13 条（D.20 9 + 08-24 3 + CUDA Qwen 1），实际 {len(entries)}: {sorted(entries)}"
+    cuda_qwen = entries['RedHatAI/Qwen3.8-27B-INT4']
+    assert cuda_qwen['revision'] == '91bd022d5b49442a868bc35008f6c21e1860edfa'
+    assert cuda_qwen['dialect'] == 'qwen35'
+    assert cuda_qwen['cuda_deployment']['supports_mtp'] is True
+    assert 'speculative' not in cuda_qwen  # CUDA built-in MTP must not load an MLX drafter.
     for repo in _KEPT_MLX + _ADDED_0824:
         assert repo in entries, f"{repo} 注册表条目缺失（D.20 保留档 / 08-24 入册）"
     for repo in _DROPPED:

@@ -192,15 +192,54 @@ class ComputeCtlTests(unittest.TestCase):
             ctl.logout_tailnet(data)
         self.assertEqual(data['tailnet_cleanup'],'logout-confirmed-removal-unverified')
 
-    def test_dns_must_resolve_to_new_vm_and_retry_is_bounded(self):
-        wrong=subprocess.CompletedProcess(['fake'],0,stdout='["100.64.0.2"]')
-        right=subprocess.CompletedProcess(['fake'],0,stdout='["100.64.0.1"]')
-        with patch.object(ctl.subprocess,'run',side_effect=[wrong,right]) as resolve, patch.object(ctl.time,'sleep'):
-            ctl.verify_dns('agent-compute.example.ts.net','100.64.0.1')
-            self.assertEqual(resolve.call_count,2)
-        with patch.object(ctl.subprocess,'run',return_value=wrong) as resolve, patch.object(ctl.time,'sleep'):
+    def tailnet_with(self,ip):
+        return {'Peer':{'n':{'DNSName':'agent-compute.example.ts.net.','TailscaleIPs':[ip,'fd7a::1']}}}
+
+    def test_tailnet_must_map_the_name_to_new_vm_and_retry_is_bounded(self):
+        with patch.object(ctl,'tailnet_status',return_value=self.tailnet_with('100.64.0.2')) as tailnet, \
+             patch.object(ctl,'system_addresses') as system, patch.object(ctl.time,'sleep'):
             with self.assertRaises(RuntimeError): ctl.verify_dns('agent-compute.example.ts.net','100.64.0.1')
-            self.assertEqual(resolve.call_count,3)
+            self.assertEqual(tailnet.call_count,3)
+            system.assert_not_called()
+        right=subprocess.CompletedProcess(['fake'],0,stdout='["100.64.0.1"]')
+        with patch.object(ctl,'tailnet_status',side_effect=[{'Peer':{}},self.tailnet_with('100.64.0.1')]), \
+             patch.object(ctl.subprocess,'run',return_value=right), patch.object(ctl.time,'sleep'):
+            self.assertEqual(ctl.verify_dns('agent-compute.example.ts.net','100.64.0.1'),'ok')
+
+    def test_unreadable_local_tailscale_keeps_ready_vm(self):
+        # Daemon restarting / Mac waking says nothing about the VM; the VM already
+        # verified its own exact name. Only a readable, wrong mapping releases.
+        events=[]
+        with patch.object(ctl,'tailnet_status',side_effect=RuntimeError('本机 Tailscale 未运行')), \
+             patch.object(ctl,'system_addresses') as system, \
+             patch.object(ctl,'event',side_effect=lambda text,**f: events.append((text,f))), \
+             patch.object(ctl.time,'sleep'):
+            self.assertEqual(ctl.verify_dns('agent-compute.example.ts.net','100.64.0.1'),'unknown')
+        system.assert_not_called()
+        self.assertEqual(events[-1][1]['error_type'],'RuntimeError')
+        with patch.object(ctl,'tailnet_status',side_effect=[RuntimeError('down'),self.tailnet_with('100.64.0.2'),
+                                                            RuntimeError('down')]), \
+             patch.object(ctl.time,'sleep'):
+            with self.assertRaises(RuntimeError): ctl.verify_dns('agent-compute.example.ts.net','100.64.0.1')
+
+    def test_local_resolver_spawn_failure_is_advisory(self):
+        with patch.object(ctl.subprocess,'run',side_effect=OSError('spawn')):
+            self.assertIsNone(ctl.system_addresses('agent-compute.example.ts.net'))
+        bad=subprocess.CompletedProcess(['fake'],0,stdout='not json')
+        with patch.object(ctl.subprocess,'run',return_value=bad):
+            self.assertIsNone(ctl.system_addresses('agent-compute.example.ts.net'))
+
+    def test_stale_local_resolver_is_reported_not_fatal(self):
+        # Observed 2026-10-24: MagicDNS had the new VM, mDNSResponder still served a
+        # cached "no such host"; the launcher released a ready VM over it.
+        events=[]
+        with patch.object(ctl,'tailnet_status',return_value=self.tailnet_with('100.64.0.1')), \
+             patch.object(ctl.subprocess,'run',side_effect=subprocess.CalledProcessError(1,'fake')) as resolve, \
+             patch.object(ctl,'event',side_effect=lambda text,**f: events.append((text,f))), \
+             patch.object(ctl.time,'sleep'):
+            self.assertEqual(ctl.verify_dns('agent-compute.example.ts.net','100.64.0.1'),'stale')
+        self.assertEqual(resolve.call_count,3)
+        self.assertIn('mDNSResponder',events[-1][1]['refresh'])
 
     def test_reused_name_does_not_stop_or_logout_the_other_vm(self):
         data={'session':'agent-compute-0123456789ab','endpoint':'old'}
@@ -292,6 +331,17 @@ class ComputeCtlTests(unittest.TestCase):
             (ctl.STATE/'current.json').write_text(json.dumps(data))
         with patch.object(ctl,'save_state',side_effect=stale_writer):
             with self.assertRaises(AssertionError): self.test_stop_terminal_state_survives_stale_boot_progress()
+
+    def test_ready_vm_with_stale_local_dns_becomes_ready_not_released(self):
+        now=time.time()
+        lease={'session':'agent-compute-0123456789ab','started':now,'deadline':now+600,
+               'expected_dns':'agent-compute.example.ts.net',
+               'options':{'bootstrap_timeout':600,'stall_timeout':60}}
+        with patch.object(ctl,'lease_alive'), patch.object(ctl,'save_state'), \
+             patch.object(ctl,'poll_progress',return_value={'phase':'ready','host':'100.64.0.1'}), \
+             patch.object(ctl,'verify_dns',return_value='stale'):
+            ctl._await_ready(lease)
+        self.assertEqual((lease['state'],lease['ip'],lease['local_dns']),('ready','100.64.0.1','stale'))
 
     def test_stop_during_progress_preserves_shutdown_and_retains_cleanup_responsibility(self):
         for stopped in ('stopping','stopped','release-unconfirmed'):
@@ -637,11 +687,26 @@ class GuardTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     parser.parse_args(argv)
         args = parser.parse_args(['start'])
-        for name in ('minutes', 'model', 'speculative', 'max_model_len', 'gpu_memory',
+        self.assertIsNone(args.speculative)  # resolved per model below
+        for name in ('minutes', 'model', 'max_model_len', 'gpu_memory',
                      'stall_timeout', 'bootstrap_timeout', 'poll_interval', 'health_interval'):
             self.assertEqual(getattr(args, name), ctl.DEFAULTS[name], name)
         self.assertIsNone(args.draft_tokens)
-        self.assertEqual(ctl.deployment_options(args)['speculative_config'], None)
+        self.assertEqual((ctl.MODEL, ctl.DEFAULTS['max_model_len']), ('RedHatAI/Qwen3.8-27B-INT4', 65536))
+        # MTP defaults on exactly where the registry declares it (Qwen3.8), off elsewhere (gemma-4).
+        registry = {ctl.MODEL: {'revision': 'a' * 40, 'dialect': 'qwen35',
+                                'cuda_deployment': {'supports_mtp': True}},
+                    'RedHatAI/gemma-4-26B-A4B-it-NVFP4': {'revision': 'b' * 40, 'dialect': 'gemma4'}}
+        with patch.object(ctl, 'registered_models', return_value=registry):
+            self.assertEqual(ctl.deployment_options(args)['speculative_config'],
+                             {'method': 'mtp', 'num_speculative_tokens': ctl.MTP_DRAFT_TOKENS})
+            gemma = parser.parse_args(['start', '--model', 'RedHatAI/gemma-4-26B-A4B-it-NVFP4'])
+            self.assertIsNone(ctl.deployment_options(gemma)['speculative_config'])
+            off = parser.parse_args(['switch', '--speculative', 'off'])
+            self.assertIsNone(ctl.deployment_options(off)['speculative_config'])
+            with self.assertRaises(ValueError):  # draft tokens on a model whose default is off
+                ctl.deployment_options(parser.parse_args(
+                    ['start', '--model', 'RedHatAI/gemma-4-26B-A4B-it-NVFP4', '--draft-tokens', '2']))
         self.assertNotIn('_worker', parser.format_help())
 
     def test_internal_workers_log_once(self):
@@ -685,4 +750,17 @@ class TailscaleInstallTests(unittest.TestCase):
                 self.assertEqual(vm.tailscaled_command('sock')[0], str(Path(directory)/'bin/tailscaled'))
 
 
-if __name__=='__main__': unittest.main()
+REAL_REGISTRY = ctl.registered_models  # captured before any test patches it
+
+
+class RegistryTests(unittest.TestCase):
+    def test_default_model_is_registered_in_the_real_config(self):
+        # Every other test patches the registry; a bare `deploy.sh start` reads this file.
+        registry = REAL_REGISTRY()
+        self.assertIn(ctl.MODEL, registry)
+        self.assertIs(registry[ctl.MODEL]['cuda_deployment']['supports_mtp'], True)
+        self.assertNotIn('cuda_deployment', registry['RedHatAI/gemma-4-26B-A4B-it-NVFP4'])
+
+
+if __name__ == '__main__':
+    unittest.main()

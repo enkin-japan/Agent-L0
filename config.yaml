@@ -277,6 +277,14 @@ inference:
       suppress_ghost_thinking: true   # 2026-08-14 用户拍板补齐（L4 日用档，实测数据见 26B 条 note）
       note: "~15GB NVFP4 | FP4 偏移评测件（Red Hat 官方量化组）| 非生产候选 | 上游 2026-08-13 有新 revision（5557756b）待下次 colab 场核"
 
+    # CUDA 原生 MTP 头保存在同一 checkpoint；不加载 MLX drafter 权重。
+    - repo: "RedHatAI/Qwen3.8-27B-INT4"
+      revision: "91bd022d5b49442a868bc35008f6c21e1860edfa"
+      dialect: "qwen35"
+      capabilities: ["text", "vision"]
+      cuda_deployment: { supports_mtp: true }
+      note: "CUDA INT4 checkpoint；Colab A100 40GB 可选原生 MTP，完整能力画像待评测"
+
   audio_max_length: 29
 
   # 模型原生模态声明（任务中心化多模态：文本+图像原生，其余走转写/解析层）。

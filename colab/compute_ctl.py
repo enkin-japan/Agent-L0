@@ -39,7 +39,7 @@ ROOT = HERE.parent
 STATE = ROOT / '.colab-compute'
 TASKS = HERE / 'vm_tasks'
 KEY = ROOT / '.keys/tailnet-colab.authkey'
-MODEL = 'RedHatAI/gemma-4-26B-A4B-it-NVFP4'
+MODEL = 'RedHatAI/Qwen3.8-27B-INT4'
 HOSTNAME = 'agent-compute'
 VM_FILES = ('compute_vm.py', 'compute_fetch.py', 'compute_common.py')
 # release_endpoint() reaches into this CLI's private client; only versions whose
@@ -60,7 +60,7 @@ PHASE_LABELS = {
     'installing-dependencies': '安装 CUDA/推理依赖', 'checking-cuda-runtime': '验证 CUDA 依赖',
     'joining-tailnet': '加入 Tailnet', 'configuring-model': '配置所选模型',
     'downloading-model': '下载模型权重', 'loading-models': '加载模型及编译 CUDA Graph',
-    'checking-authentication': '验证服务及鉴权', 'ready': '计算端就绪', 'failed': '部署失败',
+    'checking-authentication': '验证服务及鉴权', 'ready': 'VM 内服务已就绪', 'failed': '部署失败',
     'preparing-switch': '准备模型切换', 'stopping-inference': '停止现有推理进程',
     'checking-gpu-vacancy': '确认 GPU 已释放', 'updating-runtime': '更新推理运行时代码',
     'packing-source': '打包源码', 'uploading-source': '上传源码', 'starting-switch': '启动切换',
@@ -69,8 +69,8 @@ PHASE_LABELS = {
 # ---- Options: one table of defaults, one table of limits -------------------
 DEFAULTS = {
     'minutes': 120, 'auth_key': KEY, 'hostname': HOSTNAME, 'model': MODEL,
-    'quantization': 'none', 'speculative': 'off', 'draft_tokens': None,
-    'attention_backend': 'auto', 'kv_cache_dtype': 'auto', 'max_model_len': 32768,
+    'quantization': 'none', 'speculative': None, 'draft_tokens': None,  # None: per model
+    'attention_backend': 'auto', 'kv_cache_dtype': 'auto', 'max_model_len': 65536,
     'gpu_memory': .72, 'stall_timeout': 600, 'bootstrap_timeout': 3600,
     'poll_interval': 10, 'health_interval': 60, 'lines': 80,
 }
@@ -277,16 +277,19 @@ def deployment_options(args):
     quantization = opt(args, 'quantization')
     if model.startswith('google/gemma-4-') and quantization == 'none':
         raise ValueError('该 BF16 模型超出 A100 40GB 显存，请加 --quantization fp8')
+    supports_mtp = (entry.get('cuda_deployment') or {}).get('supports_mtp') is True
     speculative = opt(args, 'speculative')
+    if speculative is None:  # MTP wherever the registry says the model has it
+        speculative = 'mtp' if supports_mtp else 'off'
     draft_tokens = getattr(args, 'draft_tokens', None)
     if speculative not in {'off', 'mtp'}:
         raise ValueError('--speculative 只能是 off 或 mtp')
     if speculative == 'off' and draft_tokens is not None:
-        raise ValueError('--draft-tokens 只在 --speculative mtp 时有效')
+        raise ValueError('--draft-tokens 只在 MTP 开启时有效（该模型默认不开，需 --speculative mtp）')
     if speculative == 'mtp':
         draft_tokens = check_limit('draft_tokens',
                                    MTP_DRAFT_TOKENS if draft_tokens is None else draft_tokens)
-        if (entry.get('cuda_deployment') or {}).get('supports_mtp') is not True:
+        if not supports_mtp:
             raise ValueError('该注册模型不支持 MTP')
     attention, kv_cache = opt(args, 'attention_backend'), opt(args, 'kv_cache_dtype')
     if attention not in ATTENTION_BACKENDS or kv_cache not in KV_CACHE_DTYPES:
@@ -481,22 +484,65 @@ def check_start_resources(hostname, previous):
     return inventory['dns_suffix'].rstrip('.')
 
 
-def verify_dns(host, ip):
-    # Use the OS resolver (including macOS split DNS), not host/nslookup. Keep
-    # resolver stalls bounded and allow brief propagation after registration.
+def tailnet_address(host):
+    """IPv4 the tailnet itself maps `host` to: the source MagicDNS answers from."""
+    for peer in (tailnet_status().get('Peer') or {}).values():
+        if peer.get('DNSName', '').rstrip('.') == host:
+            return next((ip for ip in peer.get('TailscaleIPs') or () if '.' in ip), None)
+    return None
+
+
+def system_addresses(host):
+    # Use the OS resolver (including macOS split DNS), not host/nslookup, with a
+    # bounded subprocess so a resolver stall cannot hang the launcher.
     code = ('import socket,json,sys; print(json.dumps(sorted({r[4][0] for r in '
             'socket.getaddrinfo(sys.argv[1],None,socket.AF_INET,socket.SOCK_STREAM)})))')
-    for attempt in range(3):
+    try:
+        result = subprocess.run([sys.executable, '-c', code, host],
+                                check=True, capture_output=True, text=True, timeout=10)
+        return json.loads(result.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def verify_dns(host, ip):
+    """Fail only when the tailnet does not map the fixed name to the new VM.
+
+    This Mac's resolver is checked as well, but a mismatch there is a local cache:
+    while the name is absent between VMs, every client lookup gets "no such host"
+    and mDNSResponder can keep that answer far longer than the gap (observed: still
+    stale 20+ minutes after the new node registered). Releasing a ready VM for it
+    would only repeat the gap, so it is reported with the remedy instead.
+
+    Likewise an unreadable local tailscale (daemon restarting, Mac waking) proves
+    nothing about the VM; the VM itself already refused any suffixed name when it
+    recorded its identity. Returns 'ok', 'stale' or 'unknown'.
+    """
+    seen, error = False, None
+    for attempt in range(3):  # brief propagation after registration
         try:
-            result = subprocess.run([sys.executable, '-c', code, host],
-                                    check=True, capture_output=True, text=True, timeout=10)
-            if json.loads(result.stdout) == [ip]:
-                return
-        except subprocess.SubprocessError:
-            pass
+            address = tailnet_address(host)
+            seen = True
+            if address == ip:
+                break
+        except (OSError, subprocess.SubprocessError, ValueError, RuntimeError) as exc:
+            error = type(exc).__name__
         if attempt < 2:
             time.sleep(5)
-    raise RuntimeError('计算端固定域名未解析到新 VM；检查本机 Tailscale DNS 设置')
+    else:
+        if seen:
+            raise RuntimeError('Tailnet 中的计算端固定域名未指向新 VM；用 status 核对同名节点')
+        event('读不到本机 Tailscale 状态，未能核对固定域名；VM 保持就绪', host=host, ip=ip,
+              error_type=error)
+        return 'unknown'
+    for attempt in range(3):
+        if system_addresses(host) == [ip]:
+            return 'ok'
+        if attempt < 2:
+            time.sleep(5)
+    event('本机系统 DNS 仍缓存旧结果；Tailnet 已指向新 VM，VM 保持就绪',
+          host=host, ip=ip, refresh='sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder')
+    return 'stale'
 
 
 # ---- Release ---------------------------------------------------------------
@@ -852,10 +898,12 @@ def _await_ready(lease):
         if progress['phase'] == 'failed':
             raise RuntimeError('VM 部署失败；见已保存的脱敏诊断')
         if progress['phase'] == 'ready':
-            verify_dns(lease['expected_dns'], progress['host'])
-            lease.update(state=READY, host=lease['expected_dns'], ip=progress['host'])
+            local_dns = verify_dns(lease['expected_dns'], progress['host'])
+            lease.update(state=READY, host=lease['expected_dns'], ip=progress['host'],
+                         local_dns=local_dns)
             save_state(lease)
-            event('READY：计算端已就绪', host=lease['host'], stop='./colab/deploy.sh stop',
+            event('READY：计算端已就绪', host=lease['host'], local_dns=local_dns,
+                  stop='./colab/deploy.sh stop',
                   mode='手动保留：仅 ./colab/deploy.sh stop 回收' if lease.get('retain')
                   else '限时租约：到期或健康失败自动回收')
             return True
@@ -1333,10 +1381,11 @@ def build_parser():
     commands = parser.add_subparsers(dest='command', required=True, metavar='命令')
 
     def deployment(p):
-        p.add_argument('--model', default=DEFAULTS['model'], help='已注册的 CUDA 模型；见 models')
+        p.add_argument('--model', default=DEFAULTS['model'], help=f'已注册的 CUDA 模型（默认 {MODEL}）；见 models')
         p.add_argument('--quantization', choices=['none', 'fp8'], default='none')
-        p.add_argument('--speculative', choices=['off', 'mtp'], default='off',
-                       help='CUDA 投机解码模式')
+        p.add_argument('--speculative', choices=['off', 'mtp'], default=None,
+                       help='CUDA 投机解码模式（默认：注册表标明支持 MTP 的模型开 mtp，'
+                            '如 Qwen3.8-27B；其余关，如 gemma-4 系列）')
         p.add_argument('--draft-tokens', type=bounded(int, 'draft_tokens'),
                        help=f'MTP draft token 数（1–5，默认 {MTP_DRAFT_TOKENS}；需 mtp）')
         p.add_argument('--attention-backend', choices=list(ATTENTION_BACKENDS), default='auto')

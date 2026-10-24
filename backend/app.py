@@ -185,6 +185,7 @@ BASE_DIR = Path(__file__).parent
 # AGENT_DATA_DIR 时两者相同（backend/），行为与分家前逐字节一致；app 模式注入
 # ~/Library/Application Support/dev.enkin.macagent/——bundle 是签名的，写进去即破坏签名。
 from framework.utils.config_loader import load_config, data_dir
+from framework.utils import tailnet_dns
 DATA_DIR = data_dir()
 DATA_DIR.mkdir(parents=True, exist_ok=True)   # 全新数据根（app 首启）时各消费方的父目录
 
@@ -196,6 +197,10 @@ SKILLS_DIR = BASE_DIR.parent / "skills"      # 剧本是内容不是代码，与
 
 # 配置在仓库根（backend 与 rag 共用一份），寻址统一走 config_loader
 config = load_config()
+# 算力端固定 MagicDNS 名在换 VM 期间不存在，macOS 系统缓存的「无此主机」会远长于空窗；
+# 这两个配置的算力端名系统解析失败时改问 Tailscale 自身解析器（详见模块注释，配合下方 loop="asyncio"）
+tailnet_dns.install([((config.get("inference") or {}).get("remote") or {}).get("host"),
+                     ((config.get("rag") or {}).get("compute") or {}).get("host")])
 
 # 模型来源：.model-selection 指针（./devctl.sh model 写入）→ 注册表条目；无选择时用
 # config 默认。解析逻辑与 scripts/fetch_model.py 共用同一函数，保证下载与加载指向一致。
@@ -812,4 +817,5 @@ if __name__ == "__main__":
     # timeout_graceful_shutdown：默认 None = 无限等连接排空——挂着 SSE 长连时
     # SIGTERM 形同虚设（实机 2026-07-17：孤儿 backend 无视 TERM 20s 被 -9），
     # 收摊方一旦在升级 -9 前被打断（quit 看门狗）就留孤儿。5s 足够冻结落盘。
-    uvicorn.run(app, host=AGENT_HOST, port=AGENT_PORT, timeout_graceful_shutdown=5)
+    # loop="asyncio"：uvloop 在 libuv 内解析域名，会绕过 tailnet_dns 的回退（算力探活走 httpx 异步）
+    uvicorn.run(app, host=AGENT_HOST, port=AGENT_PORT, timeout_graceful_shutdown=5, loop="asyncio")
