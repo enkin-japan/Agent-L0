@@ -64,6 +64,7 @@ struct MacAgentApp: App {
     @StateObject private var store: AgentStore
     @StateObject private var settings: AppSettings
     @StateObject private var push: PushManager
+    @StateObject private var phoneLink: PhoneLink
     #if os(macOS)
     @StateObject private var sidecar: SidecarManager
     @StateObject private var retier: RetierMonitor
@@ -82,6 +83,13 @@ struct MacAgentApp: App {
         _settings = StateObject(wrappedValue: settings)
         _store = StateObject(wrappedValue: store)
         _push = StateObject(wrappedValue: push)
+        let phoneLink = PhoneLink()
+        #if os(macOS)
+        phoneLink.configure(settings: settings)
+        #else
+        phoneLink.configure(settings: settings, store: store)
+        #endif
+        _phoneLink = StateObject(wrappedValue: phoneLink)
         #if os(macOS)
         let sidecar = SidecarManager()
         sidecar.configure(settings: settings)
@@ -115,6 +123,7 @@ struct MacAgentApp: App {
                 .environmentObject(store)
                 .environmentObject(settings)
                 .environmentObject(push)
+                .environmentObject(phoneLink)
                 #if os(macOS)
                 .environmentObject(sidecar)
                 .environmentObject(retier)
@@ -125,6 +134,15 @@ struct MacAgentApp: App {
                 .id(settings.language)
                 // 灵动岛"查看详情"的 widgetURL 深链：macagent://session/{id}
                 .onOpenURL { url in
+                    // 扫码配对：macagent://pair?u=&c=（只在 iPhone 上有意义；确认框见下）
+                    if let link = PairingLink(url: url) {
+                        #if os(iOS)
+                        phoneLink.pendingLink = link
+                        #else
+                        _ = link
+                        #endif
+                        return
+                    }
                     guard url.scheme == "macagent", url.host() == "session" else { return }
                     let sid = url.lastPathComponent
                     if !sid.isEmpty { store.select(sessionId: sid) }
@@ -133,6 +151,26 @@ struct MacAgentApp: App {
                     push.sweepEndedActivities()
                     #endif
                 }
+                #if os(iOS)
+                // 链接谁都能触发（网页/其他 app）：换密钥前必须让用户看清目标主机并确认
+                .alert(L("连接到这台 Mac？"), isPresented: Binding(
+                    get: { phoneLink.pendingLink != nil },
+                    set: { if !$0 { phoneLink.pendingLink = nil } }),
+                       presenting: phoneLink.pendingLink) { link in
+                    Button(L("确认连接")) { Task { await phoneLink.claim(link) } }
+                    Button(L("取消"), role: .cancel) {}
+                } message: { link in
+                    // 完整地址（含协议与端口），不只主机名：这是用户辨认真假的唯一依据
+                    Text(link.base.absoluteString + "\n" + L("将用一次性配对码换取连接密钥，并替换本机现有的连接设置。"))
+                }
+                .alert(L("配对失败"), isPresented: Binding(
+                    get: { phoneLink.claimError != nil },
+                    set: { if !$0 { phoneLink.claimError = nil } })) {
+                    Button(L("好")) {}
+                } message: {
+                    Text(phoneLink.claimError ?? "")
+                }
+                #endif
                 #if os(macOS)
                 // 动态最窄：检查器开 = 三栏（侧栏 260 + 聊天区实测下限 ~420 +
                 // 检查器 260 + 余量），关 = 双栏照旧 760。恒定 860 实机复测仍

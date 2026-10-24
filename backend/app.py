@@ -801,6 +801,9 @@ if (_PRINT_BUNDLE / "index.html").exists():
 
 # 挂载解耦后的路由：全量 /api/v1/* 套用 Bearer 鉴权依赖（未配置密钥时依赖内部放行）
 app.include_router(router, dependencies=[Depends(verify_api_key)])
+# iPhone 扫码配对：不挂计算端就绪闸（配对与算力无关）；start 自带 Bearer，claim 凭一次性码
+from framework.api.pairing import router as pairing_router
+app.include_router(pairing_router)
 
 # ==========================================
 # 4. 启动器

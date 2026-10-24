@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var store: AgentStore
     @EnvironmentObject var push: PushManager
+    @EnvironmentObject var phoneLink: PhoneLink
     #if os(macOS)
     @EnvironmentObject var sidecar: SidecarManager
     #endif
@@ -190,17 +191,22 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var connectionSections: some View {
+                #if os(iOS)
+                PhoneConnectionSection {
+                    urlText = store.settings.baseURLString
+                    keyText = store.settings.apiKey
+                }
+                // 后端在 Mac 上；macOS 端恒连本机回环，不给地址框（见 AppSettings.localBackend）
                 Section(L("后端地址")) {
-                    TextField("http://127.0.0.1:14159", text: $urlText)
+                    TextField("https://<mac>.<tailnet>.ts.net", text: $urlText)
                         .autocorrectionDisabled()
-                        #if os(iOS)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
-                        #endif
-                    Text(L("本机运行填回环地址；跨设备走 Tailscale：推荐在 Mac 上 `tailscale serve` 反代 14159，这里填 https://<mac>.<tailnet>.ts.net"))
+                    Text(L("通常不必手填：用上方 iCloud 同步或扫码配对。手填时写 Mac 上 `tailscale serve` 开放的地址。"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                #endif
                 Section("API Key") {
                     SecureField(L("AGENT_API_KEY（存入钥匙串）"), text: $keyText)
                     #if os(macOS)
@@ -233,6 +239,11 @@ struct SettingsView: View {
                             Text(L("重新生成会立即重启执行层；其他设备须重新填入新 Key"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            if store.settings.phoneSyncEnabled {
+                                Text(L("开启 iCloud 同步的 iPhone 会自动换上新 Key。"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                     #endif
@@ -246,6 +257,9 @@ struct SettingsView: View {
                         Text(result).font(.caption)
                     }
                 }
+                #if os(macOS)
+                MacPhoneLinkSection()
+                #endif
     }
 
     @ViewBuilder
@@ -519,8 +533,16 @@ struct SettingsView: View {
     }
 
     private func save() {
-        store.settings.baseURLString = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
-        store.settings.apiKey = keyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let url = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = keyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        #if os(iOS)
+        // 手改过才算手动来源：没动就点保存不该关掉 iCloud 来源的自动更新
+        if url != store.settings.baseURLString || key != store.settings.apiKey {
+            store.settings.connectionSource = .manual
+        }
+        #endif
+        store.settings.baseURLString = url
+        store.settings.apiKey = key
         store.applySettings()
         dismiss()
     }
@@ -551,7 +573,8 @@ struct SettingsView: View {
     }
 
     /// key 轮换：新随机值即刻生效（钥匙串 + 本 app 客户端 + 执行层带新 env 重启）。
-    /// 旧 key 随即作废——其他拨号端（iPhone 等）401，须重新填入，这是轮换的本意。
+    /// 旧 key 随即作废——其他拨号端 401，须重新填入，这是轮换的本意；iCloud 同步来源的
+    /// iPhone 例外：PhoneLink 把新 key 写进同步条目，iPhone 遇 401 自行重读。
     private func regenerateKey() {
         let newKey = SidecarManager.randomKey()
         keyText = newKey

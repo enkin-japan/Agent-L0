@@ -3,7 +3,8 @@ import SwiftUI
 /// 首启强制引导（双端）：新装 app 在完成初始设置前不进主界面，也不启动执行层 / 不发起连接。
 /// 既有设置页维持原状（作为重置入口）；本页只覆盖「第一次」需要的最小字段。
 /// - macOS：主路径「内建执行层」（算力端地址 + INFER/RAG 密钥，可留空）+ 次路径「外部后端」。
-/// - iOS：单路径（后端地址 + AGENT 密钥）。
+/// - iOS：主路径「从 Mac 获取」（iCloud 钥匙串同步，或相机扫 Mac 上的配对二维码）+
+///   次路径手填（后端地址 + AGENT 密钥）。
 struct OnboardingView: View {
     @EnvironmentObject var store: AgentStore
     @EnvironmentObject var settings: AppSettings
@@ -115,8 +116,12 @@ struct OnboardingView: View {
 
     @ViewBuilder
     private var iosContent: some View {
+        PhoneConnectionSection {
+            urlText = settings.baseURLString
+            keyText = settings.apiKey
+        }
         Section {
-            Text(L("填入你 Mac 上运行的后端地址与 AGENT 密钥。"))
+            Text(L("或者手动填入 Mac 上后端的地址与 AGENT 密钥。"))
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -140,6 +145,7 @@ struct OnboardingView: View {
     private func complete() {
         settings.baseURLString = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
         settings.apiKey = keyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        settings.connectionSource = .manual
         settings.setupCompleted = true
         store.applySettings()          // 连接后置：完成即启动探活/附着
     }

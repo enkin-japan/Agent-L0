@@ -507,6 +507,23 @@ approval / approval_autodenied / schedule_start;Live Activity content-state 契�
 见 `apple-app/Sources/LiveActivity/AgentActivityAttributes.swift`(与
 `framework/push/dispatcher.py` 字段一一对应,改动须两边同步)。
 
+### 2.9 iPhone 扫码配对(additive,2026-10-25;不改既有事件语义,不升版本)
+
+iPhone 拿到连接密钥的备用出口(主路径是 iCloud 钥匙串同步,不经后端)。实现
+`framework/api/pairing.py`,不挂计算端就绪闸。
+
+```
+POST /api/v1/pair/start    (Bearer)  → {code, expires_in}   Mac app 经回环领码;重新 start 顶掉旧码
+POST /api/v1/pair/claim    {code}    → {api_key}            **全 /api/v1 唯一免鉴权的端点**
+```
+
+claim 的约束:配对码 144 bit、5 分钟过期、成功即作废;错码不作废(防任一 tailnet
+节点乱猜把码烧光);失败一律 403 同一句话;没有共享密钥可发时 start 409、claim 永不
+返回空串;响应 `Cache-Control: no-store`。状态在进程内存,后端重启即全部作废。
+「除 claim 外每条 /api/v1 路由都带鉴权依赖」由 `test_pairing.py` 的白名单测试守。
+二维码载荷 `macagent://pair?u=<*.ts.net 地址>&c=<code>`,app 端校验与确认见
+`apple-app/Sources/App/PhoneLink.swift`(PairingLink)。
+
 ---
 
 ## 3. 持久化与账本实现约束

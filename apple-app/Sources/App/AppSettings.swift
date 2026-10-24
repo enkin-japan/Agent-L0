@@ -44,12 +44,22 @@ enum Keychain {
 }
 
 /// 连接设置：服务器地址进 UserDefaults，key 进 Keychain。
-/// 地址示例——本机：http://127.0.0.1:14159；Tailscale：https://<mac>.<tailnet>.ts.net
-/// （推荐 `tailscale serve` 反代 14159：后端保持回环绑定 + 白得合法 HTTPS 证书）。
+/// macOS 的后端恒在本机回环（config.yaml 绑定 127.0.0.1:14159，执行层探活也认这个地址），
+/// 地址不可配；iOS 填 Mac 经 `tailscale serve` 开放的 https://<mac>.<tailnet>.ts.net。
 @MainActor
 final class AppSettings: ObservableObject {
+    static let localBackend = "http://127.0.0.1:14159"
+
     @Published var baseURLString: String {
         didSet { UserDefaults.standard.set(baseURLString, forKey: "agent.baseURL") }
+    }
+    /// iOS：当前连接信息从哪来（决定能否被 iCloud 同步条目自动更新）。
+    @Published var connectionSource: ConnectionSource {
+        didSet { UserDefaults.standard.set(connectionSource.rawValue, forKey: "phone.source") }
+    }
+    /// macOS：把 iPhone 连接信息（地址 + 密钥）写进 iCloud 钥匙串。默认开。
+    @Published var phoneSyncEnabled: Bool {
+        didSet { UserDefaults.standard.set(phoneSyncEnabled, forKey: "phone.icloudSync") }
     }
     @Published var apiKey: String {
         didSet { Keychain.saveAPIKey(apiKey) }
@@ -146,7 +156,15 @@ final class AppSettings: ObservableObject {
     }
 
     init() {
-        baseURLString = UserDefaults.standard.string(forKey: "agent.baseURL") ?? "http://127.0.0.1:14159"
+        #if os(macOS)
+        // 旧版设置页曾允许改它；残留的非默认值一律不再生效（改错 = 执行层在跑却连不上）
+        baseURLString = Self.localBackend
+        #else
+        baseURLString = UserDefaults.standard.string(forKey: "agent.baseURL") ?? Self.localBackend
+        #endif
+        connectionSource = ConnectionSource(
+            rawValue: UserDefaults.standard.string(forKey: "phone.source") ?? "") ?? .manual
+        phoneSyncEnabled = UserDefaults.standard.object(forKey: "phone.icloudSync") as? Bool ?? true
         apiKey = Keychain.loadAPIKey()
         appearance = UserDefaults.standard.string(forKey: "app.appearance") ?? "system"
         language = UserDefaults.standard.string(forKey: "app.language") ?? "system"
@@ -187,7 +205,7 @@ final class AppSettings: ObservableObject {
                 || !Keychain.loadAPIKey().isEmpty
             #else
             // iOS 痕迹：钥匙串已有 AGENT key，或后端地址非默认值
-            let defaultURL = "http://127.0.0.1:14159"
+            let defaultURL = Self.localBackend
             let hasTraces = !Keychain.loadAPIKey().isEmpty
                 || (ud.string(forKey: "agent.baseURL") ?? defaultURL) != defaultURL
             #endif
@@ -213,6 +231,12 @@ final class AppSettings: ObservableObject {
         guard let url = baseURL, url.scheme != nil else { return nil }
         return AgentClient(baseURL: url, apiKey: apiKey)
     }
+}
+
+/// iPhone 端连接信息的来源：iCloud 来源遇 401/离线会自动重读同步条目（见 PhoneLink），
+/// 手动填写与扫码配对的值不被静默覆盖。
+enum ConnectionSource: String {
+    case manual, icloud, qr
 }
 
 extension Bundle {

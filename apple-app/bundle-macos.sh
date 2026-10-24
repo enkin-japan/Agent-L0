@@ -133,11 +133,81 @@ if [ -n "$SIGN_ID" ]; then
     done
     codesign --force --timestamp --options runtime -s "$SIGN_ID" "$SPARKLE_FW"
   fi
-  # 主 app：hardened runtime 是公证硬性要求；entitlements **显式指定** xcodegen 产出的
-  # 文件（只含麦克风/定位），绝不用 --preserve-metadata=entitlements 继承——ad-hoc 构建
-  # 签名会注入 get-task-allow（调试键），继承下来公证必拒（首跑实测踩中）。
+  # iCloud 钥匙串同步（Sources/App/PhoneLink.swift）：共享钥匙串组是受限 entitlement，
+  # 须由嵌入的 Developer ID 描述文件授权——没有描述文件却带它签名 = app 起不来（AMFI 拒）。
+  # 所以它不进 project.yml（开发构建照常能跑），只在这里按描述文件追加。描述文件由
+  # asc-macos-profile.py 建并装到 ~/Library/MobileDevice/Provisioning Profiles/。
+  # 钥匙串组本 app 自己的排第一（未指定组的新条目默认落这里），共享组第二。
+  # 找不到 → 不带同步权限签（iPhone 只剩二维码配对）；找到但 30 天内过期、证书不是本次
+  # 签名身份、或 App ID 对不上 → 当场红：带着它发出去的 app 到期/不匹配即无法启动。
+  ENTITLEMENTS=Generated/MacAgent-macOS.entitlements
+  BUNDLE_ID=$(plutil -extract CFBundleIdentifier raw "$APP/Contents/Info.plist")
+  # SIGN_ID 可由调用方覆盖成 40 位 SHA-1（多身份同名时的消歧惯例）：那就直接用它比对
+  if [[ "$SIGN_ID" =~ ^[0-9A-Fa-f]{40}$ ]]; then
+    SIGN_HASHES=$(echo "$SIGN_ID" | tr '[:lower:]' '[:upper:]')
+  else
+    SIGN_HASHES=$(security find-identity -v -p codesigning 2>/dev/null \
+        | awk -v id="$SIGN_ID" 'index($0, "\"" id "\"") {print $2}' | sort -u | tr '\n' ' ')
+  fi
+  PROFILE=$(/usr/bin/python3 - "$BUNDLE_ID" "$SIGN_HASHES" <<'PY'
+import datetime, glob, hashlib, os, plistlib, subprocess, sys
+bundle, hashes = sys.argv[1], set(sys.argv[2].split())
+found = []
+for f in glob.glob(os.path.expanduser("~/Library/MobileDevice/Provisioning Profiles/*.provisionprofile")):
+    raw = subprocess.run(["security", "cms", "-D", "-i", f], capture_output=True).stdout
+    try:
+        p = plistlib.loads(raw)
+    except Exception:
+        continue
+    if p.get("Name") == "MacAgent macOS DeveloperID":
+        found.append((p["ExpirationDate"], f, p))
+if not found:
+    sys.exit(0)
+expires, path, p = max(found, key=lambda x: x[0])
+team = p["TeamIdentifier"][0]
+# 有效期取描述文件与其证书的较早者（ASC 报的就是证书到期日，描述文件里写的更晚）
+for cert in p["DeveloperCertificates"]:
+    end = subprocess.run(["openssl", "x509", "-inform", "DER", "-noout", "-enddate"],
+                         input=cert, capture_output=True).stdout.decode().strip()
+    if end.startswith("notAfter="):
+        expires = min(expires, datetime.datetime.strptime(end[9:], "%b %d %H:%M:%S %Y %Z"))
+problems = []
+if expires - datetime.datetime.utcnow() < datetime.timedelta(days=30):  # plist 日期是 UTC
+    problems.append(f"{expires:%Y-%m-%d} 到期（不足 30 天）——重跑 asc-macos-profile.py 续建")
+if not hashes & {hashlib.sha1(c).hexdigest().upper() for c in p["DeveloperCertificates"]}:
+    problems.append("描述文件里的证书不是本次签名身份")
+if p["Entitlements"].get("com.apple.application-identifier") != f"{team}.{bundle}":
+    problems.append(f"App ID 不是 {team}.{bundle}")
+if f"{team}.*" not in p["Entitlements"].get("keychain-access-groups", []):
+    problems.append("未授权 Team 钥匙串组")
+if problems:
+    sys.exit("❌ 描述文件 " + path + "：" + "；".join(problems))
+print(f"{path}\t{team}\t{expires:%Y-%m-%d}")
+PY
+  )
+  if [ -n "$PROFILE" ]; then
+    IFS=$'\t' read -r PROFILE_PATH TEAM_ID PROFILE_EXPIRES <<<"$PROFILE"
+    cp "$PROFILE_PATH" "$APP/Contents/embedded.provisionprofile"
+    ENTITLEMENTS=build/MacAgent-macOS-signing.entitlements
+    cp Generated/MacAgent-macOS.entitlements "$ENTITLEMENTS"
+    /usr/libexec/PlistBuddy \
+      -c "Add :com.apple.application-identifier string $TEAM_ID.$BUNDLE_ID" \
+      -c "Add :com.apple.developer.team-identifier string $TEAM_ID" \
+      -c "Add :keychain-access-groups array" \
+      -c "Add :keychain-access-groups:0 string $TEAM_ID.$BUNDLE_ID" \
+      -c "Add :keychain-access-groups:1 string $TEAM_ID.dev.enkin.macagent.shared" \
+      "$ENTITLEMENTS"
+    echo "   iCloud 钥匙串同步：已嵌入描述文件（$PROFILE_EXPIRES 到期）"
+  else
+    rm -f "$APP/Contents/embedded.provisionprofile"
+    echo "   ⚠️ 未找到描述文件「MacAgent macOS DeveloperID」：本包不带 iCloud 钥匙串同步" \
+         "（iPhone 只能扫码配对；建档跑 asc-macos-profile.py）"
+  fi
+  # 主 app：hardened runtime 是公证硬性要求；entitlements **显式指定**（xcodegen 产出的
+  # 麦克风/定位 + 上面按描述文件追加的钥匙串组），绝不用 --preserve-metadata=entitlements
+  # 继承——ad-hoc 构建签名会注入 get-task-allow（调试键），继承下来公证必拒（首跑实测踩中）。
   codesign --force --timestamp --options runtime \
-    --entitlements Generated/MacAgent-macOS.entitlements -s "$SIGN_ID" "$APP"
+    --entitlements "$ENTITLEMENTS" -s "$SIGN_ID" "$APP"
 else
   echo "   ⚠️ 未找到 Developer ID 证书，回落 ad-hoc（每次重装需重存密钥）"
   codesign --force -s - "$APP"

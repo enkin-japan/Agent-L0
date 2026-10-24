@@ -12,7 +12,7 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: "0.16.0"
-    CURRENT_PROJECT_VERSION: "74"
+    CURRENT_PROJECT_VERSION: "75"
     ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
 # 块级 Markdown 渲染（标题/列表/表格/引用等 GFM）——AttributedString 只认行内语法
@@ -97,6 +97,12 @@ targets:
       properties:
         aps-environment: development
         com.apple.developer.usernotifications.time-sensitive: true
+        # iCloud 钥匙串同步（Mac 写 iPhone 连接信息，见 Sources/App/PhoneLink.swift）：
+        # 本 app 默认组排第一，既有钥匙串条目的默认归属不变；共享组与 macOS 版互通。
+        # 描述文件默认授权 9A84P4ZS84.*，不需要新 capability。
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)dev.enkin.macagent
+          - $(AppIdentifierPrefix)dev.enkin.macagent.shared
     info:
       path: Generated/Info-iOS.plist
       properties:
