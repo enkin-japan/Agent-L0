@@ -91,7 +91,7 @@ sha256sum /content/vllm_cell.py /content/_prompt.json /content/bench_*.sh 2>/dev
 
 echo "== ③ GPU 保活 0.5G + 内存哨兵（拉件期 GPU 空闲防判零；pidfile 纪律）"
 pgrep -f "gpu_keepalive[.]py" >/dev/null || {
-  nohup python3 "$APP/colab/gpu_keepalive.py" 0.5 > /content/keepalive_gpu.log 2>&1 &
+  nohup python3 "$APP/colab/legacy/gpu_keepalive.py" 0.5 > /content/keepalive_gpu.log 2>&1 &
   sleep 1; pgrep -f "python3 .*gpu_keepalive[.]py" > /content/gpu_keepalive.pid
 }
 ( while true; do
@@ -128,6 +128,6 @@ else
 fi
 
 echo "== ⑤ MTP 热补丁（嵌入共享护栏豁免）"
-python3 "$APP/colab/mtp_patch.py" || die "MTP 热补丁失败"
+python3 "$APP/colab/legacy/mtp_patch.py" || die "MTP 热补丁失败"
 
 echo "BOOT_READY"

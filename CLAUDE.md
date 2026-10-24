@@ -28,8 +28,9 @@
   additionally requires explicit user consent to change at all.)
 - Anything requiring sudo or changing system state (`scripts/wired-limit.sh`,
   LaunchDaemons, sysctl) — these end at the user's hands anyway.
-- Anything that starts, stops, or bills paid compute (`colab/daily.sh`,
-  `daily_serve_chain.sh`, colab CLI): spending units is a user-visible act.
+- Anything that starts, stops, or bills paid compute (`colab/deploy.sh` and the
+  `colab/compute_*.py` chain behind it, the archived `colab/legacy/` scripts, colab
+  CLI): spending units is a user-visible act.
 
 ### Classifier fallback watch (quality rule, not a cost rule)
 - Cyber-adjacent work — the secrets handling in `api_tool_factory.py`, anything

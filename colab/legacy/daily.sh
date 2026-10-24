@@ -1,12 +1,12 @@
 #!/bin/bash
 # 日用算力端一键起停（Mac 侧）。白天 start、晚上 stop，中间不用管。
 #
-#   ./colab/daily.sh start [l4|a100|a100-31b]   开 VM → 全链引导 → 起服 → 挂哨兵/隧道保活
+#   ./colab/legacy/daily.sh start [l4|a100|a100-31b]   开 VM → 全链引导 → 起服 → 挂哨兵/隧道保活
 #     l4=26B NVFP4 日用（1.54u/h）· a100=26B fp8+MTP 速度王 · a100-31b=31B NVFP4+MTP
 #     质量王 48k（B 方案 2026-08-11：并发闸 1 焊死，40G 共驻余量前提）
-#   ./colab/daily.sh stop              停哨兵 → 停会话（孤儿自动还原自救）
-#   ./colab/daily.sh status            会话/健康/时长/预估 unit
-#   ./colab/daily.sh rescue            孤儿会话手动自救（还原 sessions.json 备份再 stop）
+#   ./colab/legacy/daily.sh stop              停哨兵 → 停会话（孤儿自动还原自救）
+#   ./colab/legacy/daily.sh status            会话/健康/时长/预估 unit
+#   ./colab/legacy/daily.sh rescue            孤儿会话手动自救（还原 sessions.json 备份再 stop）
 #
 # 前置（一次性）：
 #   mkdir -p ~/.config/agent-colab && chmod 700 ~/.config/agent-colab
@@ -89,7 +89,7 @@ EOF
   nohup python3 "$HERE/tunnel_keepalive.py" "$name" > "$STATE/logs/tunnel.log" 2>&1 &
   echo $! > "$STATE/tunnel.pid"
   sentinel_start
-  note "✅ 就绪：本机 ./devctl.sh start all 即可（.env.local 已拨 colab-a100）。晚上 ./colab/daily.sh stop"
+  note "✅ 就绪：本机 ./devctl.sh start all 即可（.env.local 已拨 colab-a100）。晚上 ./colab/legacy/daily.sh stop"
 }
 
 # 哨兵独立子命令：评测/维护要主动停服的窗口先 sentinel stop 静默，完事 sentinel start

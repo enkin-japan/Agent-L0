@@ -167,12 +167,12 @@ PY
 
 echo "== ⑤ GPU 保活 0.5G（防用户侧 25min 判零看门在空闲窗误杀；pidfile 纪律）"
 pgrep -f "gpu_keepalive[.]py" >/dev/null || {
-  nohup python3 "$APP/colab/gpu_keepalive.py" 0.5 > /content/keepalive_gpu.log 2>&1 &
+  nohup python3 "$APP/colab/legacy/gpu_keepalive.py" 0.5 > /content/keepalive_gpu.log 2>&1 &
   sleep 1; pgrep -f "python3 .*gpu_keepalive[.]py" > /content/gpu_keepalive.pid
 }
 
 echo "== ⑥ 服务监理循环（崩溃自动重启 ≤5 次；MTP 档先打热补丁）"
-[ "$TIER" != "l4" ] && { python "$APP/colab/mtp_patch.py" || die "MTP 热补丁失败"; }
+[ "$TIER" != "l4" ] && { python "$APP/colab/legacy/mtp_patch.py" || die "MTP 热补丁失败"; }
 cat > /content/serve_supervisor.sh <<SUP
 #!/bin/bash
 set -u

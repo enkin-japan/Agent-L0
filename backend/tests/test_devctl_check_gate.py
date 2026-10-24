@@ -14,6 +14,7 @@
 tmp_path 临时 ROOT，三条门各换成一个按环境变量退出的桩：
   backend → backend/.venv/bin/python 桩（认出 `-m pytest` 才按 FAKE_PYTEST_RC 退出；
             其余调用形态回 0 空输出，好让 lib_edge 载入期的 _read_cfg_hosts 正常落空）
+  colab   → 同一个 python 桩；参数里有 `colab` 时改按 FAKE_COLAB_RC 退出
   web     → 真 npm 跑临时 frontend/package.json 里的 `"test": "exit N"`
             （devctl.sh 会把 /opt/homebrew/bin 前置进 PATH，PATH 挂桩挂不住 npm，
              所以从 package.json 这一侧控制退出码）
@@ -53,8 +54,13 @@ _PY_STUB = """\
 #!/bin/bash
 for a in "$@"; do
     if [ "$a" = "pytest" ]; then
-        printf '%s' "${FAKE_SECRET_KEY:-}" > "$LEAK_DIR/backend"
-        exit "${FAKE_PYTEST_RC:-0}"
+        # backend 与 colab 两门共用 backend venv：按测试目录分辨是哪一门在调
+        gate=backend; rc="${FAKE_PYTEST_RC:-0}"
+        for b in "$@"; do
+            if [ "$b" = "colab" ]; then gate=colab; rc="${FAKE_COLAB_RC:-0}"; fi
+        done
+        printf '%s' "${FAKE_SECRET_KEY:-}" > "$LEAK_DIR/$gate"
+        exit "$rc"
     fi
 done
 case "${1:-}" in
@@ -187,7 +193,7 @@ def test_all_gates_pass_rc0(tmp_path):
     assert r.returncode == 0, _out(r)
     combined = _out(r)
     assert "全过" in combined
-    for gate in ("backend", "web", "apple"):
+    for gate in ("backend", "colab", "web", "apple"):
         assert gate in combined
 
 
@@ -198,6 +204,25 @@ def test_backend_test_failure_is_rc3(tmp_path):
     r = _run(devctl, ["check", "--only", "backend"], tmp_path, FAKE_PYTEST_RC=1)
     assert r.returncode == 3, _out(r)
     assert "不过" in _out(r)
+
+
+def test_colab_failure_is_rc3(tmp_path):
+    devctl = _scaffold(tmp_path)
+    r = _run(devctl, ["check", "--only", "colab"], tmp_path, FAKE_COLAB_RC=1)
+    assert r.returncode == 3, _out(r)
+    assert "不过" in _out(r)
+
+
+def test_colab_collected_nothing_or_missing_venv_is_internal_not_pass(tmp_path):
+    devctl = _scaffold(tmp_path)
+    for rc in (5, 4):
+        r = _run(devctl, ["check", "--only", "colab"], tmp_path, FAKE_COLAB_RC=rc)
+        assert r.returncode == 1, _out(r)
+        assert "跑不起来" in _out(r)
+    (tmp_path / "novenv").mkdir()
+    devctl = _scaffold(tmp_path / "novenv", backend=False)
+    r = _run(devctl, ["check", "--only", "colab"], tmp_path / "novenv")
+    assert r.returncode == 1, _out(r)
 
 
 def test_web_failure_is_rc3(tmp_path):
@@ -294,7 +319,7 @@ def test_unknown_gate_name_is_usage_error(tmp_path):
 
 def test_skipping_every_gate_is_usage_error_not_pass(tmp_path):
     devctl = _scaffold(tmp_path)
-    r = _run(devctl, ["check", "--skip", "backend,web,apple"], tmp_path)
+    r = _run(devctl, ["check", "--skip", "backend,colab,web,apple"], tmp_path)
     assert r.returncode == 2, _out(r)
     assert "一门都没有真跑" in _out(r)
 
@@ -528,7 +553,7 @@ def test_gates_do_not_inherit_secrets_from_env_local(tmp_path):
     # 这条曾被加上 `--skip docs` 让当时的新门避开检查——**把安全金测试改窄到不覆盖
     # 新增面，比它从来没覆盖过更坏**。（docs 门 2026-08-29 已退役，此处随之摘除；
     # 反漂移由下面按 CHECK_GATES 现读清单的那条兜底。）
-    for gate in ("backend", "web", "apple"):
+    for gate in ("backend", "colab", "web", "apple"):
         leaked = _leak_seen_by(tmp_path, gate)
         assert leaked == "", f"{gate} 门的子进程看到了密钥：{leaked!r}"
 
@@ -585,7 +610,7 @@ def test_no_gate_is_exempt_from_the_secret_scrub(tmp_path):
                       devctl.read_text(encoding="utf-8"), re.M).group(1).split()
     # 精确等值而非下限：增门/减门都必须有人来改这一行——门清单变动是要过脑子的事，
     # 下限写法只能抓「全清空」，抓不住悄悄少一门（首审 Nit 12）。
-    assert gates == ["backend", "web", "apple"], gates
+    assert gates == ["backend", "colab", "web", "apple"], gates
 
     assert _run(devctl, ["check"], tmp_path).returncode == 0
     for g in gates:

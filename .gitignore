@@ -53,6 +53,8 @@ rag/chroma_data/
 rag/storage/
 
 # ═══════════ 日志 / 进程文件 ═══════════
+# Colab 计算端租约的本机状态、锁、部署日志与 launcher venv（colab/compute_ctl.py）
+/.colab-compute/
 logs/
 *.log
 *.pid

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 本地 → Google Drive 的代码同步（开发 Mac 上跑；免 Colab 碰 GitHub 的日常通道）。
 #
-# 用法：./colab/sync_to_colab.sh
+# 用法：./colab/legacy/sync_to_colab.sh
 # 产出：Drive AgentColab/code/Agent-L0-src.tar.gz（+ HEAD.txt 指纹）——bootstrap
 # 解包的就是它。权重不经此路（stage_to_drive.sh 在 Colab 侧拉 HF）。
 #
@@ -9,7 +9,7 @@
 # （rclone 用户可改为 rclone copy，同一产物路径即可）。
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 if [ -z "${GDRIVE_ROOT:-}" ]; then
   for d in "$HOME"/Library/CloudStorage/GoogleDrive-*/"My Drive" \
            "$HOME/Google Drive/My Drive" "$HOME/Google Drive"; do

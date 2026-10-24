@@ -445,7 +445,7 @@ do_logs() {
 # 合并优先级 2 > 1 > 3 > 0：用法错时全部结果无意义；「跑不起来」意味着这套门整体
 # 不可信，比「某条测试红了」更需要人介入（后者在日志正文里本来就看得见）。
 #
-# 反空守卫：`--only` 解析后若一门都不剩、或 `--skip` 把三门全跳掉，一律 rc=2 而非 0
+# 反空守卫：`--only` 解析后若一门都不剩、或 `--skip` 把各门全跳掉，一律 rc=2 而非 0
 # ——「一门都没跑」被记成「过」正是本仓反复得的那个病。
 #
 # 第一版**刻意不加任何新校验器**，只做聚合与退出码合并。加校验器是另一件事，混在
@@ -454,15 +454,15 @@ do_logs() {
 # 曾有第四道门 docs（doc-numbers 防漂移，2026-08-18 并入）：2026-08-29 随台账冻结
 # 归档一起退役——它守的是活跃开发期的文档数字漂移，冻结档案无漂移可防。
 # 脚本与测试存档于 docs/history/tools/；复役步骤见该台账头部冻结注记。
-CHECK_GATES="backend web apple"
+CHECK_GATES="backend colab web apple"
 
 # ---- 门的子进程不继承密钥（首审 #14）----
 # 把门接到提交路径上 = 每次 `git commit` 都会把 `.env.local` 里的东西经本脚本顶部的
 # `set -a` 交给 pytest / npm / xcrun 的子进程；`npm run test` 还会连带执行
 # node_modules 带来的任何 lifecycle 脚本。实读 `.env.local` 的键名：五把 Bearer 钥匙
 # （AGENT / INFER / RAG / RAG_COMPUTE / CLOUD_OPENAI）+ 两个 App Store Connect 标识。
-# 三条门**一把都不需要**（backend 金测试是 FakeEngine、前端是夹具回放、apple 是 Swift
-# 编译），故在门的子 shell 里逐个摘掉。这是本次改动**新引入**的暴露面——虽无已知泄漏
+# 各门**一把都不需要**（backend 金测试是 FakeEngine、colab 是假 CLI 与临时目录、前端是
+# 夹具回放、apple 是 Swift 编译），故在门的子 shell 里逐个摘掉。这是本次改动**新引入**的暴露面——虽无已知泄漏
 # 路径，但无声扩大暴露面本身就不该默认发生。
 # 键名从 env 文件现读（不另立一张会漂移的清单）；运行必需项走安全名单排除。
 CHECK_ENV_KEEP=" PATH HOME LANG LC_ALL SHELL TMPDIR TMP USER LOGNAME TERM PWD PYTHONUNBUFFERED DEVELOPER_DIR SDKROOT "
@@ -523,6 +523,26 @@ check_gate_backend() {
         5) fail "backend 门跑不起来：pytest 一条测试都没收集到（rc=5）——这不是「过」"; return 1 ;;
         97) fail "backend 门跑不起来：进不去 ${BACKEND_DIR}"; return 1 ;;
         *) fail "backend 门跑不起来：pytest rc=${rc}（2=中断 3=内部错 4=用法错）"; return 1 ;;
+    esac
+}
+
+# Colab 计算端启动链（colab/test_*.py）：假 colab CLI、临时 git 仓与临时状态目录，
+# 不读真凭据、不建 VM、不碰 GPU。用 backend venv（自带 PyYAML 与 pytest）。
+# 退出码口径与 backend 门一致；5（一条都没收集到）同样记「跑不起来」。
+check_gate_colab() {
+    local py="$BACKEND_DIR/.venv/bin/python" rc
+    if [ ! -x "$py" ]; then
+        fail "colab 门跑不起来：找不到 ${py}。先跑 ./devctl.sh setup"
+        return 1
+    fi
+    ( check_drop_secrets; cd "$ROOT" || exit 97; PYTHONUNBUFFERED=1 "$py" -m pytest colab -q -p no:cacheprovider )
+    rc=$?
+    case "$rc" in
+        0) return 0 ;;
+        1) return 3 ;;
+        5) fail "colab 门跑不起来：pytest 一条测试都没收集到（rc=5）——这不是「过」"; return 1 ;;
+        97) fail "colab 门跑不起来：进不去 ${ROOT}"; return 1 ;;
+        *) fail "colab 门跑不起来：pytest rc=${rc}（2=中断 3=内部错 4=用法错）"; return 1 ;;
     esac
 }
 

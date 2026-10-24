@@ -1,145 +1,222 @@
-# Colab 算力端（CUDA 兼容波）
+# Colab 计算端
 
-Colab A100 在拓扑里就是"设备 A"：backend/RAG/前端留在本机，Colab 只跑推理承载，
-经 Tailscale 组网后 `./devctl.sh start -p edge -h <colab节点>` 走现有 remote 分离
-部署形态。Drive 是跨会话的持久层（Colab 本地盘每次清零）。
+从本机 Colab CLI 创建独立的 A100 会话，把当前工作树的计算端源码白名单上传过去，
+由 `devctl.sh start infer|rag-compute` 在 VM 上启动推理与 RAG 计算面；数据面留在 Mac。
+RAG 计算使用 VM 的 CPU，生成模型独占 GPU。不会上传 `.env*`、`.keys/`、会话、知识库或整个仓库。
+Colab 上只使用合成提示与测试资料。
 
-## Drive 布局（MyDrive/AgentColab/）
+唯一入口是 `./colab/deploy.sh`。旧一代的 notebook / 日用 / bench 脚本已迁到
+[`colab/legacy/`](legacy/README.md)，不要与本流程混用（尤其不要运行旧保活链）。
 
-```
-AgentColab/
-  secrets/colab.env      # 你手工创建；密钥绝不进仓库/对话
-  code/                  # Agent-L0.bundle + Agent-L0-src.tar.gz（stage 脚本产出）
-  models/<org>__<name>/  # bf16 原件，每目录一个 .complete 断点标记
-  cache/                 # pip 缓存等（bootstrap 波使用）
-```
+## 前置
 
-`secrets/colab.env` 内容形如：
+- 本机已装 `uv`、`colab`（google-colab-cli）、`tailscale`，且 Tailscale 在线、tailnet 已启用 MagicDNS。
+- Tailnet auth key 手工填入 `.keys/tailnet-colab.authkey`（父目录 700，文件 600）。一键重建需要有效的
+  **Reusable（可复用）** key；单次 key 首次入网即消耗。VM 使用 `tailscaled --state=mem:` 强制注册
+  ephemeral 临时节点，不依赖 key 是否勾选 Ephemeral，也不复用旧 VM 的节点身份。key 仍应最小权限。
+- 本机 `.env.local` 的 `INFER_API_KEY`、`RAG_COMPUTE_API_KEY` 已配置且不少于 16 字符。脚本只传这两项及
+  可选 `HF_TOKEN`，不显示其值；auth key 经私密文件交给 Tailscale，不放命令参数。CLI 凭据与会话文件由
+  CLI 自己管理，脚本从不读取或改写。
 
-```
-HF_TOKEN=hf_xxx           # gemma 系 gated 仓库必需（先在 HF 网页接受许可）
-GIT_TOKEN=github_pat_xxx  # 必需（仓库为私密仓，2026-08-08 起）：只读 PAT，匿名 clone 必挂
-TS_AUTHKEY=tskey-auth-xxx # Tailscale ephemeral+reusable auth key（headless 入网）
-INFER_API_KEY=<≥16位>     # 推理服务鉴权钥（与本机 .env.local 同值，经管道同步不经对话）
-```
+`deploy.sh` 用 `uv` 在 `.colab-compute/launcher-venv` 建固定的轻量环境（PyYAML 6.0.3）。该环境在启动终端
+退出后仍保留，供后台进程做 DNS 与健康检查；租约运行期间不要删除 `.colab-compute/`。
 
-## 运维纪律（实测沉淀，详见 EXECUTION_LEDGER 大档评测波）
-
-- **权重获取优先序（A100 会话）**：HF+Xet 直下（实测 281-357MB/s）> Drive 中转
-  （FUSE rsync ~45MB/s）。Xet 只在大内存 VM（83G+）解禁且挂 30s 内存哨兵；
-  小内存环境（免费 T4 13G）一律 `HF_HUB_DISABLE_XET=1`（内存气球实锤）。
-- **CLI 会话（google-colab-cli）**：`colab new -s <名> --gpu A100` 后**立即备份**
-  `~/.config/colab-cli/sessions.json`——exec 404 时 CLI 自清本地状态会弄丢 stop 所需
-  的 per-session JWT，VM 变成停不掉的孤儿；还原备份再 `colab stop` 即自救。
-  `colab exec` 只吃 `-f 文件`/stdin，无位置参数。
-- **多实例分层一律顺序装载**（前一实例 /health 就绪才起下一个）；重活前 `free -g`。
-- **等 GPU 长任务必挂看门狗**（停滞+超时双报警）；测试性质的临时拉起用完即收。
-
-## 一次性布置（stage_to_drive.sh）
-
-1. 把本目录的 `stage_to_drive.sh` 拖进 Drive 的 `AgentColab/`（一次即可）；
-2. Colab 开任意 GPU/CPU 实例，notebook 两个 cell：
-
-```python
-from google.colab import drive
-drive.mount('/content/drive')
-```
-
-```
-!bash /content/drive/MyDrive/AgentColab/stage_to_drive.sh
-```
-
-体量约 350GB（主模型 bf16 ~254GB + 向量/重排 ~90GB），Drive 需 2TB 档；
-首跑 2–5 小时。**可重入**：会话中断后重跑同一 cell 即断点续传（.complete 跳过）。
-免费档（CPU 机型即可，无需 GPU）本地盘仅 ~100GB：脚本安全线 75GB，不够时自动
-走 Drive 直下兜底（慢路）；同会话内下载失败保留中转续传。
-
-## 量化口径（为什么存 bf16 原件）
-
-A100 是 Ampere（sm_80），无原生 FP8 张量核；vLLM 在 Ampere 上经 Marlin 内核
-支持 FP8 weight-only（W8A16），且可加载 bf16 后在线量化（`--quantization fp8`），
-显存约砍半（31B→~31GB）。故存原件即无悔——若某型号在线路径不支持，再补
-AWQ/GPTQ/FP8 预量化版（从原件亦可自转）。
-
-## 会话引导（bootstrap.sh + agent_colab.ipynb）
-
-A100 会话（`agent_colab.ipynb` 三个 cell）：挂 Drive → `bootstrap.sh <模型repo>` →
-保活心跳。引导五步（幂等可重跑）：tailscale userspace 入网（ephemeral key，入站
-自动转发到本机端口→服务绑回环即可、护栏不触碰）→ 解包代码 → pip 依赖（Drive
-缓存，**不用 backend/requirements.txt——那是 MLX 家的**）→ 权重 Drive→本地盘
-（补 `.download_complete` 标记喂 path_resolver）→ 拉起 `INFER_BACKEND=cuda` 的
-inference-server + **契约测试**（`backend/scripts/check_infer_contract.py`，19 项
-无条件协议断言，clone 走 200 时另有 1 项条件断言；/health 模型身份断言为
-2026-08-31 缺陷二新增、尚未在 CUDA 臂实跑，其余已在本地对 MLX 服务全过——
-它就是"换后端服务一行不动"的背书）。
-
-colab.env 需三行：`HF_TOKEN` / `TS_AUTHKEY`（ephemeral+reusable）/
-`INFER_API_KEY`（≥16 位，edge 侧 .env.local 同值）。
-
-edge 侧收尾：`./devctl.sh start -p edge -h colab-a100`（MagicDNS 名或 100.x IP）。
-
-## 日常代码同步（sync_to_colab.sh，本地跑）
-
-本地改完 → `./colab/sync_to_colab.sh` → 打 HEAD 工作树 tar 进 Drive 同步文件夹
-（自动探测桌面版挂载点；含未提交改动，排除 .venv/models/sessions 等重资产）。
-Colab 侧取新包：`rm -rf /content/agent` 后重跑 bootstrap（幂等）。
-
-## CUDA 后端（backend/framework/backends/cuda/）
-
-vLLM 实现 InferenceBackend 协议（server 一行不动，`INFER_BACKEND=cuda` 起）。
-诚实边界（联调清单，代码内均响亮告警）：thinking 预算裁决未实现；
-repetition_context_size 无对应物；vision/audio 载荷透传未实测；per-request
-logits_processors 若被所装 vLLM 版本拒绝→约束降级为上游解析兜底（structural-tag
-迁移候补）。〔Qwen3.6/Ornith-35B 已随 D.20 阵容收束（2026-08-16）移出注册表。〕
-
-## bench 专用会话（bench_bootstrap.sh + bench_mtp_recheck.sh，2026-08-15 起）
-
-评测批不走 serve 链（server 起完就得杀掉腾 GPU，且是链条里最脆的段）：Mac 侧
-`colab new` → 上传 colab.env/引导/驱动/评测件 → exec 点火 `bench_bootstrap.sh`
-（tailscale+代码+pip 撕裂处置+拉件+热补丁，就绪信号 BOOT_READY）→ **之后一律走
-ssh/scp（root@colab-a100）**——exec 会话凭据 ~45min 必失效而 VM 照常计费（08-15
-四连崩验尸，§8.3 三案同因），12h 长稳形态的本质就是 exec 只点火。驱动
-`bench_mtp_recheck.sh` 逐格出 `RESULT` 行、产物落 /content/bench_out/，Mac 侧
-逐格 scp 取回（会话丢最多损失一格）。新脚本首跑按磨合纪律分钟级盯梢
-（持久记忆 new-script-shakedown-monitoring）。
-
-Mac 侧一键编排已落库：`./colab/bench_orchestrate.sh <VM侧驱动名>`（上述全流程 +
-trap 先于计费动作装上 + 逐分钟活动监测（含 ssh 失联计入停滞）+ 60min 硬顶 +
-落地产物过脱敏闸——json/log/txt 白名单就地脱敏，白名单外文件与脱敏失败会
-响亮告警并在收尾提醒手查，git add 前看告警）。场参经 `bench.env`（非密）传 VM：`BENCH_TARGET_REPO/DIR`、
-`BENCH_DRAFT_REPO/DIR` 定 boot 预拉对象（重件一律 boot 期预拉，绝不塞进评测格
-timeout），`BENCH_SKIP_PULL=1` 跳过预拉。**缺省场参是 31B 场**；换模型时在编排器
-外部 export 同名 `BENCH_*` 变量 + `BENCH_PROMPT` 指向对应 prompt 件覆盖，否则
-boot 期会先拉错 62GB 权重。驱动示例：`bench_31b_fp8_cells.sh`（31B fp8 γ 补格）。
-
-## 日用一键起停（daily.sh，2026-08-09 起）
-
-白天开、晚上关的日常算力端（背景：余量 unit 榨汁，L4 1.54u/h 可支撑约 20 天日用）。
+## 命令
 
 ```bash
-./colab/daily.sh start        # L4 档：26B NVFP4（tool 0.96/longchain 1.0；
-                              #   vision hard 档 -8pp，视觉关键活换 a100 档）
-./colab/daily.sh start a100   # A100 40G 档：26B fp8+MTP k=4 生产形态（5.3u/h）
-./colab/daily.sh status       # 会话 / 服务健康 / 时长与预估 unit
-./colab/daily.sh stop         # 停哨兵+会话；孤儿自动走还原备份自救
+./colab/deploy.sh prepare                  # 打包检查；不读密钥、不创建 VM
+./colab/deploy.sh models                   # config.yaml 中钉了 revision 的 CUDA 模型
+./colab/deploy.sh start --minutes 120      # 默认后台部署；命令立即返回，不代表已 READY
+./colab/deploy.sh start --retain           # READY 后一直保留，直到手动 stop
+./colab/deploy.sh start --foreground       # 前台模式；Ctrl+C 请求回收，请等待最终确认
+./colab/deploy.sh switch --model <repo>    # 在现有 VM 上切换模型或推理选项（见下）
+./colab/deploy.sh watch --retain           # 监督进程退出后，为已有 READY VM 重新挂监督；不新建 VM
+./colab/deploy.sh logs -f                  # 跟随部署进度；Ctrl+C 只退出查看器
+./colab/deploy.sh logs --remote --lines 80 # VM 上脱敏后的部署日志末尾（快照，最多 64 KiB）
+./colab/deploy.sh status                   # 租约、监督进程、服务端 VM、本机可见遗留节点、CLI 版本
+./colab/deploy.sh stop                     # 注销临时节点、释放本工具的 VM，并核对服务端
+./colab/deploy.sh <命令> --help            # 每个命令只接受与它相关的选项
 ```
 
-一次性前置：`mkdir -p ~/.config/agent-colab && chmod 700 ~/.config/agent-colab`，
-从 Drive `AgentColab/secrets/colab.env` 拷入该目录（chmod 600）。起服就绪后本机
-`./devctl.sh start all` 即连上（`.env.local` 已拨 colab-a100）。
+`start` / `switch` 的部署选项：`--model <完整 repo>`、`--quantization none|fp8`、
+`--speculative off|mtp`（默认 off）、`--draft-tokens 1..5`（只配 mtp，默认 3）、
+`--attention-backend auto|triton|flashinfer`、`--kv-cache-dtype auto|bfloat16|fp8`、
+`--max-model-len`（默认 32768）、`--gpu-memory`（默认 0.72）、`--stall-timeout`（默认 600 秒）、
+`--bootstrap-timeout`（默认 3600 秒）、`--poll-interval`（默认 10 秒）。`start` 另有 `--minutes`（1–240）、
+`--hostname`（默认 `agent-compute`）、`--auth-key`、`--retain`、`--foreground`、`--health-interval`（默认 60 秒）。
+默认值和取值范围各只在 `compute_ctl.py` 的 `DEFAULTS` / `LIMITS` 里定义一次。
 
-防崩溃措施（全部来自各站实证教训）：
-- `colab new` 后**立即备份 sessions.json**——CLI 404 自清会删掉 stop 所需凭据，
-  孤儿 VM 靠还原备份自救（`rescue` 子命令，账本 66eec21 案）；
-- VM 侧**监理循环**：server 崩了自动重启（≤5 次/天），`/content/logs/supervisor.log` 留痕；
-- **GPU 保活 0.5G**（gpu_keepalive.py pidfile 纪律）防用户侧 25min 判零看门在
-  空闲窗误杀；
-- Mac 侧**隧道保活替身**（tunnel_keepalive.py）——CLI 自带 keep_alive 被 404 连坐
-  杀死的长稳站教训；
-- Mac 侧**哨兵**：2min 健康轮询（失联 10min 弹 macOS 通知）+ 20min 指标回拉
-  （活跃信号）；
-- 起服卡死有 30min 停滞判死；`ssh-keygen -R colab-a100` 每次 start 自动清旧钥。
+后台进程独立于启动终端，关闭终端不影响部署；停止必须用 `stop`。后台 worker 的全部参数都从租约
+记录读取（命令行只传租约身份），不会出现前台校验与后台执行用了两套参数的情况。后台启动成功只说明
+已交给工作进程，是否部署完成以日志的 `READY` 与 `status` 为准。
 
-旋钮（env 传给 start）：`SERVE_MAXLEN`（L4 显存紧时下调上下文上限）、
-`SERVE_KV_DTYPE`（L4 档缺省 fp8——KV 减半 +20% 提速、tool_call 零漂移实测；
-传 auto 退回。A100=SM80 不支持，缺省即 auto）。
+## 模型与 MTP
+
+模型只能选 `models` 列表里的 CUDA 条目，不能把 MLX 权重交给 CUDA。BF16 Gemma 原件超过 A100 40GB，须显式
+`--quantization fp8`；列表只表示已注册，其他组合的显存、质量和速度仍需实测。Qwen3.8-27B 注册为
+`RedHatAI/Qwen3.8-27B-INT4`（revision `91bd022d5b49442a868bc35008f6c21e1860edfa`）：CUDA compressed-tensors
+INT4 权重，自带原生 MTP 头，无需另下 MLX drafter；`--quantization none` 表示不再在线二次量化。
+
+```bash
+# 新建 VM（仅在没有现存租约时）
+./colab/deploy.sh start --retain --model RedHatAI/Qwen3.8-27B-INT4 \
+  --speculative mtp --draft-tokens 3 --gpu-memory 0.85 --max-model-len 32768
+
+# 复用已有 READY VM：后台切换推理，保留 VM、Tailnet 名称和 RAG 服务
+./colab/deploy.sh switch --model RedHatAI/Qwen3.8-27B-INT4 \
+  --speculative mtp --draft-tokens 3 --gpu-memory 0.85 --max-model-len 32768
+
+# 同一模型关闭 MTP；资源参数每次显式传入
+./colab/deploy.sh switch --model RedHatAI/Qwen3.8-27B-INT4 \
+  --speculative off --attention-backend triton --kv-cache-dtype bfloat16 \
+  --gpu-memory 0.85 --max-model-len 32768
+```
+
+Qwen+MTP 的 auto 解析为 **TRITON_ATTN + bfloat16**（此前 A100 实测的组合）；其他模型保持原有 auto 行为。
+MTP 只允许注册表明确声明 `supports_mtp` 的模型。服务并发与 vLLM `max_num_seqs` 均设为 1，避免只限 HTTP
+并发而底层仍按大并发预分配缓存。显式的其他 attention/KV 组合交给当前 vLLM 验证，不承诺 A100 都支持。
+MTP 收益随输出内容、提示长度和草稿接受率变化，`--draft-tokens` 越大不保证越快。
+
+## 切换（switch）
+
+`switch` 核验当前租约与服务端 endpoint 完全一致，不新建或释放 VM，不重新加入 Tailnet。它把源码与新版
+helper 上传到隔离的 staging，核对推理鉴权及空闲，再 `devctl.sh stop infer`，确认 GPU 无计算进程后更新
+推理代码与配置、下载/加载模型，最后核验真实 `/health` 的 repo、revision、MTP/attention/KV 参数及 RAG 身份。
+活动依据鉴权 `/metrics.active_gpu_work`（含 OpenAI 门面请求）；正在生成或活动未知时拒绝切换，缺该字段的
+旧服务须在维护窗口确认调用方已停、在原 VM 上 `devctl.sh stop infer` 后重试。远端锁防止遗留 worker 与重试
+同时加载模型；`stop` 标记及本地状态 CAS 防止迟到的 READY 复活租约。切换期间计算端不可用。
+
+- 失败保存 `switch-failed` 与日志，保留 VM 供排查，可重试；不会自动回滚模型或申请新 VM。本地 CLI 超时
+  不代表远端 worker 已结束，先看 `logs --remote`。
+- `switch --foreground` 的 Ctrl+C 只中断本地等待，VM 保留；回收仍用 `stop`。
+- 切换保持现有租期及 `retain`，不延长租期。缺少 `switch_aware` 监督标记的旧版**限时**租约会被拒绝
+  （其监督进程可能在停服期间回收 VM），须先正常 `stop` 再 `start`；`switch --retain` 不能绕过。
+  `retain: true` 的租约可直接切换。
+- `/health.inference_options` 只证明启动配置；MTP 是否真在执行，看鉴权 `/metrics.speculative_decode` 中
+  `draft_tokens`、`accepted_tokens`、`num_drafts` 的生成前后增量，`unknown` 或零增量都不算证明。
+- 执行端需使用含该模型注册项的 `config.yaml`；切换完成后重启执行层，让它重新发现模型身份并采用对应
+  方言（旧进程会拒绝向身份不符的模型发请求）。部署脚本不改本机 App 的配置、签名或安装包。
+
+## 保留与监督（retain / watch）
+
+`--retain` 是显式手动保留：启动失败或超时仍回收未就绪 VM；READY 后不再按租期回收，健康失败只记录告警
+并继续监督，只有手动 `stop` 才注销节点并释放 VM。`status` 中 `retain: true` 表示原 `deadline` 仅用作启动预算。
+
+`watch --retain` 只接管当前租约记录中身份核对一致的 READY VM；已有监督进程持锁时拒绝重复接管。它用于
+监督进程意外退出后的恢复，不读凭据、不建 VM、不加载模型。`watch` 返回 0 只表示监督已启动，以 `status`
+中 `supervision.state: active` 和日志「后台监督已确认运行」为准；`interrupted` 表示监督已退出但 VM 仍保留。
+Colab 自身仍可能回收实例，Mac 休眠/断网也会中断监督；手动保留不保证永久在线。
+
+默认限时模式 READY 后每 60 秒通过 Colab kernel 检查推理及 RAG 健康，连续三次失败即记录并尝试回收，不会悄悄
+申请新 VM。这是真实服务监督，没有 GPU 空转、模拟点击或已废止的 keepalive API。CLI 0.7.5 没有独立保活守护
+进程；后端按 kernel 活动维护会话，但 Colab 仍可因空闲、资源策略或最长生命周期回收 VM，参见
+[CLI 会话说明](https://github.com/googlecolab/google-colab-cli/blob/main/docs/01_session_management.md) 与
+[Colab FAQ](https://research.google.com/colaboratory/faq.html)。
+
+## 回收与资源核对
+
+- 启动前读取 Colab 服务端列表并检查本地租约：即使本地标为 stopped，只要端点仍在就阻止重建。发现本工具
+  创建的其他 VM（`agent-compute-*`，以及旧布局的 `agent-demo-*`）、身份未知的 `?` VM、可见的遗留或同名节点
+  （包括离线节点）都会阻止新建，先运行 `status` 排查。
+- 只释放当前租约的端点；创建响应丢失时，按创建前已保存的精确随机会话名恢复端点。不会按名称前缀批量删除
+  设备或会话。状态更新使用独立文件锁，关停后到达的旧进度不能把租约重新标为运行中。
+- 完整关停另有互斥锁：另一进程正在关停时等待其结果，成功则退出，失败或中断则接手。回收期间屏蔽重复中断
+  信号，最多三轮尝试，只有服务端端点消失才打印释放确认；否则记录 `release-unconfirmed`，阻止重建，
+  不能视为已回收，需重试 `stop`。启动的收尾即使本地状态文件丢失或损坏，也按本进程所知的租约回收已分配的 VM。
+- 预检查期间 `stop` 会阻止后续申请 VM；分配期间 Ctrl+C 会等当前申请返回（上限 120 秒）并记录端点后立即回收。
+- 关停先尝试 `tailscale logout`，无论成败都释放已知端点并核对服务端。`current.json` 分开记录 VM 状态与
+  `tailnet_cleanup`：`ephemeral-logout-confirmed` 表示临时节点注销成功；`logout-unconfirmed` 表示未确认，
+  不能宣称已删除；普通节点即使注销成功也记 `logout-confirmed-removal-unverified`。失联的临时节点通常由
+  Tailscale 在最后活动后约 30–60 分钟自动删除，期间可能阻塞同名重建。
+- CLI 0.7.5 的 `stop` 在 exec 清掉本地记录后会静默成功，因此端点仍在时脚本会用已安装 CLI 自己的客户端按
+  端点释放。这依赖 CLI 私有接口，只对 `compute_ctl.py` 中 `VERIFIED_COLAB_CLI` 列出的版本放行；其他版本
+  直接报错并记 `release-unconfirmed`，请在 Colab 控制台手动释放后再 `stop` 核对。`status` 会显示当前 CLI 版本。
+- 本机节点视图受 ACL 限制，不能证明管理后台没有不可见的遗留节点；遗失租约或旧非临时节点需在管理后台核对
+  身份后删除。脚本不需要 Tailscale 管理 API 密钥。
+
+## 网络与 DNS
+
+计算端默认使用固定名称 `agent-compute.<tailnet>.ts.net`，可用 `--hostname` 改名。**MagicDNS 固定的是名称，
+不是 IP**；临时节点重建后 IP 可能变化。Mac/iPhone 应在同一 tailnet 并接受 Tailscale DNS 设置。VM 的
+`--accept-dns=false` 只表示 VM 不接管自身 DNS。READY 前会核对新节点获配的名称精确匹配，并通过 Mac 系统解析器
+确认名称指向本次 VM；名称冲突产生 `-1` 后缀会失败并释放 VM。参见
+[临时节点](https://tailscale.com/docs/features/ephemeral-nodes)、[MagicDNS](https://tailscale.com/docs/features/magicdns)
+与[机器名称冲突](https://tailscale.com/docs/concepts/machine-names)。
+
+VM 上的 Tailscale 安装官方静态包，版本与 sha256 钉在 `compute_vm.py`（`TAILSCALE_VERSION` /
+`TAILSCALE_SHA256`），校验不符即拒绝安装；不执行任何远程安装脚本。升级时两个常量一起改。
+
+终端显示 `READY` 后，把 host 和上述两把服务 key 填入 MacAgent 设置页。
+
+## 日志与诊断
+
+日志在 `.colab-compute/deploy.log`；后台进程的 stdout/stderr（只剩 traceback 一类）在 `worker.log`；新一轮开始时
+上一轮保留为 `.previous`。日志覆盖源码打包、每个文件上传、Python 与依赖安装、入网、模型配置、下载（已下载/总
+GiB、百分比、速度）、模型加载/编译与鉴权检查；加载阶段持续转发脱敏后的推理/RAG 日志。每条进度带总用时与
+无进展时长；无进展达到 `--stall-timeout` 或超过整体时限即诊断并回收（`switch` 超时保留 VM）。
+
+启动失败时，释放 VM 前会把脱敏服务诊断保存到 `.colab-compute/failure-<会话名>.log`（权限 600，每份服务日志
+保留末尾 64 KiB）；VM 不可达时明确报告诊断收集失败，仍继续释放。脱敏在 VM 上完成，传回本机前就已去掉密钥。
+进度查询遇到暂时超时或 CLI 错误会有界重试三次，并受启动与租期时限约束。
+
+## 资源与性能记录
+
+默认请求 A100，装模型前验证为单张 40GB 卡且无已有计算进程；分配到 80GB 会释放并报错，不自动扩大开销。
+VM 的 `config.yaml` 把推理显存上限设为 `--gpu-memory`、并发 1、上下文 `--max-model-len`；Mac 的配置不受修改。
+`enforce_eager=False` 保留 torch.compile 与 CUDA Graph，首次启动需要编译和捕获。完整 CUDA 环境由 uv 建立
+Python 3.12 隔离环境（避开 Colab 系统 Python 缺 ensurepip）；直接依赖见 `requirements-compute.txt`，Linux
+解析版本锁在 `requirements-compute.lock`，实际安装版本写入 VM 私密部署日志。
+
+A100 上 NVFP4 实际走 Marlin W4A16，不是原生 FP4/FP8 运算。2026-10-23 同一 A100 40GB、26B NVFP4、单请求、
+256 token 输出、各预热一次后测三次：51 token 提示的 decode 中位数从 eager 的 11.81 升至 163.46 token/s；
+13,704 token 提示从 11.71 升至 122.78 token/s（VM 回环 SSE，排除首 token，正式样本命中前缀缓存；Graph 配置下
+总显存约 38,401 MiB，含 RAG）。此前 App 中的 12.1 token/s 来自强制 eager 的配置，不代表该卡的正常水平。
+
+2026-10-24 通过正式 `switch` 在同一 A100 40GB 上完成 Qwen3.8 的 MTP 开 → 关 → 开验证，保持 RAG 与 VM。
+配置为上下文 32768、显存 0.85、单请求、Triton/BF16 KV，启用前缀缓存与 CUDA Graph；每类合成提示预热一次后测
+三次，输出截至 256 token，以下为去除首 token 后的 decode 中位数（token/s）：
+
+| 提示 | MTP 关闭 | MTP 3 token |
+| --- | ---: | ---: |
+| 短文（79 token 提示） | 64.9 | 84.3 |
+| 代码（78 token 提示） | 64.9 | 131.0 |
+| 长提示（13,722 token） | 58.8 | 61.2 |
+
+这只是少量、固定顺序、重复提示的吞吐对照：短文和代码输出不逐字一致，不构成质量或无损性评测；decode 提升也
+不代表端到端延迟同比改善（长提示预热后首 token 中位数约 0.26 / 0.50 秒）。真实 MTP 计数增量、工具 XML 解析、
+OpenAI 门面与生成期间拒绝切换均有验收；本机 `RemoteBackend` 经 Tailnet 的请求也确认草稿 129 / 接受 107 token。
+注意：该轮工具解析验收是关闭思考的单段生成；开启思考的两段式生成在 MTP 下会丢失工具调用开头的问题，已在
+`backend/framework/backends/cuda/backend.py` 修复（`_trim_after_stop`），随下一次 `switch` / `start`
+上传到 VM 后生效。结果原件在本机 `logs/qwen-deployment/`
+（Git 忽略，未发布）。合成基准不等同于所有 App 请求或多模态负载的性能保证。
+
+## 代码结构
+
+| 文件 | 运行位置 | 职责 |
+| --- | --- | --- |
+| `deploy.sh` | Mac | 唯一入口：准备 launcher venv 后转交 `compute_ctl.py` |
+| `compute_ctl.py` | Mac | 租约状态机、资源核对、上传、进度跟踪、监督、切换、回收 |
+| `compute_common.py` | Mac 与 VM | 两侧共用的事实：私密 `.env` 语法、密钥判定、脱敏、VM 布局、端口、GPU 规格 |
+| `vm_tasks/*.py` | VM（`colab exec`） | 每个远端动作一个独立脚本，参数由本机注入；见 [vm_tasks/README.md](vm_tasks/README.md) |
+| `compute_vm.py` | VM | 首次部署（环境、Tailnet、模型配置、起服）与切换事务 |
+| `compute_fetch.py` | VM | 观察产品模型解析器的下载进度并校验 revision |
+| `test_*.py` | Mac | CPU-only 测试：假 colab CLI、临时 git 仓与状态目录；`./devctl.sh check --only colab` |
+
+本机状态目录 `.colab-compute/`（Git 忽略）：`current.json` 租约记录、各类锁、`deploy.log` / `worker.log`、
+失败诊断与 `launcher-venv`。
+
+### 旧布局兼容
+
+2026-10-24 之前创建的租约没有 `vm_layout` 字段，VM 上的路径是 `/content/agent-demo*`、会话名是
+`agent-demo-*`，VM 上的 helper 是旧版 `demo_vm.py`（经 PATH 上的 `tailscale` 入网）。新代码按
+`compute_common.LEGACY_LAYOUT` 继续管理这类租约（stop / switch / logs / watch）；新建的租约一律使用新布局。
+
+旧租约的本机记录原在 `logs/colab-demo/`，需一次性迁到 `.colab-compute/`（新代码只读后者）：
+
+1. 结束旧监督进程：对 `status` 里旧的 `_watch` / `_worker` pid 发 SIGTERM。它会按原设计把监督标为
+   `interrupted` 并保留 retained VM；**不要**对非保留的限时租约这样做（它会开始回收）。
+2. 把 `logs/colab-demo/current.json` 复制为 `.colab-compute/current.json`（权限 600）；`deploy.log` 可一并复制
+   以保留历史。锁文件不复制，新代码会重建。`logs/colab-demo/` 原样留作存档。
+3. `./colab/deploy.sh watch --retain` 用新代码重新挂上监督，再用 `status` 确认 `supervision.state: active`。
+
+`status` 中不再有缺少 `vm_layout` 的租约后，可以删掉 `LEGACY_*` 与相关分支。

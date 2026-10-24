@@ -97,7 +97,7 @@
 ## 明日 L4 验收（与 #79 同场）
 
 ```bash
-./colab/daily.sh start && ./devctl.sh start all
+./colab/legacy/daily.sh start && ./devctl.sh start all   # 路径为 2026-10-24 迁移后
 cd backend && .venv/bin/python benchmarks/tool_norms/norms_probe.py \
     --work /tmp/normswork --out /tmp/norms_results.json
 ```

@@ -6,7 +6,7 @@
 # 重量级件（62GB 权重）一律 boot 期预拉（boot.log 可见、有独立预算），
 # 绝不塞进评测格的 timeout 里（评审 Critical：格超时→下一格重下→双杀中止）。
 #
-# 用法：./colab/bench_orchestrate.sh <VM侧驱动名> [输出目录]
+# 用法：./colab/legacy/bench_orchestrate.sh <VM侧驱动名> [输出目录]
 # 防线：trap 在 colab new 一成功就装（计费窗先于一切）；清尾顺序=取证→tailscale
 # logout（防下一场主机名漂移）→stop→sleep3+ls 验证真停；ssh 全程 ServerAlive
 # 有界；逐轮增量取回；总时长 60min 硬顶；控制台落地一律脱敏 token。
@@ -17,7 +17,7 @@ STATE="$HOME/.config/agent-colab"
 ENVF="$STATE/colab.env"
 CLI_CFG="$HOME/.config/colab-cli"
 DRIVER="${1:?用法: bench_orchestrate.sh <驱动脚本名> [输出目录]}"
-OUTDIR="${2:-$HERE/../benchmarks/data/bench-fetch-$(date +%y%m%d%H%M%S)}"
+OUTDIR="${2:-$HERE/../../benchmarks/data/bench-fetch-$(date +%y%m%d%H%M%S)}"
 SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=3"
 SSH="ssh -n $SSH_OPTS root@colab-a100"
 NO_STOP="${NO_STOP:-0}"
@@ -147,7 +147,7 @@ BENCH_DRAFT_DIR="${BENCH_DRAFT_DIR:-gemma-4-31B-it-assistant}"
 BENCH_SKIP_PULL="${BENCH_SKIP_PULL:-}"
 HF_HUB_ENABLE_HF_TRANSFER=1
 EOF
-PROMPT_SRC="${BENCH_PROMPT:-$HERE/../benchmarks/data/mtp-31b-cross/_prompt.json}"
+PROMPT_SRC="${BENCH_PROMPT:-$HERE/../../benchmarks/data/mtp-31b-cross/_prompt.json}"
 [ -f "$PROMPT_SRC" ] || die "缺 prompt 件 $PROMPT_SRC"
 
 note "开 A100 会话 ${name}（~5.3u/h，总时长硬顶 ${HARD_CAP_MIN}min）…"
@@ -162,7 +162,7 @@ colab upload -s "$name" "$ENVF" /content/colab.env >/dev/null || die "colab.env 
 colab upload -s "$name" "$STATE/bench.env" /content/bench.env >/dev/null || die "bench.env 上传失败"
 colab upload -s "$name" "$HERE/bench_bootstrap.sh" /content/bench_bootstrap.sh >/dev/null || die "引导上传失败"
 colab upload -s "$name" "$HERE/$DRIVER" "/content/$DRIVER" >/dev/null || die "驱动上传失败"
-colab upload -s "$name" "$HERE/../benchmarks/vllm_cell.py" /content/vllm_cell.py >/dev/null || die "vllm_cell 上传失败"
+colab upload -s "$name" "$HERE/../../benchmarks/vllm_cell.py" /content/vllm_cell.py >/dev/null || die "vllm_cell 上传失败"
 colab upload -s "$name" "$PROMPT_SRC" /content/_prompt.json >/dev/null || die "prompt 上传失败"
 
 cat > "$STATE/kick.py" <<'EOF'
