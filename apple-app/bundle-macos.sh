@@ -44,6 +44,7 @@ rsync -a --delete --delete-excluded \
   --exclude='models' --exclude='sessions' --exclude='schedules' --exclude='notes' \
   --exclude='*.jsonl' --exclude='*.log' --exclude='.DS_Store' \
   --exclude='logs' --exclude='api_tools' --exclude='skills' --exclude='/maintenance/' \
+  --exclude='/auth/' \
   "$ROOT/backend/" "$RES/backend/"
 # ⚠️ backend/api_tools 是 dev 形态的数据目录（UI 添加的声明 + .secrets.env 密钥文件），
 #    绝不进包——密钥红线；app 形态由 DATA_DIR（App Support）承接同名目录。

@@ -231,6 +231,14 @@ struct HistoryResponse: Codable {
     var displayTurnIndices: [Int]? = nil
     var retryGroups: [RetryGroup]? = nil
 
+    init(status: Bool, sessionId: String, turns: [Turn], replayAfter: Int? = nil,
+         generation: String? = nil, lastTurnRef: String? = nil,
+         displayTurnIndices: [Int]? = nil, retryGroups: [RetryGroup]? = nil) {
+        self.status = status; self.sessionId = sessionId; self.turns = turns
+        self.replayAfter = replayAfter; self.generation = generation; self.lastTurnRef = lastTurnRef
+        self.displayTurnIndices = displayTurnIndices; self.retryGroups = retryGroups
+    }
+
     enum CodingKeys: String, CodingKey {
         case status, turns, generation
         case lastTurnRef = "last_turn_ref"

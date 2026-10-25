@@ -536,8 +536,15 @@ struct SettingsView: View {
         let url = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = keyText.trimmingCharacters(in: .whitespacesAndNewlines)
         #if os(iOS)
-        // 手改过才算手动来源：没动就点保存不该关掉 iCloud 来源的自动更新
+        // 手改过才算手动来源：没动就点保存不该关掉 iCloud 来源的自动更新。
+        // 有地址就记进 Mac 列表（同地址就地更新）并设为当前
         if url != store.settings.baseURLString || key != store.settings.apiKey {
+            if !url.isEmpty {
+                phoneLink.saveManual(url: url, key: key)
+                dismiss()
+                return
+            }
+            phoneLink.disconnect()
             store.settings.connectionSource = .manual
         }
         #endif

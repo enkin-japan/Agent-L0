@@ -34,6 +34,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import json
 import os
 import queue as _queue
@@ -43,6 +44,8 @@ import uuid
 from typing import Any, Dict, Iterator, List, Optional
 
 from ...core.backend_protocol import GenChunk
+from .options import engine_options, public_options
+from .metrics import speculative_counters, unknown_metrics
 
 _NEG_INF = float("-inf")
 
@@ -216,6 +219,24 @@ def _count_constrained_tokens(token_ids: List[int], tokenizer,
         return 0
 
 
+def _trim_after_stop(token_ids: List[int], stop_ids: List[int]) -> List[int]:
+    """把段一 token_ids 截到首个停符序列末尾，与 vLLM 已截断的 text 对齐。
+
+    vLLM 的 stop 字符串只截 text、不截 token_ids：投机解码（MTP）一步接受多个
+    token 时，停符后同步被接受的 token（实测形态：</think> 后紧跟的「\\n\\n<tool_call>」）
+    会留在 token_ids 里却不在 text 里。段二若拿未截的 ids 续跑，模型「已写过」调用头
+    而客户端从未收到——解析器只见尾巴（2026-10-24 Colab Qwen3.8+MTP3 事故）。
+    取**首个**命中：vLLM 在 text 首次出现停符处即截断，首个 id 序列命中按构造就是
+    那个停符。找不到停符序列则原样返回（不猜测）。恒返回新 list，不与入参别名。"""
+    n = len(stop_ids)
+    if n == 0:
+        return list(token_ids)
+    for i in range(len(token_ids) - n + 1):
+        if token_ids[i:i + n] == stop_ids:
+            return token_ids[:i + n]
+    return list(token_ids)
+
+
 class CudaVLLMBackend:
     """InferenceBackend 的 vLLM 进程内实现。"""
 
@@ -231,13 +252,18 @@ class CudaVLLMBackend:
     def __init__(self, cfg: Optional[Dict[str, Any]] = None):
         cfg = cfg or {}
         self.model_key = ""
-        self._cfg = dict(cfg.get("cuda") or {})
+        self._cfg = deepcopy(cfg.get("cuda") or {})
+        self._runtime_options = None
+        self._speculative_enabled = False
         self.processor = None            # server 方言层依赖（backend.processor）
         self._engine = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._per_request_lp_ok = True   # 首次被拒后降级并只告警一次
         self._structural_tag_ok = True   # 同上（紧凑 DSL 方言下恒被拒，见 structural_tag_json）
+        self._stop_ids: Dict[str, Optional[List[int]]] = {}   # 思考闭符→ids（方言内恒定）
+        self._overshoot_logged = False   # 段一越界截断：MTP 下每轮都会发生，只告警一次
+        self._stop_mismatch_logged = False
         # 两段式思考预算：外部取消只知外层 request_id，段二真实 rid 经此表间接寻址
         self._rid_map: Dict[str, str] = {}
         # 仅私有循环访问；shutdown 先取消/收拢生产者，再停止循环。
@@ -263,6 +289,11 @@ class CudaVLLMBackend:
                                                            trust_remote_code=trust)
         self._tokenizer = getattr(self.processor, "tokenizer", self.processor)
 
+        options = engine_options(self._cfg, os.environ)
+        # Keep the receipt separate: vLLM mutates speculative_config while creating
+        # its engine config (e.g. adds the MTP model and parallel configuration).
+        self._runtime_options = public_options(options)
+        self._speculative_enabled = options["speculative_config"] is not None
         args = AsyncEngineArgs(
             model=model_path,
             # INFER_GPU_FRAC：多实例分层常驻的每实例显存占比覆盖（env 非空即赢，
@@ -281,13 +312,8 @@ class CudaVLLMBackend:
             enable_prefix_caching=bool(self._cfg.get("enable_prefix_caching", True)),
             enforce_eager=bool(self._cfg.get("enforce_eager", False)),
             trust_remote_code=trust,
-            # INFER_SPEC_CONFIG：投机解码 env 覆盖（MTP/assistant 草稿评测用，
-            # 2026-08-08）——整段 JSON 直传 vLLM，如
-            # '{"model":"google/gemma-4-26B-A4B-it-assistant","num_speculative_tokens":2}'
-            speculative_config=(lambda s: json.loads(s) if s else None)(
-                os.environ.get("INFER_SPEC_CONFIG", "").strip()),
-            # INFER_KV_DTYPE：KV 缓存精度 env 覆盖（FP8 KV 漂移评测用）；空=auto
-            kv_cache_dtype=(os.environ.get("INFER_KV_DTYPE", "").strip() or "auto"),
+            disable_log_stats=False,  # real speculative counters for /metrics
+            **deepcopy(options),
         )
         # 引擎与其所有 await 都发生在私有循环线程（同步协议桥接的宇宙边界）
         self._loop = asyncio.new_event_loop()
@@ -301,6 +327,33 @@ class CudaVLLMBackend:
         self._engine = asyncio.run_coroutine_threadsafe(_make(), self._loop).result()
         print(f"[CUDA] vLLM 引擎就绪: {model_path} "
               f"(quant={args.quantization}, max_len={args.max_model_len})")
+
+    def runtime_options(self) -> Optional[Dict[str, Any]]:
+        """Applied startup options only; execution evidence lives in metrics."""
+        return deepcopy(self._runtime_options)
+
+    async def speculative_metrics(self) -> Dict[str, Any]:
+        """Read vLLM's real registry after flushing its stats on its owning loop.
+
+        vLLM 0.24 AsyncLLM has no LLM.get_metrics facade. Its public metrics
+        reader and do_log_stats are used instead. Missing support stays unknown.
+        No generation/model operation is initiated by this diagnostics path.
+        """
+        engine, loop = self._engine, self._loop
+        if engine is None or loop is None or not loop.is_running():
+            return unknown_metrics("engine_unavailable")
+
+        async def read():
+            from vllm.v1.metrics.reader import get_metrics_snapshot
+            await engine.do_log_stats()
+            return speculative_counters(get_metrics_snapshot())
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(read(), loop)
+            return await asyncio.wait_for(asyncio.wrap_future(future), timeout=3)
+        except Exception:
+            # Never leak exception strings/model paths in the diagnostics response.
+            return unknown_metrics()
 
     # ---- 缓存生命周期（记账语义，物理复用=引擎 APC） ----
 
@@ -386,6 +439,34 @@ class CudaVLLMBackend:
                 fut.cancel()
                 q.close()
 
+    def _align_to_stop(self, gen_ids: List[int], end_tok: str) -> List[int]:
+        """段一自然停后把 ids 截到思考闭符（见 _trim_after_stop），两种异常各告警一次。
+
+        前提（注释即契约）：截断只修段二上下文与记账，不回拨 tool_guard——qwen35 约束
+        在 server 启动探针即整段禁用（guard 恒 None），gemma4 在 vLLM 上 per-request LP
+        被拒；若将来 guard 在 CUDA 生效且能见到越界 token，须同时回拨其状态。"""
+        if end_tok not in self._stop_ids:
+            try:
+                self._stop_ids[end_tok] = list(
+                    self._tokenizer.encode(end_tok, add_special_tokens=False))
+            except Exception as e:
+                self._stop_ids[end_tok] = None
+                print(f"[CUDA] ⚠ 思考闭符 {end_tok!r} 分词失败（{e}）——段一 ids 不做对齐")
+        stop_ids = self._stop_ids[end_tok]
+        if not stop_ids:
+            return gen_ids
+        trimmed = _trim_after_stop(gen_ids, stop_ids)
+        if len(trimmed) < len(gen_ids):
+            if not self._overshoot_logged:
+                self._overshoot_logged = True
+                print(f"[CUDA] ⚠ 思考段停符后多出 {len(gen_ids) - len(trimmed)} 个 token"
+                      f"（投机解码越界），已截断对齐 text——后续同类静默截断")
+        elif gen_ids[-len(stop_ids):] != stop_ids and not self._stop_mismatch_logged:
+            self._stop_mismatch_logged = True
+            print(f"[CUDA] ⚠ text 含思考闭符但 ids 里找不到 {stop_ids}——分词口径不一致，"
+                  f"段一越界 token 无法截断（工具调用头可能丢失）")
+        return trimmed
+
     async def _abort(self, request_id: str, engine=None):
         try:
             # 两段式在飞时真实 rid 可能是 "<request_id>-p2"（映射表间接寻址）
@@ -412,9 +493,9 @@ class CudaVLLMBackend:
                 skip_special_tokens=False,          # 规范文本须含频道/工具标记
                 spaces_between_special_tokens=False,
             )
-            # vLLM 0.26 投机解码硬拒 min_p/logit_bias（请求期 ValueError）——
-            # 投机评测档（INFER_SPEC_CONFIG 在位）弃用 min_p，采样漂移由评分兜底
-            if os.environ.get("INFER_SPEC_CONFIG", "").strip():
+            # vLLM 投机解码硬拒 min_p。依启动时实际解析的引擎配置判断：
+            # env off/null 须保留普通采样，config-only MTP 也须移除 min_p。
+            if self._speculative_enabled:
                 sp_kwargs.pop("min_p")
             guard = features.get("tool_guard")
             constraint = features.get("tool_constraint")
@@ -524,8 +605,13 @@ class CudaVLLMBackend:
                 comp1 = await _run_phase(ids, sp1, request_id)
                 if comp1 is not None:
                     all_gen_ids = list(comp1.token_ids)
-                    base_tokens = len(all_gen_ids)
-                    if end_tok not in comp1.text:
+                    if end_tok in comp1.text:
+                        # 自然停：ids 对齐到 text（截掉投机解码越过停符的 token）。
+                        # generation_tokens 口径＝保留的 token（与 cache.token_ids 一致），
+                        # 段一已流出的 chunk 计数可能略高，段二起回落到对齐值。
+                        all_gen_ids = self._align_to_stop(all_gen_ids, end_tok)
+                        base_tokens = len(all_gen_ids)
+                    else:
                         # 预算耗尽：强闭思考频道，闭符进规范文本（parser 见到成对标记）
                         forced = "\n" + end_tok
                         forced_ids = self._tokenizer.encode(

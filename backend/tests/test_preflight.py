@@ -21,6 +21,7 @@ ROOT 无关。不隔离的话，用户把 dev 栈起起来这些用例就会红�
 import json
 import os
 import shutil
+import shlex
 import socket
 import stat
 import subprocess
@@ -220,7 +221,11 @@ def _scaffold(tmp_path, *, campaign_pid=None, config=None):
 
     vbin = tmp_path / "backend" / ".venv" / "bin"
     vbin.mkdir(parents=True)
-    os.symlink(_REAL_BACKEND_PY, vbin / "python")
+    # Executing a symlink from a different venv/bin loses the source pyvenv.cfg
+    # on relocatable Python installations. A wrapper preserves the real runtime.
+    launcher = vbin / "python"
+    launcher.write_text("#!/bin/sh\nexec " + shlex.quote(_REAL_BACKEND_PY) + ' "$@"\n')
+    launcher.chmod(0o755)
 
     if campaign_pid is not None:
         d = tmp_path / "benchmarks" / "baseline" / "fake-campaign"

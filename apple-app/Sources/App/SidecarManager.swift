@@ -309,6 +309,7 @@ final class SidecarManager: ObservableObject {
                 env["RAG_COMPUTE_HOST"] = host
             }
             injectKVPersist(&env)
+            injectIdentity(&env)
             return Layout(libEdge: res.appendingPathComponent("scripts/lib_edge.sh"),
                           env: env, logDir: logDir, isBundle: true)
         }
@@ -354,6 +355,7 @@ final class SidecarManager: ObservableObject {
         // 放在 .env(.local) 平面解析**之后**：会话 KV 落不落盘是设置页上的用户决定，
         // 仓库里那份开发用赋值清单不该盖掉它。
         injectKVPersist(&env)
+        injectIdentity(&env)
         return Layout(libEdge: rootURL.appendingPathComponent("scripts/lib_edge.sh"),
                       env: env, logDir: logDir, isBundle: false)
     }
@@ -371,6 +373,12 @@ final class SidecarManager: ObservableObject {
         if settings.kvPersistEnabled {
             env["INFER_KV_TTL_DAYS"] = String(settings.kvTTLDays)
         }
+    }
+
+    /// 本机身份牌（非密钥，两种布局共用）：推送 ma.src 与配对 claim 据此告诉 iPhone
+    /// 来自哪台 Mac。放在 .env(.local) 平面解析之后：以 app 的 macId 为准。
+    private func injectIdentity(_ env: inout [String: String]) {
+        env["AGENT_INSTANCE_ID"] = MacIdentity.id
     }
 
     /// 首启生成的 AGENT_API_KEY：32 字节系统熵，base64url（无需人抄写，只走 Keychain）。

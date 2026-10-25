@@ -20,6 +20,7 @@
 - 取消：引擎逐 chunk 检查取消标志后弃置迭代器 → 生成器关闭时 best-effort 发
   /v1/generate/{gen_id}/cancel 并断开 SSE 连接（服务端对断连同样止损）。
 """
+import asyncio
 import hashlib
 import json
 import os
@@ -116,41 +117,65 @@ class RemoteBackend:
 
     @classmethod
     async def load(cls, model_path, *, executor=None, **cfg) -> "RemoteBackend":
-        """本地只加载分词器（同步、轻量，无线程绑定问题，executor 不使用）。"""
+        """本地只加载分词器；同步磁盘/HTTP IO 不占 HTTP 事件循环。"""
+        worker = asyncio.create_task(asyncio.to_thread(cls._load_sync, model_path, **cfg))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not worker.cancelled() and worker.exception() is None:
+                worker.result().shutdown()
+            raise
+
+    @classmethod
+    def _load_sync(cls, model_path, **cfg) -> "RemoteBackend":
         from transformers import AutoTokenizer
         remote = cfg.get("remote") or {}
         host = str(remote.get("host", "127.0.0.1"))
         port = int(remote.get("port", 14161))
         processor = _ProcessorShim(AutoTokenizer.from_pretrained(str(model_path)))
         backend = cls(processor, base_url=f"http://{host}:{port}")
-        # 多端点表（接口准备③）：主端点沿用上面 cfg 推导（零回归），追加端点来自
-        # config inference.endpoints（resolve_endpoints 已在 app 装配期校验过，这里
-        # 出错说明装配序被破坏——照样响亮抛，不兜）。生成路径仍走 main；专科调用
-        # （多模型协作）将来经 base_url_for(name) 取址。
-        from framework.utils.model_selection import resolve_endpoints
-        for ep in resolve_endpoints()[1:]:
-            backend._endpoint_urls[ep["name"]] = f"http://{ep['host']}:{ep['port']}"
-        # 就绪探活：装配期即暴露"服务端不可达"（否则要到首轮生成才炸，定位更绕）
         try:
-            r = backend._session.get(f"{backend.base_url}/health", timeout=_CONNECT_TIMEOUT)
-            r.raise_for_status()
-        except Exception as e:
-            raise RuntimeError(
-                f"inference-server 不可达（{backend.base_url}）：{e}\n"
-                f"  请先启动推理服务（inference/server.py）或把 config inference.mode 改回 inprocess"
-            ) from e
-        # 模型身份护栏（分离部署缺陷二）：期望身份由装配方注入 cfg.expected_model
-        # （app.py 主端点 / engine_pool 专科端点），服务端真身取自刚拿到的 /health。
-        # 注意放在可达性 try 之外：档位错开是配置性错误，不得被包装成「不可达」。
-        expected = cfg.get("expected_model") or {}
-        if expected.get("repo"):
+            # 多端点表（接口准备③）：主端点沿用上面 cfg 推导（零回归），追加端点来自
+            # config inference.endpoints（resolve_endpoints 已在 app 装配期校验过，这里
+            # 出错说明装配序被破坏——照样响亮抛，不兜）。生成路径仍走 main；专科调用
+            # （多模型协作）将来经 base_url_for(name) 取址。
+            from framework.utils.model_selection import resolve_endpoints
+            for ep in resolve_endpoints()[1:]:
+                backend._endpoint_urls[ep["name"]] = f"http://{ep['host']}:{ep['port']}"
+            # 就绪探活：装配期即暴露"服务端不可达"（否则要到首轮生成才炸，定位更绕）
             try:
-                ident = r.json()
-            except ValueError:
-                ident = {}
-            guard_model_identity(ident, expected, backend.base_url)
-        print(f"[RemoteBackend] 已连接 inference-server: {backend.base_url}")
-        return backend
+                r = backend._session.get(f"{backend.base_url}/health", timeout=_CONNECT_TIMEOUT)
+                r.raise_for_status()
+            except Exception as e:
+                raise RuntimeError(
+                    f"inference-server 不可达（{backend.base_url}）：{e}\n"
+                    f"  请先启动推理服务（inference/server.py）或把 config inference.mode 改回 inprocess"
+                ) from e
+            # 模型身份护栏（分离部署缺陷二）：期望身份由装配方注入 cfg.expected_model
+            # （app.py 主端点 / engine_pool 专科端点），服务端真身取自刚拿到的 /health。
+            # 注意放在可达性 try 之外：档位错开是配置性错误，不得被包装成「不可达」。
+            expected = cfg.get("expected_model") or {}
+            if expected.get("repo"):
+                try:
+                    ident = r.json()
+                except ValueError:
+                    ident = {}
+                guard_model_identity(ident, expected, backend.base_url)
+            print(f"[RemoteBackend] 已连接 inference-server: {backend.base_url}")
+            return backend
+        except BaseException:
+            try:
+                backend.shutdown()
+            except Exception:
+                pass  # Preserve the original load/identity failure.
+            raise
 
     def __init__(self, processor, base_url: str):
         self.model = None          # 远程模式设备 B 不持有权重（装配面 app.state.model 为 None）

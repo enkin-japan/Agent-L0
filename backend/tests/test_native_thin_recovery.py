@@ -1,6 +1,7 @@
 """Bounded native thin-terminal recovery through complete production Store/API/SSE."""
 from pathlib import Path
 import pytest
+import signal
 import subprocess
 from .test_native_retry_transport import compile_retry, pytestmark
 from .native_test_runtime import run_native_case
@@ -24,7 +25,7 @@ def compile_thin(tmp,store_text=None,actual_l10n=False):
     binary=tmp/'thin-locale'
     result=subprocess.run(['xcrun','swiftc','-parse-as-library','-D','THIN_ACTUAL_L10N',
         '-module-cache-path',str(tmp/'modules'),*map(str,sorted((source/'API').glob('*.swift'))),
-        str(source/'Store/TurnReducer.swift'),str(source/'Store/ChatMessage.swift'),str(store),
+        *map(str,sorted((source / "Store").glob("Offline*.swift"))), str(source/'Store/TurnReducer.swift'),str(source/'Store/ChatMessage.swift'),str(store),
         str(source/'App/L10n.swift'),str(support),str(harness),'-o',str(binary)],
         capture_output=True,text=True,timeout=90)
     assert result.returncode==0,result.stdout+result.stderr
@@ -83,7 +84,11 @@ def test_native_thin_recovery_mutation(tmp_path,mutation,mode,expected):
     result=run_native_case(binary,[mode,ROOT/'protocol/fixtures'],tmp_path/'case')
     (tmp_path/'mutation-output.txt').write_text(result.stdout+result.stderr)
     if mutation=='range_index':
-        assert result.returncode<0 and expected in result.stderr,result.stdout+result.stderr
+        # The harness turns the runtime trap into exit 128+signal (no crash report / dialog).
+        trapped={128+signal.SIGTRAP,128+signal.SIGILL}
+        assert result.returncode in trapped and expected in result.stderr,(
+            'returncode -5 means exitOnFatalSignals() is not installed (crash dialog is back)\n'
+            +result.stdout+result.stderr)
     else:
         assert result.returncode==1 and 'FAIL: '+expected in result.stdout,result.stdout+result.stderr
     print(f'Mutation {mutation}: intended failure ({expected}), rc={result.returncode}')

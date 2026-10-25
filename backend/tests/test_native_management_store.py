@@ -83,7 +83,7 @@ def test_native_management_mutation(tmp_path,mutation,mode,expected):
     harness=tmp_path/'management.swift';harness.write_text(header+(ROOT/'apple-app/Tests/management_store_test.swift').read_text())
     binary=tmp_path/'management'
     compiled=subprocess.run(['xcrun','swiftc','-parse-as-library','-module-cache-path',str(tmp_path/'modules'),
-        *map(str,sorted(api.glob('*.swift'))),str(source/'Store/TurnReducer.swift'),str(source/'Store/ChatMessage.swift'),str(mapped),
+        *map(str,sorted(api.glob('*.swift'))),*map(str,sorted((source / "Store").glob("Offline*.swift"))), str(source/'Store/TurnReducer.swift'),str(source/'Store/ChatMessage.swift'),str(mapped),
         str(ROOT/'apple-app/Tests/recovery_support.swift'),str(harness),'-o',str(binary)],capture_output=True,text=True,timeout=90)
     assert compiled.returncode==0,compiled.stdout+compiled.stderr
     result=run_native_case(binary,[mode,ROOT],tmp_path/'case')

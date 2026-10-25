@@ -8,8 +8,13 @@
 供探活。部署铁则同 backend/inference/rag：非回环绑定 + 空密钥 = 拒绝启动。
 """
 import hmac
+import json
 import logging
 import os
+import re
+import time
+import uuid
+from collections.abc import Sized
 from contextlib import asynccontextmanager
 from typing import List, Optional
 
@@ -59,6 +64,52 @@ app = FastAPI(lifespan=lifespan, title="RAG 计算面 API（嵌入/重排/分词
               dependencies=[Depends(verify_compute_key)])
 
 
+def _diagnostic_id(value: Optional[str]) -> str:
+    # Caller-controlled header values never enter logs verbatim.
+    return value if value and re.fullmatch(r"[0-9a-f]{32}", value) else uuid.uuid4().hex
+
+
+@app.middleware("http")
+async def trace_compute_request(request: Request, call_next):
+    request.state.compute_arrival = time.perf_counter()
+    request.state.compute_trace_id = _diagnostic_id(request.headers.get("X-RAG-Trace-ID"))
+    request.state.compute_call_id = _diagnostic_id(request.headers.get("X-RAG-Call-ID"))
+    return await call_next(request)
+
+
+def _run_compute(request: Request, operation: str, count: int, run):
+    """Time dispatch separately from the core call (which includes model-lock wait).
+
+    No query, documents, instruction, headers or exception messages are logged.
+    The core keeps sole ownership of its existing model lock and batching.
+    """
+    started = time.perf_counter()
+    record = {"event": "rag_compute_stage",
+              "request_id": request.state.compute_trace_id,
+              "call_id": request.state.compute_call_id,
+              "operation": operation, "input_count": count}
+    # 诊断字段缺失不许变成 500：中间件没跑过（直调/挂了别的 ASGI 栈）时
+    # 少一个 dispatch_ms 而已，计算请求照样服务。
+    arrival = getattr(request.state, "compute_arrival", None)
+    start_record = {**record, "state": "start"}
+    if arrival is not None:
+        start_record["dispatch_ms"] = round((started - arrival) * 1000, 3)
+    logger.info("%s", json.dumps(start_record, separators=(",", ":")))
+    try:
+        result = run()
+    except BaseException as exc:
+        logger.info("%s", json.dumps({**record, "state": "error",
+                    "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
+                    "error_type": type(exc).__name__}, separators=(",", ":")))
+        raise
+    end_record = {**record, "state": "end",
+                  "elapsed_ms": round((time.perf_counter() - started) * 1000, 3)}
+    if isinstance(result, Sized):   # 核心换成生成器/标量时日志不能把成功请求打成 500
+        end_record["result_count"] = len(result)
+    logger.info("%s", json.dumps(end_record, separators=(",", ":")))
+    return result
+
+
 class EmbedRequest(BaseModel):
     texts: List[str]
 
@@ -80,19 +131,22 @@ async def health_check():
 
 
 @app.post("/api/v1/embed", tags=["计算原语"])
-def embed(req: EmbedRequest):
+def embed(req: EmbedRequest, request: Request):
     # def（非 async）：跑在 FastAPI 线程池，模型前向由 core.MPS_LOCK 串行化，不堵事件循环
-    return {"embeddings": core.embed_texts(req.texts)}
+    return {"embeddings": _run_compute(request, "embed", len(req.texts),
+                                        lambda: core.embed_texts(req.texts))}
 
 
 @app.post("/api/v1/tokenize", tags=["计算原语"])
-def tokenize(req: TokenizeRequest):
-    return {"counts": core.token_counts(req.texts, req.model_type)}
+def tokenize(req: TokenizeRequest, request: Request):
+    return {"counts": _run_compute(request, "tokenize", len(req.texts),
+                                   lambda: core.token_counts(req.texts, req.model_type))}
 
 
 @app.post("/api/v1/rerank", tags=["计算原语"])
-def rerank(req: RerankRequest):
-    return {"scores": core.rerank_scores(req.query, req.documents, req.instruct)}
+def rerank(req: RerankRequest, request: Request):
+    return {"scores": _run_compute(request, "rerank", len(req.documents),
+                                   lambda: core.rerank_scores(req.query, req.documents, req.instruct))}
 
 
 def _enforce_bind_guardrail() -> None:

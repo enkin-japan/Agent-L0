@@ -9,7 +9,7 @@ struct SessionRoute: Identifiable, Hashable {
 /// - iOS 用 NavigationStack + navigationDestination(item:)——返回时系统自动把绑定
 ///   清回 nil，同一行可反复进入（此前用 List selection + onDisappear 手工清理，
 ///   时机不可靠，会出现「进入即弹回/只能看一次」的死锁）。
-/// - macOS 保持 NavigationSplitView 双栏。
+/// - macOS 保留手工定宽双栏，避免流式更新触发系统分栏的约束重入。
 struct RootView: View {
     @EnvironmentObject var store: AgentStore
     @EnvironmentObject var push: PushManager
@@ -49,21 +49,22 @@ struct RootView: View {
         NavigationStack {
             HStack(spacing: 0) {
                 SessionListView()
-                    .navigationTitle("MacAgent")
                     .frame(width: 260)
-                Divider()
+                    .background(Theme.sidebar)
+                Rectangle().fill(Theme.separator).frame(width: 1)
                 Group {
                     if store.selectedSessionId != nil {
                         ChatView()
                     } else {
-                        ContentUnavailableView(L("选择或新建一个会话"),
-                                               systemImage: "bubble.left.and.bubble.right",
-                                               description: Text("\(L("左上角 ✎ 开始新对话")) · \(Bundle.main.appVersionLabel)"))
+                        ConversationWelcomeView()
+                            .padding(Theme.contentPadding)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Theme.canvas)
             }
             .frame(minWidth: 760, minHeight: 480)
+            .toolbar(.hidden, for: .windowToolbar)
         }
         #endif
     }

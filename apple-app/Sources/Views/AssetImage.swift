@@ -10,7 +10,12 @@ struct AssetImage: View {
     @State private var loaded: CrossPlatformImage?
     @State private var failed = false
 
-    private static let cache = NSCache<NSString, CrossPlatformImage>()
+    private static let cache: NSCache<NSString, CrossPlatformImage> = {
+        let cache = NSCache<NSString, CrossPlatformImage>()
+        cache.countLimit = 32
+        cache.totalCostLimit = 64 * 1024 * 1024
+        return cache
+    }()
 
     var body: some View {
         Group {
@@ -31,27 +36,29 @@ struct AssetImage: View {
                     .frame(width: 120, height: 80)
             }
         }
-        .task(id: path) { await load() }
+        .task(id: (store.client?.cacheNamespace ?? "") + ":" + path) { await load() }
     }
 
     private func load() async {
-        if let cached = Self.cache.object(forKey: path as NSString) {
+        loaded = nil
+        failed = false
+        guard let client = store.client else { failed = true; return }
+        let key = "\(client.cacheNamespace):\(path)" as NSString
+        if let cached = Self.cache.object(forKey: key) {
             loaded = cached
-            return
-        }
-        guard let client = store.client else {
-            failed = true
             return
         }
         do {
             let data = try await client.fetchAsset(path: path)
+            guard !Task.isCancelled, store.client === client else { return }
             if let image = CrossPlatformImage(data: data) {
-                Self.cache.setObject(image, forKey: path as NSString)
+                Self.cache.setObject(image, forKey: key, cost: data.count)
                 loaded = image
             } else {
                 failed = true
             }
         } catch {
+            guard !Task.isCancelled, store.client === client else { return }
             failed = true
         }
     }

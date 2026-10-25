@@ -145,7 +145,8 @@ private struct ExpandedBottom: View {
                 HStack(spacing: 10) {
                     Button(intent: DenyApprovalIntent(
                         sessionId: context.attributes.sessionId,
-                        turnId: context.attributes.turnId)) {
+                        turnId: context.attributes.turnId,
+                        src: context.attributes.src)) {
                         Label(L("拒绝"), systemImage: "hand.raised.fill")
                             .font(.footnote.bold())
                     }
@@ -219,7 +220,8 @@ private struct LockScreenView: View {
                 HStack(spacing: 10) {
                     Button(intent: DenyApprovalIntent(
                         sessionId: context.attributes.sessionId,
-                        turnId: context.attributes.turnId)) {
+                        turnId: context.attributes.turnId,
+                        src: context.attributes.src)) {
                         Label(L("拒绝"), systemImage: "hand.raised.fill")
                             .font(.footnote.bold())
                     }

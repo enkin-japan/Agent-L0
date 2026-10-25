@@ -1,4 +1,5 @@
 import json
+import math
 import requests
 from ..base import BaseTool, ToolOutput
 from ...utils.config_loader import load_section, rag_auth_headers
@@ -11,6 +12,43 @@ RAG_PORT = _rag_cfg.get("port", 14160)
 RAG_HEALTH_URL = f"http://{RAG_HOST}:{RAG_PORT}/health"
 RAG_SEARCH_URL = f"http://{RAG_HOST}:{RAG_PORT}/api/v1/document/query"
 RAG_CATEGORY_URL = f"http://{RAG_HOST}:{RAG_PORT}/api/v1/category"
+
+
+def _query_timeout_seconds(value) -> float:
+    """检索读超时预算，值域 [1, 120] 秒（便利参数不拒启，同 config_loader.kv_ttl_days）。
+
+    这里**绝不抛**：本函数在 import 期求值，抛出会让 MCPRegistry 连带丢掉
+    rag_search 与 rag_get_context 两个工具（只留一行 stdout），模型侧表现为
+    「检索能力凭空消失」——比一个坏超时值严重得多。坏值/缺值回落 120，
+    越界钳回边界，各带一行警告。警告只说类型与钳后值，不回显原值（配置值
+    可能是用户文本）。
+    """
+    if isinstance(value, str):
+        # 引号里的数字（YAML 写成 "60"、或设置页写回的字符串）照数值处理，同 kv_ttl_days
+        try:
+            value = float(value.strip())
+        except ValueError:
+            pass
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        print(f"⚠️ rag.query_timeout_seconds 不是数值（{type(value).__name__}），"
+              "回落 120s")
+        return 120.0
+    if isinstance(value, float) and not math.isfinite(value):
+        print("⚠️ rag.query_timeout_seconds 非有限数值（nan/inf），回落 120s")
+        return 120.0
+    if value < 1 or value > 120:
+        clamped = 1.0 if value < 1 else 120.0
+        print(f"⚠️ rag.query_timeout_seconds 超出 [1, 120]，钳到 {clamped:g}s")
+        return clamped
+    return float(value)
+
+
+RAG_QUERY_CONNECT_TIMEOUT_SECONDS = 3
+RAG_QUERY_READ_TIMEOUT_SECONDS = _query_timeout_seconds(_rag_cfg.get("query_timeout_seconds", 120))
+# HTTP has separate connect/read limits. The orchestration deadline must leave
+# both phases and result formatting time to finish before abandoning the worker.
+RAG_QUERY_TOOL_TIMEOUT_SECONDS = math.ceil(
+    RAG_QUERY_CONNECT_TIMEOUT_SECONDS + RAG_QUERY_READ_TIMEOUT_SECONDS + 5)
 
 
 def format_results(query: str, category: str, docs: list) -> tuple:
@@ -78,6 +116,7 @@ class RAGSearchTool(BaseTool):
     )
     requires_approval = False
     is_concurrency_safe = True  # 只读向量检索，可与其他只读调用并发
+    timeout_seconds = RAG_QUERY_TOOL_TIMEOUT_SECONDS
     # 渲染格（R3 试点）：召回结果今天是灰框里一大坨格式化文本——命中分、来源、路径全
     # 埋在文字里，用户要自己数 "--- Result N ---"。这些结构在 execute 里本来就有，
     # 随 ToolOutput 交给客户端排成引文卡片即可（文本照旧给模型读）。
@@ -150,7 +189,7 @@ class RAGSearchTool(BaseTool):
                 url=RAG_SEARCH_URL,
                 json=payload,
                 headers={**rag_auth_headers(), 'Content-Type': 'application/json'},
-                timeout=15
+                timeout=(RAG_QUERY_CONNECT_TIMEOUT_SECONDS, RAG_QUERY_READ_TIMEOUT_SECONDS)
             )
             response.raise_for_status()
             result_dict = response.json()
@@ -185,8 +224,17 @@ class RAGSearchTool(BaseTool):
             return ToolOutput(formatted_context,
                               {"query": query, "category": category, "items": citations})
 
-        except requests.ConnectionError as e:
+        # 顺序有意：ConnectTimeout 同时是 ConnectionError 和 Timeout 的子类，
+        # 「连不上」要给可执行指引（去看服务起没起），只有读超时才是预算耗尽。
+        except requests.ConnectionError:
             return f"System Error: Tool execution failed. Unable to connect to the RAG server (please check if {RAG_HOST}:{RAG_PORT} is running)."
+        except requests.Timeout:
+            # Error messages may contain request details. Report only fixed
+            # budgets: a timeout produced no retrieved evidence, never a result.
+            return ("System Error: RAG query timed out "
+                    f"(connect limit {RAG_QUERY_CONNECT_TIMEOUT_SECONDS:g}s; "
+                    f"read limit {RAG_QUERY_READ_TIMEOUT_SECONDS:g}s). "
+                    "Retrieval did not return evidence.")
         except requests.HTTPError as e:
             # 数据面降级存活态（build 71 复盘）：5xx 的 detail 正是可执行指引
             # （「换档必须重建向量库…」）——透给模型/用户，别糊成裸 traceback

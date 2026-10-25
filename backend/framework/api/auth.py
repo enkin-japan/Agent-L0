@@ -52,6 +52,10 @@ async def verify_api_key(
     """
     expected: str = getattr(request.app.state, "api_key", "") or ""
     devices: Dict[str, str] = getattr(request.app.state, "auth_devices", None) or {}
+    from framework.api.devices import store_for
+    store = store_for(request.app)
+    # 鉴权开不开只看静态配置：设备记录文件丢失或损坏绝不能把鉴权「关掉」
+    # （没有共享密钥时本来也发不出设备票据，见 pairing._require_shared_key）。
     if not expected and not devices:
         return  # 未配置任何票据 → 放行（启动时已打印告警）
 
@@ -60,10 +64,25 @@ async def verify_api_key(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="缺少或格式错误的 Authorization 头（应为 'Bearer <key>'）。",
         )
-    device_id = verify_token(authorization[len("Bearer "):], shared_key=expected, devices=devices)
+    token = authorization[len("Bearer "):]
+    device_id = verify_token(token, shared_key=expected, devices=devices)
+    if device_id is None and token:
+        # 经 Mac 同意发出的设备票据（framework/api/devices.py）：只认哈希，到期单独报因
+        state, device_id = store.verify(token)
+        if state == "expired":
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="device_expired")
+        if state != "ok":
+            device_id = None
     if device_id is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="API 密钥无效。",
         )
     request.state.device_id = device_id
+
+
+async def require_owner(request: Request) -> None:
+    """只有 Mac 自己（共享密钥，device_id == default）能管配对与设备；设备票据一律 403。
+    未启用鉴权的 dev 后端没有 device_id，视同本机。须挂在 verify_api_key 之后。"""
+    if getattr(request.state, "device_id", DEFAULT_DEVICE_ID) != DEFAULT_DEVICE_ID:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有 Mac 本机能管理配对与设备。")

@@ -1,5 +1,6 @@
 // 第二批功能协议层 E2E：记忆状态 / 分支 / 删除最后一轮 / 定时任务列表 / 资产拉取。
 import Foundation
+func L(_ value: String) -> String { value }
 
 var passed = 0
 
@@ -11,8 +12,10 @@ func check(_ name: String, _ cond: Bool, _ detail: String = "") {
 @main
 enum E2E2 {
     static func main() async {
-        let base = URL(string: "http://127.0.0.1:14159")!
-        let client = AgentClient(baseURL: base, apiKey: "")
+        let env = ProcessInfo.processInfo.environment
+        let base = URL(string: env["AGENT_E2E_BASE_URL"] ?? "http://127.0.0.1:14159")!
+        let cache = env["AGENT_E2E_CACHE_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+        let client = AgentClient(baseURL: base, apiKey: env["AGENT_E2E_API_KEY"] ?? "", cacheRoot: cache)
         do {
             // 0. 造一个 1 轮会话（账本协议:202 受理 + 附着流等 turn_ended）
             let sid = "e2e-b2-\(Int(Date().timeIntervalSince1970))"

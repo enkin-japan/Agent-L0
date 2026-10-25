@@ -93,6 +93,37 @@ TIER_EMBED_DIM_HINT = ACTIVE_TIER.get("embed_dim")   # config 声明值（护栏
 DEVICE = ("cuda" if torch.cuda.is_available()
           else "mps" if torch.backends.mps.is_available() else "cpu")
 
+
+def _runtime_dtype_name(device: str, configured: str, compute_cfg: Optional[dict] = None) -> str:
+    """CPU defaults to native FP32; accelerator tiers retain configured precision.
+
+    BF16 kernels can be emulated on CPUs without native BF16 instructions. An
+    explicit cpu_dtype override allows measured native-BF16 deployments while
+    leaving the selected model family/dimension and accelerator policy intact.
+
+    便利参数不拒启（同 config_loader.kv_ttl_days）：坏值回落 fp32 并警告一行，
+    且**无论当前设备**都校验——拼错的 cpu_dtype 在 MPS/CUDA 机上一样看得见
+    （只是不生效），否则这台机器改不出的错要等搬到纯 CPU 机才首次暴露。
+    """
+    aliases = {"float16": "fp16", "bfloat16": "bf16", "float32": "fp32",
+               "fp16": "fp16", "bf16": "bf16", "fp32": "fp32"}
+    raw = (compute_cfg or {}).get("cpu_dtype")
+    cpu_dtype = str(raw if raw not in (None, "") else "fp32").lower()
+    if cpu_dtype not in aliases:
+        print(f"⚠️ rag.compute.cpu_dtype 取值无效（{cpu_dtype!r}，只认 "
+              "fp32/bf16/fp16 及 float32/bfloat16/float16），回落 fp32"
+              + ("" if device == "cpu" else f"；当前设备 {device} 不读该项"))
+        cpu_dtype = "fp32"
+    if device != "cpu":
+        # Match the longstanding TIER_DTYPE fallback for unknown tier values.
+        return aliases.get(str(configured).lower(), "fp16")
+    return aliases[cpu_dtype]
+
+
+RUNTIME_DTYPE_NAME = _runtime_dtype_name(
+    DEVICE, ACTIVE_TIER.get("dtype", "fp16"), RAG_CFG.get("compute"))
+RUNTIME_DTYPE = _DTYPE_MAP[RUNTIME_DTYPE_NAME] if DEVICE == "cpu" else TIER_DTYPE
+
 GLOBAL_OBJECTS = {}
 MPS_LOCK = threading.Lock()
 
@@ -206,14 +237,15 @@ def _load_vl_models(embed_path: str, rerank_path: str, dtype) -> dict:
 def load_models() -> None:
     """装配全套模型对象 + 重排模板 token + 运行维度探测（原 rag_server lifespan 的模型段）。"""
     print(f"正在初始化硬件设备: {DEVICE}...  档位: {ACTIVE_TIER.get('id')} "
-          f"(modality={MODALITY}, dtype={ACTIVE_TIER.get('dtype')})")
+          f"(modality={MODALITY}, dtype={RUNTIME_DTYPE_NAME}, "
+          f"configured_dtype={ACTIVE_TIER.get('dtype', 'fp16')})")
     print("正在检查模型目录")
     embed_model_path = resolve_model_path(EMBED_MODEL)
     rerank_model_path = resolve_model_path(RERANK_MODEL)
 
     # 档位分派装配：文本族 vs 视觉多模态族（两条路径产出同一 GLOBAL_OBJECTS 形状）
     loader = _load_vl_models if MODALITY == "vl" else _load_text_models
-    GLOBAL_OBJECTS.update(loader(embed_model_path, rerank_model_path, TIER_DTYPE))
+    GLOBAL_OBJECTS.update(loader(embed_model_path, rerank_model_path, RUNTIME_DTYPE))
 
     GLOBAL_OBJECTS["token_false_id"] = GLOBAL_OBJECTS["rerank_tokenizer"].convert_tokens_to_ids("no")
     GLOBAL_OBJECTS["token_true_id"] = GLOBAL_OBJECTS["rerank_tokenizer"].convert_tokens_to_ids("yes")
@@ -251,7 +283,8 @@ def identity() -> dict:
         "embed_repo": EMBED_MODEL,
         "rerank_repo": RERANK_MODEL,
         "embed_dim": GLOBAL_OBJECTS.get("embed_dim"),
-        "dtype": str(ACTIVE_TIER.get("dtype", "fp16")),
+        "dtype": RUNTIME_DTYPE_NAME,
+        "configured_dtype": str(ACTIVE_TIER.get("dtype", "fp16")),
         "device": DEVICE,
         "thresholds": dict(ACTIVE_TIER.get("thresholds") or {}),
     }
@@ -321,7 +354,14 @@ def rerank_scores(query: str, documents: List[str], instruct: Optional[str] = No
     rerank_tokenizer = GLOBAL_OBJECTS["rerank_tokenizer"]
     rerank_model = GLOBAL_OBJECTS["rerank_model"]
 
+    started = time.perf_counter()
+    # start 记录在**取锁之前**落：锁等待或 tokenize 卡死时，现场也至少留下
+    # 「这批进来了、再没出去」的一条（记录落在锁内就等于卡死即无记录）。
+    shape = {"event": "rag_rerank_core", "batch_size": len(documents),
+             "logits_to_keep": 1}
+    logger.info("%s", json.dumps({**shape, "state": "start"}, separators=(",", ":")))
     with MPS_LOCK:   # encode/pad 一并入锁：fast tokenizer 非线程安全（Already borrowed）
+        acquired = time.perf_counter()
         inputs = rerank_tokenizer(
             pairs, padding=False, truncation='longest_first',
             return_attention_mask=False,
@@ -330,15 +370,27 @@ def rerank_scores(query: str, documents: List[str], instruct: Optional[str] = No
         for i, ele in enumerate(inputs['input_ids']):
             inputs['input_ids'][i] = GLOBAL_OBJECTS["rerank_prefix_tokens"] + ele + GLOBAL_OBJECTS["rerank_suffix_tokens"]
 
+        token_count = sum(len(ids) for ids in inputs["input_ids"])
         inputs = rerank_tokenizer.pad(inputs, padding=True, return_tensors="pt").to(DEVICE)
+        forward_started = time.perf_counter()
+        shape.update(padded_tokens=int(inputs["input_ids"].shape[1]),
+                     token_count=token_count)
 
         with torch.no_grad():
-            batch_scores = rerank_model(**inputs).logits[:, -1, :]
+            # Both supported Qwen3 text/VL families slice hidden states before
+            # lm_head. Project only the last position we score: projecting every
+            # input token needlessly materializes [batch, sequence, vocabulary].
+            batch_scores = rerank_model(**inputs, logits_to_keep=1).logits[:, -1, :]
             true_vector = batch_scores[:, GLOBAL_OBJECTS["token_true_id"]]
             false_vector = batch_scores[:, GLOBAL_OBJECTS["token_false_id"]]
             batch_scores = torch.stack([false_vector, true_vector], dim=1)
             batch_scores = torch.nn.functional.log_softmax(batch_scores, dim=1)
             scores = batch_scores[:, 1].exp().tolist()
+        logger.info("%s", json.dumps({**shape, "state": "end",
+                    "lock_wait_ms": round((acquired - started) * 1000, 3),
+                    "tokenize_ms": round((forward_started - acquired) * 1000, 3),
+                    "forward_ms": round((time.perf_counter() - forward_started) * 1000, 3),
+                    "result_count": len(scores)}, separators=(",", ":")))
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()
 

@@ -29,7 +29,7 @@ def compile_listing(temp,mutation=None):
     header=(ROOT/'apple-app/Tests/api_tool_operation_test.swift').read_text().split('@main struct SetupTests')[0]
     support=temp/'support.swift';support.write_text(header)
     binary=temp/'listing'
-    r=subprocess.run(['xcrun','swiftc','-parse-as-library','-module-cache-path',str(temp/'modules'),*map(str,sorted((source/'API').glob('*.swift'))),str(source/'Store/TurnReducer.swift'),str(model),str(support),str(ROOT/'apple-app/Tests/registration_setup_test.swift'),'-o',str(binary)],capture_output=True,text=True,timeout=90)
+    r=subprocess.run(['xcrun','swiftc','-parse-as-library','-module-cache-path',str(temp/'modules'),*map(str,sorted((source/'API').glob('*.swift'))),*map(str,sorted((source / "Store").glob("Offline*.swift"))), str(source/'Store/TurnReducer.swift'),str(model),str(support),str(ROOT/'apple-app/Tests/registration_setup_test.swift'),'-o',str(binary)],capture_output=True,text=True,timeout=90)
     assert r.returncode==0,r.stdout+r.stderr
     return binary
 @pytest.fixture(scope='module')

@@ -57,7 +57,8 @@ class PushRegistry:
                token: Optional[str] = None,
                push_to_start_token: Optional[str] = None,
                prefs: Optional[Dict[str, Any]] = None,
-               app_build: Optional[str] = None) -> Dict[str, Any]:
+               app_build: Optional[str] = None,
+               auth_device: Optional[str] = None) -> Dict[str, Any]:
         d = self.devices.get(device_id) or {
             "device_id": device_id, "platform": platform,
             "env": "auto", "prefs": dict(DEFAULT_PREFS),
@@ -71,6 +72,8 @@ class PushRegistry:
             d["push_to_start_token"] = push_to_start_token
         if app_build is not None:
             d["app_build"] = app_build
+        if auth_device is not None:
+            d["auth_device"] = auth_device   # 哪张设备票据登记的：吊销时连带删
         if prefs:
             d["prefs"] = self._merge_prefs(d.get("prefs") or {}, prefs)
         d["updated_at"] = round(time.time(), 3)
@@ -110,6 +113,15 @@ class PushRegistry:
             self._persist()
             return True
         return False
+
+    def remove_bound(self, auth_device: str) -> int:
+        """设备票据被吊销：删掉它登记的全部推送条目。"""
+        stale = [k for k, v in self.devices.items() if v.get("auth_device") == auth_device]
+        for k in stale:
+            self.devices.pop(k, None)
+        if stale:
+            self._persist()
+        return len(stale)
 
     def remove_by_token(self, token: str) -> None:
         """APNs 410 Unregistered：按 token 清理（device_id 未知的回收路径）。"""

@@ -8,6 +8,7 @@ import SwiftUI
 struct OnboardingView: View {
     @EnvironmentObject var store: AgentStore
     @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var phoneLink: PhoneLink
     #if os(macOS)
     @EnvironmentObject var sidecar: SidecarManager
 
@@ -143,8 +144,19 @@ struct OnboardingView: View {
     }
 
     private func complete() {
-        settings.baseURLString = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
-        settings.apiKey = keyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let url = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = keyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 没改过列表里选中的那台就直接用它：别把 iCloud 来源改成手动（会关掉自愈）
+        if let current = phoneLink.current, url == settings.baseURLString, key == settings.apiKey {
+            phoneLink.select(current.id)
+            return
+        }
+        if !url.isEmpty {
+            phoneLink.saveManual(url: url, key: key)   // 记进 Mac 列表，设为当前并启动连接
+            return
+        }
+        settings.baseURLString = url
+        settings.apiKey = key
         settings.connectionSource = .manual
         settings.setupCompleted = true
         store.applySettings()          // 连接后置：完成即启动探活/附着

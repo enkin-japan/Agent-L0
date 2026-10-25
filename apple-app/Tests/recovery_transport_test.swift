@@ -5,13 +5,31 @@ final class RecoveryTransport: URLProtocol {
     static var requests: [URLRequest] = [], held: [RecoveryTransport] = []
     static func matching(_ suffix: String) -> [URLRequest] { lock.lock(); defer { lock.unlock() }; return requests.filter { $0.url!.path.hasSuffix(suffix) } }
     static func hold(_ t: RecoveryTransport) { lock.lock(); held.append(t); lock.unlock() }
-    static func takeHeld() -> RecoveryTransport { lock.lock(); defer { lock.unlock() }; return held.removeFirst() }
+    static func takeHeld() -> RecoveryTransport {
+        for _ in 0..<2000 {
+            lock.lock()
+            if !held.isEmpty { let value = held.removeFirst(); lock.unlock(); return value }
+            lock.unlock()
+            Thread.sleep(forTimeInterval: 0.001)
+        }
+        fatalError("missing held transport")
+    }
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() { Self.lock.lock(); Self.requests.append(request); Self.lock.unlock(); Self.handler(self) }
     override func stopLoading() {}
     private var headersSent = false
-    func respond(_ body: Any, status: Int = 200) { deliver(try! JSONSerialization.data(withJSONObject: body), status: status, type: "application/json", finish: true) }
+    func respond(_ body: Any, status: Int = 200) {
+        // Shared history fixtures are replayed for A/B ownership races. Bind their
+        // resource envelope to the requested session, as a real backend does.
+        var value = body
+        if request.url!.path.hasSuffix("/history"), var history = body as? [String: Any],
+           history["session_id"] != nil {
+            history["session_id"] = request.url!.path.split(separator: "/").dropLast().last.map(String.init)
+            value = history
+        }
+        deliver(try! JSONSerialization.data(withJSONObject: value), status: status, type: "application/json", finish: true)
+    }
     func deliver(_ data: Data, status: Int = 200, type: String = "text/event-stream", finish: Bool = false) {
         if !headersSent { headersSent = true; client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type":type])!, cacheStoragePolicy: .notAllowed) }
         if !data.isEmpty { client?.urlProtocol(self, didLoad: data) }
@@ -39,7 +57,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
         var eventCalls: Int { RecoveryTransport.matching("/events").count }
         RecoveryTransport.handler = { t in
             let path = t.request.url!.path
-            if path == "/health" { t.respond(["status":"ok"], status: mode == "auth-offline" ? 503 : 200); return }
+            if path == "/health" { t.respond(["status":"ok", "compute_ready":true, "compute_state":"ready"], status: mode == "auth-offline" ? 503 : 200); return }
             if path.hasSuffix("/turns/last") && mode == "delete-failed" { t.respond(["status":false,"response":"synthetic refusal"]); return }
             if path.hasSuffix("/history") { if mode.hasPrefix("overlap") { RecoveryTransport.hold(t) } else if mode == "fresh-completed" { var h = included as! [String:Any]; h["replay_after"] = 4; t.respond(h) } else if mode == "old-count" {
                     var value = included as! [String:Any]
@@ -81,8 +99,10 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
             delayed.respond(["status":true,"sessions":[]])
             await old.value
             check(store.connectionOK == false && String(describing:store.connState) == "unauthorized", "older probe cannot overwrite latest access state")
+            check(store.computeState == .unknown, "late ready probe cannot overwrite latest unauthenticated compute state")
         } else if mode.hasPrefix("auth-") {
             await store.refreshConnection()
+            check(store.computeState == (mode == "auth-ok" ? .ready : .unknown), "compute readiness requires current authenticated backend")
             switch mode {
             case "auth-failed": check(store.connectionOK == false && String(describing:store.connState) == "unauthorized", "health200 is not authenticated")
             case "auth-unknown": check(store.connectionOK == false && String(describing:store.connState) == "reachable", "business status unavailable stays unknown")
@@ -219,7 +239,11 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
             }
             let actual = AgentStore(settings:settings)
             actual.select(sessionId:"A"); await wait({ !RecoveryTransport.matching("/history").isEmpty }, "old history")
+            // The replacement backend does not inherit the previous selection: its own
+            // cache never listed A, so the new incarnation is opened explicitly.
             settings.baseURLString = "https://other.invalid"; actual.applySettings()
+            check(actual.selectedSessionId == nil, "a replaced backend starts with nothing selected")
+            actual.select(sessionId: "A")
             await wait({ actual.messages.count == 2 }, "new client history")
             RecoveryTransport.takeHeld().respond(before)
             try? await Task.sleep(nanoseconds:80_000_000)

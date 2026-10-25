@@ -427,8 +427,10 @@ def test_decoding_count_gauge_distinct_from_active():
     busy = {"flag": True}
     lane, built = make_lane(busy=lambda: busy["flag"], tokens_per_row=100_000)
     try:
-        lane.submit("a", {"temperature": 0})
-        lane.submit("b", {"temperature": 0})
+        # max_tokens 必须显式给：泳道缺省 4096 会把 tokens_per_row 截掉，快机上两行
+        # 在轮询看到之前就已跑完（假引擎每步零开销），断言就成了赌调度
+        lane.submit("a", {"temperature": 0, "max_tokens": 100_000})
+        lane.submit("b", {"temperature": 0, "max_tokens": 100_000})
         time.sleep(0.05)
         assert lane.decoding_count == 0     # 还没开跑
         busy["flag"] = False

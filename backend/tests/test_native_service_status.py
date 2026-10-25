@@ -19,6 +19,7 @@ def test_native_service_status_and_knowledge_management(tmp_path):
     func L(_ value: String) -> String { value }
     final class SyntheticTransport: URLProtocol {
         static var healthCode = 200
+        static var healthBody = "{}"
         static var indexCode = 200
         static var indexBody = #"{"status":true,"sessions":[]}"#
         static var knowledge = #"{"compute":null,"compute_error":"synthetic unavailable","rebuild":{"state":"idle"}}"#
@@ -39,7 +40,7 @@ def test_native_service_status_and_knowledge_management(tmp_path):
         override func startLoading() {
             let path = request.url!.path
             var code = 200, body = "{}"
-            if path == "/health" { code = Self.healthCode }
+            if path == "/health" { code = Self.healthCode; body = Self.healthBody }
             else if path == "/api/v1/sessions" {
                 Self.indexCalls += 1; code = Self.indexCode; body = Self.indexBody
                 precondition(request.timeoutInterval == 5)
@@ -90,10 +91,33 @@ def test_native_service_status_and_knowledge_management(tmp_path):
             let rejected = await api.backendAccess(); precondition(rejected == .reachable)
             SyntheticTransport.indexBody = #"{"status":true,"sessions":[]}"#
             let authenticated = await api.backendAccess(); precondition(authenticated == .authenticated)
+            for (json, expected) in [
+                (#"{"compute_ready":true,"compute_state":"ready"}"#, ComputeAvailability.ready),
+                (#"{"compute_ready":false,"compute_state":"starting"}"#, .starting),
+                (#"{"compute_ready":false,"compute_state":"retrying"}"#, .unavailable),
+                (#"{"compute_ready":false,"compute_state":"unavailable"}"#, .unavailable),
+                (#"{"compute_state":"ready"}"#, .unknown),
+                (#"{}"#, .unsupported),
+                (#"invalid"#, .unknown),
+            ] {
+                SyntheticTransport.healthBody = json
+                let before = SyntheticTransport.indexCalls
+                let report = await api.connectionStatus()
+                precondition(report.access == .authenticated && report.compute == expected)
+                precondition(SyntheticTransport.indexCalls == before + 1)
+            }
+            SyntheticTransport.healthBody = #"{"compute_ready":true}"#
+            for code in [401, 403, 503] {
+                SyntheticTransport.indexCode = code
+                let report = await api.connectionStatus()
+                precondition(report.compute == .unknown, "public health cannot grant compute readiness")
+            }
+            SyntheticTransport.indexCode = 200
             SyntheticTransport.healthCode = 503
             let count = SyntheticTransport.indexCalls
             let offline = await api.backendAccess(); precondition(offline == .offline)
             precondition(count == SyntheticTransport.indexCalls)
+            let report = await api.connectionStatus(); precondition(report.compute == .unknown)
             let panel = Panel(api)
             await panel.reload()
             precondition(panel.categories?.first?.name == "kept" && !panel.offline && !panel.overviewStale)
@@ -153,7 +177,7 @@ def test_native_service_status_and_knowledge_management(tmp_path):
     binary = tmp_path / "service-status"
     result = subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-module-cache-path", str(tmp_path / "modules"),
         *[str(p) for p in sorted((source / "API").glob("*.swift"))],
-        str(source / "Store/TurnReducer.swift"), str(test), "-o", str(binary)],
+        *map(str,sorted((source / "Store").glob("Offline*.swift"))), str(source / "Store/TurnReducer.swift"), str(test), "-o", str(binary)],
         capture_output=True, text=True, timeout=90)
     assert result.returncode == 0, result.stderr
     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20)

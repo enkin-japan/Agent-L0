@@ -25,7 +25,7 @@ def native_draft(tmp_path_factory):
     binary = tmp / "draft"
     result = subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-module-cache-path", str(tmp / "modules"),
         *[str(source / "API" / name) for name in ("JSONValue.swift", "ProtocolModels.swift", "Models.swift")],
-        str(source / "Store/TurnReducer.swift"),
+        *map(str,sorted((source / "Store").glob("Offline*.swift"))), str(source / "Store/TurnReducer.swift"),
         str(mapped), str(ROOT / "apple-app/Tests/api_tool_draft_test.swift"), "-o", str(binary)],
         capture_output=True, text=True, timeout=90)
     assert result.returncode == 0, result.stderr

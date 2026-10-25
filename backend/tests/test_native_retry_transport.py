@@ -14,7 +14,7 @@ def compile_retry(tmp, *, store_text=None, chat_text=None, harness=None):
     if chat_text is not None: chat=tmp/"ChatMessage.swift";chat.write_text(chat_text)
     binary=tmp/"retry"
     result=subprocess.run(["xcrun","swiftc","-parse-as-library","-module-cache-path",str(tmp/"modules"),
-        *map(str,sorted((source/"API").glob("*.swift"))),str(source/"Store/TurnReducer.swift"),str(chat),str(store),str(ROOT/"apple-app/Tests/recovery_support.swift"),str(harness or ROOT/"apple-app/Tests/retry_transport_test.swift"),"-o",str(binary)],capture_output=True,text=True,timeout=90)
+        *map(str,sorted((source/"API").glob("*.swift"))),*map(str,sorted((source / "Store").glob("Offline*.swift"))), str(source/"Store/TurnReducer.swift"),str(chat),str(store),str(ROOT/"apple-app/Tests/recovery_support.swift"),str(harness or ROOT/"apple-app/Tests/retry_transport_test.swift"),"-o",str(binary)],capture_output=True,text=True,timeout=90)
     assert result.returncode == 0,result.stdout+result.stderr
     return binary
 @pytest.fixture(scope="module")
@@ -126,11 +126,12 @@ def test_native_retry_mutation(tmp_path,mutation,mode,expected):
         store=store.replace(old,'composerPrefill = source.prompt.components(separatedBy: "\\n📎").first!')
     elif mutation=="edit_reply_owner":
         old='guard isCurrent(sid, epoch, client), ownsEditReply(source) else { return }'
-        assert store.count(old)==1
+        # Both sides of awaited cache invalidation enforce the same reply owner.
+        assert store.count(old)==2
         store=store.replace(old,'guard isCurrent(sid, epoch, client) else { return }')
     elif mutation=="edit_reply_aba":
         old='guard isCurrent(sid, epoch, client), ownsEditReply(source) else { return }'
-        assert store.count(old)==1
+        assert store.count(old)==2
         store=store.replace(old,'guard true else { return }')
     elif mutation=="audit_coverage":
         old='guard covered == Set(0..<count) else { return Array(0..<count) }'

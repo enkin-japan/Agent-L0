@@ -642,7 +642,10 @@ async def health():
     # service 供区分「端口被外来程序占用」与「旧版服务未报身份」。零 IO（字段启动期定案）。
     return {"status": "ok", "service": "macagent-inference",
             "model_repo": S.model_repo, "model_revision": S.model_revision,
-            "capabilities": S.model_capabilities}
+            "capabilities": S.model_capabilities,
+            "inference_options": (S.backend.runtime_options()
+                                  if callable(getattr(S.backend, "runtime_options", None))
+                                  else None)}
 
 
 @app.get("/metrics", dependencies=[Depends(verify_api_key)])
@@ -658,6 +661,16 @@ async def metrics():
            # 探针结论：True=方言+编译链路启动期走通；False=引擎在但探针没过（请求期可能
            # 按次 fail-open，看 constraint_failopen_total）；None=已禁用/未跑
            "constraint_probe_ok": S.constraint_probe_ok}
+    read_spec_metrics = getattr(S.backend, "speculative_metrics", None)
+    out["speculative_decode"] = (await read_spec_metrics()
+                                 if callable(read_spec_metrics) else
+                                 {"status": "unknown", "source": "unsupported",
+                                  "reason": "backend_without_speculative_metrics",
+                                  "draft_tokens": None, "accepted_tokens": None,
+                                  "num_drafts": None})
+    # Read busy state after the metrics await, which may yield to new requests.
+    # Includes OpenAI facade work, which does not enter S.gens.
+    out["active_gpu_work"] = S.single_busy + (S.batch_lane.active_count if S.batch_lane is not None else 0)
     if S.batch_lane is not None:
         out["batch_lane"] = {"active": S.batch_lane.active_count,
                              # decoding ≠ active：后者含引擎内排队的行——

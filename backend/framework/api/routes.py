@@ -62,6 +62,53 @@ async def _validate_path_ids(request: Request) -> None:
 router = APIRouter(dependencies=[Depends(_validate_path_ids)])
 
 
+# Keyed by (method, path), never by path alone: the same path carries both a
+# purely local and an execution operation (DELETE /chat/{id} deletes stored data,
+# POST /chat/{id} runs a turn), and a path-only gate would take the wrong one
+# of each pair with it.
+_LOCAL_READ_ROUTES = {
+    ("GET", "/api/v1/sessions"), ("GET", "/api/v1/events"), ("GET", "/api/v1/schedules"),
+    ("GET", "/api/v1/schedules/{schedule_id}/runs"),
+    ("GET", "/api/v1/chat/{session_id}/history"), ("GET", "/api/v1/chat/{session_id}/system"),
+    ("GET", "/api/v1/chat/{session_id}/task"), ("GET", "/api/v1/chat/{session_id}/turn"),
+    ("GET", "/api/v1/files/{session_id}"), ("GET", "/api/v1/files/{session_id}/deck"),
+    ("GET", "/api/v1/files/{session_id}/assets/{filename}"),
+    ("GET", "/api/v1/chat/{session_id}/offline-files"),
+    ("GET", "/api/v1/files/{session_id}/offline/{kind}/{filename}"),
+}
+_EXECUTION_ROUTES = {
+    ("POST", "/api/v1/chat/{session_id}"), ("POST", "/api/v1/chat/{session_id}/turns"),
+    ("POST", "/api/v1/chat/{session_id}/turns/retry"),
+    ("POST", "/api/v1/chat/{session_id}/turns/approval"),
+    ("POST", "/api/v1/chat/{session_id}/turns/resume"),
+    ("POST", "/api/v1/schedules/{schedule_id}/run"),
+    ("DELETE", "/api/v1/compute/kvstore"),
+}
+
+
+async def require_compute_ready(request: Request):
+    """After authentication, reject unavailable execution before ingestion/acceptance.
+
+    Once installed, local control (including cancellation) and reads keep working
+    during outages. A cold SSE attach requires the ordinary session restore path,
+    so it waits for the first complete assembly instead of creating a backendless
+    hot session merely to read history.
+    """
+    if getattr(request.app.state, "compute_ready", True):
+        return
+    route = request.scope.get("route")
+    operation = (request.method, getattr(route, "path", ""))
+    if operation in _LOCAL_READ_ROUTES:
+        return
+    if getattr(request.app.state, "compute_installed", False) \
+            and operation not in _EXECUTION_ROUTES:
+        return
+    raise HTTPException(status_code=503, detail={
+        "reason": "compute_not_ready",
+        "compute_state": getattr(request.app.state, "compute_state", "starting"),
+    }, headers={"Retry-After": "5"})
+
+
 async def _maybe_summarize_active(session, orchestrator, scheduler, session_id):
     """
     轮次落盘后的活跃期摘要压缩（方案A 高阈值路径）：上下文越过高阈值则折叠旧轮入滚动摘要。
@@ -445,13 +492,13 @@ def _schedule_or_404(store, schedule_id: str):
 async def list_schedules(request: Request):
     """定时任务清单：定义 + 是否正在执行 + 最近一次运行摘要。前端侧栏低频轮询。"""
     store = request.app.state.schedule_store
-    runner = request.app.state.schedule_runner
+    runner = getattr(request.app.state, "schedule_runner", None)
     schedules = []
     for task in await asyncio.to_thread(store.list_tasks):
         runs = await asyncio.to_thread(store.read_runs, task["id"], 1)
         schedules.append({
             **task,
-            "running": task["id"] in runner.running,
+            "running": task["id"] in runner.running if runner is not None else False,
             "last_run": runs[0] if runs else None,
         })
     return {"status": True, "count": len(schedules), "schedules": schedules}
@@ -533,15 +580,28 @@ async def get_schedule_runs(schedule_id: str, request: Request, limit: int = 20)
 # ---------- 推送设备注册面（iOS APNs；macOS 本地通知不经此）----------
 
 
+def _push_caller_may_use(request: Request, device_id: str) -> Optional[str]:
+    """推送条目归属：设备票据只能动自己登记（或尚未归属）的条目，返回调用方的设备 id；
+    共享密钥（Mac 本机 / 旧连接）照旧不受限，返回 None。防一部 iPhone 顶替另一部的推送。"""
+    caller = getattr(request.state, "device_id", "default")
+    if caller == "default":
+        return None
+    existing = request.app.state.push_registry.devices.get(device_id) or {}
+    if existing.get("auth_device") not in (None, caller):
+        raise HTTPException(status_code=403, detail="该推送设备属于另一台已连接的设备。")
+    return caller
+
+
 @router.post("/api/v1/push/register")
 async def push_register(request: Request, body: PushRegisterRequest):
     """设备注册/更新（upsert，幂等）：device token / push-to-start token / 偏好。
     token 轮换直接重打本端点；apns 未配置时注册照收（配置好即生效）。"""
     registry = request.app.state.push_registry
+    caller = _push_caller_may_use(request, body.device_id)
     d = registry.upsert(
         body.device_id, platform=body.platform, token=body.token,
         push_to_start_token=body.push_to_start_token,
-        prefs=body.prefs, app_build=body.app_build)
+        prefs=body.prefs, app_build=body.app_build, auth_device=caller)
     return {"status": True, "device_id": d["device_id"],
             "push_enabled": request.app.state.push_dispatcher.enabled,
             "prefs": d.get("prefs")}
@@ -550,6 +610,7 @@ async def push_register(request: Request, body: PushRegisterRequest):
 @router.delete("/api/v1/push/devices/{device_id}")
 async def push_unregister(device_id: str, request: Request):
     """设备注销（用户关掉总开关/卸载前清理）。不存在也返回成功（幂等）。"""
+    _push_caller_may_use(request, device_id)
     request.app.state.push_registry.remove(device_id)
     return {"status": True}
 
@@ -557,6 +618,7 @@ async def push_unregister(device_id: str, request: Request):
 @router.patch("/api/v1/push/devices/{device_id}/prefs")
 async def push_update_prefs(device_id: str, request: Request, body: PushPrefsRequest):
     """通知偏好部分更新（设置页开关的同步端点）。设备未注册时 404。"""
+    _push_caller_may_use(request, device_id)
     prefs = {k: v for k, v in body.model_dump().items() if v is not None}
     d = request.app.state.push_registry.update_prefs(device_id, prefs)
     if d is None:
@@ -568,6 +630,7 @@ async def push_update_prefs(device_id: str, request: Request, body: PushPrefsReq
 async def push_live_activity_token(request: Request, body: LiveActivityTokenRequest):
     """Live Activity 活动 token 上报：后端据此附着该会话账本做阶段推送。
     轮次已结束/会话不热时 active=False——app 据此本地收尾孤儿活动。"""
+    _push_caller_may_use(request, body.device_id)
     dispatcher = request.app.state.push_dispatcher
     res = dispatcher.register_activity(body.session_id, body.turn_id,
                                        body.device_id, body.token)
@@ -1124,9 +1187,13 @@ async def get_turn_state(session_id: str, request: Request):
         journal = TurnJournal(sdir)
 
     snap = journal.turn_snapshot()
-    if snap is not None and snap["state"] == "queued":
+    # 调度器属于计算装配：首次装配前（或收摊后）它不在 app.state 上，而磁盘账本里可能
+    # 留着上一代进程的 queued 快照——此处是本地只读端点，缺调度器就不报位次（协议里
+    # queue_position 本就可选），不是 AttributeError 把一次历史读取变成 500。
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if snap is not None and snap["state"] == "queued" and scheduler is not None:
         # 排队位次 = 比本会话更早入队的排队任务数（0 = 下一个被准入）
-        tasks = request.app.state.scheduler.snapshot().get("tasks", [])
+        tasks = scheduler.snapshot().get("tasks", [])
         mine = next((t for t in tasks
                      if t["session_id"] == session_id and t["status"] == "queued"), None)
         snap["queue_position"] = (

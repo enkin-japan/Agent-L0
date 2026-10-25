@@ -66,9 +66,13 @@ inference:
     max_model_len: 65536          # D.19（2026-08-09）：8 页 deck 单轮 ~33k 撞 32768 顶实案；
                                   # L4 fp8 KV 池 114,963 token / A100 档 KV 3.7GiB 均有余量
     tensor_parallel: 1
+    max_num_seqs: null           # null 沿用 vLLM 默认；Colab 单请求部署显式设 1
     enable_prefix_caching: true   # 引擎内自动前缀缓存 = 本后端 clone/复用的物理承载
     enforce_eager: false          # true 可跳 CUDA graph 编译省启动时间（调试用）
     trust_remote_code: false
+    speculative_config: null     # CUDA 原生 MTP；与下方 MLX drafter 配置独立
+    attention_backend: "auto"    # auto | TRITON_ATTN | FLASHINFER
+    kv_cache_dtype: "auto"       # Colab Qwen MTP 默认解析为 bfloat16
   # ── MLX 批处理泳道（§7-0①，2026-08-22）────────────────────────────────
   # 1 = 泳道不武装（缺省，行为与旧版逐字节一致）；>1 = server 起批处理泳道
   # （上游 BatchGenerator 引擎内连续批处理，仅收 features.batch_ok 显式 opt-in
@@ -373,6 +377,7 @@ rag:
   # B2c 拆分后数据面归工作端本机（回环）；知识库数据（chroma_data/storage）随之在工作端。
   host: "127.0.0.1"
   port: 14160
+  query_timeout_seconds: 120   # 检索 HTTP 读取预算（1–120s）；CPU 重排可超过 15s，工具总时限另含连接与收尾余量。
 
   # ── 数据/计算拆分（HETERO_COMPUTE B2c）────────────────────────────────────
   # compute.host 空 = 融合模式：rag_server 就地加载模型（拆分前现状，行为逐字不变）。
@@ -386,6 +391,7 @@ rag:
   compute:
     host: ""                    # 缺省空 = 融合（本地）模式。拆分部署不改本文件：各机
     port: 14162                 #   .env.local 填 RAG_COMPUTE_HOST（同上一键两职）
+    cpu_dtype: fp32             # CPU 缺省用 FP32；原生 BF16 CPU 可实测后改 bf16。CUDA/MPS 沿用档位 dtype。
 
   # ── RAG 档位注册表（镜像 inference.model_registry 的选择制，HETERO_COMPUTE B2a）──
   # 一个"档位" = 一对 {嵌入模型, 重排模型}（同尺寸同家族）。调试期换档走**选择**而非手填：

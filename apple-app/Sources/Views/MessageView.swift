@@ -1,7 +1,8 @@
 import SwiftUI
+import QuickLook
 
-/// 单条消息渲染：用户右侧气泡 / 助手左侧气泡（含边界）/ 系统居中灰条 / 工具折叠行。
-/// 菜单直接挂在气泡上（挂整行会让 iOS 长按预览高亮整排、超出内容边界）。
+/// 单条消息渲染：用户右侧青瓷气泡 / 助手正文 / 系统居中灰条 / 工具折叠行。
+/// 菜单直接挂在内容上（挂整行会让 iOS 长按预览高亮整排、超出内容边界）。
 /// 文本选中只在 iOS 开（macOS 上可选文本的系统菜单会吃掉自定义右键菜单）。
 /// 主操作（复制/撤回重编/分支/重新生成）以气泡下方的小钮行为准（Claude AI 形态）；
 /// 右键菜单保留同一组动作作为第二入口，后续还会往里放更多功能。
@@ -9,6 +10,7 @@ struct MessageView: View {
     let message: ChatMessage
     var auditOnly = false
     @EnvironmentObject var store: AgentStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     #if os(macOS)
     @State private var hovering = false
     #endif
@@ -38,20 +40,7 @@ struct MessageView: View {
                 CitationsView(items: message.citations,
                               label: message.toolLabel ?? L("工具"))
             } else {
-                DisclosureGroup {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        Text(message.toolDetail ?? "")
-                            .font(.system(.caption, design: .monospaced))
-                            .selectableOnIOS()
-                            .padding(Theme.s2)
-                    }
-                    .background(Theme.wash)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall))
-                } label: {
-                    Label(message.toolLabel ?? L("工具"), systemImage: "wrench.and.screwdriver")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                toolView
             }
         }
     }
@@ -60,11 +49,14 @@ struct MessageView: View {
 
     private var userView: some View {
         HStack {
-            Spacer(minLength: 48)
-            VStack(alignment: .trailing, spacing: Theme.s1) {
-                Text(message.text)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+            Spacer(minLength: Theme.s5)
+            VStack(alignment: .trailing, spacing: Theme.s2) {
+                Text(userPresentation.text)
+                    .font(Theme.readingFont)
+                    .selectableOnIOS()
+                    .lineSpacing(4)
+                    .padding(.horizontal, Theme.s4)
+                    .padding(.vertical, Theme.s3)
                     .background(Theme.userBubble)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.radiusBubble))
                     .contextMenu {
@@ -82,6 +74,13 @@ struct MessageView: View {
                             }
                         }
                     }
+                if !userPresentation.attachments.isEmpty {
+                    MessageAttachmentLayout(spacing: Theme.s2) {
+                        ForEach(Array(userPresentation.attachments.enumerated()), id: \.offset) { _, attachment in
+                            MessageAttachmentChip(attachment: attachment)
+                        }
+                    }
+                }
                 // 操作钮随悬停隐显，时间戳常显（钮始终占位，时间戳不漂移）
                 HStack(spacing: Theme.s1) {
                     HStack(spacing: Theme.s1) {
@@ -103,9 +102,65 @@ struct MessageView: View {
             }
             #if os(macOS)
             .onHover { hovering = $0 }
-            .animation(.easeInOut(duration: 0.12), value: hovering)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.12), value: hovering)
             #endif
         }
+    }
+
+    /// 审计页同样使用原始 canonical 下标；只有整条投影完全匹配，才拆分旧附件后缀。
+    private var userPresentation: (text: String, attachments: [AttachmentInfo]) {
+        guard let index = message.turnIndex, store.canonicalTurns.indices.contains(index),
+              let prompt = store.canonicalTurns[index].prompt else { return (message.text, []) }
+        let turn = store.canonicalTurns[index]
+        let attachments = (turn.attachments ?? []).filter { $0.name?.isEmpty == false }
+        var parts = (turn.attachments ?? []).compactMap(\.name)
+        let mediaCount = (turn.image?.count ?? 0) + (turn.audio?.count ?? 0)
+        if mediaCount > 0 { parts.append("\(L("媒体")) ×\(mediaCount)") }
+        let projected = prompt + (parts.isEmpty ? "" : "\n📎 " + parts.joined(separator: "、"))
+        guard projected == message.text else { return (message.text, []) }
+        // 媒体没有可供下载的附件记录，仍按原投影保留数量信息。
+        let mediaText = mediaCount > 0 ? "\n📎 \(L("媒体")) ×\(mediaCount)" : ""
+        return (prompt + mediaText, attachments)
+    }
+
+    private var toolView: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: Theme.s2) {
+                if let thoughts = message.thoughts, !thoughts.isEmpty {
+                    Text(thoughts)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .selectableOnIOS()
+                }
+                HStack {
+                    Text(L("详细信息")).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    Spacer(minLength: Theme.s2)
+                    CopyActionButton(text: message.toolDetail ?? "", help: L("复制全文"))
+                }
+                Text(message.toolDetail ?? "")
+                    .font(.system(.caption, design: .monospaced))
+                    .selectableOnIOS()
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.top, Theme.s2)
+        } label: {
+            Label {
+                Text(message.toolLabel ?? L("工具"))
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "wrench.and.screwdriver")
+                    .foregroundStyle(Theme.accent)
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+        }
+        .padding(Theme.s3)
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .background(Theme.wash)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
+        .overlay(RoundedRectangle(cornerRadius: Theme.radiusCard)
+            .strokeBorder(Theme.separator, lineWidth: 1))
     }
 
     private var isLastUser: Bool {
@@ -121,8 +176,8 @@ struct MessageView: View {
     }
 
     private var assistantView: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: Theme.s1) {
+        HStack(alignment: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: Theme.s2) {
                 assistantBubble
                 // 操作钮随悬停隐显，时间戳常显（钮始终占位，时间戳不漂移）
                 HStack(spacing: Theme.s1) {
@@ -152,14 +207,25 @@ struct MessageView: View {
             }
             #if os(macOS)
             .onHover { hovering = $0 }
-            .animation(.easeInOut(duration: 0.12), value: hovering)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.12), value: hovering)
             #endif
-            Spacer(minLength: 36)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var assistantBubble: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.s3) {
+            HStack(spacing: Theme.s2) {
+                Image(systemName: "asterisk")
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 24, height: 24)
+                    .background(Theme.selection)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall))
+                    .accessibilityHidden(true)
+                Text("MacAgent")
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(Theme.accent)
             if let thoughts = message.thoughts, !thoughts.isEmpty {
                 DisclosureGroup {
                     Text(thoughts)
@@ -183,12 +249,7 @@ struct MessageView: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .padding(Theme.s3)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.card)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusBubble))
-        .overlay(RoundedRectangle(cornerRadius: Theme.radiusBubble)
-            .strokeBorder(Theme.hairline, lineWidth: 1))
         .contextMenu {
             Button {
                 Self.copy(message.text)
@@ -286,10 +347,10 @@ struct MessageActionButton: View {
             Image(systemName: icon)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .frame(width: 24, height: 24)
+                .frame(width: Theme.controlHitSize, height: Theme.controlHitSize)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(CeladonControlStyle())
         .help(help)
         .accessibilityLabel(help)
     }
@@ -317,10 +378,10 @@ struct CopyActionButton: View {
             Image(systemName: copied ? "checkmark" : "doc.on.doc")
                 .font(.caption)
                 .foregroundStyle(copied ? Theme.success : Color.secondary)
-                .frame(width: 24, height: 24)
+                .frame(width: Theme.controlHitSize, height: Theme.controlHitSize)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(CeladonControlStyle())
         .help(copied ? L("已复制") : help)
         .accessibilityLabel(copied ? L("已复制") : help)
     }
@@ -338,55 +399,196 @@ extension View {
     }
 }
 
-/// 渲染格 citations（R3 试点，R5-7 落地）：与 web 的 `Citations` 同一信息面——
-/// 来源 + 分数（等宽数字右对齐）+ 摘录（限三行）+ 路径。默认展开（引用是结论的
-/// 依据，折叠等于白做）；标题行保留工具名，与灰框的心智一致。
+/// 引用仅使用工具声明的结构化载荷，展开后保留完整摘录和路径。
 struct CitationsView: View {
     let items: [CitationItem]
     let label: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.s2) {
             Label(label, systemImage: "text.quote")
-                .font(.caption)
+                .font(.caption.weight(.medium))
                 .foregroundStyle(Theme.accent)
-            ForEach(Array(items.enumerated()), id: \.offset) { _, c in
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "doc.text")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Text(c.source)
-                            .font(.caption.weight(.medium))
-                            .lineLimit(1)
-                        Spacer(minLength: 8)
-                        if let score = c.score {
-                            Text(String(format: "%.2f", score))
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                CitationCard(item: item, number: index + 1)
+            }
+        }
+    }
+}
+
+private struct CitationCard: View {
+    let item: CitationItem
+    let number: Int
+    @State private var expanded = false
+
+    private var webURL: URL? {
+        guard let path = item.path, let url = URL(string: path),
+              let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme),
+              url.host != nil else { return nil }
+        return url
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.s2) {
+            DisclosureGroup(isExpanded: $expanded) {
+                VStack(alignment: .leading, spacing: Theme.s2) {
+                    if let snippet = item.snippet, !snippet.isEmpty {
+                        Text(snippet).font(.callout).selectableOnIOS()
                     }
-                    if let snippet = c.snippet, !snippet.isEmpty {
-                        Text(snippet)
-                            .font(.caption)
-                            .foregroundStyle(.primary.opacity(0.8))
-                            .lineLimit(3)
-                    }
-                    if let path = c.path, !path.isEmpty {
+                    if let path = item.path, !path.isEmpty {
                         Text(path)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary.opacity(0.7))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .selectableOnIOS()
+                    }
+                    HStack {
+                        if let url = webURL {
+                            Link(destination: url) {
+                                Label(L("打开来源"), systemImage: "arrow.up.right.square")
+                            }
+                            .font(.caption)
+                        }
+                        Spacer(minLength: Theme.s2)
+                        CopyActionButton(text: [item.source, item.snippet, item.path].compactMap { $0 }.joined(separator: "\n"),
+                                         help: L("复制引用"))
                     }
                 }
-                .padding(Theme.s2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.card)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
-                .overlay(RoundedRectangle(cornerRadius: Theme.radiusCard)
-                    .strokeBorder(Theme.hairline, lineWidth: 1))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, Theme.s2)
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.s2) {
+                    Text("\(number)")
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                    Text(item.source)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: Theme.s1)
+                    if let score = item.score {
+                        Text(String(format: "%.2f", score))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .help(L("相关度"))
+                            .accessibilityLabel(L("相关度") + " " + String(format: "%.2f", score))
+                    }
+                }
             }
+            if !expanded, let snippet = item.snippet, !snippet.isEmpty {
+                Text(snippet)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+        }
+        .padding(Theme.s3)
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
+        .overlay(RoundedRectangle(cornerRadius: Theme.radiusCard)
+            .strokeBorder(Theme.separator, lineWidth: 1))
+    }
+}
+
+/// Uploaded originals resolve through the backend manifest or its offline copy.
+private struct MessageAttachmentChip: View {
+    let attachment: AttachmentInfo
+    @EnvironmentObject private var store: AgentStore
+    @State private var showingDetails = false
+    @State private var quickLookURL: URL?
+    @State private var opening = false
+    @State private var openError: String?
+
+    var body: some View {
+        Button { showingDetails.toggle() } label: {
+            Label(attachment.name ?? L("附件"), systemImage: "doc.text")
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.horizontal, Theme.s2)
+                .frame(minHeight: Theme.controlHitSize)
+                .foregroundStyle(.secondary)
+                .background(Theme.card)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall))
+                .overlay(RoundedRectangle(cornerRadius: Theme.radiusSmall)
+                    .strokeBorder(Theme.separator, lineWidth: 1))
+        }
+        .buttonStyle(CeladonControlStyle())
+        .help(attachment.name ?? L("附件"))
+        .popover(isPresented: $showingDetails) {
+            VStack(alignment: .leading, spacing: Theme.s3) {
+                Text(attachment.name ?? L("附件")).font(.headline)
+                if let type = attachment.type { Text(type).font(.caption).foregroundStyle(.secondary) }
+                if let path = attachment.path {
+                    Text(path).font(.caption.monospaced()).textSelection(.enabled)
+                }
+                if let openError { Text(openError).font(.caption).foregroundStyle(.secondary) }
+                HStack {
+                    Button(L("打开")) {
+                        guard let client = store.client, let sid = store.selectedSessionId else { return }
+                        opening = true; openError = nil
+                        Task {
+                            defer { opening = false }
+                            do {
+                                let url = try await client.downloadAttachment(sessionId: sid, attachment: attachment)
+                                guard store.client === client, store.selectedSessionId == sid else { return }
+                                showingDetails = false
+                                quickLookURL = url
+                            } catch {
+                                guard store.client === client, store.selectedSessionId == sid else { return }
+                                openError = L("附件尚未保存到本机，或原文件已不可用。")
+                            }
+                        }
+                    }
+                    .disabled(opening)
+                    CopyActionButton(text: [attachment.name, attachment.type, attachment.path].compactMap { $0 }.joined(separator: "\n"),
+                                     help: L("复制附件信息"))
+                    Spacer()
+                    Button(L("关闭")) { showingDetails = false }
+                }
+            }
+            .padding(Theme.s4)
+            .frame(idealWidth: 280, maxWidth: 360)
+        }
+        .quickLookPreview($quickLookURL)
+    }
+}
+
+/// 根据提议宽度换行，长文件名也不会撑开聊天列。
+private struct MessageAttachmentLayout: Layout {
+    let spacing: CGFloat
+
+    private func arrange(_ subviews: Subviews, width: CGFloat) -> (CGSize, [CGPoint]) {
+        var points: [CGPoint] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var usedWidth: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.init(width: width, height: nil))
+            if x > 0, x + size.width > width {
+                x = 0; y += rowHeight + spacing; rowHeight = 0
+            }
+            points.append(CGPoint(x: x, y: y))
+            usedWidth = max(usedWidth, x + size.width)
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return (CGSize(width: usedWidth, height: y + rowHeight), points)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let naturalWidth = subviews.reduce(CGFloat.zero) { $0 + $1.sizeThatFits(.unspecified).width }
+            + spacing * CGFloat(max(0, subviews.count - 1))
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? naturalWidth
+        return arrange(subviews, width: max(1, width)).0
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let (_, points) = arrange(subviews, width: bounds.width)
+        for (subview, point) in zip(subviews, points) {
+            subview.place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y),
+                          proposal: .init(width: bounds.width, height: nil))
         }
     }
 }

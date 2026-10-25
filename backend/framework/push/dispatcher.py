@@ -25,6 +25,8 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from framework.utils.instance_id import instance_id
+
 # 灵动岛/锁屏上的常用工具短标签（岛上空间极小；未收录的用原名）
 _TOOL_LABELS = {
     "web_research": "联网调查", "math_research": "数学推演", "excel_research": "表格工程",
@@ -70,6 +72,8 @@ class NotificationDispatcher:
         self.sessions_dir = Path(sessions_dir)
         cfg = cfg or {}
         self.bundle_id = str(cfg.get("bundle_id", "dev.enkin.macagent"))
+        # 多 Mac 的 iPhone 据此认来源（见 framework/utils/instance_id.py）；None = 不带
+        self.instance_id = instance_id()
         self.approval_ttl = int(cfg.get("approval_ttl_seconds", 900))
         la = cfg.get("live_activity") or {}
         self.la_enabled = bool(la.get("enabled", True))
@@ -194,10 +198,10 @@ class NotificationDispatcher:
                 aps["category"] = "APPROVAL"
                 aps["interruption-level"] = "time-sensitive"
                 expiration = now + self.approval_ttl
-            payload = {
-                "aps": aps,
-                "ma": {"v": 1, "kind": kind, "session_id": sid, "turn_id": turn_id},
-            }
+            ma = {"v": 1, "kind": kind, "session_id": sid, "turn_id": turn_id}
+            if self.instance_id:
+                ma["src"] = self.instance_id
+            payload = {"aps": aps, "ma": ma}
             res = await self.apns.send(
                 d["token"], payload, topic=self.bundle_id, push_type="alert",
                 priority=10, expiration=expiration,
@@ -450,10 +454,13 @@ class NotificationDispatcher:
             return
         title = self._session_title(sid, meta.get("prompt", ""))
         now = int(time.time())
+        attributes = {"sessionId": sid, "turnId": turn_id, "title": title}
+        if self.instance_id:
+            attributes["src"] = self.instance_id
         payload = {"aps": {
             "timestamp": now, "event": "start",
             "attributes-type": "AgentActivityAttributes",
-            "attributes": {"sessionId": sid, "turnId": turn_id, "title": title},
+            "attributes": attributes,
             "content-state": {"stage": "定时任务启动", "status": "running",
                               "done": 0, "total": 0, "steps": [], "detail": ""},
             "stale-date": now + self.la_stale,

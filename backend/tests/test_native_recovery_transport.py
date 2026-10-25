@@ -22,7 +22,7 @@ def compile_native(tmp_path_factory, delay_cleanup=False):
         store.write_text(actual.replace(hook,
             '            await RecoveryCleanupGate.wait()\n' + hook))
     result = subprocess.run(['xcrun','swiftc','-parse-as-library','-module-cache-path',str(temp/'modules'),
-        *map(str,sorted((source/'API').glob('*.swift'))),str(source/'Store/TurnReducer.swift'),
+        *map(str,sorted((source/'API').glob('*.swift'))),*map(str,sorted((source / "Store").glob("Offline*.swift"))), str(source/'Store/TurnReducer.swift'),
         str(source/'Store/ChatMessage.swift'),str(store),
         str(ROOT/'apple-app/Tests/recovery_support.swift'),str(ROOT/'apple-app/Tests/recovery_transport_test.swift'),'-o',str(binary)],
         capture_output=True,text=True,timeout=90)

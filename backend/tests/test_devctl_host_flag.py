@@ -23,6 +23,7 @@ bash 缺席时跳过（CI 最小镜像兜底）。
 """
 import os
 import shutil
+import shlex
 import stat
 import subprocess
 
@@ -70,7 +71,11 @@ def _scaffold(tmp_path):
 
     venv_bin = tmp_path / "backend" / ".venv" / "bin"
     venv_bin.mkdir(parents=True)
-    os.symlink(_REAL_BACKEND_PY, venv_bin / "python")
+    # Executing a symlink from a different venv/bin loses the source pyvenv.cfg
+    # on relocatable Python installations. A wrapper preserves the real runtime.
+    launcher = venv_bin / "python"
+    launcher.write_text("#!/bin/sh\nexec " + shlex.quote(_REAL_BACKEND_PY) + ' "$@"\n')
+    launcher.chmod(0o755)
 
     return devctl
 

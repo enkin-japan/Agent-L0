@@ -28,6 +28,7 @@ import re
 import time
 import uuid
 import threading
+from contextvars import ContextVar
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -177,6 +178,48 @@ QUERY_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="rag-query")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("RAG_Server")
 
+# Query diagnostics deliberately contain no query, category, document, path or
+# exception message. Start records remain useful when a downstream call hangs.
+_QUERY_TRACE = ContextVar("rag_query_trace", default=None)
+
+
+def _exc_brief(exc: BaseException) -> str:
+    """异常摘要（类名 + 消息，截 300 字符）供 fail-open 各路写日志。
+
+    阶段记录只带 error_type——能看出「这路跳了」，看不出「第三方说了什么」。
+    排障要的恰是后者（chroma 的「collection not found」vs 磁盘满），故恢复原
+    logger 行；截断是因为某些驱动会把整段 SQL/堆栈塞进消息里。
+    """
+    return f"{type(exc).__name__}: {exc}"[:300]
+
+
+def _query_log(phase: str, event: str, *, elapsed_ms=None, **counts) -> None:
+    trace_id = _QUERY_TRACE.get()
+    if trace_id is None:
+        return
+    record = {"event": "rag_query_stage", "request_id": trace_id,
+              "phase": phase, "state": event}
+    if elapsed_ms is not None:
+        record["elapsed_ms"] = round(elapsed_ms, 3)
+    record.update(counts)
+    logger.info("%s", json.dumps(record, separators=(",", ":")))
+
+
+@contextmanager
+def _query_stage(phase: str, **counts):
+    start = time.perf_counter()
+    counts["span_id"] = uuid.uuid4().hex
+    _query_log(phase, "start", **counts)
+    try:
+        yield counts
+    except BaseException as exc:
+        _query_log(phase, "error", elapsed_ms=(time.perf_counter() - start) * 1000,
+                   error_type=type(exc).__name__, **counts)
+        raise
+    else:
+        _query_log(phase, "end", elapsed_ms=(time.perf_counter() - start) * 1000,
+                   **counts)
+
 
 # ==========================================
 # 计算面客户端（同一契约两个实现：进程内 / HTTP——镜像 InProcess/RemoteBackend）
@@ -214,13 +257,16 @@ class _LocalCompute:
         return self.identity          # 启动即加载完成，恒就绪
 
     def embed(self, texts: List[str]) -> List[List[float]]:
-        return self.core.embed_texts(texts)
+        with _query_stage("local_embed", input_count=len(texts)):
+            return self.core.embed_texts(texts)
 
     def token_counts(self, texts: List[str], model_type: str = "embedding") -> List[int]:
-        return self.core.token_counts(texts, model_type)
+        with _query_stage("local_tokenize", input_count=len(texts)):
+            return self.core.token_counts(texts, model_type)
 
     def rerank(self, query: str, documents: List[str]) -> List[float]:
-        return self.core.rerank_scores(query, documents)
+        with _query_stage("local_rerank", input_count=len(documents)):
+            return self.core.rerank_scores(query, documents)
 
     def stop(self) -> None:
         if self.core:
@@ -292,19 +338,27 @@ class _RemoteCompute:
             return ident
 
     def _post(self, path: str, payload: dict, timeout: int) -> dict:
-        self.ensure_ready()
-        try:
-            r = requests.post(f"{self.base_url}{path}", json=payload,
-                              headers=self._headers(), timeout=timeout)
-        except Exception as e:
-            raise HTTPException(status_code=503,
-                                detail=f"RAG 计算面请求失败（{self.base_url}{path}）：{e}")
-        if r.status_code == 401:
-            # 密钥不一致是配置错误，不是瞬断——说清指向，别让调用方当成网络问题重试
-            raise HTTPException(status_code=500,
-                                detail="RAG_COMPUTE_API_KEY 与计算面不一致（401）：检查两侧 .env.local 同值。")
-        r.raise_for_status()
-        return r.json()
+        headers = self._headers()
+        trace_id = _QUERY_TRACE.get()
+        call_id = uuid.uuid4().hex
+        if trace_id is not None:
+            headers.update({"X-RAG-Trace-ID": trace_id, "X-RAG-Call-ID": call_id})
+        operation = path.rsplit("/", 1)[-1]
+        count = len(payload.get("texts", payload.get("documents", [])))
+        with _query_stage("remote_" + operation, input_count=count, call_id=call_id):
+            self.ensure_ready()
+            try:
+                r = requests.post(f"{self.base_url}{path}", json=payload,
+                                  headers=headers, timeout=timeout)
+            except Exception as e:
+                raise HTTPException(status_code=503,
+                                    detail=f"RAG 计算面请求失败（{self.base_url}{path}）：{e}")
+            if r.status_code == 401:
+                # 密钥不一致是配置错误，不是瞬断——说清指向，别让调用方当成网络问题重试
+                raise HTTPException(status_code=500,
+                                    detail="RAG_COMPUTE_API_KEY 与计算面不一致（401）：检查两侧 .env.local 同值。")
+            r.raise_for_status()
+            return r.json()
 
     def embed(self, texts: List[str]) -> List[List[float]]:
         # 大语料整单发来（reembed 全量重灌）时嵌入耗时可观：超时给足
@@ -1197,19 +1251,26 @@ def _contains_prefetch(col_name: str, tokens: List[str]) -> List[dict]:
     """按标识符 token 做 where_document $contains 预取（fail-open，逐 token 限量）。"""
     out: List[dict] = []
     try:
-        col = get_chroma_collection(col_name)
-        if col.count() == 0:
-            return out
-        for tok in tokens:
-            res = col.get(where_document={"$contains": tok},
-                          limit=_CONTAINS_LIMIT_PER_TOKEN,
-                          include=["documents", "metadatas"])
-            for doc, meta, doc_id in zip(res.get("documents") or [],
-                                         res.get("metadatas") or [],
-                                         res.get("ids") or []):
-                out.append({"db": col_name, "id": doc_id, "document": doc, "metadata": meta})
-    except Exception as e:
-        logger.warning(f"标识符预取 {col_name} 失败（跳过该路）: {e}")
+        with _query_stage("identifier_collection_open", db=col_name):
+            col = get_chroma_collection(col_name)
+        with _query_stage("identifier_collection_scan", db=col_name,
+                          token_count=len(tokens)) as stats:
+            if col.count() == 0:
+                stats["result_count"] = 0
+                return out
+            for tok in tokens:
+                res = col.get(where_document={"$contains": tok},
+                              limit=_CONTAINS_LIMIT_PER_TOKEN,
+                              include=["documents", "metadatas"])
+                for doc, meta, doc_id in zip(res.get("documents") or [],
+                                             res.get("metadatas") or [],
+                                             res.get("ids") or []):
+                    out.append({"db": col_name, "id": doc_id, "document": doc, "metadata": meta})
+            stats["result_count"] = len(out)
+    except Exception as exc:
+        # 库名与异常类型可记；这一路的过滤值是用户查询里的标识符 token，而 chroma 的校验
+        # 错误会把过滤值原样带进消息——所以这里只记类型，不记消息，token 绝不入日志。
+        logger.warning("标识符预取失败（跳过该路） db=%s: %s", col_name, type(exc).__name__)
     return out
 
 
@@ -1255,130 +1316,185 @@ def derive_anchor(terms: list) -> str:
 def _query_single_db(col_name: str, query_emb: list, top_k: int):
     """供线程池使用的独立查库函数"""
     try:
-        col = get_chroma_collection(col_name)
-        if col.count() == 0: return []
-        res = col.query(query_embeddings=[query_emb], n_results=top_k)
+        with _query_stage("vector_collection_open", db=col_name):
+            col = get_chroma_collection(col_name)
+        with _query_stage("vector_collection_query", db=col_name,
+                          requested_count=top_k) as stats:
+            if col.count() == 0:
+                stats["result_count"] = 0
+                return []
+            res = col.query(query_embeddings=[query_emb], n_results=top_k)
+            stats["result_count"] = len(res["ids"][0]) if res.get("ids") else 0
 
-        if not res["documents"] or not res["documents"][0]: return []
+            if not res["documents"] or not res["documents"][0]:
+                return []
 
-        # 组装返回列表
-        out = []
-        for doc, meta, doc_id in zip(res["documents"][0], res["metadatas"][0], res["ids"][0]):
-            out.append({"db": col_name, "id": doc_id, "document": doc, "metadata": meta})
-        return out
-    except Exception as e:
-        logger.error(f"查询库 {col_name} 失败: {e}")
+            # 组装返回列表（留在 stage 内：返回形状不符也要有一条带 db 的错误记录，
+            # 而不是落到 stage 外被 except 静默吞掉）
+            out = []
+            for doc, meta, doc_id in zip(res["documents"][0], res["metadatas"][0], res["ids"][0]):
+                out.append({"db": col_name, "id": doc_id, "document": doc, "metadata": meta})
+            return out
+    except Exception as exc:
+        logger.error("查询库失败（跳过该库） db=%s: %s", col_name, _exc_brief(exc))
         return []
+
+
+def _query_db_from_pool(trace_id, enqueued_at, col_name, query_emb, top_k):
+    # ContextVars are not copied by ThreadPoolExecutor.submit. Explicitly bind
+    # this query's ID and reset it so pooled threads cannot retain another ID.
+    token = _QUERY_TRACE.set(trace_id)
+    try:
+        _query_log("vector_pool_wait", "end",
+                   elapsed_ms=(time.perf_counter() - enqueued_at) * 1000)
+        return _query_single_db(col_name, query_emb, top_k)
+    finally:
+        _QUERY_TRACE.reset(token)
+
 
 @app.post("/api/v1/document/query", tags=["核心检索"])
 def advanced_query_rag(req: QueryRequest):
-    COMPUTE.ensure_ready()   # 检索要算向量+重排：计算面不可达时当场 503（上线后自愈）
+    token = _QUERY_TRACE.set(uuid.uuid4().hex)
+    try:
+        with _query_stage("query") as stats:
+            result = _advanced_query_rag(req)
+            stats["result_count"] = len(result["results"])
+            stats["retrieved_count"] = result["total_chunks_retrieved"]
+            return result
+    finally:
+        _QUERY_TRACE.reset(token)
+
+
+def _advanced_query_rag(req: QueryRequest):
+    with _query_stage("compute_ready"):
+        COMPUTE.ensure_ready()   # 计算面不可达时当场 503（上线后自愈）
 
     # 1. 计算路由向量与检索向量（合一批：省一次模型前向与 MPS 往返；拆分模式还省一次 HTTP）
-    cat_emb, opt_query_emb = get_embeddings([req.category, req.optimized_query])
+    with _query_stage("embed_route_query", input_count=2):
+        cat_emb, opt_query_emb = get_embeddings([req.category, req.optimized_query])
 
     # 2. 软路由：获取目标库名
-    target_dbs = []
-    meta_db = get_chroma_collection("meta_classification_db")
-    meta_count = meta_db.count()
-    if meta_count > 0:
-        routes = meta_db.query(query_embeddings=[cat_emb], n_results=min(req.top_k_dbs, meta_count))
+    with _query_stage("route_collections") as route_stats:
+        target_dbs = []
+        meta_db = get_chroma_collection("meta_classification_db")
+        meta_count = meta_db.count()
+        if meta_count > 0:
+            routes = meta_db.query(query_embeddings=[cat_emb], n_results=min(req.top_k_dbs, meta_count))
 
-        for db_name, distance in zip(routes["ids"][0], routes["distances"][0]):
-            if not _usable_category(db_name):
-                continue
-            if distance <= THRESHOLDS["query_routing_max_distance"]:
-                target_dbs.append(db_name)
-            else:
-                logger.info(f"🚫 库 {db_name} 距离过远 ({distance:.2f})，被动态剔除。")
+            for db_name, distance in zip(routes["ids"][0], routes["distances"][0]):
+                if not _usable_category(db_name):
+                    continue
+                if distance <= THRESHOLDS["query_routing_max_distance"]:
+                    target_dbs.append(db_name)
+                else:
+                    # 阈值校准证据（原「🚫 库 X 距离过远」行）：库名 + 距离都是
+                    # 路由判据本身，没有它们没法回答「该不该放宽这条阈值」。
+                    _query_log("route_collections", "rejected", db=db_name,
+                               distance=round(float(distance), 4))
 
+        # 【强制带载未分类库兜底】
+        if "unclassified_db" not in target_dbs:
+            target_dbs.append("unclassified_db")
 
-    # 【强制带载未分类库兜底】
-    if "unclassified_db" not in target_dbs:
-        target_dbs.append("unclassified_db")
-
-    logger.info(f"🔎 即将并发查询的候选库：{target_dbs}")
+        route_stats["db_count"] = len(target_dbs)
 
     # 3. 多库并发查询（常驻线程池：线程复用 → thread_local 的 Chroma 客户端复用）
-    all_retrieved_chunks = []
-    futures = {
-        QUERY_POOL.submit(_query_single_db, db_name, opt_query_emb, req.chunk_k_per_db): db_name
-        for db_name in target_dbs
-    }
-    for future in as_completed(futures):
-        all_retrieved_chunks.extend(future.result())
+    with _query_stage("vector_retrieval", db_count=len(target_dbs)) as vector_stats:
+        all_retrieved_chunks = []
+        futures = {
+            QUERY_POOL.submit(_query_db_from_pool, _QUERY_TRACE.get(), time.perf_counter(),
+                                  db_name, opt_query_emb, req.chunk_k_per_db): db_name
+            for db_name in target_dbs
+        }
+        for future in as_completed(futures):
+            all_retrieved_chunks.extend(future.result())
+        vector_stats["result_count"] = len(all_retrieved_chunks)
 
     # 3b. 标识符子串预取（mem0 评估采纳）：纯向量把文件名/hash/键名摊平成语义噪声，
     #     对查询里的标识符 token 做 contains 预取并入重排池——重排当裁判，无关命中
     #     会被 rerank_min_score 筛掉，这一路只扩池不定序。
-    seen_ids = {c["id"] for c in all_retrieved_chunks}
-    idents = extract_identifiers(req.query, req.optimized_query)
-    if idents:
-        extra = 0
-        for db_name in target_dbs:
-            for c in _contains_prefetch(db_name, idents):
-                if c["id"] not in seen_ids:
-                    all_retrieved_chunks.append(c)
-                    seen_ids.add(c["id"])
-                    extra += 1
-        if extra:
-            logger.info(f"🔩 标识符预取 {idents} 补入 {extra} 条候选")
+    with _query_stage("identifier_prefetch") as identifier_stats:
+        seen_ids = {c["id"] for c in all_retrieved_chunks}
+        idents = extract_identifiers(req.query, req.optimized_query)
+        if idents:
+            extra = 0
+            for db_name in target_dbs:
+                for c in _contains_prefetch(db_name, idents):
+                    if c["id"] not in seen_ids:
+                        all_retrieved_chunks.append(c)
+                        seen_ids.add(c["id"])
+                        extra += 1
+            if extra:
+                identifier_stats["added_count"] = extra
 
     # 3c. FTS 关键词腿（R2）：bigram 全文命中并入重排池。跨全库不受软路由约束——
     #     关键词命中是强信号，正是路由漏路时的兜底；不做分数融合，重排是终局裁判。
-    fts_by_db: Dict[str, List[str]] = {}
-    for h in FTS.search(req.query, req.optimized_query, limit=10):
-        if h["chunk_id"] not in seen_ids and h["db"] != "meta_classification_db":
-            fts_by_db.setdefault(h["db"], []).append(h["chunk_id"])
-    fts_added = 0
-    for db_name, id_list in fts_by_db.items():
-        try:
-            got = get_chroma_collection(db_name).get(
-                ids=id_list, include=["documents", "metadatas"])
-            for doc, meta, cid in zip(got.get("documents") or [],
-                                      got.get("metadatas") or [],
-                                      got.get("ids") or []):
-                all_retrieved_chunks.append({"db": db_name, "id": cid,
-                                             "document": doc, "metadata": meta})
-                seen_ids.add(cid)
-                fts_added += 1
-        except Exception as e:
-            logger.warning(f"⚠️ FTS 候选回取失败（库 {db_name}，跳过该路）: {e}")
-    if fts_added:
-        logger.info(f"🔤 FTS 关键词腿补入 {fts_added} 条候选")
+    with _query_stage("fts_retrieval") as fts_stats:
+        fts_by_db: Dict[str, List[str]] = {}
+        for h in FTS.search(req.query, req.optimized_query, limit=10):
+            if h["chunk_id"] not in seen_ids and h["db"] != "meta_classification_db":
+                fts_by_db.setdefault(h["db"], []).append(h["chunk_id"])
+        fts_added = 0
+        for db_name, id_list in fts_by_db.items():
+            try:
+                # 回取与组装同在 stage 内：组装失败（返回形状不符）也要留一条
+                # 带 db 的错误记录，不能掉进 except 里静默
+                with _query_stage("fts_collection_fetch", db=db_name,
+                                  input_count=len(id_list)) as fetch_stats:
+                    got = get_chroma_collection(db_name).get(
+                        ids=id_list, include=["documents", "metadatas"])
+                    added = 0
+                    for doc, meta, cid in zip(got.get("documents") or [],
+                                              got.get("metadatas") or [],
+                                              got.get("ids") or []):
+                        all_retrieved_chunks.append({"db": db_name, "id": cid,
+                                                     "document": doc, "metadata": meta})
+                        seen_ids.add(cid)
+                        added += 1
+                    fetch_stats["result_count"] = added
+                    fts_added += added
+            except Exception as exc:   # 这一路 fail-open，但不许静默
+                logger.warning("⚠️ FTS 候选回取失败（跳过该路） db=%s: %s",
+                               db_name, _exc_brief(exc))
+        if fts_added:
+            fts_stats["added_count"] = fts_added
 
     # 3d. 多意图分解腿（F5）:关键词逐个作子查询向量检索,只扩池不定序。
     #     多意图查询的整句向量落在几个意图的质心之间,只覆盖单一意图的文档单腿
     #     召回不到(rq-multi-004 实证);与标识符/FTS 腿同纪律,重排是终局裁判。
     #     每块记下命中它的子词(_via_terms)——子词救援(5b)只对分解腿召回的块开放。
-    sub_terms = split_subquery_terms(req.optimized_query)
-    if len(sub_terms) >= _SUBQUERY_MIN_TERMS:
-        try:
-            term_embs = get_embeddings(sub_terms)
-            sub_added = 0
-            for term, emb in zip(sub_terms, term_embs):
-                for db_name in target_dbs:
-                    for c in _query_single_db(db_name, emb, 3):
-                        if c["id"] in seen_ids:
-                            for existing in all_retrieved_chunks:
-                                if existing["id"] == c["id"]:
-                                    existing.setdefault("_via_terms", []).append(term)
-                                    break
-                            continue
-                        c["_via_terms"] = [term]
-                        all_retrieved_chunks.append(c)
-                        seen_ids.add(c["id"])
-                        sub_added += 1
-            if sub_added:
-                logger.info(f"🧩 多意图分解腿({len(sub_terms)} 子词)补入 {sub_added} 条候选")
-        except Exception as e:
-            logger.warning(f"⚠️ 分解腿失败（跳过该路,主腿照常）: {e}")
+    with _query_stage("subquery_retrieval") as sub_stats:
+        sub_terms = split_subquery_terms(req.optimized_query)
+        if len(sub_terms) >= _SUBQUERY_MIN_TERMS:
+            try:
+                with _query_stage("embed_subqueries", input_count=len(sub_terms)):
+                    term_embs = get_embeddings(sub_terms)
+                sub_added = 0
+                for term, emb in zip(sub_terms, term_embs):
+                    for db_name in target_dbs:
+                        for c in _query_single_db(db_name, emb, 3):
+                            if c["id"] in seen_ids:
+                                for existing in all_retrieved_chunks:
+                                    if existing["id"] == c["id"]:
+                                        existing.setdefault("_via_terms", []).append(term)
+                                        break
+                                continue
+                            c["_via_terms"] = [term]
+                            all_retrieved_chunks.append(c)
+                            seen_ids.add(c["id"])
+                            sub_added += 1
+                if sub_added:
+                    sub_stats["added_count"] = sub_added
+            except Exception as e:
+                _query_log("subquery_retrieval", "degraded", error_type=type(e).__name__)
+                logger.warning("多意图分解腿失败（只用整句召回）: %s", _exc_brief(e))
 
     if not all_retrieved_chunks:
         return {"original_query": req.query, "scanned_dbs": target_dbs, "total_chunks_retrieved": 0, "results": []}
 
     # 4. Reranker 全局统一重排（模板/收尾串归计算侧——模型家族绑定事实与权重同侧）
-    rerank_scores = COMPUTE.rerank(req.query, [item["document"] for item in all_retrieved_chunks])
+    with _query_stage("rerank", input_count=len(all_retrieved_chunks)):
+        rerank_scores = COMPUTE.rerank(req.query, [item["document"] for item in all_retrieved_chunks])
 
     # 5. 回填分数并截断
     for item, score in zip(all_retrieved_chunks, rerank_scores):
@@ -1397,65 +1513,80 @@ def advanced_query_rag(req: QueryRequest):
     #       对「除垢」0.578、对主题「咖啡」0.361——是查询明列的一个意图,该进);
     #     · 否决:全句分落在 [地板, 地板+带宽) 的边际带、且锚点分 < anchor 线的
     #       块剔除(孩子疫苗 0.334 贴地越线,对「猫」0.182——主体不符,该出)。
-    anchor = derive_anchor(sub_terms) if len(sub_terms) >= _SUBQUERY_MIN_TERMS else ""
-    if anchor:
-        floor = THRESHOLDS["rerank_min_score"]
-        band_hi = floor + THRESHOLDS["subject_veto_margin"]
-        marginal = [c for c in confident_chunks if c["rerank_score"] < band_hi]
-        rescuable = [c for c in all_retrieved_chunks
-                     if c.get("_via_terms") and c["rerank_score"] < floor]
-        need_anchor = marginal + rescuable
-        if need_anchor:
-            try:
-                anchor_scores = COMPUTE.rerank(anchor, [c["document"] for c in need_anchor])
-                for c, a_score in zip(need_anchor, anchor_scores):
-                    c["_anchor_score"] = a_score
-                # 佐证豁免:边际带候选逐子词打分,≥2 个不同子词过佐证线 → 免否决
-                # (多主体查询的第二主体文档对首词锚点必然低分——rq-multi-001 误杀实证)
-                corroborate = THRESHOLDS["subquery_corroborate_score"]
-                # 按子词**批量**打分(阶段复审 M4):逐(候选×子词)单发在拆分部署下是
-                # O(m×t) 次 HTTP 往返;批量后是 t 次,融合模式两者同价
-                strong_count = {id(c): 0 for c in marginal}
-                if marginal:
-                    m_docs = [c["document"] for c in marginal]
-                    for term in sub_terms:
-                        for c, sc in zip(marginal, COMPUTE.rerank(term, m_docs)):
-                            if sc >= corroborate:
-                                strong_count[id(c)] += 1
-                for c in marginal:
-                    c["_corroborated"] = strong_count[id(c)] >= 2
-                vetoed = [c for c in marginal
-                          if not c.get("_corroborated")
-                          and c.get("_anchor_score", 1.0) < THRESHOLDS["anchor_min_score"]]
-                for c in vetoed:
-                    confident_chunks.remove(c)
-                    logger.info(f"🚷 边际带主体否决: {c['id']} 全句 "
-                                f"{c['rerank_score']:.3f} / 锚点[{anchor}] "
-                                f"{c['_anchor_score']:.3f}")
-                rescued = 0
-                for c in rescuable:
-                    if c.get("_anchor_score", 0.0) < THRESHOLDS["anchor_min_score"]:
-                        continue
-                    term_scores = COMPUTE.rerank(
-                        " ".join(c["_via_terms"]), [c["document"]])
-                    if term_scores and term_scores[0] >= THRESHOLDS["subquery_rescue_score"]:
-                        c["rerank_score"] = term_scores[0]   # 排序按救援分(如实:子词口径)
-                        confident_chunks.append(c)
-                        rescued += 1
-                        logger.info(f"🛟 子词救援: {c['id']} 子词[{','.join(c['_via_terms'])}] "
-                                    f"{term_scores[0]:.3f} / 锚点[{anchor}] "
-                                    f"{c['_anchor_score']:.3f}")
-                if rescued:
-                    confident_chunks.sort(key=lambda x: x["rerank_score"], reverse=True)
-            except Exception as e:
-                logger.warning(f"⚠️ 锚点判定失败（跳过救援/否决,按原置信集续走）: {e}")
+    with _query_stage("anchor_filter", term_count=len(sub_terms)):
+        anchor = derive_anchor(sub_terms) if len(sub_terms) >= _SUBQUERY_MIN_TERMS else ""
+        if anchor:
+            floor = THRESHOLDS["rerank_min_score"]
+            band_hi = floor + THRESHOLDS["subject_veto_margin"]
+            marginal = [c for c in confident_chunks if c["rerank_score"] < band_hi]
+            rescuable = [c for c in all_retrieved_chunks
+                         if c.get("_via_terms") and c["rerank_score"] < floor]
+            need_anchor = marginal + rescuable
+            if need_anchor:
+                try:
+                    with _query_stage("rerank_anchor", input_count=len(need_anchor)):
+                        anchor_scores = COMPUTE.rerank(anchor, [c["document"] for c in need_anchor])
+                    for c, a_score in zip(need_anchor, anchor_scores):
+                        c["_anchor_score"] = a_score
+                    # 佐证豁免:边际带候选逐子词打分,≥2 个不同子词过佐证线 → 免否决
+                    # (多主体查询的第二主体文档对首词锚点必然低分——rq-multi-001 误杀实证)
+                    corroborate = THRESHOLDS["subquery_corroborate_score"]
+                    # 按子词**批量**打分(阶段复审 M4):逐(候选×子词)单发在拆分部署下是
+                    # O(m×t) 次 HTTP 往返;批量后是 t 次,融合模式两者同价
+                    strong_count = {id(c): 0 for c in marginal}
+                    if marginal:
+                        m_docs = [c["document"] for c in marginal]
+                        for term in sub_terms:
+                            with _query_stage("rerank_corroborate", input_count=len(m_docs)):
+                                term_scores = COMPUTE.rerank(term, m_docs)
+                            for c, sc in zip(marginal, term_scores):
+                                if sc >= corroborate:
+                                    strong_count[id(c)] += 1
+                    for c in marginal:
+                        c["_corroborated"] = strong_count[id(c)] >= 2
+                    vetoed = [c for c in marginal
+                              if not c.get("_corroborated")
+                              and c.get("_anchor_score", 1.0) < THRESHOLDS["anchor_min_score"]]
+                    for c in vetoed:
+                        confident_chunks.remove(c)
+                        # 阈值校准证据（原「🚷 边际带主体否决」行）：块 id + 全句分
+                        # + 锚点分。分数是模型输出，可记；锚点词派生自用户查询，不记。
+                        _query_log("anchor_veto", "end", chunk_id=c["id"],
+                                   sentence_score=round(float(c["rerank_score"]), 4),
+                                   anchor_score=round(float(c.get("_anchor_score", 1.0)), 4),
+                                   result_count=1)
+                    rescued = 0
+                    for c in rescuable:
+                        if c.get("_anchor_score", 0.0) < THRESHOLDS["anchor_min_score"]:
+                            continue
+                        with _query_stage("rerank_rescue", input_count=1):
+                            term_scores = COMPUTE.rerank(
+                                " ".join(c["_via_terms"]), [c["document"]])
+                        if term_scores and term_scores[0] >= THRESHOLDS["subquery_rescue_score"]:
+                            sentence_score = float(c["rerank_score"])
+                            c["rerank_score"] = term_scores[0]   # 排序按救援分(如实:子词口径)
+                            confident_chunks.append(c)
+                            rescued += 1
+                            # 阈值校准证据（原「🛟 子词救援」行）：块 id + 全句分 +
+                            # 子词分 + 锚点分；子词本身是用户查询的切片，只记个数。
+                            _query_log("anchor_rescue", "end", chunk_id=c["id"],
+                                       sentence_score=round(sentence_score, 4),
+                                       subword_score=round(float(term_scores[0]), 4),
+                                       anchor_score=round(float(c.get("_anchor_score", 0.0)), 4),
+                                       term_count=len(c["_via_terms"]), result_count=1)
+                    if rescued:
+                        confident_chunks.sort(key=lambda x: x["rerank_score"], reverse=True)
+                except Exception as e:
+                    _query_log("anchor_filter", "degraded", error_type=type(e).__name__)
+                    logger.warning("主体锚点过滤失败（保留未过滤结果）: %s", _exc_brief(e))
     for c in all_retrieved_chunks:
         c.pop("_via_terms", None)
         c.pop("_anchor_score", None)
         c.pop("_corroborated", None)
     # MMR 多样性选择（grok-build 评估采纳）：候选多于名额时防 top-k 全是同一
     # 文档的近邻块；候选不足名额时原样通过（没得挑就不挑，行为与旧版全同）。
-    final_results = mmr_select(confident_chunks, req.rerank_top_k)
+    with _query_stage("mmr_select", input_count=len(confident_chunks)):
+        final_results = mmr_select(confident_chunks, req.rerank_top_k)
 
     logger.info(f"📊 原始召回 {len(all_retrieved_chunks)} 条，动态置信度过滤后剩 {len(confident_chunks)} 条，最终喂给模型 {len(final_results)} 条。")
 

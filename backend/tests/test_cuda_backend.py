@@ -12,6 +12,8 @@
   拒启的护栏靠注册表）且无 profile（未画像绝不被路由优先选中）。
 ⑤ **server 环境覆盖**——INFER_BACKEND 的 env 覆盖锚点在位（Colab 起 cuda 不改
   config 的通道）。
+⑥ **两段式思考 ids↔text 对齐**——段一 stop 字符串只截 text，投机解码越过停符的
+  token 必须从段二 prompt 与 cache 记账里截掉（否则调用头进了上下文却不进正文）。
 """
 from pathlib import Path
 import asyncio
@@ -119,10 +121,10 @@ def test_config_cuda_knobs_and_registry_entries():
     assert cuda.get("enable_prefix_caching") is True
     reg = {e["repo"]: e for e in inf["model_registry"]}
     # D.20 阵容收束（2026-08-16）：Qwen3.6 / Ornith-35B 两条已随舍弃移出本钉。
-    # RedHatAI NVFP4（L4 日用档，daily_serve_chain.sh 消费）无 profile 属预期
+    # RedHatAI NVFP4（L4 日用档，colab/legacy/daily_serve_chain.sh 消费）无 profile 属预期
     # （评测件不入路由优先选中），单独钉在册+方言+revision。
     l4 = reg.get("RedHatAI/gemma-4-26B-A4B-it-NVFP4")
-    assert l4 is not None, "L4 日用档 RedHatAI NVFP4 未注册（daily.sh 起服会拒启）"
+    assert l4 is not None, "L4 日用档 RedHatAI NVFP4 未注册（colab/legacy/daily.sh 起服会拒启）"
     assert l4["dialect"] == "gemma4" and l4.get("revision")
     for repo, dialect in (("google/gemma-4-31B-it", "gemma4"),
                           ("google/gemma-4-26B-A4B-it", "gemma4")):
@@ -437,6 +439,71 @@ def test_cuda_two_phase_forced_close_order_and_cache(cuda_stream):
     assert engine.requests[1][1]["max_tokens"] == 4
     assert engine.requests[1][0]["prompt_token_ids"] == [100, 101, 10, 11, 100, 101]
     assert cache.token_ids == [100, 101, 10, 11, 100, 101, 20, 21]
+
+
+class _OvershootEngine(_BurstEngine):
+    """段一 text 已被 stop 截在 </think>；ids 多出「\\n\\n」=50、「<tool_call>」=51。"""
+    def __init__(self, phase1_ids=(10, 11, 99, 50, 51)):
+        super().__init__()
+        self.phase1_ids = list(phase1_ids)
+
+    async def generate(self, prompt, params, rid):
+        self.requests.append((prompt, params.kwargs, rid))
+        if rid.endswith("-p2"):
+            yield _completion("<tool_call>…</tool_call>", [51, 60, 61], "stop")
+        else:
+            yield _completion("thought</think>", self.phase1_ids, "stop")
+
+
+def _run_overshoot(b, engine, encode):
+    b._engine = engine
+    b._tokenizer = SimpleNamespace(encode=encode)
+    cache = b.new_cache()
+    chunks = list(b.stream_generate("synthetic", cache=cache,
+        sampling={"max_tokens": 8}, features={"want_delta": True,
+            "enable_thinking": True, "thinking_budget": 4,
+            "thinking_end_token": "</think>"}))
+    return chunks, cache
+
+
+def _encode_close_99(text, **kw):
+    return [99] if text == "</think>" else [100, 101]
+
+
+def test_cuda_two_phase_trims_speculative_overshoot_past_think_close(cuda_stream, capsys):
+    """MTP 一步接受多 token：停符后的 ids 不得混进段二 prompt（2026-10-24 事故）。"""
+    engine = _OvershootEngine()
+    chunks, cache = _run_overshoot(cuda_stream.backend, engine, _encode_close_99)
+    assert [c.text for c in chunks] == ["thought</think>", "<tool_call>…</tool_call>"]
+    assert engine.requests[1][0]["prompt_token_ids"] == [100, 101, 10, 11, 99]
+    assert engine.requests[1][1]["max_tokens"] == 5
+    # 口径＝保留的 token：段一 chunk 按引擎原值（5），段二起回落到对齐值 3+3
+    assert [c.generation_tokens for c in chunks] == [5, 6]
+    assert cache.token_ids == [100, 101, 10, 11, 99, 51, 60, 61]
+    # 越界告警只打一次（MTP 下每轮都会发生，不得刷屏）
+    _run_overshoot(cuda_stream.backend, _OvershootEngine(), _encode_close_99)
+    assert capsys.readouterr().out.count("投机解码越界") == 1
+
+
+def test_cuda_two_phase_unmatched_close_ids_left_untouched_and_reported(cuda_stream, capsys):
+    """分词口径不一致（闭符 ids 在段一里找不到）：不猜测截断，但必须响亮告警。"""
+    engine = _OvershootEngine()
+    chunks, cache = _run_overshoot(cuda_stream.backend, engine,
+                                   lambda text, **kw: [98])
+    assert engine.requests[1][0]["prompt_token_ids"] == [98, 10, 11, 99, 50, 51]
+    assert "分词口径不一致" in capsys.readouterr().out
+
+
+def test_trim_after_stop_boundaries():
+    from framework.backends.cuda.backend import _trim_after_stop
+    assert _trim_after_stop([1, 7, 8, 2, 3], [7, 8]) == [1, 7, 8], "多 token 停符"
+    assert _trim_after_stop([1, 7, 2, 7, 3], [7]) == [1, 7], "取首个停符"
+    assert _trim_after_stop([1, 2, 7], [7]) == [1, 2, 7], "无越界则不动"
+    assert _trim_after_stop([1, 2, 3], [7]) == [1, 2, 3], "找不到停符不猜测"
+    assert _trim_after_stop([1], [1, 2]) == [1], "停符比 ids 长"
+    assert _trim_after_stop([1, 2], []) == [1, 2]
+    src = [1, 2]
+    assert _trim_after_stop(src, [7]) is not src, "不与入参别名"
 
 
 def test_cuda_two_phase_close_aborts_second_request(cuda_stream):

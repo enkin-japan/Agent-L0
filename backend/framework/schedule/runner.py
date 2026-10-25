@@ -44,7 +44,7 @@ class ScheduleRunner:
     """触发扫描 + 无人值守执行（进程内单例，lifespan 装配）。"""
 
     def __init__(self, store: ScheduleStore, session_manager, orchestrator, scheduler,
-                 cfg: Optional[Dict[str, Any]] = None):
+                 cfg: Optional[Dict[str, Any]] = None, *, can_execute=None):
         cfg = cfg or {}
         self.store = store
         self.session_manager = session_manager
@@ -52,12 +52,17 @@ class ScheduleRunner:
         self.scheduler = scheduler
         self.tick_seconds = int(cfg.get("tick_seconds", 30))
         self.running: set = set()  # 正在执行（含排队/挂起等待）的 schedule_id，防同任务双发
+        self._can_execute = can_execute or (lambda: True)
+        self._tasks: set = set()
+        self._stopping = False
 
     # ---------- 触发循环（lifespan 内 asyncio.create_task） ----------
     async def tick_loop(self):
         while True:
             try:
                 await asyncio.sleep(self.tick_seconds)
+                if self._stopping or not self._can_execute():
+                    continue  # 尚未就绪不推进 next_run，恢复后仍由既有 due 判定派发一次
                 now = time.time()
                 for task in self.store.list_tasks():
                     if not task.get("enabled") or task["id"] in self.running:
@@ -75,11 +80,28 @@ class ScheduleRunner:
 
     def launch(self, task: Dict[str, Any], scheduled_for: float) -> bool:
         """派发一次运行（tick 与 /run 端点共用）。已在运行则拒绝。"""
-        if task["id"] in self.running:
+        if self._stopping or not self._can_execute() or task["id"] in self.running:
             return False
         self.running.add(task["id"])
-        asyncio.create_task(self._execute(task, scheduled_for))
+        worker = asyncio.create_task(self._execute(task, scheduled_for))
+        self._tasks.add(worker)
+        worker.add_done_callback(self._tasks.discard)
         return True
+
+    async def stop(self):
+        """Let existing cancellation checkpoints archive each run before releasing engines.
+
+        Schedule execution predates task cancellation settlement: cancelling its
+        coroutine would skip its terminal archive. Use the established session
+        cancellation flag, then join all owned workers instead.
+        """
+        self._stopping = True
+        for schedule_id in self.running:
+            session = self.session_manager._all_sessions.get(session_id_for(schedule_id))
+            if session is not None:
+                session.cancel_requested = True
+        if self._tasks:
+            await asyncio.gather(*list(self._tasks), return_exceptions=True)
 
     # ---------- 无人值守执行器（仿 routes._chat_turn 骨架，无 SSE） ----------
     async def _execute(self, task: Dict[str, Any], scheduled_for: float):
@@ -119,6 +141,9 @@ class ScheduleRunner:
         )
 
         async with session.lock:
+            if self._stopping:
+                run["status"] = "cancelled"
+                return  # Not accepted yet: do not create a user message or inflight marker.
             # 残留清理：专属会话也可能被用户手动聊过并留下待审批/挂起态（语义同 _chat_turn：
             # 新输入到来即视为放弃旧限态，补取消/中断记录后落盘收尾）
             if session.pending_tool_calls:
@@ -160,6 +185,11 @@ class ScheduleRunner:
                 session.task_state = None
                 self.scheduler.discard(sid)
 
+            # Archiving a previous paused turn yields to stop(). Do not erase its
+            # cancellation request or accept new work after shutdown has begun.
+            if self._stopping:
+                run["status"] = "cancelled"
+                return
             session.cancel_requested = False
             session.suspend_requested = False
             rollback_idx = len(session.history)

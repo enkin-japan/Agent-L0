@@ -31,6 +31,8 @@ final class PushManager: NSObject, ObservableObject {
     #if os(iOS)
     private var apnsToken: String?
     private var activityTokenTasks: [String: Task<Void, Never>] = [:]   // activity.id →
+    /// iPhone 可能保存了多台 Mac：推送登记覆盖每一台，通知与审批按来源（ma.src）回到那台。
+    weak var phoneLink: PhoneLink?
     #endif
 
     init(settings: AppSettings) {
@@ -109,11 +111,8 @@ final class PushManager: NSObject, ObservableObject {
             #endif
         } else {
             #if os(iOS)
-            // 总开关关：注销后端设备（macOS 本地路径由 postLocal 的开关判断兜住）
-            let id = deviceId
-            if let client = settings.makeClient() {
-                Task { try? await client.pushUnregister(deviceId: id) }
-            }
+            // 总开关关：向每台 Mac 注销本设备（macOS 本地路径由 postLocal 的开关判断兜住）
+            for client in targets() { unregister(using: client) }
             #endif
         }
     }
@@ -127,35 +126,63 @@ final class PushManager: NSObject, ObservableObject {
             content_level: settings.notifContentLevel)
     }
 
-    /// APNs 设备 token 回调（AppDelegate 转发）：注册/更新到后端。
+    /// 要登记推送的后端：列表里的每台 Mac；列表还空（刚升级、尚未迁移）时退回当前连接。
+    private func targets() -> [AgentClient] {
+        let all = phoneLink?.allClients ?? []
+        if !all.isEmpty { return all }
+        return settings.makeClient().map { [$0] } ?? []
+    }
+
+    /// 某台 Mac 发来的事件该回给谁（规则见 MacDirectory.approvalTarget）。nil = 不发：
+    /// 带了来源却认不出、而当前连着的是另一台已知 Mac——审批绝不改投。
+    private func client(src: String?) -> AgentClient? {
+        guard let phoneLink, !phoneLink.macs.isEmpty else { return settings.makeClient() }
+        guard let id = phoneLink.approvalTarget(src: src) else { return nil }
+        return phoneLink.client(for: id)
+    }
+
+    /// APNs 设备 token 回调（AppDelegate 转发）：向每台 Mac 注册/更新。
     func handleDeviceToken(_ tokenData: Data) {
-        let hex = tokenData.map { String(format: "%02x", $0) }.joined()
-        apnsToken = hex
-        guard settings.notifEnabled, let client = settings.makeClient() else { return }
+        apnsToken = tokenData.map { String(format: "%02x", $0) }.joined()
+        registerEverywhere()
+    }
+
+    /// 每次启动拿到 token、加入新 Mac、扫码配对后都调一遍（upsert，幂等）：
+    /// 上次没登记上的那台在这里补上。
+    func registerEverywhere() {
+        guard settings.notifEnabled, let token = apnsToken else { return }
         let id = deviceId
         let prefs = currentPrefs()
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
-        Task {
-            do {
-                _ = try await client.pushRegister(deviceId: id, token: hex,
-                                                  prefs: prefs, appBuild: build)
-            } catch {
-                print("[Push] 设备注册失败（下次启动/换 token 重试）：\(error.localizedDescription)")
+        for client in targets() {
+            Task {
+                do {
+                    _ = try await client.pushRegister(deviceId: id, token: token,
+                                                      prefs: prefs, appBuild: build)
+                } catch {
+                    print("[Push] 设备注册失败（下次启动/换 token 重试）：\(error.localizedDescription)")
+                }
             }
         }
     }
 
+    func unregister(using client: AgentClient) {
+        let id = deviceId
+        Task { try? await client.pushUnregister(deviceId: id) }
+    }
+
     func syncPrefsToBackend() {
-        guard let client = settings.makeClient() else { return }
         let id = deviceId
         let prefs = currentPrefs()
-        Task {
-            do {
-                try await client.pushUpdatePrefs(deviceId: id, prefs: prefs)
-            } catch {
-                // 设备可能尚未注册（404）：走一次 upsert 补注册
-                _ = try? await client.pushRegister(deviceId: id, token: self.apnsToken,
-                                                   prefs: prefs, appBuild: nil)
+        for client in targets() {
+            Task {
+                do {
+                    try await client.pushUpdatePrefs(deviceId: id, prefs: prefs)
+                } catch {
+                    // 设备可能尚未注册（404）：走一次 upsert 补注册
+                    _ = try? await client.pushRegister(deviceId: id, token: self.apnsToken,
+                                                       prefs: prefs, appBuild: nil)
+                }
             }
         }
     }
@@ -230,8 +257,15 @@ final class PushManager: NSObject, ObservableObject {
 
     // MARK: - 审批远程决议（通知按钮 → 后端；带 expected_turn_id 防错批）
 
-    private func decideRemote(sessionId: String, turnId: String?, approve: Bool) {
+    private func decideRemote(sessionId: String, turnId: String?, src: String?, approve: Bool) {
+        #if os(iOS)
+        guard let client = client(src: src) else {
+            postPlain(title: "MacAgent", body: L("发出这条审批的 Mac 已不在列表里，审批未送达。"))
+            return
+        }
+        #else
         guard let client = settings.makeClient() else { return }
+        #endif
         Task { @MainActor in
             do {
                 _ = try await client.submitApproval(sessionId: sessionId, approve: approve,
@@ -256,7 +290,13 @@ final class PushManager: NSObject, ObservableObject {
                                   content: content, trigger: nil))
     }
 
-    private func openSession(_ sessionId: String) {
+    private func openSession(_ sessionId: String, src: String?) {
+        #if os(iOS)
+        // 来自另一台 Mac 的通知：先切到那台，再定位会话
+        if let phoneLink, let id = phoneLink.route(src: src), id != phoneLink.currentId {
+            phoneLink.select(id)
+        }
+        #endif
         store?.select(sessionId: sessionId)
         #if os(macOS)
         NSApp.activate(ignoringOtherApps: true)
@@ -278,7 +318,8 @@ final class PushManager: NSObject, ObservableObject {
             return
         }
         let attrs = AgentActivityAttributes(sessionId: sessionId, turnId: turnId,
-                                            title: String(title.prefix(24)))
+                                            title: String(title.prefix(24)),
+                                            src: phoneLink?.current?.macId)
         let state = AgentActivityAttributes.ContentState(
             stage: L("启动中"), status: "running", done: 0, total: 0, steps: [], detail: nil)
         do {
@@ -325,11 +366,12 @@ final class PushManager: NSObject, ObservableObject {
         guard activityTokenTasks[act.id] == nil else { return }
         let sessionId = act.attributes.sessionId
         let turnId = act.attributes.turnId
+        let src = act.attributes.src
         activityTokenTasks[act.id] = Task { [weak self] in
             for await tokenData in act.pushTokenUpdates {
                 let hex = tokenData.map { String(format: "%02x", $0) }.joined()
                 await self?.uploadActivityToken(act, sessionId: sessionId,
-                                                turnId: turnId, token: hex)
+                                                turnId: turnId, src: src, token: hex)
             }
             await MainActor.run { [weak self] in
                 self?.activityTokenTasks[act.id] = nil
@@ -339,8 +381,8 @@ final class PushManager: NSObject, ObservableObject {
 
     private func uploadActivityToken(_ act: Activity<AgentActivityAttributes>,
                                      sessionId: String, turnId: String,
-                                     token: String) async {
-        guard let client = settings.makeClient() else { return }
+                                     src: String?, token: String) async {
+        guard let client = client(src: src) else { return }
         do {
             let res = try await client.pushLiveActivityToken(
                 deviceId: deviceId, sessionId: sessionId, turnId: turnId, token: token)
@@ -359,9 +401,11 @@ final class PushManager: NSObject, ObservableObject {
         Task { [weak self] in
             for await tokenData in Activity<AgentActivityAttributes>.pushToStartTokenUpdates {
                 let hex = tokenData.map { String(format: "%02x", $0) }.joined()
-                guard let self, let client = self.settings.makeClient() else { continue }
-                _ = try? await client.pushRegister(deviceId: self.deviceId,
-                                                   pushToStartToken: hex)
+                guard let self else { continue }
+                for client in self.targets() {
+                    _ = try? await client.pushRegister(deviceId: self.deviceId,
+                                                       pushToStartToken: hex)
+                }
             }
         }
     }
@@ -408,17 +452,18 @@ extension PushManager: UNUserNotificationCenterDelegate {
         let ma = userInfo["ma"] as? [String: Any]
         let sid = ma?["session_id"] as? String
         let turnId = ma?["turn_id"] as? String
+        let src = ma?["src"] as? String
         let action = response.actionIdentifier
         Task { @MainActor in
             defer { completionHandler() }
             guard let sid else { return }
             switch action {
             case Self.approveActionId:
-                self.decideRemote(sessionId: sid, turnId: turnId, approve: true)
+                self.decideRemote(sessionId: sid, turnId: turnId, src: src, approve: true)
             case Self.denyActionId:
-                self.decideRemote(sessionId: sid, turnId: turnId, approve: false)
+                self.decideRemote(sessionId: sid, turnId: turnId, src: src, approve: false)
             case UNNotificationDefaultActionIdentifier:
-                self.openSession(sid)
+                self.openSession(sid, src: src)
             default:
                 break
             }

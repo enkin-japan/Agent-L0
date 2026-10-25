@@ -19,7 +19,7 @@ def compile_operation(temp, mutation=None):
         copy=temp/'ApiToolOperation.swift';copy.write_text(text)
         files=[copy if f==original else f for f in files]
     binary=temp/'setup'
-    result=subprocess.run(['xcrun','swiftc','-parse-as-library','-module-cache-path',str(temp/'modules'),*map(str,files),str(src/'Store/TurnReducer.swift'),str(ROOT/'apple-app/Tests/api_tool_operation_test.swift'),'-o',str(binary)],capture_output=True,text=True,timeout=90)
+    result=subprocess.run(['xcrun','swiftc','-parse-as-library','-module-cache-path',str(temp/'modules'),*map(str,files),*map(str,sorted((src / "Store").glob("Offline*.swift"))), str(src/'Store/TurnReducer.swift'),str(ROOT/'apple-app/Tests/api_tool_operation_test.swift'),'-o',str(binary)],capture_output=True,text=True,timeout=90)
     assert result.returncode==0,result.stdout+result.stderr
     return binary
 @pytest.fixture(scope='module')
@@ -45,7 +45,7 @@ def test_editor_presentation_guard_mutation(tmp_path):
     copy=tmp_path/'ApiToolOperation.swift';copy.write_text(text.replace(old,'connectionIsCurrent()'))
     files=[copy if p==original else p for p in sorted((src/'API').glob('*.swift'))]
     binary=tmp_path/'setup'
-    r=subprocess.run(['xcrun','swiftc','-parse-as-library','-module-cache-path',str(tmp_path/'modules'),*map(str,files),str(src/'Store/TurnReducer.swift'),str(ROOT/'apple-app/Tests/api_tool_operation_test.swift'),'-o',str(binary)],capture_output=True,text=True,timeout=90)
+    r=subprocess.run(['xcrun','swiftc','-parse-as-library','-module-cache-path',str(tmp_path/'modules'),*map(str,files),*map(str,sorted((src / "Store").glob("Offline*.swift"))), str(src/'Store/TurnReducer.swift'),str(ROOT/'apple-app/Tests/api_tool_operation_test.swift'),'-o',str(binary)],capture_output=True,text=True,timeout=90)
     assert r.returncode==0,r.stdout+r.stderr
     for mode in ('closed','reopened'):
         r=subprocess.run([str(binary),mode],capture_output=True,text=True,timeout=15)

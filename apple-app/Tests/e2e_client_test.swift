@@ -2,6 +2,7 @@
 // 覆盖：health / 会话列表 / 202 受理 → /turn 状态 → 事件附着(重放+续播) /
 //      历史对账 / 生命周期事件序 / 会话删除。
 import Foundation
+func L(_ value: String) -> String { value }
 
 var passed = 0
 
@@ -13,8 +14,10 @@ func check(_ name: String, _ cond: Bool, _ detail: String = "") {
 @main
 enum E2E {
     static func main() async {
-        let base = URL(string: "http://127.0.0.1:14159")!
-        let client = AgentClient(baseURL: base, apiKey: "")
+        let env = ProcessInfo.processInfo.environment
+        let base = URL(string: env["AGENT_E2E_BASE_URL"] ?? "http://127.0.0.1:14159")!
+        let cache = env["AGENT_E2E_CACHE_ROOT"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+        let client = AgentClient(baseURL: base, apiKey: env["AGENT_E2E_API_KEY"] ?? "", cacheRoot: cache)
         do {
             // 1. health
             let ok = try await client.health()

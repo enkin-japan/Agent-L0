@@ -78,7 +78,7 @@ struct ComposerView: View {
                                         ? Theme.accent.opacity(0.12) : Color.clear)
                             .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(CeladonControlStyle())
                     }
                 }
                 .background(Theme.card)
@@ -107,50 +107,14 @@ struct ComposerView: View {
                 .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall))
             }
 
-            HStack(alignment: .bottom, spacing: 8) {
-                attachMenu
-
-                #if os(iOS)
-                if clipboardHasImage {
-                    PasteButton(payloadType: PastedImage.self) { items in
-                        Task { @MainActor in
-                            let stamp = Int(Date().timeIntervalSince1970)
-                            for (index, item) in items.enumerated() {
-                                let kind = Multipart.sniffImage(item.data)
-                                uploads.append(Upload(
-                                    filename: "clipboard-\(stamp)-\(index).\(kind.ext)",
-                                    mime: kind.mime, data: item.data))
-                            }
-                        }
-                    }
-                    .labelStyle(.iconOnly)
-                    .buttonBorderShape(.capsule)
-                    .controlSize(.small)
-                    .tint(.secondary)
-                }
-                #endif
-
-                Button {
-                    toggleRecording()
-                } label: {
-                    Image(systemName: recorder.isRecording ? "mic.fill" : "mic")
-                        .font(.title3)
-                        .foregroundStyle(recorder.isRecording ? Color.red : Color.primary)
-                        .symbolEffect(.pulse, isActive: recorder.isRecording)
-                }
-                .buttonStyle(.plain)
-                .disabled(store.isGenerating || store.selectedSessionIsDeleting)
-                .help(L("语音输入（松开即作为音频附件发送给后端转写）"))
-
+            VStack(alignment: .leading, spacing: Theme.s2) {
                 TextField(L("给 Agent 发消息…"), text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
+                    .font(Theme.readingFont)
                     .lineLimit(1...8)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, Theme.s2)
-                    .background(Theme.wash)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
-                    .overlay(RoundedRectangle(cornerRadius: Theme.radiusCard)
-                        .strokeBorder(Theme.hairline, lineWidth: 1))
+                    .padding(.horizontal, Theme.s1)
+                    .padding(.top, Theme.s1)
+                    .frame(minHeight: Theme.controlHitSize, alignment: .topLeading)
                     .onSubmit(send)
                     // 候选弹出期间键盘接管：↑↓ 移选、Tab/回车补全；候选收起后
                     // 全部 .ignored 走原路（回车 onSubmit 发送）。剧本名是 ASCII，
@@ -189,37 +153,108 @@ struct ComposerView: View {
                     }
                     .onChange(of: draft) { slashSelection = 0 }
 
-                Toggle(isOn: $thinking) {
-                    Image(systemName: "brain")
-                }
-                .toggleStyle(.button)
-                .tint(Theme.thoughts)
-                .help(L("深度思考模式"))
+                HStack(spacing: Theme.s1) {
+                    attachMenu
 
-                if store.isGenerating {
+                    #if os(iOS)
+                    if clipboardHasImage {
+                        PasteButton(payloadType: PastedImage.self) { items in
+                            Task { @MainActor in
+                                let stamp = Int(Date().timeIntervalSince1970)
+                                for (index, item) in items.enumerated() {
+                                    let kind = Multipart.sniffImage(item.data)
+                                    uploads.append(Upload(
+                                        filename: "clipboard-\(stamp)-\(index).\(kind.ext)",
+                                        mime: kind.mime, data: item.data))
+                                }
+                            }
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonBorderShape(.capsule)
+                        .frame(minWidth: Theme.controlHitSize, minHeight: Theme.controlHitSize)
+                        .tint(.secondary)
+                    }
+                    #endif
+
                     Button {
-                        store.cancelGeneration()
+                        toggleRecording()
                     } label: {
-                        Image(systemName: "stop.circle.fill")
-                            .font(.title2)
-                            .foregroundStyle(.red)
+                        Image(systemName: recorder.isRecording ? "mic.fill" : "mic")
+                            .font(.body)
+                            .foregroundStyle(recorder.isRecording ? Theme.danger : Color.secondary)
+                            .symbolEffect(.pulse, isActive: recorder.isRecording)
+                            .frame(width: Theme.controlHitSize, height: Theme.controlHitSize)
+                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .disabled(store.controlRequest != nil || store.selectedSessionIsDeleting)
-                    .help(L("停止后续执行（已完成的副作用不会自动撤销）"))
-                } else {
-                    Button(action: send) {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.title2)
-                            .foregroundStyle(canSend ? Theme.accent : Color.secondary)
+                    .buttonStyle(CeladonControlStyle())
+                    .disabled(store.isGenerating || store.selectedSessionIsDeleting)
+                    .help(L("语音输入（松开即作为音频附件发送给后端转写）"))
+                    .accessibilityLabel(L("语音输入"))
+
+                    Toggle(isOn: $thinking) {
+                        Image(systemName: "brain")
+                            .font(.body)
+                            .frame(width: Theme.controlHitSize, height: Theme.controlHitSize)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!canSend)
-                    .keyboardShortcut(.return, modifiers: .command)
+                    .toggleStyle(.button)
+                    .buttonStyle(CeladonControlStyle(selected: thinking))
+                    .foregroundStyle(thinking ? Theme.thoughts : Color.secondary)
+                    .background(thinking ? Theme.thoughtsWash : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
+                    .help(L("深度思考模式"))
+                    .accessibilityLabel(L("深度思考模式"))
+
+                    #if os(macOS)
+                    Text(L("回车发送 · ⇧回车换行"))
+                        .font(.caption2)
+                        .foregroundStyle(Theme.secondaryText)
+                        .lineLimit(1)
+                        .padding(.leading, Theme.s2)
+                    #endif
+                    Spacer(minLength: Theme.s1)
+
+                    if store.isGenerating {
+                        Button {
+                            store.cancelGeneration()
+                        } label: {
+                            Image(systemName: "stop.fill")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(Theme.danger)
+                                .frame(width: Theme.controlHitSize, height: Theme.controlHitSize)
+                                .background(Theme.wash, in: Circle())
+                        }
+                        .buttonStyle(CeladonControlStyle(filled: true, cornerRadius: Theme.controlHitSize / 2))
+                        .disabled(store.controlRequest != nil || store.selectedSessionIsDeleting)
+                        .help(L("停止后续执行（已完成的副作用不会自动撤销）"))
+                        .accessibilityLabel(L("停止"))
+                    } else {
+                        Button(action: send) {
+                            Image(systemName: "arrow.up")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(canSend ? Theme.accentInk : Color.secondary)
+                                .frame(width: Theme.controlHitSize, height: Theme.controlHitSize)
+                                .background(canSend ? Theme.accent : Theme.wash, in: Circle())
+                        }
+                        .buttonStyle(CeladonControlStyle(filled: true, cornerRadius: Theme.controlHitSize / 2))
+                        .disabled(!canSend)
+                        .keyboardShortcut(.return, modifiers: .command)
+                        .help(L("发送消息"))
+                        .accessibilityLabel(L("发送消息"))
+                    }
                 }
             }
+            .padding(Theme.s3)
+            .background(Theme.inputSurface)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusComposer))
+            .overlay(RoundedRectangle(cornerRadius: Theme.radiusComposer)
+                .strokeBorder(Theme.separator, lineWidth: 1))
+            .shadow(color: Theme.cardShadow, radius: 8, y: 3)
         }
-        .padding(10)
+        .frame(maxWidth: Theme.readingWidth)
+        .padding(.horizontal, Theme.contentPadding)
+        .padding(.top, Theme.s2)
+        .padding(.bottom, Theme.s4)
+        .frame(maxWidth: .infinity)
         // 从 Finder / 文件 App 拖文件进输入区 → 附件化（与文件选择器/⌘V 同一条导入路）。
         // 悬停时描一圈虚线主色框作为可放提示；生成中拒收（与其他附件入口口径一致）。
         .dropDestination(for: URL.self) { urls, _ in
@@ -229,7 +264,7 @@ struct ComposerView: View {
         } isTargeted: { dropTargeted = $0 }
         .overlay {
             if dropTargeted {
-                RoundedRectangle(cornerRadius: Theme.radiusCard)
+                RoundedRectangle(cornerRadius: Theme.radiusComposer)
                     .strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 2, dash: [6]))
             }
         }
@@ -255,7 +290,7 @@ struct ComposerView: View {
         .onAppear { installPasteMonitor() }
         .onDisappear { removePasteMonitor() }
         #endif
-        .onChange(of: store.composerPrefill) {
+        .onChange(of: store.composerPrefill, initial: true) {
             // 「编辑并重发」通道：store 回填上一条用户输入
             if let prefill = store.composerPrefill {
                 draft = prefill
@@ -300,13 +335,18 @@ struct ComposerView: View {
             }
             #endif
         } label: {
-            Image(systemName: "plus.circle")
-                .font(.title3)
+            Image(systemName: "plus")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .frame(width: Theme.controlHitSize, height: Theme.controlHitSize)
+                .contentShape(Rectangle())
+                .modifier(CeladonHoverSurface(cornerRadius: Theme.radiusSmall))
         }
         .menuIndicator(.hidden)
-        .buttonStyle(.plain)
+        .buttonStyle(CeladonControlStyle())
         .disabled(store.isGenerating || store.selectedSessionIsDeleting)
         .help(L("添加附件（图片 / PDF / 文档 / 音频）"))
+        .accessibilityLabel(L("添加附件（图片 / PDF / 文档 / 音频）"))
     }
 
     /// 附件 chip：图片显示缩略图，其余显示回形针 + 文件名。
@@ -322,8 +362,11 @@ struct ComposerView: View {
                 uploads.removeAll { $0.id == upload.id }
             } label: {
                 Image(systemName: "xmark.circle.fill")
+                    .frame(minWidth: Theme.controlHitSize, minHeight: Theme.controlHitSize)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(CeladonControlStyle())
+            .accessibilityLabel(L("移除附件") + " " + upload.filename)
         }
         .font(.caption)
         .padding(.horizontal, 8)
@@ -387,7 +430,7 @@ struct ComposerView: View {
     // MARK: - 发送
 
     private var canSend: Bool {
-        !store.selectedSessionIsDeleting && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !uploads.isEmpty)
+        !store.historyIsReadOnly && !store.selectedSessionIsDeleting && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !uploads.isEmpty)
     }
 
     /// 发送入口：暂停态（待审批 / 已挂起）先弹确认，其余直发。

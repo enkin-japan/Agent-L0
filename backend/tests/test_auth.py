@@ -85,10 +85,26 @@ def _health_body() -> dict:
 def test_health_reports_identity_fields():
     # 四字段齐全：探针要能一次问出「你是谁 / 哪套布局 / 认哪把钥匙」
     body = _health_body()
-    assert set(body) == {"status", "service", "layout", "key_fp"}
+    # 钉住**整个**键集而非子集：/health 免鉴权，任何新字段漏到这里都是对未认证
+    # 调用方的额外披露，必须由一个测试红掉来拍板，而不是顺手跟着实现走。
+    assert set(body) == {"status", "service", "layout", "key_fp",
+                         "data_ready", "compute_ready", "compute_state"}
     assert body["status"] == "ok"           # 旧消费方只看这个，语义不变
     assert body["service"] == SERVICE_NAME == "macagent-backend"
     assert isinstance(body["layout"], str) and body["layout"]
+    assert type(body["data_ready"]) is bool
+    assert type(body["compute_ready"]) is bool
+    assert isinstance(body["compute_state"], str) and body["compute_state"]
+
+
+def test_health_before_lifespan_reports_unavailable_capabilities(monkeypatch):
+    from fastapi import FastAPI
+    monkeypatch.setattr(app_module, "app", FastAPI())
+    body = _health_body()
+    assert body["status"] == "ok"
+    assert body["data_ready"] is False
+    assert body["compute_ready"] is False
+    assert body["compute_state"] == "starting"
 
 
 def test_health_key_fp_is_8_hex_or_empty():

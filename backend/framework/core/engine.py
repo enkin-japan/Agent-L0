@@ -61,11 +61,37 @@ class AgentEngine:
         executor = ThreadPoolExecutor(max_workers=max_concurrency,
                                       thread_name_prefix="inference")
         from ..backends import get_backend_class  # 后端命名收编在注册面（缺省即默认后端）
-        backend_obj = await get_backend_class(backend).load(
-            model_path, executor=executor, **(kv_config or {}))
-        return cls(backend_obj, kv_config=kv_config,
-                   model_options=model_options, env=env,
-                   _executor=executor, max_concurrency=max_concurrency)
+        backend_obj = None
+        load_task = None
+        try:
+            load_task = asyncio.create_task(get_backend_class(backend).load(
+                model_path, executor=executor, **(kv_config or {})))
+            # Backend loaders may use a worker thread. Cancellation must join that
+            # load before releasing resources or permitting the next assembly.
+            backend_obj = await asyncio.shield(load_task)
+            return cls(backend_obj, kv_config=kv_config,
+                       model_options=model_options, env=env,
+                       _executor=executor, max_concurrency=max_concurrency)
+        except BaseException:
+            if load_task is not None:
+                while not load_task.done():
+                    try:
+                        await asyncio.shield(load_task)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if backend_obj is None and not load_task.cancelled():
+                    try:
+                        backend_obj = load_task.result()
+                    except BaseException:
+                        pass
+            try:
+                if backend_obj is not None:
+                    backend_obj.shutdown()
+            finally:
+                executor.shutdown(wait=True, cancel_futures=True)
+            raise
 
     def __init__(self, backend: InferenceBackend, kv_config=None,
                  model_options=None,

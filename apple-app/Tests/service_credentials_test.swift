@@ -20,6 +20,8 @@ final class FixtureDefaults {
 enum AppLanguage: String { case system }
 enum L10n { static var current = AppLanguage.system }
 struct AgentClient { let baseURL: URL; let apiKey: String }
+// Lives in PhoneLink.swift (not compiled here); AppSettings stores it.
+enum ConnectionSource: String, Codable { case manual, icloud, qr }
 
 @main
 struct ServiceCredentialsTest {

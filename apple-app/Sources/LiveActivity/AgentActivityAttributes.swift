@@ -27,5 +27,7 @@ struct AgentActivityAttributes: ActivityAttributes {
     var sessionId: String
     var turnId: String
     var title: String
+    /// 来自哪台 Mac（后端 instance_id = Mac 的 macId）；旧后端不带。岛上的「拒绝」据此回到那台。
+    var src: String?
 }
 #endif

@@ -19,22 +19,34 @@ struct DenyApprovalIntent: LiveActivityIntent {
     var sessionId: String
     @Parameter(title: "轮次")
     var turnId: String
+    @Parameter(title: "Mac")
+    var src: String?
 
     init() {}
 
-    init(sessionId: String, turnId: String) {
+    init(sessionId: String, turnId: String, src: String?) {
         self.sessionId = sessionId
         self.turnId = turnId
+        self.src = src
     }
 
     func perform() async throws -> some IntentResult {
-        guard let base = Self.baseURL(),
+        // 多 Mac：活动来自哪台就回给哪台（PhoneLink 的列表与 mac-key.<id>），认不出退回当前连接
+        // 规则同 MacDirectory.approvalTarget（本文件也编进 widget，不能引用它）
+        let target: (id: String, url: URL)?
+        switch Self.resolve(src: src) {
+        case .refuse: return .result()
+        case .legacy: target = nil
+        case .mac(let id, let url): target = (id, url)
+        }
+        guard let base = target?.url ?? Self.baseURL(),
               let url = URL(string: "/api/v1/chat/\(sessionId)/turns/approval",
                             relativeTo: base) else { return .result() }
         var req = URLRequest(url: url, timeoutInterval: 10)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let key = Self.apiKey()
+        let key = target.map { Self.keychain($0.id) } ?? Self.keychain(nil)
+        if target != nil, key.isEmpty { return .result() }   // 那台的密钥丢了：不发无鉴权请求
         if !key.isEmpty {
             req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         }
@@ -55,11 +67,37 @@ struct DenyApprovalIntent: LiveActivityIntent {
         return u
     }
 
-    private static func apiKey() -> String {
+    private enum Target {
+        case legacy                     // 没有 Mac 列表 / 不带来源：当前连接（agent.baseURL）
+        case mac(String, URL)           // 列表里的那一台（mac-key.<id>）
+        case refuse                     // 认不出来源，而当前是另一台已知 Mac：不发
+    }
+
+    /// PhoneLink 存的 Mac 列表（UserDefaults phone.macs / phone.currentMac）。
+    private static func resolve(src: String?) -> Target {
+        struct Saved: Decodable { let id: String; let macId: String?; let url: String }
+        let defaults = UserDefaults.standard
+        guard let data = defaults.data(forKey: "phone.macs"),
+              let list = try? JSONDecoder().decode([Saved].self, from: data), !list.isEmpty
+        else { return .legacy }
+        let current = list.first { $0.id == defaults.string(forKey: "phone.currentMac") }
+        let chosen: Saved?
+        if let src {
+            chosen = list.first { $0.macId == src } ?? (current?.macId == nil ? current : nil)
+        } else {
+            chosen = current
+        }
+        guard let chosen else { return .refuse }
+        guard let url = URL(string: chosen.url), url.scheme != nil else { return .refuse }
+        return .mac(chosen.id, url)
+    }
+
+    /// nil = 当前连接的密钥（agent-api-key）；否则该 Mac 的 mac-key.<id>。
+    private static func keychain(_ savedId: String?) -> String {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "dev.enkin.macagent",
-            kSecAttrAccount as String: "agent-api-key",
+            kSecAttrAccount as String: savedId.map { "mac-key." + $0 } ?? "agent-api-key",
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]

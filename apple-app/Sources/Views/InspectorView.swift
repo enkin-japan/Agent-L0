@@ -30,6 +30,7 @@ struct InspectorView: View {
     @State private var showDeckViewer = false
     // 文件页签态
     @State private var files: [AssetFileItem]?
+    @State private var inputFiles: [OfflineFileEntry] = []
     @State private var busyFile: String?          // 正在下载中的文件名（行内菊花）
     @State private var mediaPreview: MediaPreviewRequest?
     @State private var imagePreviewPath: String?
@@ -40,7 +41,14 @@ struct InspectorView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("", selection: $tab) {
+            HStack {
+                Text(L("任务详情")).font(.headline)
+                Spacer()
+                Image(systemName: "list.bullet.rectangle").foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            .padding(Theme.s4)
+            Picker(L("任务详情"), selection: $tab) {
                 ForEach(Tab.allCases, id: \.self) { item in
                     Text(item.label).tag(item)
                 }
@@ -54,14 +62,19 @@ struct InspectorView: View {
             ScrollView {
                 content
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
+                    .padding(Theme.s4)
             }
         }
+        .background(Theme.sidebar)
         .task(id: tab) { await load() }
         .task(id: store.selectedSessionId) {
             planSnapshot = nil
             files = nil
+            inputFiles = []
             await load()
+        }
+        .onChange(of: store.offlineSyncInProgress) {
+            if !store.offlineSyncInProgress, tab == .files { Task { await load() } }
         }
         // 消息里点了产物链接：切到文件页签（列表刷新由 task(id: tab) 顺带完成；
         // 已在文件页签时手动刷一次——链接指向的可能是刚生成的文件）
@@ -121,21 +134,19 @@ struct InspectorView: View {
     private var planContent: some View {
         let snapshot = store.taskSnapshot ?? planSnapshot
         if let task = snapshot, let plan = task.plan, !plan.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: Theme.s4) {
+                TaskPhaseLabel()
                 if let goal = task.goal, !goal.isEmpty {
-                    Text(goal).font(.callout).bold()
+                    Text(goal).font(.headline)
                 }
-                ForEach(plan) { step in
-                    HStack(alignment: .top, spacing: 8) {
-                        Text(Self.stepIcon(step.status))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(step.title).font(.callout)
-                            if let note = step.note, !note.isEmpty {
-                                Text(note).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
+                VStack(alignment: .leading, spacing: Theme.s2) {
+                    ProgressView(value: Double(plan.filter { $0.status == "done" }.count), total: Double(plan.count))
+                        .tint(Theme.accent)
+                        .accessibilityLabel(L("已完成步骤"))
+                    Text(L("已完成步骤") + " \(plan.filter { $0.status == "done" }.count) / \(plan.count)")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 }
+                TaskPlanSteps(plan: plan)
                 if let activity = store.activity, let current = activity.current,
                    !current.isEmpty, store.isGenerating {
                     Divider()
@@ -146,16 +157,6 @@ struct InspectorView: View {
             }
         } else {
             emptyHint(L("当前会话没有进行中的多步任务计划"))
-        }
-    }
-
-    static func stepIcon(_ status: String) -> String {
-        switch status {
-        case "done": return "✅"
-        case "doing": return "▶️"
-        case "failed": return "❌"
-        case "skipped": return "⏭"
-        default: return "○"
         }
     }
 
@@ -216,6 +217,31 @@ struct InspectorView: View {
         } else {
             ProgressView().frame(maxWidth: .infinity)
         }
+        if !inputFiles.isEmpty {
+            DisclosureGroup(L("上传原件")) {
+                ForEach(inputFiles, id: \.path) { item in
+                    Button {
+                        guard let client = store.client, let sid = store.selectedSessionId else { return }
+                        Task {
+                            do {
+                                let url = try await client.downloadAsset(path: item.path, suggestedName: item.name)
+                                guard store.client === client, store.selectedSessionId == sid else { return }
+                                quickLookURL = url
+                            } catch {
+                                guard store.client === client, store.selectedSessionId == sid else { return }
+                                store.errorMessage = L("附件尚未保存到本机，或原文件已不可用。")
+                            }
+                        }
+                    } label: {
+                        Label(item.name, systemImage: FileKind.of(item.name).icon)
+                            .font(.callout).lineLimit(1).truncationMode(.middle)
+                    }
+                    .buttonStyle(.borderless)
+                    .padding(.vertical, Theme.s1)
+                }
+            }
+            .padding(.top, Theme.s3)
+        }
     }
 
     private func fileRow(_ item: AssetFileItem) -> some View {
@@ -250,10 +276,10 @@ struct InspectorView: View {
                 #endif
             }
         }
-        .padding(Theme.s2)
+        .padding(Theme.s3)
         .background(store.revealedAssetName == item.name
-                    ? Theme.accent.opacity(0.12) : Theme.wash)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall))
+                    ? Theme.selection : Theme.card)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
         .contentShape(Rectangle())
         .onTapGesture { preview(item) }
     }
@@ -265,9 +291,12 @@ struct InspectorView: View {
         let path = item.assetPath(sessionId: sid)
         switch FileKind.of(item.name) {
         case .media:
-            if let src = client.assetPlaybackSource(path: path) {
-                mediaPreview = MediaPreviewRequest(name: item.name, url: src.url,
-                                                   headers: src.headers)
+            Task {
+                if let src = await client.assetPlaybackSource(path: path),
+                   store.client === client, store.selectedSessionId == sid {
+                    mediaPreview = MediaPreviewRequest(name: item.name, url: src.url,
+                                                       headers: src.headers)
+                }
             }
         case .image:
             imagePreviewPath = path
@@ -375,9 +404,17 @@ struct InspectorView: View {
             }
         case .files:
             if let sid = store.selectedSessionId {
-                files = (try? await client.sessionFiles(sessionId: sid)) ?? files ?? []
+                let cached = await client.cachedSessionFiles(sessionId: sid)
+                let inputs = await client.cachedInputFiles(sessionId: sid)
+                guard store.client === client, store.selectedSessionId == sid else { return }
+                if let cached { files = cached }
+                inputFiles = inputs
+                let refreshed = try? await client.sessionFiles(sessionId: sid)
+                guard store.client === client, store.selectedSessionId == sid else { return }
+                files = refreshed ?? files ?? []
             } else {
                 files = []
+                inputFiles = []
             }
         case .deck:
             break
@@ -409,6 +446,42 @@ private enum FileKind {
         case .media: return "play.rectangle"
         case .image: return "photo"
         case .other: return "doc"
+        }
+    }
+}
+
+/// 手机折叠摘要与桌面检查器共用同一份计划展示，不另建任务状态机。
+struct TaskPlanSteps: View {
+    let plan: [TaskStep]
+
+    private func presentation(_ status: String) -> (symbol: String, label: String, color: Color) {
+        switch status {
+        case "done": return ("checkmark.circle.fill", L("已完成"), Theme.accent)
+        case "doing": return ("circle.dotted", L("正在处理"), Theme.accent)
+        case "failed": return ("xmark.circle", L("失败"), Theme.danger)
+        case "skipped": return ("forward.end", L("已跳过"), .secondary)
+        default: return ("circle", L("待处理"), .secondary)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.s4) {
+            ForEach(plan) { step in
+                HStack(alignment: .top, spacing: Theme.s2) {
+                    Image(systemName: presentation(step.status).symbol)
+                        .foregroundStyle(presentation(step.status).color)
+                        .font(.callout)
+                        .frame(width: 20)
+                        .accessibilityLabel(presentation(step.status).label)
+                    VStack(alignment: .leading, spacing: Theme.s1) {
+                        Text(step.title).font(.callout)
+                        if let note = step.note, !note.isEmpty {
+                            Text(note).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .accessibilityElement(children: .combine)
+            }
         }
     }
 }

@@ -5,13 +5,34 @@ final class RecoveryTransport: URLProtocol {
     static var requests: [URLRequest] = [], held: [RecoveryTransport] = []
     static func matching(_ suffix: String) -> [URLRequest] { lock.lock(); defer { lock.unlock() }; return requests.filter { $0.url!.path.hasSuffix(suffix) } }
     static func hold(_ t: RecoveryTransport) { lock.lock(); held.append(t); lock.unlock() }
-    static func takeHeld() -> RecoveryTransport { lock.lock(); defer { lock.unlock() }; return held.removeFirst() }
+    // startLoading records the request before its handler holds it: a test that waits on
+    // `matching(...)` can arrive here first under load. Wait for the hold (same as the
+    // recovery/retry harnesses) instead of trapping on an empty queue.
+    static func takeHeld() -> RecoveryTransport {
+        for _ in 0..<2000 {
+            lock.lock()
+            if !held.isEmpty { let value = held.removeFirst(); lock.unlock(); return value }
+            lock.unlock()
+            Thread.sleep(forTimeInterval: 0.001)
+        }
+        fatalError("missing held transport")
+    }
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() { Self.lock.lock(); Self.requests.append(request); Self.lock.unlock(); Self.handler(self) }
     override func stopLoading() {}
     private var headersSent = false
-    func respond(_ body: Any, status: Int = 200) { deliver(try! JSONSerialization.data(withJSONObject: body), status: status, type: "application/json", finish: true) }
+    func respond(_ body: Any, status: Int = 200) {
+        // Shared history fixtures are replayed for A/B ownership races. Bind their
+        // resource envelope to the requested session, as a real backend does.
+        var value = body
+        if request.url!.path.hasSuffix("/history"), var history = body as? [String: Any],
+           history["session_id"] != nil {
+            history["session_id"] = request.url!.path.split(separator: "/").dropLast().last.map(String.init)
+            value = history
+        }
+        deliver(try! JSONSerialization.data(withJSONObject: value), status: status, type: "application/json", finish: true)
+    }
     func deliver(_ data: Data, status: Int = 200, type: String = "text/event-stream", finish: Bool = false) {
         if !headersSent { headersSent = true; client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type":type])!, cacheStoragePolicy: .notAllowed) }
         if !data.isEmpty { client?.urlProtocol(self, didLoad: data) }

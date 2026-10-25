@@ -18,14 +18,21 @@ enum AgentError: LocalizedError {
 /// key 存 Keychain，每个请求自带 Authorization 头。
 final class AgentClient {
     let baseURL: URL
+    let cacheNamespace: String
+    let offlineCacheRoot: URL?
+    let offlineAssets: OfflineAssetStore
     private let apiKey: String
     private let session: URLSession
     /// 阻塞式长调用（/task/resume：续跑可能多步耗时）专用超时。
     private let longTimeout: TimeInterval = 3600
 
-    init(baseURL: URL, apiKey: String, session: URLSession? = nil) {
+    init(baseURL: URL, apiKey: String, session: URLSession? = nil, cacheRoot: URL? = nil,
+         mirrorLimits: OfflineAssetStore.MirrorLimits = .production) {
         self.baseURL = baseURL
         self.apiKey = apiKey
+        self.cacheNamespace = OfflineHistoryStore.namespace(baseURL: baseURL, apiKey: apiKey)
+        self.offlineCacheRoot = cacheRoot
+        self.offlineAssets = OfflineAssetStore(root: cacheRoot, limits: mirrorLimits)
         if let session {
             self.session = session
             return
@@ -92,16 +99,26 @@ final class AgentClient {
         return (response as? HTTPURLResponse)?.statusCode == 200
     }
 
-    func backendAccess() async -> BackendAccess {
-        guard (try? await health()) == true else { return .offline }
+    func backendAccess() async -> BackendAccess { await connectionStatus().access }
+
+    /// One health read per monitor cycle, followed by the existing authenticated read.
+    func connectionStatus() async -> BackendConnectionStatus {
+        let health: BackendHealth?
+        do {
+            let (data, response) = try await session.data(for: request("GET", "/health", timeout: 5))
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                return BackendConnectionStatus(access: .offline, health: nil)
+            }
+            health = try? JSONDecoder().decode(BackendHealth.self, from: data)
+        } catch { return BackendConnectionStatus(access: .offline, health: nil) }
+        let access: BackendAccess
         do {
             let index = try await sessionIndex(timeout: 5)
-            return index.status ? .authenticated : .reachable
+            access = index.status ? .authenticated : .reachable
         } catch AgentError.http(let code, _) where code == 401 || code == 403 {
-            return .unauthorized
-        } catch {
-            return .reachable
-        }
+            access = .unauthorized
+        } catch { access = .reachable }
+        return BackendConnectionStatus(access: access, health: health)
     }
 
     // MARK: - 会话
@@ -364,46 +381,241 @@ final class AgentClient {
     /// 拉取会话资产（图表 PNG 等）：带鉴权头 GET 相对路径。文件名含时间戳恒不复用，
     /// 后端发 immutable 长缓存头，URLCache 自动生效。
     /// 会话产物清单（检查器「文件」页签）。
-    func sessionFiles(sessionId: String) async throws -> [AssetFileItem] {
-        let res: SessionFilesResponse = try await send(try request("GET", "/api/v1/files/\(sessionId)"))
-        return res.files
+    func cachedSessionFiles(sessionId: String) async -> [AssetFileItem]? {
+        guard let data = await offlineAssets.data(namespace: cacheNamespace, sid: sessionId, key: "files"),
+              let cached = try? JSONDecoder().decode(SessionFilesResponse.self, from: data) else { return nil }
+        return cached.files
     }
 
-    /// 下载会话产物到本地临时文件（流式落盘，视频可上 GB——绝不整块进内存）。
-    /// 返回的 URL 在系统临时目录，调用方负责搬走或用完即弃。
-    func downloadAsset(path: String, suggestedName: String) async throws -> URL {
-        let req = try request("GET", path, timeout: 3600)
-        let (tmp, response) = try await session.download(for: req)
-        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-            throw AgentError.http(http.statusCode, "")
+    func cachedInputFiles(sessionId: String) async -> [OfflineFileEntry] {
+        guard let data = await offlineAssets.data(namespace: cacheNamespace, sid: sessionId, key: "manifest"),
+              let manifest = try? JSONDecoder().decode(OfflineFileManifest.self, from: data),
+              manifest.status, manifest.session_id == sessionId else { return [] }
+        return manifest.files.filter { $0.kind != "assets" }
+    }
+
+    func sessionFiles(sessionId: String) async throws -> [AssetFileItem] {
+        let requestEpoch = try await offlineAssets.epoch(namespace: cacheNamespace, sid: sessionId)
+        do {
+            let res: SessionFilesResponse = try await send(try request("GET", "/api/v1/files/\(sessionId)", timeout: 5))
+            guard res.status else { throw AgentError.http(200, L("文件清单暂不可用")) }
+            try? await offlineAssets.save(JSONEncoder().encode(res), namespace: cacheNamespace,
+                sid: sessionId, key: "files", expectedEpoch: requestEpoch)
+            try await offlineAssets.validate(namespace: cacheNamespace, sid: sessionId, expectedEpoch: requestEpoch)
+            return res.files
+        } catch {
+            // A cached list stands in only for lost transport. Authorization,
+            // server and decoding failures must reach the caller.
+            guard OfflineTransportFailure.matches(error),
+                  let cached = await cachedSessionFiles(sessionId: sessionId) else { throw error }
+            return cached
         }
-        // download(for:) 的临时文件名是随机串：换成真名（默认 app 打开/分享都靠扩展名）
-        let dest = FileManager.default.temporaryDirectory
-            .appendingPathComponent("macagent-assets", isDirectory: true)
-            .appendingPathComponent(suggestedName)
-        try? FileManager.default.createDirectory(at: dest.deletingLastPathComponent(),
-                                                 withIntermediateDirectories: true)
-        try? FileManager.default.removeItem(at: dest)
-        try FileManager.default.moveItem(at: tmp, to: dest)
+    }
+
+    /// Traversal is rejected as a path SEGMENT: `report..final.pdf` is an ordinary
+    /// file name, while `a/../b` is an escape. Mirrors canonicalInputReference.
+    private func assetSession(_ path: String) throws -> String {
+        let decoded = path.removingPercentEncoding ?? path
+        let parts = decoded.split(separator: "/").map(String.init)
+        guard path.hasPrefix("/api/v1/files/"), parts.count >= 5,
+              !path.contains("?"), !path.contains("#"), !decoded.contains("\\"),
+              !parts.contains(".."), !parts.contains(".") else { throw AgentError.badURL }
+        return parts[3]
+    }
+
+    /// Returned export copies retain the original filename; media itself remains
+    /// in the durable cache so closing a preview cannot erase the offline copy.
+    func downloadAsset(path: String, suggestedName: String, expectedEpoch: Int? = nil) async throws -> URL {
+        let sid = try assetSession(path)
+        let requestEpoch: Int
+        if let expectedEpoch { requestEpoch = expectedEpoch }
+        else { requestEpoch = try await offlineAssets.epoch(namespace: cacheNamespace, sid: sid) }
+        try await offlineAssets.validate(namespace: cacheNamespace, sid: sid, expectedEpoch: requestEpoch, key: path)
+        let local: URL
+        var downloaded: URL?
+        defer { if let downloaded { try? FileManager.default.removeItem(at: downloaded) } }
+        if let cached = await offlineAssets.file(namespace: cacheNamespace, sid: sid, path: path) {
+            local = cached
+        } else {
+            let (temporary, response) = try await session.download(for: request("GET", path, timeout: 3600))
+            downloaded = temporary
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                throw AgentError.http((response as? HTTPURLResponse)?.statusCode ?? 0, "")
+            }
+            try? await offlineAssets.install(temporary, namespace: cacheNamespace, sid: sid, path: path, expectedEpoch: requestEpoch)
+            local = await offlineAssets.file(namespace: cacheNamespace, sid: sid, path: path) ?? temporary
+        }
+        try await offlineAssets.validate(namespace: cacheNamespace, sid: sid, expectedEpoch: requestEpoch, key: path)
+        // One deterministic export location per cached asset, overwritten in place:
+        // repeated previews of the same file must not pile up full temporary copies.
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("macagent-assets")
+            .appendingPathComponent(OfflineHistoryStore.digest(cacheNamespace + "\n" + path))
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let dest = directory.appendingPathComponent((suggestedName as NSString).lastPathComponent)
+        if FileManager.default.fileExists(atPath: dest.path) {
+            try FileManager.default.removeItem(at: dest)
+        }
+        try FileManager.default.copyItem(at: local, to: dest)
         return dest
     }
 
-    /// 产物的绝对 URL + 鉴权头（AVPlayer 流式播放用：AVURLAsset 自带 Range 断点能力，
-    /// 但 Authorization 头得由我们注入）。
-    func assetPlaybackSource(path: String) -> (url: URL, headers: [String: String])? {
+    func assetPlaybackSource(path: String) async -> (url: URL, headers: [String: String])? {
+        guard let sid = try? assetSession(path),
+              let requestEpoch = try? await offlineAssets.epoch(namespace: cacheNamespace, sid: sid),
+              (try? await offlineAssets.validate(namespace: cacheNamespace, sid: sid, expectedEpoch: requestEpoch, key: path)) != nil else { return nil }
+        if let cached = await offlineAssets.file(namespace: cacheNamespace, sid: sid, path: path) {
+            guard (try? await offlineAssets.validate(namespace: cacheNamespace, sid: sid, expectedEpoch: requestEpoch, key: path)) != nil else { return nil }
+            return (cached, [:])
+        }
         guard let url = URL(string: path, relativeTo: baseURL) else { return nil }
-        let headers = apiKey.isEmpty ? [:] : ["Authorization": "Bearer \(apiKey)"]
-        return (url, headers)
+        return (url, apiKey.isEmpty ? [:] : ["Authorization": "Bearer \(apiKey)"])
     }
 
     func fetchAsset(path: String) async throws -> Data {
-        var req = try request("GET", path)
-        req.cachePolicy = .returnCacheDataElseLoad
-        let (data, response) = try await session.data(for: req)
-        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-            throw AgentError.http(http.statusCode, "")
+        let sid = try assetSession(path)
+        let requestEpoch = try await offlineAssets.epoch(namespace: cacheNamespace, sid: sid)
+        try await offlineAssets.validate(namespace: cacheNamespace, sid: sid, expectedEpoch: requestEpoch, key: path)
+        if let cached = await offlineAssets.data(namespace: cacheNamespace, sid: sid, key: path) {
+            try await offlineAssets.validate(namespace: cacheNamespace, sid: sid, expectedEpoch: requestEpoch, key: path)
+            return cached
         }
+        let (data, response) = try await session.data(for: request("GET", path))
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw AgentError.http((response as? HTTPURLResponse)?.statusCode ?? 0, "")
+        }
+        try? await offlineAssets.save(data, namespace: cacheNamespace, sid: sid, key: path, expectedEpoch: requestEpoch)
+        try await offlineAssets.validate(namespace: cacheNamespace, sid: sid, expectedEpoch: requestEpoch, key: path)
         return data
+    }
+
+    /// The result of one automatic mirroring pass. `partial` means the pass reached
+    /// the end of the manifest but the budget left files out, so the session is not
+    /// fully saved on this device even though nothing failed. `evicted` names other
+    /// sessions whose copies were dropped to make room.
+    struct OfflineSyncResult: Sendable, Equatable {
+        enum State: Sendable, Equatable { case complete, partial, deferred, failed }
+        var state: State
+        var evicted: Set<String> = []
+    }
+
+    /// Serial disk downloads bound memory and connection usage. A failed transfer
+    /// leaves its old manifest in place so the next pass retries it.
+    func syncOfflineAssets(sessionId: String) async -> OfflineSyncResult {
+        // Metered or low-data paths carry no automatic media copies; history text
+        // keeps syncing, and any file still opens on demand.
+        guard NetworkPathPolicy.shared.allowsAutomaticMirroring else { return OfflineSyncResult(state: .deferred) }
+        var evicted = Set<String>()
+        var skipped = false
+        // The session's own missing bytes are expressed by the failed state, not as
+        // an eviction of itself (which would bump its own pass token).
+        let failure = { OfflineSyncResult(state: .failed, evicted: evicted.subtracting([sessionId])) }
+        do {
+            let requestEpoch = try await offlineAssets.epoch(namespace: cacheNamespace, sid: sessionId)
+            let manifest: OfflineFileManifest = try await send(try request("GET",
+                "/api/v1/chat/\(sessionId)/offline-files", timeout: 15))
+            guard manifest.status, manifest.session_id == sessionId else { return failure() }
+            for item in manifest.files {
+                guard try assetSession(item.path) == sessionId, item.size >= 0,
+                      ["assets", "image", "audio", "attach"].contains(item.kind) else { return failure() }
+                if item.kind != "assets" {
+                    guard OfflineInputReference.assetPath(item.path) == OfflineInputReference(kind: item.kind, path: item.name) else { return failure() }
+                }
+            }
+            try await offlineAssets.acceptManifest(manifest, namespace: cacheNamespace, sid: sessionId, expectedEpoch: requestEpoch)
+            let oldData = await offlineAssets.data(namespace: cacheNamespace, sid: sessionId, key: "manifest")
+            let old = oldData.flatMap { try? JSONDecoder().decode(OfflineFileManifest.self, from: $0) }
+            // What is already on disk is recorded as each file lands, not at the end:
+            // a failure on the last file must not make the next pass download the
+            // whole session again. An older cache seeds the record from its manifest.
+            var installed = await installedRevisions(sessionId: sessionId)
+            if installed.isEmpty, let old {
+                for file in old.files { installed[file.cachePath(sessionId: sessionId)] = file.revision }
+            }
+            for item in manifest.files {
+                try await offlineAssets.validate(namespace: cacheNamespace, sid: sessionId, expectedEpoch: requestEpoch)
+                guard try assetSession(item.path) == sessionId, item.size >= 0,
+                      ["assets", "image", "audio", "attach"].contains(item.kind) else { return failure() }
+                let key = item.cachePath(sessionId: sessionId)
+                let exists = await offlineAssets.file(namespace: cacheNamespace, sid: sessionId, path: key) != nil
+                if exists, installed[key] == item.revision { continue }
+                // Oversized or over-budget files are left on the server on purpose:
+                // they remain downloadable, and the cache stays within its budget.
+                // Making room is never free — whoever lost bytes is reported back.
+                let admission = await offlineAssets.admitAutomatic(size: item.size, namespace: cacheNamespace)
+                evicted.formUnion(admission.evicted)
+                guard admission.accepted else { skipped = true; continue }
+                var req = try request("GET", item.path, timeout: 120)
+                req.cachePolicy = .reloadIgnoringLocalCacheData
+                let (temporary, response) = try await session.download(for: req)
+                defer { try? FileManager.default.removeItem(at: temporary) }
+                guard (response as? HTTPURLResponse)?.statusCode == 200,
+                      (try temporary.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) == item.size
+                else { return failure() }
+                try await offlineAssets.install(temporary, namespace: cacheNamespace, sid: sessionId, path: key, expectedEpoch: requestEpoch)
+                installed[key] = item.revision
+                try await saveInstalledRevisions(installed, sessionId: sessionId, expectedEpoch: requestEpoch)
+            }
+            // A file evicted later in this same pass is not mirrored either.
+            if evicted.contains(sessionId) { skipped = true }
+            let keys = Set(manifest.files.map { $0.cachePath(sessionId: sessionId) })
+            for previous in old?.files ?? [] where !keys.contains(previous.cachePath(sessionId: sessionId)) {
+                await offlineAssets.remove(namespace: cacheNamespace, sid: sessionId, key: previous.cachePath(sessionId: sessionId), expectedEpoch: requestEpoch)
+            }
+            let outputs = manifest.files.filter { $0.kind == "assets" }.map {
+                AssetFileItem(name: $0.name, size: $0.size,
+                    mtime: (Double($0.revision.split(separator: ":").first ?? "0") ?? 0) / 1_000_000_000)
+            }
+            try await offlineAssets.save(JSONEncoder().encode(SessionFilesResponse(status: true, files: outputs)),
+                namespace: cacheNamespace, sid: sessionId, key: "files", expectedEpoch: requestEpoch)
+            _ = try await refreshDeck(sessionId: sessionId, expectedEpoch: requestEpoch)
+            try await offlineAssets.save(JSONEncoder().encode(manifest), namespace: cacheNamespace, sid: sessionId, key: "manifest", expectedEpoch: requestEpoch)
+            try await saveInstalledRevisions(installed.filter { keys.contains($0.key) },
+                sessionId: sessionId, expectedEpoch: requestEpoch)
+            return OfflineSyncResult(state: skipped ? .partial : .complete, evicted: evicted.subtracting([sessionId]))
+        } catch { return failure() }
+    }
+
+    /// Cache path -> revision of every file this connection has actually written for
+    /// the session. Kept apart from the manifest, which is only published once the
+    /// whole pass succeeded.
+    private struct InstalledRevisions: Codable {
+        let session_id: String
+        var entries: [String: String]
+    }
+
+    private func installedRevisions(sessionId: String) async -> [String: String] {
+        guard let data = await offlineAssets.data(namespace: cacheNamespace, sid: sessionId, key: "installed"),
+              let record = try? JSONDecoder().decode(InstalledRevisions.self, from: data),
+              record.session_id == sessionId else { return [:] }
+        return record.entries
+    }
+
+    private func saveInstalledRevisions(_ entries: [String: String], sessionId: String, expectedEpoch: Int) async throws {
+        try await offlineAssets.save(JSONEncoder().encode(InstalledRevisions(session_id: sessionId, entries: entries)),
+            namespace: cacheNamespace, sid: sessionId, key: "installed", expectedEpoch: expectedEpoch)
+    }
+
+    /// Resolve only a file declared by the session manifest, never a raw local
+    /// path from a tool/model response. The saved manifest works without HTTP.
+    func downloadAttachment(sessionId: String, attachment: AttachmentInfo) async throws -> URL {
+        let requestEpoch = try await offlineAssets.epoch(namespace: cacheNamespace, sid: sessionId)
+        let saved = await offlineAssets.data(namespace: cacheNamespace, sid: sessionId, key: "manifest")
+        let manifest: OfflineFileManifest
+        if let saved, let cached = try? JSONDecoder().decode(OfflineFileManifest.self, from: saved) {
+            manifest = cached
+        } else {
+            manifest = try await send(try request("GET", "/api/v1/chat/\(sessionId)/offline-files", timeout: 5))
+        }
+        guard manifest.status, manifest.session_id == sessionId else { throw AgentError.badURL }
+        try await offlineAssets.validate(namespace: cacheNamespace, sid: sessionId, expectedEpoch: requestEpoch)
+        let filename = attachment.path.map { ($0 as NSString).lastPathComponent } ?? attachment.name
+        let matches = manifest.files.filter { $0.kind != "assets" && $0.name == filename }
+        guard matches.count == 1, let match = matches.first,
+              try assetSession(match.path) == sessionId else {
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+        return try await downloadAsset(path: match.path, suggestedName: attachment.name ?? match.name, expectedEpoch: requestEpoch)
     }
 
     func memoryStatus(sessionId: String) async throws -> MemoryStatusResponse {
@@ -508,15 +720,37 @@ final class AgentClient {
     }
 
     /// 会话 Deck Spec；该会话没有 deck 时返回 nil（404 不是错误）。
+    func cachedDeck(sessionId: String) async -> DeckSpec? {
+        guard let data = await offlineAssets.data(namespace: cacheNamespace, sid: sessionId, key: "deck") else { return nil }
+        return try? JSONDecoder().decode(DeckEnvelope.self, from: data).deck
+    }
+
     func deck(sessionId: String) async throws -> DeckSpec? {
-        let req = try request("GET", "/api/v1/files/\(sessionId)/deck")
-        let (data, response) = try await session.data(for: req)
-        guard let http = response as? HTTPURLResponse else { return nil }
-        if http.statusCode == 404 { return nil }
-        if http.statusCode != 200 {
-            throw AgentError.http(http.statusCode, "")
+        do { return try await refreshDeck(sessionId: sessionId) }
+        catch {
+            // Same discipline as the file list: only lost transport reads the cache.
+            guard OfflineTransportFailure.matches(error),
+                  let cached = await cachedDeck(sessionId: sessionId) else { throw error }
+            return cached
         }
-        return try JSONDecoder().decode(DeckEnvelope.self, from: data).deck
+    }
+
+    private func refreshDeck(sessionId: String, expectedEpoch: Int? = nil) async throws -> DeckSpec? {
+        let requestEpoch: Int
+        if let expectedEpoch { requestEpoch = expectedEpoch }
+        else { requestEpoch = try await offlineAssets.epoch(namespace: cacheNamespace, sid: sessionId) }
+        let req = try request("GET", "/api/v1/files/\(sessionId)/deck", timeout: 15)
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw AgentError.badURL }
+        try await offlineAssets.validate(namespace: cacheNamespace, sid: sessionId, expectedEpoch: requestEpoch)
+        if http.statusCode == 404 {
+            await offlineAssets.remove(namespace: cacheNamespace, sid: sessionId, key: "deck", expectedEpoch: requestEpoch)
+            return nil
+        }
+        guard http.statusCode == 200 else { throw AgentError.http(http.statusCode, "") }
+        let deck = try JSONDecoder().decode(DeckEnvelope.self, from: data).deck
+        try await offlineAssets.save(data, namespace: cacheNamespace, sid: sessionId, key: "deck", expectedEpoch: requestEpoch)
+        return deck
     }
 
     struct BranchBody: Encodable {

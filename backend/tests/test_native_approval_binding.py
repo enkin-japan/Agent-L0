@@ -35,6 +35,13 @@ def test_native_approval(native_approval, mode, tmp_path):
 
 def test_native_full_argument_disclosure_uses_same_presentation():
     card = (ROOT / "apple-app/Sources/Views/ApprovalCard.swift").read_text()
-    assert 'DisclosureGroup("完整参数")' in card
-    assert "Text(presentation.summary)" in card
-    assert "Text(presentation.fullText)" in card
+    assert 'DisclosureGroup(L("完整参数"))' in card
+    # Same presentation, and both serialized texts pass the invisible-character
+    # filter: a bidi override must not reorder what the approver reads.
+    assert "Text(ApprovalArguments.visibleFormatting(presentation.summary))" in card
+    assert "Text(ApprovalArguments.visibleFormatting(presentation.fullText))" in card
+    assert "Text(presentation.summary)" not in card
+    assert "Text(presentation.fullText)" not in card
+    # The short per-key rows go through the same filter.
+    assert "Text(ApprovalArguments.displayKey(key))" in card
+    assert "args[key].map(ApprovalArguments.displayValue)" in card

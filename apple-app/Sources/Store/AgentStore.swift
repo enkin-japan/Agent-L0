@@ -1,6 +1,22 @@
 import Foundation
 import UserNotifications
 
+/// A request token can be checked by disk actors without hopping back to MainActor.
+/// The lock protects only the token; file IO never holds it.
+final class OfflineSessionIndexFence: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current = UUID()
+    @discardableResult func advance() -> UUID {
+        lock.lock(); defer { lock.unlock() }
+        current = UUID()
+        return current
+    }
+    func matches(_ request: UUID) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return current == request
+    }
+}
+
 /// 审批卡片捕获的账本身份；seq 区分同一轮中后续的一批审批。
 struct PendingApprovalTarget: Equatable {
     let sessionId: String
@@ -38,6 +54,7 @@ final class AgentStore: ObservableObject {
     // 连接
     @Published var connectionOK: Bool?
     @Published var connState: ConnState = .connecting
+    @Published var computeState: ComputeState = .unknown
     // 会话
     @Published var sessions: [SessionMetaItem] = []
     @Published var retentionPolicy: SessionRetentionPolicy?
@@ -45,13 +62,46 @@ final class AgentStore: ObservableObject {
     @Published var skills: [SkillItem] = []
     /// 持久化选中会话：杀进程/重启后自动回到原直播视图（铁律 4 的 ≤1s 恢复语义，
     /// web 靠刷新同 URL 天然满足，native 必须显式记住）。draft（未落盘）id 也会
-    /// 存进去，恢复时经 restoreLastSession 的存在性校验过滤。
+    /// 存进去，恢复时经 restoreLocalHistory / loadSessions 的存在性校验过滤。
     @Published var selectedSessionId: String? {
         didSet {
-            let ud = UserDefaults.standard
-            if let id = selectedSessionId { ud.set(id, forKey: "session.lastSelected") }
-            else { ud.removeObject(forKey: "session.lastSelected") }
+            guard persistSelectedSession, let namespace = client?.cacheNamespace else { return }
+            let selected = selectedSessionId, cache = offlineHistory
+            Task { try? await cache.saveSelection(selected, namespace: namespace) }
         }
+    }
+    /// Local history never grants turn/control authority. Cleared only by online recovery.
+    @Published private(set) var historyIsReadOnly = false
+    @Published private(set) var offlineSavedSessionIDs: Set<String> = []
+    @Published private(set) var offlineSyncInProgress = false
+    @Published private(set) var offlineAttachmentsComplete = false
+    /// Attachment mirroring is waiting for an unmetered path, not failing.
+    @Published private(set) var offlineMirroringDeferred = false
+    var offlineHistoryNotice: String? {
+        if historyIsReadOnly {
+            return L(!sessions.isEmpty && offlineSavedSessionIDs.count < sessions.count
+                ? "离线阅读 · 部分记录尚未同步" : "离线阅读 · 本地已保存")
+        }
+        if offlineSyncInProgress { return L("正在保存历史与附件…") }
+        if !sessions.isEmpty && offlineSavedSessionIDs.count < sessions.count { return L("历史同步未完成") }
+        if !sessions.isEmpty && offlineMirroringDeferred { return L("正文已保存 · 附件等待 Wi-Fi") }
+        if !sessions.isEmpty && !offlineAttachmentsComplete { return L("正文已保存 · 附件同步未完成") }
+        return sessions.isEmpty ? nil : L("已保存到本地")
+    }
+    private var persistSelectedSession = true
+    private let offlineHistory: OfflineHistoryStore
+    private var localRestoreTask: Task<Void, Never>?
+    private var historySyncTask: Task<Void, Never>?
+    private var historySyncRequested = false
+    private var currentDisplayIndices: [Int]?
+    private var currentHistoryGeneration: String?
+    private var currentCacheEpoch = 0
+    private var currentCanonicalMetadata: SessionMetaItem?
+    private var canonicalProjectionRevision = UUID()
+    private func rejectReadOnlyHistory() -> Bool {
+        guard historyIsReadOnly else { return false }
+        errorMessage = L("当前为离线阅读；连接并同步后可继续操作。")
+        return true
     }
     @Published var messages: [ChatMessage] = []
     @Published private(set) var canonicalTurns: [Turn] = []
@@ -70,7 +120,7 @@ final class AgentStore: ObservableObject {
     }
 
     private var editableAttemptTarget: EditableAttemptTarget? {
-        guard !isGenerating, controlRequest == nil, !selectedSessionIsDeleting else { return nil }
+        guard !historyIsReadOnly, !isGenerating, controlRequest == nil, !selectedSessionIsDeleting else { return nil }
         if ledgerPhase == "awaiting_approval" || ledgerPhase == "suspended" {
             guard let id = liveTurnId, let prompt = liveRawPrompt else { return nil }
             return EditableAttemptTarget(prompt: prompt, pausedTurnId: id,
@@ -124,7 +174,7 @@ final class AgentStore: ObservableObject {
     var suspendPending: Bool { controlRequest?.kind == .suspend }
     static func hasControllableChat(kind: String?) -> Bool { kind != "summarize" && kind != "prewarm" }
     static func canCancelTask(phase: String) -> Bool { ["queued", "running"].contains(phase) }
-    var canSuspend: Bool { ledgerPhase == "running" && liveTurnId != nil && controlRequest == nil && !selectedSessionIsDeleting }
+    var canSuspend: Bool { !historyIsReadOnly && ledgerPhase == "running" && liveTurnId != nil && controlRequest == nil && !selectedSessionIsDeleting }
     var controlFeedback: String? {
         guard let controlRequest else { return nil }
         if !controlRequest.accepted { return L("正在发送控制请求…") }
@@ -205,8 +255,6 @@ final class AgentStore: ObservableObject {
     /// App 是否前台活跃（RootView 从 scenePhase 同步）：后台完结的轮次发本地通知
     var isAppActive = true
     private var errorDismissTask: Task<Void, Never>?
-    /// 会话历史缓存（内容搜索用）：last_updated 不变即命中
-    private var historyCache: [String: (updated: Double, turns: [Turn])] = [:]
 
     let settings: AppSettings
     private(set) var client: AgentClient?
@@ -221,6 +269,11 @@ final class AgentStore: ObservableObject {
     private var connMonitorTask: Task<Void, Never>?
     private var connFailures = 0
     private var connectionRequest = 0
+    private let sessionIndexFence = OfflineSessionIndexFence()
+    private func invalidateSessionIndexRequests() { sessionIndexFence.advance() }
+    private func ownsSessionIndex(_ client: AgentClient, request: UUID) -> Bool {
+        self.client === client && sessionIndexFence.matches(request) && !Task.isCancelled
+    }
     /// 通知去重：同一会话 30s 内只报一次（自发轮次与全局监听两条路径都会命中完结）。
     private var notifiedAt: [String: Date] = [:]
 
@@ -269,21 +322,12 @@ final class AgentStore: ObservableObject {
     /// 发送暂存（outbox）：提交前落 UserDefaults,202 受理即清——App 在 multipart
     /// 上传途中被杀时,这是唯一能证明"有话没送达"的凭据。
     private let outboxKey = "macagent.outbox"
-    /// 会话列表快照（冷启空窗填充）：sidecar 拉起前先摆上次的列表，服务端真相
-    /// 到达即替换（loadSessions 的等值守卫兜底——不变则不闪）。
-    private let sessionsSnapshotKey = "macagent.sessions.snapshot"
-
-    /// 快照按后端地址隔离：连远程时闪出本机的会话列表是**错误信息**，
-    /// 比空列表更糟；地址对不上宁可空着。
-    private struct SessionsSnapshot: Codable {
-        let backendURL: String
-        let items: [SessionMetaItem]
-    }
-
-    init(settings: AppSettings) {
+    init(settings: AppSettings, offlineCacheRoot: URL? = nil) {
         self.settings = settings
-        self.client = settings.makeClient()
-        restoreSessionsSnapshot()
+        let madeClient = settings.makeClient()
+        self.offlineHistory = OfflineHistoryStore(root: offlineCacheRoot ?? madeClient?.offlineCacheRoot)
+        self.client = madeClient
+        localRestoreTask = Task { [weak self] in await self?.restoreLocalHistory() }
         // 连接后置（首启引导）：引导未完成前不发起任何探活/附着——新装 app 在填完
         // 地址/密钥前空转尝试没有意义。引导完成时 OnboardingView 调 applySettings()
         // 重启这两个监听（applySettings 无条件启动，那时 setupCompleted 已为 true）。
@@ -295,6 +339,8 @@ final class AgentStore: ObservableObject {
 
     /// 设置变更后重建客户端并重新对账（选中会话重新附着）。
     func applySettings() {
+        let previousSelection = selectedSessionId
+        invalidateSessionIndexRequests()
         detach()
         client = settings.makeClient()
         clearHistoryProjection()
@@ -307,30 +353,41 @@ final class AgentStore: ObservableObject {
         sessionDeleteRequests.removeAll(); deletingSessionIDs.removeAll(); submissionHTTPRequests.removeAll()
         startGlobalMonitor()       // client 换了，监听循环重启
         startConnectionMonitor()   // 连接探活同理重启（失败计数清零 → 黄灯重试）
-        // 可能换了后端：旧列表立即撤下，摆新地址的快照（没有就空着等真相）
-        sessions = []
-        retentionPolicy = nil
-        restoreSessionsSnapshot()
-        let sid = selectedSessionId
-        let epoch = selectionEpoch
+        historySyncTask?.cancel(); historySyncTask = nil
+        localRestoreTask?.cancel()
+        sessions = []; retentionPolicy = nil; offlineSavedSessionIDs = []
+        offlineSyncInProgress = false; offlineAttachmentsComplete = false
+        offlineMirroringDeferred = false
+        persistSelectedSession = false
+        selectedSessionId = nil; messages = []; historyIsReadOnly = false
+        persistSelectedSession = true
         let appliedClient = client
-        messages = []
+        localRestoreTask = Task { [weak self] in await self?.restoreLocalHistory() }
         Task {
+            await localRestoreTask?.value
+            guard client === appliedClient else { return }
+            // The previous selection belongs to the previous connection. Re-select it
+            // only if this backend's own local index knows it; otherwise leave the
+            // choice to loadSessions, which sees the authoritative list.
+            if selectedSessionId == nil, let previousSelection,
+               sessions.contains(where: { $0.sessionId == previousSelection }) {
+                select(sessionId: previousSelection)
+            }
             await refreshConnection()
-            guard selectionEpoch == epoch, client === appliedClient else { return }
+            guard client === appliedClient else { return }
             await loadSessions()
-            guard selectionEpoch == epoch, client === appliedClient else { return }
-            if let sid { await open(sessionId: sid) }
         }
     }
 
     func refreshConnection() async {
-        guard let client else { connectionOK = false; connState = .offline; return }
+        guard let client else { connectionOK = false; connState = .offline; computeState = .unknown; return }
         connectionRequest += 1
         let request = connectionRequest
-        let access = await client.backendAccess()
+        let status = await client.connectionStatus()
+        let access = status.access
         guard !Task.isCancelled, self.client === client, request == connectionRequest else { return }
         recordBackendAccess(access)
+        computeState = status.compute
     }
 
     // MARK: - 连接状态监控（实机反馈：信号原来只在设置页关闭时刷一次，静态且滞后）
@@ -338,16 +395,63 @@ final class AgentStore: ObservableObject {
     /// Backend access only; an authenticated API does not prove every compute capability.
     enum ConnState { case connecting, connected, offline, unauthorized, reachable }
 
+    typealias ComputeState = ComputeAvailability
+    var computeStatusLabel: String {
+        switch computeState {
+        case .ready: return L("计算端就绪")
+        case .starting: return L("计算端启动中")
+        case .unavailable: return L("计算端未就绪")
+        case .unknown: return L("计算端待确认")
+        case .unsupported: return L("计算端状态未知")
+        }
+    }
+    var computeStatusDetail: String {
+        switch computeState {
+        case .ready: return L("后端已确认推理计算端就绪；知识库能力在知识库面板单独检查。")
+        case .starting: return L("计算端正在启动，本地历史仍可阅读。")
+        case .unavailable: return L("计算端尚未就绪，本地历史仍可阅读。")
+        case .unknown: return L("尚未取得经过认证的计算端状态。")
+        case .unsupported: return L("当前后端未提供计算端状态。")
+        }
+    }
+
+    /// Only a refused or absent backend turns the displayed history into a reading
+    /// projection. `.reachable` means the health endpoint answered but the index
+    /// probe did not settle in time — a transient failure that must not take Stop /
+    /// Suspend / Approve away from a live turn.
     private func recordBackendAccess(_ access: BackendAccess) {
         connectionOK = access == .authenticated
         switch access {
-        case .authenticated: connFailures = 0; connState = .connected
-        case .unauthorized: connFailures = 0; connState = .unauthorized
+        case .authenticated:
+            connFailures = 0; connState = .connected
+            // This backend just authenticated, so a session it recovered and is
+            // still attached to keeps its control authority. A cache-only
+            // projection (no attachment) stays read only.
+            if historyIsReadOnly, selectedSessionIsAttached { historyIsReadOnly = false }
+        case .unauthorized:
+            connFailures = 0; connState = .unauthorized
+            markHistoryReadOnly()
         case .reachable: connFailures = 0; connState = .reachable
         case .offline:
             connFailures += 1
             connState = connFailures >= 10 ? .offline : .connecting
+            // An attached live stream is its own authority, and health is probed
+            // every 2s while unreachable: a single missed probe must not take
+            // Approve / Stop away mid-turn. Honour the same debounce the signal
+            // uses — only the settled offline verdict freezes an attached session.
+            if connState == .offline || !selectedSessionIsAttached { markHistoryReadOnly() }
         }
+    }
+
+    /// The selected session was recovered online and still owns a live attachment.
+    private var selectedSessionIsAttached: Bool {
+        guard let sid = selectedSessionId else { return false }
+        return attachedSessionId == sid && attachTask != nil
+    }
+
+    /// The local copy never carries execution or approval authority.
+    private func markHistoryReadOnly() {
+        if !canonicalTurns.isEmpty, optimisticReceipt == nil { historyIsReadOnly = true }
     }
 
     /// Existing monitor verifies reachability and backend authentication every 15s;
@@ -358,6 +462,7 @@ final class AgentStore: ObservableObject {
         connectionRequest += 1
         connFailures = 0
         connState = .connecting
+        computeState = .unknown
         connectionOK = nil
         connMonitorTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -365,13 +470,15 @@ final class AgentStore: ObservableObject {
                 guard let client = self.client else { return }
                 self.connectionRequest += 1
                 let request = self.connectionRequest
-                let access = await client.backendAccess()
+                let status = await client.connectionStatus()
+                let access = status.access
                 if Task.isCancelled || self.client !== client { return }
                 if request != self.connectionRequest {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                     continue
                 }
                 self.recordBackendAccess(access)
+                self.computeState = status.compute
                 if access == .authenticated {
                     // 顺带巡刷会话列表（macOS 无下拉刷新后的自动更新通道）：
                     // 等值守卫兜底，列表没变不会引起任何视图重建
@@ -384,11 +491,20 @@ final class AgentStore: ObservableObject {
 
     // MARK: - 会话管理
 
+    /// Cached reading should survive ordinary transport loss; authentication,
+    /// malformed responses, TLS failures and other unknown errors stay visible.
+    /// One classifier, shared with the client's own cache fallbacks.
+    private static func isOfflineTransportFailure(_ error: Error) -> Bool {
+        OfflineTransportFailure.matches(error)
+    }
+
     func loadSessions() async {
         guard let client else { return }
+        let request = sessionIndexFence.advance(), fence = sessionIndexFence
         do {
             let index = try await client.sessionIndex()
-            guard self.client === client else { return }
+            guard ownsSessionIndex(client, request: request), index.status else { return }
+            let previousIDs = Set(sessions.map(\.sessionId))
             retentionPolicy = index.retentionPolicy
             var items = index.sessions
             items.sort {
@@ -399,33 +515,243 @@ final class AgentStore: ObservableObject {
             // List 整体重建——刷新控件收起动画与内容重建打架，表现为瞬移回顶+双重残影
             if items != sessions {
                 sessions = items
-                saveSessionsSnapshot()   // 只有真变了才落快照（探活 15s 一巡，别空写）
+            }
+            let saved = try await offlineHistory.saveIndex(items, retentionPolicy: index.retentionPolicy,
+                namespace: client.cacheNamespace, isCurrent: { fence.matches(request) })
+            guard ownsSessionIndex(client, request: request), saved else { return }
+            let savedIndex = await offlineHistory.loadIndex(namespace: client.cacheNamespace)
+            guard ownsSessionIndex(client, request: request) else { return }
+            offlineSavedSessionIDs = savedSessionIDs(matching: savedIndex)
+            if let selected = selectedSessionId, previousIDs.contains(selected),
+               !items.contains(where: { $0.sessionId == selected }), !isGenerating,
+               !hasSubmissionInFlight(selected) {
+                detach(); selectedSessionId = nil; clearHistoryProjection(); messages = []; knownTurnCount = 0
+            }
+            let reclaimed = await client.offlineAssets.retainSessions(Set(items.map(\.sessionId)), namespace: client.cacheNamespace,
+                isCurrent: { fence.matches(request) })
+            guard ownsSessionIndex(client, request: request) else { return }
+            // Removed sessions freed space: mirrors the budget had cut short get
+            // another attempt on the next pass.
+            if reclaimed {
+                try? await offlineHistory.retryPartialAssetSessions(namespace: client.cacheNamespace)
+                guard ownsSessionIndex(client, request: request) else { return }
+            }
+            // Upgrade path: authenticate/list first, then restore only an ID which this
+            // connection actually returned. Legacy titles/bodies are never imported.
+            if selectedSessionId == nil, !items.isEmpty {
+                let local = await offlineHistory.loadIndex(namespace: client.cacheNamespace)
+                guard ownsSessionIndex(client, request: request), selectedSessionId == nil else { return }
+                struct LegacyConnection: Decodable { let backendURL: String }
+                let legacyData = UserDefaults.standard.data(forKey: "macagent.sessions.snapshot")
+                let legacy = legacyData.flatMap { try? JSONDecoder().decode(LegacyConnection.self, from: $0) }
+                let legacyID = legacy?.backendURL == settings.baseURLString
+                    ? UserDefaults.standard.string(forKey: "session.lastSelected") : nil
+                let candidate = [local.selectedSessionId, legacyID].compactMap { $0 }
+                    .first(where: { id in items.contains { $0.sessionId == id } })
+                if let candidate { select(sessionId: candidate) }
+            }
+            startHistorySync(client: client)
+            if historyIsReadOnly, recoveryTask == nil, attachTask == nil, let selected = selectedSessionId {
+                Task { await open(sessionId: selected) }
             }
         } catch {
-            guard self.client === client else { return }
-            errorMessage = L("会话列表加载失败：") + error.localizedDescription
+            guard ownsSessionIndex(client, request: request) else { return }
+            if sessions.isEmpty || !Self.isOfflineTransportFailure(error) {
+                errorMessage = L("会话列表加载失败：") + error.localizedDescription
+            }
         }
         // 剧本清单搭车刷新：变动频率极低（装依赖/加剧本），无须独立轮询；
         // 拉不到就保持旧值——候选提示是锦上添花，不值得为它弹错误横幅
-        if let fetched = try? await client.skills(), self.client === client {
+        if let fetched = try? await client.skills(), ownsSessionIndex(client, request: request) {
             skills = fetched
         }
     }
 
-    /// 读上次的列表快照（仅当后端地址一致）。摆的是元数据（标题/轮数/时间戳），
-    /// 点击行为照常：连接建立前拉历史会失败弹横幅，几秒窗口，不值得禁点。
-    private func restoreSessionsSnapshot() {
-        guard let data = UserDefaults.standard.data(forKey: sessionsSnapshotKey),
-              let snap = try? JSONDecoder().decode(SessionsSnapshot.self, from: data),
-              snap.backendURL == settings.baseURLString else { return }
-        sessions = snap.items
+    private func savedSessionIDs(matching index: OfflineHistoryStore.Index) -> Set<String> {
+        Set(sessions.compactMap { item in
+            index.invalidated?.contains(item.sessionId) != true
+                && index.versions[item.sessionId] == OfflineHistoryStore.Version(item) ? item.sessionId : nil
+        })
     }
 
-    private func saveSessionsSnapshot() {
-        let snap = SessionsSnapshot(backendURL: settings.baseURLString, items: sessions)
-        if let data = try? JSONEncoder().encode(snap) {
-            UserDefaults.standard.set(data, forKey: sessionsSnapshotKey)
+    private func refreshSavedSessionIDs(client: AgentClient) async {
+        let index = await offlineHistory.loadIndex(namespace: client.cacheNamespace)
+        guard self.client === client, !Task.isCancelled else { return }
+        offlineSavedSessionIDs = savedSessionIDs(matching: index)
+    }
+
+    /// Startup reads local files before initiating any network wait.
+    func restoreLocalHistory() async {
+        guard let client else { return }
+        let index = await offlineHistory.loadIndex(namespace: client.cacheNamespace)
+        guard self.client === client, !Task.isCancelled else { return }
+        if sessions.isEmpty { sessions = index.sessions; retentionPolicy = index.retentionPolicy }
+        offlineSavedSessionIDs = savedSessionIDs(matching: index)
+        if selectedSessionId == nil, let selected = index.selectedSessionId,
+           sessions.contains(where: { $0.sessionId == selected }) {
+            select(sessionId: selected)
         }
+    }
+
+    /// Two histories at a time; each result is persisted and released before another is fetched.
+    /// A pass first decides what it owes: an index refresh that changed nothing must
+    /// not re-list attachments, nor flap the sync notice and the Files tab every 15s.
+    private func startHistorySync(client: AgentClient) {
+        historySyncRequested = true
+        guard historySyncTask == nil else { return }
+        historySyncTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.client === client {
+                    self.historySyncTask = nil
+                    self.setOfflineSyncInProgress(false)
+                }
+            }
+            repeat {
+                self.historySyncRequested = false
+                let targets = self.sessions
+                let cache = self.offlineHistory
+                // Asking the path policy once per pass keeps a metered device quiet:
+                // the deferred work never enters the pass, so nothing is requested,
+                // no progress flag flips, and the Files tab is not reloaded.
+                let mayMirror = NetworkPathPolicy.shared.allowsAutomaticMirroring
+                var work: [(item: SessionMetaItem, history: Bool, assets: Bool)] = []
+                var deferred = false
+                for item in targets {
+                    let history = await cache.needsHistory(item, namespace: client.cacheNamespace)
+                    var assets = await cache.needsAssetSync(item, namespace: client.cacheNamespace)
+                    guard self.client === client, !Task.isCancelled else { return }
+                    if assets, !mayMirror { assets = false; deferred = true }
+                    if history || assets { work.append((item, history, assets)) }
+                }
+                let partial = await cache.partialAssetSessions(namespace: client.cacheNamespace)
+                guard self.client === client, !Task.isCancelled else { return }
+                self.setMirroringDeferred(deferred)
+                // Per pass, not per connection: a pass that mirrors everything it
+                // owes reports complete even after an earlier pass failed. Mirrors
+                // the budget cut short stay visible until they are completed.
+                self.setAttachmentsComplete(partial.isEmpty && !deferred)
+                if work.isEmpty { continue }
+                self.setOfflineSyncInProgress(true)
+                // Text first, two at a time; each result is persisted and released
+                // before another is fetched.
+                var historyFailed = Set<String>()
+                await withTaskGroup(of: String?.self) { group in
+                    var pending = work.filter(\.history).makeIterator()
+                    func enqueue() {
+                        guard !Task.isCancelled, let target = pending.next() else { return }
+                        group.addTask {
+                            guard !Task.isCancelled else { return nil }
+                            let item = target.item
+                            let cacheEpoch = await cache.epoch(sessionId: item.sessionId, namespace: client.cacheNamespace)
+                            guard let history = try? await client.history(sessionId: item.sessionId),
+                                  history.status, history.sessionId == item.sessionId else { return item.sessionId }
+                            await self.cacheBackgroundHistory(history, metadata: item, client: client, expectedEpoch: cacheEpoch)
+                            return nil
+                        }
+                    }
+                    enqueue(); enqueue()
+                    for await failed in group { if let failed { historyFailed.insert(failed) }; enqueue() }
+                }
+                guard self.client === client, !Task.isCancelled else { return }
+                // Attachments strictly one session at a time: two mirrors would admit
+                // against the same free space and could each report "complete" after
+                // the other evicted their bytes.
+                for target in work where target.assets {
+                    guard !Task.isCancelled else { continue }
+                    // Text did not land this pass: its attachments are not mirrored either,
+                    // so the notice must not read "saved locally".
+                    if historyFailed.contains(target.item.sessionId) {
+                        self.markAttachmentsIncomplete(client: client)
+                        continue
+                    }
+                    let item = target.item
+                    let token = await cache.beginAssetSync(sessionId: item.sessionId, namespace: client.cacheNamespace)
+                    guard self.client === client, !Task.isCancelled else { return }
+                    let result = await client.syncOfflineAssets(sessionId: item.sessionId)
+                    guard self.client === client, !Task.isCancelled else { return }
+                    switch result.state {
+                    case .complete, .partial:
+                        // The version advances either way so the 15s refresh stops
+                        // asking; `partial` — or an eviction raised since `token` —
+                        // keeps the session marked as not fully saved on this device.
+                        try? await cache.recordAssetSync(item, namespace: client.cacheNamespace,
+                                                         complete: result.state == .complete, token: token)
+                    case .deferred, .failed:
+                        break
+                    }
+                    // Whoever lost bytes to this session is no longer complete,
+                    // and neither is this pass's view of the cache.
+                    if !result.evicted.isEmpty {
+                        try? await cache.markAssetsEvicted(result.evicted, namespace: client.cacheNamespace)
+                        self.markAttachmentsIncomplete(client: client)
+                    }
+                    if result.state == .deferred { self.markMirroringDeferred(client: client) }
+                    if result.state != .complete { self.markAttachmentsIncomplete(client: client) }
+                    guard self.client === client, !Task.isCancelled else { return }
+                }
+                guard self.client === client, !Task.isCancelled else { return }
+            } while self.historySyncRequested
+        }
+    }
+
+    /// Published only on a real change: the notice and the Files tab reload react to
+    /// this flag, and an idle pass must leave both alone.
+    private func setOfflineSyncInProgress(_ value: Bool) {
+        if offlineSyncInProgress != value { offlineSyncInProgress = value }
+    }
+
+    private func setAttachmentsComplete(_ value: Bool) {
+        if offlineAttachmentsComplete != value { offlineAttachmentsComplete = value }
+    }
+
+    private func setMirroringDeferred(_ value: Bool) {
+        if offlineMirroringDeferred != value { offlineMirroringDeferred = value }
+    }
+
+    private func markAttachmentsIncomplete(client: AgentClient) {
+        if self.client === client { setAttachmentsComplete(false) }
+    }
+
+    /// The path turned metered while the pass was running: the attachments are
+    /// waiting for Wi-Fi, which is a different message from "sync incomplete".
+    private func markMirroringDeferred(client: AgentClient) {
+        if self.client === client { setMirroringDeferred(true) }
+    }
+
+    private func cacheBackgroundHistory(_ history: HistoryResponse, metadata: SessionMetaItem, client: AgentClient, expectedEpoch: Int) async {
+        guard self.client === client, !Task.isCancelled,
+              sessions.contains(where: { $0.sessionId == metadata.sessionId && $0.lastUpdated == metadata.lastUpdated && $0.turnCount == metadata.turnCount }),
+              !isSessionDeleting(metadata.sessionId) else { return }
+        do {
+            let saved = try await offlineHistory.saveHistory(history, metadata: metadata, namespace: client.cacheNamespace, requireListed: true, expectedEpoch: expectedEpoch)
+            if saved, self.client === client {
+                await refreshSavedSessionIDs(client: client)
+                guard self.client === client, !Task.isCancelled else { return }
+                // A suffix already present before validation may have been deleted remotely.
+                // Only terminals appended during this comparison can extend its saved base.
+                guard canonicalTurns.count == history.turns.count else { return }
+                // A terminal can append while the off-main comparison is suspended.
+                // Prove the entire saved prefix against a stable current projection before
+                // adopting its index version, then save any authoritative terminal suffix.
+                let selection = selectionEpoch
+                while isCurrent(history.sessionId, selection, client), !Task.isCancelled,
+                      canonicalTurns.count >= history.turns.count {
+                    let revision = canonicalProjectionRevision
+                    let prefix = Array(canonicalTurns.prefix(history.turns.count))
+                    let matches = await offlineHistory.canonicalTurnsMatch(prefix, history.turns)
+                    guard isCurrent(history.sessionId, selection, client), !Task.isCancelled,
+                          sessions.first(where: { $0.sessionId == history.sessionId }).map(OfflineHistoryStore.Version.init) == OfflineHistoryStore.Version(metadata) else { return }
+                    if canonicalProjectionRevision != revision { continue }
+                    guard matches else { return }
+                    currentCanonicalMetadata = metadata
+                    if canonicalTurns.count > history.turns.count {
+                        persistCurrentHistory(sessionId: history.sessionId, client: client)
+                    }
+                    break
+                }
+            }
+        } catch { /* Keep the existing readable copy and retry on the next index refresh. */ }
     }
 
     func newSession() {
@@ -434,15 +760,6 @@ final class AgentStore: ObservableObject {
         clearHistoryProjection()
         messages = []
         knownTurnCount = 0
-    }
-
-    /// 启动恢复：回到上次的会话（仅当它仍存在于会话列表——draft/已删除的过滤掉）。
-    /// 在 loadSessions 之后调用；已有选中（深链等先到）则不抢。
-    func restoreLastSession() {
-        guard selectedSessionId == nil,
-              let last = UserDefaults.standard.string(forKey: "session.lastSelected"),
-              sessions.contains(where: { $0.sessionId == last }) else { return }
-        select(sessionId: last)
     }
 
     func select(sessionId: String) {
@@ -458,6 +775,16 @@ final class AgentStore: ObservableObject {
     private func open(sessionId: String) async {
         guard let client, selectedSessionId == sessionId else { return }
         let epoch = selectionEpoch
+        if canonicalTurns.isEmpty, optimisticReceipt == nil,
+           let cached = await offlineHistory.loadHistory(sessionId: sessionId, namespace: client.cacheNamespace),
+           isCurrent(sessionId, epoch, client), !Task.isCancelled,
+           canonicalTurns.isEmpty, optimisticReceipt == nil {
+            applyHistoryProjection(cached, metadata: sessions.first { $0.sessionId == sessionId })
+            historyIsReadOnly = true
+            let cachedDeck = await client.cachedDeck(sessionId: sessionId)
+            guard isCurrent(sessionId, epoch, client) else { return }
+            deck = cachedDeck
+        }
         if let recoveryTask {
             guard await recoveryTask.value, isCurrent(sessionId, epoch, client) else { return }
         } else {
@@ -490,10 +817,33 @@ final class AgentStore: ObservableObject {
     private func loadHistory(sessionId: String) async -> Bool {
         guard let client, selectedSessionId == sessionId else { return false }
         let epoch = selectionEpoch
+        // Bind the response to the index version observed before this request.
+        let requestMetadata = sessions.first { $0.sessionId == sessionId }
+        let cacheEpoch = await offlineHistory.epoch(sessionId: sessionId, namespace: client.cacheNamespace)
+        guard isCurrent(sessionId, epoch, client), !Task.isCancelled else { return false }
+        currentCacheEpoch = cacheEpoch
         do {
-            let history = try await client.history(sessionId: sessionId)
-            guard history.status else { throw AgentError.http(200, L("历史读取未被受理。")) }
+            var history = try await client.history(sessionId: sessionId)
+            var projectionMetadata = requestMetadata
+            guard history.status, history.sessionId == sessionId else { throw AgentError.http(200, L("历史读取未被受理。")) }
             guard isCurrent(sessionId, epoch, client), !Task.isCancelled else { return false }
+            // Index/backfill may have advanced while this foreground request was in flight.
+            // Prefer its exact saved snapshot; never install an old body under the new version.
+            let latestMetadata = sessions.first { $0.sessionId == sessionId }
+            if requestMetadata.map(OfflineHistoryStore.Version.init) != latestMetadata.map(OfflineHistoryStore.Version.init) {
+                guard let latestMetadata,
+                      let latest = await offlineHistory.loadHistory(sessionId: sessionId, namespace: client.cacheNamespace,
+                          matchingVersion: OfflineHistoryStore.Version(latestMetadata)),
+                      isCurrent(sessionId, epoch, client), !Task.isCancelled,
+                      sessions.first(where: { $0.sessionId == sessionId }).map(OfflineHistoryStore.Version.init) == OfflineHistoryStore.Version(latestMetadata) else {
+                    guard isCurrent(sessionId, epoch, client), !Task.isCancelled else { return false }
+                    historyProjectionNeedsRefresh = true
+                    if optimisticReceipt == nil { historyIsReadOnly = true }
+                    return false
+                }
+                history = latest
+                projectionMetadata = latestMetadata
+            }
             if let required = missingThinRecord,
                required.index.map({ history.turns.indices.contains($0) }) != true {
                 // A successful HTTP response is not a complete canonical projection.
@@ -507,13 +857,7 @@ final class AgentStore: ObservableObject {
             missingThinRecord = nil
             // Preserve only the current submit's optimistic bubble until terminal reconciliation.
             let optimistic = optimisticReceipt == nil ? [] : messages.filter { $0.id == optimisticUserMessageId }
-            let displayed = HistoryProjection.indices(history)
-            canonicalTurns = history.turns
-            lastTurnRef = history.lastTurnRef
-            retryGroups = HistoryProjection.groups(history, displayed: displayed)
-            messages = displayed.flatMap { index in
-                ChatMessage.from(turn: history.turns[index], turnIndex: index)
-            } + optimistic
+            applyHistoryProjection(history, optimistic: optimistic, metadata: projectionMetadata)
             retryStatusNotice = nil
             historyProjectionNeedsRefresh = false
             knownTurnCount = history.turns.count
@@ -521,14 +865,50 @@ final class AgentStore: ObservableObject {
             // A just-accepted submit can already be in history before its first attachment.
             // Replaying its known queued identity reconciles the optimistic bubble without guessing text.
             cursor = replayAfter ?? 0
+            let saved = try? await offlineHistory.saveHistory(history,
+                metadata: projectionMetadata, namespace: client.cacheNamespace, expectedEpoch: cacheEpoch)
+            guard isCurrent(sessionId, epoch, client), !Task.isCancelled else { return false }
+            if saved == true { await refreshSavedSessionIDs(client: client) }
+            else { offlineSavedSessionIDs.remove(sessionId) }
+            guard isCurrent(sessionId, epoch, client), !Task.isCancelled else { return false }
             let fetchedDeck = try? await client.deck(sessionId: sessionId)
             guard isCurrent(sessionId, epoch, client), !Task.isCancelled else { return false }
             deck = fetchedDeck
             return true
         } catch {
             guard isCurrent(sessionId, epoch, client), !Task.isCancelled else { return false }
-            errorMessage = L("历史加载失败：") + error.localizedDescription
+            if !canonicalTurns.isEmpty { historyIsReadOnly = true }
+            if canonicalTurns.isEmpty || historyProjectionNeedsRefresh || !Self.isOfflineTransportFailure(error) {
+                errorMessage = L("历史加载失败：") + error.localizedDescription
+            }
             return false
+        }
+    }
+
+    private func applyHistoryProjection(_ history: HistoryResponse, optimistic: [ChatMessage] = [], metadata: SessionMetaItem? = nil) {
+        let displayed = HistoryProjection.indices(history)
+        canonicalTurns = history.turns; lastTurnRef = history.lastTurnRef
+        retryGroups = HistoryProjection.groups(history, displayed: displayed)
+        currentDisplayIndices = history.displayTurnIndices
+        currentHistoryGeneration = history.generation
+        currentCanonicalMetadata = metadata
+        canonicalProjectionRevision = UUID()
+        messages = displayed.flatMap { ChatMessage.from(turn: history.turns[$0], turnIndex: $0) } + optimistic
+        knownTurnCount = history.turns.count
+    }
+
+    private func persistCurrentHistory(sessionId: String, client: AgentClient) {
+        let snapshot = HistoryResponse(status: true, sessionId: sessionId, turns: canonicalTurns,
+            replayAfter: cursor, generation: currentHistoryGeneration, lastTurnRef: lastTurnRef,
+            displayTurnIndices: currentDisplayIndices, retryGroups: retryGroups.isEmpty ? nil : retryGroups)
+        let metadata = currentCanonicalMetadata, cache = offlineHistory
+        let expectedEpoch = currentCacheEpoch
+        offlineSavedSessionIDs.remove(sessionId)
+        Task {
+            let saved = try? await cache.saveHistory(snapshot, metadata: metadata, namespace: client.cacheNamespace, expectedEpoch: expectedEpoch)
+            guard self.client === client else { return }
+            if saved == true { await refreshSavedSessionIDs(client: client) }
+            else { offlineSavedSessionIDs.remove(sessionId) }
         }
     }
 
@@ -580,7 +960,9 @@ final class AgentStore: ObservableObject {
         }
         var result = await collectDeleteReceipts(available, client: client) { client, id in
             let response = try await client.deleteSession(sessionId: id)
-            return (response.status || response.reason == "not_found", response.response)
+            let confirmed = response.status || response.reason == "not_found"
+            if self.client === client, confirmed { invalidateSessionIndexRequests() }
+            return (confirmed, response.response)
         }
         for id in blocked {
             result.failures[id] = isSessionDeleting(id)
@@ -597,6 +979,13 @@ final class AgentStore: ObservableObject {
         for id in result.deleted where outboxAll()[id]?["receipt"] == savedReceipts[id] {
             outboxClear(sessionId: id)
         }
+        try? await offlineHistory.removeSessions(result.deleted, namespace: client.cacheNamespace)
+        // A confirmed deletion frees space; mirrors cut short by the budget retry.
+        if await client.offlineAssets.removeSessions(result.deleted, namespace: client.cacheNamespace) {
+            try? await offlineHistory.retryPartialAssetSessions(namespace: client.cacheNamespace)
+        }
+        guard self.client === client else { return result }
+        offlineSavedSessionIDs.subtract(result.deleted)
         sessions.removeAll { result.deleted.contains($0.sessionId) }
         await loadSessions()
         return result
@@ -618,6 +1007,7 @@ final class AgentStore: ObservableObject {
             guard self.client === client, !rejectDeletingSession(item.sessionId) else { return }
             do {
                 _ = try await client.setPin(sessionId: item.sessionId, pinned: !(item.pinned ?? false))
+                if self.client === client { invalidateSessionIndexRequests() }
             } catch {
                 guard self.client === client else { return }
                 errorMessage = L("保留状态保存失败，请重试。")
@@ -641,7 +1031,8 @@ final class AgentStore: ObservableObject {
         guard let client, !rejectDeletingSession(item.sessionId) else { return }
         Task {
             guard self.client === client, !rejectDeletingSession(item.sessionId) else { return }
-            _ = try? await client.renameSession(sessionId: item.sessionId, title: trimmed)
+            let response = try? await client.renameSession(sessionId: item.sessionId, title: trimmed)
+            if self.client === client, response?.status == true { invalidateSessionIndexRequests() }
             await loadSessions()
         }
     }
@@ -649,6 +1040,7 @@ final class AgentStore: ObservableObject {
     // MARK: - 发消息（202 受理 + 事件流）
 
     func send(prompt: String, uploads: [Upload], thinking: Bool) {
+        guard !rejectReadOnlyHistory() else { return }
         guard !isGenerating, let client else { return }
         let sid: String
         if let existing = selectedSessionId {
@@ -700,6 +1092,7 @@ final class AgentStore: ObservableObject {
                 let accepted = try await client.submitTurn(sessionId: sid, params: params, files: uploads)
                 self?.submissionHTTPRequests[submittedReceipt] = nil
                 guard let self else { return }
+                if self.client === client, accepted.status { self.invalidateSessionIndexRequests() }
                 if self.client === client, self.outboxAll()[sid]?["receipt"] == submittedReceipt {
                     self.outboxClear(sessionId: sid)
                 }
@@ -742,6 +1135,7 @@ final class AgentStore: ObservableObject {
     private func acceptSubmission(_ accepted: TurnAccepted, sessionId sid: String, epoch: UUID,
                                   client: AgentClient, receipt: String, bubbleId: UUID?) async {
         guard accepted.status else { throwSubmissionFailure(receipt: receipt); return }
+        if self.client === client { invalidateSessionIndexRequests() }
         if self.client === client, outboxAll()[sid]?["receipt"] == receipt { outboxClear(sessionId: sid) }
         guard isCurrent(sid, epoch, client), optimisticReceipt == receipt else { return }
         if accepted.duplicate == true {
@@ -780,6 +1174,7 @@ final class AgentStore: ObservableObject {
     // MARK: - 审批 / 任务控制
 
     func decideApproval(approve: Bool, target: PendingApprovalTarget) {
+        guard !rejectReadOnlyHistory() else { return }
         guard let client, selectedSessionId == target.sessionId,
               pendingApprovalTarget == target, pendingTools?.isEmpty == false else { return }
         let sid = target.sessionId
@@ -853,6 +1248,7 @@ final class AgentStore: ObservableObject {
     private func requestControl(_ kind: ControlKind, confirmedTurn: (String, String, Int)? = nil) {
         guard let client, let sid = selectedSessionId, controlRequest == nil else { return }
         guard !rejectDeletingSession(sid) else { return }
+        guard confirmedTurn != nil || !rejectReadOnlyHistory() else { return }
         let snapshotIsCurrent = confirmedTurn.map { $0.2 >= cursor } ?? false
         let turnId = snapshotIsCurrent ? confirmedTurn?.0 : liveTurnId
         let phase = snapshotIsCurrent ? (confirmedTurn?.1 ?? ledgerPhase) : ledgerPhase
@@ -906,6 +1302,7 @@ final class AgentStore: ObservableObject {
     func regenerateLastTurn() { requestRetryConfirmation() }
 
     func requestRetryConfirmation() {
+        guard !rejectReadOnlyHistory() else { return }
         guard !isGenerating, !isSuspended, ledgerPhase != "awaiting_approval",
               !historyProjectionNeedsRefresh, pendingTools?.isEmpty != false, let client, let sid = selectedSessionId else { return }
         guard !rejectDeletingSession(sid) else { return }
@@ -929,6 +1326,7 @@ final class AgentStore: ObservableObject {
     func cancelRetryConfirmation() { retryConfirmationId = nil; retryConfirmationTarget = nil }
 
     func confirmRetry(_ target: RetryConfirmationTarget) {
+        guard !rejectReadOnlyHistory() else { return }
         retryConfirmationTarget = nil
         guard let client, retryConfirmationId == target.id,
               isCurrent(target.sessionId, target.selectionEpoch, client),
@@ -1005,6 +1403,11 @@ final class AgentStore: ObservableObject {
 
     private func clearHistoryProjection() {
         canonicalTurns = []; retryGroups = []; lastTurnRef = nil
+        currentDisplayIndices = nil; currentHistoryGeneration = nil; currentCanonicalMetadata = nil
+        // The epoch belongs to the projection it was read with: a later save must
+        // never carry the previous session's deletion fence.
+        currentCacheEpoch = 0
+        canonicalProjectionRevision = UUID()
         retryStatusNotice = nil; historyProjectionNeedsRefresh = false
     }
 
@@ -1061,6 +1464,8 @@ final class AgentStore: ObservableObject {
     /// 断开附着并清空活跃轮簿记（换会话/设置变更时）。
     private func detach() {
         selectionEpoch = UUID()
+        historyIsReadOnly = false
+        currentCacheEpoch = 0
         cancelRetryConfirmation()
         controlRequest = nil
         ledgerPhase = "none"
@@ -1113,6 +1518,7 @@ final class AgentStore: ObservableObject {
                     guard ownsAttachment() else { return }
                     after = min(replayAfter ?? 0, ts.turn.flatMap { ($0.firstSeq ?? 1) - 1 } ?? (ts.lastSeq ?? 0))
                     cursor = after
+                    historyIsReadOnly = false
                     anchored = true
                     if ts.turn == nil && optimisticReceipt == nil { isGenerating = false }
                 }
@@ -1138,6 +1544,8 @@ final class AgentStore: ObservableObject {
                 return
             } catch {
                 if !ownsAttachment() { return }
+                if !canonicalTurns.isEmpty, optimisticReceipt == nil { historyIsReadOnly = true }
+                anchored = false
                 if case AgentError.http(404, _) = error { return }
                 if case SSEError.badStatus(404) = error { return }
                 try? await Task.sleep(nanoseconds: backoff)
@@ -1294,6 +1702,7 @@ final class AgentStore: ObservableObject {
         let retryTerminal = env.data["retry_of"] != nil || turn?.retryOf != nil ||
             (optimisticOperation == "retry" && optimisticTurnId == env.turnId && env.turnId != nil)
         guard discarded || archived || turn != nil else { return }
+        if !archived { invalidateSessionIndexRequests() }
         if let id = env.turnId { lastEndedId = id }
         if let turnId = env.turnId, liveTurnId == turnId {
             if let id = liveUserMessageId { messages.removeAll { $0.id == id } }
@@ -1322,7 +1731,11 @@ final class AgentStore: ObservableObject {
             let turnIndex = index ?? knownTurnCount
             if let turn, !retryTerminal {
                 lastTurnRef = turn.turnRef
-                if turnIndex == canonicalTurns.count { canonicalTurns.append(turn) }
+                if turnIndex == canonicalTurns.count {
+                    canonicalTurns.append(turn)
+                    canonicalProjectionRevision = UUID()
+                    currentDisplayIndices?.append(turnIndex)
+                }
                 // Authoritative full record includes the prompt even if queued was not replayed.
                 messages.append(contentsOf: ChatMessage.from(turn: turn, turnIndex: turnIndex))
             }
@@ -1335,6 +1748,7 @@ final class AgentStore: ObservableObject {
         }
 
         guard let client else { return }
+        if !retryTerminal && !discarded && !archived { persistCurrentHistory(sessionId: sessionId, client: client) }
         let epoch = selectionEpoch
         Task {
             await loadSessions()
@@ -1697,21 +2111,62 @@ final class AgentStore: ObservableObject {
         return true
     }
 
+    /// Only canonical session input locations provide a retained-file identity.
+    /// A display name or an arbitrary absolute path is never a substitute for provenance.
+    private static func canonicalInputReference(_ path: String, sessionId: String) -> OfflineInputReference? {
+        let decoded = path.removingPercentEncoding ?? path
+        guard !decoded.contains("://"), !decoded.contains("\\") else { return nil }
+        let parts = decoded.split(separator: "/").map(String.init)
+        guard !parts.contains(".."), !parts.contains("."), parts.count >= 4 else { return nil }
+        let isStorage = parts[parts.count - 4] == "sessions" && parts[parts.count - 3] == sessionId
+        let isAPI = path.hasPrefix("/api/v1/files/") && parts.count >= 6 && parts[3] == sessionId &&
+            (parts.count == 6 || (parts.count == 7 && parts[4] == "offline"))
+        guard isStorage || isAPI else { return nil }
+        return OfflineInputReference(kind: parts[parts.count - 2], path: parts.last!)
+    }
+    private static func inputReferences(in turns: [Turn], sessionId: String) -> Set<OfflineInputReference> {
+        var retained = Set<OfflineInputReference>()
+        for turn in turns {
+            for path in turn.image ?? [] {
+                if let ref = canonicalInputReference(path, sessionId: sessionId), ref.kind == "image" { retained.insert(ref) }
+            }
+            for path in turn.audio ?? [] {
+                if let ref = canonicalInputReference(path, sessionId: sessionId), ref.kind == "audio" { retained.insert(ref) }
+            }
+            for item in turn.attachments ?? [] {
+                guard let path = item.path, let ref = canonicalInputReference(path, sessionId: sessionId) else { continue }
+                if let type = item.type?.lowercased().split(separator: "/").first.map(String.init) {
+                    let expected = ["audio", "image"].contains(type) ? type : "attach"
+                    guard ref.kind == expected else { continue }
+                }
+                retained.insert(ref)
+            }
+        }
+        return retained
+    }
+
     /// 编辑并重发：取回上一条用户输入 → 删除最后一轮（后端回退记忆/KV）→ 回填输入框。
     func editLastTurn() {
         guard let client, let sid = selectedSessionId else { return }
         guard !rejectDeletingSession(sid), let source = editableAttemptTarget else { return }
         let epoch = selectionEpoch
+        let retainedInputs = Self.inputReferences(in: source.pausedTurnId == nil ? Array(canonicalTurns.dropLast()) : canonicalTurns, sessionId: sid)
         Task {
             // The captured queued/canonical source must still be the target before sending DELETE.
             guard isCurrent(sid, epoch, client), !rejectDeletingSession(sid), editableAttemptTarget == source else { return }
             let res = try? await client.deleteLastTurn(sessionId: sid)
+            if self.client === client, res?.status == true { invalidateSessionIndexRequests() }
             guard isCurrent(sid, epoch, client), ownsEditReply(source) else { return }
             if res?.status != true {
                 errorMessage = res?.response ?? L("回退失败")
                 return
             }
-            detach()
+            invalidateSessionIndexRequests()
+            try? await client.offlineAssets.invalidateInputs(retaining: retainedInputs, namespace: client.cacheNamespace, sid: sid)
+            try? await offlineHistory.invalidateHistory(sessionId: sid, namespace: client.cacheNamespace)
+            guard isCurrent(sid, epoch, client), ownsEditReply(source) else { return }
+            offlineSavedSessionIDs.remove(sid)
+            detach(); clearHistoryProjection(); messages = []; knownTurnCount = 0
             let recoveredEpoch = selectionEpoch
             await open(sessionId: sid)
             guard isCurrent(sid, recoveredEpoch, client) else { return }
@@ -1726,6 +2181,7 @@ final class AgentStore: ObservableObject {
 
     /// 从指定落盘轮次分支出新会话并切换过去（后端复制 [0, index] 并尽量热复用 KV）。
     func branch(fromTurnIndex index: Int) {
+        guard !rejectReadOnlyHistory() else { return }
         guard let client, let sid = selectedSessionId else { return }
         guard !rejectDeletingSession(sid) else { return }
         let epoch = selectionEpoch
@@ -1733,11 +2189,13 @@ final class AgentStore: ObservableObject {
             guard isCurrent(sid, epoch, client), !rejectDeletingSession(sid) else { return }
             do {
                 let res = try await client.branchSession(sessionId: sid, nodeIndex: index)
+                if self.client === client, res.status, res.sessionId != nil { invalidateSessionIndexRequests() }
                 guard isCurrent(sid, epoch, client) else { return }
                 guard res.status, let newId = res.sessionId else {
                     errorMessage = res.response ?? L("分支失败")
                     return
                 }
+                invalidateSessionIndexRequests()
                 await loadSessions()
                 guard isCurrent(sid, epoch, client) else { return }
                 select(sessionId: newId)
@@ -1750,19 +2208,28 @@ final class AgentStore: ObservableObject {
 
     /// 删除最后一轮问答（后端同步回退内存记忆与 KV），完成后重拉历史对账。
     func deleteLastTurn() {
+        guard !rejectReadOnlyHistory() else { return }
         guard let client, let sid = selectedSessionId, !isGenerating else { return }
         guard !rejectDeletingSession(sid) else { return }
         let epoch = selectionEpoch
+        let paused = ledgerPhase == "awaiting_approval" || ledgerPhase == "suspended"
+        let retainedInputs = Self.inputReferences(in: paused ? canonicalTurns : Array(canonicalTurns.dropLast()), sessionId: sid)
         Task {
             guard isCurrent(sid, epoch, client), !rejectDeletingSession(sid) else { return }
             do {
                 let res = try await client.deleteLastTurn(sessionId: sid)
+                if self.client === client, res.status { invalidateSessionIndexRequests() }
                 guard isCurrent(sid, epoch, client) else { return }
                 if !res.status {
                     errorMessage = res.response ?? "回退失败"
                     return
                 }
-                detach()
+                invalidateSessionIndexRequests()
+                try? await client.offlineAssets.invalidateInputs(retaining: retainedInputs, namespace: client.cacheNamespace, sid: sid)
+                try? await offlineHistory.invalidateHistory(sessionId: sid, namespace: client.cacheNamespace)
+                guard isCurrent(sid, epoch, client) else { return }
+                offlineSavedSessionIDs.remove(sid)
+                detach(); clearHistoryProjection(); messages = []; knownTurnCount = 0
                 await open(sessionId: sid)
                 await loadSessions()
             } catch {
@@ -1818,46 +2285,27 @@ final class AgentStore: ObservableObject {
         let targets = sessions
         var hits: [SearchHit] = []
 
-        // withTaskGroup 闭包不继承 MainActor：缓存组外快照、组内只收集、组后统一写回
-        let cacheSnapshot = historyCache
-        let collected: [(SessionMetaItem, [Turn])] = await withTaskGroup(
-            of: (SessionMetaItem, [Turn])?.self
-        ) { group in
+        let cache = offlineHistory
+        await withTaskGroup(of: SearchHit?.self) { group in
             var pending = targets.makeIterator()
-            var active = 0
-            var out: [(SessionMetaItem, [Turn])] = []
             func enqueue() {
-                while active < 5, let item = pending.next() {
-                    active += 1
-                    let cached = cacheSnapshot[item.sessionId]
-                    group.addTask {
-                        if let cached, cached.updated == (item.lastUpdated ?? -1) {
-                            return (item, cached.turns)
-                        }
-                        guard let history = try? await client.history(sessionId: item.sessionId)
-                        else { return nil }
-                        return (item, history.turns)
-                    }
+                guard let item = pending.next() else { return }
+                group.addTask {
+                    // Only a copy saved under this exact index version may answer a
+                    // search; anything older could quote deleted or superseded text.
+                    let cached = await cache.loadHistory(sessionId: item.sessionId, namespace: client.cacheNamespace,
+                        matchingVersion: OfflineHistoryStore.Version(item))
+                    let history: HistoryResponse?
+                    if let cached { history = cached }
+                    else { history = try? await client.history(sessionId: item.sessionId) }
+                    guard let history else { return nil }
+                    return await Self.match(query: query, in: history.turns, session: item)
                 }
             }
-            enqueue()
-            for await result in group {
-                active -= 1
-                enqueue()
-                if let result { out.append(result) }
-            }
-            return out
+            enqueue(); enqueue()
+            for await hit in group { if let hit { hits.append(hit) }; enqueue() }
         }
-        for (item, turns) in collected {
-            historyCache[item.sessionId] = (item.lastUpdated ?? -1, turns)
-            if let hit = Self.match(query: query, in: turns, session: item) {
-                hits.append(hit)
-            }
-        }
-        // 容量护栏：缓存的是全部会话的全文轮次，会话多时是可观的常驻内存——
-        // 超限整体清掉（搜索是低频手动操作，重拉的代价可接受）
-        if historyCache.count > 32 { historyCache.removeAll() }
-
+        guard self.client === client, searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == query else { return }
         // 稳定排序：最近更新的会话在前
         hits.sort { ($0.lastUpdated ?? 0) > ($1.lastUpdated ?? 0) }
         searchResults = hits

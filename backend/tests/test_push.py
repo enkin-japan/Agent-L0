@@ -54,7 +54,7 @@ class FakeAPNs:
                 if (s["payload"].get("ma") or {}).get("kind") == kind]
 
 
-def make_dispatcher(tmp_path, devices=(), cfg=None):
+def make_dispatcher(tmp_path, devices=(), cfg=None, instance=None):
     registry = PushRegistry(tmp_path / "push")
     for d in devices:
         registry.upsert(**d)
@@ -66,6 +66,7 @@ def make_dispatcher(tmp_path, devices=(), cfg=None):
                 "live_activity": {"enabled": True, "heartbeat_seconds": 60,
                                   "stale_seconds": 150, "min_push_interval": 0.05}},
         tmp_path / "sessions")
+    disp.instance_id = instance
     return disp, registry, apns
 
 
@@ -197,6 +198,53 @@ def test_alert_approval_interactive(tmp_path):
                                   "session_id": "s-1", "turn_id": "t_a"}
     assert abs(s["expiration"] - (time.time() + 900)) < 10    # TTL 过期不投
     assert s["collapse_id"] == "t_a:approval"
+
+
+def test_payloads_name_the_source_mac_when_known(tmp_path, monkeypatch):
+    """An iPhone with several Macs routes the tap and the approval by ma.src / attributes.src."""
+    monkeypatch.setenv("AGENT_INSTANCE_ID", "mac-7f3a9c21")
+    registry = PushRegistry(tmp_path / "push")
+    registry.upsert(device_id="d1", token="t1", prefs={"schedule_start": True},
+                    push_to_start_token="pts1")
+    apns = FakeAPNs()
+    disp = NotificationDispatcher(
+        GlobalFeed(), registry, apns, types.SimpleNamespace(_all_sessions={}),
+        {"bundle_id": "dev.enkin.macagent", "live_activity": {"enabled": True}},
+        tmp_path / "sessions")
+    run(route_turn(
+        disp,
+        feed_item("turn_queued", prompt="Task: 巡检", origin="schedule"),
+        feed_item("turn_started")))
+    alerts = [s for s in apns.sent if s["push_type"] == "alert"]
+    starts = [s for s in apns.sent if s["push_type"] == "liveactivity"]
+    assert alerts and all(s["payload"]["ma"]["src"] == "mac-7f3a9c21" for s in alerts)
+    assert starts[0]["payload"]["aps"]["attributes"]["src"] == "mac-7f3a9c21"
+
+
+def test_unset_or_invalid_instance_id_is_not_sent(tmp_path, monkeypatch):
+    for value in (None, "short", "has space here"):
+        if value is None:
+            monkeypatch.delenv("AGENT_INSTANCE_ID", raising=False)
+        else:
+            monkeypatch.setenv("AGENT_INSTANCE_ID", value)
+        disp = NotificationDispatcher(
+            GlobalFeed(), PushRegistry(tmp_path / f"push-{value}"), FakeAPNs(),
+            types.SimpleNamespace(_all_sessions={}), {}, tmp_path / "sessions")
+        assert disp.instance_id is None, value
+
+
+def test_payloads_omit_the_source_when_unknown(tmp_path):
+    disp, _, apns = make_dispatcher(tmp_path, [
+        {"device_id": "d1", "token": "t1", "prefs": {"schedule_start": True},
+         "push_to_start_token": "pts1"}])
+    run(route_turn(
+        disp,
+        feed_item("turn_queued", prompt="Task: 巡检", origin="schedule"),
+        feed_item("turn_started")))
+    assert apns.sent
+    for s in apns.sent:
+        assert "src" not in (s["payload"].get("ma") or {})
+        assert "src" not in (s["payload"]["aps"].get("attributes") or {})
 
 
 def test_alert_schedule_autodeny_is_report_not_card(tmp_path):

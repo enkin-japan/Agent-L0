@@ -1,0 +1,172 @@
+# 计划：iPhone ↔ Mac 多对多连接 + 合并版界面 → build 76
+
+> 状态：**已获用户批准，待执行**（2026-10-25）。用户原话：「A和B，以及前面的一起，按你的建议做，但是先将计划落盘，等我压缩一下上下文之后再做」。
+> 「按你的建议」意味着：Phase B **先出设计、用户确认后才动代码**；其余按本文顺序推进。
+> 恢复执行时先读完本文，再跑 `./devctl.sh preflight`。
+
+---
+
+## 0. 现状（落盘时刻的事实，执行前逐条复核）
+
+- `main` HEAD = `bac3e9e`：iPhone 经 iCloud 钥匙串同步连接 + 二维码配对备用 + macOS 去掉后端地址项；build 75。**未推送到 git 远端。**
+- build 75 已发布：macOS 版（公证、Sparkle 更新源、75→74/73/72 delta 已上传 `enkin-japan/Agent-L0` 的 `updates`；本机已装）；iOS 版 TestFlight VALID。
+- **build 75 是从干净提交构建的，不含工作区里的未提交改动**——用户此前本机跑的是 10-24 14:00 用工作区构建的 build 74（带那批界面改动），所以装上 75 后「外观变回去了」。那批改动仍完整保存在工作区，未被动过。
+- 已核实合并无冲突（2026-10-25）：
+  - 文本层面两边都改的只有 `L10n.swift`（未提交改动的词条在第 29 行附近，本次功能的词条块在第 728 行，615 个键，没有重复）和 `backend/app.py`（路由挂载相邻但不重叠）；
+  - 合并后的工作区 macOS 与 iOS 模拟器都能编译；提交 bac3e9e 时 pre-commit 测的就是合并后的工作区（hook 不 stash），四道门全过；设计预览工具能编译、能出图；
+  - 语义层面：401 仍会映射为「未认证」状态，鉴权依赖排在计算端就绪闸之前，离线缓存的分区不受影响（Mac 端存的就是默认地址）；
+  - 差异：未提交的 `lib_edge.sh` 去掉了「推理不可达就拒启 backend」这道门，已提交的版本（即 build 75）在算力端离线时后端起不来。
+- 算力端（Colab VM）**离线**，开机由用户决定（计费）。
+- **build 75 已知缺陷（Phase A 修）**：iCloud 同步条目全局只有一条。同一 Apple ID 下有两台 Mac 都同步时会互相覆盖；iPhone 离线时自愈重读，可能被**悄悄切到另一台 Mac**。
+
+## 1. 硬约束（违反即停）
+
+- 只用简体中文和用户沟通；代码、命令、commit message 保持英文惯例。
+- 不用 `--no-verify`；`config.yaml` 的 `bundle_id` 不许改；`.p8`、`.env*` 不能进包也不能进 git；不读 `reminder/bark.env`；密钥不经过对话。
+- 开机或停用计费算力由用户决定。单 GPU 纪律：同一时刻只允许一个真模型进程（本计划默认不跑真模型）。
+- 每个非平凡 diff：reviewer 先审 + 主会话再审；守卫类改动要做变异证明（清 `__pycache__`、按 sha256 还原、记进 commit message）。
+- 超过 10 分钟的任务挂 task-sentinel。只在全部完成或受阻时推送，23:00–06:00 静默时段被拒就不重试。
+- 本机环境实测（详见记忆 release-env-facts）：
+  - 提交用 `git -c user.name=enkin -c user.email=contact@enkin.dev commit …`；
+  - 构建要显式设 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`；
+  - 有未提交改动时，发布必须从干净的 worktree 构建；
+  - generate_appcast 可能弹钥匙串授权框，要等用户点允许。
+
+## 2. Phase 0 — 整理未提交改动（合并版的前提）
+
+目标：把工作区里的未提交改动整理成逻辑清楚、经过审查的若干提交，让 build 76 能从干净的提交构建出合并版。
+
+1. 先只读盘点：`git status` 与 `git diff --stat`，逐组读 diff。按主题拆分（实际分组以读 diff 为准）：
+   - G1 CUDA 后端 MTP 越界 `</think>` 修复 + 测试（本会话早期诊断的那个工具调用故障）；
+   - G2 计算端生命周期：`backend/framework/api/compute_lifecycle.py`（未跟踪）、`routes.py` 的 `require_compute_ready`、`app.py` 的 lifespan 重写、`scripts/lib_edge.sh`、`backends/remote`、`rag/compute_*`、`inference/server.py`、`config.yaml`（**核对 bundle_id 未变**）；
+   - G3 离线历史与文件：`backend/framework/api/offline_files.py`（未跟踪）、`AgentClient`/`AgentStore`/`OfflineHistoryStore`/`OfflineAssetStore` 相关；
+   - G4 原生 app 界面：`Sources/Views/*`、`Theme.swift`、`L10n.swift` 那 68 个词条、`ServiceStatus`/`Models`；
+   - G5 原生测试：`apple-app/Tests/*`（含未跟踪的 `design_preview*`）、`backend/tests/test_native_*` 等；
+   - G6 其他后端：`orchestrator`、`engine`、`retrieval_evidence`、`schedule/runner`、`mcp/tools/rag_search`；
+   - G7 工具配置与文档：`.codex/`、`AGENTS.md`、`ARCHITECTURE.md`。**默认不提交 `.codex/` 和 `AGENTS.md`**（Codex 侧的配置，归属不明），先问用户。
+2. 对每组：有依赖的按依赖顺序合并成一个提交，每个提交前都要过 reviewer 和主会话自审；守卫类改动补变异证明。提交时 pre-commit 测的是**工作区**（不 stash），所以拆分提交时，要先用 `git checkout-index` 导出暂存树、在导出的树上跑测试，证明每个提交单独成立。
+3. 若某组明显未完成或审查发现重大问题：停下来汇报，由用户决定修、搁置还是丢弃，**不擅自丢弃**任何改动。
+
+验收：工作区只剩用户决定不提交的文件；每个提交单独可编译、能过相关测试。
+
+## 3. Phase A — 一部 iPhone 对应多台 Mac
+
+### A1 Mac 侧：同步条目按 Mac 分开
+- 每台 Mac 生成稳定的 `macId`（UUID，首次生成后存 UserDefaults，`phone.macId`），同步条目的 account = `connection.<macId>`。条目内容在 `{url, key, mac}` 之外加 `macId` 和 `updated`（时间戳）。
+- 只写、只删自己那一条。`unexpose`、关闭同步、轮换密钥都只动自己的。
+- 迁移：首次启动新版时删除旧的全局条目 `connection`。只删 service `dev.enkin.macagent.phone-link`、account `connection` 这一条。
+
+### A2 iPhone 侧：多 Mac 列表 + 当前连接
+- 新建 `SavedMac`：`{macId?, name, url, key, source(icloud|qr|manual), addedAt}`。列表存 UserDefaults（不含 key），key 存本机钥匙串（account `mac-key.<id>`，不同步）。「当前连接」= 列表里的某一项 id。`baseURLString` 和 `apiKey` 从当前项派生，保持与现有 `AgentStore` 及离线缓存兼容。
+- 读同步条目：用 `kSecMatchLimitAll` 读出全部 `connection.*`，与列表按 `macId` 合并（新增 / 更新 url、key；Mac 那边删掉的条目标记为「已从 iCloud 移除」，**不自动删**，由用户删）。
+- 自愈只针对当前那台 Mac：401 或离线时，只重读与当前 `macId` 相同的那条。**绝不切换到别的 Mac**，这是 75 缺陷的根治点。
+- 界面：
+  - iOS 设置页「从 Mac 获取」改为 Mac 列表，可点选切换（切换走 `applySettings`），可左滑删除；
+  - 引导页：只有一台时一键使用，多台时让用户选；
+  - 扫码配对得到的连接加进列表，并设为当前。
+- 已有的 75 用户迁移：当前 `baseURLString`/`apiKey` 迁成列表第一项（source 沿用 `connectionSource`）。
+
+### A3 推送向所有已保存的 Mac 登记
+- `PushManager` 改为：拿到 APNs token 后，向列表里每台 Mac 的后端各登记一次（同一 `deviceId`），失败的下次启动或切换时重试；删除某台 Mac 时，先向它注销。
+- 收到推送后，按 payload 判断来自哪台 Mac：在 `ma` 段加 `src`（后端的实例指纹，可复用 `/health` 的 `key_fp` 或新加 `instance_id`，**不放密钥**）。点开通知时，先切到那台 Mac，再定位会话。
+- 涉及 PROTOCOL.md §2.8（推送 payload 增加可选字段，additive，不升版本）。
+
+### A 验收
+- Swift 纯逻辑测试（沿用 `backend/tests/test_phone_link.py` 驱动 swiftc 的方式）：多条目合并、只自愈当前 macId、迁移、删除；macOS 分支可直接测。iOS 分支的逻辑尽量抽成平台无关的纯函数，以便测到（弥补 75 中 iOS 分支无测试的缺口）。
+- 变异证明：「自愈读到别的 Mac 也换上」「写条目不带 macId」「迁移误删他人条目」三个变异都必须被杀死。
+
+## 4. Phase B — 一台 Mac 对应多部 iPhone：每台设备单独发票据
+
+**先出设计给用户确认，确认前不写代码。** 设计草案要点（供写设计文档时展开）：
+- 扫码 claim 不再返回共享的 AGENT 密钥，而是为这台设备新签一张**设备票据**（随机 256 bit），返回 `{token, device_id}`；后端只存 `sha256(token)` 和元数据（名称、首次/最近使用时间、来源），存放在数据根下的 `auth/devices.json`，权限 0600，写入要原子。
+- `verify_token` 已预留 `devices` 分支（`framework/api/auth.py`，`app.state.auth_devices`）：改为从这份文件加载，比对哈希，并更新最近使用时间。共享密钥继续有效：Mac 自己用，iCloud 同步也继续用它。是否让 iCloud 也改成每台设备一张票据，留作待定问题。
+- Mac 设置新增「已配对设备」列表：显示名称、最近使用、来源，可单独吊销（删掉哈希，下一次请求就 401）。
+- 新增接口（需要 Bearer 共享密钥，只给 Mac 用）：`GET /api/v1/pair/devices`、`DELETE /api/v1/pair/devices/{id}`。白名单测试（只有 claim 免鉴权）保持不变。
+- 推送登记的 `device_id` 与票据的 `device_id` 关联：吊销设备时一并注销它的推送。
+- 安全面：票据只在 claim 的响应里出现一次（`no-store`），日志里只记 device_id；文件里只存哈希；吊销立即生效；绝不回显。属于 CLAUDE.md 所说的密钥处理类改动，建议在 Opus 会话里做，遇到分类器降级就停。
+- 待用户决定：iCloud 同步继续用共享密钥（简单，同一 Apple ID 的设备都属于本人），还是同样改发设备票据（可单独吊销，但要有一次在线换领）；设备票据有没有有效期；名称取 iPhone 的设备名（`UIDevice.current.name`，iOS 16+ 需要授权才能拿到真实名称，否则只有「iPhone」）还是让用户自己填。
+
+### B 验收（设计确认后细化）
+- 后端金测试：吊销后立即 401；文件里只有哈希；损坏的文件不能导致放行（fail-closed）；并发写入不丢记录。
+- 每条都要做变异证明。
+
+## 5. Phase C — build 76 发布
+
+1. 版本号升到 `CURRENT_PROJECT_VERSION: "76"`（与最后一个功能提交合在一起即可）。
+2. 先推送 git 远端？——**问用户**（bac3e9e 起都未推送）。
+3. 从干净的 worktree 构建（参照 75 的做法）：
+   ```
+   git worktree add --detach /Volumes/enkin/project/Agent-release-76 <commit>
+   软链：build/runtime、apple-app/build/{sparkle-tools,SourcePackages}、apple-app/releases、.env.local
+   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer ./release-macos.sh   （挂 sentinel）
+   …./release-ios.sh（挂 sentinel）→ ../backend/.venv/bin/python wait-testflight.py 76
+   发布完：先 rm 各软链，再 git worktree remove --force
+   ```
+4. 核验：
+   - `codesign --verify --strict`、`spctl -a -vv`、`stapler validate`；
+   - entitlements 带两个钥匙串组，`embedded.provisionprofile` 存在；
+   - appcast 含 76，delta 已生成；
+   - 本机 app 能启动；
+   - 界面和用户原先本机那版一致（用设计预览工具截图比对，或请用户确认）；
+   - iOS 归档的 entitlements 正确，TestFlight 状态 VALID。
+5. 推送一次完成通知（写清待用户在真机上确认的项）。
+
+## 6. 需要用户在真机上确认的（不能自动化）
+- Mac：「设置 → 连接 → 连接 iPhone」显示同步状态；
+- iPhone：TestFlight 76 的引导页 / 设置页能列出 Mac、能切换，扫码能加入列表；
+- 一台 Mac 有两部 iPhone 时（Phase B）：能分别吊销；
+- 二维码配对的线上实测需要后端在跑：合并版去掉了「推理不可达就拒启」，所以算力端离线也能测。
+
+## 7. 执行顺序小结
+Phase 0（盘点 → 逐组审查提交）→ Phase A → 出 Phase B 设计 → **等用户确认** → Phase B 实现 → Phase C 发布 76 → 汇报。
+每个 Phase 结束只做内部记录，不推送；只有整体完成或受阻时才推送。
+
+---
+
+## 8. 进度记录（2026-10-25 暂停时）
+
+- Phase 0：工作区的未提交改动拆为六组：C1 测试脚手架（test_devctl_host_flag/test_preflight）、C2 CUDA、C3 RAG、C4 检索证据护栏、C5 remote 离线优先启动、C6 原生 app。
+  - 在当前工作区跑 `./devctl.sh check`，四项全过。
+  - **还没有提交任何一组。**
+  - 审查结果：
+    - C4 有重要问题：一次检索失败后，`_is_local_mutation` 会把 shell 命令（含 ls）一律拦下；改写过的查询无法消除 pending 状态；与去重拦截相撞。
+    - C6 有重要问题：historyIsReadOnly 不会自动清除，导致「停止」和「审批」失效；媒体全量下载、没有上限；每 15 秒全量重新同步；`..` 按子串判断。
+    - 以上两条已由主会话核实。**待用户决定**修、搁置还是丢弃。
+    - C2、C3、C5 的 reviewer 报告暂停时尚未收到，恢复后需要重新发起审查。
+- Phase A：已在 worktree `/Volumes/enkin/project/Agent-phaseA`（分支 phase-a-multi-mac，**未提交**）完成实现。
+  - macOS 与 iOS 都能编译；test_phone_link、test_push、test_pairing 全部通过；11 个变异全部被杀死，脚本在 scratchpad 的 phaseA_mutants.py。
+  - PROTOCOL §2.8 与 §2.9 已更新。
+  - reviewer 报告未收到，恢复后重新送审。
+  - 实例标识：Mac app 把 `AGENT_INSTANCE_ID` 注入执行层，后端在推送里带 `ma.src` 和 `attributes.src`，claim 返回 `instance_id`。
+- Phase B：设计稿已写好，见 `docs/plans/2026-10-25-device-tokens-design.md`，等用户确认三个问题。
+- C2 CUDA 的审查结果在暂停后才收到：没有阻断问题，83 项测试通过，bundle_id 没动，/health 只暴露白名单字段。有一项需要提交前核实：`attention_config` 和 `kv_cache_dtype="bfloat16"` 这两个参数，vLLM 0.24.0 的 AsyncEngineArgs 不一定接受，而测试里的桩接受任意参数，所以测不出来。如果不接受，第一次真实部署就会起不来。其余都是小问题，包括 server.py 的 unknown 分支缺 `reason` 字段、README 与实现不一致等。C2 不必再重新送审。
+- C3 RAG 审查（恢复后收到）：没有阻断问题。有几条重要问题：
+  - 配置值写错时 rag_search 和 rag_get_context 两个工具会一起消失，只在日志里留一行；
+  - 三处错误日志被换成 `except: pass`，库名和分数都丢了，阈值校准的证据随之消失；
+  - 客户端超时放宽到 120s，但服务端没有截止时间，被放弃的查询会在后台继续跑，单 GPU 上会叠加；
+  - CPU 主机默认改用 fp32，内存大约翻倍。
+  
+  reviewer 跑全量测试时 test_native_recovery_transport 有 3 项失败，但主会话之前跑的 `./devctl.sh check` 全部通过。当时有多份全量测试在并发抢 CPU，疑似超时导致，需要复核。
+- C5 离线优先启动审查（恢复后收到）：没有阻断问题，鉴权挂载顺序正确，offline_files 没有路径穿越问题。有几条重要问题：
+  - 关机时等待后台任务结束没有设超时，可能被 SIGKILL 打断，GPU 来不及释放；
+  - RAG 短暂不可达会让整个执行面返回 503，而且探活没有防抖，一次失败就翻转；
+  - 重试日志只打印异常类名，丢掉了原来「地址或密钥配错」的那类可操作提示；
+  - 引擎清理没有逐个隔离异常，一个后端报错，其余后端都不会被释放；
+  - 闸门只按路径判断，`DELETE /chat/{id}` 在离线时也被拦下；
+  - `/turn` 这个只读接口在首次装配之前可能返回 500。
+  
+  全量测试有 2 项失败（shell 超时 kill、native_recovery 的 overlap-same-early），单独跑能过，判断是不稳定的偶发失败，需要复核。
+
+## 9. 用户决定（2026-10-25 恢复后）
+- Phase 0 按建议处理：
+  - C1、C2 直接提交。C2 的两个 vLLM 参数已对照 v0.24.0 源码核实：`attention_config` 是 EngineArgs 的字段，`"bfloat16"` 在 CacheDType 的允许值里。
+  - C3、C5、C6 修完重要问题再提交，三个 implementer 并行在修。
+  - C4 这次不带，留在工作区。
+  - 做完要向用户逐条说明残留问题、原因和推荐处理。
+- Phase B 第二稿已确认（`docs/plans/2026-10-25-device-tokens-design.md`）：
+  - 每部 iPhone 都要握手、由 Mac 同意。同一 Apple ID 用 iCloud 请求凭据，Mac 弹框并显示 4 位核对码；不同 Apple ID 扫码。
+  - 共享密钥不再离开 Mac。
+  - 有效期默认 90 天，从同意时起算，不自动顺延；单台设备可以改成永久。
+  - 两端都能给对方改名。
+  - 已拿到共享密钥的旧 iPhone 自动换成设备票据。
+  - 75 格式的条目不再双写。

@@ -63,6 +63,11 @@ extension View {
 }
 
 @main struct MarkdownImagePolicyTest {
+    static let fenceCases = [
+        "  ~~~python\n  print(1)\n  ~~~\n\n普通正文",
+        "  ~~~python\n  print(1)\n~~~\n\n普通正文",
+        "- Example\n\n  ~~~python\n  print(1)\n  ~~~\n\n普通正文"
+    ]
     static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
         if !condition() {
             print("FAIL: \(message); intercepted_requests=\(MarkdownImageProbe.requests.count)")
@@ -72,6 +77,16 @@ extension View {
 
     static func main() async throws {
         L10n.current = .zh
+        for markdown in fenceCases {
+            let html = MarkdownContent(MarkdownImagePolicy.linksForExternalImages(markdown)).renderHTML()
+            expect(html.contains(">print(1)\n</code>"), "fence indentation normalized before display/copy")
+            expect(html.contains("<p>普通正文</p>"), "closing fence does not swallow following prose")
+        }
+        let literalFence = MarkdownContent(MarkdownImagePolicy.linksForExternalImages("~~~~swift\n~~~\n~~~~")).renderHTML()
+        expect(literalFence.contains(">~~~\n</code>"), "shorter fence remains code content")
+        let partialFence = MarkdownContent(MarkdownImagePolicy.linksForExternalImages("```swift\nlet value = 1")).renderHTML()
+        expect(partialFence.contains(">let value = 1\n</code>"), "unfinished streaming fence remains code")
+        print("PASS: code fences preserve nesting, indentation, trailing prose and partial streams")
         method_exchangeImplementations(
             class_getClassMethod(URLSessionConfiguration.self, #selector(getter: URLSessionConfiguration.default))!,
             class_getClassMethod(URLSessionConfiguration.self, #selector(URLSessionConfiguration.markdownImageProbeConfiguration))!)
@@ -211,7 +226,7 @@ extension View {
             for markdown in ["![remote](\(remote))", "before ![remote](\(remote)) after",
                              "![remote][ref]\n\n[ref]: \(remote)",
                              "before ![remote][ref] after\n\n[ref]: \(remote)",
-                             "[**![logo](\(remote))**](https://destination.invalid/)"] {
+                             "[**![logo](\(remote))**](https://destination.invalid/)"] + fenceCases + ["```swift\nlet value = 1"] {
                 let hosted = NSHostingView(rootView: MarkdownText(text: markdown, streaming: streaming)
                     .environmentObject(store))
                 window.contentView = hosted

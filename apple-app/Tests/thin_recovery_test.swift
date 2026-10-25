@@ -6,13 +6,23 @@ import Foundation
         check(false,"timeout "+message)
     }
     static func held(_ suffix:String) -> RecoveryTransport {
-        RecoveryTransport.lock.lock();defer{RecoveryTransport.lock.unlock()}
-        return RecoveryTransport.held.remove(at:RecoveryTransport.held.firstIndex{$0.request.url!.path.hasSuffix(suffix)}!)
+        for _ in 0..<2000 {
+            RecoveryTransport.lock.lock()
+            if let index = RecoveryTransport.held.firstIndex(where: { $0.request.url!.path.hasSuffix(suffix) }) {
+                let value = RecoveryTransport.held.remove(at:index)
+                RecoveryTransport.lock.unlock()
+                return value
+            }
+            RecoveryTransport.lock.unlock()
+            Thread.sleep(forTimeInterval: 0.001)
+        }
+        fatalError("missing held transport " + suffix)
     }
     static func sse(_ stream:RecoveryTransport,_ event:[String:Any]) {
         stream.deliver(Data(("data: "+String(data:try! JSONSerialization.data(withJSONObject:event),encoding:.utf8)!+"\n\n").utf8))
     }
     @MainActor static func main() async throws {
+        exitOnFatalSignals()
         let mode=CommandLine.arguments[1],root=CommandLine.arguments[2]
         #if THIN_ACTUAL_L10N
         L10n.current = .zh
@@ -75,7 +85,9 @@ import Foundation
         await wait({aHistory>=2},"same recovery entrance")
         if late {
             let delayed=held("/chat/A/history")
-            if mode=="late-client" {settings.baseURLString="https://replacement.invalid";store.applySettings()}
+            // A replaced backend never inherits the previous selection (its own cache
+            // does not know it), so the new incarnation is opened explicitly here.
+            if mode=="late-client" {settings.baseURLString="https://replacement.invalid";store.applySettings();store.select(sessionId:"A")}
             else {store.select(sessionId:"B");await wait({store.messages.contains{$0.text=="current selection"}},"B selection");if mode=="late-aba" {store.select(sessionId:"A")}}
             await wait({store.messages.contains{$0.text=="current selection"}},"new incarnation")
             delayed.respond(["status":true,"session_id":"A","turns":[]])
@@ -114,7 +126,11 @@ import Foundation
         }
         #endif
         if mode=="stable-error" {
-            try? await Task.sleep(nanoseconds:6_200_000_000)
+            // Ordinary errors auto-clear after 6.0 s; wait well past that so a loaded machine
+            // cannot delay a (mutant) dismissal beyond the check and let it pass unseen.
+            // Upper bounds: run_native_case times out at 20 s, and the connection monitor
+            // re-polls sessions at ~15 s -- keep this wait below both.
+            try? await Task.sleep(nanoseconds:9_000_000_000)
             check(store.errorMessage != nil && aHistory==2,"incomplete synchronization error stays visible until explicit recovery")
         }
         if mode=="manual" {

@@ -87,6 +87,8 @@ struct MacAgentApp: App {
         #if os(macOS)
         phoneLink.configure(settings: settings)
         #else
+        phoneLink.push = push
+        push.phoneLink = phoneLink
         phoneLink.configure(settings: settings, store: store)
         #endif
         _phoneLink = StateObject(wrappedValue: phoneLink)
@@ -161,7 +163,32 @@ struct MacAgentApp: App {
                     Button(L("取消"), role: .cancel) {}
                 } message: { link in
                     // 完整地址（含协议与端口），不只主机名：这是用户辨认真假的唯一依据
-                    Text(link.base.absoluteString + "\n" + L("将用一次性配对码换取连接密钥，并替换本机现有的连接设置。"))
+                    Text(link.base.absoluteString + "\n" + L("将用一次性配对码为本机领取这台 Mac 的连接凭据，并切换到这台 Mac。"))
+                }
+                // 同一 Apple ID 的握手：请求已发出，等你在 Mac 上点允许
+                .alert(L("等待 Mac 同意"), isPresented: Binding(
+                    get: { phoneLink.handshake != nil },
+                    set: { if !$0 { phoneLink.cancelHandshake() } }),
+                       presenting: phoneLink.handshake) { handshake in
+                    switch handshake.state {
+                    case .waiting:
+                        Button(L("取消"), role: .cancel) { phoneLink.cancelHandshake() }
+                    default:
+                        Button(L("重试")) { phoneLink.requestConnection(handshake.macId) }
+                        Button(L("好"), role: .cancel) { phoneLink.cancelHandshake() }
+                    }
+                } message: { handshake in
+                    switch handshake.state {
+                    case .waiting:
+                        Text(L("请在「") + handshake.macName + L("」上点「允许」。核对码 ") + handshake.code
+                             + "\n" + L("请确认 Mac 上显示的是同一个核对码。"))
+                    case .denied:
+                        Text(L("Mac 拒绝了这次连接请求。"))
+                    case .expired:
+                        Text(L("等了 5 分钟没有回应，请重新请求。"))
+                    case .failed(let reason):
+                        Text(L("连接请求没有送达：") + reason)
+                    }
                 }
                 .alert(L("配对失败"), isPresented: Binding(
                     get: { phoneLink.claimError != nil },
@@ -169,6 +196,19 @@ struct MacAgentApp: App {
                     Button(L("好")) {}
                 } message: {
                     Text(phoneLink.claimError ?? "")
+                }
+                #endif
+                #if os(macOS)
+                // iPhone 请求连接：每部 iPhone 都要在这里由你同意一次（核对码与 iPhone 上一致才点允许）
+                .alert(L("iPhone 请求连接"), isPresented: Binding(
+                    get: { phoneLink.prompt != nil },
+                    set: { if !$0 { phoneLink.prompt = nil } }),
+                       presenting: phoneLink.prompt) { request in
+                    Button(L("允许")) { Task { await phoneLink.decide(request, approve: true) } }
+                    Button(L("拒绝"), role: .cancel) { Task { await phoneLink.decide(request, approve: false) } }
+                } message: { request in
+                    Text("「\(request.name)」" + L("请求连接这台 Mac。核对码 ") + request.code
+                         + "\n" + L("请确认 iPhone 上显示的是同一个核对码，不认识的请求请拒绝。"))
                 }
                 #endif
                 #if os(macOS)

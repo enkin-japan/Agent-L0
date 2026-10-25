@@ -502,27 +502,57 @@ POST   /api/v1/push/live-activity               Live Activity 活动 token 上�
 (通知按钮/灵动岛)带上,当前等待审批的轮次不是它时 409 `approval_target_mismatch`
 ——迟到点击绝不错递给后来的审批请求。不带该字段的旧客户端行为不变。
 
-APNs payload 自定义段 `ma: {v, kind, session_id, turn_id}`,kind ∈ result /
-approval / approval_autodenied / schedule_start;Live Activity content-state 契约
+APNs payload 自定义段 `ma: {v, kind, session_id, turn_id, src?}`,kind ∈ result /
+approval / approval_autodenied / schedule_start。可选 `src`(2026-10-25 追加)= 后端所在
+Mac 的 macId(Mac app 经 `AGENT_INSTANCE_ID` 注入内建执行层,`framework/utils/instance_id.py`
+校验格式;未注入时不带):保存了多台 Mac 的 iPhone 据此把点开、审批按钮回到发出它的那台;
+push-to-start 的 `attributes` 同样可带 `src`。Live Activity content-state 契约
 见 `apple-app/Sources/LiveActivity/AgentActivityAttributes.swift`(与
 `framework/push/dispatcher.py` 字段一一对应,改动须两边同步)。
 
-### 2.9 iPhone 扫码配对(additive,2026-10-25;不改既有事件语义,不升版本)
+### 2.9 iPhone 连接:Mac 同意后按设备发票据(additive,2026-10-25;不改既有事件语义,不升版本)
 
-iPhone 拿到连接密钥的备用出口(主路径是 iCloud 钥匙串同步,不经后端)。实现
-`framework/api/pairing.py`,不挂计算端就绪闸。
+每部 iPhone 都要经 Mac **明确同意**才能连上,并拿到它自己的设备票据;共享密钥不离开
+Mac。实现 `framework/api/pairing.py`(入口)+ `devices.py`(票据存储)+ `auth.py`
+(`verify_api_key` 认设备票据、`require_owner`),不挂计算端就绪闸。设计见
+`docs/plans/2026-10-25-device-tokens-design.md`。
 
 ```
-POST /api/v1/pair/start    (Bearer)  → {code, expires_in}   Mac app 经回环领码;重新 start 顶掉旧码
-POST /api/v1/pair/claim    {code}    → {api_key}            **全 /api/v1 唯一免鉴权的端点**
+# 扫码(不同 Apple ID):打开二维码即同意
+POST /api/v1/pair/start                (owner)         → {code, expires_in}
+POST /api/v1/pair/claim                {code, name?, platform?, push_device_id?}
+                                                        → {token, api_key(=token), device_id, instance_id?}
+# 握手(同一 Apple ID):iCloud 条目里的 ticket 只能提交请求,Mac 点允许才发票据
+POST /api/v1/pair/request              {ticket, name?, platform?, push_device_id?}
+                                                        → {request_id, poll_secret, code(4 位核对码), expires_in}
+POST /api/v1/pair/request/{id}/poll    {poll_secret}    → {status: pending|denied}
+                                                          | {status: approved, token, api_key, device_id, instance_id?}
+GET  /api/v1/pair/requests             (owner)          → {requests: [{id, code, name, platform, created}]}
+POST /api/v1/pair/requests/{id}/approve | /deny  (owner)
+GET  /api/v1/pair/ticket · POST /api/v1/pair/ticket/rotate   (owner) → {ticket}
+# 旧连接(手里是共享密钥)换票据;设备管理
+POST /api/v1/pair/upgrade              (owner)          → 同 claim
+GET  /api/v1/pair/devices              (owner)          → {devices: [{id, name, via, platform, created, last_used, expires}],
+                                                           default_ttl_days, notice}
+PATCH /api/v1/pair/devices/{id}        (owner) {name?, permanent?, ttl_days?}
+DELETE /api/v1/pair/devices/{id}       (owner)          吊销,连带删推送登记
+PUT  /api/v1/pair/settings             (owner) {default_ttl_days: int|null}   新设备默认有效期(缺省 90,null=永久)
 ```
 
-claim 的约束:配对码 144 bit、5 分钟过期、成功即作废;错码不作废(防任一 tailnet
-节点乱猜把码烧光);失败一律 403 同一句话;没有共享密钥可发时 start 409、claim 永不
-返回空串;响应 `Cache-Control: no-store`。状态在进程内存,后端重启即全部作废。
-「除 claim 外每条 /api/v1 路由都带鉴权依赖」由 `test_pairing.py` 的白名单测试守。
-二维码载荷 `macagent://pair?u=<*.ts.net 地址>&c=<code>`,app 端校验与确认见
-`apple-app/Sources/App/PhoneLink.swift`(PairingLink)。
+(owner) = `verify_api_key` 通过且是共享密钥(`device_id == "default"`),设备票据一律 403。
+**全 /api/v1 免 Bearer 的恰好三条**:`claim`、`request`、`request/{id}/poll`(各凭一次性
+码 / ticket / poll_secret),由 `test_pairing.py` 的白名单测试守。
+
+约束:配对码 144 bit、5 分钟、单次,错码不作废(防乱猜把码烧光);请求 5 分钟过期,同时
+≤3 条待处理、每分钟 ≤3 次提交,未经同意的查询永不含票据,被拒 / 过期即作废,票据只发一次;
+后端没有共享密钥时一律不发票据(start / ticket 409,claim / request 403)。票据 256 bit,
+只在发放那一次出现;数据根 `auth/devices.json`(0700/0600,原子写)只存 sha256,损坏即
+fail-closed(设备票据全 401,共享密钥不受影响,`notice` 提示重连);到期的票据 401
+`detail: device_expired`。响应一律 `Cache-Control: no-store`。配对码与待处理请求在进程
+内存,后端重启即作废;ticket 与设备记录持久。`instance_id` 与 §2.8 的 `src` 同值(可选),
+iPhone 的 Mac 列表据此认出同一台 Mac。二维码载荷 `macagent://pair?u=<*.ts.net 地址>&c=<code>`;
+iCloud 条目 `{url, mac, macId, ticket}`(不含共享密钥),app 端见
+`apple-app/Sources/App/PhoneLink.swift`。
 
 ---
 

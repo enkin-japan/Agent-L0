@@ -17,7 +17,7 @@ def compile_control(tmp, *, store_text=None, chat_text=None, harness=None):
         chat=tmp/"ChatMessage.swift";chat.write_text(chat_text)
     harness=harness or ROOT/"apple-app/Tests/task_control_test.swift"
     result=subprocess.run(["xcrun","swiftc","-parse-as-library","-module-cache-path",str(tmp/"modules"),
-        *map(str,sorted((source/"API").glob("*.swift"))),str(source/"Store/TurnReducer.swift"),str(chat),str(store),
+        *map(str,sorted((source/"API").glob("*.swift"))),*map(str,sorted((source / "Store").glob("Offline*.swift"))), str(source/"Store/TurnReducer.swift"),str(chat),str(store),
         str(ROOT/"apple-app/Tests/recovery_support.swift"),str(harness),"-o",str(binary)],capture_output=True,text=True,timeout=90)
     assert result.returncode == 0, result.stdout+result.stderr
     return binary

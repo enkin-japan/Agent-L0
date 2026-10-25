@@ -27,11 +27,21 @@ from framework.utils.path_resolver import resolve_model_path, resolve_tokenizer_
 from framework.memory.compactor import maybe_summarize_context, sediment_pending_turns
 from framework.memory import dream as notes_dream
 from framework.maintenance import drift_patrol
-from framework.api.routes import router, _maybe_summarize_active
+from framework.api.routes import router, _maybe_summarize_active, require_compute_ready
 from framework.api.auth import verify_api_key
+# 两张附加路由表（挂载见文件末尾，鉴权/就绪依赖各不相同）：离线文件只读面与 iPhone 扫码配对。
+from framework.api.offline_files import router as offline_files_router
+from framework.api.pairing import router as pairing_router
+
+# 收摊时「协作结算活跃轮次」的总预算（秒）。合作取消是尽力而为：卡住的轮次
+# 不能拖住 GPU/后端释放与 compute_state="stopped"，超时即取消剩余继续收摊。
+SHUTDOWN_JOIN_SECONDS = 10       # 活跃轮次与定时任务各自一份，互不挤占
+ENGINE_RELEASE_SECONDS = 10      # 推理线程退出的上限：到点不再等，照常释放后端
+_LINGERING = set()               # 超时未退出的推理线程 join：留引用，免得被回收时报 pending
 
 
-async def _idle_maintenance_loop(session_manager, scheduler, orchestrator, interval: int = 120):
+async def _idle_maintenance_loop(session_manager, scheduler, orchestrator, interval: int = 120,
+                                 can_execute=None):
     """
     空闲维护回合（方案A 低阈值路径）：定期扫描空闲但未冻结的会话，对越过低阈值者
     在其被 freeze 释放 KV 前先做一次摘要压缩——此时 KV 反正要释放，压缩近乎免费，
@@ -40,6 +50,8 @@ async def _idle_maintenance_loop(session_manager, scheduler, orchestrator, inter
     while True:
         try:
             await asyncio.sleep(interval)
+            if can_execute is not None and not can_execute():
+                continue
             now = time.time()
             idle_before = orchestrator.summary_idle_seconds
             for sid, session in list(session_manager._all_sessions.items()):
@@ -306,334 +318,38 @@ def require_remote_inference_host(cfg) -> None:
 # ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 采纳写回面（发现采纳块用；global 须先于本函数内任何对这些名字的读取——
-    # 条件判断里就读了 _model_source）
-    global MODEL, MODEL_REVISION, MODEL_OPTIONS, _model_source
-    # 推理承载（B1）先于路径解析定夺：mode=remote 时本进程只当编排端，权重在设备 A 的
-    # inference-server 里——这里若走全量 resolve_model_path，edge 机会照样拉满 4.9G，
-    # devctl 的 --tokenizer-only 预取也拦不住（那只让分词器先到位，全量解析看的是
-    # .download_complete 标记，缺了就重下）。故按 mode 选解析器，别按 profile 旗标。
-    _inference_cfg = config.get("inference") or {}
-    _mode = str(_inference_cfg.get("mode", "inprocess"))
-    _remote = _mode == "remote"
-    # 模型发现采纳（分离部署铁则，build 72 实机复盘）：remote 形态先问算力端 /health
-    # 拿真身就地采纳——app bundle 没有 .model-selection、config 默认键按 J5 决策只管
-    # 小内存回落（e4b），不发现就必然与生产选型（26b）错配、被身份护栏正确拒启。
-    # 只在本地无显式选型（source=default）时采纳（修正评审 S6）：操作员写下的
-    # .model-selection 是决定不是建议（评测臂强钉某档），显式选型走「不采纳 + 装配
-    # 护栏响亮比对」。采纳落在 model_selection 模块态（adopt_model）而非仅 app 全局：
-    # resolve_endpoints/路由在调用期重推主模型，只改这里的 MODEL 会让路由面继续拿
-    # 未采纳缺省的能力集（修正评审 C1）。旧版服务未报身份/外来占端口 → 回落缺省，
-    # 护栏 fail-closed 兜底；不可达 → 重试窗后拒启（含指引；算力端可能正在开机）。
-    if _remote and _model_source == "default":
-        from framework.utils.model_selection import adopt_model, discover_remote_model
-        require_remote_inference_host(config)   # 空 host 先拦成明确指引（uvicorn app:app 路径也覆盖）
-        _rm = _inference_cfg.get("remote") or {}
-        try:
-            _port = int(_rm.get("port", 14161))
-        except (TypeError, ValueError):
-            raise SystemExit(f"❌ [backend] inference.remote.port 不是数值：{_rm.get('port')!r}")
-        _base = f"http://{str(_rm.get('host') or '').strip()}:{_port}"
-        _found, _last_err = None, None
-        for _attempt in range(5):        # 重试窗 ~8s：算力端可能正在开机（sidecar 快崩
-            try:                         # 循环会烧重启预算，修正评审 S7）
-                _found = discover_remote_model(_base)
-                _last_err = None
-                break
-            except RuntimeError as e:    # 表外模型：重试无意义，当场拒启
-                raise SystemExit(f"❌ [backend] {e}")
-            except Exception as e:
-                _last_err = e
-                await asyncio.sleep(2)
-        if _last_err is not None:
-            raise SystemExit(
-                f"❌ [backend] 拒绝启动：inference.mode=remote 但算力端不可达或探活失败"
-                f"（{_base}）：{_last_err}\n"
-                f"   请先启动算力端推理服务（./devctl.sh start --profile gpu），"
-                f"或把 inference.mode 改回 inprocess。")
-        if _found:
-            adopt_model(_found[0], _found[1])
-            MODEL, MODEL_REVISION, _model_source = resolve_selected_model()
-            MODEL_OPTIONS = model_options(MODEL)
-            print(f"🔎 [System] 已按算力端发现采纳模型：{MODEL}"
-                  f"（注册表钉扎 {str(MODEL_REVISION)[:12] if MODEL_REVISION else '无'}——"
-                  f"模型状态靠发现不靠抄；首启可能现场拉取分词器 ~31MB）")
-        else:
-            print(f"⚠️ [System] 算力端未报模型身份（旧版服务/外来程序占端口）：回落本地"
-                  f"缺省 {MODEL}，装配期身份护栏将 fail-closed 兜底")
-    elif _remote:
-        print(f"📌 [System] 本地 .model-selection 显式选型 {MODEL}：跳过发现采纳"
-              f"（操作员决定优先），装配期身份护栏将与算力端实跑模型响亮比对")
-    print(f"🚀 [System] {'resolving tokenizer for' if _remote else 'loading model:'} {MODEL}"
-          + ("（来自 .model-selection 启动选择）" if _model_source == "selection" else "")
-          + ("（mode=remote：只读分词器，不拉权重）" if _remote else ""))
-    model_path = (resolve_tokenizer_only_path(MODEL, revision=MODEL_REVISION) if _remote
-                  else resolve_model_path(MODEL, revision=MODEL_REVISION))
-
-    # VAD 只服务**原生音频直喂**（把音频切成 ≤29s 块喂多模态模型），而它由
-    # inference.modalities 含 "audio" 才启用（config.yaml 默认 ["text","image"]
-    # → 音频一律走 ASR 转写，不经 VAD）。此前这里无条件加载：默认配置下 torch(385M)
-    # + silero 被拉进内存却从不参与音频路——edge 打包时这是纯粹的 385M 死重（R5-2）。
-    # 惰性 import 同样必要：`from silero_vad import ...` 本身就会 import torch。
-    _native_audio = "audio" in ((config.get("inference") or {}).get("modalities") or ["text", "image"])
-    vad_model = None
-    if _native_audio:
-        print("🎵 [System] loading model: Silero VAD（原生音频直喂已启用）")
-        from silero_vad import load_silero_vad
-        vad_model = load_silero_vad()
-    else:
-        print("🎵 [System] 跳过 Silero VAD（modalities 不含 audio → 音频走 ASR 转写）")
-
-    print("⚙️  [System] Initializing architecture components...")
-    # 0. 长期记忆类目就绪（Stage 3）：在扫描 MCP 工具前确保 agent_memory 类目存在，
-    #    好让 rag_search 在启动探测类目时就把它列为可召回类目（RAG 离线则静默跳过）。
-    if (config.get("agent") or {}).get("sediment_to_rag", True):
-        from framework.memory.rag_sink import ensure_memory_category
-        await asyncio.to_thread(ensure_memory_category)
-
-    # 0.0b 长期记忆笔记本（R4）：与上面同一个理由必须先于 MCPRegistry——rag_search 在
-    #      __init__ 里探测类目来构建自己的 schema，agent_notes 晚了它就不认识，笔记正文
-    #      再也搜不到。笔记本句柄同样先于工具扫描登记（memory_write 的探活要看它）；
-    #      与 skill_invoke 不同，这里没有互为前置的环，一段装配即可。
-    from framework.agents import runtime as research_runtime
-    from framework.memory.notes import NoteStore
-    from framework.memory.rag_sink import ensure_notes_category
-    research_runtime.set_note_store(NoteStore(NOTES_DIR))
-    await asyncio.to_thread(ensure_notes_category)
-
-    # 0.1 定时任务仓库：须先于 MCPRegistry 注入进程全局句柄（schedule_* 工具经
-    #     framework.schedule.get_store() 取用，对齐 agents/runtime.py 惯例）。
+    from contextlib import suppress
+    from framework.api.compute_lifecycle import (
+        ComputeLifecycle, blocking_call, finish_task, probe_remote_compute)
+    from framework.core.feed import GlobalFeed
     from framework.schedule import ScheduleStore, ScheduleRunner, set_store
+    from framework.agents import runtime as research_runtime
+
+    global MODEL, MODEL_REVISION, MODEL_OPTIONS, _model_source
+    enforce_bind_guardrail(AGENT_HOST, API_KEY, service="backend", key_env="AGENT_API_KEY")
+    inference_cfg = config.get("inference") or {}
+    _remote_transport = (str(inference_cfg.get("mode", "inprocess")) == "remote"
+                         or inference_cfg.get("backend") == "remote")
+    _discover_default = _model_source in ("default", "adopted")
+    app.state.data_ready = False
+    app.state.compute_ready = False
+    app.state.compute_state = "starting"
+    app.state.compute_installed = False
+    # RAG 可用性单记一处：它不参与 compute_ready 判定（装配后掉线只影响检索类工具）。
+    app.state.rag_ready = False
+    feed = GlobalFeed()
+    session_manager = SessionManager(sessions_dir=SESSIONS_DIR, idle_timeout=1800)
+    session_manager.feed = feed
+    app.state.feed = feed
+    app.state.session_manager = session_manager
     schedules_cfg = config.get("schedules") or {}
     schedule_store = ScheduleStore(
         SCHEDULES_DIR,
         run_history_keep=int(schedules_cfg.get("run_history_keep", 50)),
-        min_interval_minutes=int(schedules_cfg.get("min_interval_minutes", 5)),
-    )
+        min_interval_minutes=int(schedules_cfg.get("min_interval_minutes", 5)))
     set_store(schedule_store)
-
-    # 1. 插件层：扫描并注册所有 MCP 工具
-    mcp_registry = MCPRegistry(tools_dir=TOOLS_DIR)
-
-    # 1b. 剧本层（R2a）：skill = 主轮次的提示词剧本，工具沿用主循环 → 审批闸门照常生效。
-    #     两段装配是因为两表互为前置：剧本的 requires 探活要看工具表（故必在 MCPRegistry
-    #     之后），而 skill_invoke 的探活要看剧本表（故上一步的目录扫描必然跳过它，此处补注册）。
-    skill_registry = SkillRegistry(SKILLS_DIR, tool_names=mcp_registry.tool_names(),
-                                   user_dir=data_dir() / "skills")
-    research_runtime.set_skill_registry(skill_registry)
-    mcp_registry.load_tool(SkillInvokeTool())
-    
-    # 2. 领域层：推理引擎（单次生成）+ 编排循环（计划推进/失败路由/终止保护）。
-    #    经 AgentEngine.create 在专用推理线程内加载模型并装配——推理宇宙(权重/惰性
-    #    常量/KV/生成)同属一个线程,事件循环全程自由(prefill 不再饿死 API)。
-    #    推理承载（B1）：mode=inprocess（现状默认）在本进程加载所选后端；
-    #    mode=remote 改装 RemoteBackend（backends/remote/）连 inference-server——
-    #    执行层/会话数据留在本机，本进程不加载权重（只在本地读分词器）。
-    _backend_name = "remote" if _remote else str(_inference_cfg.get("backend") or "")
-    if _remote:
-        _r = _inference_cfg.get("remote") or {}
-        print(f"🔌 [System] 推理模式 remote：连接 inference-server "
-              f"{_r.get('host', '127.0.0.1')}:{_r.get('port', 14161)}（本进程不加载权重）")
-        # 多端点声明校验（接口准备③）：inference.endpoints 配置错误在装配期响亮拒启
-        # （resolve_endpoints 抛 ValueError 说清哪条错），不留到专科调用时才炸
-        from framework.utils.model_selection import resolve_endpoints
-        _eps = resolve_endpoints()
-        if len(_eps) > 1:
-            print("🔌 [System] 追加推理端点：" + ", ".join(
-                f"{e['name']}={e['repo'].split('/')[-1]}:{e['port']}" for e in _eps[1:]))
-    if _backend_name == "remote":
-        # 模型身份护栏（分离部署缺陷二）：把本侧选型注入装配 cfg，RemoteBackend 拿
-        # inference-server /health 报的真身来比——两侧 .model-selection 各管各的，
-        # 档位错开时在装配期响亮拒启，不是分词器驱动错权重静默出垃圾。键在
-        # _backend_name 而非 mode：inference.backend=remote（mode 仍 inprocess）
-        # 同样装 RemoteBackend，按 mode 注入会让那条路的护栏静默失效（首评 S1）。
-        _inference_cfg = {**_inference_cfg,
-                          "expected_model": {"repo": MODEL, "revision": MODEL_REVISION}}
-    engine = await AgentEngine.create(
-        model_path, kv_config=_inference_cfg,
-        # 注册表条目整条透传（R0）：方言名与全部模型级开关（suppress_ghost_thinking 等）
-        # 由方言自行解读，引擎不解读——换模型家族不动 app.py 与 engine 的签名。
-        model_options=MODEL_OPTIONS,
-        env=(config.get("agent") or {}).get("environment") or {},
-        backend=_backend_name,
-        max_concurrency=int((config.get("agent") or {}).get("max_inference_concurrency", 1)),
-    )
-    model, processor = engine.model, engine.processor
-    orchestrator = Orchestrator(engine, mcp_registry, config.get("agent") or {})
-
-    # 2.1 联网调查沙箱运行时：把引擎与主事件循环登记给 web_research（受限沙箱工具经
-    #     run_coroutine_threadsafe 投回本循环复用主模型生成，见 framework/agents）。
-    research_runtime.set_runtime(engine, asyncio.get_running_loop())
-    #     任务路由执行面（混合架构第一波）：端点引擎池——无状态单发生成经
-    #     core/model_router 按实测画像选端点、由池懒装配专科引擎（仅 remote 模式
-    #     真的会建；inprocess 恒只有 main）。主循环轮次不经此层（铁律 6 方向）。
-    from framework.core.engine_pool import EnginePool
-    engine_pool = EnginePool(engine)
-    research_runtime.set_engine_pool(engine_pool)
-    #     客户端反查通道（get_location 等）：工具线程经此 loop 往会话事件流发请求事件
-    from framework.core import client_query
-    client_query.set_loop(asyncio.get_running_loop())
-
-    # 2.2 工具注册表热重扫（D 阶段工程票）：依赖后装（LibreOffice 案）不再要求重启
-    #     执行层。编排与启动时的两段装配同构：重探工具 → 重建剧本表（requires 要看
-    #     新工具面）→ 二次重探（skill_invoke 的探活要看新剧本表）→ 刷新工具声明与
-    #     摘要阈值锚点。只增不删（删除与进行中轮次竞态；服务死亡由执行期报错兜底）。
-    def _rebuild_skills() -> "SkillRegistry":
-        """重建剧本表（含用户目录）并登记到 runtime，返回新表。热重扫与剧本
-        保存/删除端点共用——重扫式注册表，改动即时生效。"""
-        new_skills = SkillRegistry(SKILLS_DIR, tool_names=mcp_registry.tool_names(),
-                                   user_dir=data_dir() / "skills")
-        research_runtime.set_skill_registry(new_skills)
-        return new_skills
-
-    def _rescan_tools() -> dict:
-        newly = mcp_registry.rescan_unavailable()
-        new_skills = _rebuild_skills()
-        newly += mcp_registry.rescan_unavailable()
-        if newly:
-            orchestrator.refresh_tools_declaration()
-            print(f"🔄 [System] 热重扫补注册工具: {newly}（声明与阈值已刷新）")
-        return {"newly_available_tools": newly,
-                "skills_available": new_skills.names()}
-    research_runtime.set_rescan_hook(_rescan_tools)
-    # 剧本保存/删除端点（POST/DELETE /api/v1/skills）经此即时重建剧本表（照 app.state.feed 形状）
-    app.state.rebuild_skills = _rebuild_skills
-
-
-    # 3. 记忆层：初始化弹性冷热会话管理 (默认闲置 30 分钟冻结)。
-    #    全局任务 feed(Phase 3):各会话账本的生命周期事件镜像于此,
-    #    GET /api/v1/events 推送给任务中心/通知(替代 /tasks 差分轮询)。
-    from framework.core.feed import GlobalFeed
-    feed = GlobalFeed()
-    session_manager = SessionManager(sessions_dir=SESSIONS_DIR, idle_timeout=1800)
-    session_manager.feed = feed
-    # 推理后端注入：会话缓存句柄（new/clone/release）的生命周期属主（P0 协议面）
-    session_manager.backend = engine.backend
-    app.state.feed = feed
-
-    # 3.0 中断轮次恢复（write-ahead 闭环）：上次进程死亡时进行中/待审批/挂起的轮次，
-    #     按残留的 inflight.json 补 fail 轮存档——用户输入不蒸发、会话窗口可见死因。
-    recovered = await asyncio.to_thread(session_manager.recover_inflight_turns)
-    if recovered:
-        print(f"🩹 [System] 恢复 {len(recovered)} 个被进程中断的轮次存档（输入已保留）")
-    # 3.0b 的补发挪到 7.5 之后（首审 H1）：GlobalFeed.publish 只推给发布时刻在场的
-    #     订阅者且 dispatcher 不回放环——在这里发,APNs 读者(7.5 才订阅)一条也收不到,
-    #     「后台轮次死了」的 iOS 推送恰好丢在本波要修的那条通知路径上。见下方 7.5 末尾。
-
-    # 3.1 调度层：全局单 worker 任务调度器（默认 FIFO、不抢占；策略可后续热替换为自动调度）。
-    #     注入会话管理器：驱逐器据此避免冻结掉排队/运行/挂起中任务的内存 KV。
-    #     on_suspend_request 把手动/自动的挂起意图传播到会话，编排循环在迭代边界据此让出。
-    def _flag_session_suspend(sid: str):
-        s = session_manager._all_sessions.get(sid)
-        if s is not None and not s.is_cold:
-            s.suspend_requested = True
-
-    # on_cancel_request：交互任务到达时抢占运行中的后台摘要（cancel 原语，摘要可安全放弃；
-    # 执行侧 finally 复位 cancel_requested，见 routes._maybe_summarize_active 与上方空闲维护回合）
-    def _flag_session_cancel(sid: str):
-        s = session_manager._all_sessions.get(sid)
-        if s is not None and not s.is_cold:
-            s.cancel_requested = True
-
-    # 排队位次广播(Phase 3):位次变化写入对应会话账本(queue_moved 事件)。
-    # 排队中的会话必然是热会话(受理即建),取不到就静默跳过。
-    def _publish_queue_positions(positions: dict):
-        for sid, pos in positions.items():
-            s = session_manager._all_sessions.get(sid)
-            if s is not None and not s.is_cold:
-                s.journal.emit("queue_moved", {"position": pos})
-
-    sched_cfg = (config.get("agent") or {}).get("scheduler") or {}
-    # 任务级 worker 数与生成并发同源（B1 单旋钮）：remote 后端才放开多会话并行准入，
-    # 进程内后端共享单例不可并发 → 恒 1（与引擎的钳制口径一致）。
-    _n_task_workers = (
-        max(1, int((config.get("agent") or {}).get("max_inference_concurrency", 1)))
-        if _backend_name == "remote" else 1
-    )
-    scheduler = TaskScheduler(
-        policy=ClassPolicy(
-            aging_seconds=float(sched_cfg.get("aging_seconds", 300)),
-            preempt_background=bool(sched_cfg.get("preempt_background", True)),
-        ),
-        on_suspend_request=_flag_session_suspend,
-        on_cancel_request=_flag_session_cancel,
-        on_queue_positions=_publish_queue_positions,
-        max_workers=_n_task_workers,
-    )
-    session_manager.scheduler = scheduler
-    
-    # 3.2 轮次执行层：TurnRunner —— 轮次生命周期的唯一属主（受理/执行/终态分流/落盘/
-    #     账本生命周期事件）。routes 的对话端点全部是它的薄适配器（新旧契约共用一套闭环）。
-    async def _summarize_hook(session, sid):
-        await _maybe_summarize_active(session, orchestrator, scheduler, sid)
-
-    turn_runner = TurnRunner(orchestrator, scheduler, summarize_after_turn=_summarize_hook)
-
-    # 4. 基础设施层：文件处理器（图像落盘 + 原生音频 VAD 切片）
-    file_handler = FileHandler(vad_model=vad_model, audio_max_length=AUDIO_MAX_LENGTH)
-
-    # 4.1 摄入解析层：按模态分路（图像原生 / 音频等转写 / 代码大文件懒登记）。
-    #     能力声明取自 inference.modalities（默认 [text,image]，音频转写）；复用 file_handler
-    #     的图像落盘与原生音频 VAD 切片（能力含 audio 时）。
-    ingestion = Ingestion(
-        inference_cfg=config.get("inference") or {},
-        ingestion_cfg=config.get("ingestion") or {},
-        file_handler=file_handler,
-    )
-
-    # 5. 依赖注入：挂载到 FastAPI 全局上下文，供 API 路由层提取
-    app.state.model = model
-    app.state.processor = processor
-    app.state.vad_model = vad_model
-    app.state.engine = engine
-    app.state.engine_pool = engine_pool
-    app.state.orchestrator = orchestrator
-    app.state.mcp_registry = mcp_registry
-    app.state.session_manager = session_manager
-    app.state.scheduler = scheduler
-    app.state.turn_runner = turn_runner
-    app.state.file_handler = file_handler
-    app.state.ingestion = ingestion
-
-    # 6. 维护层：启动空闲摘要压缩的后台回合（方案A 低阈值路径）
-    maintenance_task = asyncio.create_task(
-        _idle_maintenance_loop(session_manager, scheduler, orchestrator)
-    )
-    app.state.maintenance_task = maintenance_task
-
-    # 6b. T3 基座前缀缓存：启动即后台预填（~16s，M5 实测 9424 token）。用户若抢先
-    # 开聊，其首轮在推理锁上排队——但排的正是同一段前缀的预填工作，总时长不变；
-    # 预填先完成则此后每个新会话省下整段冷预填。失败只损失优化，冷路兜底。
-    async def _startup_prewarm():
-        try:
-            await orchestrator.prewarm_base_cache()
-        except Exception as e:
-            print(f"[App] 基座前缀预填失败（冷路兜底）: {e}")
-    app.state.base_prewarm_task = asyncio.create_task(_startup_prewarm())
-
-    # 6.1 清理层：确定性磁盘回收的后台清扫（默认自动过期、pin 才长留；见 config.session_cleanup）。
-    #     依赖 session_manager.scheduler（已于上方注入），故置于其后；recover_inflight_turns 已先行。
-    cleanup_cfg = session_cleanup_policy(config.get("session_cleanup") or {})
-    app.state.session_cleanup_policy = cleanup_cfg
-    cleanup_task = None
-    if cleanup_cfg["enabled"]:
-        cleanup_task = asyncio.create_task(_session_cleanup_loop(
-            session_manager, cleanup_cfg, orchestrator.sediment_to_rag))
-        app.state.cleanup_task = cleanup_task
-        print(f"🧹 [System] 会话自动清理已启用（保留 {cleanup_cfg['retention_days']} 天 / "
-              f"空壳 {cleanup_cfg['empty_ttl_hours']} 小时 / "
-              f"周期 {cleanup_cfg['scan_interval_seconds']}s）")
-
-    # 7. 定时任务层：触发扫描循环（due 任务经 kind="scheduled"/priority=-1 无人值守执行，
-    #    交互任务到达时被 suspend 抢占让位，见 framework/schedule/runner.py）
-    schedule_runner = ScheduleRunner(
-        schedule_store, session_manager, orchestrator, scheduler, schedules_cfg
-    )
-    schedule_tick_task = asyncio.create_task(schedule_runner.tick_loop())
     app.state.schedule_store = schedule_store
-    app.state.schedule_runner = schedule_runner
-    app.state.schedule_tick_task = schedule_tick_task
-
+    recovered = await blocking_call(session_manager.recover_inflight_turns)
     # 7.5 推送层（CHARTER 铁律 2 预留的"通知读者"）：dispatcher 订阅全局 feed 把生命周期
     #     事件映射为 APNs 推送（iOS）；Live Activity 按 app 上报的活动 token 附着会话账本。
     #     缺 .p8 密钥时 APNs 客户端不建，dispatcher 保持注册表可用但一个字节不发（macOS
@@ -673,54 +389,449 @@ async def lifespan(app: FastAPI):
     # 之后——feed 只推给在场订阅者,不回放环(首审 H1:早发一步,iOS 推送就真丢)。
     session_manager.emit_recovery_events(recovered)
 
-    if AUTH_DEVICES:
-        print(f"🔐 [System] API 鉴权已启用（设备级票据 ×{len(AUTH_DEVICES)}"
-              + ("；共享密钥同时有效" if API_KEY else "") + "）")
-    elif API_KEY:
-        print("🔐 [System] API 鉴权已启用（Bearer 共享密钥）")
-    else:
-        print("⚠️  [System] API 鉴权未启用：未设置 AGENT_API_KEY / server.api_key，接口对可达网络裸奔。"
-              "\n    生产务必设置 AGENT_API_KEY 环境变量。")
 
-    print(f"✅ [System] Agent has started and is listening on {AGENT_HOST}:{AGENT_PORT}")
-    yield
+    app.state.data_ready = True
+    identity = None
+    last_rescan = 0.0
 
-    # 停机：先停后台维护回合、清扫回合、定时任务触发循环与推送分发器
-    maintenance_task.cancel()
-    if cleanup_task is not None:
-        cleanup_task.cancel()
-    schedule_tick_task.cancel()
-    try:
-        await push_dispatcher.stop()
-    except Exception:
-        pass
+    async def _probe_dependencies():
+        """只有推理活体/鉴权决定 compute_ready；RAG 只是装配期前置，装完即与执行解耦。"""
+        nonlocal identity, last_rescan
+        from framework.api.compute_lifecycle import describe_failure, probe_rag_data
+        remote = inference_cfg.get("remote") or {}
+        identity = await probe_remote_compute(
+            f"http://{remote.get('host', '127.0.0.1')}:{int(remote.get('port', 14161))}",
+            {"repo": MODEL, "revision": MODEL_REVISION},
+            os.environ.get("INFER_API_KEY", ""), identity)
+        installed = getattr(app.state, "compute_installed", False)
+        try:
+            await probe_rag_data(config.get("rag") or {}, os.environ.get("RAG_API_KEY", ""))
+        except Exception as exc:
+            was_ready = getattr(app.state, "rag_ready", None)
+            app.state.rag_ready = False
+            # 装配前 RAG 仍是前置（工具探活一次性，启动契约不变）；装配完成后 RAG 掉线
+            # 只让 rag_search 失败（本次改动之前的行为），绝不把执行能力一起拉下来。
+            if not installed:
+                raise
+            if was_ready is not False:
+                print(f"[Compute] RAG 数据面不可用（{describe_failure(exc) or type(exc).__name__}）；"
+                      f"检索类工具将失败，执行能力不受影响")
+        else:
+            if getattr(app.state, "rag_ready", None) is False:
+                print("[Compute] RAG 数据面已恢复")
+            app.state.rag_ready = True
+        if installed and time.monotonic() - last_rescan >= 30:
+            last_rescan = time.monotonic()
+            try:
+                await blocking_call(app.state.rescan_tools)
+            except Exception as exc:
+                print(f"[Compute] 可选工具重扫失败（{type(exc).__name__}），下次重试")
 
-    # 优雅停机：安全清理物理与内存资源
-    print("\n🛑 [System] An exit signal has been received, resources are being cleaned up....")
-    try:
-        # 清理所有活跃的会话缓存
-        if hasattr(app.state, 'session_manager'):
-            for session in list(app.state.session_manager._all_sessions.values()):
+    async def _close_engine(engine, label="主引擎"):
+        """每段收摊各自隔离：一个失败的专科端点不能挡住主引擎（及其 GPU/后端）释放。"""
+        try:
+            executor = getattr(engine, "_inference_executor", None)
+            if executor is not None:
+                # cancel_futures 只丢弃排队的活：正在生成的那个线程要等它自己返回。设上限，
+                # 到点就不再等（释放后端会断开远端连接，线程随之结束），收摊照常走完。
+                joiner = asyncio.ensure_future(asyncio.to_thread(
+                    executor.shutdown, wait=True, cancel_futures=True))
+                done, _ = await asyncio.wait({joiner}, timeout=ENGINE_RELEASE_SECONDS)
+                if done:
+                    joiner.result()
+                else:
+                    _LINGERING.add(joiner)
+                    joiner.add_done_callback(_LINGERING.discard)
+                    print(f"[App] {label} 推理线程 {ENGINE_RELEASE_SECONDS}s 内未退出：不再等待，继续释放后端")
+        except Exception as exc:
+            print(f"[App] {label} 推理线程收摊失败（{type(exc).__name__}），继续释放后端")
+        try:
+            await blocking_call(engine.backend.shutdown)
+        except Exception as exc:
+            print(f"[App] {label} 后端释放失败（{type(exc).__name__}）")
+
+    async def _cleanup_compute(resources):
+        tasks = [resources.get(name) for name in (
+            "maintenance_task", "base_prewarm_task", "cleanup_task", "schedule_tick_task")]
+        for task in tasks:
+            if task is not None:
+                task.cancel()
+        for task in tasks:
+            if task is not None:
+                with suppress(asyncio.CancelledError, Exception):
+                    await finish_task(task)
+        async def _join_bounded(label, coro, pending):
+            """有界结算：取消检查点不配合（或轮次真的卡死）时也必须继续释放引擎。
+
+            asyncio.wait 不会代为取消被等待者——超时后由本函数显式取消它与
+            它名下的 worker，再带着错误继续走完收摊，而不是永远挂在这里。
+            """
+            # 每段各自计时：卡住的轮次不能把定时任务归档所需的时间吃掉
+            worker = asyncio.ensure_future(coro)
+            done, _ = await asyncio.wait({worker}, timeout=SHUTDOWN_JOIN_SECONDS)
+            if not done:
+                print(f"[App] {label} 在 {SHUTDOWN_JOIN_SECONDS}s 内未结算：取消剩余，继续释放引擎")
+                for item in pending:
+                    item.cancel()
+                worker.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await worker
+
+        runner = resources.get("turn_runner")
+        # Cooperatively settle active turns through their existing cancellation path.
+        for session in list(session_manager._all_sessions.values()):
+            session.cancel_requested = True
+        if runner is not None and runner._bg:
+            turns = list(runner._bg.values())
+            await _join_bounded("活跃轮次", asyncio.gather(*turns, return_exceptions=True), turns)
+        scheduled = resources.get("schedule_runner")
+        if scheduled is not None:
+            await _join_bounded("定时任务", scheduled.stop(), list(scheduled._tasks))
+        for session in list(session_manager._all_sessions.values()):
+            try:
                 session.freeze()
-                
-        # 卸载模型组件
-        del app.state.model
-        del app.state.processor
-        del app.state.vad_model
-        del app.state.engine
-        del app.state.orchestrator
-        del app.state.session_manager
-        del app.state.file_handler
+            except Exception as exc:
+                print(f"[App] 会话冻结失败（{type(exc).__name__}），继续释放引擎")
+        try:
+            pool = resources.get("engine_pool")
+            if pool is not None:
+                try:
+                    extras = [(name, engine) for name, engine in list(pool._engines.items())
+                              if name != "main"]
+                except Exception as exc:
+                    print(f"[App] 端点引擎池清点失败（{type(exc).__name__}），仍释放主引擎")
+                    extras = []
+                for name, extra in extras:
+                    await _close_engine(extra, f"端点 {name}")
+                with suppress(Exception):
+                    pool._engines.clear()
+            if resources.get("engine") is not None:
+                await _close_engine(resources["engine"])
+        finally:
+            # 状态复位无论如何都要做：否则 app.state 留着已释放的引擎句柄。
+            session_manager.backend = None
+            session_manager.scheduler = None
+            research_runtime.set_runtime(None, None)
+            research_runtime.set_engine_pool(None)
+            research_runtime.set_rescan_hook(None)
+            research_runtime.set_skill_registry(None)
+            research_runtime.set_note_store(None)
+            for name in resources:
+                if hasattr(app.state, name):
+                    delattr(app.state, name)
 
-        # 追加端点引擎先收（懒建的专科引擎；main 由下一行收）
-        if getattr(app.state, "engine_pool", None) is not None:
-            app.state.engine_pool.shutdown_extras()
-            del app.state.engine_pool
-        # 释放推理后端持有的全局资源（MLX 下即强制释放苹果芯片的显存/内存）
-        engine.backend.shutdown()
-        print("✅ [System] Resources have been safely released. Goodbye!")
-    except Exception as e:
-        print(f"❌ [System] Resource release error, force termination: {e}")
+    async def _assemble_compute():
+        global MODEL, MODEL_REVISION, MODEL_OPTIONS, _model_source
+        resources = {}
+        try:
+            require_remote_inference_host(config)
+            # 推理承载（B1）先于路径解析定夺：mode=remote 时本进程只当编排端，权重在设备 A 的
+            # inference-server 里——这里若走全量 resolve_model_path，edge 机会照样拉满 4.9G，
+            # devctl 的 --tokenizer-only 预取也拦不住（那只让分词器先到位，全量解析看的是
+            # .download_complete 标记，缺了就重下）。故按 mode 选解析器，别按 profile 旗标。
+            _inference_cfg = config.get("inference") or {}
+            _mode = str(_inference_cfg.get("mode", "inprocess"))
+            _remote = _mode == "remote"
+            # 模型发现采纳（分离部署铁则，build 72 实机复盘）：remote 形态先问算力端 /health
+            # 拿真身就地采纳——app bundle 没有 .model-selection、config 默认键按 J5 决策只管
+            # 小内存回落（e4b），不发现就必然与生产选型（26b）错配、被身份护栏正确拒启。
+            # 只在本地无显式选型（source=default）时采纳（修正评审 S6）：操作员写下的
+            # .model-selection 是决定不是建议（评测臂强钉某档），显式选型走「不采纳 + 装配
+            # 护栏响亮比对」。采纳落在 model_selection 模块态（adopt_model）而非仅 app 全局：
+            # resolve_endpoints/路由在调用期重推主模型，只改这里的 MODEL 会让路由面继续拿
+            # 未采纳缺省的能力集（修正评审 C1）。旧版服务未报身份/外来占端口 → 回落缺省，
+            # 护栏 fail-closed 兜底；不可达由单个后台启动属主有界退避重试。
+            if _remote and _discover_default:
+                from framework.utils.model_selection import adopt_model, discover_remote_model
+                require_remote_inference_host(config)   # 空 host 先拦成明确指引（uvicorn app:app 路径也覆盖）
+                _rm = _inference_cfg.get("remote") or {}
+                try:
+                    _port = int(_rm.get("port", 14161))
+                except (TypeError, ValueError):
+                    raise SystemExit(f"❌ [backend] inference.remote.port 不是数值：{_rm.get('port')!r}")
+                _base = f"http://{str(_rm.get('host') or '').strip()}:{_port}"
+                _found = await blocking_call(lambda: discover_remote_model(_base))
+                if _found:
+                    adopt_model(_found[0], _found[1])
+                    MODEL, MODEL_REVISION, _model_source = resolve_selected_model()
+                    MODEL_OPTIONS = model_options(MODEL)
+                    print(f"🔎 [System] 已按算力端发现采纳模型：{MODEL}"
+                          f"（注册表钉扎 {str(MODEL_REVISION)[:12] if MODEL_REVISION else '无'}——"
+                          f"模型状态靠发现不靠抄；首启可能现场拉取分词器 ~31MB）")
+                else:
+                    print(f"⚠️ [System] 算力端未报模型身份（旧版服务/外来程序占端口）：回落本地"
+                          f"缺省 {MODEL}，装配期身份护栏将 fail-closed 兜底")
+            elif _remote:
+                print(f"📌 [System] 本地 .model-selection 显式选型 {MODEL}：跳过发现采纳"
+                      f"（操作员决定优先），装配期身份护栏将与算力端实跑模型响亮比对")
+            print(f"🚀 [System] {'resolving tokenizer for' if _remote else 'loading model:'} {MODEL}"
+                  + ("（来自 .model-selection 启动选择）" if _model_source == "selection" else "")
+                  + ("（mode=remote：只读分词器，不拉权重）" if _remote else ""))
+            if _remote_transport:
+                await _probe_dependencies()
+            model_path = await blocking_call(lambda: (
+                resolve_tokenizer_only_path(MODEL, revision=MODEL_REVISION) if _remote
+                else resolve_model_path(MODEL, revision=MODEL_REVISION)))
+
+            # VAD 只服务**原生音频直喂**（把音频切成 ≤29s 块喂多模态模型），而它由
+            # inference.modalities 含 "audio" 才启用（config.yaml 默认 ["text","image"]
+            # → 音频一律走 ASR 转写，不经 VAD）。此前这里无条件加载：默认配置下 torch(385M)
+            # + silero 被拉进内存却从不参与音频路——edge 打包时这是纯粹的 385M 死重（R5-2）。
+            # 惰性 import 同样必要：`from silero_vad import ...` 本身就会 import torch。
+            _native_audio = "audio" in ((config.get("inference") or {}).get("modalities") or ["text", "image"])
+            vad_model = None
+            if _native_audio:
+                print("🎵 [System] loading model: Silero VAD（原生音频直喂已启用）")
+                from silero_vad import load_silero_vad
+                vad_model = await blocking_call(load_silero_vad)
+            else:
+                print("🎵 [System] 跳过 Silero VAD（modalities 不含 audio → 音频走 ASR 转写）")
+
+            print("⚙️  [System] Initializing architecture components...")
+            # 0. 长期记忆类目就绪（Stage 3）：在扫描 MCP 工具前确保 agent_memory 类目存在，
+            #    好让 rag_search 在启动探测类目时就把它列为可召回类目（RAG 离线则静默跳过）。
+            if (config.get("agent") or {}).get("sediment_to_rag", True):
+                from framework.memory.rag_sink import ensure_memory_category
+                await blocking_call(ensure_memory_category)
+
+            # 0.0b 长期记忆笔记本（R4）：与上面同一个理由必须先于 MCPRegistry——rag_search 在
+            #      __init__ 里探测类目来构建自己的 schema，agent_notes 晚了它就不认识，笔记正文
+            #      再也搜不到。笔记本句柄同样先于工具扫描登记（memory_write 的探活要看它）；
+            #      与 skill_invoke 不同，这里没有互为前置的环，一段装配即可。
+            from framework.agents import runtime as research_runtime
+            from framework.memory.notes import NoteStore
+            from framework.memory.rag_sink import ensure_notes_category
+            research_runtime.set_note_store(await blocking_call(NoteStore, NOTES_DIR))
+            await blocking_call(ensure_notes_category)
+
+            # 1. 插件层：扫描并注册所有 MCP 工具
+            mcp_registry = await blocking_call(MCPRegistry, tools_dir=TOOLS_DIR)
+
+            # 1b. 剧本层（R2a）：skill = 主轮次的提示词剧本，工具沿用主循环 → 审批闸门照常生效。
+            #     两段装配是因为两表互为前置：剧本的 requires 探活要看工具表（故必在 MCPRegistry
+            #     之后），而 skill_invoke 的探活要看剧本表（故上一步的目录扫描必然跳过它，此处补注册）。
+            skill_registry = await blocking_call(
+                SkillRegistry, SKILLS_DIR, tool_names=mcp_registry.tool_names(),
+                user_dir=data_dir() / "skills")
+            research_runtime.set_skill_registry(skill_registry)
+            mcp_registry.load_tool(SkillInvokeTool())
+
+            # 2. 领域层：推理引擎（单次生成）+ 编排循环（计划推进/失败路由/终止保护）。
+            #    经 AgentEngine.create 在专用推理线程内加载模型并装配——推理宇宙(权重/惰性
+            #    常量/KV/生成)同属一个线程,事件循环全程自由(prefill 不再饿死 API)。
+            #    推理承载（B1）：mode=inprocess（现状默认）在本进程加载所选后端；
+            #    mode=remote 改装 RemoteBackend（backends/remote/）连 inference-server——
+            #    执行层/会话数据留在本机，本进程不加载权重（只在本地读分词器）。
+            _backend_name = "remote" if _remote else str(_inference_cfg.get("backend") or "")
+            if _remote:
+                _r = _inference_cfg.get("remote") or {}
+                print(f"🔌 [System] 推理模式 remote：连接 inference-server "
+                      f"{_r.get('host', '127.0.0.1')}:{_r.get('port', 14161)}（本进程不加载权重）")
+                # 多端点声明校验（接口准备③）：inference.endpoints 配置错误在装配期响亮拒启
+                # （resolve_endpoints 抛 ValueError 说清哪条错），不留到专科调用时才炸
+                from framework.utils.model_selection import resolve_endpoints
+                _eps = resolve_endpoints()
+                if len(_eps) > 1:
+                    print("🔌 [System] 追加推理端点：" + ", ".join(
+                        f"{e['name']}={e['repo'].split('/')[-1]}:{e['port']}" for e in _eps[1:]))
+            if _backend_name == "remote":
+                # 模型身份护栏（分离部署缺陷二）：把本侧选型注入装配 cfg，RemoteBackend 拿
+                # inference-server /health 报的真身来比——两侧 .model-selection 各管各的，
+                # 档位错开时在装配期响亮拒启，不是分词器驱动错权重静默出垃圾。键在
+                # _backend_name 而非 mode：inference.backend=remote（mode 仍 inprocess）
+                # 同样装 RemoteBackend，按 mode 注入会让那条路的护栏静默失效（首评 S1）。
+                _inference_cfg = {**_inference_cfg,
+                                  "expected_model": {"repo": MODEL, "revision": MODEL_REVISION}}
+            engine = await AgentEngine.create(
+                model_path, kv_config=_inference_cfg,
+                # 注册表条目整条透传（R0）：方言名与全部模型级开关（suppress_ghost_thinking 等）
+                # 由方言自行解读，引擎不解读——换模型家族不动 app.py 与 engine 的签名。
+                model_options=MODEL_OPTIONS,
+                env=(config.get("agent") or {}).get("environment") or {},
+                backend=_backend_name,
+                max_concurrency=int((config.get("agent") or {}).get("max_inference_concurrency", 1)),
+            )
+            resources["engine"] = engine
+            model, processor = engine.model, engine.processor
+            orchestrator = Orchestrator(engine, mcp_registry, config.get("agent") or {})
+
+            # 2.1 联网调查沙箱运行时：把引擎与主事件循环登记给 web_research（受限沙箱工具经
+            #     run_coroutine_threadsafe 投回本循环复用主模型生成，见 framework/agents）。
+            #     任务路由执行面（混合架构第一波）：端点引擎池——无状态单发生成经
+            #     core/model_router 按实测画像选端点、由池懒装配专科引擎（仅 remote 模式
+            #     真的会建；inprocess 恒只有 main）。主循环轮次不经此层（铁律 6 方向）。
+            from framework.core.engine_pool import EnginePool
+            engine_pool = EnginePool(engine)
+            resources["engine_pool"] = engine_pool
+            #     客户端反查通道（get_location 等）：工具线程经此 loop 往会话事件流发请求事件
+
+            # 2.2 工具注册表热重扫（D 阶段工程票）：依赖后装（LibreOffice 案）不再要求重启
+            #     执行层。编排与启动时的两段装配同构：重探工具 → 重建剧本表（requires 要看
+            #     新工具面）→ 二次重探（skill_invoke 的探活要看新剧本表）→ 刷新工具声明与
+            #     摘要阈值锚点。只增不删（删除与进行中轮次竞态；服务死亡由执行期报错兜底）。
+            def _rebuild_skills() -> "SkillRegistry":
+                """重建剧本表（含用户目录）并登记到 runtime，返回新表。热重扫与剧本
+                保存/删除端点共用——重扫式注册表，改动即时生效。"""
+                new_skills = SkillRegistry(SKILLS_DIR, tool_names=mcp_registry.tool_names(),
+                                           user_dir=data_dir() / "skills")
+                research_runtime.set_skill_registry(new_skills)
+                return new_skills
+
+            def _rescan_tools() -> dict:
+                newly = mcp_registry.rescan_unavailable()
+                new_skills = _rebuild_skills()
+                newly += mcp_registry.rescan_unavailable()
+                if newly:
+                    orchestrator.refresh_tools_declaration()
+                    print(f"🔄 [System] 热重扫补注册工具: {newly}（声明与阈值已刷新）")
+                return {"newly_available_tools": newly,
+                        "skills_available": new_skills.names()}
+            # 剧本保存/删除端点（POST/DELETE /api/v1/skills）经此即时重建剧本表（照 app.state.feed 形状）
+
+
+            # 3.1 调度层：全局单 worker 任务调度器（默认 FIFO、不抢占；策略可后续热替换为自动调度）。
+            #     注入会话管理器：驱逐器据此避免冻结掉排队/运行/挂起中任务的内存 KV。
+            #     on_suspend_request 把手动/自动的挂起意图传播到会话，编排循环在迭代边界据此让出。
+            def _flag_session_suspend(sid: str):
+                s = session_manager._all_sessions.get(sid)
+                if s is not None and not s.is_cold:
+                    s.suspend_requested = True
+
+            # on_cancel_request：交互任务到达时抢占运行中的后台摘要（cancel 原语，摘要可安全放弃；
+            # 执行侧 finally 复位 cancel_requested，见 routes._maybe_summarize_active 与上方空闲维护回合）
+            def _flag_session_cancel(sid: str):
+                s = session_manager._all_sessions.get(sid)
+                if s is not None and not s.is_cold:
+                    s.cancel_requested = True
+
+            # 排队位次广播(Phase 3):位次变化写入对应会话账本(queue_moved 事件)。
+            # 排队中的会话必然是热会话(受理即建),取不到就静默跳过。
+            def _publish_queue_positions(positions: dict):
+                for sid, pos in positions.items():
+                    s = session_manager._all_sessions.get(sid)
+                    if s is not None and not s.is_cold:
+                        s.journal.emit("queue_moved", {"position": pos})
+
+            sched_cfg = (config.get("agent") or {}).get("scheduler") or {}
+            # 任务级 worker 数与生成并发同源（B1 单旋钮）：remote 后端才放开多会话并行准入，
+            # 进程内后端共享单例不可并发 → 恒 1（与引擎的钳制口径一致）。
+            _n_task_workers = (
+                max(1, int((config.get("agent") or {}).get("max_inference_concurrency", 1)))
+                if _backend_name == "remote" else 1
+            )
+            scheduler = TaskScheduler(
+                policy=ClassPolicy(
+                    aging_seconds=float(sched_cfg.get("aging_seconds", 300)),
+                    preempt_background=bool(sched_cfg.get("preempt_background", True)),
+                ),
+                on_suspend_request=_flag_session_suspend,
+                on_cancel_request=_flag_session_cancel,
+                on_queue_positions=_publish_queue_positions,
+                max_workers=_n_task_workers,
+            )
+
+            # 3.2 轮次执行层：TurnRunner —— 轮次生命周期的唯一属主（受理/执行/终态分流/落盘/
+            #     账本生命周期事件）。routes 的对话端点全部是它的薄适配器（新旧契约共用一套闭环）。
+            async def _summarize_hook(session, sid):
+                if app.state.compute_ready:
+                    await _maybe_summarize_active(session, orchestrator, scheduler, sid)
+
+            turn_runner = TurnRunner(orchestrator, scheduler, summarize_after_turn=_summarize_hook)
+
+            # 4. 基础设施层：文件处理器（图像落盘 + 原生音频 VAD 切片）
+            file_handler = FileHandler(vad_model=vad_model, audio_max_length=AUDIO_MAX_LENGTH)
+
+            # 4.1 摄入解析层：按模态分路（图像原生 / 音频等转写 / 代码大文件懒登记）。
+            #     能力声明取自 inference.modalities（默认 [text,image]，音频转写）；复用 file_handler
+            #     的图像落盘与原生音频 VAD 切片（能力含 audio 时）。
+            ingestion = Ingestion(
+                inference_cfg=config.get("inference") or {},
+                ingestion_cfg=config.get("ingestion") or {},
+                file_handler=file_handler,
+            )
+
+            resources.update(
+                model=model, processor=processor, vad_model=vad_model,
+                orchestrator=orchestrator, mcp_registry=mcp_registry,
+                scheduler=scheduler, turn_runner=turn_runner,
+                file_handler=file_handler, ingestion=ingestion,
+                rebuild_skills=_rebuild_skills, rescan_tools=_rescan_tools)
+            if _remote_transport:
+                await _probe_dependencies()  # Auth/identity may have changed during tokenizer/tool IO.
+            return resources
+        except BaseException as exc:
+            try:
+                await finish_task(asyncio.create_task(_cleanup_compute(resources)))
+            except Exception as cleanup_exc:
+                # 原始装配错误才是诊断：收摊噪声只记日志，绝不盖掉它（否则重试日志
+                # 永远在讲收摊的那个异常，没人知道装配为什么失败）。
+                print(f"[App] 装配失败后的收摊出错（{type(cleanup_exc).__name__}）；"
+                      f"保留原始装配错误")
+            if isinstance(exc, SystemExit):
+                raise RuntimeError(str(exc)) from exc  # Bad compute config cannot exit the data service.
+            raise
+
+    def _publish_compute(resources):
+        engine, orchestrator = resources["engine"], resources["orchestrator"]
+        scheduler = resources["scheduler"]
+        session_manager.backend = engine.backend
+        session_manager.scheduler = scheduler
+        research_runtime.set_runtime(engine, asyncio.get_running_loop())
+        research_runtime.set_engine_pool(resources["engine_pool"])
+        research_runtime.set_rescan_hook(resources["rescan_tools"])
+        from framework.core import client_query
+        client_query.set_loop(asyncio.get_running_loop())
+        resources["maintenance_task"] = asyncio.create_task(
+            _idle_maintenance_loop(session_manager, scheduler, orchestrator,
+                                   can_execute=lambda: app.state.compute_ready))
+        async def _startup_prewarm():
+            try:
+                await orchestrator.prewarm_base_cache()
+            except Exception as exc:
+                print(f"[App] 基座前缀预填失败（冷路兜底）: {type(exc).__name__}")
+        resources["base_prewarm_task"] = asyncio.create_task(_startup_prewarm())
+        cleanup_cfg = session_cleanup_policy(config.get("session_cleanup") or {})
+        app.state.session_cleanup_policy = cleanup_cfg
+        if cleanup_cfg["enabled"]:
+            resources["cleanup_task"] = asyncio.create_task(_session_cleanup_loop(
+                session_manager, cleanup_cfg, orchestrator.sediment_to_rag))
+        schedule_runner = ScheduleRunner(
+            schedule_store, session_manager, orchestrator, scheduler, schedules_cfg,
+            can_execute=lambda: app.state.compute_ready)
+        resources["schedule_runner"] = schedule_runner
+        resources["schedule_tick_task"] = asyncio.create_task(schedule_runner.tick_loop())
+        for name, value in resources.items():
+            setattr(app.state, name, value)
+
+    lifecycle = ComputeLifecycle(
+        app, _assemble_compute, _publish_compute, _cleanup_compute,
+        _probe_dependencies if _remote_transport else None)
+    app.state.compute_lifecycle = lifecycle
+    try:
+        if _remote_transport:
+            lifecycle.start()
+        else:
+            # In-process model loading retains its original startup/readiness contract.
+            await lifecycle._install()
+        if AUTH_DEVICES:
+            print(f"🔐 [System] API 鉴权已启用（设备级票据 ×{len(AUTH_DEVICES)}"
+                  + ("；共享密钥同时有效" if API_KEY else "") + "）")
+        elif API_KEY:
+            print("🔐 [System] API 鉴权已启用（Bearer 共享密钥）")
+        else:
+            print("⚠️ [System] API 鉴权未启用：未设置 AGENT_API_KEY / server.api_key。")
+        print(f"✅ [System] 本地数据服务已就绪：{AGENT_HOST}:{AGENT_PORT}")
+        yield
+    finally:
+        # data_ready 先落（收摊期间 /health 立刻说实话，不等引擎释放完）
+        app.state.data_ready = False
+        try:
+            await lifecycle.stop()
+        finally:
+            await push_dispatcher.stop()
+            for session in list(session_manager._all_sessions.values()):
+                session.journal.close()
+            set_store(None)
 
 # ==========================================
 # 3. FastAPI 表现层服务配置
@@ -747,7 +858,7 @@ app.add_middleware(
 )
 
 # 免鉴权健康探活：挂在 app 上（不经 router 的鉴权依赖），供 devctl/反代/负载均衡就绪探测。
-# uvicorn 在 lifespan 启动完成（模型加载完）后才开始受理请求，故 200 即代表已就绪。
+# status 保留进程探活语义；data_ready/compute_ready 明确区分本地读取与执行能力。
 #
 # 实例指纹（#85 完整版 1，2026-08-10 401 事故根治）：探针「14159 上有 200」不足以认领
 # 一个后端——端口可能被别的程序占着，也可能是钥匙已漂移的旧后端（app 恒发钥匙串值 →
@@ -781,6 +892,9 @@ async def health():
         "service": SERVICE_NAME,
         "layout": _HEALTH_LAYOUT,
         "key_fp": _HEALTH_KEY_FP,
+        "data_ready": getattr(app.state, "data_ready", False),
+        "compute_ready": getattr(app.state, "compute_ready", False),
+        "compute_state": getattr(app.state, "compute_state", "starting"),
     }
 
 # 自托管 deck 打印页(Phase 4b 解除后端→前端倒挂):`./devctl.sh bundle-print` 把
@@ -800,9 +914,10 @@ if (_PRINT_BUNDLE / "index.html").exists():
     print("🖨️  [System] deck 打印页自托管已启用（backend/static/webapp）")
 
 # 挂载解耦后的路由：全量 /api/v1/* 套用 Bearer 鉴权依赖（未配置密钥时依赖内部放行）
-app.include_router(router, dependencies=[Depends(verify_api_key)])
+app.include_router(router, dependencies=[Depends(verify_api_key), Depends(require_compute_ready)])
+app.include_router(offline_files_router,
+                   dependencies=[Depends(verify_api_key), Depends(require_compute_ready)])
 # iPhone 扫码配对：不挂计算端就绪闸（配对与算力无关）；start 自带 Bearer，claim 凭一次性码
-from framework.api.pairing import router as pairing_router
 app.include_router(pairing_router)
 
 # ==========================================
@@ -810,8 +925,7 @@ app.include_router(pairing_router)
 # ==========================================
 if __name__ == "__main__":
     import uvicorn
-    # 配置完整性先于密钥/地址检查：mode=remote 但算力端地址为空 = 配置缺失，立即拒启
-    require_remote_inference_host(config)
+    # 算力配置验证归计算装配；缺算力地址不阻止本地历史数据服务启动。
     # 绑定护栏先于加载模型：非回环 + 空密钥立即拒启，不浪费几十秒权重加载才发现
     enforce_bind_guardrail(AGENT_HOST, API_KEY, service="backend", key_env="AGENT_API_KEY")
     # 密钥护栏之后再验地址（先密钥后地址，护栏输出顺序稳定）：绑定地址不属本机立即拒启

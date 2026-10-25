@@ -13,6 +13,7 @@ xcrun swiftc -parse-as-library -target arm64-apple-macos14.0 \
     -I "$build/SourcePackages/checkouts/swift-cmark/src/include" \
     -I "$build/SourcePackages/checkouts/swift-cmark/extensions/include" \
     ../Sources/App/L10n.swift \
+    ../Sources/Views/Theme.swift \
     ../Sources/Views/MarkdownImagePolicy.swift \
     ../Sources/Views/MarkdownImageProviders.swift \
     ../Sources/Views/MarkdownText.swift \

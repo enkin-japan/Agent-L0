@@ -233,12 +233,6 @@ final class AppSettings: ObservableObject {
     }
 }
 
-/// iPhone 端连接信息的来源：iCloud 来源遇 401/离线会自动重读同步条目（见 PhoneLink），
-/// 手动填写与扫码配对的值不被静默覆盖。
-enum ConnectionSource: String {
-    case manual, icloud, qr
-}
-
 extension Bundle {
     /// 界面可见的版本戳（侧栏底部 + 设置页）："v0.2.0 (2)"。
     /// 用于一眼确认设备上装的是哪个构建，杜绝「装没装上新版」的猜谜。

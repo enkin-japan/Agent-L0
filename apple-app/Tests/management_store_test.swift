@@ -258,7 +258,9 @@ import Foundation
                     check(store.selectedSessionId == (mode=="delete-aba" ? "A" : "B") && store.messages.map(\.text)==texts,"late delete receipt cannot detach new selection/ABA")
                     check((outbox as NSDictionary?)?.isEqual(to:UserDefaults.standard.dictionary(forKey:"macagent.outbox") ?? [:]) ?? (outbox==nil),"late delete of another session preserves new outbox receipt")
                 } else if mode=="delete-client-cleanup" {
-                    settings.baseURLString="https://replacement.invalid";store.applySettings()
+                    // The replacement backend's own cache never listed A, so it starts
+                    // with nothing selected; the new incarnation is opened explicitly.
+                    settings.baseURLString="https://replacement.invalid";store.applySettings();store.select(sessionId:"A")
                     await wait({store.messages.contains{$0.text=="keep winner A"}},"replacement client")
                     let newer=Task{await store.deleteSession(item)}
                     await wait({deleteCalls.count==2},"new deletion ownership")

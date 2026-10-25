@@ -11,11 +11,12 @@ DATA_ROOT="${AGENT_DATA_DIR:-$(cd ../../backend && pwd)}"
 mkdir -p "$DATA_ROOT/sessions/e2efixture-chart/assets"
 cp fixtures/chart-fixture.png "$DATA_ROOT/sessions/e2efixture-chart/assets/"
 TESTS=${1:-"e2e_client_test e2e_batch2_test"}
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+export AGENT_E2E_CACHE_ROOT="${AGENT_E2E_CACHE_ROOT:-$scratch/cache}"
 for t in $TESTS; do
   echo "== 编译 $t =="
-  swiftc -parse-as-library -o "/tmp/$t" \
-    "$API/JSONValue.swift" "$API/Models.swift" "$API/ProtocolModels.swift" \
-    "$API/DeckModels.swift" "$API/SSEClient.swift" \
-    "$API/Multipart.swift" "$API/AgentClient.swift" "$t.swift"
-  "/tmp/$t"
+  swiftc -parse-as-library -module-cache-path "$scratch/modules" -o "$scratch/$t" \
+    "$API"/*.swift ../Sources/Store/Offline*.swift "$t.swift"
+  "$scratch/$t"
 done

@@ -706,36 +706,17 @@ start_backend() {
     key_stat() { if [ -n "$1" ]; then echo "有(${#1}字)"; else echo "无"; fi; }
     echo "[edge] $(date '+%H:%M:%S') 密钥盘点: AGENT=$(key_stat "${AGENT_API_KEY:-}") INFER=$(key_stat "${INFER_API_KEY:-}") RAG=$(key_stat "${RAG_API_KEY:-}")" \
         >>"$EDGE_LOG_DIR/backend.log"
-    # 硬性依赖顺序：RAG 完全就绪后 backend 才能启动（工具探活只发生在 backend 启动时）。
-    # edge profile 下 RAG_READY_URL 已指向设备 A（rag.host），这一条同样是跨机可达性校验。
-    if ! is_ready "$RAG_READY_URL"; then
-        fail "RAG 未就绪（探活 ${RAG_READY_URL}），拒绝启动 backend（否则 RAG 工具集不会注册）"
-        [ "$(probe_host "$RAG_HOST")" = "127.0.0.1" ] || \
-            warn "  RAG 配置在远端——请确认设备 A 上 './devctl.sh start --profile gpu' 已跑起来、Tailscale 可达。"
-        return 1
-    fi
-    probe_auth "RAG" "$RAG_AUTH_URL" "${RAG_API_KEY:-}" || return 1
-    # 模型预取（前台）：初次部署要下数 GB，HF 进度条直接显示在终端，杜绝「启动中假死」观感；
-    # 已就绪时命中标记瞬时通过。backend 内部的下载路径保留为绕过启动器直启时的自愈兜底。
-    # mode=remote：推理在设备 A，本机只需分词器（§S.3 B1）——按 config 的 mode 判，而非 profile 旗标，
-    # 因为"要不要权重"取决于承载模式本身（同机 remote 双进程也一样不必在 backend 侧再拉一份）。
-    if [ "$INFER_MODE" = "remote" ]; then
-        # 空 INFER_HOST 会拼出 http://:14161 的晦涩探活失败——先拦成明确指引（探活之前）
-        require_host "$INFER_HOST" "算力端（inference-server）" \
-            "app 形态：设置 → 执行层 → 算力端地址；dev 形态：.env.local 写 INFER_REMOTE_HOST=<算力端 IP>；单机部署请改 inference.mode: inprocess" \
-            || return 1
-        info "检查分词器（inference.mode=remote：推理在远端，本机不拉权重）…"
-        ( cd "$EDGE_BACKEND_DIR" && "$EDGE_BACKEND_PY" scripts/fetch_model.py --tokenizer-only ) \
-            || { fail "分词器未就绪，中止 backend 启动"; return 1; }
-        if ! is_ready "$INFER_READY_URL"; then
-            fail "inference-server 未就绪（探活 ${INFER_READY_URL}），拒绝启动 backend"
-            warn "  mode=remote 下没有推理承载，任何生成都会整轮失败。"
-            warn "  请确认设备 A 上 './devctl.sh start --profile gpu' 已跑起来、Tailscale 可达。"
+    # 本地历史/文件必须独立于算力端可读。模型下载、身份/鉴权校验及依赖
+    # 就绪由 backend 的单一后台装配任务负责；未就绪时执行接口返回 503。
+    # 不在 HTTP 数据服务之前等待 RAG、远端推理或 tokenizer 下载。
+    if [ "$INFER_MODE" != "remote" ]; then
+        # Direct `devctl start backend` also retains the in-process contract.
+        if ! is_ready "$RAG_READY_URL"; then
+            fail "RAG 未就绪，单机执行层等待依赖后启动"
             return 1
         fi
-        probe_auth "inference-server" "$INFER_AUTH_URL" "${INFER_API_KEY:-}" || return 1
-    else
-        info "检查模型（未下载时将前台下载并显示进度）…"
+        probe_auth "RAG" "$RAG_AUTH_URL" "${RAG_API_KEY:-}" || return 1
+        info "检查本机模型（未下载时显示下载进度）…"
         ( cd "$EDGE_BACKEND_DIR" && "$EDGE_BACKEND_PY" scripts/fetch_model.py ) \
             || { fail "模型未就绪，中止 backend 启动"; return 1; }
     fi
@@ -748,17 +729,27 @@ start_backend() {
 stop_backend() { stop_one "backend" "$BACKEND_PORT" "$EDGE_LOG_DIR/backend.pid" 20; }
 
 # ---- edge 编队（app 与 devctl edge profile 共用的顺序与容错）----
-# 🔴 SearXNG 必须先于 backend：web_research 的注册是 backend 启动期一次性探活，
-# searx 晚到 = 整轮不注册（§S.3 已入账的事故）。searx 本身可选：起不来只告警不阻断。
+# 数据服务优先；计算与工具注册在后端后台装配，晚到依赖沿既有重扫机制补齐。
 edge_up() {
     edge_require_env || return 1
     mkdir -p "$EDGE_LOG_DIR"
-    # RAG 数据面最先（B2c）：backend 启动门硬依赖 RAG 就绪（工具探活一次性）。
-    # rag.host 指远端（拆分切换前的过渡拓扑）时不归本编队，交由 backend 门探活跨机校验。
-    if rag_is_local; then
-        start_rag_local || return 1
+    if [ "$INFER_MODE" != "remote" ]; then
+        # In-process assembly retains synchronous model/tool startup. Keep its
+        # established dependency ordering so optional tools are not lost.
+        if rag_is_local; then
+            start_rag_local || return 1
+        fi
+        start_searx || warn "SearXNG 未就绪，联网搜索暂不可用"
+        start_backend
+        return $?
     fi
-    { start_searx || warn "SearXNG 未就绪，web_research 将不注册，继续"; true; } && start_backend
+    # 先提供本地历史；依赖服务可以稍后就绪，失败不撤掉数据服务。
+    start_backend || return 1
+    if rag_is_local; then
+        start_rag_local || warn "RAG 未就绪，本地历史可用；执行能力等待依赖恢复"
+    fi
+    start_searx || warn "SearXNG 未就绪，联网搜索暂不可用"
+    return 0
 }
 
 edge_down() {

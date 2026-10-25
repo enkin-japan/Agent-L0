@@ -8,6 +8,35 @@ enum BackendAccess: Equatable {
     case offline
 }
 
+/// Readiness reported by the backend; absent/unknown fields never imply readiness.
+enum ComputeAvailability: Equatable {
+    case unknown, starting, ready, unavailable, unsupported
+}
+
+struct BackendHealth: Decodable {
+    let computeReady: Bool?
+    let computeState: String?
+    enum CodingKeys: String, CodingKey {
+        case computeReady = "compute_ready", computeState = "compute_state"
+    }
+}
+
+struct BackendConnectionStatus {
+    let access: BackendAccess
+    let health: BackendHealth?
+    var compute: ComputeAvailability {
+        guard access == .authenticated else { return .unknown }
+        guard let health else { return .unknown }
+        if health.computeReady == true { return .ready }
+        if health.computeReady == nil, health.computeState == nil { return .unsupported }
+        switch health.computeState {
+        case "starting": return .starting
+        case "retrying", "unavailable", "stopping", "stopped": return .unavailable
+        default: return health.computeReady == false ? .unavailable : .unknown
+        }
+    }
+}
+
 /// Shared decoding of the data service's authoritative maintenance status.
 struct RagRetierStatus: Decodable {
     struct TierInfo: Decodable {
