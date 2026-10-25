@@ -170,3 +170,62 @@ Phase 0（盘点 → 逐组审查提交）→ Phase A → 出 Phase B 设计 →
   - 两端都能给对方改名。
   - 已拿到共享密钥的旧 iPhone 自动换成设备票据。
   - 75 格式的条目不再双写。
+
+## 10. 提交与发布（2026-10-25 晚）
+- 用户要求合并为一次提交，以免完整检查重复跑：`c9934c3`，包括 C1、C2、C3、C5、C6 和 Phase A+B，构建号升到 76。C4、`.codex/`、`AGENTS.md` 留在工作区，未提交。
+- 用户决定：先不推送远端（`bac3e9e` 与 `c9934c3` 都只在本地）；先发布 build 76，阶段全盘复审（stage-reviewer）暂时搁置。
+- 已发布（2026-10-25 23:20）：
+  - macOS 76：已公证并钉票，更新源已更新（增量补丁 72–75），本机已装；算力端离线时 `data_ready` 为 true，可以启动。
+  - iOS 76：TestFlight 状态 VALID。
+  - 发布用的 worktree 和 Phase A 的 worktree 都已清理；完成通知遇上静默时段，已写入 suppressed.log。
+- 待办：推送远端（用户决定暂不推送）；阶段复审（已搁置）；C4 的去留；真机确认（见第 6 节）。
+
+## 11. 遗留问题清单（build 76 发布后，2026-10-25）
+
+现状：build 76 已发布（见第 10 节）。下列问题都不阻断使用，各条注明了原因和建议。
+
+### 11.1 待用户决定
+- **C4 检索证据护栏**（`backend/framework/core/orchestrator.py`、`retrieval_evidence.py`、`backend/tests/test_retrieval_evidence_guard.py`、`run_retrieval_guard_mutations.py`）：留在工作区，未提交。
+  - 原因：设计层面有问题。一次知识库检索失败后，`_is_local_mutation`（判据是「非只读」）会把 shell 命令连同只读的 `ls` 一起拦下；换个说法重新检索也消不掉待定状态；而且它会与去重拦截相撞，导致一次偶发失败就让整轮无法恢复。
+  - 建议：只拦截真正产出内容的工具（如图表、文件写入），允许换个说法重新检索后解除；如果改不好，就丢掉。
+- **阶段全盘复审（stage-reviewer）**：用户决定搁置。本阶段一共改了 114 个文件，建议之后补跑，范围 `c9e2772..c9934c3`。
+- **推送远端**：`bac3e9e` 和 `c9934c3` 都只在本地。
+- **`.codex/` 与 `AGENTS.md`**：属于 Codex 侧的配置，归属不明，未提交。
+
+### 11.2 需要真机确认（自动化覆盖不到）
+1. 同一 Apple ID：iPhone 的 Mac 列表点选后发起请求，两边显示同一个 4 位核对码，Mac 点「允许」后能连上。
+2. 不同 Apple ID：扫码连接。
+3. Mac 设置 → 连接 → 连接 iPhone：设备列表能改名、改为永久、移除；移除后对应设备立即断开。
+4. 原本用共享密钥的 iPhone 升级后，自动换成设备票据（设备列表显示「旧连接升级」）。
+
+### 11.3 技术遗留（按重要性排序）
+1. **RAG 服务端没有截止时间**（C3）：客户端放弃的检索仍在 `QUERY_POOL` 里跑，单 GPU 上会越堆越多。建议给检索加服务端预算，超时即中止。
+2. **设备票据没有权限分级**（Phase B）：设备票据能调用的接口与共享密钥相同，包括写入 `.secrets.env` 的 `/api/v1/api-tools`。目前唯一的控制手段是吊销。建议把这类接口限定为只有 Mac 本机（owner）能用。
+3. **iPhone 端部分逻辑没有运行时测试**：
+   - PhoneLink 的状态流转（`readSynced`、`select`、`remove`、`claim`、握手）只有 iOS 编译检查，测试只覆盖了 `MacDirectory` 里的纯函数；
+   - 按流量计费 / 低数据模式下的附件延迟同步（`NetworkPathPolicy`）在 macOS 测试机上恒为允许，走不到。
+   - 建议加一个只在 DEBUG 构建生效的测试接口，补上这两块的测试。
+4. **启动顺序**（C5）：
+   - remote 模式下后端先于本地 RAG 启动，第一次装配必然失败，要等一轮退避，冷启动多出 2–8 秒。建议本地 RAG 先启动，或者缩短第一次重试的间隔。
+   - 算力端换了模型之后，身份检查会一直失败，必须重启后端才能重新装配。
+   - 探活读到的是新密钥，已装好的 RemoteBackend 用的还是旧密钥；轮换密钥后会显示「就绪」，但生成请求返回 401。
+5. **离线缓存的边界情况**（C6）：
+   - 后端只要返回一次空的会话列表，就会清空本机全部缓存，没有防误删的检查。建议在这种情况下要求再确认一次。
+   - 把附件预算调大后，之前标成「部分完成」的会话不会自动补下。
+   - 附件同步期间，正文同步要等它完成。
+   - `MarkdownText` 每次增量渲染都在主线程做一次完整的 cmark 解析，长代码块的流式输出可能变慢。
+   - 本地缓存分区用的是未加盐的密钥 sha256。
+6. **CUDA**（C2）：嵌入式的 v0 `AsyncLLMEngine` 不一定注册了 v1 的 Prometheus 计数器，投机解码指标可能一直显示 `counters_missing`；`/metrics` 每次抓取都会触发一次 `do_log_stats`。需要在下次真实部署时确认，必要时改为缓存快照。
+7. **其他小问题**：
+   - `device_expired` 没有单独的提示文案，到期与被移除显示同一句话；
+   - `GET /pair/ticket` 有副作用（首次请求会生成凭据）；
+   - 设备记录文件读取时遇到短暂的 OSError 也会按「损坏」处理并改名留存；
+   - 第一次请求时才加载设备记录，因此记录损坏的日志不会在启动时出现；
+   - `/health` 对外暴露 `data_ready`、`compute_ready`、`compute_state` 三个状态字段（不需要鉴权）；
+   - RAG 每次查询会产生 20–40 行 INFO 日志；
+   - README 里的 CUDA 环境变量说明还停留在旧版本。
+
+### 11.4 本次顺带修复的既有测试缺陷（已在 c9934c3 中）
+- `test_batch_lane.py::test_decoding_count_gauge_distinct_from_active`：没有显式指定 `max_tokens`，被默认值 4096 截断，导致在这台机器上必定失败。
+- `apple-app/Tests/task_control_test.swift` 的 `takeHeld()`：存在竞态，高负载下会在空队列上崩溃。
+- `apple-app/Tests/service_credentials_test.swift`：补上 `ConnectionSource` 桩（这个类型已移到 PhoneLink.swift）。
