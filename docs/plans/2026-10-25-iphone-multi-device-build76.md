@@ -188,6 +188,19 @@ Phase 0（盘点 → 逐组审查提交）→ Phase A → 出 Phase B 设计 →
 - **C4 检索证据护栏**（`backend/framework/core/orchestrator.py`、`retrieval_evidence.py`、`backend/tests/test_retrieval_evidence_guard.py`、`run_retrieval_guard_mutations.py`）：留在工作区，未提交。
   - 原因：设计层面有问题。一次知识库检索失败后，`_is_local_mutation`（判据是「非只读」）会把 shell 命令连同只读的 `ls` 一起拦下；换个说法重新检索也消不掉待定状态；而且它会与去重拦截相撞，导致一次偶发失败就让整轮无法恢复。
   - 建议：只拦截真正产出内容的工具（如图表、文件写入），允许换个说法重新检索后解除；如果改不好，就丢掉。
+  - 2026-10-26 复核（reviewer 首审 + verifier）：机制自洽——31 项用例全绿、10 个变异在隔离副本里全杀、相关回归
+    474 项通过；但三条设计问题仍在：(1) `registry.is_read_only` 对 shell 恒为 False，一次失败/空结果后本轮
+    `ls`/`cat`/`git status` 全被当交付拦下（FakeTool 默认只读，测不出）；(2) 改 optimized_query 可解除，改
+    query/category 不能，而 rag_search 自己的文案让模型"换说法或分类重试"；(3) 空结果也计 pending，错分类搜空后
+    在对的分类命中证据，正确答案仍被丢弃。另有：同批屏障不看 pending（已批准的 `[write, rag_search(成功)]` 里
+    write 不执行）；子生成预算/解析失败/迭代上限三个出口被检索解释盖掉真实原因。结论：需修后合并；仍留工作区。
+  - 2026-10-26 修复（用户决定"按建议修"）：R1 只拦真正产出内容的工具（显式 DELIVERY_TOOLS 含
+    excel_research；shell 交给 `registry.requires_approval` 自判只读；动态 API 工具看 `_method` 且非只读）；
+    R2 空结果算已完成检索，不再是 pending；R3 之后任一次完成的检索（任意目标）解除全部 pending，文案与
+    rag_search 自己的重试措辞一致；R4 同批屏障、approval 前拦截与 complete_step/remember 拦截只在 pending
+    时生效，同批里排在交付前的检索仍先被冲掉（不等 pending）；R5 四个预算/解析/失控出口保留真实原因，只是
+    追加检索说明（`metrics["retrieval_incomplete"]`），`_retrieval_incomplete()` 只用于预判生成路径。
+    状态：已修复，待提交（由主会话提交）。
 - **阶段全盘复审（stage-reviewer）**：用户决定搁置。本阶段一共改了 114 个文件，建议之后补跑，范围 `78e1660^..0a2aac9`（5 条提交、161 个文件）。
 - **推送远端**：`bac3e9e` 和 `c9934c3` 都只在本地。
 - **`.codex/` 与 `AGENTS.md`**：属于 Codex 侧的配置，归属不明，未提交。
@@ -321,3 +334,53 @@ C-m5 Mac 端同意框在设置页 sheet 下可能看不见；C-m10 `asc-macos-pr
   run_build76_review_mutations 13（已接进 pytest：backend/tests/test_native_build76_mutations.py）、
   run_offline_history_mutations 18，另有 compute_ctl/compute_common 5 个由 verifier 手工注入；全部变红并按字节
   还原。
+
+### 12.5 C4 检索证据护栏重设计（2026-10-26）
+
+首审（reviewer）发现 11.1 所列三条设计问题属实后，用户决定按建议修，而不是丢弃。五条规则：
+
+- R1 拦截范围：新增 `is_delivery(registry, call)` 谓词，取代两处拦截点上的 `_is_local_mutation`。显式
+  `DELIVERY_TOOLS` 集合（图表/文档/文件/幻灯片、memory_write、rag_insert_document、通知/剪贴板/日程/文本
+  输入、`run_applescript`、`excel_research`）；`run_shell_command` 交给它自己的只读判据
+  （`registry.requires_approval`）；动态 API 工具（api_tool_factory）只有同时满足「带 `_method` 属性」且
+  「非只读」才算交付，没有 `_method` 的非只读工具不算。
+- R2 空不算待定：`observe()` 里 "evidence" 与 "empty" 都算已完成检索，只有 "failed" 才进入 pending；
+  `rag_get_context` 的"未找到"类服务端消息不再被错分类为失败（见下方 reviewer 首审修复）。
+- R3 全局解除：之后任何一次已完成的检索（证据或空结果，任意目标、任意工具）清空全部 pending 并重置
+  overflow；REPAIR_NOTE/DELIVERY_BLOCKED 改成与 rag_search 自己的重试措辞一致（换说法/换分类/换上下文指针）。
+- R4 同批屏障只在 pending 时生效：approval 前拦截与 `complete_step`/`remember` 拦截都改为只在
+  `retrieval.unresolved` 时触发；同批里排在交付前的检索（无论是否已有 pending）一律先冲刷执行，不参与屏障
+  判断（即附录条款，见下）。
+- R5 出口保真：`max_sub_generations`/`parse_loop`/`max_total_iterations`/`runaway_call` 四个出口保留各自
+  原本的 status/response/activity，只在 unresolved 时追加检索说明并置
+  `metrics["retrieval_incomplete"] = True`；`_retrieval_incomplete()` 只用在预判生成路径（工具调用耗尽后的
+  一次 REPAIR_NOTE 提醒）。
+- 附录（规范之后商定）：同批里排在交付前的检索一律先冲刷，不管是否已有 pending：`[rag(失败), chart]` 挡住
+  chart，`[rag(成功), chart]` 正常执行；`[chart, rag(失败)]` 且本来无 pending 时按 C4 之前的行为执行（已知
+  缺口，见下）。
+
+首审（reviewer）发现并已修复：`rag_get_context` 的"未找到"类服务端消息（如"未找到该 source_path 的任何
+切片…"、旧格式入库、`chunks=[]`）曾被错分类为失败，现改为：任何非失败、非证据的 `rag_get_context` 响应都算
+"空"（已完成）。连带 Minor：C4 拦截的响应带 `_blocked: True`，不计入 ⑤′-3 的 upgrade_failures 计数器、也不进
+未验证写入扫描（批处理循环与 approval 恢复路径两处），`_failed` 字段仍保留给 D2 用；`runaway_call` 出口补上
+检索说明；`write_thing` 测试夹具的 `concurrency_safe=False`；串行执行路径的 observe 调用补了覆盖；
+`RetrievalEvidence.__init__` 对畸形 checkpoint 容错不抛异常。
+
+测试：`test_retrieval_evidence_guard.py` + `test_fabrication_guardrails.py` + `test_turn_runner.py` 共
+84 项通过（重设计前是 60 项；护栏文件本身 55 项）。变异证明 `backend/tests/run_retrieval_guard_mutations.py`：
+19 个变异全部变红（20 行结果，M-A 对应两条测试）、基线全绿、副本跑完后工作树按字节还原（verifier 独立复跑）。
+verifier 跑的完整后端套件：3304 通过、3 跳过。主循环里对被拦写调用的 `_blocked` 跳过（orchestrator.py ~1096）
+证明不了：被拦的写之后要么进临时生成提前返回，要么后续检索本来就清旗，两种候选测试在变异下都过；保留为
+防御性代码，无变异证明。审批续跑一侧的同类跳过有测试与变异 M-L。
+
+保留待用户决定（已知弱点，未修）：
+- 全局解除代价低：`rag_search` 返回"无结果……知识库为空或暂不可用"也算一次完成的检索，照样解除全部 pending。
+- 一个全新批次 `[render_chart, rag_search(失败)]` 仍会先跑图表（交付排在检索之前、当时无 pending），与 C4
+  之前的行为一致。
+- 已审批的交付排在检索之后、检索随后失败时，仍会在审批之后被拦（approval 对话框等于白问一次——只在检索失败
+  这一种情况下发生）。
+- 预判生成路径上，模型自己写的诚实文本（"检索未完成"或 `web_research` 给出的回答）仍会被替换成固定的
+  「尚未完成」文案。
+- `_retrieval_incomplete()` 走 `_exit_audit`，因此像其他非回答类出口一样会丢掉云端降级/升级提示。
+- `runaway_call` 出口的追加说明没有测试钉住（预判路径下不可达）。
+- 动态 API 工具靠 `_method` 属性这个启发式识别，不是协议层面的保证。

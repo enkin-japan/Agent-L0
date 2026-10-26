@@ -29,6 +29,10 @@ from ..memory.session import ChatSession
 from ..memory.compactor import compact_tool_observations
 from ..mcp.registry import MCPRegistry
 from .spill import spill_observation, truncate_observation
+from .retrieval_evidence import (RetrievalEvidence, REPAIR_NOTE, DELIVERY_BLOCKED,
+                                 is_delivery,
+                                 target_key as retrieval_target,
+                                 observation as retrieval_observation)
 
 # 会话资产的 markdown 链接（图表图片 ![..](/api/v1/files/..)、导出 PDF [..](/api/v1/files/..)）
 _ASSET_LINK_RE = re.compile(r"!?\[[^\]\n]*\]\((/api/v1/files/[^)\s]+)\)")
@@ -545,8 +549,14 @@ class Orchestrator:
 
         # 流式回调集中在此注入(单一写入者纪律):任何调用方(TurnRunner/定时任务)
         # 都自动获得完整直播——正文逐段、思考逐段(Phase 3)、工具名预告(Phase 3)。
-        gen_kwargs["on_text_delta"] = lambda t: journal.emit("token_delta", {"text": t})
-        gen_kwargs["on_thinking_delta"] = lambda t: journal.emit("thinking_delta", {"text": t})
+        # Once retrieval fails, the next generation is provisional: never publish
+        # an invented answer before the deterministic evidence gate can inspect it.
+        # The flag is fixed at generation start, not changed mid-stream by tools.
+        provisional_generation = False
+        gen_kwargs["on_text_delta"] = lambda t: (
+            None if provisional_generation else journal.emit("token_delta", {"text": t}))
+        gen_kwargs["on_thinking_delta"] = lambda t: (
+            None if provisional_generation else journal.emit("thinking_delta", {"text": t}))
         gen_kwargs["on_tool_pending"] = lambda name: journal.emit("tool_call_pending", {"name": name})
 
         task = session.task_state
@@ -572,6 +582,7 @@ class Orchestrator:
         # 审批/挂起把一轮切成多个 run_turn 段：从 session.carried_turn_stats 播种续算，
         # 使 history.jsonl 最终落盘的 metrics 是整轮口径而非末段（实测被低估 8 倍）。
         _carried = getattr(session, "carried_turn_stats", None) or {}
+        retrieval = RetrievalEvidence(_carried.get("retrieval_evidence"))
         turn_breakdown: Dict[str, int] = dict(_carried.get("breakdown") or {})
         turn_gen_tokens = int(_carried.get("gen_tokens") or 0)
         turn_spec = {"drafted": int((_carried.get("spec") or {}).get("drafted") or 0),
@@ -636,6 +647,7 @@ class Orchestrator:
                 "parse_errors": carried_parse_errors + sum(parse_errors.values()),
                 "usage": dict(turn_usage),
                 "no_task_calls": list(no_task_calls),
+                "retrieval_evidence": retrieval.checkpoint(),
             }
         # 有界恢复计数（T2-5 地基，承载 T1-2/T1-3；到顶即放行，杜绝新增分支造成死循环）
         max_tokens_override: Optional[int] = None   # T1-3：非 None 时本轮后续生成用升档上限
@@ -706,6 +718,24 @@ class Orchestrator:
             runaway/parse_loop/cancelled 三类出口曾漏）。不追加用户文案——这些出口的 response 不是答复。"""
             _finalize_cloud_degraded(session, metrics, "", append_notice=False)
             _append_upgrade_notices("", metrics, upgrade_decisions)
+
+        def _with_retrieval_note(response: str) -> str:
+            # Budget/parse exits keep their real reason; an unresolved retrieval is
+            # appended as a second fact, never substituted for the real cause.
+            if not retrieval.unresolved:
+                return response
+            metrics["retrieval_incomplete"] = True
+            return response + "\n\n" + retrieval.explanation()
+
+        def _retrieval_incomplete() -> Dict[str, Any]:
+            # Provisional-generation path only (no tool calls after one REPAIR_NOTE
+            # nudge): do not retain the discarded draft/thoughts in the transcript.
+            text = retrieval.explanation()
+            session.add_assistant_message(content=text)
+            session.set_activity("检索未完成", phase="done")
+            _stamp_turn_stats()
+            _exit_audit()
+            return {"status": "warning", "response": text, "thoughts": [], "metrics": metrics}
         # 只在**新用户轮**判：审批续跑（keep_recent_calls）与挂起续跑（compact_history=False
         # 的轮中重入）都不是新轮——重入再判就是一轮两次提醒/两次代发起。
         # 用户已点取消/挂起的轮不判（先于代发起：取消了的轮不该再花钱出网，评审 M1）
@@ -759,10 +789,11 @@ class Orchestrator:
                 _exit_audit()
                 return {
                     "status": "warning",
-                    "response": (f"子调研生成已达预算上限（{self.max_sub_generations} 次），任务终止。"
-                                 f"本轮主循环 {session.carried_iterations + iterations} 次、"
-                                 f"子调研生成 {turn_usage.get('sub_generations', 0)} 次。"
-                                 "可以试试：①减少调研类工具的连续调用；②把任务拆小分别发起。"),
+                    "response": _with_retrieval_note(
+                        f"子调研生成已达预算上限（{self.max_sub_generations} 次），任务终止。"
+                        f"本轮主循环 {session.carried_iterations + iterations} 次、"
+                        f"子调研生成 {turn_usage.get('sub_generations', 0)} 次。"
+                        "可以试试：①减少调研类工具的连续调用；②把任务拆小分别发起。"),
                     "thoughts": ["System Warning: sandbox generation budget exceeded."],
                     "metrics": metrics,
                 }
@@ -798,6 +829,7 @@ class Orchestrator:
             journal.emit("iteration_started", {
                 "n": iterations + 1, "thinking": bool(call_kwargs["enable_thinking"]),
             })
+            provisional_generation = retrieval.unresolved
             result = await self.engine.generate_once(
                 session=session, tools=self._tools_decl,
                 grammar_tools=self._grammar_tools, task_block=task_block,
@@ -830,6 +862,18 @@ class Orchestrator:
             text = result["text"]
             thoughts = result["thoughts"]
 
+            if provisional_generation:
+                # Even a tool-bearing repair iteration must not archive unverified
+                # narrative/thoughts. Tool calls still use the existing approval gate.
+                thoughts = []
+                if not tool_calls:
+                    if retrieval.nudges < 1:
+                        retrieval.nudges += 1
+                        pending_tail_notes.append(REPAIR_NOTE)
+                        _transition("retrieval_evidence_nudge")
+                        continue
+                    return _retrieval_incomplete()
+
             # 思考已在生成中经 on_thinking_delta 逐段直播(Phase 3),此处不再整块补发
             # (重复累积);权威思考文本随 turn_ended.response 的 thoughts 字段对账。
 
@@ -855,9 +899,10 @@ class Orchestrator:
                         _exit_audit()
                         return {
                             "status": "warning",
-                            "response": ("多次生成工具调用参数失控（超长复读），已终止本次任务。"
-                                         "可以试试：①把需求拆成几件更小的事分别发起；"
-                                         "②如果涉及长文本，让我分段处理。"),
+                            "response": _with_retrieval_note(
+                                "多次生成工具调用参数失控（超长复读），已终止本次任务。"
+                                "可以试试：①把需求拆成几件更小的事分别发起；"
+                                "②如果涉及长文本，让我分段处理。"),
                             "thoughts": ["System: repeated runaway constrained tool calls; aborted."],
                             "metrics": metrics,
                         }
@@ -900,6 +945,17 @@ class Orchestrator:
                 responses: List[Dict[str, Any]] = []
                 for call in meta_calls:
                     mname = call.get("name")
+                    # Meta calls run before the physical batch. While a retrieval
+                    # failure is pending, neither completion results nor remembered
+                    # facts may solidify an unverified value, whatever the batch holds.
+                    if mname in {"complete_step", "remember"} and retrieval.unresolved:
+                        blocked_action = "step completion" if mname == "complete_step" else "fact recording"
+                        responses.append({"name": mname, "_failed": True, "_blocked": True,
+                                          "response": (
+                                              f"System Error: {blocked_action} blocked pending retrieval evidence. "
+                                              "No completion or fact was recorded. First retrieve the source, then "
+                                              f"call {mname} in a later batch with the verified result.")})
+                        continue
                     # complete_step 的目标步标题须在执行前取（执行后游标已推进）
                     cur = (session.task_state.current_step()
                            if (mname == "complete_step" and session.task_state is not None
@@ -939,6 +995,28 @@ class Orchestrator:
                         validated.append(c)
                 phys_calls = validated
 
+                # A failed knowledge-base retrieval cannot be replaced with model-
+                # invented delivered content. Block known-unverified delivery before
+                # the single approval gate; keep the proposed calls in the audit trail.
+                # A delivery preceded by a retrieval in this batch is deferred to
+                # _execute_physical, which flushes that retrieval and re-checks.
+                if retrieval.unresolved:
+                    permitted = []
+                    retrieval_before = False
+                    for c in phys_calls:
+                        if c.get("type") == "error":
+                            permitted.append(c)
+                            continue
+                        if (not retrieval_before
+                                and is_delivery(self.registry, c)):
+                            responses.append({"name": c.get("name"), "response": DELIVERY_BLOCKED,
+                                              "_failed": True, "_blocked": True})
+                            continue
+                        if retrieval_target(c.get("name"), c.get("arguments") or {}):
+                            retrieval_before = True
+                        permitted.append(c)
+                    phys_calls = permitted
+
                 # [D2 谎报围堵：拒批同参拦截] 本轮已被用户拒绝的调用原样重发 → 不再弹窗，
                 # 直接打回（26B 实案：nohup 同命令被拒 2 次仍连发 4 次，用户陷入拒批拉锯）。
                 denied_fps = getattr(session, "denied_call_fps", set())
@@ -972,7 +1050,8 @@ class Orchestrator:
 
                 tracker = task.recent_calls if task is not None else no_task_calls
                 phys_responses = await self._execute_physical(session, phys_calls, tracker,
-                                                              parse_errors, journal=journal)
+                                                              parse_errors, journal=journal,
+                                                              retrieval=retrieval)
                 # [D2 谎报围堵] 按声明序扫描本批结果：失败置位、其后任何成功清位；
                 # 成功的变更类调用记账（收尾时"零变更却声称已做"的判据）。
                 _batch_failed = _batch_ok = False
@@ -987,7 +1066,10 @@ class Orchestrator:
                         continue
                     if _obs_failed(r):
                         unresolved_failure = True
-                        _batch_failed = True
+                        # C4 retrieval blocks (`_blocked`) are guard refusals, not tool
+                        # failures: they must not drive the ⑤′-3 consult escalation.
+                        if not r.get("_blocked"):
+                            _batch_failed = True
                         continue
                     unresolved_failure = False
                     _batch_ok = True
@@ -1009,8 +1091,9 @@ class Orchestrator:
                 # 置「未验证」，其后任何非写调用（读回文件 / 跑代码 / grep 等）视为复查、清除标记。
                 # 写屏障（_execute_physical）保证写后重读不会被去重拦截，故复查总能真正执行；
                 # 声明序与批内实际执行序一致（串行写之前会先冲刷此前积压的只读批）。
-                for c in phys_calls:
-                    if c.get("type") == "error":
+                for c, r in zip(phys_calls, phys_responses):
+                    # A C4-blocked call never ran: it neither wrote nor re-checked.
+                    if c.get("type") == "error" or r.get("_blocked"):
                         continue
                     if c.get("name") in _FILE_WRITE_TOOLS:
                         unverified_write = True
@@ -1037,9 +1120,10 @@ class Orchestrator:
                     _exit_audit()
                     return {
                         "status": "warning",
-                        "response": ("多次未能解析要调用的工具格式，已终止本次任务。"
-                                     "可以试试：①原样重发一次；②把需求说得更简单具体些；"
-                                     "③把任务拆成几个更小的步骤分别提出。"),
+                        "response": _with_retrieval_note(
+                            "多次未能解析要调用的工具格式，已终止本次任务。"
+                            "可以试试：①原样重发一次；②把需求说得更简单具体些；"
+                            "③把任务拆成几个更小的步骤分别提出。"),
                         "thoughts": ["System: repeated tool-call parse failures; aborted to avoid a loop."],
                         "metrics": metrics,
                     }
@@ -1262,9 +1346,10 @@ class Orchestrator:
         _exit_audit()
         return {
             "status": "warning",
-            "response": (f"任务在 {self.max_total_iterations} 次主循环迭代内未能收敛{_budget_detail}，已终止。"
-                         "可以试试：①把任务拆成几个更小的目标分别发起；②缩小范围（只处理一部分）；"
-                         "③告诉我可以跳过哪些环节。"),
+            "response": _with_retrieval_note(
+                f"任务在 {self.max_total_iterations} 次主循环迭代内未能收敛{_budget_detail}，已终止。"
+                "可以试试：①把任务拆成几个更小的目标分别发起；②缩小范围（只处理一部分）；"
+                "③告诉我可以跳过哪些环节。"),
             "thoughts": ["System Warning: orchestration loop threshold exceeded."],
             "metrics": metrics,
         }
@@ -1492,7 +1577,8 @@ class Orchestrator:
     async def _execute_physical(self, session: ChatSession, calls: List[Dict[str, Any]],
                                 tracker: List[str],
                                 parse_errors: Dict[str, int],
-                                *, journal: TurnJournal
+                                *, journal: TurnJournal,
+                                retrieval: Optional[RetrievalEvidence] = None
                                 ) -> List[Dict[str, Any]]:
         """
         执行一批物理调用，保持响应与调用一一对应（按原序返回）。
@@ -1508,6 +1594,8 @@ class Orchestrator:
                 return
             coros = [self._invoke_tool(session, c, cid, journal) for (_, c, cid) in safe_batch]
             results = await asyncio.gather(*coros)
+            if retrieval is not None:
+                retrieval.observe([c for (_, c, _) in safe_batch], results)
             for (idx, _, _), r in zip(safe_batch, results):
                 by_idx[idx] = r
             safe_batch.clear()
@@ -1529,6 +1617,33 @@ class Orchestrator:
 
             name = call.get("name")
             args = call.get("arguments", {})
+
+            # A delivery always waits for the retrievals queued before it in this
+            # batch (RAG and render_chart are both concurrency-safe): serialize, do
+            # not block. Only then, and only while a failure is pending, is it held
+            # back. A delivery ahead of every retrieval with nothing pending runs as
+            # before. A blocked call is never executed and never takes a fingerprint.
+            if retrieval is not None and is_delivery(self.registry, call):
+                # (a) let queued retrievals complete (or fail) first, unconditionally
+                if any(
+                        retrieval_target(c.get("name"), c.get("arguments") or {})
+                        for (_, c, _) in safe_batch):
+                    await flush_safe_batch()
+                # (b) do not reorder tools or deliver ahead of a later retrieval
+                if retrieval.unresolved and any(
+                        retrieval_target(c.get("name"), c.get("arguments") or {})
+                        for c in calls[idx + 1:] if c.get("type") != "error"):
+                    by_idx[idx] = {"name": name, "_failed": True, "_blocked": True,
+                                   "response": (
+                                       "System Error: delivery blocked until the later retrieval in this batch "
+                                       "has completed. This operation was NOT executed. First retrieve the "
+                                       "source, then deliver in a later batch using verified evidence.")}
+                    continue
+                # (c) still unresolved
+                if retrieval.unresolved:
+                    by_idx[idx] = {"name": name, "response": DELIVERY_BLOCKED,
+                                   "_failed": True, "_blocked": True}
+                    continue
 
             # [死循环拦截] 同名同参调用直接打回（最常见的循环形态）。指纹按序登记并带
             # r:/w: 前缀区分只读与写：写调用执行后清掉 r: 指纹（写屏障，与 T3-b 同思路）——
@@ -1553,6 +1668,8 @@ class Orchestrator:
                 # 有副作用/有状态调用：先冲刷积压的只读批（保证它在这些安全调用之后执行），再串行跑
                 await flush_safe_batch()
                 by_idx[idx] = await self._invoke_tool(session, call, call_id, journal)
+                if retrieval is not None:
+                    retrieval.observe([call], [by_idx[idx]])
                 if not read_only:
                     # 写屏障：系统状态已变，此前的只读结果不再代表现状，解禁同参复读
                     tracker[:] = [f for f in tracker if not f.startswith("r:")]
@@ -1641,6 +1758,7 @@ class Orchestrator:
         # （registry.execute_tool 返回失败标志而非文本前缀），另立项。去掉 re.M 已经
         # 消掉了发生率高得多的那一半（错误行在第 2 行及以后）。
         failed = errored or timed_out or _resp_failed(result_text)
+        retrieval_fact = retrieval_observation(name, args, result_text, render, failed)
 
         # [观察截断] 保护每步延迟与上下文（护栏参数，见 config agent.observation_max_chars）
         # 注：截断只作用于给模型的文本。渲染载荷由工具在结构尚在时另行产出（ToolOutput），
@@ -1671,6 +1789,8 @@ class Orchestrator:
         # 判据用 is_read_only（而非 is_concurrency_safe）：read_ui_tree 这类「只读但不可并发」
         # 的观察最大、最需要取代去重，不能因退出并发批而失去 _safe。
         obs = {"name": name, "response": result_text, "_failed": failed}
+        if retrieval_fact is not None:
+            obs["_retrieval"] = retrieval_fact
         if degraded:
             obs["_cloud_degraded"] = degraded   # `_` 前缀：落盘剥离；收尾标注扫的是文本前缀
         # 渲染格：只在工具真跑成功时挂——超时/报错时没有载荷可言。
@@ -1758,8 +1878,10 @@ class Orchestrator:
             tracker = task.recent_calls if task is not None else list(
                 session.carried_turn_stats.get("no_task_calls") or [])
             # 批准的敏感调用同样经账本发事件（修复旧实现漏发 tool_started/result 的洞）
+            retrieval = RetrievalEvidence(session.carried_turn_stats.get("retrieval_evidence"))
             responses = await self._execute_physical(session, pending_calls, tracker, {},
-                                                     journal=journal)
+                                                     journal=journal, retrieval=retrieval)
+            session.carried_turn_stats["retrieval_evidence"] = retrieval.checkpoint()
             if task is None:
                 session.carried_turn_stats["no_task_calls"] = tracker
             # [D2 谎报围堵] 续跑轮的三态起点必须带上刚执行的批准调用（否则续跑里的
@@ -1805,8 +1927,8 @@ class Orchestrator:
         # 文件写恰是最不该「改完即宣布成功」的一类，续跑不能丢失这个标记。判据与主循环一致
         # （只认 edit_file/write_file），不用对 shell 无效的 is_read_only。
         wrote_unverified = approved and any(
-            c.get("name") in _FILE_WRITE_TOOLS
-            for c in pending_calls if c.get("type") != "error"
+            c.get("name") in _FILE_WRITE_TOOLS and not r.get("_blocked")
+            for c, r in zip(pending_calls, responses) if c.get("type") != "error"
         )
         # 回到编排主循环（若再次命中敏感工具会再次挂起）。keep_recent_calls：保留刚执行的
         # 批准调用指纹，防模型在续跑首步立即原样重复该敏感调用。
