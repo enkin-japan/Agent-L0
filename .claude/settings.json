@@ -1,4 +1,17 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(./devctl.sh check *)",
+      "Bash(./devctl.sh check)",
+      "Bash(./devctl.sh preflight)",
+      "Bash(./devctl.sh status)",
+      "Bash(./devctl.sh logs *)"
+    ]
+  },
+  "bashOutputMaxChars": 12000,
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "claude-opus-5-5"
+  },
   "hooks": {
     "PreToolUse": [
       {

@@ -4,7 +4,7 @@ description: 阶段收官后的全盘复审——对一整个阶段（站/波）
   测量结论、档案、场务脚本、跨文档一致性）找错漏并按严重度报告。只读，只报
   告不修正。在阶段 commit 推送完、向用户汇报收官前后由主会话发起。
 tools: Read, Grep, Glob, Bash
-model: claude-opus-5
+model: claude-opus-5-5
 effort: xhigh
 ---
 你是阶段全盘复审员（stage reviewer）。一个阶段的工作已经收官入库，你的任务是

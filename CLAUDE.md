@@ -6,10 +6,16 @@
   cases; only the main session's model changes.
 - Fable quota is the scarce resource. Never spend it on work a pinned subagent
   can do. It is reserved for the "never delegate" work below.
-- Every subagent pins its own `model` and `effort` so its behaviour does not
-  drift when the session model or session effort changes. Do not remove those
-  pins, and do not set `CLAUDE_CODE_SUBAGENT_MODEL` — it overrides subagent
-  frontmatter and would defeat the pinning.
+- Every subagent pins its own `model` and `effort` (`.claude/agents/*.md`) so
+  its behaviour does not drift when the session model or session effort
+  changes. Do not remove those pins. Every `Agent` call that has no frontmatter
+  pin (built-in `Explore`, `general-purpose`) names an explicit `model`; none
+  may inherit the session model.
+- Safety net (behaviour verified in Agent-L1 on 2026-09-28, CLI 2.1.282):
+  `.claude/settings.json` sets `CLAUDE_CODE_SUBAGENT_MODEL=claude-opus-5-5`, so
+  an agent without a pin falls to Opus instead of the session model; pins still
+  win. Do not change or unset it, and never set
+  `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` (that one would override the pins).
 
 ### Never delegate; the main session handles these directly
 - Architecture decisions, task breakdown, cross-module refactoring, final review.
@@ -40,6 +46,37 @@
 - Prefer starting that work in an Opus 5 session. If a fallback notice appears
   mid-task, stop and redo the change on Opus 5 rather than accepting the result.
 
+### What the main session does not do
+Every main-session call re-reads the whole context; a command run here costs
+two to three times what it costs in a subagent, and its output stays in the
+context for the rest of the session.
+- No test suites, gates, `xcodebuild`, or mutation harnesses in the foreground:
+  `verifier`. (The pre-commit hook and one named test during final review are
+  fine.)
+- No reconnaissance: repo-wide searches, reading files to get oriented:
+  `scout`, or built-in `Explore` with a cheaper `model` for pure location.
+- No reading of raw run artifacts or logs, no inline recomputation: `analyst`.
+- No experiment drivers, probes, or harness scripts: `implementer`.
+- No waiting or polling: background the task, attach `task-sentinel`, end the
+  turn.
+- Never read a subagent's transcript or raw task output; its report is the
+  interface.
+- Rule of thumb: more than three tool calls, or more than a hundred lines
+  coming back: delegate.
+
+### Context discipline
+- Working budget for the main session: 400k tokens. At a phase boundary above
+  the budget, persist (plan file, memory) and ask the user to `/compact`.
+- Compact before leaving, not after returning: when a work window ends and
+  everything is persisted, ask for `/compact` while the cache is warm.
+- Output that may exceed 60 lines goes to a file; read the tail or a summary.
+  No full logs, no long-line diffs in the context (`bashOutputMaxChars` in
+  `.claude/settings.json` caps what a Bash call can return).
+- Subagent reports are at most 60 lines; evidence goes to files and the report
+  gives paths.
+- Unattended windows cannot be compacted: size the slice to the budget before
+  starting.
+
 ### Single-GPU discipline (this machine is the production M4 Max 64G)
 - One GPU, no preemption safety valve (MLX over-commit = page-thrash cliff).
   At most ONE real-model process at any moment: benches, inference servers
@@ -51,18 +88,31 @@
 - Subagents must not start/stop services on :14159/:14160/:14161/:8080 or load
   models unless the delegation explicitly grants it. Golden tests
   (`backend/tests/`, FakeEngine, CPU-only) are always safe to run concurrently.
+- Subagents must never run process-killing or service-restart experiments on
+  this machine (`pkill`/`kill` patterns, restarting anything), not even to
+  "verify" a finding: a verify agent killed the user's Ollama.app server on
+  2026-09-11 this way (Agent-L1 incident, same machine).
 
 ### Delegation targets
-- `chore-worker`: running tests / lint / documentation / commit messages /
-  implementing a small function from a detailed plan.
-- `implementer`: multi-file feature implementation and moderately complex bug
-  fixes.
-- `reviewer`: first-pass review of a diff, before the main session signs off.
-- `stage-reviewer`: post-stage full review (Opus 5 + xhigh, i.e. the ultracode
-  thinking tier). Not a per-diff reviewer — it audits a whole completed stage:
-  conclusions vs raw data, archive completeness, cross-document consistency,
-  billing/secret paths. See "Stage review" below for when it is mandatory.
-- `task-sentinel`: 3-minute real-time monitoring of ANY task expected to run
+- `chore-worker` (Sonnet 5, high): small edits, lint, formatting, code-adjacent
+  documentation, commit message drafts, implementing a small function from a
+  detailed plan.
+- `implementer` (Opus 5.5, high): multi-file feature implementation,
+  moderately complex bug fixes, experiment drivers and harness scripts.
+- `reviewer` (Opus 5.5, high): first-pass review of a diff, before the main
+  session signs off; skeptic for a Critical / Major finding.
+- `scout` (Opus 5.5, high): read-only reconnaissance with verified `path:line`
+  citations, before design decisions.
+- `analyst` (Opus 5.5, high): recomputation from raw run artifacts, analysis
+  scripts under `benchmarks/`, draft result paragraphs.
+- `verifier` (Sonnet 5, high): runs tests, gates, `xcodebuild`, mutation
+  harnesses; one at a time; reports a table, fixes nothing.
+- `stage-reviewer` (Opus 5.5, xhigh, i.e. the ultracode thinking tier):
+  post-stage full review. Not a per-diff reviewer — it audits a whole completed
+  stage: conclusions vs raw data, archive completeness, cross-document
+  consistency, billing/secret paths. See "Stage review" below for when it is
+  mandatory.
+- `task-sentinel` (Haiku 4.5, low): 3-minute real-time monitoring of ANY task expected to run
   longer than 10 minutes (user decision 2026-08-16, superseding the old
   "shakedown only for new scripts" rule — verified scripts get a sentinel too).
   Pinned Haiku 4.5 + low effort + batched polling to keep cost negligible;
@@ -78,7 +128,11 @@
   task, use one rather than several.
 - Do not spawn a subagent to verify or double-check work another subagent just
   did. The two per-diff gates below and the stage review are the only
-  verification steps.
+  verification steps. The one exception is a skeptic (`reviewer`) per
+  Critical / Major finding in a review or stage review.
+- Agent batches of at most ten that spend no Fable need one line of notice in
+  the reply; larger batches, or batches that spend Fable, need the user's go
+  first.
 
 ### Delegation contract
 - Every delegation must include: the specific file paths involved, and explicit
@@ -100,6 +154,23 @@
   stages.
 - A task whose acceptance criteria you cannot write is not ready to delegate.
   Scope it first.
+- State the report contract: at most 60 lines, evidence in files, paths in the
+  report.
+- Read scope (user decision 2026-09-29, recorded in Agent-L1; the point is to
+  keep the user's personal data from leaking). No request needed: this
+  repository, the sibling repo `/Volumes/enkin/project/Agent-L1`, Claude Code's
+  own working directories, and dependency libraries / toolchains / machine state
+  / configuration that hold no personal data. Anything that may hold personal
+  data (documents, desktop, downloads, mail, messages, photos, browser data,
+  cloud drives, other projects' directories), or that you are unsure about, is
+  read only after the main session has reported the exact paths to the user and
+  received the go; a delegation lists those authorized paths, and the agent
+  reads nothing of that kind outside the list. Secrets and credentials are never
+  read, wherever they are; the user's notes, sessions and rag data are looked
+  at by name and size only.
+- Parallel implementers work in separate worktrees; anything that rewrites
+  source files (mutation harnesses) or builds the same sources (`xcodebuild`)
+  runs one at a time.
 
 ### Review gates — both mandatory, never collapsed to save usage
 Scope: every non-trivial code diff, **including code the main session wrote
@@ -109,6 +180,12 @@ change). Docs-only and ledger-only diffs are exempt.
 2. The main session then reviews the diff itself before committing it or
    building further work on top of it. The main session owns the sign-off; the
    reviewer's report is input to that decision, not a replacement for it.
+- Gate 2 reads by risk, and the commit message says which way it read:
+  - line by line: guards, secret / permission / file handling, packaging and
+    signing scripts, state machines and concurrency, acceptance criteria and
+    test oracles, everything the reviewer flagged;
+  - by summary (`--stat`, the reviewer's report, two or three sampled hunks):
+    pure moves, deletions, generated files, fixtures, documents.
 - Beyond reporting test results, do not instruct subagents to re-verify their own
   work. Redundant verification instructions cost tokens without adding quality.
 
@@ -146,6 +223,10 @@ test is evidence.
   the commit message is the successor record (user decision 2026-08-29).
   **There is no separate mutation ledger** — a second place to keep the same
   numbers in sync is just a third source of drift.
+- Who runs it: execution belongs to `verifier`, in series, one harness at a
+  time; it returns the mutant → red tests → restored table and
+  `git status --short`. For a guard on one of the "never delegate" red-line
+  paths the main session names the mutants and re-runs one of them itself.
 
 ### Stage review — mandatory after every completed stage (user decision, 2026-08-16)
 - Trigger: a stage/station/wave has closed out — its commits are pushed and the
@@ -167,6 +248,9 @@ test is evidence.
   fixes, and runs the fixes through the normal per-diff gates. A stage is not
   closed until its stage review's confirmed findings are fixed or explicitly
   deferred with the user.
+- Every Critical / Major finding of a stage review gets one skeptic
+  (`reviewer`, default stance: refute it) before the main session verifies the
+  survivors.
 - Do not substitute the stage review for the per-diff gates or vice versa;
   do not run more than one stage review per stage (fix-up commits after the
   review do not re-trigger it — they go through the per-diff gates only).
@@ -216,3 +300,25 @@ test is evidence.
   `reminder/bark.env` (0600, and `/reminder/` is gitignored). Never read, print,
   or commit that file — the script reads it itself and redacts the key even out
   of Bark's own error messages.
+
+### Repository hygiene
+- `git add` with explicit paths only, never `git add -A` / `git add .`. Commit
+  and push only when the user asks; a reviewed diff is not an authorization to
+  commit it, and a commit is not an authorization to push it.
+- Every commit that contains code runs the full `./devctl.sh check` through
+  the pre-commit hook, so reviewed groups are combined into one commit with a
+  sectioned message rather than committed one topic at a time.
+- Persist session artifacts into the repo the same day: harness and analysis
+  scripts to `benchmarks/`, decisions and residual lists to the plan file under
+  `docs/plans/`. The scratchpad is session-scoped and gets wiped.
+
+## Compact instructions
+When compacting, keep: the current phase and slice with its acceptance
+criteria; the state of uncommitted work (which files, verified or not);
+background tasks and agents still running, with what each was asked; the
+user's standing authorizations and their most recent instructions, verbatim;
+open decisions waiting on the user; every constraint the user stated in this
+session.
+Drop: command output, diffs, file contents, agent reports already recorded in
+the plan file or a commit message. Point to the file that holds a fact instead
+of restating it.

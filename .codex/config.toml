@@ -1,0 +1,8 @@
+# Project-only Codex settings. Main model, approval policy, permissions, network,
+# notifications and credentials inherit user/client policy. No automatic startup.
+# Custom roles are discovered from the adjacent agents/*.toml files.
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 3
+default_subagent_model = "gpt-6.1-sol"
+default_subagent_reasoning_effort = "high"
