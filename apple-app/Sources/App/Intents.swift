@@ -15,7 +15,7 @@ struct AskAgentIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog & ReturnsValue<String> {
         let client = await MainActor.run { AppSettings().makeClient() }
         guard let client else {
-            let msg = "尚未配置后端地址，请先打开 MacAgent 设置连接。"
+            let msg = L("尚未连接 Mac，请先在 MacAgent 里通过 iCloud 或扫码配对。")
             return .result(value: msg, dialog: IntentDialog(stringLiteral: msg))
         }
 

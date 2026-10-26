@@ -1,19 +1,19 @@
 import SwiftUI
 
-/// 连接设置：服务器地址 + API Key（Keychain）+ 连通性测试 + 通知偏好。
+/// 设置。iPhone 只经 iCloud 钥匙串 / 扫码连接 Mac，不给手填入口（2026-10-27 用户决定）；
+/// macOS 恒连本机回环，AGENT 密钥只在 devctl / repo 布局手填（bundle 布局自动生成）。
 struct SettingsView: View {
     @EnvironmentObject var store: AgentStore
     @EnvironmentObject var push: PushManager
-    @EnvironmentObject var phoneLink: PhoneLink
     #if os(macOS)
     @EnvironmentObject var sidecar: SidecarManager
     #endif
     @Environment(\.dismiss) private var dismiss
 
+    #if os(macOS)
     @State private var urlText = ""
     @State private var keyText = ""
     @State private var testResult: String?
-    #if os(macOS)
     @State private var keyCopied = false
     @State private var copyResetTask: Task<Void, Never>?
     private enum RegenPhase { case idle, restarting, done }
@@ -117,18 +117,18 @@ struct SettingsView: View {
             }
             .navigationTitle(L("连接设置"))
             .toolbar {
+                // iOS 页上已无待保存的输入：Mac 列表点选即生效，通知/外观即改即存
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(L("保存")) { save() }
-                }
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L("取消")) { dismiss() }
+                    Button(L("完成")) { dismiss() }
                 }
             }
             #endif
         }
         .onAppear {
+            #if os(macOS)
             urlText = store.settings.baseURLString
             keyText = store.settings.apiKey
+            #endif
             push.refreshAuthStatus()
         }
         #if os(macOS)
@@ -192,28 +192,54 @@ struct SettingsView: View {
     @ViewBuilder
     private var connectionSections: some View {
                 #if os(iOS)
-                PhoneConnectionSection {
-                    urlText = store.settings.baseURLString
-                    keyText = store.settings.apiKey
+                // iPhone 连 Mac 只有两条路：iCloud 钥匙串同步的 Mac 列表、扫 Mac 上的配对
+                // 二维码（2026-10-27 用户决定）。不给地址 / 密钥输入框，也没有「高级」折叠。
+                PhoneConnectionSection()
+                #else
+                agentKeySection
+                Section {
+                    Button(L("测试连接")) { test() }
+                    if let result = testResult {
+                        Text(result).font(.caption)
+                    }
                 }
-                // 后端在 Mac 上；macOS 端恒连本机回环，不给地址框（见 AppSettings.localBackend）
-                Section(L("后端地址")) {
-                    TextField("https://<mac>.<tailnet>.ts.net", text: $urlText)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                    Text(L("通常不必手填：用上方 iCloud 同步或扫码配对。手填时写 Mac 上 `tailscale serve` 开放的地址。"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                MacPhoneLinkSection()
                 #endif
+    }
+
+    #if os(macOS)
+    /// AGENT 密钥：bundle 布局由 app 自管（引导页 / 执行层首启自动生成、拉起时注入），
+    /// 只摆一行状态 + 重新生成；devctl / repo 布局密钥在仓库 `.env.local`，须手填同值。
+    @ViewBuilder
+    private var agentKeySection: some View {
                 Section("API Key") {
-                    SecureField(L("AGENT_API_KEY（存入钥匙串）"), text: $keyText)
-                    #if os(macOS)
-                    // 工作端才有这两枚钮：复制（SecureField 抄不出来——iPhone 填 key
-                    // 的真实痛点）；重新生成 = key 轮换，仅内建执行层可用（external/
-                    // repo 布局的 key 在 .env.local，这里换了对不上）。
-                    HStack(spacing: Theme.s2) {
+                    if agentKeyManagedByApp {
+                        Label(L("后端密钥已自动生成并同步"), systemImage: "checkmark.seal")
+                            .foregroundStyle(.secondary)
+                        // 重新生成 = key 轮换：写钥匙串 → 本 app 客户端 → 执行层带新 env 重启
+                        // （bundle 布局 resolveLayout 从 settings.apiKey 注入 AGENT_API_KEY）。
+                        // 三态反馈：重启中…（禁点）→ ✓ 已更新（1.5s）→ 复位
+                        switch regenPhase {
+                        case .idle:
+                            Button(L("重新生成")) { regenerateKey() }
+                        case .restarting:
+                            Button(L("重启中…")) {}.disabled(true)
+                        case .done:
+                            Label(L("已更新"), systemImage: "checkmark")
+                                .foregroundStyle(Theme.success)
+                        }
+                        Text(L("重新生成会立即重启执行层；仍在用旧共享密钥的客户端（旧版手填或 devctl 工具）会收到 401，须重新配对或同步密钥。经你同意或扫码连上的 iPhone 用的是自己的设备票据，不受影响。"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if store.settings.phoneSyncEnabled {
+                            Text(L("iCloud 钥匙串里只有地址与连接请求凭据，没有这把 Key。"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        SecureField(L("AGENT_API_KEY（存入钥匙串）"), text: $keyText)
+                        // 复制（SecureField 抄不出来）。不给「重新生成」：这些布局的后端从
+                        // .env.local 取密钥，这里换了重启后也对不上。
                         // 反馈在按钮原位画勾（用户定：挤开邻钮的旁注难看）；ZStack
                         // 定宽避免勾/字互换时布局跳动
                         Button { copyKey() } label: {
@@ -225,42 +251,13 @@ struct SettingsView: View {
                             }
                         }
                         .disabled(keyText.isEmpty)
-                        if sidecarManaged {
-                            // 三态反馈：重启中…（禁点）→ ✓ 已更新（1.5s）→ 复位
-                            switch regenPhase {
-                            case .idle:
-                                Button(L("重新生成")) { regenerateKey() }
-                            case .restarting:
-                                Button(L("重启中…")) {}.disabled(true)
-                            case .done:
-                                Label(L("已更新"), systemImage: "checkmark")
-                                    .foregroundStyle(Theme.success)
-                            }
-                            Text(L("重新生成会立即重启执行层；手动填了这把 Key 的设备须重新填入。经你同意或扫码连上的 iPhone 用的是自己的设备票据，不受影响。"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            if store.settings.phoneSyncEnabled {
-                                Text(L("iCloud 钥匙串里只有地址与连接请求凭据，没有这把 Key。"))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    #endif
-                    Text(L("与仓库根 .env 里的 AGENT_API_KEY 相同；后端未启用鉴权时留空。"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Section {
-                    Button(L("测试连接")) { test() }
-                    if let result = testResult {
-                        Text(result).font(.caption)
+                        Text(L("与仓库根 .env.local 里的 AGENT_API_KEY 相同；后端未启用鉴权时留空。"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
-                #if os(macOS)
-                MacPhoneLinkSection()
-                #endif
     }
+    #endif
 
     @ViewBuilder
     private var notificationSection: some View {
@@ -532,43 +529,35 @@ struct SettingsView: View {
                 set: { store.settings.language = $0 })
     }
 
+    #if os(macOS)
     private func save() {
-        let url = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let key = keyText.trimmingCharacters(in: .whitespacesAndNewlines)
-        #if os(iOS)
-        // 手改过才算手动来源：没动就点保存不该关掉 iCloud 来源的自动更新。
-        // 有地址就记进 Mac 列表（同地址就地更新）并设为当前
-        if url != store.settings.baseURLString || key != store.settings.apiKey {
-            if !url.isEmpty {
-                phoneLink.saveManual(url: url, key: key)
-                dismiss()
-                return
-            }
-            phoneLink.disconnect()
-            store.settings.connectionSource = .manual
+        store.settings.baseURLString = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 自管布局下输入框不在页上：keyText 只是打开页面时的快照，执行层其间生成/轮换的
+        // 新 key 不得被它写回旧值
+        if !agentKeyManagedByApp {
+            store.settings.apiKey = keyText.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        #endif
-        store.settings.baseURLString = url
-        store.settings.apiKey = key
         store.applySettings()
-        #if os(macOS)
         MacOfflineCaches.prune(store.settings)
-        #endif
         dismiss()
     }
 
-    #if os(macOS)
-    /// 内建执行层在管（含故障态）才轮换得动 key。写成显式 switch 而非链式 ==：
-    /// ViewBuilder 里裸 `.failed` 会被类型检查器解析到 SwiftUI 自家的枚举上去
-    /// （实报 PencilSqueezeGesturePhase，Release 构建失败）。
-    private var sidecarManaged: Bool {
+    /// AGENT 密钥归 app 自管 = bundle 布局 + 内建执行层在管（含故障态）+ 14159 上的后端
+    /// 没探到（nil）或自报 bundle。自报 repo / unknown（未设 AGENT_LAYOUT 起的后端）时
+    /// 指纹不符的提示会让用户「同步 .env.local 与 app 设置的密钥」，输入框必须在。
+    /// 未启用 / 收养外部后端 / repo 布局一律手填。
+    /// 写成显式 switch 而非链式 ==：ViewBuilder 里裸 `.failed` 会被类型检查器解析到
+    /// SwiftUI 自家的枚举上去（实报 PencilSqueezeGesturePhase，Release 构建失败）。
+    private var agentKeyManagedByApp: Bool {
+        guard sidecar.layoutKind == "bundle",
+              sidecar.peerLayout == nil || sidecar.peerLayout == "bundle" else { return false }
         switch sidecar.state {
         case .running, .starting, .failed: return true
         case .disabled, .external: return false
         }
     }
 
-    /// 复制当前 key 到剪贴板（配合 iPhone 通用剪贴板跨端填 key）。1.5s 反馈复位。
+    /// 复制当前 key 到剪贴板（devctl / repo 布局下给其他本机工具用）。1.5s 反馈复位。
     private func copyKey() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(keyText, forType: .string)
@@ -583,7 +572,7 @@ struct SettingsView: View {
     }
 
     /// key 轮换：新随机值即刻生效（钥匙串 + 本 app 客户端 + 执行层带新 env 重启）。
-    /// 旧 key 随即作废——手动填了它的拨号端 401，须重新填入，这是轮换的本意。经同意或扫码
+    /// 旧 key 随即作废——手动填了它的客户端 401，须重新填入，这是轮换的本意。经同意或扫码
     /// 连上的 iPhone 用自己的设备票据，不受影响；iCloud 条目里本来就没有 key（76 起）。
     private func regenerateKey() {
         let newKey = SidecarManager.randomKey()
@@ -662,7 +651,6 @@ struct SettingsView: View {
             withAnimation { restartPhase = .idle }
         }
     }
-    #endif
 
     private func test() {
         testResult = L("测试中…")
@@ -694,4 +682,5 @@ struct SettingsView: View {
             }
         }
     }
+    #endif
 }

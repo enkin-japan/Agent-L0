@@ -24,10 +24,10 @@ open MacAgentClient.xcodeproj
 
 App 内右上角 ⚙ 打开连接设置：
 
-| 场景 | 地址 | Key |
+| 设备 | 手填什么 | 不用手填的 |
 |---|---|---|
-| 本机（Mac 上跑 app + 后端） | `http://127.0.0.1:14159` | 开发仓库 `.env.local` 的 `AGENT_API_KEY`；bundle 由 Keychain 持有本机密钥 |
-| 跨设备（iPhone/iPad 经 Tailscale） | `https://<mac>.<tailnet>.ts.net` | 同上 |
+| Mac（app + 后端同机，恒连 `http://127.0.0.1:14159`） | 执行层设置：算力端地址、`INFER_API_KEY`、`RAG_COMPUTE_API_KEY` | `AGENT_API_KEY`：bundle 布局且内建执行层在管时由 app 自动生成并存钥匙串（设置里只显示状态与「重新生成」）；devctl / repo 布局、内建执行层关着、收养了外部后端、或 14159 上的后端自报布局 repo / unknown 时，连接页才显示密钥框，粘贴仓库 `.env.local` 的同值 |
+| iPhone/iPad（经 Tailscale） | 无 | 只经 iCloud 钥匙串同步（同一 Apple ID，在 Mac 上点允许）或扫 Mac 上的配对二维码连接；没有地址 / 密钥输入框（2026-10-27 起）。引导页可「稍后配对」，之后在主界面 ⚙ 或直接用系统相机扫码 |
 
 macOS 执行层设置分别保存推理服务与 RAG 服务的连接信息。拆分 RAG 时，算力端对应
 `RAG_COMPUTE_API_KEY`，与本机数据面的 `RAG_API_KEY` 分开；旧的远程数据面拓扑仍按

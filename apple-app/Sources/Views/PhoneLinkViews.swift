@@ -230,14 +230,13 @@ struct MacPhoneLinkSection: View {
 #endif
 
 #if os(iOS)
-/// iPhone 的引导页与设置页共用：保存过的 Mac（iCloud 同步 / 扫码 / 手填），点选切换、左滑删除。
+/// iPhone 的引导页与设置页共用：保存过的 Mac（iCloud 同步 / 扫码；旧版手填的条目照常
+/// 列出并自动换成设备票据），点选切换、左滑删除。
 struct PhoneConnectionSection: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var phoneLink: PhoneLink
     @State private var renaming: SavedMac?
     @State private var newName = ""
-    /// 设置页用它刷新自己的输入框（否则随后点「保存」会把旧值写回去）。
-    var onApplied: () -> Void = {}
 
     var body: some View {
         Section {
@@ -250,7 +249,6 @@ struct PhoneConnectionSection: View {
                 ForEach(phoneLink.macs) { mac in
                     Button {
                         phoneLink.select(mac.id)
-                        onApplied()
                     } label: {
                         row(mac)
                     }
@@ -267,7 +265,6 @@ struct PhoneConnectionSection: View {
                     // 先取 id 再删：删除会改变下标
                     let ids = offsets.map { phoneLink.macs[$0].id }
                     ids.forEach(phoneLink.remove)
-                    onApplied()
                 }
                 if let error = phoneLink.syncedError {
                     Text(error)

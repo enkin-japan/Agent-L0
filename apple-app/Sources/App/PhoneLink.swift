@@ -38,7 +38,7 @@ struct PhoneConnection: Codable, Equatable {
 /// iPhone 手里对某台 Mac 的凭据是什么。
 enum Credential: String, Codable {
     case none          // 只读到了 iCloud 条目，还没经 Mac 同意
-    case sharedKey     // 75 / 手填 / 旧连接：共享密钥，启动后自动换成设备票据
+    case sharedKey     // 75 / 旧版手填 / 旧连接：共享密钥，启动后自动换成设备票据（不再新建）
     case deviceToken   // Mac 同意（或扫码）后发给这部 iPhone 的票据
 }
 
@@ -1620,27 +1620,6 @@ final class PhoneLink: ObservableObject {
         }
         persist()
         pruneOfflineCaches()
-    }
-
-    /// 设置页 / 引导页手填后保存（地址 + 共享密钥）：同地址的就地更新为手动来源，否则新增
-    /// 一台；设为当前。之后自动换成本机自己的票据。
-    func saveManual(url: String, key: String) {
-        var url = url
-        while url.hasSuffix("/") { url.removeLast() }   // 同一台 Mac 不因结尾斜杠分成两行
-        guard !url.isEmpty else { return }
-        let result = MacDirectory.upsert(macs, url: url, macId: nil, source: .manual,
-                                         credential: .sharedKey, now: Date(), newId: Self.newId)
-        hidden.remove(MacDirectory.hideKey(macId: nil, url: url))
-        macs = result.macs
-        Keychain.save(Self.keyAccount(result.id), key)
-        select(result.id, freshCredential: true)
-        upgradeSharedKeys()
-    }
-
-    /// 设置页清空了地址：不再有当前 Mac（否则下一次 readSynced 又把它换回来）。
-    func disconnect() {
-        currentId = nil
-        persist()
     }
 
     /// 用户在确认框里点了「连接」之后才调：拿一次性配对码换本机的票据，加进列表并设为当前。

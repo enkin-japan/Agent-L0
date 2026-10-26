@@ -3,8 +3,9 @@ import SwiftUI
 /// 首启强制引导（双端）：新装 app 在完成初始设置前不进主界面，也不启动执行层 / 不发起连接。
 /// 既有设置页维持原状（作为重置入口）；本页只覆盖「第一次」需要的最小字段。
 /// - macOS：主路径「内建执行层」（算力端地址 + INFER/RAG 密钥，可留空）+ 次路径「外部后端」。
-/// - iOS：主路径「从 Mac 获取」（iCloud 钥匙串同步，或相机扫 Mac 上的配对二维码）+
-///   次路径手填（后端地址 + AGENT 密钥）。
+/// - iOS：只有「从 Mac 获取」——iCloud 钥匙串同步的 Mac 列表，或相机扫 Mac 上的配对
+///   二维码；没有手填入口（2026-10-27 用户决定）。点选 / 扫码确认后 PhoneLink.apply()
+///   标记引导完成。
 struct OnboardingView: View {
     @EnvironmentObject var store: AgentStore
     @EnvironmentObject var settings: AppSettings
@@ -15,9 +16,6 @@ struct OnboardingView: View {
     @State private var computeHost = ""
     @State private var inferKey = ""
     @State private var ragKey = ""
-    #else
-    @State private var urlText = ""
-    @State private var keyText = ""
     #endif
 
     var body: some View {
@@ -37,9 +35,6 @@ struct OnboardingView: View {
             computeHost = settings.computeHost
             inferKey = settings.inferApiKey
             ragKey = settings.ragComputeApiKey
-            #else
-            urlText = settings.baseURLString
-            keyText = settings.apiKey
             #endif
         }
         #if os(macOS)
@@ -117,49 +112,22 @@ struct OnboardingView: View {
 
     @ViewBuilder
     private var iosContent: some View {
-        PhoneConnectionSection {
-            urlText = settings.baseURLString
-            keyText = settings.apiKey
-        }
+        PhoneConnectionSection()
+        // 出口：新装且暂时没有可连的 Mac（无 iCloud 条目、手边也没有 Mac 的二维码）时不能
+        // 卡死在引导页。进主界面后照样能配对：系统相机扫码由 MacAgentApp 的 onOpenURL
+        // 接住（引导页与主界面同一处），Mac 列表在主界面 ⚙ → 设置里。
         Section {
-            Text(L("或者手动填入 Mac 上后端的地址与 AGENT 密钥。"))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-        Section(L("后端地址")) {
-            TextField("https://<mac>.<tailnet>.ts.net", text: $urlText)
-                .autocorrectionDisabled()
-                .keyboardType(.URL)
-                .textInputAutocapitalization(.never)
-        }
-        Section("API Key") {
-            SecureField(L("AGENT_API_KEY（存入钥匙串）"), text: $keyText)
-        }
-        Section {
-            Button(L("保存设置")) { complete() }
-                .buttonStyle(.borderedProminent)
-            Text(L("保存后会检查连接与鉴权；尚未配置或离线的服务会单独提示。"))
-                .font(.caption).foregroundStyle(.secondary)
+            Button(L("稍后配对")) { pairLater() }
         }
     }
 
-    private func complete() {
-        let url = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let key = keyText.trimmingCharacters(in: .whitespacesAndNewlines)
-        // 没改过列表里选中的那台就直接用它：别把 iCloud 来源改成手动（会关掉自愈）
-        if let current = phoneLink.current, url == settings.baseURLString, key == settings.apiKey {
-            phoneLink.select(current.id)
-            return
-        }
-        if !url.isEmpty {
-            phoneLink.saveManual(url: url, key: key)   // 记进 Mac 列表，设为当前并启动连接
-            return
-        }
-        settings.baseURLString = url
-        settings.apiKey = key
+    /// 与旧版「地址留空保存」同效：地址清空（否则下次启动 build 75 迁移会把默认回环地址
+    /// 当成一台 Mac 迁进列表）、标记引导完成、启动连接（无地址 = 不连）。
+    private func pairLater() {
+        settings.baseURLString = ""
         settings.connectionSource = .manual
         settings.setupCompleted = true
-        store.applySettings()          // 连接后置：完成即启动探活/附着
+        store.applySettings()
     }
     #endif
 }

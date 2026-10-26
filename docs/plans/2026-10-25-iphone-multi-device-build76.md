@@ -404,3 +404,47 @@ DMG（约 5GB）和十个 delta；旧仓 Agent-L0-macOS-app 的 `updates` 镜像
   不符、releaseNotesLink 仍指 updates、`../..` 仓名）均拒绝且不改文件（reviewer 首审后补的反向用例）。README、
   project.yml 与 MacAgentApp.swift 的注释同步更新。
 - 本机验证：feed 可解析（3 条目、12 enclosure），本机装的 76 即 Latest，无更新可提示；新脚本的真实首跑要等 build 77。
+
+## 14. iPhone 手填入口移除（2026-10-27）
+
+用户决定：iPhone 连 Mac 只有两条路——iCloud 钥匙串同步（同一 Apple ID，Mac 上点允许）与扫 Mac 上的配对二维码；
+不留手填，也不留「高级」折叠。macOS 的 AGENT 密钥框只在用户确实需要时出现。
+
+移除：
+- iOS 设置页的「后端地址」框、「API Key」框、「测试连接」及其说明文字（`SettingsView.swift`）；iOS 设置页已无待保存
+  输入，工具栏的「保存 / 取消」换成「完成」。
+- iOS 引导页的手填分支（「或者手动填入…」、地址 / 密钥框、「保存设置」，`OnboardingView.swift`）：引导页只剩 Mac
+  列表 + 「稍后配对」，点选或扫码确认后由 `PhoneLink.apply()` 标记引导完成。
+- 引导页出口「稍后配对」：与旧版「地址留空保存」同效——`baseURLString` 清空（否则下次启动 build 75 迁移会把默认
+  回环地址当成一台 Mac 迁进列表）、来源记 manual、`setupCompleted = true`、`applySettings()`（无地址即不连）。进主界面
+  后照样能配对：系统相机扫码由 `MacAgentApp.swift` 的 `.onOpenURL`（引导页与主界面共用同一处）弹确认框；Mac 列表在
+  主界面 ⚙（`SessionListView.swift` 工具栏）→ 设置。
+- 随之失效的代码：`PhoneLink.saveManual(url:key:)`（唯一会新建 `.sharedKey` 条目的入口）与 `PhoneLink.disconnect()`、
+  `PhoneConnectionSection.onApplied` 回调；L10n 里只服务手填入口的 5 个词条（含两条早已无引用的手填提示）。
+- macOS 连接页：AGENT 密钥框、「复制」与 `.env.local` 说明只在 devctl / repo 布局、未启用内建执行层、收养了外部后端、
+  或 14159 上的后端自报布局 repo / unknown（未设 AGENT_LAYOUT 起的后端）时出现；bundle 布局、执行层在管且对端
+  没探到或自报 bundle 时只显示「后端密钥已自动生成并同步」+「重新生成」
+  （它写钥匙串后 `sidecar.restart()`，`resolveLayout` 重新注入 `AGENT_API_KEY`，会同步运行中的后端）。repo 布局不再
+  显示「重新生成」：那里的后端从 `.env.local` 取密钥，换了重启后也对不上。「重新生成」的说明改为：仍用旧共享密钥的
+  客户端（旧版手填或 devctl 工具）会 401、须重新配对或同步，有设备票据的 iPhone 不受影响。
+- Siri「问 MacAgent」未连接时的提示改为「尚未连接 Mac，请先在 MacAgent 里通过 iCloud 或扫码配对。」并走 L10n
+  （`App/Intents.swift`）。
+
+刻意保留：
+- 存储键与属性：UserDefaults `agent.baseURL`、钥匙串 `agent-api-key`、`settings.baseURL` / `settings.apiKey`——锁屏旧路径
+  `LiveActivity/ApprovalIntents.swift` 直接读它们；配对后它们由 `PhoneLink.apply()` 写入（apiKey = 本机设备票据）。
+- `.sharedKey` 凭据与 `POST /pair/upgrade` 升级路径（`PhoneLink.upgradeSharedKeys()`）：build 75 的 iPhone 与旧版手填的
+  条目仍持共享密钥，启动后照常换成设备票据；`Credential.sharedKey`、`ConnectionSource.manual` 与「手动填写」来源标签留着
+  显示这些旧条目。
+- 后端 `backend/framework/api/pairing.py` `_issued()` 的 `api_key` 同值别名（build 75 的 iPhone 只认这个字段名）。
+- 源码扫描护栏：`backend/tests/test_phone_link.py::test_wiring` 断言 iOS 设置页（连接区与整个 iOS Form）、iOS 引导页
+  与 `PhoneConnectionSection`（改名框除外）不含地址 / 密钥输入与「测试连接」，`saveManual` 不再出现，引导页留有
+  「稍后配对」，且 macOS 自管判据含 `peerLayout == nil || peerLayout == "bundle"`。6 个变异体（四处各塞一个输入框、
+  macOS 自管分支塞密钥框、判据退回 `!= "repo"`）均转红（在源码副本上跑，仓库未动）。
+
+恢复路径（不再有 app 内重填）：build 75 手填 / 迁移来的 `.sharedKey` 条目，若 Mac 之后轮换了 AGENT 密钥、旧共享
+密钥已失效而该条目还没换到设备票据，就在 Mac 列表左滑删除这一行，再扫这台 Mac 的配对二维码（同一 Apple ID 的也可等
+iCloud 条目出现后点选、在 Mac 上点允许）。
+
+已知、未修：macOS 设置页「保存」写回的 `keyText` 是开页时的快照（devctl / repo 布局下密钥框可见时才写），开页期间
+别处改了 `settings.apiKey` 会被旧值盖回（复审 nit 7，既有问题，本次不动）。

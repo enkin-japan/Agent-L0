@@ -178,9 +178,13 @@ enum L10n {
         "删除所选": ("選択項目を削除", "Delete Selected"),
         "确认删除所选会话？": ("選択したチャットを削除しますか？", "Delete selected chats?"),
         "（不可恢复）": ("（元に戻せません）", "(cannot be undone)"),
-        "重新生成会立即重启执行层；手动填了这把 Key 的设备须重新填入。经你同意或扫码连上的 iPhone 用的是自己的设备票据，不受影响。":
-            ("再生成すると実行レイヤーが直ちに再起動します。このキーを手入力したデバイスでは再入力が必要です。承認または QR コードで接続した iPhone は専用のデバイストークンを使うため影響を受けません。",
-             "Regenerating restarts the execution layer immediately; devices where this key was entered by hand must re-enter it. iPhones connected by approval or QR code use their own device tokens and are not affected."),
+        "重新生成会立即重启执行层；仍在用旧共享密钥的客户端（旧版手填或 devctl 工具）会收到 401，须重新配对或同步密钥。经你同意或扫码连上的 iPhone 用的是自己的设备票据，不受影响。":
+            ("再生成すると実行レイヤーが直ちに再起動します。古い共有キーを使い続けているクライアント（旧バージョンで手入力したもの・devctl ツール）は 401 になり、再ペアリングまたはキーの再同期が必要です。承認または QR コードで接続した iPhone は専用のデバイストークンを使うため影響を受けません。",
+             "Regenerating restarts the execution layer immediately; clients still using the old shared key (entered by hand in older versions, or devctl tools) get 401 and must re-pair or re-sync the key. iPhones connected by approval or QR code use their own device tokens and are not affected."),
+        "稍后配对": ("後でペアリング", "Pair later"),
+        "尚未连接 Mac，请先在 MacAgent 里通过 iCloud 或扫码配对。":
+            ("Mac に未接続です。先に MacAgent で iCloud または QR コードでペアリングしてください。",
+             "Not connected to a Mac yet. Pair one in MacAgent via iCloud or by scanning its QR code first."),
         "取消": ("キャンセル", "Cancel"),
         "删除": ("削除", "Delete"),
         "恢复": ("再開", "Resume"),
@@ -499,15 +503,12 @@ enum L10n {
         "拒绝": ("拒否", "Deny"),
         "批准执行": ("承認して実行", "Approve"),
         // 设置
-        "后端地址": ("バックエンドURL", "Backend URL"),
         "API Key": ("API Key", "API Key"),
         "AGENT_API_KEY（存入钥匙串）": ("AGENT_API_KEY（キーチェーンに保存）", "AGENT_API_KEY (stored in Keychain)"),
-        "与仓库根 .env 里的 AGENT_API_KEY 相同；后端未启用鉴权时留空。":
-            ("リポジトリ直下 .env の AGENT_API_KEY と同じ。認証無効時は空欄。",
-             "Same as AGENT_API_KEY in repo-root .env; leave empty if auth is off."),
-        "本机运行填回环地址；跨设备走 Tailscale：推荐在 Mac 上 `tailscale serve` 反代 14159，这里填 https://<mac>.<tailnet>.ts.net":
-            ("同一Mac上なら 127.0.0.1。他デバイスからは Tailscale 経由：Mac 側で `tailscale serve` を推奨、ここに https://<mac>.<tailnet>.ts.net",
-             "Use loopback when local; across devices use Tailscale: run `tailscale serve` on the Mac and enter https://<mac>.<tailnet>.ts.net"),
+        "与仓库根 .env.local 里的 AGENT_API_KEY 相同；后端未启用鉴权时留空。":
+            ("リポジトリ直下 .env.local の AGENT_API_KEY と同じ。認証無効時は空欄。",
+             "Same as AGENT_API_KEY in repo-root .env.local; leave empty if auth is off."),
+        "后端密钥已自动生成并同步": ("バックエンドのキーは自動生成・同期済みです", "Backend key generated and synced automatically"),
         "测试连接": ("接続テスト", "Test Connection"),
         "测试中…": ("テスト中…", "Testing…"),
         "❌ 地址无效": ("❌ URLが無効です", "❌ Invalid URL"),
@@ -540,9 +541,6 @@ enum L10n {
         "使用外部后端（devctl）/ 稍后配置":
             ("外部バックエンド（devctl）を使う / 後で設定",
              "Use external backend (devctl) / configure later"),
-        "填入你 Mac 上运行的后端地址与 AGENT 密钥。":
-            ("Mac で稼働中のバックエンドのアドレスと AGENT キーを入力。",
-             "Enter the address and AGENT key of the backend running on your Mac."),
         "外观": ("外観", "Appearance"),
         "语言": ("言語", "Language"),
         "跟随系统": ("システムに従う", "System"),
@@ -823,8 +821,6 @@ enum L10n {
         "已连接设备记录损坏，需要重新连接 iPhone。": ("接続済みデバイスの記録が破損しています。iPhone を再接続してください。", "The connected-device record is damaged; reconnect your iPhones."),
         "发出这条审批的 Mac 已不在列表里，审批未送达。": ("この承認を送った Mac は一覧にないため、承認は届いていません。", "The Mac that sent this approval is no longer in your list, so the decision was not delivered."),
         "也可以在 Mac 的「设置 → 连接 → 连接 iPhone」中显示配对二维码，用 iPhone 相机扫描。": ("Mac の「設定 → 接続 → iPhone を接続」でペアリング用 QR コードを表示し、iPhone のカメラで読み取ることもできます。", "You can also show a pairing QR code in the Mac's Settings → Connection → Connect iPhone and scan it with the iPhone camera."),
-        "通常不必手填：用上方 iCloud 同步或扫码配对。手填时写 Mac 上 `tailscale serve` 开放的地址。": ("通常は手入力不要です。上の iCloud 同期か QR ペアリングを使ってください。手入力する場合は Mac で `tailscale serve` が公開しているアドレスを入れます。", "Usually no need to type this: use iCloud sync or QR pairing above. If you do, enter the address the Mac shares with `tailscale serve`."),
-        "或者手动填入 Mac 上后端的地址与 AGENT 密钥。": ("または Mac のバックエンドのアドレスと AGENT キーを手入力します。", "Or enter the Mac backend's address and AGENT key manually."),
     ]
 }
 
