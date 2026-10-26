@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-DD="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
+DD="${DEVELOPER_DIR:-$(xcode-select -p)}"   # 默认跟随 xcode-select（Xcode-beta 已不在；想换版本用 DEVELOPER_DIR 覆盖）
 
 xcodegen generate
 DEVELOPER_DIR="$DD" xcodebuild \

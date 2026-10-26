@@ -17,7 +17,7 @@ RUNTIME="$ROOT/build/runtime"
 [ -x "$RUNTIME/bin/python3.13" ] || {
   echo "❌ 缺 $RUNTIME——先跑 scripts/build-runtime.sh" >&2; exit 1; }
 
-DD="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
+DD="${DEVELOPER_DIR:-$(xcode-select -p)}"   # 默认跟随 xcode-select（Xcode-beta 已不在；想换版本用 DEVELOPER_DIR 覆盖）
 
 echo "== xcodegen + Release 构建 =="
 xcodegen generate

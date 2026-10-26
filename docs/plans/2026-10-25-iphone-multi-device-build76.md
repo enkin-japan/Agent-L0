@@ -448,3 +448,17 @@ iCloud 条目出现后点选、在 Mac 上点允许）。
 
 已知、未修：macOS 设置页「保存」写回的 `keyText` 是开页时的快照（devctl / repo 布局下密钥框可见时才写），开页期间
 别处改了 `settings.apiKey` 会被旧值盖回（复审 nit 7，既有问题，本次不动）。
+
+## 15. build 77 发布（2026-10-27）
+
+- 版本号提交 `b71606b`（四门全过，已推送）。随包内容：iPhone 仅 iCloud/扫码配对（§14）、macOS 自管密钥隐藏（§14）、
+  C4 检索证据护栏重设计（§12.5）、每构建一个 Release 的发布布局（§13）。发布说明 `apple-app/releases/notes-77.md`（gitignored）。
+- macOS：`release-macos.sh` 新流程首次实跑成功——两次公证通过，Release `macos-0.16.0-77`（tag 指 b71606b，6 个资产：DMG +
+  77←72…76 五个 delta）公开并标 Latest；appcast 由 generate_appcast 保留 75/76/77 三版、URL 改写到各构建 Release，15 个地址
+  HEAD 全 200；两仓 `updates` 仍只剩 appcast.xml 且哈希与本地一致；本机已重装钉票版 77。
+- iOS：`release-ios.sh` 归档、导出、上传 App Store Connect 成功（06:27 上传），等 ASC 处理后 TestFlight 可见；本文档写时尚未确认
+  处理完成。
+- 踩坑：`bundle-macos.sh` 与 `release-ios.sh` 的 `DEVELOPER_DIR` 默认值指向已不存在的 Xcode-beta，首跑在 ① 构建处即退（无副作
+  用），显式传 `/Applications/Xcode.app/Contents/Developer` 后重跑成功。已改默认为 `xcode-select -p`（见后续提交）。
+- 真机待确认：iOS 引导页「稍后配对」后能否扫码连接；macOS 设置页在捆绑形态下显示的是状态行而非输入框；Sparkle 从 76 升 77 的
+  delta 更新是否正常（本机是重装而非 delta 升级，未验）。

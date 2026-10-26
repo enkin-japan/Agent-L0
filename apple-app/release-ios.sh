@@ -22,7 +22,7 @@ done
 ASC_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
 [ -f "$ASC_KEY_PATH" ] || { echo "❌ 找不到私钥 $ASC_KEY_PATH" >&2; exit 1; }
 
-DD="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
+DD="${DEVELOPER_DIR:-$(xcode-select -p)}"   # 默认跟随 xcode-select（Xcode-beta 已不在；想换版本用 DEVELOPER_DIR 覆盖）
 # 构建钥匙串会超时自锁，跑之前解锁
 security unlock-keychain -p "$(cat ~/.appstoreconnect/macagent-build-keychain-pass)" macagent-build.keychain
 AUTH=(
