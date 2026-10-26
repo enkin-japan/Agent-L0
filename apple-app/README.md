@@ -59,13 +59,20 @@ xcodebuild -project MacAgentClient.xcodeproj -scheme MacAgent-iOS -configuration
 
 ## macOS 下载与自动更新
 
-安装包统一发布在 [Agent-L0 Releases](https://github.com/enkin-japan/Agent-L0/releases/tag/updates)，
-应用内更新使用同一 Release 中的 Sparkle `appcast.xml`。
+每个构建一个 GitHub Release（tag `macos-<版本>-<构建号>`），放该构建的 DMG 与升到该版的
+delta 补丁；新设备装机下 [Latest Release](https://github.com/enkin-japan/Agent-L0/releases/latest)
+的 DMG。应用内更新的 Sparkle `appcast.xml` 单独放在 feed 专用的
+[`updates` Release](https://github.com/enkin-japan/Agent-L0/releases/tag/updates)——已安装 app 的
+`SUFeedURL` 指着它，这个 tag 不能改名；它只放 appcast，不放安装包（2026-10-26 整理前所有版本
+都堆在这一个 Release 里）。
 
-`./release-macos.sh` 负责构建、签名、公证及上传。先上传安装包和补丁，再更新清单。
-迁移前已安装的 build 74 及更早版本仍读取旧仓库地址，因此发布脚本会把同一份清单同步到
-旧仓库作为兼容入口；清单中的文件下载地址统一指向 `Agent-L0`。后续新构建直接使用新地址。
-迁移现有安装包时只改变下载位置，不修改已签名的二进制或覆盖同构建号的内容。
+`./release-macos.sh` 负责构建、签名、公证及上传：生成清单后先用 `appcast_release_urls.py` 把下载地址
+改写到各构建的 Release；再以草稿建本构建的 Release、上传安装包和补丁、核对远端资产的名/大小/sha256，
+核对通过才公开并标 Latest；最后把清单推到两仓的 `updates`。发布前要求工作树干净且 HEAD 已推送到
+origin/main（Release 的 tag 指向发布所用的提交）；中途失败重跑时，上次留下的草稿会被删掉重建。
+发布说明放 `releases/notes-<构建号>.md`（可选）。迁移前已安装的 build 74 及更早版本仍读取旧仓库
+地址，因此发布脚本会把同一份清单同步到旧仓库作为兼容入口；清单中的文件下载地址统一指向
+`Agent-L0`。EdDSA 签名针对文件字节，改下载地址不影响验签。
 
 ## TestFlight 发布（iOS）
 

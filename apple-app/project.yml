@@ -20,7 +20,7 @@ packages:
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
     from: "2.4.0"
-  # 应用内更新（仅 macOS target 挂）：DMG 全量 + delta 补丁走公共发布仓的滚动 release
+  # 应用内更新（仅 macOS target 挂）：DMG 全量 + delta 补丁在各构建自己的 GitHub Release
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: "2.9.6"
@@ -52,7 +52,7 @@ targets:
       path: Generated/Info-macOS.plist
       properties:
         CFBundleDisplayName: MacAgent
-        # Sparkle 更新源：公共发布仓的滚动 release（tag=updates），appcast+DMG+delta 同处
+        # Sparkle 更新源：公共发布仓 feed 专用的滚动 release（tag=updates）只放 appcast；DMG/delta 在各构建的 Release
         SUFeedURL: https://github.com/enkin-japan/Agent-L0/releases/download/updates/appcast.xml
         # EdDSA 公钥（私钥在构建机钥匙串，永不入仓库）
         SUPublicEDKey: rO8YyJT++AQ8w9YIhWVaY2YTlLvdSZIXCZrPeR1A2jI=

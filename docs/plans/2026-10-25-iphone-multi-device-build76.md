@@ -384,3 +384,23 @@ verifier 跑的完整后端套件：3304 通过、3 跳过。主循环里对被�
 - `_retrieval_incomplete()` 走 `_exit_audit`，因此像其他非回答类出口一样会丢掉云端降级/升级提示。
 - `runaway_call` 出口的追加说明没有测试钉住（预判路径下不可达）。
 - 动态 API 工具靠 `_method` 属性这个启发式识别，不是协议层面的保证。
+
+## 13. macOS 发布整理（2026-10-26，用户决定）
+
+整理前：Agent-L0 公共仓只有一个滚动 Release（tag `updates`，标 Latest），堆着 appcast.xml、build 70–76 的七个
+DMG（约 5GB）和十个 delta；旧仓 Agent-L0-macOS-app 的 `updates` 镜像 appcast 并留着 70–74 的 DMG。
+整理后：
+- 每个构建一个 Release：`macos-0.16.0-74/75/76`，tag 分别打在 52c82fd、bac3e9e、c9934c3；各放自己的 DMG 与升到
+  该版的 delta（74：3 个资产，75：4 个，76：5 个），76 标 Latest。资产名与大小与本地 `apple-app/releases/` 逐一核对。
+- `updates`（两仓）只留 appcast.xml，标题改为「Sparkle 更新源（appcast）」；已装 app 的 SUFeedURL 指着它，tag 不改名。
+- appcast 的 12 个 enclosure URL 由新脚本 `apple-app/appcast_release_urls.py` 改写到各构建的 Release（EdDSA 签的是
+  文件字节，不含 URL）；两仓 feed 与本地 appcast 哈希一致，12 个地址 HEAD 全 200。
+- 70–73 的 DMG 已不在 appcast 里，从两仓 `updates` 删除（本地 `releases/`、`old_updates/` 仍有存档）；74 的旧仓副本同删。
+- `release-macos.sh` 改为新流程：生成 appcast 后先改写 URL → 以草稿建本构建 Release（--target 当前提交）→ 上传 DMG +
+  本版 delta → 远端资产名/大小/sha256 与本地核对 → 公开并标 Latest → appcast 推两仓 `updates`。守门：发布前工作树
+  必须干净且 HEAD 已在 origin/main 上（tag 要指向发布所用提交）；重复构建号按发布列表判且 gh 出错即停（不再
+  fail-open）；上次失败留下的草稿删掉重建；origin 已有同名 tag 且指向别的提交则拒绝。发布说明可放
+  `releases/notes-<build>.md`。改写器对六类畸形输入（外域地址、单引号外域、指向他版的 delta、与 sparkle:version
+  不符、releaseNotesLink 仍指 updates、`../..` 仓名）均拒绝且不改文件（reviewer 首审后补的反向用例）。README、
+  project.yml 与 MacAgentApp.swift 的注释同步更新。
+- 本机验证：feed 可解析（3 条目、12 enclosure），本机装的 76 即 Latest，无更新可提示；新脚本的真实首跑要等 build 77。

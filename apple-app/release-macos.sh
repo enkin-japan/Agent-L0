@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # macOS 发布管线：bundle-macos.sh（构建，SKIP_INSTALL）→ app 公证+钉票 → DMG →
-#   DMG 公证+钉票 → Sparkle appcast（自动含 delta 补丁）→ 推送公共发布仓的滚动
-#   release（tag=updates）→ 本机重装钉票版。
+#   DMG 公证+钉票 → Sparkle appcast（自动含 delta 补丁）→ 本构建自己的 GitHub Release
+#   （tag=macos-<ver>-<build>，放 DMG + 升到本版的 delta）→ appcast 的下载地址改写到
+#   各构建的 Release → appcast.xml 推到 feed 专用的滚动 release（tag=updates，两仓）→
+#   本机重装钉票版。
 #
-# 分发模型（用户 2026-08-30 拍板）：
-#   - 新设备装机 = 从发布仓下最新 MacAgent-<ver>-<build>.dmg，双击拖装（app 与 DMG
-#     双层公证钉票，离线首启也过 Gatekeeper）；
-#   - 老设备更新 = app 内 Sparkle 自动提示，只下 delta（内嵌运行时不变则远小于全量）。
+# 分发模型（用户 2026-08-30 拍板；2026-10-26 改为每构建一个 Release）：
+#   - 新设备装机 = 从发布仓 Latest Release 下 MacAgent-<ver>-<build>.dmg，双击拖装（app 与
+#     DMG 双层公证钉票，离线首启也过 Gatekeeper）；
+#   - 老设备更新 = app 内 Sparkle 自动提示，只下 delta（内嵌运行时不变则远小于全量）；
+#   - `updates` release 只放 appcast.xml：已装 app 的 SUFeedURL 烤死在那里，不能动；
+#     DMG/delta 各归各构建的 Release，appcast 里的 URL 由 appcast_release_urls.py 改写
+#     （EdDSA 签的是文件字节，不含 URL，改地址不影响验签）。
 # ⚠️ 公开面：发布仓是 PUBLIC，DMG 内是完整 app（含内嵌 backend 源码）——等于公开这些
 #   内容（用户已知情接受）。密钥红线不变：.p8/.env*/EdDSA 私钥一个字节不进包不进仓；
 #   本脚本任何输出不得回显 .env 值（失败提示只给 submission id，凭据自己去 .env.local 看）。
@@ -21,8 +26,9 @@
 #   （缺了按下面报错里的指引取，版本与 project.yml 钉的 Sparkle 一致）。
 # 本地存档：releases/（gitignored）。generate_appcast 默认只保 3 个版本做 delta 基线，
 #   更老的自动挪进 releases/old_updates/——那是工具自己的归档动作，不是病；old_updates
-#   可手动清理换磁盘。GitHub 滚动 release 每版累积约 1G，攒多了手动删旧 DMG 资产即可
-#   （appcast 里已不引用的版本删了无害）。
+#   可手动清理换磁盘。GitHub 上每个构建一个 Release（约 700M），appcast 已不引用的旧构建
+#   Release 删了无害（不删也只是占空间）。发布说明：releases/notes-<build>.md 存在则用它，
+#   否则用默认一句话。
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -30,6 +36,7 @@ RELEASE_REPO="enkin-japan/Agent-L0"
 # 已安装的 build 74 及更早版本仍请求旧 feed；仅镜像 XML，文件统一从新仓库下载。
 LEGACY_RELEASE_REPO="enkin-japan/Agent-L0-macOS-app"
 FEED_TAG="updates"
+# generate_appcast 只认一个前缀；先按它写，⑤ 末尾再按文件名改写到各构建的 Release。
 DL_PREFIX="https://github.com/${RELEASE_REPO}/releases/download/${FEED_TAG}/"
 SPARKLE_BIN="build/sparkle-tools/bin"
 ARCHIVE_DIR="releases"
@@ -69,6 +76,16 @@ notarize() {  # $1 = 待公证文件
   echo "   公证通过（${subid}）"
 }
 
+# Release 的 tag 打在当前提交上：脏树发出去的包对不上任何提交，先提交再发；提交还得已在
+# origin 上，否则 GitHub 建不出指向它的 tag（放在公证之前：一秒钟能拦下的事不要花十分钟
+# 公证完再发现）。
+[ -z "$(git status --porcelain)" ] || {
+  echo "❌ 工作树有未提交改动或未跟踪文件（git status）——Release tag 要指向发布所用的提交，先提交/清理" >&2; exit 1; }
+RELEASE_COMMIT="$(git rev-parse HEAD)"
+git fetch --quiet origin || { echo "❌ git fetch origin 失败（网络/鉴权）" >&2; exit 1; }
+git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main \
+  || { echo "❌ HEAD（${RELEASE_COMMIT:0:7}）尚未推送到 origin/main——先 push 再发布" >&2; exit 1; }
+
 echo "== ① 构建（bundle-macos.sh，跳过其安装段——本机装机延到⑦装钉票版）=="
 SKIP_INSTALL=1 ./bundle-macos.sh
 
@@ -77,13 +94,31 @@ VER=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")
 BUILD=$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")
 DMG_NAME="MacAgent-${VER}-${BUILD}.dmg"
 DMG="$ARCHIVE_DIR/$DMG_NAME"
+RELEASE_TAG="macos-${VER}-${BUILD}"
 
-# 防覆盖已发布版本（首审 S4）：同名资产已在滚动 release 上 = 这个构建号发过了，
-# 老设备的 delta 基线会被悄悄换掉——必须提版本号，不许原地重发。
-if gh release view "$FEED_TAG" -R "$RELEASE_REPO" --json assets \
-     --jq '.assets[].name' 2>/dev/null | grep -qxF "$DMG_NAME"; then
-  echo "❌ ${DMG_NAME} 已经发布过——提 project.yml 的 CURRENT_PROJECT_VERSION 再来" >&2
-  exit 1
+# 防覆盖已发布版本（首审 S4）：这个构建号的 Release 已存在 = 发过了，老设备的 delta
+# 基线会被悄悄换掉——必须提版本号，不许原地重发。查的是发布列表（查不到就停，不许把网络/
+# 鉴权错误当"没发过"）；上次中途失败留下的草稿不对外，删掉重来。
+# 同名条目的 published/draft 计数（gh 自带 --jq，不另依赖 jq；gh 失败即停）。
+RELEASE_STATE="$(gh release list -R "$RELEASE_REPO" --limit 200 --json tagName,isDraft \
+    --jq "map(select(.tagName==\"${RELEASE_TAG}\")) | \"\(map(select(.isDraft|not))|length) \(map(select(.isDraft))|length)\"")" \
+  || { echo "❌ 读不到 ${RELEASE_REPO} 的发布列表（gh 网络/鉴权）" >&2; exit 1; }
+case "$RELEASE_STATE" in
+  [1-9]*) echo "❌ ${RELEASE_TAG} 已经发布过——提 project.yml 的 CURRENT_PROJECT_VERSION 再来" >&2; exit 1 ;;
+  "0 0") : ;;
+  "0 "*) echo "   上次失败留下的草稿 ${RELEASE_TAG}，删掉重建（连同上次算出的本版 delta，免得新旧字节混用）"
+         while [ "$(gh release list -R "$RELEASE_REPO" --limit 200 --json tagName,isDraft \
+                   --jq "map(select(.tagName==\"${RELEASE_TAG}\" and .isDraft)) | length")" != 0 ]; do
+           gh release delete "$RELEASE_TAG" -R "$RELEASE_REPO" -y
+         done
+         rm -f "$ARCHIVE_DIR"/MacAgent"${BUILD}"-*.delta ;;
+  *) echo "❌ 发布列表返回了看不懂的内容：${RELEASE_STATE}" >&2; exit 1 ;;
+esac
+# tag 已存在而无 Release（手工迁移遗留）时 gh 会沿用它并忽略 --target：只接受指向同一提交的
+# （附注 tag 取剥离后的 ^{} 行，即提交 SHA；轻量 tag 只有一行）。
+REMOTE_TAG="$(git ls-remote --tags origin "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}" | tail -1 | cut -f1)"
+if [ -n "$REMOTE_TAG" ] && [ "$REMOTE_TAG" != "$RELEASE_COMMIT" ]; then
+  echo "❌ origin 已有 tag ${RELEASE_TAG} 指向 ${REMOTE_TAG:0:7}，不是当前 HEAD——先处理这个 tag" >&2; exit 1
 fi
 
 # 签名门（首审 S1/S3）：尊重环境 SIGN_ID（与 bundle-macos.sh 同语义），
@@ -135,23 +170,50 @@ echo "== ⑤ 生成 appcast（EdDSA 签名 + delta 补丁）=="
 # 钥匙串私钥给每个条目签名（客户端用 SUPublicEDKey 验签）。超过保留数的老版本会被它
 # 自动挪进 releases/old_updates/。
 "$SPARKLE_BIN/generate_appcast" --download-url-prefix "$DL_PREFIX" "$ARCHIVE_DIR"
+# 每个条目改指自己构建的 Release（映射不全或仍指 updates 即失败，不许半改）。
+python3 ./appcast_release_urls.py "$ARCHIVE_DIR/appcast.xml" "$RELEASE_REPO"
 
-echo "== ⑥ 推送公共发布仓（${RELEASE_REPO} · tag=${FEED_TAG}）=="
-gh release view "$FEED_TAG" -R "$RELEASE_REPO" >/dev/null 2>&1 || \
-  gh release create "$FEED_TAG" -R "$RELEASE_REPO" \
-    --title "MacAgent 更新通道" \
-    --notes "滚动更新通道：appcast.xml（Sparkle 订阅源）+ 各版本 DMG + delta 补丁。新设备装机请下最新的 MacAgent-<版本>-<构建号>.dmg。"
+echo "== ⑥ 发布 ${RELEASE_REPO} · ${RELEASE_TAG}（DMG + 本版 delta），再推 feed（tag=${FEED_TAG}，两仓）=="
+NOTES_FILE="$ARCHIVE_DIR/notes-${BUILD}.md"
+if [ -f "$NOTES_FILE" ]; then notes_args=(--notes-file "$NOTES_FILE");
+else notes_args=(--notes "MacAgent ${VER} (build ${BUILD})。安装包已签名并经 Apple 公证；已安装用户由应用内 Sparkle 自动更新。"); fi
+[ "$(git rev-parse HEAD)" = "$RELEASE_COMMIT" ] || { echo "❌ 发布期间 HEAD 变了——tag 会对不上构建" >&2; exit 1; }
+# 先建草稿（对外不可见、不占 Latest），资产齐了、核对过了再公开：半截上传不许变成新装机入口，
+# 失败重跑时草稿会被上面的守门删掉重建（首审 Major 1）。
+gh release create "$RELEASE_TAG" -R "$RELEASE_REPO" --target "$RELEASE_COMMIT" --draft \
+  --title "MacAgent ${VER} (${BUILD})" "${notes_args[@]}"
 UPLOADS=("$DMG")
 n_delta=0
-for d in "$ARCHIVE_DIR"/*.delta; do [ -e "$d" ] && { UPLOADS+=("$d"); n_delta=$((n_delta+1)); }; done
+# 只上传升到本版的 delta（MacAgent<build>-<from>.delta）；旧版的 delta 已在各自的 Release 里。
+for d in "$ARCHIVE_DIR"/MacAgent"${BUILD}"-*.delta; do [ -e "$d" ] && { UPLOADS+=("$d"); n_delta=$((n_delta+1)); }; done
 # delta 是显式发布目标（补丁式更新）：零 delta 要说出来，回归不许静默（复审 nit）。
 # 注：脏基线（≤71 版，运行时带 dSYM xattr）做 before-tree 时 generate_appcast 照旧
 # 差分失败——首份 delta 预期出现在两侧都是净树的版本对（72→73），见 bundle-macos.sh。
 [ "$n_delta" -gt 0 ] || echo "   ⚠️ 本次无 delta 补丁（老设备将全量下载）"
 # 文件全部上传成功后才发布 feed，避免客户端看到尚不可下载的版本。
-gh release upload "$FEED_TAG" -R "$RELEASE_REPO" --clobber "${UPLOADS[@]}"
+gh release upload "$RELEASE_TAG" -R "$RELEASE_REPO" --clobber "${UPLOADS[@]}"
+# 远端资产名、大小、sha256 须与本地一致（上传半截的 DMG 验签必败，宁可在这里停）。
+ASSET_CHECK="$(mktemp -d "${TMPDIR:-/tmp}/release-assets.XXXXXX")"
+for f in "${UPLOADS[@]}"; do
+  echo "$(basename "$f") $(stat -f %z "$f") sha256:$(shasum -a 256 "$f" | cut -d' ' -f1)"
+done | sort > "$ASSET_CHECK/local"
+gh release view "$RELEASE_TAG" -R "$RELEASE_REPO" --json assets \
+    --jq '.assets[] | "\(.name) \(.size) \(.digest)"' | sort > "$ASSET_CHECK/remote" \
+  || { echo "❌ 读不到 ${RELEASE_TAG} 的远端资产列表（gh 网络/鉴权）——草稿未公开，feed 未更新" >&2; exit 1; }
+diff "$ASSET_CHECK/local" "$ASSET_CHECK/remote" >/dev/null \
+  || { echo "❌ ${RELEASE_TAG} 远端资产与本地不一致（名/大小/sha256）——草稿未公开，feed 未更新，对照 ${ASSET_CHECK}/{local,remote}" >&2; exit 1; }
+rm -rf "$ASSET_CHECK"   # 只在不一致时才需要留着看
+# 公开并标 Latest。草稿的下载地址不可用，必须先公开再推 feed。
+gh release edit "$RELEASE_TAG" -R "$RELEASE_REPO" --draft=false --latest >/dev/null
+# feed 专用 release：只放 appcast.xml。已装 app 的 SUFeedURL 指着它，tag 名不能变。
+gh release view "$FEED_TAG" -R "$RELEASE_REPO" >/dev/null 2>&1 || \
+  gh release create "$FEED_TAG" -R "$RELEASE_REPO" --latest=false \
+    --title "Sparkle 更新源（appcast）" \
+    --notes "应用内更新订阅源 appcast.xml。安装包与补丁在各构建自己的 Release（macos-<版本>-<构建号>）；新设备装机请下 Latest Release 的 DMG。"
 gh release upload "$FEED_TAG" -R "$RELEASE_REPO" --clobber "$ARCHIVE_DIR/appcast.xml"
-# 保留旧客户端的更新入口。XML 中的下载 URL 仍由 DL_PREFIX 指向正式仓库。
+STRAY="$(gh release view "$FEED_TAG" -R "$RELEASE_REPO" --json assets --jq '.assets[].name' | grep -vx appcast.xml || true)"
+[ -z "$STRAY" ] || echo "   ⚠️ ${FEED_TAG} 下有 appcast.xml 以外的资产（应只放 feed）：$(printf '%s' "$STRAY" | tr '\n' ' ')"
+# 保留旧客户端的更新入口。XML 中的下载 URL 已指向正式仓库各构建的 Release。
 gh release upload "$FEED_TAG" -R "$LEGACY_RELEASE_REPO" --clobber "$ARCHIVE_DIR/appcast.xml" || {
   echo "❌ 正式仓库已发布，但旧版 Sparkle 兼容 feed 同步失败；请补传 appcast.xml 后再结束发布。" >&2
   exit 1
@@ -174,5 +236,5 @@ xcrun stapler validate /Applications/MacAgent.app >/dev/null \
 echo "   本机已重装钉票版 → /Applications/MacAgent.app"
 
 echo "== done：v${VER}（${BUILD}）已发布 =="
-echo "   新装机：${DL_PREFIX}${DMG_NAME}"
+echo "   新装机：https://github.com/${RELEASE_REPO}/releases/tag/${RELEASE_TAG}（${DMG_NAME}）"
 echo "   应用内更新：装有本版及以后版本的设备将经 appcast 自动收到提示（delta 优先）"

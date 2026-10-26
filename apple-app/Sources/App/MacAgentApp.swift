@@ -5,7 +5,7 @@ import Sparkle
 
 #if os(macOS)
 /// 应用内更新（Sparkle 2）：feed/公钥在 Info.plist（SUFeedURL/SUPublicEDKey），
-/// 更新包由 release-macos.sh 公证后连同 appcast 推到公共发布仓的滚动 release。
+/// 更新包由 release-macos.sh 公证后发到本构建的 GitHub Release，appcast 推到 feed 专用的滚动 release。
 /// 文件级单例：主窗口菜单与菜单栏常驻面板两个入口共用同一个 updater，
 /// 且保证 App 结构体重建时不会重复实例化（Sparkle 要求进程内唯一）。
 @MainActor let sparkleUpdater = SPUStandardUpdaterController(
