@@ -31,10 +31,11 @@ struct DenyApprovalIntent: LiveActivityIntent {
     }
 
     func perform() async throws -> some IntentResult {
-        // 多 Mac：活动来自哪台就回给哪台（PhoneLink 的列表与 mac-key.<id>），认不出退回当前连接
-        // 规则同 MacDirectory.approvalTarget（本文件也编进 widget，不能引用它）
+        // 多 Mac：活动来自哪台就回给哪台（PhoneLink 的列表与 mac-key.<id>），规则见 ApprovalRouting
         let target: (id: String, url: URL)?
-        switch Self.resolve(src: src) {
+        let defaults = UserDefaults.standard
+        switch ApprovalRouting.intentTarget(list: defaults.data(forKey: "phone.macs"),
+                                            currentId: defaults.string(forKey: "phone.currentMac"), src: src) {
         case .refuse: return .result()
         case .legacy: target = nil
         case .mac(let id, let url): target = (id, url)
@@ -65,31 +66,6 @@ struct DenyApprovalIntent: LiveActivityIntent {
               let u = URL(string: s.trimmingCharacters(in: .whitespacesAndNewlines)),
               u.scheme != nil else { return nil }
         return u
-    }
-
-    private enum Target {
-        case legacy                     // 没有 Mac 列表 / 不带来源：当前连接（agent.baseURL）
-        case mac(String, URL)           // 列表里的那一台（mac-key.<id>）
-        case refuse                     // 认不出来源，而当前是另一台已知 Mac：不发
-    }
-
-    /// PhoneLink 存的 Mac 列表（UserDefaults phone.macs / phone.currentMac）。
-    private static func resolve(src: String?) -> Target {
-        struct Saved: Decodable { let id: String; let macId: String?; let url: String }
-        let defaults = UserDefaults.standard
-        guard let data = defaults.data(forKey: "phone.macs"),
-              let list = try? JSONDecoder().decode([Saved].self, from: data), !list.isEmpty
-        else { return .legacy }
-        let current = list.first { $0.id == defaults.string(forKey: "phone.currentMac") }
-        let chosen: Saved?
-        if let src {
-            chosen = list.first { $0.macId == src } ?? (current?.macId == nil ? current : nil)
-        } else {
-            chosen = current
-        }
-        guard let chosen else { return .refuse }
-        guard let url = URL(string: chosen.url), url.scheme != nil else { return .refuse }
-        return .mac(chosen.id, url)
     }
 
     /// nil = 当前连接的密钥（agent-api-key）；否则该 Mac 的 mac-key.<id>。

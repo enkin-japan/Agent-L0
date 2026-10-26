@@ -78,7 +78,8 @@ INT4 权重，自带原生 MTP 头，无需另下 MLX drafter；`--quantization 
 
 默认组合的依据：2026-10-24 在 A100 40GB 上以 Qwen3.8-27B INT4 + MTP 3、上下文 65536、显存 0.72 启动，
 权重 18.5 GiB，vLLM 报 KV cache 101,344 token，即单请求 65,536 token 的 1.55 倍，加载与鉴权检查均通过
-（该次 VM 随后因本机 DNS 缓存被误回收，没有测吞吐；吞吐数据见下方 32768 / 0.85 的记录）。
+（该次 VM 随后因本机 DNS 缓存被误回收，没有测吞吐；吞吐数据见下方 32768 / 0.85 的记录）。验证脚本见
+`benchmarks/qwen-deployment/`；结果原件在本机 `logs/qwen-deployment/`（Git 忽略，未发布）。
 
 Qwen+MTP 的 auto 解析为 **TRITON_ATTN + bfloat16**（此前 A100 实测的组合）；其他模型保持原有 auto 行为。
 MTP 只允许注册表明确声明 `supports_mtp` 的模型。服务并发与 vLLM `max_num_seqs` 均设为 1，避免只限 HTTP
@@ -130,7 +131,11 @@ Colab 自身仍可能回收实例，Mac 休眠/断网也会中断监督；手动
   设备或会话。状态更新使用独立文件锁，关停后到达的旧进度不能把租约重新标为运行中。
 - 完整关停另有互斥锁：另一进程正在关停时等待其结果，成功则退出，失败或中断则接手。回收期间屏蔽重复中断
   信号，最多三轮尝试，只有服务端端点消失才打印释放确认；否则记录 `release-unconfirmed`，阻止重建，
-  不能视为已回收，需重试 `stop`。启动的收尾即使本地状态文件丢失或损坏，也按本进程所知的租约回收已分配的 VM。
+  不能视为已回收，需重试 `stop`。例外：`colab new` 自己报错（无 A100、配额、网络）且服务端随后既无本会话也无
+  身份不明的 `?` VM 时，收尾直接记 `stopped`；`new` 超时这类说不清服务端有没有分配的情况仍保持
+  `release-unconfirmed`，人工核对 `colab sessions` 确认没有本工具的 VM 后用 `stop --confirm-unallocated`
+  清除本地租约（服务端仍有同名或 `?` VM 时照旧拒绝）。启动的收尾即使本地状态文件丢失或损坏，也按本进程所知的
+  租约回收已分配的 VM。
 - 预检查期间 `stop` 会阻止后续申请 VM；分配期间 Ctrl+C 会等当前申请返回（上限 120 秒）并记录端点后立即回收。
 - 关停先尝试 `tailscale logout`，无论成败都释放已知端点并核对服务端。`current.json` 分开记录 VM 状态与
   `tailnet_cleanup`：`ephemeral-logout-confirmed` 表示临时节点注销成功；`logout-unconfirmed` 表示未确认，
@@ -204,7 +209,7 @@ A100 上 NVFP4 实际走 Marlin W4A16，不是原生 FP4/FP8 运算。2026-10-23
 OpenAI 门面与生成期间拒绝切换均有验收；本机 `RemoteBackend` 经 Tailnet 的请求也确认草稿 129 / 接受 107 token。
 注意：该轮工具解析验收是关闭思考的单段生成；开启思考的两段式生成在 MTP 下会丢失工具调用开头的问题，已在
 `backend/framework/backends/cuda/backend.py` 修复（`_trim_after_stop`），随下一次 `switch` / `start`
-上传到 VM 后生效。结果原件在本机 `logs/qwen-deployment/`
+上传到 VM 后生效。生成本表的脚本见 `benchmarks/qwen-deployment/`；结果原件在本机 `logs/qwen-deployment/`
 （Git 忽略，未发布）。合成基准不等同于所有 App 请求或多模态负载的性能保证。
 
 ## 代码结构

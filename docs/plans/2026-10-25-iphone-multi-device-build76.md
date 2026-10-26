@@ -1,6 +1,6 @@
 # 计划：iPhone ↔ Mac 多对多连接 + 合并版界面 → build 76
 
-> 状态：**已获用户批准，待执行**（2026-10-25）。用户原话：「A和B，以及前面的一起，按你的建议做，但是先将计划落盘，等我压缩一下上下文之后再做」。
+> 状态：**已发布（build 76，2026-10-25）；2026-10-26 完成阶段复审，见 §12**。用户原话：「A和B，以及前面的一起，按你的建议做，但是先将计划落盘，等我压缩一下上下文之后再做」。
 > 「按你的建议」意味着：Phase B **先出设计、用户确认后才动代码**；其余按本文顺序推进。
 > 恢复执行时先读完本文，再跑 `./devctl.sh preflight`。
 
@@ -188,7 +188,7 @@ Phase 0（盘点 → 逐组审查提交）→ Phase A → 出 Phase B 设计 →
 - **C4 检索证据护栏**（`backend/framework/core/orchestrator.py`、`retrieval_evidence.py`、`backend/tests/test_retrieval_evidence_guard.py`、`run_retrieval_guard_mutations.py`）：留在工作区，未提交。
   - 原因：设计层面有问题。一次知识库检索失败后，`_is_local_mutation`（判据是「非只读」）会把 shell 命令连同只读的 `ls` 一起拦下；换个说法重新检索也消不掉待定状态；而且它会与去重拦截相撞，导致一次偶发失败就让整轮无法恢复。
   - 建议：只拦截真正产出内容的工具（如图表、文件写入），允许换个说法重新检索后解除；如果改不好，就丢掉。
-- **阶段全盘复审（stage-reviewer）**：用户决定搁置。本阶段一共改了 114 个文件，建议之后补跑，范围 `c9e2772..c9934c3`。
+- **阶段全盘复审（stage-reviewer）**：用户决定搁置。本阶段一共改了 114 个文件，建议之后补跑，范围 `78e1660^..0a2aac9`（5 条提交、161 个文件）。
 - **推送远端**：`bac3e9e` 和 `c9934c3` 都只在本地。
 - **`.codex/` 与 `AGENTS.md`**：属于 Codex 侧的配置，归属不明，未提交。
 
@@ -215,7 +215,7 @@ Phase 0（盘点 → 逐组审查提交）→ Phase A → 出 Phase B 设计 →
    - 附件同步期间，正文同步要等它完成。
    - `MarkdownText` 每次增量渲染都在主线程做一次完整的 cmark 解析，长代码块的流式输出可能变慢。
    - 本地缓存分区用的是未加盐的密钥 sha256。
-6. **CUDA**（C2）：嵌入式的 v0 `AsyncLLMEngine` 不一定注册了 v1 的 Prometheus 计数器，投机解码指标可能一直显示 `counters_missing`；`/metrics` 每次抓取都会触发一次 `do_log_stats`。需要在下次真实部署时确认，必要时改为缓存快照。
+6. **CUDA**（C2）：`/metrics` 每次抓取都会触发一次 `do_log_stats`，需要在下次真实部署时确认，必要时改为缓存快照。「投机解码指标可能一直显示 `counters_missing`」已证伪关闭：`colab/README.md`:203-204 的实测显示 `status=observed`，草稿 129 / 接受 107，计数器确实注册并更新。
 7. **其他小问题**：
    - `device_expired` 没有单独的提示文案，到期与被移除显示同一句话；
    - `GET /pair/ticket` 有副作用（首次请求会生成凭据）；
@@ -224,8 +224,100 @@ Phase 0（盘点 → 逐组审查提交）→ Phase A → 出 Phase B 设计 →
    - `/health` 对外暴露 `data_ready`、`compute_ready`、`compute_state` 三个状态字段（不需要鉴权）；
    - RAG 每次查询会产生 20–40 行 INFO 日志；
    - README 里的 CUDA 环境变量说明还停留在旧版本。
+8. **RAG CPU 主机默认 fp32**（C3，见第 8 节 :147）：未处理，保留默认，原因：待用户决定。
+9. **变异证明脚本未入库**：Phase A 16 个、Phase B 26 个、C5 13+3 个、`bac3e9e` 的 M1-8/S1-8 变异证明脚本
+   未入库，scratchpad 已清空，无法复算；本次复审新增的三份变异脚本已在工作树（未提交）
+   （`backend/tests/run_pairing_push_mutations.py`、`backend/tests/run_shell_exec_secret_mutations.py`、
+   `apple-app/Tests/run_build76_review_mutations.sh`）。
 
 ### 11.4 本次顺带修复的既有测试缺陷（已在 c9934c3 中）
 - `test_batch_lane.py::test_decoding_count_gauge_distinct_from_active`：没有显式指定 `max_tokens`，被默认值 4096 截断，导致在这台机器上必定失败。
 - `apple-app/Tests/task_control_test.swift` 的 `takeHeld()`：存在竞态，高负载下会在空队列上崩溃。
+
+## 12. 2026-10-26 阶段复审
+
+范围：`78e1660^..0a2aac9`（见 §11.1）。下列发现均已在工作树修复（2026-10-26，未提交）或保留待定；
+修复详情见对应 commit message。
+
+### Major（已在工作树修复，2026-10-26，未提交）
+- **A1** `colab/compute_ctl.py:826-830`→`:612-622`：`colab new` 干净失败后 `allocation_attempted` 已置位，
+  `stop` 永远记 `release-unconfirmed`，`start` 被拒，只能手删 `.colab-compute/current.json`；`finally`
+  里的错顶替了原始 `CalledProcessError`。
+- **A2** `colab/README.md:79-81,:187-208`：吞吐与 64K 依据的脚本和原件只在 gitignored 目录（见第 1 节）。
+- **B1** `backend/framework/api/routes.py:583-592`、`pairing.py:360-367`、`devices.py:160-169`：推送条目绑死
+  首个票据，同机重配对（到期或重扫码）后 `prefs`/`live-activity`/`register` 全 403；到期设备仍收推送；
+  `_drop_push` 无条件删条目。
+- **B2** `backend/framework/mcp/tools/shell_exec.py:95,:115,:139,:584`：工具子进程继承全部环境变量；
+  `cat .env.local`/`grep -r` 免审批可读密钥文件；输出无脱敏（根因 71c1a01/3b2d4d6，早于本阶段；`ps -E` 在
+  macOS 27 实测不显示环境，原报告机制修正）。
+- **B3/C2** `apple-app/Sources/App/PhoneLink.swift:903-906`：`expose()` 不检查密钥，空钥 repo 布局下
+  `tailscale serve` 把免鉴权 owner 接口暴露给整个 tailnet；`app.py:253` 护栏只看绑定地址。
+- **C1** `apple-app/Sources/Store/OfflineAssetStore.swift:179`、`OfflineHistoryStore.swift:45-52`：缓存按
+  地址+密钥哈希分区，换票据后旧分区永不回收，1G/5G 预算仅限当前分区。
+- **C3** 变异证明脚本未入库：已在工作树（未提交）新增三份（见 §11.3#9）。
+
+### Minor（已在工作树修复，2026-10-26，未提交）
+A-2 `compute_common.py:85-95` `A=#foo` 读成空串与注释矛盾；B-m1 吊销不停正在进行的灵动岛；B-m2
+`app.py:917/919` 就绪闸没有测试钉住；B-m3 `/pair/request`、`/pair/poll` 的 no-store 无断言；B-m4
+`PROTOCOL.md` 漏 `DELETE /pair/self`、`503 compute_not_ready`、`/health` 新字段、`offline-files` 路由、
+推送 403 归属规则，「一律 no-store」不实；B-m8/C-11 `phone_link_test.swift` 真实 tailnet 名；B-m9
+`compute_lifecycle.py:182,199-202` 日志量；C-m1 停止开放竞态；C-m2 界面文案 75 版口径；C-m4 iOS 重试按钮被
+dismiss 取消；C-m6 锁屏后台抹掉离线索引；C-m7 票据 Keychain 非 ThisDeviceOnly；C-m8 升级重试/轮询无上限；
+C-m9 `bundle-macos.sh` 排除清单缺 `/push/` 与 `/registrations/`；C-m12 `ApprovalIntents` 重写
+`approvalTarget` 规则；A-m4/5/6、C-m13 文档修正（本节与第 1、2 节）。
+
+### Minor（保留待用户决定）
+A-m1 `78e1660`/`c9e2772` 单独检出不可部署（历史，HEAD 已一致）；B-m5 设计稿 §7「仍有 N 台旧方式连接」
+无落点、:106 与 `pairing.py:121` 保留 `api_key` 别名不符；B-m6 残留 11.3#4(3) 描述的状态进程内不可达；
+C-m5 Mac 端同意框在设置页 sheet 下可能看不见；C-m10 `asc-macos-profile.py:112-132` 保留旧描述文件不核对
+证书。
+
+本次复审新发现，追加到本列表：
+- **(a)** shell 工具对绝对路径整片目录的递归搜索（如 `grep -r KEY /Volumes/enkin/project/Agent`）仍免审批，
+  只剩输出脱敏兜底。
+- **(b)** 到期的设备票据自己仍无法注销（`DELETE /push/devices`、`/pair/self` 返回 401），已由发送侧跳过
+  到期设备缓解。
+- **(c)** 重新配对以自报 `push_device_id` 认同一部手机：首审后已收紧为「只取代**已到期**的同 push id
+  旧记录；接管推送条目还要求调用方自己记录里的 push_device_id 与条目一致」，仍有效的票据不会被自报 id 顶掉
+  （旧票据仍有效时重新配对改由 iPhone 先调 `DELETE /pair/self` 注销）。残余面：已获 Mac 同意、且知道别人
+  push id 的设备，可在对方票据到期后接管其推送条目；push id 从不出现在任何响应里，需先泄露。
 - `apple-app/Tests/service_credentials_test.swift`：补上 `ConnectionSource` 桩（这个类型已移到 PhoneLink.swift）。
+
+### 12.4 两道门之后的追加修复（2026-10-26，已在工作树，未提交）
+
+首审（reviewer）对上述修复又提出 2+2+5 条 Major 与若干 Minor，处置如下：
+
+- colab：`colab new` 非零退出不等于服务端没分配——记 `stopped` 前 `_confirm_no_allocation` 连续三次
+  （间隔 5 s）核对服务端既无本会话也无 `?` VM；`stop --confirm-unallocated` 只对本次调用生效、不落盘；
+  启动失败的日志不再可能顶替原始异常。`compute_common` 的 `.env` 解析：`x\ #c` 保留 `#`，未引号的
+  `; & | < > ( ) \`` 一律拒绝。
+- backend 配对/推送：只取代**已到期**的同 push_device_id 旧记录；接管推送条目要求调用方记录的
+  push_device_id 与条目一致；`_adopt_push` 失败不影响发票据；跳过日志按 owner 300 s 节流；灵动岛发送前
+  按 token 快照复核（关掉通知的 iPhone 没有注册表条目，不能按"条目缺失"跳过）。
+- shell 工具：递归读取类命令（grep -r/-d recurse、rg/ag/ack、diff -r）的每个搜索根解析为绝对路径后必须
+  严格在仓库内且不与任何已知密钥位置（`.env*`、`.hf_token_tmp`、`.keys/`、`backend/{.secrets.env,auth,
+  push,registrations}`、`.colab-compute/`、`reminder/`；家目录 `.ssh/.aws/.gnupg/.netrc/.envrc/.config/gh/
+  .docker/config.json/Library/Keychains`）有祖先/后代关系；折叠危险字符（NFKC 变形或 casefold 后含
+  ASCII 字母）审批、中文免审批；grep/rg 的模式操作数不当路径；免审批执行剔除全部密钥类变量，已审批命令
+  只剔后端四把钥（保留 HF_TOKEN/GH_TOKEN）；`ps -ef` 免审批、`ps -E`/`ps e` 审批。工具描述多了一句，
+  `model_visible_text.snap` 随之更新。
+- Swift：expose() 先向后端发无 Authorization 的 `GET /api/v1/pair/devices`，必须 401 才 serve；已开放时
+  探测失败显示持久警告（不自动关）；清理经 `OfflineCachePruner` actor 串行、`keepSet` 任一 key 为空或
+  会删光时返回 nil 整轮不删；锁屏索引读失败只跳过本轮写入、不弹横幅、历史同步整轮跳过；附件淘汰先标记
+  再删字节；5xx 一律瞬时错误；升级退避落 UserDefaults（键为地址+密钥哈希）；`stopRequested` 直到真正
+  未开放才清；换票据前先用旧票据 `DELETE /pair/self`（≤5 s，best effort；upgrade 路径手里是共享密钥，
+  不适用）。
+- 新增残留（待用户决定）：iOS 删掉最后一台 Mac 后其缓存分区不再清理（"不能删光"守卫的后果）；仓库外的
+  递归搜索一律审批（含用户其他项目）；半角片假名等兼容字符按折叠危险处理；仓库内 `.claude/worktrees/*`
+  的 backend/auth 不按密钥位置处理；iOS 换票据 / 重试弹窗 / Keychain ThisDeviceOnly 迁移只过了编译与主机
+  测试，未在模拟器实跑。
+- 终审（第二遍 reviewer）追加：shell 工具的密钥位置清单原写 `backend/.secrets.env`，而该文件实际在
+  `data_dir()/api_tools/.secrets.env`——改为整个 `backend/api_tools` 目录，并把运行时 `data_dir()` 下的
+  auth/push/registrations/api_tools 与 `~/Library/Application Support/dev.enkin.macagent` 列入；词元层也按绝对
+  路径与密钥位置比对。`stop --confirm-unallocated` 的 CLI 布线补了测试（verifier 的变异曾存活）。Swift 侧：
+  当前 Mac 曾拒绝本机后重扫其二维码时新票据未被采用（HEAD 已有，本次注销让它更易触发）、`stopRequested`
+  持久化、鉴权探测周期重探、等价性测试区分 refuse/legacy、票据键孤儿、守卫变异接进 pytest。
+- 变异证明（commit message 为正式记录）：run_pairing_push_mutations 16、run_shell_exec_secret_mutations 25、
+  run_build76_review_mutations 13（已接进 pytest：backend/tests/test_native_build76_mutations.py）、
+  run_offline_history_mutations 18，另有 compute_ctl/compute_common 5 个由 verifier 手工注入；全部变红并按字节
+  还原。

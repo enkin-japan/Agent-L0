@@ -474,3 +474,85 @@ def test_schemas_accept_optional_fields():
     assert p.model_dump()["approval"] is None
     la = LiveActivityTokenRequest(device_id="d", session_id="s", turn_id="t", token="k")
     assert la.token == "k"
+
+
+# ---------- 设备票据到期 / 吊销：发送侧跳过、Live Activity 收掉 ----------
+
+def _owned_devices():
+    # auth_device = 登记该条目的设备票据；"dev-live" 仍有效，"dev-gone" 已到期或已删，
+    # 无归属的条目（共享密钥登记）照发
+    return [
+        {"device_id": "p-live", "token": "tok-live", "auth_device": "dev-live",
+         "push_to_start_token": "pts-live", "prefs": {"schedule_start": True}},
+        {"device_id": "p-gone", "token": "tok-gone", "auth_device": "dev-gone",
+         "push_to_start_token": "pts-gone", "prefs": {"schedule_start": True}},
+        {"device_id": "p-shared", "token": "tok-shared",
+         "push_to_start_token": "pts-shared", "prefs": {"schedule_start": True}},
+    ]
+
+
+def test_tokens_of_expired_devices_are_not_sent(tmp_path, capsys):
+    disp, registry, apns = make_dispatcher(tmp_path, _owned_devices())
+    disp.device_active = lambda device_id: device_id == "dev-live"
+    run(route_turn(
+        disp,
+        feed_item("turn_queued", prompt="Task: 巡检", origin="chat"),
+        feed_item("awaiting_approval", pending_tools=[{"name": "write_file"}]),
+        feed_item("turn_ended", status="success")))
+    assert sorted(s["token"] for s in apns.by_kind("approval")) == ["tok-live", "tok-shared"]
+    assert sorted(s["token"] for s in apns.by_kind("result")) == ["tok-live", "tok-shared"]
+    assert "p-gone" in registry.devices                 # 只跳过，不删条目
+    assert capsys.readouterr().out.count("dev-gone") == 1   # 两次发送，同一设备只记一行
+
+
+def test_push_to_start_skips_expired_devices(tmp_path):
+    disp, _, apns = make_dispatcher(tmp_path, _owned_devices())
+    disp.device_active = lambda device_id: device_id == "dev-live"
+    run(route_turn(
+        disp,
+        feed_item("turn_queued", prompt="Task: 巡检", origin="schedule"),
+        feed_item("turn_started")))
+    starts = [s["token"] for s in apns.sent if s["push_type"] == "liveactivity"]
+    assert sorted(starts) == ["pts-live", "pts-shared"]
+    alerts = [s["token"] for s in apns.sent if s["push_type"] == "alert"]
+    assert sorted(alerts) == ["tok-live", "tok-shared"]
+
+
+def test_live_activity_updates_skip_expired_devices(tmp_path):
+    disp, _, apns = make_dispatcher(tmp_path, _owned_devices())
+    disp.device_active = lambda device_id: device_id == "dev-live"
+    st = _ActivityState("s-1", "t_a")
+    st.tokens = {"p-live": "la-live", "p-gone": "la-gone", "p-shared": "la-shared"}
+    run(disp._activity_push(st, priority=5, force=True))
+    assert sorted(s["token"] for s in apns.sent) == ["la-live", "la-shared"]
+    assert set(st.tokens) == {"p-live", "p-gone", "p-shared"}
+
+
+def test_forgetting_a_push_device_ends_its_live_activities(tmp_path):
+    disp, _, _ = make_dispatcher(tmp_path)
+    shared = _ActivityState("s-1", "t_a")
+    shared.tokens = {"p-1": "la-1", "p-2": "la-2"}
+    solo = _ActivityState("s-2", "t_b")
+    solo.tokens = {"p-1": "la-1b"}
+    disp._activities = {"s-1": shared, "s-2": solo}
+    disp.forget_push_device("p-1")
+    assert all("p-1" not in st.tokens for st in disp._activities.values())
+    assert set(disp._activities) == {"s-1"} and solo.ended
+    assert shared.tokens == {"p-2": "la-2"}
+
+
+def test_live_activity_frame_is_not_sent_to_a_device_forgotten_mid_push(tmp_path):
+    # 快照 list(st.tokens.items()) 之后、await 之间吊销了 p-2：这一帧不能再发给它
+    disp, _, apns = make_dispatcher(tmp_path, [{"device_id": "p-1", "token": "t1"},
+                                               {"device_id": "p-2", "token": "t2"}])
+    st = _ActivityState("s-1", "t_a")
+    st.tokens = {"p-1": "la-1", "p-2": "la-2"}
+    disp._activities["s-1"] = st
+    send = apns.send
+
+    async def revoke_during_send(token, payload, **kwargs):
+        disp.forget_push_device("p-2")
+        return await send(token, payload, **kwargs)
+    apns.send = revoke_during_send
+    run(disp._activity_push(st, priority=5, force=True))
+    assert [s["token"] for s in apns.sent] == ["la-1"]

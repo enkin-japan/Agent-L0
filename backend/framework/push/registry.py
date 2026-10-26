@@ -114,14 +114,24 @@ class PushRegistry:
             return True
         return False
 
-    def remove_bound(self, auth_device: str) -> int:
-        """设备票据被吊销：删掉它登记的全部推送条目。"""
+    def rebind(self, device_id: str, auth_device: str) -> bool:
+        """条目改归另一张设备票据（同机重新配对 / 原票据已到期或吊销）。条目不存在 = 不动。"""
+        d = self.devices.get(device_id)
+        if d is None or d.get("auth_device") == auth_device:
+            return False
+        d["auth_device"] = auth_device
+        d["updated_at"] = round(time.time(), 3)
+        self._persist()
+        return True
+
+    def remove_bound(self, auth_device: str) -> List[str]:
+        """设备票据被吊销：删掉它登记的全部推送条目，返回被删的推送 id。"""
         stale = [k for k, v in self.devices.items() if v.get("auth_device") == auth_device]
         for k in stale:
             self.devices.pop(k, None)
         if stale:
             self._persist()
-        return len(stale)
+        return stale
 
     def remove_by_token(self, token: str) -> None:
         """APNs 410 Unregistered：按 token 清理（device_id 未知的回收路径）。"""

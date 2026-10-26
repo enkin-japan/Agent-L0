@@ -61,6 +61,109 @@ import Foundation
             check(absent == nil, "same sid on another credential is isolated")
             print("PASS identity"); return
         }
+        if mode == "index-unreadable" {
+            // iOS keeps index.json unreadable while locked (.completeUnlessOpen); a write
+            // that cannot read its base must fail instead of saving an empty index over it.
+            try await cache.saveIndex([a,b], retentionPolicy:nil, namespace:namespace)
+            try await cache.saveSelection("A", namespace:namespace)
+            let file = root.appendingPathComponent(OfflineCacheRoot.partition(namespace)).appendingPathComponent("index.json")
+            let before = try Data(contentsOf:file)
+            try FileManager.default.setAttributes([.posixPermissions:0o000], ofItemAtPath:file.path)
+            var refused = 0
+            do { try await cache.saveSelection("B", namespace:namespace) } catch { refused += 1 }
+            do { try await cache.saveIndex([a], retentionPolicy:nil, namespace:namespace) } catch { refused += 1 }
+            do { try await cache.removeSessions(["B"], namespace:namespace) } catch { refused += 1 }
+            try FileManager.default.setAttributes([.posixPermissions:0o600], ofItemAtPath:file.path)
+            let after = try Data(contentsOf:file)
+            check(after == before, "an unreadable index is never replaced by an empty one")
+            check(refused == 3, "a write without a readable index reports failure")
+            let index = await cache.loadIndex(namespace:namespace)
+            check(index.selectedSessionId == "A" && index.sessions.count == 2, "the index reads back intact once readable")
+            try await cache.saveSelection("B", namespace:namespace)
+            let fresh = OfflineHistoryStore(root:root.appendingPathComponent("missing"))
+            try await fresh.saveSelection("A", namespace:namespace)
+            let created = await fresh.loadIndex(namespace:namespace)
+            check(created.selectedSessionId == "A", "a missing index still starts empty")
+            print("PASS index unreadable"); return
+        }
+        if mode == "prune-keep-set" {
+            let conn = { (id: String, url: String) in OfflineCacheRoot.Connection(id: id, url: url) }
+            let macs = [conn("a", "https://a.example.ts.net"), conn("b", "https://b.example.ts.net")]
+            let keys = ["a": "ticket-a", "b": "ticket-b"]
+            let both = OfflineCacheRoot.keepSet(macs: macs, keys: keys, fallbackBaseURL: nil, fallbackKey: "")
+            check(both == [OfflineHistoryStore.namespace(baseURL: URL(string: "https://a.example.ts.net")!, apiKey: "ticket-a"),
+                           OfflineHistoryStore.namespace(baseURL: URL(string: "https://b.example.ts.net")!, apiKey: "ticket-b")],
+                  "every credentialed Mac keeps its partition")
+            check(OfflineCacheRoot.keepSet(macs: macs, keys: ["a": "ticket-a", "b": ""], fallbackBaseURL: nil, fallbackKey: "") == nil,
+                  "a Mac whose credential reads back empty skips the whole round")
+            check(OfflineCacheRoot.keepSet(macs: macs, keys: ["a": "ticket-a"], fallbackBaseURL: nil, fallbackKey: "") == nil,
+                  "a Mac without a stored credential skips the whole round")
+            check(OfflineCacheRoot.keepSet(macs: [], keys: [:], fallbackBaseURL: URL(string: "https://fixture.invalid"), fallbackKey: "") == nil,
+                  "no Mac and no key never prunes everything")
+            check(OfflineCacheRoot.keepSet(macs: [conn("x", "no scheme")], keys: ["x": "ticket-x"], fallbackBaseURL: nil, fallbackKey: "") == nil,
+                  "nothing with a usable address never prunes everything")
+            let fallback = OfflineCacheRoot.keepSet(macs: [], keys: [:], fallbackBaseURL: URL(string: "https://fixture.invalid"), fallbackKey: "synthetic")
+            check(fallback == [namespace], "the single macOS connection keeps exactly its own partition")
+            // The serial pruner computes what to keep when it runs, not when it was asked.
+            let other = OfflineHistoryStore.namespace(baseURL: URL(string: "https://other.invalid")!, apiKey: "synthetic")
+            let pruneRoot = root.appendingPathComponent("prune-root")
+            let partitioned = OfflineHistoryStore(root: pruneRoot.appendingPathComponent("OfflineHistory"))
+            try await partitioned.saveIndex([a], retentionPolicy: nil, namespace: namespace)
+            try await partitioned.saveIndex([a], retentionPolicy: nil, namespace: other)
+            func present(_ ns: String) -> Bool {
+                FileManager.default.fileExists(atPath: pruneRoot.appendingPathComponent("OfflineHistory")
+                    .appendingPathComponent(OfflineCacheRoot.partition(ns)).path)
+            }
+            var current: Set<String>? = nil
+            await OfflineCachePruner.shared.enqueue(root: pruneRoot, keep: { await MainActor.run { current } })
+            check(present(other) && present(namespace), "a round whose keep set is nil deletes nothing")
+            current = [namespace]
+            await OfflineCachePruner.shared.enqueue(root: pruneRoot, keep: { await MainActor.run { current } })
+            check(!present(other) && present(namespace), "the keep set read at run time decides what goes")
+            print("PASS prune keep set"); return
+        }
+        if mode == "index-unreadable-store" {
+            // A locked device: the index exists but cannot be read. The refresh skips only the
+            // index write — no banner, sessions still update, the old index stays intact.
+            var listed = [a, b]
+            RecoveryTransport.handler = { t in
+                let path = t.request.url!.path
+                if path.hasSuffix("/sessions") { t.respond(try! JSONSerialization.jsonObject(with:JSONEncoder().encode(SessionListResponse(status:true,sessions:listed)))) }
+                else if path.hasSuffix("/offline-files") {
+                    let id = path.split(separator:"/").dropLast().last.map(String.init)!
+                    t.respond(["status":true,"session_id":id,"files":[]])
+                }
+                else if path.hasSuffix("/history") {
+                    let parts = path.split(separator:"/").map(String.init)
+                    t.respond(try! JSONSerialization.jsonObject(with:JSONEncoder().encode(history(parts[parts.count - 2]))))
+                }
+                else if path.hasSuffix("/turn") { t.respond(["status":true,"turn":NSNull(),"last_seq":12]) }
+                else if path.hasSuffix("/events") { RecoveryTransport.hold(t);t.deliver(Data()) }
+                else if path.hasSuffix("/deck") { t.respond([:],status:404) }
+                else { t.respond(["status":true,"skills":[]]) }
+            }
+            let store = AgentStore(settings:AppSettings(),offlineCacheRoot:root)
+            await store.loadSessions()
+            await wait({ !store.offlineSyncInProgress && store.offlineSavedSessionIDs == ["A","B"] },"first sync saved A and B")
+            let file = root.appendingPathComponent(OfflineCacheRoot.partition(namespace)).appendingPathComponent("index.json")
+            let before = try Data(contentsOf:file)
+            let histories = RecoveryTransport.matching("/history").count
+            try FileManager.default.setAttributes([.posixPermissions:0o000], ofItemAtPath:file.path)
+            listed = [a, b, item("C")]
+            await store.loadSessions()
+            try? await Task.sleep(nanoseconds:200_000_000)
+            try FileManager.default.setAttributes([.posixPermissions:0o600], ofItemAtPath:file.path)
+            check(RecoveryTransport.matching("/history").count == histories, "no history storm while the index is unreadable")
+            check(store.errorMessage == nil, "an unreadable index raises no session-list banner")
+            check(store.sessions.map(\.sessionId).sorted() == ["A","B","C"], "the session list still updates")
+            check(store.offlineSavedSessionIDs == ["A","B"], "what is known to be saved stays as it was")
+            let after = try Data(contentsOf:file)
+            check(after == before, "the unreadable index was not overwritten")
+            await store.loadSessions()
+            await wait({ !store.offlineSyncInProgress && store.offlineSavedSessionIDs == ["A","B","C"] },"readable again: C saved")
+            store.newSession()
+            print("PASS unreadable index during a refresh"); return
+        }
         if mode == "cleanup" {
             try await cache.saveIndex([a,b], retentionPolicy:nil, namespace:namespace)
             try await cache.saveHistory(history("A"), metadata:a, namespace:namespace)

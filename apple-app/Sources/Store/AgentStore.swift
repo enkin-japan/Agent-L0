@@ -516,12 +516,18 @@ final class AgentStore: ObservableObject {
             if items != sessions {
                 sessions = items
             }
-            let saved = try await offlineHistory.saveIndex(items, retentionPolicy: index.retentionPolicy,
-                namespace: client.cacheNamespace, isCurrent: { fence.matches(request) })
+            // An index that exists but cannot be read (iOS keeps it closed while the
+            // device is locked) only skips this round's index write: no banner, and the
+            // retention, selection and history steps below still run.
+            var saved = true
+            do {
+                saved = try await offlineHistory.saveIndex(items, retentionPolicy: index.retentionPolicy,
+                    namespace: client.cacheNamespace, isCurrent: { fence.matches(request) })
+            } catch is OfflineHistoryStore.IndexUnreadable {}
             guard ownsSessionIndex(client, request: request), saved else { return }
-            let savedIndex = await offlineHistory.loadIndex(namespace: client.cacheNamespace)
+            let savedIndex = await offlineHistory.readableIndex(namespace: client.cacheNamespace)
             guard ownsSessionIndex(client, request: request) else { return }
-            offlineSavedSessionIDs = savedSessionIDs(matching: savedIndex)
+            if let savedIndex { offlineSavedSessionIDs = savedSessionIDs(matching: savedIndex) }
             if let selected = selectedSessionId, previousIDs.contains(selected),
                !items.contains(where: { $0.sessionId == selected }), !isGenerating,
                !hasSubmissionInFlight(selected) {
@@ -617,6 +623,10 @@ final class AgentStore: ObservableObject {
                 let mayMirror = NetworkPathPolicy.shared.allowsAutomaticMirroring
                 var work: [(item: SessionMetaItem, history: Bool, assets: Bool)] = []
                 var deferred = false
+                // An unreadable index (device locked) makes every session look stale; a
+                // pass now would refetch every history only to fail saving it.
+                guard await cache.readableIndex(namespace: client.cacheNamespace) != nil else { continue }
+                guard self.client === client, !Task.isCancelled else { return }
                 for item in targets {
                     let history = await cache.needsHistory(item, namespace: client.cacheNamespace)
                     var assets = await cache.needsAssetSync(item, namespace: client.cacheNamespace)
@@ -668,22 +678,29 @@ final class AgentStore: ObservableObject {
                     let item = target.item
                     let token = await cache.beginAssetSync(sessionId: item.sessionId, namespace: client.cacheNamespace)
                     guard self.client === client, !Task.isCancelled else { return }
-                    let result = await client.syncOfflineAssets(sessionId: item.sessionId)
+                    let namespace = client.cacheNamespace
+                    let result = await client.syncOfflineAssets(sessionId: item.sessionId,
+                        markEvicted: { ids in try await cache.markAssetsEvicted(ids, namespace: namespace) })
                     guard self.client === client, !Task.isCancelled else { return }
                     switch result.state {
                     case .complete, .partial:
                         // The version advances either way so the 15s refresh stops
                         // asking; `partial` — or an eviction raised since `token` —
                         // keeps the session marked as not fully saved on this device.
-                        try? await cache.recordAssetSync(item, namespace: client.cacheNamespace,
-                                                         complete: result.state == .complete, token: token)
+                        do {
+                            try await cache.recordAssetSync(item, namespace: client.cacheNamespace,
+                                                            complete: result.state == .complete, token: token)
+                        } catch {
+                            // Not recorded: the version does not advance, so the next pass
+                            // retries; this pass is not reported as saved.
+                            self.markAttachmentsIncomplete(client: client)
+                        }
                     case .deferred, .failed:
                         break
                     }
-                    // Whoever lost bytes to this session is no longer complete,
-                    // and neither is this pass's view of the cache.
+                    // Whoever lost bytes to this session was marked before the bytes went
+                    // (markEvicted above); this pass's view of the cache is not complete.
                     if !result.evicted.isEmpty {
-                        try? await cache.markAssetsEvicted(result.evicted, namespace: client.cacheNamespace)
                         self.markAttachmentsIncomplete(client: client)
                     }
                     if result.state == .deferred { self.markMirroringDeferred(client: client) }

@@ -1,4 +1,5 @@
 import Combine
+import CryptoKit
 import Foundation
 import Security
 import SwiftUI
@@ -327,20 +328,37 @@ enum MacDirectory {
                         addedAt: now, removedFromICloud: false, credential: .sharedKey, customName: false)
     }
 
+    /// 点选一台时要不要先经 Mac 同意（握手）：还没凭据、读不出凭据、或当前这台已拒绝本机的
+    /// 票据。freshCredential = 刚换到了这台的新凭据（扫码 / 手填）：之前的拒绝已不算数，
+    /// 直接采用，绝不再为它发 /pair/request。
+    static func needsHandshake(credential: Credential, hasKey: Bool, isCurrent: Bool,
+                               currentRejected: Bool, freshCredential: Bool) -> Bool {
+        if credential == .none || !hasKey { return true }
+        if freshCredential { return false }
+        return isCurrent && currentRejected
+    }
+
+    /// 扫码换到票据、等完旧票据的注销之后：在**最新**的列表上落位（新项沿用计划时的 id）。
+    /// 返回票据该存在哪个 id 下；计划时的 id 若已不在列表里（等待期间被删 / 被别的项取代），
+    /// 一并返回，调用方清掉它名下可能残留的凭据。
+    static func finalizeClaim(_ macs: [SavedMac], plannedId: String, url: String, macId: String?,
+                              now: Date) -> (macs: [SavedMac], id: String, orphan: String?) {
+        let result = upsert(macs, url: url, macId: macId, source: .qr, credential: .deviceToken,
+                            now: now, newId: { plannedId })
+        let orphan = result.id != plannedId && !result.macs.contains(where: { $0.id == plannedId }) ? plannedId : nil
+        return (result.macs, result.id, orphan)
+    }
+
     /// 推送 / 灵动岛事件来自哪台：src 认得出就是那台，认不出（旧后端、手填的 Mac）退回当前那台。
     static func route(src: String?, macs: [SavedMac], current: String?) -> String? {
         if let src, let mac = macs.first(where: { $0.macId == src }) { return mac.id }
         return current
     }
 
-    /// 审批（允许 / 拒绝）回给哪台：比 route 严。带了 src 却认不出时，只有当前那台本身
-    /// 没有 macId（手填、75 迁移来的，可能正是它）才回给它；当前那台有别的 macId 就拒发——
-    /// 审批绝不改投到另一台 Mac。
+    /// 审批（允许 / 拒绝）回给哪台：规则见 ApprovalRouting.target（与灵动岛共用一份）。
     static func approvalTarget(src: String?, macs: [SavedMac], current: String?) -> String? {
-        guard let src else { return current }
-        if let mac = macs.first(where: { $0.macId == src }) { return mac.id }
-        guard let current, let mac = macs.first(where: { $0.id == current }), mac.macId == nil else { return nil }
-        return current
+        ApprovalRouting.target(src: src, macs: macs.map { ApprovalRouting.Mac(id: $0.id, macId: $0.macId) },
+                               current: current)
     }
 }
 
@@ -396,12 +414,15 @@ enum PairingAPI {
     enum Failure: LocalizedError {
         case refused(String)
         case http(Int)
+        /// 5xx：服务端（或 serve 反代）一时出错，不论响应体带没带 detail，都不是 Mac 的回答
+        case server(Int, String?)
         case badResponse
 
         var errorDescription: String? {
             switch self {
             case .refused(let detail): return detail
             case .http(let code): return "HTTP \(code)"
+            case .server(let code, let detail): return detail ?? "HTTP \(code)"
             case .badResponse: return L("后端返回异常")
             }
         }
@@ -535,8 +556,18 @@ enum PairingAPI {
                               body: identity(pushDeviceId: pushDeviceId), key: key))
     }
 
-    static func forgetSelf(base: URL, token: String) async throws {
-        let _: Ignored = try await call(base, "DELETE", "/api/v1/pair/self", body: nil, key: token)
+    static func forgetSelf(base: URL, token: String, timeout: TimeInterval = 10) async throws {
+        let _: Ignored = try await call(base, "DELETE", "/api/v1/pair/self", body: nil, key: token, timeout: timeout)
+    }
+
+    /// 不带 Authorization 打一个受鉴权的接口：401 = 后端开了鉴权；200（或别的）= 没开，
+    /// 谁都能进；nil = 没有响应（执行层没起）。
+    static func unauthenticatedStatus(base: URL) async -> Int? {
+        guard let url = URL(string: "/api/v1/pair/devices", relativeTo: base) else { return nil }
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 5)
+        req.httpMethod = "GET"
+        guard let (_, response) = try? await session.data(for: req) else { return nil }
+        return (response as? HTTPURLResponse)?.statusCode
     }
 
     private static func issued(_ value: Issued) throws -> Issued {
@@ -545,9 +576,10 @@ enum PairingAPI {
     }
 
     private static func call<T: Decodable>(_ base: URL, _ method: String, _ path: String,
-                                           body: [String: Any]?, key: String) async throws -> T {
+                                           body: [String: Any]?, key: String,
+                                           timeout: TimeInterval = 10) async throws -> T {
         guard let url = URL(string: path, relativeTo: base) else { throw Failure.badResponse }
-        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         req.httpMethod = method
         if !key.isEmpty { req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
         if let body {
@@ -558,10 +590,124 @@ enum PairingAPI {
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else {
             let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"] as? String
+            if code >= 500 { throw Failure.server(code, detail) }
             throw detail.map(Failure.refused) ?? Failure.http(code)
         }
         guard let decoded = try? JSONDecoder().decode(T.self, from: data) else { throw Failure.badResponse }
         return decoded
+    }
+}
+
+/// 旧连接升级（POST /pair/upgrade）失败后的退避：同一台 Mac 失败后等 1、2、4……分钟，
+/// 最长 1 小时；期间连接状态再怎么变也不重发。换到票据、或这台的地址 / 密钥变了就从头算。
+/// 按 fingerprint（地址 + 密钥的哈希，密钥本身不落盘）持久到 UserDefaults：app 重启不重置。
+/// 纯值类型（两端都编译，主机上可直接测）。
+struct UpgradeBackoff {
+    static let base: TimeInterval = 60
+    static let cap: TimeInterval = 3600
+    static let defaultsKey = "phone.upgradeBackoff"
+
+    private struct Entry: Codable {
+        var failures: Int
+        var next: Date
+    }
+    private let defaults: UserDefaults?
+    private var entries: [String: Entry] = [:]
+
+    /// defaults 为 nil 只在内存里记（测试用）。
+    init(defaults: UserDefaults? = .standard) {
+        self.defaults = defaults
+        if let data = defaults?.data(forKey: Self.defaultsKey),
+           let stored = try? JSONDecoder().decode([String: Entry].self, from: data) {
+            entries = stored
+        }
+    }
+
+    /// 这台 Mac 此刻的配置：地址 + 凭据。变了说明配置换过，旧的失败不再算数。
+    static func fingerprint(url: String, key: String) -> String {
+        SHA256.hash(data: Data((url + "\n" + key).utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// 第 n 次连续失败之后要等多久。
+    static func delay(afterFailures n: Int) -> TimeInterval {
+        guard n > 0 else { return 0 }
+        return min(cap, base * pow(2, Double(min(n - 1, 16))))
+    }
+
+    func allows(_ fingerprint: String, now: Date) -> Bool {
+        guard let entry = entries[fingerprint] else { return true }
+        return now >= entry.next
+    }
+
+    mutating func failed(_ fingerprint: String, now: Date) {
+        let failures = (entries[fingerprint]?.failures ?? 0) + 1
+        entries[fingerprint] = Entry(failures: failures,
+                                     next: now.addingTimeInterval(Self.delay(afterFailures: failures)))
+        persist(now: now)
+    }
+
+    mutating func succeeded(_ fingerprint: String) {
+        guard entries.removeValue(forKey: fingerprint) != nil else { return }
+        persist(now: Date())
+    }
+
+    /// 早已过了等待期的旧配置（换过密钥 / 地址）不再留着。
+    private mutating func persist(now: Date) {
+        entries = entries.filter { $0.value.next > now.addingTimeInterval(-Self.cap) }
+        guard let defaults else { return }
+        if entries.isEmpty { defaults.removeObject(forKey: Self.defaultsKey) }
+        else if let data = try? JSONEncoder().encode(entries) { defaults.set(data, forKey: Self.defaultsKey) }
+    }
+}
+
+/// 同一台 Mac 上换设备票据（扫码、握手同意）：手里还有这台的旧设备票据时，先用它向那台
+/// Mac 注销自己（DELETE /api/v1/pair/self），再保存新票据——后端只在旧票据到期后才自动
+/// 取代同一推送设备的旧记录。best effort：最多等 timeout，失败只记日志，绝不挡住换新。
+/// 共享密钥不是设备票据（后端回 400），不走这里。
+enum TicketHandover {
+    static let timeout: TimeInterval = 5
+
+    @MainActor
+    static func replace(previous: String?, at base: URL?, timeout: TimeInterval = timeout,
+                        forget: @escaping @Sendable (URL, String) async throws -> Void,
+                        save: () -> Void, log: (String) -> Void = { print($0) }) async {
+        if let previous, !previous.isEmpty, let base {
+            let outcome: Bool? = await withTaskGroup(of: Bool?.self) { group in
+                group.addTask {
+                    do { try await forget(base, previous); return true } catch { return false }
+                }
+                group.addTask {
+                    try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    return nil
+                }
+                let first = await group.next() ?? nil
+                group.cancelAll()
+                return first
+            }
+            if outcome != true {
+                log("[Pair] 注销旧设备票据" + (outcome == nil ? "超时" : "失败") + "（\(base.host() ?? "")），继续换新")
+            }
+        }
+        save()
+    }
+}
+
+/// 握手轮询：瞬时的网络错误（tailnet 抖动、Mac 睡眠唤醒、后端重启时 serve 回 502/503）
+/// 不立即结束等待；连续 maxConsecutiveErrors 次才放弃。Mac 明确回答的错误（拒绝、
+/// 请求已不存在、响应不对）一次就结束。
+enum HandshakePolling {
+    static let maxConsecutiveErrors = 5
+
+    static func isTransient(_ error: Error) -> Bool {
+        if let error = error as? URLError { return error.code != .cancelled }
+        if case PairingAPI.Failure.server = error { return true }
+        if case PairingAPI.Failure.http(let code) = error { return code >= 500 || code == 0 }
+        return false
+    }
+
+    /// consecutive = 算上这一次、连续失败了几次。
+    static func keepsWaiting(after error: Error, consecutive: Int) -> Bool {
+        isTransient(error) && consecutive < maxConsecutiveErrors
     }
 }
 
@@ -715,8 +861,68 @@ final class PhoneLink: ObservableObject {
         let image: NSImage?
     }
 
+    /// tailscale CLI、iCloud 钥匙串与本机后端的入口。生产用真的；phone_link_test 换成
+    /// 假实现，开放 / 停止开放 / 同步的顺序才测得到，又不碰 CLI、钥匙串与网络。
+    struct Effects {
+        var tailscale: ([String]) async -> TailscaleCLI.Output? = { await TailscaleCLI.run($0) }
+        var ticket: (URL, String) async throws -> String = { try await PairingAPI.ticket(base: $0, key: $1) }
+        var rotateTicket: (URL, String) async throws -> String = {
+            try await PairingAPI.rotateTicket(base: $0, key: $1)
+        }
+        var pending: (URL, String) async throws -> [PairingAPI.Pending] = {
+            try await PairingAPI.pending(base: $0, key: $1)
+        }
+        var devices: (URL, String) async throws -> PairingAPI.Devices = {
+            try await PairingAPI.devices(base: $0, key: $1)
+        }
+        var writeEntry: (PhoneConnection) -> OSStatus = { SharedKeychain.write($0) }
+        var deleteEntry: (String) -> OSStatus = { SharedKeychain.delete(macId: $0) }
+        var deleteLegacy: () -> OSStatus = { SharedKeychain.deleteLegacy() }
+        var readEntries: () -> ([PhoneConnection], OSStatus) = { SharedKeychain.readAll() }
+        var macId: () -> String = { MacIdentity.id }
+        /// 不带密钥打受鉴权接口得到的状态码（PairingAPI.unauthenticatedStatus）。
+        var probeAuth: (URL) async -> Int? = { await PairingAPI.unauthenticatedStatus(base: $0) }
+        /// bundle 形态（Resources 里带执行层）：密钥在 app 设置里，不在 .env.local。
+        /// 停止开放的请求要跨重启记住（见 stopRequested）。
+        var defaults: UserDefaults = .standard
+        var bundleLayout: () -> Bool = {
+            Bundle.main.resourceURL.map {
+                FileManager.default.fileExists(atPath: $0.appendingPathComponent("backend/app.py").path)
+            } ?? false
+        }
+    }
+
+    /// 对 tailnet 开放前，后端必须有自己的鉴权：后端的护栏只看绑定地址（回环放行），
+    /// 无密钥时所有请求都拿 owner 权限，而 serve 正是把回环反代给整个 tailnet。
+    static let minimumKeyLength = 16
+
+    /// 只有 tailnet 上开着入口时才有 iPhone 能来请求连接：没开放时不轮询 /pair/requests。
+    static func pollsRequests(_ exposure: Exposure) -> Bool {
+        if case .served = exposure { return true }
+        return false
+    }
+
     static let target = AppSettings.localBackend
+    private var effects = Effects()
     @Published private(set) var exposure: Exposure = .checking
+    /// 一次停止开放正在进行（按钮防重入）。
+    @Published private(set) var stopping = false
+    /// 已经请求停止开放：iCloud 条目已删。直到 exposure 真正变成未开放才清除——
+    /// tailscale serve off 失败、serve 仍在时，同步（含 watcher 每 3 秒的重试）也不得把
+    /// 条目写回；界面显示停止未完成并可重试。
+    @Published private(set) var stopRequested = false {
+        didSet {
+            guard stopRequested != oldValue else { return }
+            effects.defaults.set(stopRequested, forKey: Self.stopRequestedKey(effects.macId()))
+        }
+    }
+    static func stopRequestedKey(_ macId: String) -> String { "phone.stopRequested." + macId }
+    /// 已开放时多久重新确认一次后端鉴权（后端修好 / 变成无钥都会反映到 authWarning）。
+    static let authRecheckInterval: TimeInterval = 60
+    /// 已经开放、但后端不带密钥也放行（未启用鉴权）：持久警告，不自动关 serve。
+    @Published private(set) var authWarning: String?
+    /// 上一次拿到明确状态码的鉴权探测时间（nil = 这次开放还没确认过）。
+    private var lastAuthCheck: Date?
     @Published private(set) var syncOK = false
     @Published private(set) var syncError: String?
     @Published private(set) var busy = false
@@ -738,8 +944,11 @@ final class PhoneLink: ObservableObject {
     private var refreshGeneration = 0
     private var watcher: Task<Void, Never>?
 
-    func configure(settings: AppSettings) {
+    func configure(settings: AppSettings, effects: Effects = Effects()) {
         self.settings = settings
+        self.effects = effects
+        // 上次 serve off 失败后退出：重启后仍算「已请求停止」，直到真的未开放
+        stopRequested = effects.defaults.bool(forKey: Self.stopRequestedKey(effects.macId()))
         // 密钥轮换（设置页重新生成 / 执行层首启生成）后重新取请求凭据并同步
         settings.$apiKey.dropFirst().removeDuplicates()
             .sink { [weak self] _ in
@@ -762,7 +971,9 @@ final class PhoneLink: ObservableObject {
             var tick = 0
             while !Task.isCancelled {
                 guard let self else { return }
-                await self.pollRequests()
+                if Self.pollsRequests(self.exposure) { await self.pollRequests() }
+                // 启动时已经开放着：执行层可能还没起，确认到鉴权状态为止
+                if case .served = self.exposure, self.authCheckDue { await self.checkServedAuth() }
                 if !self.syncOK, case .served = self.exposure { await self.sync() }
                 if tick % 10 == 0 { await self.refreshDevices() }
                 tick += 1
@@ -778,7 +989,7 @@ final class PhoneLink: ObservableObject {
 
     private func pollRequests() async {
         guard let (base, key) = local,
-              let pending = try? await PairingAPI.pending(base: base, key: key) else { return }
+              let pending = try? await effects.pending(base, key) else { return }
         requests = pending
         if let prompt, !pending.contains(prompt) { self.prompt = nil }
         if prompt == nil { prompt = pending.first { !answered.contains($0.id) } }
@@ -816,7 +1027,7 @@ final class PhoneLink: ObservableObject {
     }
 
     func refreshDevices() async {
-        guard let (base, key) = local, let listing = try? await PairingAPI.devices(base: base, key: key)
+        guard let (base, key) = local, let listing = try? await effects.devices(base, key)
         else { return }
         devices = listing.devices
         defaultTTLDays = listing.default_ttl_days
@@ -856,7 +1067,7 @@ final class PhoneLink: ObservableObject {
 
     /// 停止同步 / 停止开放：iPhone 本机缓存的旧凭据随之作废，不能再来弹请求。
     private func voidTicket() async {
-        guard let (base, key) = local, let fresh = try? await PairingAPI.rotateTicket(base: base, key: key)
+        guard let (base, key) = local, let fresh = try? await effects.rotateTicket(base, key)
         else { return }
         ticket = fresh
     }
@@ -875,9 +1086,9 @@ final class PhoneLink: ObservableObject {
     func refresh() async {
         refreshGeneration += 1
         let generation = refreshGeneration
-        let status = await TailscaleCLI.run(["status", "--json"])
+        let status = await effects.tailscale(["status", "--json"])
         let me = status.flatMap { $0.code == 0 ? TailnetParse.selfNode($0.out) : nil }
-        let serve = me?.running == true ? await TailscaleCLI.run(["serve", "status", "--json"]) : nil
+        let serve = me?.running == true ? await effects.tailscale(["serve", "status", "--json"]) : nil
         guard generation == refreshGeneration else { return }
         guard status != nil else {
             exposure = .noTailscale
@@ -894,23 +1105,90 @@ final class PhoneLink: ObservableObject {
         } else {
             exposure = .notServed(https: me.canHTTPS,
                                   portTaken: TailnetParse.portInUse(config, me.canHTTPS ? "443" : "14159"))
+            stopRequested = false
+            lastAuthCheck = nil
+            authWarning = nil
         }
+        // 每次 refresh 都重新确认（watcher 另外每 60 秒一次）
+        if case .served = exposure { await checkServedAuth() }
         await sync()
         await refreshDevices()
+    }
+
+    /// 已开放时确认后端真的要密钥；不要就挂上持久警告（serve 不自动关，由你决定）。
+    /// 没响应（执行层还没起）不下结论，watcher 下一轮再查。
+    private var authCheckDue: Bool {
+        guard let lastAuthCheck else { return true }
+        return Date().timeIntervalSince(lastAuthCheck) >= Self.authRecheckInterval
+    }
+
+    private func checkServedAuth() async {
+        guard let base = settings?.baseURL, let status = await effects.probeAuth(base) else { return }
+        guard case .served = exposure else { return }
+        lastAuthCheck = Date()
+        switch status {
+        case 401:
+            authWarning = nil
+        case 404:
+            authWarning = L("后端版本过旧或地址不对，无法确认鉴权。")
+        default:
+            authWarning = effects.bundleLayout()
+                ? L("警告：已对 tailnet 开放，但后端未启用鉴权，tailnet 上的任何设备都能免密钥访问。请先停止开放，再在设置里重新生成密钥。")
+                : L("警告：已对 tailnet 开放，但后端未启用鉴权，tailnet 上的任何设备都能免密钥访问。请先停止开放，再在 .env.local 设置 AGENT_API_KEY 并重启后端。")
+        }
+    }
+
+    /// nil = 可以开放；否则是拒绝开放的原因（设置页据此禁用按钮并显示同一句话）。
+    var exposeRefusal: String? {
+        let key = settings?.apiKey.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard key.count < Self.minimumKeyLength else { return nil }
+        return effects.bundleLayout()
+            ? L("密钥未配置或过短，不能对外开放。请在设置里重新生成密钥。")
+            : L("密钥未配置或过短，不能对外开放。先在 .env.local 设置 AGENT_API_KEY 或运行 ./devctl.sh setup。")
     }
 
     /// 由用户在设置页亲手点：serve 配置是 tailscaled 的持久状态，重启后仍在。
     func expose() async {
         guard case .notServed(let https, let taken) = exposure, !taken else { return }
+        if let refusal = exposeRefusal {
+            actionError = refusal
+            return
+        }
+        // app 里有钥不等于后端开了鉴权（repo 布局：钥匙串留着旧钥、后端却没配）：
+        // 不带密钥问一次受鉴权接口，必须是 401 才开放。
+        guard !busy, let base = settings?.baseURL else { return }
+        busy = true
+        actionError = nil
+        let status = await effects.probeAuth(base)
+        busy = false
+        guard case .notServed = exposure else { return }
+        guard status == 401 else {
+            switch status {
+            case nil:
+                actionError = L("无法确认后端已启用鉴权：执行层没有响应，请稍后再试。")
+            case 404:
+                actionError = L("后端版本过旧或地址不对，无法确认鉴权。")
+            default:
+                actionError = effects.bundleLayout()
+                    ? L("后端未启用鉴权（不带密钥的请求也被放行），不能对外开放。请在设置里重新生成密钥。")
+                    : L("后端未启用鉴权（不带密钥的请求也被放行），不能对外开放。先在 .env.local 设置 AGENT_API_KEY 并重启后端。")
+            }
+            return
+        }
         let args = ["serve", "--bg", https ? "--https=443" : "--http=14159", Self.target]
         await runAction(args, failure: L("开放失败："))
     }
 
+    /// 先进入「已请求停止」（sync 不再写回），再删条目、作废请求凭据、停 serve。
+    /// serve off 失败时 stopRequested 留着，再点一次即重试。
     func unexpose() async {
-        guard case .served(let url) = exposure else { return }
+        guard case .served(let url) = exposure, !stopping else { return }
+        stopping = true
+        stopRequested = true
+        defer { stopping = false }
         let https = url.scheme == "https"
         let port = url.port ?? (https ? 443 : 80)
-        _ = SharedKeychain.delete(macId: MacIdentity.id)
+        _ = effects.deleteEntry(effects.macId())
         removeOwnLegacy(url: url.absoluteString)
         lastWritten = nil
         syncOK = false
@@ -923,7 +1201,7 @@ final class PhoneLink: ObservableObject {
         busy = true
         defer { busy = false }
         actionError = nil
-        let result = await TailscaleCLI.run(args)
+        let result = await effects.tailscale(args)
         if result?.code != 0 {
             let reason = String((result?.err ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(300))
             let command = "tailscale " + args.joined(separator: " ")
@@ -938,7 +1216,7 @@ final class PhoneLink: ObservableObject {
         if on {
             Task { await sync() }
         } else {
-            let status = SharedKeychain.delete(macId: MacIdentity.id)
+            let status = effects.deleteEntry(effects.macId())
             if case .served(let url) = exposure { removeOwnLegacy(url: url.absoluteString) }
             syncOK = false
             syncError = status == errSecSuccess ? nil : SharedKeychain.describe(status)
@@ -948,32 +1226,35 @@ final class PhoneLink: ObservableObject {
 
     /// 写本机的 iCloud 条目：地址 + 请求凭据（向本机后端领，经回环）。共享密钥不进 iCloud。
     private func sync() async {
-        guard let settings, settings.phoneSyncEnabled else { return }
+        guard let settings, settings.phoneSyncEnabled, !stopRequested else { return }
         guard case .served(let url) = exposure, let (base, key) = local else {
             syncOK = false
             return
         }
         if ticket.isEmpty {
-            guard let fresh = try? await PairingAPI.ticket(base: base, key: key) else {
+            guard let fresh = try? await effects.ticket(base, key) else {
                 syncOK = false
                 syncError = L("执行层尚未就绪，就绪后自动同步。")
                 return
             }
             ticket = fresh
         }
+        // 领凭据期间可能开始了停止开放（或开放方式变了）：那就不写
+        guard !stopRequested, settings.phoneSyncEnabled, case .served(url) = exposure else { return }
+        let macId = effects.macId()
         let connection = MacDirectory.outgoing(url: url.absoluteString, ticket: ticket, mac: macName,
-                                               macId: MacIdentity.id, now: Date())
+                                               macId: macId, now: Date())
         if let lastWritten, lastWritten.sameContent(connection) { return }
-        let status = SharedKeychain.write(connection)
+        let status = effects.writeEntry(connection)
         syncOK = status == errSecSuccess
         syncError = syncOK ? nil : SharedKeychain.describe(status)
         lastWritten = syncOK ? connection : nil
         guard syncOK else { return }
-        let (items, readStatus) = SharedKeychain.readAll()
+        let (items, readStatus) = effects.readEntries()
         guard readStatus == errSecSuccess else { return }
         // 本机丢过 macId（重装等）留下的旧身份条目：同地址、别的 macId，删掉
-        for stale in MacDirectory.staleOwnItems(items, macId: MacIdentity.id, url: connection.url) {
-            _ = SharedKeychain.delete(macId: stale)
+        for stale in MacDirectory.staleOwnItems(items, macId: macId, url: connection.url) {
+            _ = effects.deleteEntry(stale)
         }
         // 本机升级前（75）写的全局条目里有共享密钥：是本机的就删掉，另一台 Mac 的不碰
         removeOwnLegacy(url: connection.url, items: items)
@@ -984,12 +1265,12 @@ final class PhoneLink: ObservableObject {
         if let items {
             list = items
         } else {
-            let (read, status) = SharedKeychain.readAll()
+            let (read, status) = effects.readEntries()
             guard status == errSecSuccess else { return }
             list = read
         }
         guard list.contains(where: { MacDirectory.ownsLegacy($0, name: macName, url: url) }) else { return }
-        _ = SharedKeychain.deleteLegacy()
+        _ = effects.deleteLegacy()
     }
 
     func startPairing() async {
@@ -1036,7 +1317,10 @@ final class PhoneLink: ObservableObject {
     private var hidden: Set<String> = []
     private var lastHeal = Date.distantPast
     private var handshakeTask: Task<Void, Never>?
+    /// 「重试」刚发起了新请求：弹窗随之关闭时（binding setter）不能把它取消。
+    private var retryPending = false
     private var upgrading = Set<String>()
+    private var upgradeBackoff = UpgradeBackoff()
 
     private static let listKey = "phone.macs"
     private static let currentKey = "phone.currentMac"
@@ -1067,6 +1351,7 @@ final class PhoneLink: ObservableObject {
         }
         readSynced()
         upgradeSharedKeys()
+        pruneOfflineCaches()
         // 不去重：iCloud 钥匙串传播要几十秒到几分钟，离线期间每轮探活都给一次重读机会，
         // 由 heal 的 30 秒节流限频
         store.$connState
@@ -1131,10 +1416,12 @@ final class PhoneLink: ObservableObject {
     }
 
     /// 点选一台：已有凭据就切过去；只读到了 iCloud 条目（还没经 Mac 同意）就发起握手。
-    func select(_ id: String) {
+    func select(_ id: String, freshCredential: Bool = false) {
         guard let mac = macs.first(where: { $0.id == id }) else { return }
         // 还没经 Mac 同意，或当前这台已不再接受本机的票据（被移除 / 到期）：重新握手
-        if mac.credential == .none || key(for: id).isEmpty || (id == currentId && currentRejected) {
+        if MacDirectory.needsHandshake(credential: mac.credential, hasKey: !key(for: id).isEmpty,
+                                       isCurrent: id == currentId, currentRejected: currentRejected,
+                                       freshCredential: freshCredential) {
             requestConnection(id)
             return
         }
@@ -1159,16 +1446,28 @@ final class PhoneLink: ObservableObject {
             do {
                 let request = try await PairingAPI.request(base: base, ticket: ticket, pushDeviceId: pushId)
                 await MainActor.run {
+                    // 新请求已送达：此后的关闭不再是「重试」引起的
+                    self?.retryPending = false
                     self?.handshake = Handshake(macId: id, macName: mac.name, code: request.code, state: .waiting)
                 }
                 let deadline = Date().addingTimeInterval(TimeInterval(request.expires_in))
+                var errors = 0
                 while Date() < deadline {
                     try await Task.sleep(nanoseconds: 2_000_000_000)
-                    let poll = try await PairingAPI.poll(base: base, request: request)
+                    let poll: PairingAPI.Poll
+                    do {
+                        poll = try await PairingAPI.poll(base: base, request: request)
+                        errors = 0
+                    } catch {
+                        try Task.checkCancellation()
+                        errors += 1
+                        if HandshakePolling.keepsWaiting(after: error, consecutive: errors) { continue }
+                        throw error
+                    }
                     switch poll.status {
                     case "approved":
                         guard let token = poll.token, !token.isEmpty else { throw PairingAPI.Failure.badResponse }
-                        await MainActor.run { self?.adopt(id, token: token, instanceId: poll.instance_id) }
+                        await self?.adopt(id, token: token, instanceId: poll.instance_id)
                         return
                     case "denied":
                         await MainActor.run { self?.handshake?.state = .denied }
@@ -1180,7 +1479,10 @@ final class PhoneLink: ObservableObject {
                 await MainActor.run { self?.handshake?.state = .expired }
             } catch is CancellationError {
             } catch {
+                // 取消时在途请求抛的是 URLError.cancelled：已取消的握手不再弹失败
+                guard !Task.isCancelled else { return }
                 await MainActor.run {
+                    self?.retryPending = false
                     if self?.handshake == nil {
                         self?.handshake = Handshake(macId: id, macName: mac.name, code: "", state: .waiting)
                     }
@@ -1191,18 +1493,50 @@ final class PhoneLink: ObservableObject {
     }
 
     func cancelHandshake() {
+        retryPending = false
         handshakeTask?.cancel()
         handshake = nil
     }
 
-    /// 握手成功：存票据、设为当前。
-    private func adopt(_ id: String, token: String, instanceId: String?) {
+    /// 弹窗里的「重试」：新请求接替旧的那一次。
+    func retryHandshake(_ id: String) {
+        retryPending = true
+        requestConnection(id)
+    }
+
+    /// 弹窗关闭（SwiftUI 在任何按钮之后都会走 binding 的 setter）。「重试」之后的这次关闭
+    /// 只收起旧状态，不取消刚发出的请求——它送达后会带着新核对码重新弹出。其余情况
+    /// 等同取消。按钮动作与 setter 谁先谁后都成立：setter 先到时 retryPending 还没置位，
+    /// 取消的是旧请求，随后的「重试」照常发起新的。
+    func handshakeDismissed() {
+        guard retryPending else {
+            cancelHandshake()
+            return
+        }
+        retryPending = false
+        handshake = nil
+    }
+
+    /// 旧设备票据的注销（TicketHandover）：最多等 5 秒。
+    private static let forgetPrevious: @Sendable (URL, String) async throws -> Void = { base, token in
+        try await PairingAPI.forgetSelf(base: base, token: token, timeout: TicketHandover.timeout)
+    }
+
+    /// 握手成功：（旧票据还在就先注销它）存票据、设为当前。
+    private func adopt(_ id: String, token: String, instanceId: String?) async {
+        guard let mac = macs.first(where: { $0.id == id }) else { return }
+        let previous = mac.credential == .deviceToken ? key(for: id) : nil
+        await TicketHandover.replace(previous: previous, at: URL(string: mac.url), forget: Self.forgetPrevious,
+                                     save: { [self] in
+            // 等注销期间被删掉了：不留一把孤儿票据
+            if macs.contains(where: { $0.id == id }) { Keychain.save(Self.keyAccount(id), token) }
+        })
         guard let i = macs.firstIndex(where: { $0.id == id }) else { return }
-        Keychain.save(Self.keyAccount(id), token)
         macs[i].credential = .deviceToken
         if macs[i].macId == nil, let claimed = MacDirectory.adoptableId(instanceId, for: id, macs: macs) {
             macs[i].macId = claimed
         }
+        retryPending = false
         handshake = nil
         currentId = id
         currentRejected = false
@@ -1213,10 +1547,15 @@ final class PhoneLink: ObservableObject {
 
     /// 手里还是共享密钥的 Mac（75 迁移来的、手填的）：向那台 Mac 换一张本机自己的票据，
     /// 换到后删掉共享密钥。Mac 还没升级（404）或连不上时下次再试。
+    /// 每次连接状态变化都会进来：失败过的 Mac 按 UpgradeBackoff 退避，不对一台回 404 / 401
+    /// 的 Mac 反复 POST。
     private func upgradeSharedKeys() {
+        let now = Date()
         for mac in macs where mac.credential == .sharedKey && !upgrading.contains(mac.id) {
             let key = key(for: mac.id)
             guard !key.isEmpty, let base = URL(string: mac.url) else { continue }
+            let fingerprint = UpgradeBackoff.fingerprint(url: mac.url, key: key)
+            guard upgradeBackoff.allows(fingerprint, now: now) else { continue }
             upgrading.insert(mac.id)
             let pushId = push?.deviceId
             Task { [weak self] in
@@ -1224,7 +1563,12 @@ final class PhoneLink: ObservableObject {
                 await MainActor.run {
                     guard let self else { return }
                     self.upgrading.remove(mac.id)
-                    guard let issued, let i = self.macs.firstIndex(where: { $0.id == mac.id }),
+                    guard let issued else {
+                        self.upgradeBackoff.failed(fingerprint, now: Date())
+                        return
+                    }
+                    self.upgradeBackoff.succeeded(fingerprint)
+                    guard let i = self.macs.firstIndex(where: { $0.id == mac.id }),
                           self.key(for: mac.id) == key else { return }
                     Keychain.save(Self.keyAccount(mac.id), issued.token)
                     self.macs[i].credential = .deviceToken
@@ -1275,6 +1619,7 @@ final class PhoneLink: ObservableObject {
             }
         }
         persist()
+        pruneOfflineCaches()
     }
 
     /// 设置页 / 引导页手填后保存（地址 + 共享密钥）：同地址的就地更新为手动来源，否则新增
@@ -1288,7 +1633,7 @@ final class PhoneLink: ObservableObject {
         hidden.remove(MacDirectory.hideKey(macId: nil, url: url))
         macs = result.macs
         Keychain.save(Self.keyAccount(result.id), key)
-        select(result.id)
+        select(result.id, freshCredential: true)
         upgradeSharedKeys()
     }
 
@@ -1306,14 +1651,31 @@ final class PhoneLink: ObservableObject {
         do {
             let issued = try await PairingAPI.claim(link, pushDeviceId: push?.deviceId)
             let macId = issued.instance_id.flatMap { MacDirectory.validMacId($0) ? $0 : nil }
-            let result = MacDirectory.upsert(macs, url: link.base.absoluteString, macId: macId,
-                                             source: .qr, credential: .deviceToken, now: Date(),
-                                             newId: Self.newId)
+            // 落到哪一项（同一台 Mac 就地更新）：那一项手里还有旧设备票据时先注销它
+            let planned = MacDirectory.upsert(macs, url: link.base.absoluteString, macId: macId,
+                                              source: .qr, credential: .deviceToken, now: Date(),
+                                              newId: Self.newId)
+            let existing = macs.first { $0.id == planned.id }
+            let previous = existing?.credential == .deviceToken ? key(for: planned.id) : nil
+            // 等注销期间列表可能变了：等完再在最新的列表上落位，票据只存到最终那一项名下
+            var placement: (macs: [SavedMac], id: String, orphan: String?)?
+            await TicketHandover.replace(previous: previous, at: existing.flatMap { URL(string: $0.url) },
+                                         forget: Self.forgetPrevious, save: { [self] in
+                let placed = MacDirectory.finalizeClaim(macs, plannedId: planned.id, url: link.base.absoluteString,
+                                                        macId: macId, now: Date())
+                Keychain.save(Self.keyAccount(placed.id), issued.token)
+                if let orphan = placed.orphan {
+                    Keychain.save(Self.keyAccount(orphan), "")
+                    Keychain.save(Self.ticketAccount(orphan), "")
+                }
+                placement = placed
+            })
+            guard let placement else { return }
             hidden.remove(MacDirectory.hideKey(macId: macId, url: link.base.absoluteString))
             hidden.remove(MacDirectory.hideKey(macId: nil, url: link.base.absoluteString))
-            macs = result.macs
-            Keychain.save(Self.keyAccount(result.id), issued.token)
-            select(result.id)
+            macs = placement.macs
+            // 新票据刚存：之前被拒绝（吊销 / 到期）不再算数，直接采用，不再弹握手
+            select(placement.id, freshCredential: true)
             push?.registerEverywhere()
         } catch {
             claimError = error.localizedDescription
@@ -1351,6 +1713,26 @@ final class PhoneLink: ObservableObject {
         settings.connectionSource = mac.source
         settings.setupCompleted = true
         store.applySettings()
+        pruneOfflineCaches()
+    }
+
+    /// 离线缓存按「地址 + 凭据」分区：换票据（升级、到期重新同意、扫码）、地址变化、删掉
+    /// 一台之后，旧分区再也不会被读写，也不计入当前分区的预算。清理排进 OfflineCachePruner
+    /// 串行执行，保留集合在执行那一刻按最新的列表与钥匙串重算（OfflineCacheRoot.keepSet）：
+    /// 任何一台的凭据读不出来、或什么都不剩时这一轮不删。
+    private func pruneOfflineCaches() {
+        OfflineCachePruner.shared.schedule { [weak self] in
+            await MainActor.run { self?.currentKeepSet() } ?? nil
+        }
+    }
+
+    private func currentKeepSet() -> Set<String>? {
+        let held = macs.filter { $0.credential != .none }
+        var keys: [String: String] = [:]
+        for mac in held { keys[mac.id] = key(for: mac.id) }
+        return OfflineCacheRoot.keepSet(macs: held.map { OfflineCacheRoot.Connection(id: $0.id, url: $0.url) },
+                                        keys: keys, fallbackBaseURL: settings?.baseURL,
+                                        fallbackKey: settings?.apiKey ?? "")
     }
     #endif
 }

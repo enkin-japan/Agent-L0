@@ -376,8 +376,10 @@ async def lifespan(app: FastAPI):
             print("📮 [System] APNs 推送已启用（iOS 横幅 + Live Activity）")
         except APNsDisabled as e:
             print(f"📮 [System] iOS 推送未启用（{e}）——设备注册照常，macOS 本地通知不受影响")
+    from framework.api.devices import store_for
     push_dispatcher = NotificationDispatcher(
-        feed, push_registry, apns_client, session_manager, push_cfg, SESSIONS_DIR)
+        feed, push_registry, apns_client, session_manager, push_cfg, SESSIONS_DIR,
+        device_active=lambda device_id: store_for(app).active(device_id))
     push_dispatcher.start()
     app.state.push_registry = push_registry
     app.state.push_dispatcher = push_dispatcher

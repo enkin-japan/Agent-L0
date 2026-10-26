@@ -30,10 +30,17 @@ class EnvGrammarTests(unittest.TestCase):
     def test_hash_and_comments_read_like_bash_source(self):
         # bash keeps '#' inside a word; only a separate '#...' word starts a comment.
         text = ('INFER_API_KEY=abc#def-0123456789\nA=x # note\nB= # only a comment\n'
-                "C='quoted # kept'\nD=a\\bc\n")
+                "C='quoted # kept'\nD=a\\bc\nE=#leading\nF='#quoted-leading'\n"
+                'G="x # in dquotes"\nH=x\\ #c\n')
         self.assertEqual(common.parse_env(text), {'INFER_API_KEY': 'abc#def-0123456789',
                                                   'A': 'x', 'B': '', 'C': 'quoted # kept',
-                                                  'D': 'abc'})
+                                                  'D': 'abc', 'E': '#leading',
+                                                  'F': '#quoted-leading', 'G': 'x # in dquotes',
+                                                  'H': 'x #c'})
+        for bad in ('I=a;#b\n', 'J=a|b\n', 'K=$(x)\n'[:0] or 'K=a&b\n', "L=`x`\n", 'M=a>b\n'):
+            with self.assertRaises(ValueError, msg=bad):
+                common.parse_env(bad)
+        self.assertEqual(common.parse_env("N='a;b'\n"), {'N': 'a;b'})
 
     def test_format_round_trips_shell_special_characters(self):
         values = {'A_KEY': "a b#c'd\"e$f`g\\h", 'EMPTY': '', 'JSON': '{"method": "mtp"}'}

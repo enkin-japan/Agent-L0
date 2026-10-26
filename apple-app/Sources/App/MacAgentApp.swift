@@ -42,6 +42,23 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 }
 #endif
 
+#if os(macOS)
+/// macOS 只连本机后端：离线缓存只有一个当前分区（地址 + 密钥）。换过密钥留下的分区
+/// 再也不会被读写，删掉。排进 OfflineCachePruner 串行执行，保留集合在执行时按当时的设置
+/// 重算；密钥读出来是空的就不删（OfflineCacheRoot.keepSet）。
+enum MacOfflineCaches {
+    @MainActor static func prune(_ settings: AppSettings) {
+        OfflineCachePruner.shared.schedule { [weak settings] in
+            await MainActor.run { () -> Set<String>? in
+                guard let settings else { return nil }
+                return OfflineCacheRoot.keepSet(macs: [], keys: [:], fallbackBaseURL: settings.baseURL,
+                                                fallbackKey: settings.apiKey)
+            }
+        }
+    }
+}
+#endif
+
 #if os(iOS)
 /// APNs 注册回调只走 UIApplicationDelegate——SwiftUI 生命周期没有等价物。
 final class AppDelegate: NSObject, UIApplicationDelegate {
@@ -75,6 +92,9 @@ struct MacAgentApp: App {
     #endif
 
     init() {
+        #if os(iOS)
+        Keychain.restrictToThisDevice()
+        #endif
         let settings = AppSettings()
         let store = AgentStore(settings: settings)
         let push = PushManager(settings: settings)
@@ -101,6 +121,7 @@ struct MacAgentApp: App {
         retier.configure(settings: settings)
         _retier = StateObject(wrappedValue: retier)
         MacAppDelegate.retier = retier
+        MacOfflineCaches.prune(settings)
         #endif
         #if os(iOS)
         AppDelegate.pushManager = push
@@ -168,13 +189,13 @@ struct MacAgentApp: App {
                 // 同一 Apple ID 的握手：请求已发出，等你在 Mac 上点允许
                 .alert(L("等待 Mac 同意"), isPresented: Binding(
                     get: { phoneLink.handshake != nil },
-                    set: { if !$0 { phoneLink.cancelHandshake() } }),
+                    set: { if !$0 { phoneLink.handshakeDismissed() } }),
                        presenting: phoneLink.handshake) { handshake in
                     switch handshake.state {
                     case .waiting:
                         Button(L("取消"), role: .cancel) { phoneLink.cancelHandshake() }
                     default:
-                        Button(L("重试")) { phoneLink.requestConnection(handshake.macId) }
+                        Button(L("重试")) { phoneLink.retryHandshake(handshake.macId) }
                         Button(L("好"), role: .cancel) { phoneLink.cancelHandshake() }
                     }
                 } message: { handshake in

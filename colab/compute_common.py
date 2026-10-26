@@ -82,14 +82,44 @@ def parse_env(text, names=None):
     return values
 
 
+_UNQUOTED_METACHARS = ';&|<>()`'
+
+
+def _strip_comment(name, raw):
+    # Same reading as bash `source`: an unquoted '#' begins a comment only at the
+    # start of a word after unescaped whitespace (`A=#foo`, `A='#foo'` and `A=x\ #c`
+    # keep their '#'). Unquoted shell metacharacters would mean something other than
+    # a literal to bash, so they are rejected instead of being read as text.
+    quote = None
+    escaped = False
+    word_start = True
+    for index, char in enumerate(raw):
+        if escaped:
+            escaped = False
+            word_start = False
+        elif quote:
+            if char == quote:
+                quote = None
+            elif char == '\\' and quote == '"':
+                escaped = True
+        elif char == '\\':
+            escaped = True
+        elif char in '\'"':
+            quote = char
+            word_start = False
+        elif char in ' \t':
+            word_start = True
+        elif char == '#' and word_start and index > 0:
+            return raw[:index]
+        elif char in _UNQUOTED_METACHARS:
+            raise ValueError(f'{name} 含未加引号的 shell 元字符，必须是单个字面值')
+        else:
+            word_start = False
+    return raw
+
+
 def _literal(name, raw):
-    # Same reading as bash `source`: '#' is literal inside a word and only a
-    # separate word starting with '#' begins a trailing comment.
-    parts = shlex.split(raw)
-    for index, part in enumerate(parts):
-        if part.startswith('#'):
-            parts = parts[:index]
-            break
+    parts = shlex.split(_strip_comment(name, raw))
     if len(parts) > 1:
         raise ValueError(f'{name} 必须是单个字面值')
     return parts[0] if parts else ''

@@ -166,7 +166,10 @@ def test_request_needs_the_icloud_ticket(client):
 
 
 def test_handshake_issues_a_token_only_after_the_mac_approves(client):
-    r = submit(client, ticket(client)).json()
+    submitted = submit(client, ticket(client))
+    # poll_secret 与票据只出现在这两条响应里：任何一层缓存都不能留下它们
+    assert submitted.status_code == 200 and submitted.headers["cache-control"] == "no-store"
+    r = submitted.json()
     assert len(r["code"]) == 4 and r["code"].isdigit()
     assert "token" not in r
     pending = client.get("/api/v1/pair/requests", headers=BEARER).json()["requests"]
@@ -174,9 +177,12 @@ def test_handshake_issues_a_token_only_after_the_mac_approves(client):
     for _ in range(3):
         waiting = poll(client, r["request_id"], r["poll_secret"])
         assert waiting.json() == {"status": "pending"}
+        assert waiting.headers["cache-control"] == "no-store"
     assert poll(client, r["request_id"], "wrong-secret").status_code == 404
     assert client.post(f"/api/v1/pair/requests/{r['request_id']}/approve", headers=BEARER).status_code == 200
-    done = poll(client, r["request_id"], r["poll_secret"]).json()
+    approved = poll(client, r["request_id"], r["poll_secret"])
+    assert approved.headers["cache-control"] == "no-store"
+    done = approved.json()
     assert done["status"] == "approved" and done["token"]
     assert poll(client, r["request_id"], r["poll_secret"]).status_code == 404   # issued once
     assert client.get("/api/v1/probe", headers=bearer(done["token"])).status_code == 200
@@ -275,21 +281,28 @@ def test_a_device_can_disconnect_itself(client):
     assert client.delete("/api/v1/pair/self", headers=BEARER).status_code == 400
 
 
-def test_revoking_unregisters_the_devices_push(client):
-    class Registry:
-        removed = []
+def test_revoking_unregisters_the_devices_push(tmp_path, monkeypatch):
+    c, app, _ = push_app(tmp_path, monkeypatch)
+    a = pair(c, push_device_id="push-123")
+    other = pair(c)
+    assert register(c, a, "push-123").status_code == 200
+    assert register(c, other, "push-other").status_code == 200
+    activity = live_activity(app, "push-123", "push-other")
+    assert c.delete(f"/api/v1/pair/devices/{device_of(app, 'push-123')}", headers=BEARER).status_code == 200
+    assert set(app.state.push_registry.devices) == {"push-other"}
+    # 吊销即停推：进行中的 Live Activity 不再带它的 token，别的设备照旧
+    assert all("push-123" not in st.tokens for st in app.state.push_dispatcher._activities.values())
+    assert activity.tokens == {"push-other": "la-push-other"}
 
-        def remove(self, device_id):
-            self.removed.append(device_id)
-        bound = []
 
-        def remove_bound(self, auth_device):
-            self.bound.append(auth_device)
-    client.app.state.push_registry = Registry()
-    claim(client, start(client), push_device_id="push-123")
-    device = client.get("/api/v1/pair/devices", headers=BEARER).json()["devices"][0]["id"]
-    client.delete(f"/api/v1/pair/devices/{device}", headers=BEARER)
-    assert Registry.removed == ["push-123"] and Registry.bound == [device]
+def test_revoking_the_only_live_activity_device_ends_the_activity(tmp_path, monkeypatch):
+    c, app, _ = push_app(tmp_path, monkeypatch)
+    a = pair(c, push_device_id="push-solo")
+    assert register(c, a, "push-solo").status_code == 200
+    live_activity(app, "push-solo")
+    assert c.delete("/api/v1/pair/self", headers=bearer(a)).status_code == 200
+    assert app.state.push_dispatcher._activities == {}
+    assert "push-solo" not in app.state.push_registry.devices
 
 
 def test_expiry_defaults_to_90_days_and_can_be_made_permanent(client, monkeypatch):
@@ -428,6 +441,183 @@ def test_push_entries_belong_to_the_device_that_registered_them(tmp_path, monkey
     device_a = app.state.push_registry.devices["push-A"]["auth_device"]
     assert c.delete(f"/api/v1/pair/devices/{device_a}", headers=BEARER).status_code == 200
     assert "push-A" not in app.state.push_registry.devices        # revocation drops its pushes
+
+
+# ---------- 同一部 iPhone 换了票据：推送条目跟着走 ----------
+
+def push_app(tmp_path, monkeypatch):
+    """配对 + 推送注册面 + 真的注册表与 dispatcher（APNs 关闭：只看簿记，不发任何东西）。"""
+    import types
+    from framework.api.routes import router as api_router
+    from framework.core.feed import GlobalFeed
+    from framework.push.dispatcher import NotificationDispatcher
+    from framework.push.registry import PushRegistry
+    monkeypatch.delenv("AGENT_INSTANCE_ID", raising=False)
+    monkeypatch.setenv("AGENT_DATA_DIR", str(tmp_path))
+    now = [1_000_000.0]
+    app = FastAPI()
+    app.state.api_key = KEY
+    app.state.device_store = devices_module.DeviceStore(tmp_path / "auth" / "devices.json",
+                                                        clock=lambda: now[0])
+    app.state.push_registry = PushRegistry(tmp_path / "push")
+    app.state.push_dispatcher = NotificationDispatcher(
+        GlobalFeed(), app.state.push_registry, None, types.SimpleNamespace(_all_sessions={}),
+        {}, tmp_path / "sessions", device_active=app.state.device_store.active)
+    app.include_router(pairing.router)
+    app.include_router(api_router, dependencies=[Depends(verify_api_key)])
+    return TestClient(app), app, now
+
+
+def pair(c, **extra):
+    code = c.post("/api/v1/pair/start", headers=BEARER).json()["code"]
+    r = c.post("/api/v1/pair/claim", json={"code": code, **extra})
+    assert r.status_code == 200
+    return r.json()["token"]
+
+
+def register(c, token, push_id, apns="apns-token"):
+    return c.post("/api/v1/push/register", headers=bearer(token),
+                  json={"device_id": push_id, "platform": "ios", "token": apns})
+
+
+def device_of(app, push_id):
+    return app.state.push_registry.devices[push_id]["auth_device"]
+
+
+def live_activity(app, *push_ids):
+    from framework.push.dispatcher import _ActivityState
+    st = _ActivityState("s-1", "t-1")
+    st.tokens = {pid: f"la-{pid}" for pid in push_ids}
+    app.state.push_dispatcher._activities["s-1"] = st
+    return st
+
+
+def use_push_surface(c, token, push_id):
+    return [register(c, token, push_id, apns="apns-new").status_code,
+            c.patch(f"/api/v1/push/devices/{push_id}/prefs", headers=bearer(token),
+                    json={"results": False}).status_code,
+            c.post("/api/v1/push/live-activity", headers=bearer(token),
+                   json={"session_id": "s-1", "turn_id": "t-1", "device_id": push_id,
+                         "token": "la-new"}).status_code]
+
+
+def test_repairing_the_same_iphone_after_expiry_moves_its_push_entry(tmp_path, monkeypatch):
+    # iPhone 的推送 id 存在本机、永不变；票据 A 到期后同一部手机拿到票据 B：B 必须能继续
+    # 管理自己的推送，到期的旧记录 A 被取代，不在设备列表里留一行死票据。
+    c, app, now = push_app(tmp_path, monkeypatch)
+    a = pair(c, push_device_id="push-P")
+    assert register(c, a, "push-P").status_code == 200
+    first = device_of(app, "push-P")
+    now[0] += 91 * 86400
+    assert c.get("/api/v1/pair/devices", headers=bearer(a)).json()["detail"] == "device_expired"
+    b = pair(c, push_device_id="push-P")
+    listing = c.get("/api/v1/pair/devices", headers=BEARER).json()["devices"]
+    assert len(listing) == 1 and listing[0]["id"] != first
+    # 改绑在配对当下完成：发送侧按归属跳过失效票据，通知不能等到 B 再登记一次才恢复
+    assert device_of(app, "push-P") == listing[0]["id"]
+    assert app.state.push_dispatcher._deliverable(app.state.push_registry.devices["push-P"], "t")
+    assert use_push_surface(c, b, "push-P") == [200, 200, 200]
+    assert device_of(app, "push-P") == listing[0]["id"]
+    assert app.state.push_registry.devices["push-P"]["token"] == "apns-new"
+    assert c.get("/api/v1/pair/devices", headers=bearer(a)).status_code == 401    # A is gone
+
+
+def test_a_live_ticket_is_never_superseded_by_a_self_reported_push_id(tmp_path, monkeypatch):
+    # push id 是手机自报的：凭它删掉一张仍有效的票据就等于顶替。旧票据仍有效时重扫码，
+    # 由 iPhone 先注销旧票据；后端两张都留着，条目仍归 A。
+    c, app, _ = push_app(tmp_path, monkeypatch)
+    a = pair(c, push_device_id="push-P")
+    assert register(c, a, "push-P").status_code == 200
+    first = device_of(app, "push-P")
+    b = pair(c, push_device_id="push-P")
+    assert len(c.get("/api/v1/pair/devices", headers=BEARER).json()["devices"]) == 2
+    assert device_of(app, "push-P") == first
+    assert use_push_surface(c, b, "push-P") == [403, 403, 403]
+    assert register(c, a, "push-P").status_code == 200                           # A still works
+
+
+def _expired_owner_and_later_ticket(c, app, now, caller_push_id):
+    """A（配对时没报推送 id）登记了 push-Q；10 天后配对 B；再过 81 天 A 到期、B 仍有效。"""
+    a = pair(c)
+    assert register(c, a, "push-Q").status_code == 200
+    first = device_of(app, "push-Q")
+    now[0] += 10 * 86400
+    b = pair(c, push_device_id=caller_push_id)
+    assert device_of(app, "push-Q") == first               # A 仍有效：配对时不接管
+    now[0] += 81 * 86400
+    ids = [d["id"] for d in c.get("/api/v1/pair/devices", headers=BEARER).json()["devices"]]
+    return b, first, [i for i in ids if i != first][0]
+
+
+def test_entry_of_an_expired_ticket_is_taken_over_by_the_phone_that_owns_the_push_id(tmp_path, monkeypatch):
+    c, app, now = push_app(tmp_path, monkeypatch)
+    b, first, b_id = _expired_owner_and_later_ticket(c, app, now, "push-Q")
+    prefs = c.patch("/api/v1/push/devices/push-Q/prefs", headers=bearer(b), json={"results": False})
+    assert prefs.status_code == 200
+    assert device_of(app, "push-Q") == b_id                 # 接管当场改绑，不等下一次 register
+    assert use_push_surface(c, b, "push-Q") == [200, 200, 200]
+    assert device_of(app, "push-Q") == b_id
+
+
+def test_entry_of_an_expired_ticket_is_not_taken_over_by_another_phone(tmp_path, monkeypatch):
+    c, app, now = push_app(tmp_path, monkeypatch)
+    b, first, _ = _expired_owner_and_later_ticket(c, app, now, "push-other")
+    assert use_push_surface(c, b, "push-Q") == [403, 403, 403]
+    assert device_of(app, "push-Q") == first
+
+
+def test_a_ticket_stops_counting_at_its_expiry_instant(tmp_path):
+    now = [1_000_000.0]
+    store = devices_module.DeviceStore(tmp_path / "devices.json", clock=lambda: now[0])
+    token, record, _ = store.issue(name="x", via="qr", push_device_id="push-E")
+    now[0] = record["expires"] - 1
+    assert store.active(record["id"]) and store.verify(token)[0] == "ok"
+    now[0] = record["expires"]                              # same instant auth calls it expired
+    assert store.verify(token)[0] == "expired"
+    assert not store.active(record["id"])
+    assert store.field(record["id"], "push_device_id") == "push-E"
+    assert store.field("d_missing", "push_device_id") is None
+
+
+def test_push_rebind_failure_never_withholds_the_ticket(tmp_path, monkeypatch, capsys):
+    c, app, now = push_app(tmp_path, monkeypatch)
+    a = pair(c, push_device_id="push-P")
+    assert register(c, a, "push-P").status_code == 200
+    now[0] += 91 * 86400
+
+    def broken(*args, **kwargs):
+        raise OSError("disk full")
+    monkeypatch.setattr(app.state.push_registry, "rebind", broken)
+    b = pair(c, push_device_id="push-P")                    # asserts 200 + a token
+    assert b and "推送条目改绑失败" in capsys.readouterr().out
+
+
+def test_entry_of_a_live_ticket_still_cannot_be_taken_over(tmp_path, monkeypatch):
+    c, app, _ = push_app(tmp_path, monkeypatch)
+    a = pair(c)
+    assert register(c, a, "push-R").status_code == 200
+    owner = device_of(app, "push-R")
+    b = pair(c)
+    assert use_push_surface(c, b, "push-R") == [403, 403, 403]
+    assert device_of(app, "push-R") == owner
+    # 自报同一个推送 id 去配对也接不走仍然有效的别的票据登记的条目
+    pair(c, push_device_id="push-R")
+    assert device_of(app, "push-R") == owner
+
+
+def test_revoking_a_device_leaves_other_devices_entries_alone(tmp_path, monkeypatch):
+    # C 的记录自报了推送 id R，但条目 R 是仍然有效的 D 登记的：吊销 C 不能把 D 的推送删掉。
+    c, app, _ = push_app(tmp_path, monkeypatch)
+    d = pair(c)
+    assert register(c, d, "push-R").status_code == 200
+    owner = device_of(app, "push-R")
+    pair(c, push_device_id="push-R")
+    claimant = [x["id"] for x in c.get("/api/v1/pair/devices", headers=BEARER).json()["devices"]
+                if x["id"] != owner][0]
+    live_activity(app, "push-R")
+    assert c.delete(f"/api/v1/pair/devices/{claimant}", headers=BEARER).status_code == 200
+    assert device_of(app, "push-R") == owner
+    assert app.state.push_dispatcher._activities["s-1"].tokens == {"push-R": "la-push-R"}
 
 
 def test_store_survives_a_restart(client, tmp_path):

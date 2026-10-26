@@ -561,11 +561,11 @@ def logout_tailnet(data):
         pass
 
 
-def stop_owned(data):
+def stop_owned(data, operator_confirmed=False):
     with cleanup_signals():
         for attempt in range(3):
             try:
-                return stop_attempt(data)
+                return stop_attempt(data, operator_confirmed)
             except LeaseStopped:
                 raise
             except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
@@ -576,7 +576,7 @@ def stop_owned(data):
                 time.sleep(2)
 
 
-def stop_attempt(data):
+def stop_attempt(data, operator_confirmed=False):
     name = data['session']
     if not common.is_owned_session(name):
         raise ValueError('拒绝停止非本工具创建的会话')
@@ -596,7 +596,7 @@ def stop_attempt(data):
                 return  # Another stop completed while this caller was waiting.
             data.update(latest)
         try:
-            _stop_owned(data)
+            _stop_owned(data, operator_confirmed)
         except BaseException:
             data['state'] = RELEASE_UNCONFIRMED
             try:
@@ -606,7 +606,19 @@ def stop_attempt(data):
             raise
 
 
-def _stop_owned(data):
+def _confirm_no_allocation(name, first):
+    # A non-zero `colab new` exit is not proof that the server allocated nothing: the
+    # CLI may have timed out after the server accepted, and a VM still provisioning
+    # shows up late. Require the server list to stay free of this session and of
+    # unattributed `?` VMs across three reads, 5 s apart.
+    views = [first]
+    for _ in range(2):
+        time.sleep(5)
+        views.append(server_sessions())
+    return all(name not in v.values() and '?' not in v.values() for v in views)
+
+
+def _stop_owned(data, operator_confirmed=False):
     name = data['session']
     event('正在核对并回收 VM', session=name)
     if data.get('allocation_attempted') is False and not data.get('endpoint'):
@@ -617,9 +629,18 @@ def _stop_owned(data):
     assignments = server_sessions()
     endpoint = data.get('endpoint') or next((e for e, n in assignments.items() if n == name), None)
     if not endpoint:
+        proven = data.get('allocation_failed') or operator_confirmed
+        if proven and _confirm_no_allocation(name, assignments):
+            data['state'] = STOPPED
+            save_state(data)
+            event('申请未成功且服务端连续三次核对均无本会话或身份不明的 VM；无计费资源需要释放',
+                  session=name, allocation_failed=data.get('allocation_failed'),
+                  operator_confirmed=bool(operator_confirmed))
+            return
         data['state'] = RELEASE_UNCONFIRMED
         save_state(data)
-        raise RuntimeError('分配身份未知；先人工核对 colab sessions；未声称已释放')
+        raise RuntimeError('分配身份未知；先人工核对 colab sessions；未声称已释放。'
+                           '确认服务端没有本工具的 VM 后，用 stop --confirm-unallocated 清除本地租约')
     data['endpoint'] = endpoint
     data['state'] = STOPPING
     save_state(data)
@@ -753,7 +774,14 @@ def start(args):
             raise
         except LeaseStopped:
             event('租约已由另一个进程停止')
-        except Exception:
+        except Exception as exc:
+            # finish_start may raise its own error; record the original cause first.
+            try:
+                event('启动失败' + ('，开始回收' if phase['allocated'] else ''),
+                      error_type=type(exc).__name__,
+                      reason=str(exc) if isinstance(exc, (ValueError, RuntimeError)) else '')
+            except OSError:
+                pass  # Logging must never replace the original failure.
             if phase['bootstrapped']:
                 try:
                     collect_failure_diagnostic(lease)
@@ -827,7 +855,16 @@ def _allocate(lease, phase):
         save_state(lease)  # CAS rejects a stop issued during preflight before any paid call.
         phase['allocated'] = True
         event('开始申请 A100 40GB VM', session=lease['session'])
-        cli('new', '-s', lease['session'], '--gpu', common.GPU_NAME, timeout=120)
+        try:
+            cli('new', '-s', lease['session'], '--gpu', common.GPU_NAME, timeout=120)
+        except subprocess.CalledProcessError as exc:
+            # The CLI itself reported the request failed (no A100, quota, network).
+            # allocation_attempted stays True: stop still has to see the server list
+            # free of this session and of unattributed VMs before recording STOPPED.
+            lease['allocation_failed'] = 'cli-error'
+            save_state(lease)
+            event('Colab CLI 申请 VM 失败', returncode=exc.returncode)
+            raise
         lease['endpoint'] = next((e for e, n in server_sessions().items()
                                   if n == lease['session']), None)
         if not lease['endpoint']:
@@ -1425,7 +1462,10 @@ def build_parser():
                    default=DEFAULTS['health_interval'])
     p = commands.add_parser('status', help='租约、服务端 VM、本机可见遗留节点')
     p.add_argument('--hostname', default=HOSTNAME)
-    commands.add_parser('stop', help='注销节点、释放本工具的 VM 并核对服务端')
+    p = commands.add_parser('stop', help='注销节点、释放本工具的 VM 并核对服务端')
+    p.add_argument('--confirm-unallocated', action='store_true',
+                   help='人工已核对 colab sessions 没有本工具的 VM：允许把无端点的租约记为 stopped'
+                        '（服务端仍有本会话或身份不明的 VM 时照旧拒绝）')
     p = commands.add_parser('logs', help='查看部署日志')
     p.add_argument('--lines', type=bounded(int, 'lines'), default=DEFAULTS['lines'])
     p.add_argument('--remote', action='store_true', help='拉取 VM 脱敏日志末尾（快照）')
@@ -1497,7 +1537,9 @@ def dispatch(args):
             raise RuntimeError('状态文件已损坏，无法确定要释放哪台 VM；用 status / colab sessions '
                                '核对本工具的会话后在 Colab 控制台释放，再删除该文件')
         if data and (data.get('endpoint') or data.get('state') != STOPPED):
-            stop_owned(data)
+            # The operator's confirmation applies to this invocation only; it is not
+            # persisted, so a later plain `stop` does not inherit it.
+            stop_owned(data, operator_confirmed=getattr(args, 'confirm_unallocated', False))
         else:
             print('没有本工具持有的活动租约')
     elif args.command == 'status':
@@ -1530,8 +1572,11 @@ def main(argv=None):
         return 1
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
         # No exception repr for subprocesses: it may contain remote output.
-        event('ERROR', reason=str(exc) if isinstance(exc, (ValueError, RuntimeError))
-              else type(exc).__name__)
+        fields = {'reason': str(exc) if isinstance(exc, (ValueError, RuntimeError))
+                  else type(exc).__name__}
+        if exc.__context__ is not None:
+            fields['context_type'] = type(exc.__context__).__name__
+        event('ERROR', **fields)
         return 1
 
 

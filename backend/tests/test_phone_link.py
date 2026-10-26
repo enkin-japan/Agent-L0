@@ -19,6 +19,7 @@ def test_phone_link_logic(tmp_path):
     compilation = subprocess.run([
         "xcrun", "swiftc", "-parse-as-library", "-module-cache-path", str(tmp_path / "modules"),
         str(ROOT / "apple-app/Sources/App/PhoneLink.swift"),
+        str(ROOT / "apple-app/Sources/LiveActivity/ApprovalRouting.swift"),
         str(ROOT / "apple-app/Tests/phone_link_test.swift"), "-o", str(binary),
     ], capture_output=True, text=True, timeout=120)
     assert compilation.returncode == 0, compilation.stderr

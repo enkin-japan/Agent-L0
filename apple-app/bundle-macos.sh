@@ -44,8 +44,10 @@ rsync -a --delete --delete-excluded \
   --exclude='models' --exclude='sessions' --exclude='schedules' --exclude='notes' \
   --exclude='*.jsonl' --exclude='*.log' --exclude='.DS_Store' \
   --exclude='logs' --exclude='api_tools' --exclude='skills' --exclude='/maintenance/' \
-  --exclude='/auth/' \
+  --exclude='/auth/' --exclude='/push/' --exclude='/registrations/' \
   "$ROOT/backend/" "$RES/backend/"
+# /auth/ /push/ /registrations/ 同样只匹配数据根（设备票据哈希、APNs token、待确认注册队列），
+# framework/push/ 是运行代码，必须保留；下方泄漏断言一并核对这三个目录。
 # ⚠️ backend/api_tools 是 dev 形态的数据目录（UI 添加的声明 + .secrets.env 密钥文件），
 #    绝不进包——密钥红线；app 形态由 DATA_DIR（App Support）承接同名目录。
 #    backend/skills 同理（UI 添加的用户剧本，dev 数据目录）——开发机私有内容不进交付包。
@@ -99,6 +101,9 @@ cp "$ROOT/config.yaml" "$RES/config.yaml"
 # 私钥零泄漏断言：包里绝不能有 .p8 / .env*（S 级纪律，宁可组装失败）
 leaked=$(find "$APP" \( -name '*.p8' -o -name '.env' -o -name '.env.*' \) | head -5)
 [ -z "$leaked" ] || { echo "❌ 包内发现私钥/环境文件：" >&2; echo "$leaked" >&2; exit 1; }
+for d in auth push registrations api_tools; do
+  [ ! -e "$RES/backend/$d" ] || { echo "❌ 包内发现数据目录 backend/$d（票据 / 推送 token / 密钥文件）" >&2; exit 1; }
+done
 
 # 执行层完整性断言（2026-08-10 401 事故）：resolveLayout 的 bundle 判据就是这些文件，
 # 缺任何一件装出去的 app 会静默退 repo 布局（密钥换源 → 构造性 401）。宁可组装失败。

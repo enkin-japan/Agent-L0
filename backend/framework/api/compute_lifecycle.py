@@ -1,6 +1,7 @@
 """Compute availability for the HTTP adapter, without owning any turn lifecycle."""
 import asyncio
 import re
+import time
 from contextlib import suppress
 
 import httpx
@@ -9,6 +10,9 @@ import httpx
 # execution away from the user; three consecutive cycles is a real outage.
 MONITOR_FAILURES_BEFORE_UNAVAILABLE = 3
 MESSAGE_MAX_CHARS = 300
+# An outage that lasts hours must not print a line every probe cycle (5 s) or every
+# retry (≤30 s): a state change is logged at once, the same state at most this often.
+LOG_REPEAT_SECONDS = 300
 # The guidance the shell launcher used to print before it stopped gating startup
 # (scripts/lib_edge.sh require_host / probe_auth): the operator needs to know what
 # to go fix, and after this change the backend log is the only place that says it.
@@ -115,7 +119,7 @@ class ComputeLifecycle:
     """One assembly attempt at a time, followed by availability checks of that engine."""
 
     def __init__(self, app, assemble, publish, cleanup, probe=None, *,
-                 retry_initial=2, retry_max=30, monitor_interval=5):
+                 retry_initial=2, retry_max=30, monitor_interval=5, clock=time.monotonic):
         self.app = app
         self.assemble = assemble
         self.publish = publish
@@ -126,7 +130,10 @@ class ComputeLifecycle:
         self.monitor_interval = max(0.01, monitor_interval)
         self.resources = None
         self.task = None
-        self._last_detail = None
+        self.clock = clock
+        self._log_key = None
+        self._log_at = 0.0
+        self._log_suppressed = 0
         self.app.state.compute_ready = False
         self.app.state.compute_state = "starting"
         self.app.state.compute_installed = False
@@ -156,18 +163,26 @@ class ComputeLifecycle:
         self.task = asyncio.create_task(self._run(), name="compute-startup")
         return self.task
 
-    def _diagnose(self, exc) -> str:
-        """Exception class on every line; the message only when it is new.
-
-        A retry loop that reprints the same sentence every few seconds buries the
-        one line that changed, so the detail is printed on the first failure and
-        again whenever it differs (a refused connection becoming a 401 is news).
-        """
+    @staticmethod
+    def _diagnose(exc) -> str:
         detail = describe_failure(exc)
-        if detail and detail != self._last_detail:
-            self._last_detail = detail
-            return f"{type(exc).__name__}: {detail}"
-        return type(exc).__name__
+        return f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
+
+    def _log(self, key, line: str) -> None:
+        """A state change prints at once; the same state at most every LOG_REPEAT_SECONDS.
+
+        The key carries the failure detail, so a refused connection becoming a 401 is
+        a change and is printed immediately; an unchanged outage is not repeated every
+        few seconds, burying the one line that changed.
+        """
+        now = self.clock()
+        if key == self._log_key and now - self._log_at < LOG_REPEAT_SECONDS:
+            self._log_suppressed += 1
+            return
+        if key == self._log_key and self._log_suppressed:
+            line += f"（同一状态已持续，{LOG_REPEAT_SECONDS // 60} 分钟内省略 {self._log_suppressed} 行）"
+        self._log_key, self._log_at, self._log_suppressed = key, now, 0
+        print(line)
 
     async def _run(self):
         delay = self.retry_initial
@@ -179,10 +194,11 @@ class ComputeLifecycle:
             except Exception as exc:
                 self.app.state.compute_ready = False
                 self.app.state.compute_state = "retrying"
-                print(f"[Compute] 计算装配未就绪（{self._diagnose(exc)}），{delay:g}s 后重试")
+                diagnosis = self._diagnose(exc)
+                self._log(("retrying", diagnosis),
+                          f"[Compute] 计算装配未就绪（{diagnosis}），{delay:g}s 后重试")
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, self.retry_max)
-        self._last_detail = None
         failures = 0
         while self.probe is not None:
             await asyncio.sleep(self.monitor_interval)
@@ -192,22 +208,24 @@ class ComputeLifecycle:
                 raise
             except Exception as exc:
                 failures += 1
+                diagnosis = self._diagnose(exc)
                 # Hysteresis: only consecutive failures mean the compute side is
                 # gone. Flipping on the first one would 503 a user mid-conversation
-                # for a single dropped packet. _diagnose is called exactly once per
-                # failure in either branch (it owns the "message changed" state).
+                # for a single dropped packet.
                 if failures >= MONITOR_FAILURES_BEFORE_UNAVAILABLE:
                     self.app.state.compute_ready = False
                     self.app.state.compute_state = "unavailable"
-                    print(f"[Compute] 计算连接未就绪（{self._diagnose(exc)}）；保留本地记录与既有引擎")
+                    self._log(("unavailable", diagnosis),
+                              f"[Compute] 计算连接未就绪（{diagnosis}）；保留本地记录与既有引擎")
                 else:
-                    print(f"[Compute] 计算连接探活失败 "
-                          f"{failures}/{MONITOR_FAILURES_BEFORE_UNAVAILABLE}"
-                          f"（{self._diagnose(exc)}）；仍按就绪对外服务")
+                    self._log(("probe_failed", failures, diagnosis),
+                              f"[Compute] 计算连接探活失败 "
+                              f"{failures}/{MONITOR_FAILURES_BEFORE_UNAVAILABLE}"
+                              f"（{diagnosis}）；仍按就绪对外服务")
             else:
-                if failures:
-                    failures = 0
-                    self._last_detail = None
+                if self.app.state.compute_state == "unavailable":
+                    self._log(("ready",), "[Compute] 计算连接已恢复")
+                failures = 0
                 self.app.state.compute_ready = True
                 self.app.state.compute_state = "ready"
 

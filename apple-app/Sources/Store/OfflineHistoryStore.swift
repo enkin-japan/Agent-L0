@@ -52,15 +52,36 @@ actor OfflineHistoryStore {
         return digest((components?.string ?? baseURL.absoluteString) + "\n" + digest(apiKey))
     }
     private func directory(_ namespace: String) -> URL {
-        root.appendingPathComponent(Self.digest(namespace), isDirectory: true)
+        root.appendingPathComponent(OfflineCacheRoot.partition(namespace), isDirectory: true)
     }
     private func historyURL(_ sessionId: String, _ namespace: String) -> URL {
         directory(namespace).appendingPathComponent("history-" + Self.digest(sessionId) + ".json")
     }
+    /// The index exists but cannot be read right now (iOS: device locked). Not a
+    /// failure of the connection: callers skip this round's index writes and go on.
+    struct IndexUnreadable: Error {
+        let underlying: Error
+    }
+    /// Readers treat an unreadable index as empty: nothing cached is shown.
     func loadIndex(namespace: String) -> Index {
+        (try? readIndex(namespace: namespace)) ?? Index()
+    }
+    /// nil = the index exists but is unreadable (callers keep what they already show).
+    func readableIndex(namespace: String) -> Index? {
+        try? readIndex(namespace: namespace)
+    }
+    /// The base of every index write. Only a missing file is an empty index. Any other
+    /// read failure throws, so the write is skipped instead of replacing the real index
+    /// with an empty one — on iOS the file is `.completeUnlessOpen` and cannot be read
+    /// while the device is locked, which is exactly when background refreshes run.
+    /// An unparsable file is still rebuilt from empty: it holds nothing to preserve.
+    private func readIndex(namespace: String) throws -> Index {
         let url = directory(namespace).appendingPathComponent("index.json")
-        guard let data = try? Data(contentsOf: url), let index = try? JSONDecoder().decode(Index.self, from: data) else { return Index() }
-        return index
+        let data: Data
+        do { data = try Data(contentsOf: url) }
+        catch CocoaError.fileReadNoSuchFile, CocoaError.fileNoSuchFile { return Index() }
+        catch { throw IndexUnreadable(underlying: error) }
+        return (try? JSONDecoder().decode(Index.self, from: data)) ?? Index()
     }
     private func write<T: Encodable>(_ value: T, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -87,7 +108,7 @@ actor OfflineHistoryStore {
     func saveIndex(_ sessions: [SessionMetaItem], retentionPolicy: SessionRetentionPolicy?, namespace: String,
                    isCurrent: @Sendable () -> Bool = { true }) throws -> Bool {
         guard !Task.isCancelled, isCurrent() else { return false }
-        var index = loadIndex(namespace: namespace)
+        var index = try readIndex(namespace: namespace)
         let valid = Set(sessions.map(\.sessionId))
         let removed = Set(index.sessions.map(\.sessionId)).union(index.versions.keys).subtracting(valid)
         for id in removed {
@@ -109,7 +130,7 @@ actor OfflineHistoryStore {
         return true
     }
     func saveSelection(_ sessionId: String?, namespace: String) throws {
-        var index = loadIndex(namespace: namespace); index.selectedSessionId = sessionId
+        var index = try readIndex(namespace: namespace); index.selectedSessionId = sessionId
         try writeIndex(index, namespace: namespace)
     }
     func loadHistory(sessionId: String, namespace: String, matchingVersion: Version? = nil) -> HistoryResponse? {
@@ -125,7 +146,7 @@ actor OfflineHistoryStore {
     func saveHistory(_ history: HistoryResponse, metadata: SessionMetaItem?, namespace: String, requireListed: Bool = false, expectedEpoch: Int? = nil) throws -> Bool {
         guard history.status, !Task.isCancelled else { return false }
         if let expectedEpoch, expectedEpoch != epoch(sessionId: history.sessionId, namespace: namespace) { return false }
-        var index = loadIndex(namespace: namespace)
+        var index = try readIndex(namespace: namespace)
         let listed = index.sessions.first { $0.sessionId == history.sessionId }
         // A late foreground response must not borrow a newer index's version.
         if let metadata, let listed, Version(metadata) != Version(listed) { return false }
@@ -139,7 +160,7 @@ actor OfflineHistoryStore {
            let existing = loadHistory(sessionId: history.sessionId, namespace: namespace),
            existing.turns.count > history.turns.count { return false }
         try write(history, to: historyURL(history.sessionId, namespace))
-        index = loadIndex(namespace: namespace)
+        index = try readIndex(namespace: namespace)
         index.invalidated?.remove(history.sessionId)
         if let metadata { index.versions[history.sessionId] = Version(metadata) }
         else { index.versions[history.sessionId] = nil }
@@ -186,7 +207,7 @@ actor OfflineHistoryStore {
     /// A confirmed tail deletion invalidates only this body. Persist the tombstone
     /// before removing bytes so an interrupted cleanup cannot resurrect it on restart.
     func invalidateHistory(sessionId: String, namespace: String) throws {
-        var index = loadIndex(namespace: namespace)
+        var index = try readIndex(namespace: namespace)
         advanceEpoch(sessionId, index: &index)
         index.versions[sessionId] = nil
         if index.invalidated == nil { index.invalidated = [] }
@@ -214,7 +235,7 @@ actor OfflineHistoryStore {
     /// means the budget left files out: the version still advances (the 15s refresh
     /// must not retry it forever) but the session is not advertised as fully saved.
     func recordAssetSync(_ item: SessionMetaItem, namespace: String, complete: Bool, token: Int) throws {
-        var index = loadIndex(namespace: namespace)
+        var index = try readIndex(namespace: namespace)
         guard index.sessions.contains(where: { $0.sessionId == item.sessionId }),
               index.invalidated?.contains(item.sessionId) != true else { return }
         if index.assetVersions == nil { index.assetVersions = [:] }
@@ -229,7 +250,7 @@ actor OfflineHistoryStore {
     /// all the same — its running pass reads the raised counter and stays partial.
     func markAssetsEvicted(_ ids: Set<String>, namespace: String) throws {
         guard !ids.isEmpty else { return }
-        var index = loadIndex(namespace: namespace)
+        var index = try readIndex(namespace: namespace)
         index.assetPartial = (index.assetPartial ?? []).union(ids)
         var marks = index.assetMarks ?? [:]
         for id in ids { marks[id] = (marks[id] ?? 0) + 1 }
@@ -243,14 +264,14 @@ actor OfflineHistoryStore {
     /// Space was reclaimed (sessions disappeared): every mirror the budget had cut
     /// short becomes eligible again on the next pass.
     func retryPartialAssetSessions(namespace: String) throws {
-        var index = loadIndex(namespace: namespace)
+        var index = try readIndex(namespace: namespace)
         guard let partial = index.assetPartial, !partial.isEmpty else { return }
         for id in partial { index.assetVersions?[id] = nil }
         index.assetPartial = []
         try writeIndex(index, namespace: namespace)
     }
     func removeSessions(_ ids: Set<String>, namespace: String) throws {
-        var index = loadIndex(namespace: namespace)
+        var index = try readIndex(namespace: namespace)
         for id in ids {
             advanceEpoch(id, index: &index)
             try? FileManager.default.removeItem(at: historyURL(id, namespace)); index.versions[id] = nil
@@ -275,5 +296,32 @@ enum OfflineTransportFailure {
         default:
             return false
         }
+    }
+}
+
+/// Which connection partitions are still in use. Pure, so it is tested on the host.
+/// `macs` are the saved connections that hold a credential; `keys` maps their id to it.
+/// nil means "do not prune this round": any credential that reads back empty (the
+/// keychain was unavailable, or an entry was lost) would otherwise make its live
+/// partition look orphaned, and an empty result — no Mac and no key, or nothing with a
+/// usable address — would delete every partition.
+extension OfflineCacheRoot {
+    struct Connection: Equatable, Sendable {
+        let id: String
+        let url: String
+    }
+
+    static func keepSet(macs: [Connection], keys: [String: String],
+                        fallbackBaseURL: URL?, fallbackKey: String) -> Set<String>? {
+        var namespaces = Set<String>()
+        for mac in macs {
+            guard let key = keys[mac.id], !key.isEmpty else { return nil }
+            guard let url = URL(string: mac.url), url.scheme != nil else { continue }
+            namespaces.insert(OfflineHistoryStore.namespace(baseURL: url, apiKey: key))
+        }
+        if let url = fallbackBaseURL, url.scheme != nil, !fallbackKey.isEmpty {
+            namespaces.insert(OfflineHistoryStore.namespace(baseURL: url, apiKey: fallbackKey))
+        }
+        return namespaces.isEmpty ? nil : namespaces
     }
 }

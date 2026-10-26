@@ -514,6 +514,81 @@ m.stop_owned(m.current())
             self.assertEqual(data['state'],'release-unconfirmed')
             release.assert_not_called()
 
+    def test_cli_rejected_allocation_releases_lease_once_server_shows_nothing(self):
+        # `colab new` exited non-zero: stop may record STOPPED, but only after the
+        # server list shows neither this session nor an unattributed VM.
+        data={'session':'agent-compute-0123456789ab','allocation_attempted':True,'allocation_failed':'cli-error'}
+        with patch.object(ctl,'server_sessions',return_value={}) as sessions, patch.object(ctl,'save_state'), \
+             patch.object(ctl.time,'sleep') as sleep, \
+             patch.object(ctl,'release_endpoint') as release, patch.object(ctl,'cli') as cli:
+            ctl.stop_owned(data)
+            self.assertEqual(data['state'],'stopped'); release.assert_not_called(); cli.assert_not_called()
+            self.assertEqual(sessions.call_count,3); self.assertEqual(sleep.call_count,2)
+        # An unattributed VM shows up only on a later read (CLI failed after the server accepted).
+        data={'session':'agent-compute-0123456789ab','allocation_attempted':True,'allocation_failed':'cli-error'}
+        views=iter([{},{}])
+        with patch.object(ctl,'server_sessions',side_effect=lambda: next(views,{'late':'?'})), \
+             patch.object(ctl,'save_state'), patch.object(ctl.time,'sleep'), patch.object(ctl,'cli') as cli:
+            with self.assertRaises(RuntimeError): ctl.stop_owned(data)
+            self.assertEqual(data['state'],'release-unconfirmed'); cli.assert_not_called()
+        data={'session':'agent-compute-0123456789ab','allocation_attempted':True,'allocation_failed':'cli-error'}
+        with patch.object(ctl,'server_sessions',return_value={'orphan':'?'}), patch.object(ctl,'save_state'):
+            with self.assertRaises(RuntimeError): ctl.stop_owned(data)
+            self.assertEqual(data['state'],'release-unconfirmed')
+        data={'session':'agent-compute-0123456789ab','allocation_attempted':True}  # timeout leaves no marker
+        with patch.object(ctl,'server_sessions',return_value={}), patch.object(ctl,'save_state'):
+            with self.assertRaises(RuntimeError): ctl.stop_owned(data)
+            self.assertEqual(data['state'],'release-unconfirmed')
+
+    def test_operator_confirmation_clears_unconfirmed_lease_only_without_unknown_vms(self):
+        data={'session':'agent-compute-0123456789ab','allocation_attempted':True}
+        with patch.object(ctl,'server_sessions',return_value={'orphan':'?'}), patch.object(ctl,'save_state'), \
+             patch.object(ctl.time,'sleep'):
+            with self.assertRaises(RuntimeError): ctl.stop_owned(data, operator_confirmed=True)
+            self.assertEqual(data['state'],'release-unconfirmed')
+        with patch.object(ctl,'server_sessions',return_value={}), patch.object(ctl,'save_state'), \
+             patch.object(ctl.time,'sleep'):
+            ctl.stop_owned(data, operator_confirmed=True)
+            self.assertEqual(data['state'],'stopped')
+            self.assertNotIn('operator_confirmed_unallocated',data)  # confirmation is per invocation
+
+    def test_stop_command_passes_operator_confirmation_only_when_flag_given(self):
+        lease={'session':'agent-compute-0123456789ab','state':'release-unconfirmed','allocation_attempted':True}
+        with patch.object(ctl,'snapshot',return_value=dict(lease)), patch.object(ctl,'stop_owned') as stop:
+            ctl.dispatch(argparse.Namespace(command='stop',confirm_unallocated=True))
+            self.assertEqual(stop.call_args.kwargs,{'operator_confirmed':True})
+            stop.reset_mock()
+            ctl.dispatch(argparse.Namespace(command='stop',confirm_unallocated=False))
+            self.assertEqual(stop.call_args.kwargs,{'operator_confirmed':False})
+            stop.reset_mock()
+            ctl.dispatch(argparse.Namespace(command='stop'))  # older callers without the flag
+            self.assertEqual(stop.call_args.kwargs,{'operator_confirmed':False})
+            self.assertNotIn('operator_confirmed_unallocated',stop.call_args.args[0])
+
+    def test_failed_new_marks_lease_and_unmocked_stop_recovers_to_stopped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); key=root/'key'; key.write_text('tskey-auth-synthetic'); key.chmod(0o600)
+            args=argparse.Namespace(auth_key=key,minutes=1,hostname=ctl.HOSTNAME)
+            calls=[]
+            def fake_cli(*a,**k):
+                calls.append(a[0])
+                if a[0]=='new': raise subprocess.CalledProcessError(1,'colab')
+                if a[0]=='sessions':
+                    return subprocess.CompletedProcess(a,0,stdout='No active sessions found on server.\n',stderr='')
+                raise AssertionError(a)
+            with patch.object(ctl,'STATE',root/'state'), patch.object(ctl,'env_credentials',return_value={}), \
+                 patch.object(ctl,'make_archive',return_value=5), \
+                 patch.object(ctl,'check_start_resources',return_value='example.ts.net'), \
+                 patch.object(ctl,'cli',side_effect=fake_cli), patch.object(ctl.time,'sleep'):
+                with self.assertRaises(subprocess.CalledProcessError): ctl.start(args)
+                current=ctl.current()
+                self.assertEqual(current['allocation_failed'],'cli-error')
+                self.assertEqual(current['state'],'stopped')
+                self.assertNotIn('stop',calls)
+                log=(ctl.STATE/'deploy.log').read_text()
+                self.assertIn('Colab CLI 申请 VM 失败',log)
+                self.assertIn('CalledProcessError',log)
+
     def test_secret_guard_mutations_are_detected(self):
         # Mutate only in-memory function globals, proving the archive test detects leakage.
         original=ctl.source_allowed

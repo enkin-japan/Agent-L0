@@ -6,6 +6,9 @@
 - 文件损坏 / 结构不对 / 字段类型不对 → **fail-closed**：设备票据一律不认（共享密钥不受
   影响，Mac 照常可用）；坏文件改名留存，从空表重来，并给出 `notice` 供 Mac 设置页提示；
 - 吊销即删记录，下一次请求就 401；到期返回 `expired`，由调用方报 device_expired；
+- 同一部手机重新配对（新记录自报的 push_device_id 与一条**已到期**的旧记录相同）：旧记录被
+  取代、当场删掉，issue() 交回被取代的 id，调用方据此把推送条目改绑到新票据；仍有效的同
+  push id 记录一律不动——自报的推送 id 不能拿来顶掉别人的票据；
 - 写入：临时文件 + fsync + os.replace，目录 0700、文件 0600；进程内一把锁串行化。
 票据 256 bit 随机，按哈希查表即可（无需慢哈希；高熵票据的查表时序泄露不出可用信息）。
 """
@@ -146,23 +149,51 @@ class DeviceStore:
                     print(f"[Auth] last_used 落盘失败（内存态仍有效）：{type(exc).__name__}")
             return "ok", device_id
 
+    def active(self, device_id: Optional[str]) -> bool:
+        """记录存在且未到期（吊销 = 记录已删）。推送归属与发送侧据此认「票据还算数」。"""
+        with self.lock:
+            record = self.devices.get(device_id) if device_id else None
+            if record is None:
+                return False
+            expires = record.get("expires")
+            return expires is None or self.clock() < expires
+
+    def field(self, device_id: Optional[str], name: str) -> Any:
+        """只读：某条记录的一个字段（记录不存在 = None）。不暴露记录本身，免得调用方改到它。"""
+        with self.lock:
+            record = self.devices.get(device_id) if device_id else None
+            return None if record is None else record.get(name)
+
     def __len__(self) -> int:
         return len(self.devices)
 
     # ---------- 管理（只给 Mac：require_owner） ----------
     def issue(self, *, name: str, via: str, platform: str = "ios",
-              push_device_id: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
+              push_device_id: Optional[str] = None) -> Tuple[str, Dict[str, Any], List[str]]:
+        """发新票据。返回 (明文票据, 记录副本, 被取代的旧 device id 列表)。
+
+        push_device_id 是 iPhone 存在本机、永不变的推送 id：已有一条**已到期**的记录带同一个
+        值，就是同一部手机在旧票据到期后重新配对——旧记录被取代、一并删掉，否则推送条目永远
+        绑在一张再也用不上的票据上。仍有效的同值记录不动：push id 是手机自报的，凭它删掉
+        一张有效票据等于顶替（旧票据仍有效时重扫码，由 iPhone 先注销旧票据）。"""
         token = secrets.token_urlsafe(TOKEN_BYTES)
         with self.lock:
             now = self.clock()
             device_id = "d_" + secrets.token_urlsafe(12)
+            push = push_device_id if isinstance(push_device_id, str) \
+                and 0 < len(push_device_id) <= 64 else None
             record = {"id": device_id, "token_sha256": _digest(token),
                       "name": clean_name(name, "iPhone"), "via": via,
                       "platform": platform if platform in ("ios", "ipados", "macos") else "ios",
                       "created": now, "last_used": now,
                       "expires": None if self.default_ttl_days is None else now + self.default_ttl_days * _DAY,
-                      "push_device_id": push_device_id if isinstance(push_device_id, str)
-                      and 0 < len(push_device_id) <= 64 else None}
+                      "push_device_id": push}
+            superseded = {k: r for k, r in self.devices.items()
+                          if push is not None and r.get("push_device_id") == push
+                          and r.get("expires") is not None and now >= r["expires"]}
+            for old_id, old in superseded.items():
+                self.devices.pop(old_id)
+                self.by_hash.pop(old["token_sha256"], None)
             self.devices[device_id] = record
             self.by_hash[record["token_sha256"]] = device_id
             try:
@@ -170,9 +201,12 @@ class DeviceStore:
             except BaseException:
                 self.devices.pop(device_id, None)
                 self.by_hash.pop(record["token_sha256"], None)
+                for old_id, old in superseded.items():
+                    self.devices[old_id] = old
+                    self.by_hash[old["token_sha256"]] = old_id
                 raise
             self.notice = None           # 损坏后已重新连上设备：提示不再适用
-        return token, dict(record)
+        return token, dict(record), list(superseded)
 
     def public(self) -> List[Dict[str, Any]]:
         with self.lock:

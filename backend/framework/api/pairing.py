@@ -195,10 +195,11 @@ async def claim_pairing(body: ClaimBody, request: Request, response: Response):
     if not hmac.compare_digest(body.code.encode("utf-8"), code.encode("utf-8")):
         raise HTTPException(status.HTTP_403_FORBIDDEN, _REJECT)
     state.clear()
-    token, record = store_for(request.app).issue(
+    token, record, superseded = store_for(request.app).issue(
         name=clean_name(body.name, _default_name(body.platform)), via="qr",
         platform=body.platform, push_device_id=body.push_device_id)
     print(f"[Pair] 扫码连接：已为设备 {record['id']} 发放票据")
+    _adopt_push(request, record, superseded)
     response.headers["Cache-Control"] = "no-store"
     return _issued(token, record)
 
@@ -244,10 +245,11 @@ async def poll_request(request_id: str, body: PollBody, request: Request, respon
     pending.pop(request_id)          # 被拒或已同意：这条请求到此作废
     if item["status"] != "approved":
         return {"status": "denied"}
-    token, record = store_for(request.app).issue(
+    token, record, superseded = store_for(request.app).issue(
         name=item["name"], via="icloud", platform=item["platform"],
         push_device_id=item["push_device_id"])
     print(f"[Pair] Mac 已同意请求 {request_id}：为设备 {record['id']} 发放票据")
+    _adopt_push(request, record, superseded)
     return {"status": "approved", **_issued(token, record)}
 
 
@@ -299,10 +301,11 @@ async def rotate_ticket(request: Request, response: Response):
 @router.post("/upgrade", dependencies=_OWNER)
 async def upgrade(body: UpgradeBody, request: Request, response: Response):
     _require_shared_key(request)
-    token, record = store_for(request.app).issue(
+    token, record, superseded = store_for(request.app).issue(
         name=clean_name(body.name, _default_name(body.platform)), via="upgrade",
         platform=body.platform, push_device_id=body.push_device_id)
     print(f"[Pair] 旧连接升级：为设备 {record['id']} 发放票据")
+    _adopt_push(request, record, superseded)
     response.headers["Cache-Control"] = "no-store"
     return _issued(token, record)
 
@@ -357,14 +360,47 @@ async def forget_self(request: Request):
     return {"status": True}
 
 
+def _adopt_push(request: Request, record: dict, superseded: list) -> None:
+    """同一部手机重新配对后，它自报推送 id 的条目改归新票据。
+
+    只接管无主、或原主票据已不算数（被取代 = 记录已删、到期、吊销）的条目；仍有效的
+    另一张票据登记的条目不动——自报的推送 id 不能拿来顶替别的手机。票据此时已经签发：
+    这里任何失败只记一行，绝不能让手机拿不到票据（推送条目下次登记时还会再接管）。"""
+    try:
+        for old in superseded:
+            print(f"[Pair] 设备 {record['id']} 取代了同机旧记录 {old}")
+        push_id = record.get("push_device_id")
+        registry = getattr(request.app.state, "push_registry", None)
+        if not push_id or registry is None:
+            return
+        entry = registry.devices.get(push_id)
+        if entry is None:
+            return
+        owner = entry.get("auth_device")
+        if owner is None or not store_for(request.app).active(owner):
+            if registry.rebind(push_id, record["id"]):
+                print(f"[Pair] 推送条目已改绑到设备 {record['id']}")
+    except Exception as exc:
+        print(f"[Pair] 推送条目改绑失败（票据照发，下次登记推送时再接管）：{type(exc).__name__}")
+
+
 def _drop_push(request: Request, device_id: str, record: dict) -> None:
     registry = getattr(request.app.state, "push_registry", None)
-    if registry is not None:
-        # 吊销即停推：它登记的条目（按票据归属）与它自报的推送 id 一并删掉
-        registry.remove_bound(device_id)
-        push_id = record.get("push_device_id")
-        if push_id:
+    if registry is None:
+        return
+    # 吊销即停推：它登记的条目（按票据归属）删掉；它自报的推送 id 只在条目无主或归它时
+    # 才删——同机重新配对后条目已改绑到新票据，删旧票据不能把新票据的推送一起带走
+    dropped = list(registry.remove_bound(device_id))
+    push_id = record.get("push_device_id")
+    if push_id:
+        entry = registry.devices.get(push_id)
+        if entry is not None and entry.get("auth_device") in (None, device_id):
             registry.remove(push_id)
+            dropped.append(push_id)
+    forget = getattr(getattr(request.app.state, "push_dispatcher", None), "forget_push_device", None)
+    if forget is not None:
+        for pid in dropped:
+            forget(pid)
 
 
 @router.put("/settings", dependencies=_OWNER)

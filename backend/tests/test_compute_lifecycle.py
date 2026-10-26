@@ -166,9 +166,103 @@ def test_retry_log_prints_each_distinct_message_once(capsys):
         await owner.stop()
     asyncio.run(scenario())
     out = capsys.readouterr().out
-    assert out.count("ConnectionError") == 4, out
+    # a changed message is a state change and prints at once; the repeats are throttled
+    assert out.count("ConnectionError") == 2, out
     assert out.count("first synthetic outage") == 1, out
     assert out.count("second synthetic outage") == 1, out
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_unchanged_outage_logs_once_per_five_minutes(capsys):
+    """5 s probe cycle: a 60 s outage is one line, not twelve; then one line per 5 min."""
+    clock = _Clock()
+    done = asyncio.Event()
+
+    async def scenario():
+        app = FastAPI()
+        calls = []
+
+        async def probe():
+            calls.append(clock.now)
+            if len(calls) > 3 + 300 // 5 + 1:
+                done.set()
+                await asyncio.Event().wait()
+            clock.now += 5
+            raise ConnectionError("synthetic probe outage")
+
+        owner = _trivial_owner(app, probe=probe, clock=clock)
+        owner.start()
+        try:
+            await asyncio.wait_for(done.wait(), 5)
+        finally:
+            await owner.stop()
+    asyncio.run(scenario())
+    lines = capsys.readouterr().out.splitlines()
+    unavailable = [line for line in lines if "计算连接未就绪" in line]
+    # failures 1/3 and 2/3 are distinct states (each printed once); the outage spans
+    # 300+ s of 5 s cycles: printed when it starts and once more five minutes later
+    assert sum("探活失败" in line for line in lines) == 2, lines
+    assert len(unavailable) == 2, lines
+    assert "省略" in unavailable[1], unavailable
+
+
+def test_outage_within_a_minute_is_one_line_and_recovery_is_logged(capsys):
+    clock = _Clock()
+    outcomes = ["fail"] * (3 + 60 // 5) + ["ok", "fail", "fail", "fail"]
+    done = asyncio.Event()
+
+    async def scenario():
+        app = FastAPI()
+
+        async def probe():
+            if not outcomes:
+                done.set()
+                await asyncio.Event().wait()
+            clock.now += 5
+            if outcomes.pop(0) == "fail":
+                raise ConnectionError("synthetic probe outage")
+
+        owner = _trivial_owner(app, probe=probe, clock=clock)
+        owner.start()
+        try:
+            await asyncio.wait_for(done.wait(), 5)
+        finally:
+            await owner.stop()
+    asyncio.run(scenario())
+    out = capsys.readouterr().out
+    # 60 s of the same outage = 1 line; recovering is a change; the next outage is news
+    assert out.count("计算连接未就绪") == 2, out
+    assert out.count("计算连接已恢复") == 1, out
+
+
+def test_assembly_retries_log_once_per_five_minutes(capsys):
+    clock = _Clock()
+
+    async def scenario():
+        app = FastAPI()
+        attempts = []
+
+        async def assemble():
+            attempts.append(1)
+            if len(attempts) <= 13:              # 13 attempts, 5 s apart = 60 s
+                clock.now += 5
+                raise ConnectionError("synthetic assembly outage")
+            return {"engine": object()}
+
+        owner = _trivial_owner(app, assemble=assemble, clock=clock)
+        owner.start()
+        await _settle(lambda: owner.resources is not None)
+        await owner.stop()
+    asyncio.run(scenario())
+    out = capsys.readouterr().out
+    assert out.count("计算装配未就绪") == 1, out
 
 
 def test_stop_clears_installed_before_cleanup_runs():

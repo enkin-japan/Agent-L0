@@ -43,6 +43,7 @@ from .schemas import (
 from ..core.journal import BOOT_ID, TurnJournal
 from ..core.turn_runner import TurnConflict, public_turn, turn_reference, retry_history_projection
 from ..memory.compactor import maybe_summarize_context
+from .devices import store_for
 
 # 路径 ID 白名单（会话/定时任务/资产文件名共用）：首字符字母数字，其余限 [A-Za-z0-9._-]。
 # 若不校验，`DELETE /api/v1/chat/..` 这类构造请求会把 sessions/.. 当作会话目录整棵 rmtree。
@@ -581,14 +582,22 @@ async def get_schedule_runs(schedule_id: str, request: Request, limit: int = 20)
 
 
 def _push_caller_may_use(request: Request, device_id: str) -> Optional[str]:
-    """推送条目归属：设备票据只能动自己登记（或尚未归属）的条目，返回调用方的设备 id；
-    共享密钥（Mac 本机 / 旧连接）照旧不受限，返回 None。防一部 iPhone 顶替另一部的推送。"""
+    """推送条目归属：设备票据只能动自己登记或尚未归属的条目；原主票据已不算数（记录已删 /
+    到期 / 吊销）的条目，只有配对时自报的推送 id 正是这一条的调用方才能接管。放行时返回
+    调用方的设备 id 并当场把条目改绑过去；共享密钥（Mac 本机 / 旧连接）照旧不受限，返回
+    None。防一部 iPhone 顶替另一部的推送，同时不让同一部 iPhone 换了票据（旧票据到期后
+    重新配对）就再也碰不到自己的条目。"""
     caller = getattr(request.state, "device_id", "default")
     if caller == "default":
         return None
-    existing = request.app.state.push_registry.devices.get(device_id) or {}
-    if existing.get("auth_device") not in (None, caller):
-        raise HTTPException(status_code=403, detail="该推送设备属于另一台已连接的设备。")
+    registry = request.app.state.push_registry
+    owner = (registry.devices.get(device_id) or {}).get("auth_device")
+    if owner not in (None, caller):
+        store = store_for(request.app)
+        if store.active(owner) or store.field(caller, "push_device_id") != device_id:
+            raise HTTPException(status_code=403, detail="该推送设备属于另一台已连接的设备。")
+    if owner != caller:
+        registry.rebind(device_id, caller)
     return caller
 
 

@@ -236,11 +236,11 @@ struct SettingsView: View {
                                 Label(L("已更新"), systemImage: "checkmark")
                                     .foregroundStyle(Theme.success)
                             }
-                            Text(L("重新生成会立即重启执行层；其他设备须重新填入新 Key"))
+                            Text(L("重新生成会立即重启执行层；手动填了这把 Key 的设备须重新填入。经你同意或扫码连上的 iPhone 用的是自己的设备票据，不受影响。"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             if store.settings.phoneSyncEnabled {
-                                Text(L("开启 iCloud 同步的 iPhone 会自动换上新 Key。"))
+                                Text(L("iCloud 钥匙串里只有地址与连接请求凭据，没有这把 Key。"))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -551,6 +551,9 @@ struct SettingsView: View {
         store.settings.baseURLString = url
         store.settings.apiKey = key
         store.applySettings()
+        #if os(macOS)
+        MacOfflineCaches.prune(store.settings)
+        #endif
         dismiss()
     }
 
@@ -580,13 +583,14 @@ struct SettingsView: View {
     }
 
     /// key 轮换：新随机值即刻生效（钥匙串 + 本 app 客户端 + 执行层带新 env 重启）。
-    /// 旧 key 随即作废——其他拨号端 401，须重新填入，这是轮换的本意；iCloud 同步来源的
-    /// iPhone 例外：PhoneLink 把新 key 写进同步条目，iPhone 遇 401 自行重读。
+    /// 旧 key 随即作废——手动填了它的拨号端 401，须重新填入，这是轮换的本意。经同意或扫码
+    /// 连上的 iPhone 用自己的设备票据，不受影响；iCloud 条目里本来就没有 key（76 起）。
     private func regenerateKey() {
         let newKey = SidecarManager.randomKey()
         keyText = newKey
         store.settings.apiKey = newKey
         store.applySettings()
+        MacOfflineCaches.prune(store.settings)
         regenPhase = .restarting
         Task {
             // restart() 等到执行层重新就绪（state==running）才返回——「已更新」

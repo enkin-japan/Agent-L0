@@ -22,7 +22,7 @@ mutations={
  'readonly-transient': ('readonly-transient','AgentStore.swift', 'case .reachable: connFailures = 0; connState = .reachable', 'case .reachable: connFailures = 0; connState = .reachable; markHistoryReadOnly()'),
  'readonly-cached-auth': ('readonly-transient','AgentStore.swift', 'if historyIsReadOnly, selectedSessionIsAttached { historyIsReadOnly = false }', 'if historyIsReadOnly, selectedSessionIsAttached || true { historyIsReadOnly = false }'),
  'readonly-debounce': ('readonly-transient','AgentStore.swift', 'if connState == .offline || !selectedSessionIsAttached { markHistoryReadOnly() }', 'markHistoryReadOnly()'),
- 'mirror-evicted': ('mirror-budget','AgentStore.swift', 'if !result.evicted.isEmpty {', 'if false {'),
+ 'mirror-evicted': ('mirror-budget','AgentStore.swift', 'markEvicted: { ids in try await cache.markAssetsEvicted(ids, namespace: namespace) })', 'markEvicted: { _ in })'),
  'mirror-partial': ('mirror-budget','AgentStore.swift', 'complete: result.state == .complete, token: token)', 'complete: true, token: token)'),
  'asset-evicted-unknown': ('asset-mark-race','OfflineHistoryStore.swift', 'index.assetPartial = (index.assetPartial ?? []).union(ids)', 'index.assetPartial = (index.assetPartial ?? []).union(ids.filter { index.assetVersions?[$0] != nil })'),
  'asset-mark-token': ('asset-mark-race','OfflineHistoryStore.swift', 'if complete, !evictedDuringPass {', 'if complete {'),

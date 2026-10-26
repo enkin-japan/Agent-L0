@@ -535,7 +535,8 @@ POST /api/v1/pair/upgrade              (owner)          → 同 claim
 GET  /api/v1/pair/devices              (owner)          → {devices: [{id, name, via, platform, created, last_used, expires}],
                                                            default_ttl_days, notice}
 PATCH /api/v1/pair/devices/{id}        (owner) {name?, permanent?, ttl_days?}
-DELETE /api/v1/pair/devices/{id}       (owner)          吊销,连带删推送登记
+DELETE /api/v1/pair/devices/{id}       (owner)          吊销,连带删它名下的推送登记,其进行中的 Live Activity 不再收到任何帧
+DELETE /api/v1/pair/self               (设备票据)       iPhone 自行断开:吊销自己的票据,同上连带清理;共享密钥 400
 PUT  /api/v1/pair/settings             (owner) {default_ttl_days: int|null}   新设备默认有效期(缺省 90,null=永久)
 ```
 
@@ -548,11 +549,51 @@ PUT  /api/v1/pair/settings             (owner) {default_ttl_days: int|null}   �
 后端没有共享密钥时一律不发票据(start / ticket 409,claim / request 403)。票据 256 bit,
 只在发放那一次出现;数据根 `auth/devices.json`(0700/0600,原子写)只存 sha256,损坏即
 fail-closed(设备票据全 401,共享密钥不受影响,`notice` 提示重连);到期的票据 401
-`detail: device_expired`。响应一律 `Cache-Control: no-store`。配对码与待处理请求在进程
+`detail: device_expired`。凡发出票据 / ticket / poll_secret 的响应(claim、request、poll、upgrade、
+ticket、rotate)带 `Cache-Control: no-store`;其余管理响应不带。配对码与待处理请求在进程
 内存,后端重启即作废;ticket 与设备记录持久。`instance_id` 与 §2.8 的 `src` 同值(可选),
 iPhone 的 Mac 列表据此认出同一台 Mac。二维码载荷 `macagent://pair?u=<*.ts.net 地址>&c=<code>`;
 iCloud 条目 `{url, mac, macId, ticket}`(不含共享密钥),app 端见
 `apple-app/Sources/App/PhoneLink.swift`。
+
+同一部手机的身份靠 `push_device_id`(app 生成、UserDefaults 持久)衔接:claim / poll / upgrade
+发新票据时,若已有**另一条已到期**的设备记录带同一个 `push_device_id`,旧记录视为被取代而删除,
+它名下的推送条目改绑新票据(2026-10-26 修正;此前到期后重新配对的新票据会被自己的旧登记 403
+挡住)。仍有效的旧记录不会被自报的 `push_device_id` 顶掉:iPhone 在旧票据仍有效时重新配对,
+先用旧票据调 `DELETE /pair/self` 注销,再换上新票据。
+Mac 端 `expose`(tailscale serve)在后端没有共享密钥时拒绝执行:无密钥的后端对回环放行一切请求,
+反代到 tailnet 等于免鉴权。
+
+推送条目归属(§2.8 四条路由):条目记首次登记它的设备票据 `auth_device`;设备票据可以动
+`auth_device` 为空或等于自己的条目;`auth_device` 指向的记录已到期 / 已删(吊销)时,只有自己
+记录里的 `push_device_id` 与该条目一致的调用方才能接管并改绑,否则 403;共享密钥不受限。发送侧
+跳过归属设备已失效(到期 / 已删,状态读不出也按失效)的条目,只跳过、不删;吊销只删该设备
+名下的条目,不按自报的 `push_device_id` 删别人的。
+
+### 2.10 离线优先:算力就绪闸(additive,2026-10-25;不改既有事件语义,不升版本)
+
+后端先于算力端起来,`/health` 多报三项:`data_ready`(本地会话 / 文件可读)、`compute_ready`
+(推理活体 + 鉴权通过)、`compute_state` ∈ starting / ready / retrying / unavailable /
+stopping / stopped。鉴权之后、受理之前,`require_compute_ready`(`framework/api/routes.py`)
+对执行类路由在 `compute_ready=false` 时回 503 `{reason: compute_not_ready, compute_state}` +
+`Retry-After: 5`;执行类路由固定为 `_EXECUTION_ROUTES`:
+
+```
+POST   /api/v1/chat/{session_id}                 POST /api/v1/chat/{session_id}/turns
+POST   /api/v1/chat/{session_id}/turns/retry     POST /api/v1/chat/{session_id}/turns/approval
+POST   /api/v1/chat/{session_id}/turns/resume    POST /api/v1/schedules/{schedule_id}/run
+DELETE /api/v1/compute/kvstore
+```
+
+首次装配完成前(`compute_installed=false`)除本地读取白名单 `_LOCAL_READ_ROUTES` 外一律 503;
+装配过一次后,断线期间只有上表受限,本地控制(含取消)与读取照常。§2.9 配对面不挂此闸。
+离线文件(只要 `data_ready`,不看算力):
+
+```
+GET /api/v1/chat/{session_id}/offline-files            → {status, session_id, files: [{path, name, kind, size, revision}]}
+GET /api/v1/files/{session_id}/offline/{kind}/{filename}   Cache-Control: private, no-cache;
+                                                           nosniff + attachment(用户上传的 .html/.svg 绝不同源执行)
+```
 
 ---
 

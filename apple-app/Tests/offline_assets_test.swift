@@ -82,7 +82,25 @@ import Foundation
         try await budgeted.save(Data(repeating: 2, count: 4096), namespace: "connection1", sid: "A", key: new)
         let recent = await budgeted.data(namespace: "connection1", sid: "A", key: new)
         precondition(recent != nil, "the newer copy is the recently used one")
-        let room = await budgeted.admitAutomatic(size: 4096, namespace: "connection1")
+        // The losing session is marked before any byte goes: a failed mark refuses the
+        // file and evicts nothing, so no copy disappears behind a "fully mirrored" record.
+        struct MarkFailed: Error {}
+        let refused = await budgeted.admitAutomatic(size: 4096, namespace: "connection1") { _ in throw MarkFailed() }
+        let stillOld = await budgeted.file(namespace: "connection1", sid: "A", path: old)
+        if !(!refused.accepted && refused.evicted.isEmpty && stillOld != nil) {
+            print("FAIL: a failed eviction mark keeps every byte and refuses the file"); exit(1)
+        }
+        final class Marks: @unchecked Sendable { var seen: [Set<String>] = []; var oldPresentAtMark = false }
+        let marks = Marks()
+        let oldURL = await budgeted.file(namespace: "connection1", sid: "A", path: old)!
+        // Those two lookups touched the old copy; make the new one the recently used again.
+        try await Task.sleep(nanoseconds: 20_000_000)
+        _ = await budgeted.data(namespace: "connection1", sid: "A", key: new)
+        let room = await budgeted.admitAutomatic(size: 4096, namespace: "connection1") { ids in
+            marks.seen.append(ids)
+            marks.oldPresentAtMark = FileManager.default.fileExists(atPath: oldURL.path)
+        }
+        precondition(marks.seen == [["A"]] && marks.oldPresentAtMark, "the mark comes first, while the bytes still exist")
         let evicted = await budgeted.file(namespace: "connection1", sid: "A", path: old)
         let survivor = await budgeted.file(namespace: "connection1", sid: "A", path: new)
         precondition(room.accepted && evicted == nil && survivor != nil,
@@ -99,6 +117,41 @@ import Foundation
             if (try? await bounded.epoch(namespace: "connection1", sid: "S\(index)")) == nil { fenced += 1 }
         }
         precondition(fenced == OfflineAssetStore.retainedDeletions, "deletion fences stay bounded")
+        // Orphaned partitions: a namespace is (address, credential), so every ticket
+        // change leaves the old one behind. Pruning keeps exactly the current ones, in
+        // both stores, and leaves anything that is not a partition alone.
+        let pruneRoot = root.appendingPathComponent("prune")
+        let partitions = OfflineAssetStore(root: pruneRoot)
+        func historyPartition(_ namespace: String) -> URL {
+            pruneRoot.appendingPathComponent("OfflineHistory")
+                .appendingPathComponent(OfflineCacheRoot.partition(namespace), isDirectory: true)
+        }
+        for namespace in ["connection1", "connection2"] {
+            await partitions.retainSessions(["A"], namespace: namespace)
+            try await partitions.save(Data("kept-\(namespace)".utf8), namespace: namespace, sid: "A", key: "files")
+            try FileManager.default.createDirectory(at: historyPartition(namespace), withIntermediateDirectories: true)
+            try Data("{}".utf8).write(to: historyPartition(namespace).appendingPathComponent("index.json"))
+        }
+        let stray = pruneRoot.appendingPathComponent("assets/not-a-partition", isDirectory: true)
+        try FileManager.default.createDirectory(at: stray, withIntermediateDirectories: true)
+        let pruned = OfflineCacheRoot.pruneOrphans(keeping: ["connection1"], root: pruneRoot)
+        var pruneFailures = 0
+        func expect(_ condition: Bool, _ label: String) {
+            if !condition { pruneFailures += 1; print("FAIL: " + label) }
+        }
+        let orphanAsset = await partitions.data(namespace: "connection2", sid: "A", key: "files")
+        let orphanAssetDir = pruneRoot.appendingPathComponent("assets")
+            .appendingPathComponent(OfflineCacheRoot.partition("connection2")).path
+        expect(orphanAsset == nil && !FileManager.default.fileExists(atPath: orphanAssetDir)
+               && !FileManager.default.fileExists(atPath: historyPartition("connection2").path),
+               "an orphaned partition is deleted from both stores")
+        expect(pruned.count == 2, "pruning reports the two orphaned directories")
+        let keptAsset = await partitions.data(namespace: "connection1", sid: "A", key: "files")
+        expect(keptAsset == Data("kept-connection1".utf8)
+               && FileManager.default.fileExists(atPath: historyPartition("connection1").appendingPathComponent("index.json").path),
+               "the kept partition is intact")
+        expect(FileManager.default.fileExists(atPath: stray.path), "only partition-named directories are pruned")
+        if pruneFailures > 0 { exit(1) }
         print("PASS offline asset restart / namespace / refresh / permissions / deletion / budget / bounds")
     }
 }

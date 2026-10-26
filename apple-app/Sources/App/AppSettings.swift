@@ -34,8 +34,33 @@ enum Keychain {
         guard !key.isEmpty, let data = key.data(using: .utf8) else { return }
         var attrs = base
         attrs[kSecValueData as String] = data
-        attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        attrs[kSecAttrAccessible as String] = accessibility
         SecItemAdd(attrs as CFDictionary, nil)
+    }
+
+    /// iOS：这些是发给这一部 iPhone 的设备票据 / 请求凭据，不该随备份恢复到另一部
+    /// （新 iPhone 要自己经 Mac 同意）。ThisDeviceOnly 的条目不进备份迁移，也从不同步——
+    /// iCloud 钥匙串里那组条目（SharedKeychain，另一个 service）有自己的属性，不经这里。
+    /// macOS 仍用 AfterFirstUnlock：这里存的是本机后端自己的密钥，换 Mac 迁移时随数据走。
+    #if os(iOS)
+    private static let accessibility = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    #else
+    private static let accessibility = kSecAttrAccessibleAfterFirstUnlock
+    #endif
+
+    /// 76 及以前写下的条目是 AfterFirstUnlock：就地改成 ThisDeviceOnly（SecItemUpdate，
+    /// 不删不重建，失败也不丢条目）。读不受影响；之后每次 save 本来就是删了重建。
+    static func restrictToThisDevice() {
+        #if os(iOS)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrSynchronizable as String: false,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+        ]
+        let update: [String: Any] = [kSecAttrAccessible as String: accessibility]
+        SecItemUpdate(query as CFDictionary, update as CFDictionary)
+        #endif
     }
 
     // 既有调用面保持原名（`agent-api-key` 账户不变，老用户的钥匙串条目继续有效）
@@ -57,7 +82,7 @@ final class AppSettings: ObservableObject {
     @Published var connectionSource: ConnectionSource {
         didSet { UserDefaults.standard.set(connectionSource.rawValue, forKey: "phone.source") }
     }
-    /// macOS：把 iPhone 连接信息（地址 + 密钥）写进 iCloud 钥匙串。默认开。
+    /// macOS：把 iPhone 连接信息（地址 + 只能用来提交连接请求的凭据，不含密钥）写进 iCloud 钥匙串。默认开。
     @Published var phoneSyncEnabled: Bool {
         didSet { UserDefaults.standard.set(phoneSyncEnabled, forKey: "phone.icloudSync") }
     }

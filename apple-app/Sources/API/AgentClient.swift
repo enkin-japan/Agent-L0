@@ -501,7 +501,10 @@ final class AgentClient {
 
     /// Serial disk downloads bound memory and connection usage. A failed transfer
     /// leaves its old manifest in place so the next pass retries it.
-    func syncOfflineAssets(sessionId: String) async -> OfflineSyncResult {
+    /// `markEvicted` is called with the other sessions about to lose copies, before
+    /// their bytes are removed (see OfflineAssetStore.admitAutomatic).
+    func syncOfflineAssets(sessionId: String,
+                           markEvicted: @escaping @Sendable (Set<String>) async throws -> Void = { _ in }) async -> OfflineSyncResult {
         // Metered or low-data paths carry no automatic media copies; history text
         // keeps syncing, and any file still opens on demand.
         guard NetworkPathPolicy.shared.allowsAutomaticMirroring else { return OfflineSyncResult(state: .deferred) }
@@ -542,7 +545,12 @@ final class AgentClient {
                 // Oversized or over-budget files are left on the server on purpose:
                 // they remain downloadable, and the cache stays within its budget.
                 // Making room is never free — whoever lost bytes is reported back.
-                let admission = await offlineAssets.admitAutomatic(size: item.size, namespace: cacheNamespace)
+                let admission = await offlineAssets.admitAutomatic(size: item.size, namespace: cacheNamespace) { owners in
+                    // The session's own losses are expressed by `skipped`, not as an
+                    // eviction of itself (which would bump its own pass token).
+                    let others = owners.subtracting([sessionId])
+                    if !others.isEmpty { try await markEvicted(others) }
+                }
                 evicted.formUnion(admission.evicted)
                 guard admission.accepted else { skipped = true; continue }
                 var req = try request("GET", item.path, timeout: 120)

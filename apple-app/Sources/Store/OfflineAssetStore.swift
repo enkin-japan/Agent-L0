@@ -34,7 +34,7 @@ actor OfflineAssetStore {
     }
 
     private func directory(_ namespace: String, _ sid: String) -> URL {
-        root.appendingPathComponent(hash(namespace)).appendingPathComponent(hash(sid))
+        root.appendingPathComponent(OfflineCacheRoot.partition(namespace)).appendingPathComponent(hash(sid))
     }
 
     private func location(_ namespace: String, _ sid: String, _ key: String) -> URL {
@@ -52,7 +52,7 @@ actor OfflineAssetStore {
         var deletionOrder: [String]?
     }
     private func membershipURL(_ namespace: String) -> URL {
-        root.appendingPathComponent(hash(namespace)).appendingPathComponent("membership.json")
+        root.appendingPathComponent(OfflineCacheRoot.partition(namespace)).appendingPathComponent("membership.json")
     }
     private func membership(_ namespace: String) throws -> Membership {
         let url = membershipURL(namespace)
@@ -174,11 +174,39 @@ actor OfflineAssetStore {
     /// Automatic mirroring admission: refuse a single oversized file outright, and
     /// make room for an accepted one by dropping the least recently accessed
     /// mirrored media of this connection. A refused file stays downloadable.
-    func admitAutomatic(size: Int64, namespace: String) -> Admission {
+    /// `markEvicted` records the losing sessions before any byte is removed: if it
+    /// fails, nothing is evicted and the file is refused, so a session can never have
+    /// lost its copies while its record still says it is fully mirrored.
+    func admitAutomatic(size: Int64, namespace: String,
+                        markEvicted: @Sendable (Set<String>) async throws -> Void = { _ in }) async -> Admission {
         guard size >= 0, size <= limits.perFile, size <= limits.total else { return Admission(accepted: false) }
-        let base = root.appendingPathComponent(hash(namespace), isDirectory: true)
+        // Plan first, mark, then delete.
+        guard var plan = evictionPlan(size: size, namespace: namespace) else { return Admission(accepted: true) }
+        let losing = Set(plan.files.compactMap(\.owner))
+        if !losing.isEmpty {
+            do { try await markEvicted(losing) } catch { return Admission(accepted: false) }
+        }
+        var evicted = Set<String>()
+        for candidate in plan.files {
+            guard plan.total + size > limits.total else { break }
+            guard (try? FileManager.default.removeItem(at: candidate.url)) != nil else { continue }
+            plan.total -= candidate.size
+            if let owner = candidate.owner { evicted.insert(owner) }
+        }
+        return Admission(accepted: plan.total + size <= limits.total, evicted: evicted)
+    }
+
+    private struct EvictionPlan {
+        var total: Int64
+        var files: [(url: URL, size: Int64, owner: String?)]
+    }
+
+    /// nil = the file fits without evicting anything. Otherwise the least recently
+    /// accessed mirrored files that would have to go, oldest first.
+    private func evictionPlan(size: Int64, namespace: String) -> EvictionPlan? {
+        let base = root.appendingPathComponent(OfflineCacheRoot.partition(namespace), isDirectory: true)
         let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentAccessDateKey, .contentModificationDateKey]
-        guard let walk = FileManager.default.enumerator(at: base, includingPropertiesForKeys: keys) else { return Admission(accepted: true) }
+        guard let walk = FileManager.default.enumerator(at: base, includingPropertiesForKeys: keys) else { return nil }
         let protected = controlFileNames
         // Only the hashed directory name is on disk; map it back through the
         // sessions this connection knows, so eviction can be attributed.
@@ -196,15 +224,15 @@ actor OfflineAssetStore {
             candidates.append((url, bytes, values.contentAccessDate ?? values.contentModificationDate ?? .distantPast,
                                owners[url.deletingLastPathComponent().lastPathComponent]))
         }
-        guard total + size > limits.total else { return Admission(accepted: true) }
-        var evicted = Set<String>()
+        guard total + size > limits.total else { return nil }
+        var files: [(url: URL, size: Int64, owner: String?)] = []
+        var room = total
         for candidate in candidates.sorted(by: { $0.used < $1.used }) {
-            guard total + size > limits.total else { break }
-            guard (try? FileManager.default.removeItem(at: candidate.url)) != nil else { continue }
-            total -= candidate.size
-            if let owner = candidate.owner { evicted.insert(owner) }
+            guard room + size > limits.total else { break }
+            files.append((candidate.url, candidate.size, candidate.owner))
+            room -= candidate.size
         }
-        return Admission(accepted: total + size <= limits.total, evicted: evicted)
+        return EvictionPlan(total: total, files: files)
     }
 
     func data(namespace: String, sid: String, key: String) -> Data? {

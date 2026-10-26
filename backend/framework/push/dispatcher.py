@@ -23,7 +23,7 @@ import json
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from framework.utils.instance_id import instance_id
 
@@ -34,6 +34,8 @@ _TOOL_LABELS = {
     "write_file": "写文件", "run_bash": "执行命令", "rag_search": "查记忆",
     "deck_export_pdf": "导出 PDF", "update_plan": "订计划", "complete_step": "步骤完成",
 }
+
+_SKIP_LOG_SECONDS = 300   # 到期设备的「跳过」日志：同一设备最多每 5 分钟一行
 
 _STEP_STATE = {"pending": "pending", "doing": "doing", "done": "done", "failed": "failed"}
 
@@ -64,9 +66,14 @@ class _ActivityState:
 
 class NotificationDispatcher:
     def __init__(self, feed, registry, apns, session_manager, cfg: Dict[str, Any],
-                 sessions_dir: Path):
+                 sessions_dir: Path, *,
+                 device_active: Optional[Callable[[str], bool]] = None):
         self.feed = feed
         self.registry = registry
+        # 设备票据还算不算数（devices.DeviceStore.active）：条目归属的票据已到期 / 已删时
+        # 不再往那条 token 发。None = 不查（只有共享密钥的部署，条目本来就无主）
+        self.device_active = device_active
+        self._skip_logged: Dict[str, float] = {}     # owner -> 上次记「跳过」的时刻（节流）
         self.apns = apns                     # None = iOS 推送禁用（缺 .p8），完全静默
         self.session_manager = session_manager
         self.sessions_dir = Path(sessions_dir)
@@ -113,6 +120,32 @@ class NotificationDispatcher:
     @property
     def enabled(self) -> bool:
         return self.apns is not None
+
+    def _deliverable(self, entry: Dict[str, Any], path: str) -> bool:
+        """条目归属的设备票据已到期 / 已不存在：跳过（只跳过、记一行，不删条目——
+        同一部手机重新配对后条目会改绑到新票据，届时照常送达）。"""
+        owner = entry.get("auth_device")
+        if not owner or self.device_active is None:
+            return True
+        try:
+            ok = bool(self.device_active(owner))
+        except Exception as e:
+            print(f"[Push] 设备票据状态读取失败，按失效处理（{type(e).__name__}）")
+            ok = False
+        if not ok:
+            now = time.monotonic()
+            last = self._skip_logged.get(owner)
+            if last is None or now - last >= _SKIP_LOG_SECONDS:
+                self._skip_logged[owner] = now
+                print(f"[Push] 跳过 {path}：推送条目 {entry.get('device_id')} 所属设备 {owner} "
+                      f"已到期或已移除（同一设备 {_SKIP_LOG_SECONDS // 60} 分钟内不再重复记录）")
+        return ok
+
+    def forget_push_device(self, push_id: str) -> None:
+        """设备被吊销：它在进行中的 Live Activity 一并收掉（不再往它发任何一帧）。"""
+        for st in list(self._activities.values()):
+            if st.tokens.pop(push_id, None) is not None and not st.tokens:
+                self._teardown_activity(st)
 
     # ------------------------------------------------ feed 读者（横幅 + push-to-start）
     async def _run(self) -> None:
@@ -186,6 +219,8 @@ class NotificationDispatcher:
         title_hint = self._session_title(sid, ctx.get("prompt", ""))
         now = int(time.time())
         for d in devices:
+            if not self._deliverable(d, kind):
+                continue
             level = ((d.get("prefs") or {}).get("content_level")) or "category"
             title, body = self._content(kind, level, title_hint, ctx)
             aps: Dict[str, Any] = {
@@ -413,7 +448,13 @@ class NotificationDispatcher:
         payload = {"aps": aps}
         topic = f"{self.bundle_id}.push-type.liveactivity"
         for device_id, token in list(st.tokens.items()):
+            # 快照之后被 forget_push_device 收掉（吊销发生在本轮 await 之间）：不再补发这一帧
+            if st.tokens.get(device_id) != token:
+                continue
+            # 没有注册表条目照发：通知总开关关着的 iPhone 不登记推送，Live Activity 却照样上报
             dev = self.registry.devices.get(device_id) or {}
+            if not self._deliverable({"device_id": device_id, **dev}, "Live Activity"):
+                continue
             res = await self.apns.send(token, payload, topic=topic,
                                        push_type="liveactivity", priority=priority,
                                        expiration=0, environment=dev.get("env", "auto"))
@@ -467,6 +508,8 @@ class NotificationDispatcher:
         }}
         topic = f"{self.bundle_id}.push-type.liveactivity"
         for d in devices:
+            if not self._deliverable(d, "push-to-start"):
+                continue
             res = await self.apns.send(d["push_to_start_token"], payload, topic=topic,
                                        push_type="liveactivity", priority=10,
                                        expiration=now + 300,

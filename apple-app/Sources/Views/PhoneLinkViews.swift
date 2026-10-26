@@ -79,14 +79,31 @@ struct MacPhoneLinkSection: View {
                     .foregroundStyle(Theme.warning)
             } else {
                 Button(L("对 iPhone 开放（tailscale serve）")) { Task { await phoneLink.expose() } }
-                    .disabled(phoneLink.busy)
+                    .disabled(phoneLink.busy || phoneLink.exposeRefusal != nil)
+                if let refusal = phoneLink.exposeRefusal {
+                    Text(refusal)
+                        .font(.caption)
+                        .foregroundStyle(Theme.warning)
+                }
             }
         case .served(let url):
             LabeledContent(L("iPhone 地址")) {
                 Text(url.absoluteString).textSelection(.enabled)
             }
-            Button(L("停止对 iPhone 开放"), role: .destructive) { Task { await phoneLink.unexpose() } }
-                .disabled(phoneLink.busy)
+            if let warning = phoneLink.authWarning {
+                Text(warning)
+                    .font(.caption)
+                    .foregroundStyle(Theme.warning)
+            }
+            if phoneLink.stopRequested && !phoneLink.stopping {
+                Text(L("停止开放没有完成：iCloud 条目已删除，但 tailscale serve 仍在运行。"))
+                    .font(.caption)
+                    .foregroundStyle(Theme.warning)
+            }
+            Button(phoneLink.stopRequested ? L("重试停止开放") : L("停止对 iPhone 开放"), role: .destructive) {
+                Task { await phoneLink.unexpose() }
+            }
+                .disabled(phoneLink.busy || phoneLink.stopping)
         }
     }
 
@@ -164,7 +181,7 @@ struct MacPhoneLinkSection: View {
     @ViewBuilder
     private var syncStatus: some View {
         if phoneLink.syncOK {
-            Label(L("已写入 iCloud 钥匙串：同一 Apple ID 的 iPhone 打开 app 即可使用。"),
+            Label(L("已写入 iCloud 钥匙串：同一 Apple ID 的 iPhone 打开 app 后会在这里请求连接，你点允许即可。"),
                   systemImage: "checkmark.icloud")
                 .font(.caption)
                 .foregroundStyle(Theme.success)
