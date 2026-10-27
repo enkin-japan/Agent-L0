@@ -63,6 +63,7 @@ def test_wiring():
                               ("onboarding", ios_onboarding), ("PhoneConnectionSection", phone_section)):
             assert manual_entry not in scanned, (name, manual_entry)
     _assert_unpair_wiring(sources, phone_section, app)
+    _assert_probe_tick_wiring(sources)
     # Onboarding keeps an exit for a phone with no reachable Mac yet.
     assert 'Button(L("稍后配对")) { pairLater() }' in ios_onboarding
     assert "settings.setupCompleted = true" in ios_onboarding
@@ -173,3 +174,28 @@ def _assert_unpair_wiring(sources, phone_section, app):
     for added in ("已配对", "未配对", "取消配对", "正在与「", "」配对…"):
         assert f'"{added}": (' in l10n, added
     assert "点选切换，左滑删除。" not in l10n
+
+
+def _assert_probe_tick_wiring(sources):
+    """build 78 M2: the iCloud heal / shared-key upgrade retry runs on every probe tick.
+    AgentStore assigns connState only on change, so `$connState` falls silent across repeated
+    offline / unauthorized ticks; PhoneLink must listen to the per-tick `probeTick` instead,
+    and the store must send it unconditionally at the end of recordBackendAccess."""
+    phone = _code((sources / "App/PhoneLink.swift").read_text())
+    store = _code((sources / "Store/AgentStore.swift").read_text())
+    configure = _body(phone, r"func configure\(settings: AppSettings, store: AgentStore\)")
+    assert "$connState" not in configure
+    assert _has(configure, "store.probeTick", ".sink { [weak self] state in",
+                "Task { @MainActor in self?.connectionChanged(state) }")
+    assert _has(store, "let probeTick = PassthroughSubject<ConnState, Never>()")
+    record = _body(store, r"private func recordBackendAccess\(")
+    # Last statement, outside the switch and with no change-only guard around it.
+    assert record.rstrip().endswith("probeTick.send(connState)"), record[-200:]
+    # No client at all is a probe outcome too (offline); its early return must still tick.
+    refresh = _body(store, r"func refreshConnection\(\) async")
+    no_client = _body(refresh, r"guard let client else")
+    assert no_client.rstrip().endswith("probeTick.send(connState) return"), no_client
+    # Throttles stay where they were: heal 30 s, upgrade retries through upgradeBackoff.
+    assert _has(_body(phone, r"private func heal\(\)"), "Date().timeIntervalSince(lastHeal) > 30")
+    assert _has(_body(phone, r"private func upgradeSharedKeys\(\)"),
+                "guard upgradeBackoff.allows(fingerprint, now: now) else { continue }")

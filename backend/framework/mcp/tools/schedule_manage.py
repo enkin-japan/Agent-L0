@@ -58,6 +58,8 @@ class ScheduleCreateTool(BaseTool):
         "them the exact name/prompt/schedule, so fill all fields carefully and completely."
     )
     requires_approval = True     # 审批卡片=任务细节确认；防无人值守/注入内容排任务
+    # 钉死（build 78）：这张卡是文档化的安全闸（见模块 docstring），写档 "auto" 不得放行
+    approval_pinned = True
     is_concurrency_safe = False
     is_read_only = False
 
@@ -97,6 +99,8 @@ class ScheduleUpdateTool(BaseTool):
         "you are not sure of the schedule_id. Requires the user's approval."
     )
     requires_approval = True
+    # 钉死（build 78）：改 prompt/时间同样是注入内容自我增殖的入口，卡片即确认，"auto" 不放行
+    approval_pinned = True
     is_concurrency_safe = False
     is_read_only = False
 
@@ -134,6 +138,7 @@ class ScheduleDeleteTool(BaseTool):
         "enabled=false. Requires the user's approval."
     )
     requires_approval = True
+    approval_pinned = True       # 同 create/update：审批卡即安全门，write=auto 不越过
     is_concurrency_safe = False
     is_read_only = False
 

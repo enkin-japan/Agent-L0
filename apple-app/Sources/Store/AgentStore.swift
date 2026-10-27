@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import UserNotifications
 
@@ -54,6 +55,11 @@ final class AgentStore: ObservableObject {
     // 连接
     @Published var connectionOK: Bool?
     @Published var connState: ConnState = .connecting
+    /// Every probe outcome, sent once per probe even when connState did not change.
+    /// connState is assigned only on change (recordConnection), so `$connState` falls
+    /// silent across repeated offline / unauthorized ticks. A subscriber that must act on
+    /// every tick — PhoneLink's iCloud heal and shared-key upgrade retries — listens here.
+    let probeTick = PassthroughSubject<ConnState, Never>()
     @Published var computeState: ComputeState = .unknown
     /// Latest authenticated /health data-plane failure (Contract H `rag_state`:
     /// "unreachable" / "unauthorized", else nil); only qualifies the 「后端启动中」 label.
@@ -406,6 +412,7 @@ final class AgentStore: ObservableObject {
             if connectionOK != false { connectionOK = false }
             if connState != .offline { connState = .offline }
             if computeState != .unknown { computeState = .unknown }
+            probeTick.send(connState)   // no client is a probe outcome too: PhoneLink heals on it
             return
         }
         connectionRequest += 1
@@ -495,6 +502,7 @@ final class AgentStore: ObservableObject {
             // uses — only the settled offline verdict freezes an attached session.
             if connState == .offline || !selectedSessionIsAttached { markHistoryReadOnly() }
         }
+        probeTick.send(connState)   // unconditionally: one emission per probe, see probeTick
     }
 
     /// The selected session was recovered online and still owns a live attachment.

@@ -723,7 +723,7 @@ private struct ApprovalPolicySection: View {
         } header: {
             Text(L("权限"))
         } footer: {
-            Text(L("读取 / 检索类：只查看或检索信息、不改变任何东西的工具。写入 / 删除类：会修改、发送或删除内容的工具。Shell 命令按每条命令单独归类：只读命令算读取类，其余算写入类。「按工具默认」沿用各工具自身的审批设置。"))
+            Text(L("读取 / 检索类：只查看或检索信息、不改变任何东西的工具。写入 / 删除类：会修改、发送或删除内容的工具。Shell 命令按每条命令单独归类：只读命令算读取类；会改变东西的 Shell 命令始终询问，定时任务的创建/修改与 API 工具注册同样始终询问，「自动放行」只对其他写入工具生效。「按工具默认」沿用各工具自身的审批设置。"))
                 .font(.caption).foregroundStyle(.secondary)
         }
         .task(id: store.client.map { ObjectIdentifier($0) }) { await load() }

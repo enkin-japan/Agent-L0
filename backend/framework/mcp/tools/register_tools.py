@@ -71,6 +71,8 @@ class RegisterApiToolTool(BaseTool):
         "required": ["name", "description", "endpoint"],
     }
     requires_approval = True
+    # 钉死（build 78）：本卡是双闸的第一道（模块 docstring ②），写档 "auto" 不得把它拆掉
+    approval_pinned = True
     is_concurrency_safe = False
 
     def execute(self, name: str, description: str, endpoint: str,
@@ -151,6 +153,7 @@ class RegisterSkillTool(BaseTool):
         "required": ["name", "description", "body"],
     }
     requires_approval = True
+    approval_pinned = True       # 注册即持久化新能力：审批卡是第一道门，write=auto 不越过
     is_concurrency_safe = False
 
     def execute(self, name: str, description: str, body: str,

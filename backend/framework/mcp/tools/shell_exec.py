@@ -817,6 +817,10 @@ class ShellExecTool(BaseTool):
         "GH_TOKEN / HF_TOKEN. Known secret values are redacted from output."
     )
     requires_approval = False  # 默认放行；实际是否弹窗由 needs_approval 按命令内容动态决定
+    # 整个工具钉死审批（build 78 M1）：needs_approval 的逐命令判定（非只读 ⇒ 审批）就是人的
+    # 决定，也是凭据隔离 env 规则的前提（免审批执行 ⇔ 只读，见 execute 的 env 剥离），
+    # 所以写档 "auto" 永不放行变更命令；只读命令 needs_approval=False，钉不住，照常按读档走。
+    approval_pinned = True
     parameters = {
         "properties": {
             "command": {

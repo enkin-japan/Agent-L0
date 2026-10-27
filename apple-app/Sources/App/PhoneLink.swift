@@ -1407,9 +1407,10 @@ final class PhoneLink: ObservableObject {
         readSynced()
         upgradeSharedKeys()
         pruneOfflineCaches()
-        // 不去重：iCloud 钥匙串传播要几十秒到几分钟，离线期间每轮探活都给一次重读机会，
-        // 由 heal 的 30 秒节流限频
-        store.$connState
+        // 每轮探活一次、不去重：订 probeTick 而不是 $connState——后者只在状态变化时赋值，
+        // 离线/被拒期间连续几轮状态不变就不再发。iCloud 钥匙串传播要几十秒到几分钟，每轮
+        // 都给一次重读机会，由 heal 的 30 秒节流限频；换票据的重试由 upgradeBackoff 限频
+        store.probeTick
             .sink { [weak self] state in
                 Task { @MainActor in self?.connectionChanged(state) }
             }
@@ -1426,16 +1427,19 @@ final class PhoneLink: ObservableObject {
 
     func key(for id: String) -> String { Keychain.load(Self.keyAccount(id)) }
 
+    /// 每轮探活都会进来（probeTick）：@Published 只在值变化时赋值，否则每 2 秒一轮都会让
+    /// 观察 PhoneLink 的视图重建。
     private func connectionChanged(_ state: AgentStore.ConnState) {
+        func setRejected(_ value: Bool) { if currentRejected != value { currentRejected = value } }
         switch state {
         case .unauthorized:
             // 设备票据被拒：被 Mac 移除或已到期，要重新经 Mac 同意（不自动发请求，由你点）
-            currentRejected = current?.credential == .deviceToken
+            setRejected(current?.credential == .deviceToken)
             heal()
         case .offline:
             heal()
         default:
-            currentRejected = false
+            setRejected(false)
             upgradeSharedKeys()
         }
     }

@@ -495,13 +495,13 @@ iCloud 条目出现后点选、在 Mac 上点允许）。
   名不进闸、沿旧路径报 `No tool named`）；三条硬规则压过档位——钉死（API 工具声明里显式写的
   `requires_approval`、`cloud.require_approval` 开着的云咨询）auto 不得越过；无人值守轮
   （`turn_origin != chat`）一律按 default 判；策略文件缺失按缺省、存在但损坏按 ask/ask 并告警一次。
-  `GET`/`PATCH /api/v1/approval-policy`（`approval_policy.py:73-156`；PATCH 落盘失败 503
+  `GET`/`PATCH /api/v1/approval-policy`（`routes.py:152-180；策略模块 approval_policy.py`；PATCH 落盘失败 503
   `policy_save_failed`，内存策略不变），两路由首次装配前可用；`GET /api/v1/tools` 多报 `effect`。
   macOS 设置新增「权限」页。
 - 聊天：实时步骤单行紧凑（状态符号+标签+单行详情）；结束后同一轮连续工具行折叠为「执行过程 · N
-  步 · X 秒」（N 按调用对计，回执按 callId 匹配、匹配不上不贴状态）；展开态按 `turnIndex` 加首行序号
+  步 · X 秒」（N 按调用对计，回执按工具名+角色在行数与回执数相等时按序贴、否则不贴状态（行上没有 callId））；展开态按 `turnIndex` 加首行序号
   的稳定键存于 `AgentStore`（`apple-app/Sources/Views/ChatView.swift:58-59,280-485`、
-  `MessageView.swift:112,186,259`）。审批卡移到输入栏上方，消息流留「等待审批 N 项…」占位、决议后按
+  `ChatMessage.groupedForDisplay`、`AgentStore.expandedToolGroups`、`MessageView.swift` 的 `ToolGroupView`）。审批卡移到输入栏上方，消息流留「等待审批 N 项…」占位、决议后按
   `resumed` 事件显示已批准/已拒绝；引用卡仍在顶层。
 - iPhone：删除隐藏名单机制，启动时移除旧 UserDefaults 键
   `phone.hiddenMacs`（`apple-app/Sources/App/PhoneLink.swift:1397`）；左滑改「取消配对」（仅已配对行）=
@@ -529,5 +529,31 @@ policy 14（P-M1…M14）、iOS 29（`unpair_mutants.py`）、macOS 状态映射
 
 变异证明结果（verifier，2026-10-27）：后端 22/22 被杀（health H-M1…M7+M3b，policy P-M1…M14；H-M1 实际由
 `test_local_retries_do_not_advance_the_backoff` 杀死，清单里点名的两条在该场景下与原码等价）、全量 3463 passed /
-3 skipped；Swift 侧 iOS 29/29（复件驱动 unpair_mutants.py）、macOS 状态映射 7/7、connState 1/1、回执匹配与步数 2/2 全红；
+3 skipped（定稿树在 pre-commit 第二跑为 3468 passed / 3 skipped）；Swift 侧 iOS 29/29（复件驱动 unpair_mutants.py）、macOS 状态映射 7/7、connState 1/1、回执匹配与步数 2/2 全红；
 macOS/iOS Debug 构建通过，原生测试 432 passed，reducer 夹具 16/16。构建与发布记录见 §16.5。
+
+### 16.5 提交与发布记录（2026-10-27）
+- 提交 `b1ff204`（62 文件，+3264/−193），pre-commit 首跑 backend 门不过：`test_service_credentials::test_native_credential_mapping`
+  用 swiftc 单独编译 `AppSettings.swift`，而它引用了 `Models.swift` 的 `ApprovalPolicy.modes`；改为本地字面量集合后第二跑四门全过
+  （1081 s）。教训：`AppSettings.swift` 不得依赖其他源文件的类型。已推送 origin/main。
+- macOS：`release-macos.sh` 一次通过，Release `macos-0.16.0-78` 指向 b1ff204，6 个资产（DMG + 78-73/74/75/76/77 delta），
+  两仓 `updates` 仅 appcast.xml，feed 列 76/77/78 共 17 条链接；本机已装钉票版。
+- iOS：`release-ios.sh` 归档、导出、上传成功，等 ASC 处理后 TestFlight 可见。
+- 构建警告（非阻塞，Swift 6 模式）：PhoneLink.swift:797 main-actor isolation、PhoneLink.swift:1814 captured self（upgradeLegacy 的 Task）、
+  MacAgentApp.swift:53 captured var。
+- 真机待确认：macOS 捆绑形态冷启左下角先「后端启动中」再「计算端就绪」且总时长明显短于 30 s；聊天页任务结束后执行过程自动折叠；
+  审批卡贴在输入栏上方；设置「权限」页读写两档可切换并即时生效；iPhone 列表「已配对 / 未配对」标识、左滑「取消配对」后仍列出且可点按重配。
+
+### 16.6 阶段复审（stage-reviewer，2026-10-27，区间 5162fc6..b1ff204）与修复
+无 Critical；4 Major 全部成立（M1–M3 经 skeptic 反驳未遂、M4 为事实），4 Minor 已改文档：
+- M1 write=auto 让 shell 的密钥隔离失效：`approval_required` 的 auto 分支在 `needs_approval` 之前返回 False，`cat .env.local`
+  这类非只读命令既不审批又拿宽松环境（execute 以「只读」代替「已审批」选 env）。修法：shell 工具整体钉死（`approval_pinned = True`，
+  变更命令始终询问，只读命令仍按读取档），PROTOCOL §2.11 钉死规则相应补入，设置页脚注改写。
+- M2 AgentStore「只在变化时赋值」切断了 PhoneLink 依赖每轮探活发射的离线自愈与旧钥升级重试（探针：离线 40 轮 b77 触发 31 次、b78 1 次）。
+  修法：新增每轮必发的 `probeTick`，PhoneLink 改订阅它，UI 去重保留。
+- M3 `stillStarting` 含 `engine_ready == false`，未装配过的后端遇算力端 unreachable/unauthorized 或 RAG 鉴权失败时 2 s 轮询永不停。
+  修法：节点已定失败或 RAG 有告警时不算 starting。
+- M4 变异驱动只在会话 scratchpad：已入库 `backend/tests/run_build78_mutations.py`（22 后端 + 树内 Swift 变异）与
+  `apple-app/Tests/run_unpair_mutations.py`（29 个 iOS 复件变异），全跑 32/32、29/29 被杀。
+- Minor：全量数字以定稿树 3468 passed 为准；PROTOCOL §2.11 补 PATCH 仅 owner/403；§16.2 回执匹配与引用改正；README 取消配对措辞收窄。
+已发出的 build 78 含 M1（捆绑后端，仅 write=auto 时暴露）与 M2/M3 的 app 侧回归：修复过两道门与变异证明后升 build 79 重发。

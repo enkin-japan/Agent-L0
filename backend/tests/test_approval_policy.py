@@ -3,7 +3,8 @@
 Oracles (guard-type change: each assertion below is what a mutant has to break):
 - the decision matrix of MCPRegistry.approval_required, including fail-closed for
   unknown tools and the "default" delegation to the tool's own requires_approval;
-- the shell classifies per command with the same rule as its approval hook;
+- the shell classifies per command with the same rule as its approval hook, and is
+  pinned: a non-read-only command asks under every policy (write="auto" included);
 - READ_TOOLS / WRITE_TOOLS are the literal classification table: every shipped tool
   class is in exactly one of them and declares exactly that effect;
 - persistence (missing / corrupt => defaults, atomic 0600 roundtrip);
@@ -59,6 +60,11 @@ WRITE_TOOLS = {
     "math_research", "run_math",
 }
 DYNAMIC_TOOLS = {"run_shell_command"}
+# Tools whose approval card is a documented security gate: pinned per class, so write="auto"
+# never clears it (shell: per command, only non-read-only commands ask). Instance-level pins
+# (API declarations, cloud.require_approval) are covered by their own tests below.
+PINNED_TOOLS = {"run_shell_command", "schedule_create", "schedule_update", "schedule_delete",
+                "register_api_tool", "register_skill"}
 
 
 class _Fixture(BaseTool):
@@ -161,12 +167,39 @@ def test_shell_classifies_per_command_and_policy_follows():
     assert registry.approval_required(shell.name, rm, relaxed) is True
     inverted = ApprovalPolicy(read="ask", write="auto")
     assert registry.approval_required(shell.name, ls, inverted) is True
-    assert registry.approval_required(shell.name, rm, inverted) is False
+    assert registry.approval_required(shell.name, rm, inverted) is True   # pinned: auto can't skip
 
     for args in (ls, rm):
         assert registry.approval_required(shell.name, args, approval_policy.DEFAULT) \
             is shell.needs_approval(args)
     assert shell.needs_approval(ls) is False and shell.needs_approval(rm) is True
+
+
+# M1: the shell is pinned as a whole. Its per-command needs_approval (not read-only =>
+# approval) is the human decision and the premise of the env rule (run without approval
+# <=> read-only => credential variables stripped), so write="auto" must never clear it.
+SHELL_MUTATING = ["cat .env.local", "base64 < backend/.secrets.env", "printenv GH_TOKEN",
+                  "rm -rf x"]
+
+
+@pytest.mark.parametrize("read", MODES)
+@pytest.mark.parametrize("command", SHELL_MUTATING)
+def test_shell_pin_keeps_non_readonly_commands_asking_under_write_auto(command, read):
+    shell = ShellExecTool()
+    registry = _registry(shell)
+    args = {"command": command}
+    assert ShellExecTool.approval_pinned is True
+    assert shell.needs_approval(args) is True          # the fixture really is non-read-only
+    assert registry.approval_required(shell.name, args, ApprovalPolicy(read=read, write="auto")) is True
+
+
+@pytest.mark.parametrize("write", MODES)
+@pytest.mark.parametrize("read,expected", [("auto", False), ("default", False), ("ask", True)])
+def test_shell_pin_leaves_read_only_commands_on_the_read_knob(read, write, expected):
+    shell = ShellExecTool()
+    registry = _registry(shell)
+    ls = {"command": "ls -la"}
+    assert registry.approval_required(shell.name, ls, ApprovalPolicy(read=read, write=write)) is expected
 
 
 # ── Every shipped tool is classified, and matches the table ───────────────────
@@ -207,6 +240,24 @@ def test_every_shipped_tool_class_declares_its_table_effect(hermetic_tools):
     assert not wrong, wrong
     dynamic = {name for name, cls in classes.items() if cls.effect_for is not BaseTool.effect_for}
     assert dynamic == DYNAMIC_TOOLS
+    pinned = {name for name, cls in classes.items() if cls.approval_pinned is True}
+    assert pinned == PINNED_TOOLS
+
+
+GATE_TOOLS = sorted(PINNED_TOOLS - {"run_shell_command"})
+
+
+@pytest.mark.parametrize("read", MODES)
+@pytest.mark.parametrize("write", MODES)
+@pytest.mark.parametrize("name", GATE_TOOLS)
+def test_security_gate_tools_ask_under_every_policy(hermetic_tools, name, read, write):
+    # schedule_create/update: the card is the task-detail confirmation that blocks injected
+    # scheduling; register_api_tool: the card is the first of two gates. write="auto" (and
+    # read="auto", which does not apply to a write tool anyway) must leave them asking.
+    tool = object.__new__(_shipped_tool_classes()[name])
+    assert tool.approval_pinned is True and tool.needs_approval({}) is True
+    registry = _registry(tool)
+    assert registry.approval_required(name, {}, ApprovalPolicy(read=read, write=write)) is True
 
 
 def test_real_registry_tools_have_valid_effects(hermetic_tools):
@@ -501,6 +552,32 @@ def test_gate_asks_for_a_read_only_shell_command_when_reads_are_ask(make_session
     pending = asyncio.run(orch.run_turn(session, journal=session.journal, **GEN))
     assert pending["status"] == "pending_approval"
     assert pending["pending_tools"][0]["arguments"] == {"command": "ls -la"}
+    assert not any(e["type"] == "tool_started" for e in session.journal.ring)
+
+
+@pytest.mark.parametrize("command", SHELL_MUTATING)
+def test_gate_asks_for_a_mutating_shell_command_even_when_writes_are_auto(make_session, tmp_path,
+                                                                         command):
+    from framework.core.orchestrator import Orchestrator
+    from .fake_engine import FakeEngine, call
+    from .test_orchestrator_lifecycles import GEN, begin_turn
+
+    class NeverExecute(ShellExecTool):
+        def execute(self, **kwargs):
+            pytest.fail("approval must precede shell execution")
+
+    approval_policy.replace(ApprovalPolicy(read="auto", write="auto"))
+    registry = MCPRegistry(tmp_path / "empty-tools")
+    registry.register(NeverExecute())
+    engine = FakeEngine([{"tool_calls": [call(ShellExecTool.name, command=command)]},
+                         {"text": "ok"}])
+    orch = Orchestrator(engine, registry, {"react_max_steps": 4, "max_total_iterations": 12})
+    session = make_session()
+    session.add_user_message("do it")
+    begin_turn(session)
+    pending = asyncio.run(orch.run_turn(session, journal=session.journal, **GEN))
+    assert pending["status"] == "pending_approval"
+    assert pending["pending_tools"][0]["arguments"] == {"command": command}
     assert not any(e["type"] == "tool_started" for e in session.journal.ring)
 
 

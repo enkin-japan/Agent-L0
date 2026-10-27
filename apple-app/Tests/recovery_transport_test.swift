@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 final class RecoveryTransport: URLProtocol {
     static let lock = NSLock()
@@ -62,7 +63,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
                 // Contract H engine_ready: absent for every other mode (older backend shape).
                 if mode == "auth-engine-starting" { body["engine_ready"] = false }
                 if mode == "auth-engine-ready" { body["engine_ready"] = true }
-                t.respond(body, status: mode == "auth-offline" ? 503 : 200); return
+                t.respond(body, status: mode.hasPrefix("auth-offline") ? 503 : 200); return
             }
             if path.hasSuffix("/turns/last") && mode == "delete-failed" { t.respond(["status":false,"response":"synthetic refusal"]); return }
             if path.hasSuffix("/history") { if mode.hasPrefix("overlap") { RecoveryTransport.hold(t) } else if mode == "fresh-completed" { var h = included as! [String:Any]; h["replay_after"] = 4; t.respond(h) } else if mode == "old-count" {
@@ -106,6 +107,20 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
             await old.value
             check(store.connectionOK == false && String(describing:store.connState) == "unauthorized", "older probe cannot overwrite latest access state")
             check(store.computeState == .unknown, "late ready probe cannot overwrite latest unauthenticated compute state")
+        } else if mode == "auth-offline-ticks" {
+            // build 78 M2: connState is assigned only on change, so repeated failing probes
+            // leave $connState silent; probeTick must still fire once per probe (PhoneLink's
+            // iCloud heal / shared-key upgrade retry hang off it).
+            var ticks: [String] = []
+            var connChanges = 0
+            let tickSub = store.probeTick.sink { ticks.append(String(describing: $0)) }
+            let connSub = store.$connState.dropFirst().sink { _ in connChanges += 1 }
+            for _ in 0..<3 { await store.refreshConnection() }
+            check(ticks.count == 3, "three failing probes give three probeTick emissions (got \(ticks.count))")
+            check(ticks.allSatisfy { $0 == String(describing: store.connState) }, "probeTick carries the current connState: \(ticks)")
+            check(connChanges <= 1, "connState stays change-only (\(connChanges) assignments)")
+            check(store.connectionOK == false, "health failure is not connected")
+            tickSub.cancel(); connSub.cancel()
         } else if mode.hasPrefix("auth-") {
             await store.refreshConnection()
             let authenticated = ["auth-ok", "auth-engine-starting", "auth-engine-ready"].contains(mode)

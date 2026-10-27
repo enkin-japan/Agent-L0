@@ -44,9 +44,10 @@ class BaseTool(ABC):
     # 忘了声明时落在保守一侧。用户的 read/write 两档旋钮按此分类生效，见
     # framework/core/approval_policy.py 与 MCPRegistry.approval_required。
     effect: str = "write"
-    # 钉死的人工审批：用户/配置对本工具显式要求过审批（API 声明里写了 requires_approval、
-    # cloud.require_approval=true）时为 True。钉死且本次调用需审批 ⇒ 任何策略档位都审批，
-    # "auto" 不得推翻人的显式决定（"ask" 本就更严）。
+    # 钉死的人工审批：本次调用需审批时，任何策略档位都审批，"auto" 不得推翻（"ask" 本就更严）。
+    # 两类来源：① 用户/配置显式要求过审批（API 声明里写了 requires_approval、
+    # cloud.require_approval=true）；② 审批卡本身是文档化安全闸的工具按类钉死——shell（按
+    # 命令：只有非只读命令要审批，钉的就是这些）、schedule_create/update、register_api_tool。
     approval_pinned: bool = False
     # 并发安全：可与同批其他安全调用并发执行（无副作用且可重入）设 True。
     # 默认 False（保守串行）；有状态或有副作用的工具（GUI 变更、写库、shell）保持 False。

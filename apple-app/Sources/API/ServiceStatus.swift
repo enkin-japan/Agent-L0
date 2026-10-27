@@ -71,11 +71,19 @@ struct BackendConnectionStatus {
         }
     }
 
-    /// Still coming up: authenticated and either the engine is not installed or the first
-    /// node probe has not answered. Settled failures (unreachable / unauthorized) and
-    /// older backends that omit the fields are not "starting".
+    /// Still coming up: authenticated and either the first node probe has not answered, or
+    /// the engine is not installed yet while nothing has settled as a permanent failure.
+    /// A settled node failure (compute_node_state unreachable / unauthorized) or a rejected
+    /// RAG key (rag_state unauthorized) is not "starting" even while engine_ready is false —
+    /// the backend retries those on its own backoff, so fast-polling them would be 2 s
+    /// forever. rag_state "unreachable" is not settled: a local RAG that is not up yet is the
+    /// normal cold start and keeps the 2 s cadence. Older backends that omit the fields are
+    /// not "starting" either.
     var stillStarting: Bool {
-        access == .authenticated && (health?.engineReady == false || health?.computeNodeState == "probing")
+        access == .authenticated && (health?.computeNodeState == "probing"
+            || (health?.engineReady == false
+                && !["unreachable", "unauthorized"].contains(health?.computeNodeState ?? "")
+                && health?.ragState != "unauthorized"))
     }
 
     /// Monitor cadence: 2 s while offline or still starting; 15 s for every settled state.

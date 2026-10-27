@@ -622,8 +622,10 @@ effect 按命令逐次判定(只读命令 → read),API 工具 GET/HEAD → read
 `needs_approval`,即 2026-10-27 前的行为)/ `ask`(必问);两类缺省均为 default。闸门判定:
 未注册工具名不进闸门,沿旧路径直接报错(`approval_required` 本身对未知名恒必问);否则按该次
 调用的 effect 取档。三条硬规则压过档位:(1)**钉死**——用户在 API 工具声明里显式写的
-`requires_approval`、以及 `cloud.require_approval` 开着的云咨询,是工具级的人为决定,`auto`
-不得越过(`ask` 仍可更严);(2)**无人值守**——`turn_origin != chat` 的轮次(计划任务等)一律按
+`requires_approval`、`cloud.require_approval` 开着的云咨询、以及 `run_shell_command` 的变更命令
+(它的只读判定本身就是密钥隔离护栏的前提:免审批执行 ⇔ 只读,见 2026-10-26 阶段复审)、以及
+审批卡本身就是安全门的工具(定时任务的建立/修改/删除——卡即任务详情确认;API 工具与技能注册——第一道门),
+都是工具级的人为决定,`auto` 不得越过(`ask` 仍可更严);(2)**无人值守**——`turn_origin != chat` 的轮次(计划任务等)一律按
 default 判,auto 不安全、ask 无人可答;(3)**损坏即收紧**——策略文件缺失按缺省,存在但损坏或
 不可读按 ask/ask 并告警一次。策略落盘 `<data_root>/approval_policy.json`(0600,先 chmod 临时
 文件再原子替换);改动即时生效,不重启;落盘失败回 503 `{reason: policy_save_failed}`,内存策略不变。
@@ -631,6 +633,7 @@ default 判,auto 不安全、ask 无人可答;(3)**损坏即收紧**——策略
 ```
 GET   /api/v1/approval-policy   → {"read": MODE, "write": MODE, "tools": {name: "read"|"write"}, "dynamic": ["run_shell_command"]}
 PATCH /api/v1/approval-policy   {"read"?: MODE, "write"?: MODE}   → 200 全量策略;非法档位或未知键 → 422
+                                仅 Mac 本体(共享密钥 require_owner);配对设备票据 → 403
 ```
 
 `awaiting_approval` 事件、`POST /turns/approval`(含锁屏 Live Activity 的拒绝路径)、计划任务的

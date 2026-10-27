@@ -225,6 +225,18 @@ func L(_ value: String) -> String { value }
         check(status(#"{"engine_ready":true,"compute_node_state":"unreachable"}"#).pollIntervalSeconds == 15, "unreachable node polls at 15 s")
         check(status(#"{"engine_ready":true,"compute_node_state":"unauthorized"}"#).pollIntervalSeconds == 15, "unauthorized node polls at 15 s")
         check(status(#"{"engine_ready":true,"compute_node_state":"ready"}"#).pollIntervalSeconds == 15, "ready polls at 15 s")
+        check(status(#"{"engine_ready":false,"compute_node_state":"unreachable"}"#).pollIntervalSeconds == 15,
+              "engine down with a settled unreachable node polls at 15 s")
+        check(status(#"{"engine_ready":false,"compute_node_state":"unauthorized"}"#).pollIntervalSeconds == 15,
+              "engine down with a settled unauthorized node polls at 15 s")
+        check(status(#"{"engine_ready":false,"compute_node_state":"ready","rag_state":"unauthorized"}"#).pollIntervalSeconds == 15,
+              "engine down with a settled RAG failure polls at 15 s")
+        check(status(#"{"engine_ready":false,"compute_node_state":"local"}"#).pollIntervalSeconds == 2,
+              "engine still installing on a local node polls at 2 s")
+        check(status(#"{"engine_ready":false,"compute_node_state":"ready","rag_state":"unreachable"}"#).pollIntervalSeconds == 2,
+              "local RAG not up yet is a cold start, not settled: polls at 2 s")
+        check(status(#"{"compute_node_state":"probing","rag_state":"unauthorized"}"#).pollIntervalSeconds == 2,
+              "a pending node probe polls at 2 s whatever the RAG state")
         check(status(#"{"compute_ready":true,"compute_state":"ready"}"#).pollIntervalSeconds == 15, "nil fields poll at 15 s")
         check(status(#"{}"#, .offline).pollIntervalSeconds == 2, "offline polls at 2 s")
         check(status(#"{"engine_ready":false}"#, .unauthorized).pollIntervalSeconds == 15, "unauthenticated never fast-polls")
