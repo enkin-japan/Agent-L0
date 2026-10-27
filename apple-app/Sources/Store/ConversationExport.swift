@@ -22,6 +22,8 @@ enum ConversationExport {
                 lines.append(message.text)
             case .tool:
                 lines.append("> 🔧 \(message.toolLabel ?? "工具")")
+            case .toolGroup:
+                lines.append(contentsOf: message.toolSteps.map { "> 🔧 \($0.label)" })
             case .system:
                 lines.append("> ⚠️ \(message.text.replacingOccurrences(of: "\n", with: " "))")
             }

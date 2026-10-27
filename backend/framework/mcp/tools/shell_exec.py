@@ -869,6 +869,13 @@ class ShellExecTool(BaseTool):
         return not _is_readonly(str(arguments.get("command", "")),
                                 cwd=str(arguments.get("cwd") or ""))
 
+    def effect_for(self, arguments: Dict[str, Any] = None) -> str:
+        # 与 needs_approval 同一把尺：只读命令 = read，其余（含判不了的）= write。
+        # 类属性 effect 保持 "write"（静态清单里 shell 按最坏情形展示）。
+        arguments = arguments or {}
+        return "read" if _is_readonly(str(arguments.get("command", "")),
+                                      cwd=str(arguments.get("cwd") or "")) else "write"
+
     def execute(self, command: str, cwd: str = "", timeout: int = 60) -> str:
         if not command or not command.strip():
             return "System Error: empty command."

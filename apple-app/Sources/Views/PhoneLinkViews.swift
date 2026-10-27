@@ -231,7 +231,8 @@ struct MacPhoneLinkSection: View {
 
 #if os(iOS)
 /// iPhone 的引导页与设置页共用：保存过的 Mac（iCloud 同步 / 扫码；旧版手填的条目照常
-/// 列出并自动换成设备票据），点选切换、左滑删除。
+/// 列出并自动换成设备票据），点选切换（未配对的点按即经 Mac 同意配对）、左滑取消配对。
+/// 取消配对不把 Mac 藏起来：iCloud 里还有的照常列出，标成「未配对」。
 struct PhoneConnectionSection: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var phoneLink: PhoneLink
@@ -260,11 +261,12 @@ struct PhoneConnectionSection: View {
                         }
                         .tint(Theme.accent)
                     }
-                }
-                .onDelete { offsets in
-                    // 先取 id 再删：删除会改变下标
-                    let ids = offsets.map { phoneLink.macs[$0].id }
-                    ids.forEach(phoneLink.remove)
+                    .swipeActions(edge: .trailing) {
+                        // 未配对的没有可取消的：不给左滑
+                        if mac.pairingState == .paired {
+                            Button(L("取消配对"), role: .destructive) { phoneLink.remove(mac.id) }
+                        }
+                    }
                 }
                 if let error = phoneLink.syncedError {
                     Text(error)
@@ -276,7 +278,7 @@ struct PhoneConnectionSection: View {
         } header: {
             Text(L("Mac 列表"))
         } footer: {
-            Text(L("点选切换，左滑删除，右滑改名。同一 Apple ID 的 Mac 会自动出现在这里，第一次连接要在 Mac 上点允许；不同 Apple ID 的，在 Mac 的「设置 → 连接 → 连接 iPhone」中显示配对二维码，用 iPhone 相机扫描。"))
+            Text(L("点选切换，左滑取消配对，右滑改名。同一 Apple ID 的 Mac 会自动出现在这里；取消配对后 Mac 仍会列出，可随时重新配对。第一次连接要在 Mac 上点允许；不同 Apple ID 的，在 Mac 的「设置 → 连接 → 连接 iPhone」中显示配对二维码，用 iPhone 相机扫描。"))
         }
         .onAppear { phoneLink.readSynced() }
         .alert(L("给 Mac 改名"), isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
@@ -298,6 +300,7 @@ struct PhoneConnectionSection: View {
                     .foregroundStyle(mac.removedFromICloud ? Theme.warning : Color.secondary)
             }
             Spacer()
+            pairingBadge(mac)
             if mac.id == phoneLink.currentId, settings.setupCompleted {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(Theme.success)
@@ -307,12 +310,26 @@ struct PhoneConnectionSection: View {
         .contentShape(Rectangle())
     }
 
+    @ViewBuilder
+    private func pairingBadge(_ mac: SavedMac) -> some View {
+        switch mac.pairingState {
+        case .paired:
+            Text(L("已配对"))
+                .font(.caption2)
+                .foregroundStyle(.tint)
+        case .unpaired:
+            Text(L("未配对"))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private func sourceLabel(_ mac: SavedMac) -> String {
         if mac.id == phoneLink.currentId, phoneLink.currentRejected {
             return L("这台 Mac 已不再接受本机（被移除或已到期），点按重新请求连接")
         }
-        if mac.removedFromICloud { return L("Mac 已停止同步（仍可使用，不需要时左滑删除）") }
-        if mac.credential == .none { return L("点按向这台 Mac 请求连接") }
+        if mac.removedFromICloud { return L("Mac 已停止同步（仍可使用，不需要时左滑取消配对）") }
+        if mac.pairingState == .unpaired { return L("点按向这台 Mac 请求连接") }
         switch mac.source {
         case .icloud: return L("iCloud 同步")
         case .qr: return L("扫码配对")

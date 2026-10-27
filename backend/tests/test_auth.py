@@ -87,8 +87,10 @@ def test_health_reports_identity_fields():
     body = _health_body()
     # 钉住**整个**键集而非子集：/health 免鉴权，任何新字段漏到这里都是对未认证
     # 调用方的额外披露，必须由一个测试红掉来拍板，而不是顺手跟着实现走。
+    # build 78（Contract H）拍板新增三项非密就绪标志，与 compute_state 同类。
     assert set(body) == {"status", "service", "layout", "key_fp",
-                         "data_ready", "compute_ready", "compute_state"}
+                         "data_ready", "compute_ready", "compute_state",
+                         "engine_ready", "compute_node_state", "rag_state"}
     assert body["status"] == "ok"           # 旧消费方只看这个，语义不变
     assert body["service"] == SERVICE_NAME == "macagent-backend"
     assert isinstance(body["layout"], str) and body["layout"]

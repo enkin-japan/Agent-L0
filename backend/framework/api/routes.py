@@ -4,7 +4,7 @@ import os
 import re
 import time
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from .schemas import (
@@ -12,6 +12,7 @@ from .schemas import (
     ApiToolSaveRequest,
     ApiToolPatchRequest,
     ApiToolTestRequest,
+    ApprovalPolicyResponse,
     ApprovalRequest,
     RetryRequest,
     CancelResponse,
@@ -40,6 +41,8 @@ from .schemas import (
     SkillsResponse,
     ToolsResponse,
 )
+from .auth import require_owner
+from ..core import approval_policy
 from ..core.journal import BOOT_ID, TurnJournal
 from ..core.turn_runner import TurnConflict, public_turn, turn_reference, retry_history_projection
 from ..memory.compactor import maybe_summarize_context
@@ -76,6 +79,9 @@ _LOCAL_READ_ROUTES = {
     ("GET", "/api/v1/files/{session_id}/assets/{filename}"),
     ("GET", "/api/v1/chat/{session_id}/offline-files"),
     ("GET", "/api/v1/files/{session_id}/offline/{kind}/{filename}"),
+    # 本集合的含义是「首次装配前即可用」，不是「只读」：审批策略是本地状态，设置页在
+    # 算力就绪前也要能读写（PATCH 另挂 require_owner）
+    ("GET", "/api/v1/approval-policy"), ("PATCH", "/api/v1/approval-policy"),
 }
 _EXECUTION_ROUTES = {
     ("POST", "/api/v1/chat/{session_id}"), ("POST", "/api/v1/chat/{session_id}/turns"),
@@ -142,6 +148,35 @@ async def list_tools(request: Request):
     registry = request.app.state.mcp_registry
     tools = registry.list_tools()
     return {"status": True, "count": len(tools), "tools": tools}
+
+
+def _approval_policy_payload(request: Request, policy) -> Dict[str, Any]:
+    registry = getattr(request.app.state, "mcp_registry", None)
+    tools = registry.tool_effects() if registry is not None else {}
+    dynamic = registry.dynamic_effect_tools() if registry is not None else []
+    return {**policy.as_dict(), "tools": tools, "dynamic": dynamic}
+
+
+@router.get("/api/v1/approval-policy", response_model=ApprovalPolicyResponse)
+async def get_approval_policy(request: Request):
+    """审批策略（Contract P）：read/write 两档 + 已注册工具的类级效果分类。"""
+    return _approval_policy_payload(request, approval_policy.current())
+
+
+@router.patch("/api/v1/approval-policy", response_model=ApprovalPolicyResponse,
+              dependencies=[Depends(require_owner)])
+async def patch_approval_policy(request: Request, body: Any = Body(...)):
+    """部分更新 {"read"?: MODE, "write"?: MODE}：落盘后立即对下一次工具闸门生效。
+    只给 Mac（共享密钥）；配对设备票据 403——放开免审批是本机主人的决定。
+    非法取值 / 未知键 / 非对象 → 422，策略与文件都不变。"""
+    try:
+        policy = await asyncio.to_thread(approval_policy.update, body)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except OSError as e:
+        print(f"[ApprovalPolicy] ⚠️ 策略落盘失败，内存策略不变: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=503, detail={"reason": "policy_save_failed"})
+    return _approval_policy_payload(request, policy)
 
 
 @router.get("/api/v1/skills", response_model=SkillsResponse)

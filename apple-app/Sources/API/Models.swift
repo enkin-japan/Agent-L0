@@ -738,3 +738,18 @@ struct Upload: Identifiable {
     let mime: String
     let data: Data
 }
+
+/// Contract P：后端的审批策略（读取类 / 写入类各一个 MODE）。tools / dynamic 仅供展示，可缺省。
+struct ApprovalPolicy: Decodable, Equatable {
+    static let modes = ["auto", "default", "ask"]
+    let read: String
+    let write: String
+    let tools: [String: String]?
+    let dynamic: [String]?
+}
+
+/// PATCH 体：只带改动的那一个键（nil 不编码）。
+struct ApprovalPolicyPatch: Encodable {
+    var read: String?
+    var write: String?
+}

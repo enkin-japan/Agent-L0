@@ -9,6 +9,16 @@ struct SearchHit: Identifiable {
     let lastUpdated: Double?
 }
 
+/// 执行过程组里的一步（来自一条 `.tool` 消息；status/timestamp 仅在执行回执给得出时有值）。
+struct ToolStep: Identifiable {
+    let id: UUID
+    let label: String
+    let detail: String
+    /// 回执里的工具返回状态（"ok" / "timeout" / …）；推不出时 nil，不冒充成功。
+    let status: String?
+    let thoughts: String?
+}
+
 /// UI 侧消息模型：把后端轮次（Turn.response 的 role 消息）铺平成可渲染列表。
 struct ChatMessage: Identifiable {
     enum Kind {
@@ -17,9 +27,13 @@ struct ChatMessage: Identifiable {
         case system
         /// 工具调用/返回的折叠行（detail 收在 DisclosureGroup 里）
         case tool
+        /// 显示投影：同一轮里连续的 `.tool` 行合成的「执行过程」组（toolSteps）。
+        /// 只由 `groupedForDisplay` 产生；`from(turn:)` 与 store.messages 仍是逐行的。
+        case toolGroup
     }
 
-    let id = UUID()
+    /// 组的 id 取其第一步的 id，所以同一份 messages 重算投影时组身份稳定。
+    var id = UUID()
     let kind: Kind
     var text: String
     var thoughts: String?
@@ -35,6 +49,21 @@ struct ChatMessage: Identifiable {
     var meta: String?
     /// 轮次完结时间（同轮消息同值）。旧历史行没有 timestamp 字段 → nil 不显示。
     var timestamp: Date?
+    /// tool 行：执行回执给出的返回状态 / 事件时刻（epoch 秒）；没有可靠对应的回执 → nil。
+    var stepStatus: String?
+    var stepTimestamp: Double?
+    /// tool 行：这一行是一次调用（call）还是其返回（result），及工具名——用于把
+    /// 调用+返回计为一步、以及与回执对账。解析失败行没有名字（nil）。
+    /// notRun：作废的待审批调用——闭合其调用（计步），但从不是一次返回（不参与回执对账）。
+    enum StepRole { case call, result, notRun }
+    var stepRole: StepRole?
+    var stepName: String?
+    /// toolGroup：组内各行、调用次数（调用+返回算一步）、按回执时刻算出的耗时
+    /// （秒；不足两个时刻 → nil），以及稳定的展开键（见 groupedForDisplay）。
+    var toolSteps: [ToolStep] = []
+    var toolInvocationCount = 0
+    var stepsDuration: Double?
+    var toolGroupKey: String?
 
     static func user(_ text: String) -> ChatMessage {
         ChatMessage(kind: .user, text: text)
@@ -105,8 +134,11 @@ extension ChatMessage {
                                              detail: call.errorMsg ?? ""))
                         } else {
                             let name = call.name ?? "unknown"
-                            out.append(.tool(label: "\(L("调用")) \(name)",
-                                             detail: call.arguments?.compact(max: 4000) ?? "{}"))
+                            var row = ChatMessage.tool(label: "\(L("调用")) \(name)",
+                                                       detail: call.arguments?.compact(max: 4000) ?? "{}")
+                            row.stepRole = .call
+                            row.stepName = name
+                            out.append(row)
                         }
                     }
                     // 带 tool_calls 的 assistant 消息也可能有过程性思考
@@ -121,12 +153,17 @@ extension ChatMessage {
             case "tool":
                 for item in msg.toolResponses ?? [] {
                     if item.response == "Operation cancelled: the user sent a new message without approving." {
-                        out.append(.tool(label: (item.name ?? L("工具")) + " · " + L("未执行"),
-                                         detail: L("此待审批调用已因新消息作废，未获批执行。")))
+                        var row = ChatMessage.tool(label: (item.name ?? L("工具")) + " · " + L("未执行"),
+                                                   detail: L("此待审批调用已因新消息作废，未获批执行。"))
+                        row.stepRole = .notRun
+                        row.stepName = item.name
+                        out.append(row)
                         continue
                     }
                     var m = ChatMessage.tool(label: "\(item.name ?? L("工具")) \(L("返回"))",
                                              detail: item.response ?? "")
+                    m.stepRole = .result
+                    m.stepName = item.name
                     // 渲染格分派（R3，与 web 的 renderByHint 同一决策表）：
                     // 认识的 hint 走结构化渲染，不认识/缺载荷降级灰框——fail-open
                     if item.render?.hint == "citations" {
@@ -145,6 +182,7 @@ extension ChatMessage {
                 }
             }
         }
+        attachReceipts(turn.executionReceipts?.items ?? [], to: &out)
         // Reuse the ordinary tool disclosure rows for journal facts in both live and history paths.
         let hasToolMessages = out.contains { $0.kind == .tool }
         if stopped || !hasToolMessages, let facts = turn.executionReceipts {
@@ -168,9 +206,17 @@ extension ChatMessage {
                 }) {
                     out[existing].toolLabel = item.name + " · " + L("已返回")
                     out[existing].toolDetail = detail
+                    out[existing].stepStatus = item.status
+                    out[existing].stepTimestamp = item.ts
                     continue
                 }
-                out.append(.tool(label: item.name + " · " + L(started ? "已开始" : "已返回"), detail: detail))
+                // These rows ARE the receipts, so their status and time are exact.
+                var row = ChatMessage.tool(label: item.name + " · " + L(started ? "已开始" : "已返回"), detail: detail)
+                row.stepStatus = started ? nil : item.status
+                row.stepTimestamp = item.ts
+                row.stepRole = started ? .call : .result
+                row.stepName = item.name
+                out.append(row)
             }
             if facts.truncated == true { out.append(.system(L("执行记录不完整，不能据此排除其他副作用。"))) }
             if stopped && facts.items.isEmpty { out.append(.system(L("本轮未记录工具事件；这不能证明没有副作用。"))) }
@@ -194,6 +240,99 @@ extension ChatMessage {
             out[lastAssistant].meta = meta
         }
         return out
+    }
+}
+
+extension ChatMessage {
+    /// Response rows carry no call id (the backend mints it at execution time and keeps it
+    /// only in the journal), so receipts cannot be matched per call. Per tool name and role,
+    /// attach status/time only when the rows and receipts are equally many — then the k-th
+    /// row is the k-th execution. A denied or abandoned call leaves a row without a receipt,
+    /// the counts differ, and that name stays unknown (nil) instead of shifting results.
+    fileprivate static func attachReceipts(_ receipts: [ExecutionReceipt], to rows: inout [ChatMessage]) {
+        guard !receipts.isEmpty else { return }
+        func key(_ role: StepRole, _ name: String) -> String { (role == .call ? "c\u{1F}" : "r\u{1F}") + name }
+        var rowIndices: [String: [Int]] = [:]
+        for i in rows.indices where rows[i].kind == .tool {
+            guard let role = rows[i].stepRole, role != .notRun, let name = rows[i].stepName else { continue }
+            rowIndices[key(role, name), default: []].append(i)
+        }
+        var receiptGroups: [String: [ExecutionReceipt]] = [:]
+        for item in receipts {
+            let role: StepRole
+            switch item.type {
+            case "tool_started": role = .call
+            case "tool_result": role = .result
+            default: continue
+            }
+            receiptGroups[key(role, item.name), default: []].append(item)
+        }
+        for (k, indices) in rowIndices {
+            guard let matched = receiptGroups[k], matched.count == indices.count else { continue }
+            for (i, receipt) in zip(indices, matched) {
+                rows[i].stepTimestamp = receipt.ts
+                if rows[i].stepRole == .result { rows[i].stepStatus = receipt.status }
+            }
+        }
+    }
+
+    /// 显示投影：同一轮（turnIndex 相同）里连续的普通 `.tool` 行合成一条 `.toolGroup`；
+    /// 引用格（citations）行留在顶层原位（build 77 的摆放），并打断连续段。
+    /// 纯函数；输入的逐行消息原样保留在 store.messages（导出、审批/重试逻辑、原生测试都读它）。
+    /// 展开键 = "turnIndex:组首行在该轮工具行中的序号"，同一轮重投影得到同一个键。
+    static func groupedForDisplay(_ messages: [ChatMessage]) -> [ChatMessage] {
+        var out: [ChatMessage] = []
+        var run: [ChatMessage] = []
+        var runOrdinal = 0
+        var toolOrdinal: [Int: Int] = [:]   // turnIndex → tool rows seen so far in that turn
+        func flush() {
+            guard let first = run.first else { return }
+            var group = ChatMessage(id: first.id, kind: .toolGroup, text: "")
+            group.turnIndex = first.turnIndex
+            group.timestamp = first.timestamp
+            group.toolGroupKey = first.turnIndex.map { "\($0):\(runOrdinal)" } ?? first.id.uuidString
+            group.toolSteps = run.map {
+                ToolStep(id: $0.id, label: $0.toolLabel ?? L("工具"), detail: $0.toolDetail ?? "",
+                         status: $0.stepStatus, thoughts: $0.thoughts)
+            }
+            group.toolInvocationCount = invocationCount(run)
+            let times = run.compactMap(\.stepTimestamp)
+            if times.count >= 2, let lo = times.min(), let hi = times.max(), hi > lo {
+                group.stepsDuration = hi - lo
+            }
+            out.append(group)
+            run.removeAll()
+        }
+        for message in messages {
+            guard message.kind == .tool else { flush(); out.append(message); continue }
+            let ordinal = message.turnIndex.map { toolOrdinal[$0, default: 0] } ?? 0
+            if let index = message.turnIndex { toolOrdinal[index] = ordinal + 1 }
+            if !message.citations.isEmpty { flush(); out.append(message); continue }
+            if let last = run.last, last.turnIndex != message.turnIndex { flush() }
+            if run.isEmpty { runOrdinal = ordinal }
+            run.append(message)
+        }
+        flush()
+        return out
+    }
+
+    /// 调用+返回算一步：返回行若能接上同名的未闭合调用就不另计；其余行各算一步。
+    static func invocationCount(_ rows: [ChatMessage]) -> Int {
+        var open: [String: Int] = [:]
+        var count = 0
+        for row in rows {
+            let name = row.stepName ?? ""
+            switch row.stepRole {
+            case .call:
+                count += 1
+                open[name, default: 0] += 1
+            case .result, .notRun:
+                if let n = open[name], n > 0 { open[name] = n - 1 } else { count += 1 }
+            case nil:
+                count += 1
+            }
+        }
+        return count
     }
 }
 

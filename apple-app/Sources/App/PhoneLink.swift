@@ -165,6 +165,11 @@ struct SavedMac: Codable, Equatable, Identifiable {
     var credential: Credential
     /// 用户在 iPhone 上改过名：iCloud 同步不再覆盖。
     var customName: Bool
+
+    enum PairingState: Equatable { case paired, unpaired }
+    /// 已配对 = 本机手里有这台 Mac 的凭据（设备票据，或待换票据的旧共享密钥）；
+    /// 未配对 = 只从 iCloud 知道这台 Mac（或取消配对之后），点按经 Mac 同意重新配对。
+    var pairingState: PairingState { credential == .none ? .unpaired : .paired }
 }
 
 /// 多 Mac 列表的纯逻辑（两端都编译，主机上可直接测）。
@@ -187,8 +192,10 @@ enum MacDirectory {
         legacy.macId == nil && (legacy.url == url || (!name.isEmpty && legacy.mac == name))
     }
 
-    /// 用户删掉的 Mac 记在 hidden 里：有 macId 记 macId，没有（75 旧条目）记地址。
-    static func hideKey(macId: String?, url: String) -> String { macId ?? "url:" + url }
+    /// iPhone 本机钥匙串（不同步）：每台 Mac 的票据（或旧连接的共享密钥），与 DenyApprovalIntent 一致
+    static func keyAccount(_ id: String) -> String { "mac-key." + id }
+    /// iPhone 本机钥匙串：每台 Mac 的请求凭据（来自 iCloud 条目）
+    static func ticketAccount(_ id: String) -> String { "mac-ticket." + id }
 
     /// Mac 侧：同一服务地址下、macId 不是本机的条目——本机 macId 丢失（重装、清 UserDefaults）
     /// 后留下的旧身份。它还装着旧密钥，iPhone 会看到一台永远 401 的「Mac」，写入时一并清掉。
@@ -216,31 +223,35 @@ enum MacDirectory {
 
     struct Merged: Equatable {
         var macs: [SavedMac]
-        /// 需要写进本机钥匙串的共享密钥（只来自 75 旧条目；SavedMac.id → key）
-        var keys: [String: String]
+        /// 75 旧条目里的共享密钥（SavedMac.id → key），只给没有设备票据的项：点按时拿它换本机的设备票据
+        /// （POST /pair/upgrade）。从不写成本机凭据——iCloud 只让 Mac 被发现，配对要你点。
+        var legacyKeys: [String: String]
         /// 需要写进本机钥匙串的请求凭据（SavedMac.id → ticket）
         var tickets: [String: String]
+        /// 移出列表的未配对项（iCloud 里已经没有它了）：调用方清掉它名下残留的请求凭据
+        var dropped: [String]
     }
 
     /// 把 iCloud 里读到的全部条目并进本机列表。规则：
     /// - 按 macId 认 Mac；本机旧项（75 迁移来的、没有 macId）按地址认领 macId；
     /// - 只有 iCloud 来源的项会被更新地址、名字与请求凭据，扫码与手填的值不被静默覆盖；
-    ///   已经拿到设备票据的项，旧条目里的共享密钥不会把它顶掉；用户改过的名字不被覆盖；
-    /// - 新 Mac 追加为 iCloud 来源（还没有凭据，要先经 Mac 同意）；用户删过的不再加回来；
-    /// - iCloud 里已经没有的 iCloud 项标成 removedFromICloud，不自动删。
-    /// 只在读取成功时调用（读失败不能据此把 Mac 标成已移除）。
-    static func merge(_ macs: [SavedMac], synced: [PhoneConnection], hidden: Set<String>,
+    ///   旧条目里的共享密钥从不变成本机凭据（未配对的项点按时才拿它换票据）；用户改过的名字不被覆盖；
+    /// - 新 Mac 追加为 iCloud 来源（还没有凭据，要先经 Mac 同意）；取消配对过的照常列出（未配对），
+    ///   不记「删过」——77 及以前把它藏起来，用户就再也找不回那台 Mac；
+    /// - iCloud 里已经没有的 iCloud 项：已配对的标成 removedFromICloud，不自动删（仍可使用）；
+    ///   未配对的移出列表（手里没有凭据，也没有条目可凭着重新配对）。
+    /// 只在读取成功时调用（读失败不能据此把 Mac 标成已移除）。读到零条不移出任何项（退出 iCloud 等
+    /// 「没有信息」的情形）；pinned（当前那台、正在配对的那台）也从不移出。
+    static func merge(_ macs: [SavedMac], synced: [PhoneConnection], pinned: Set<String>,
                       now: Date, newId: () -> String) -> Merged {
         var out = macs
-        var keys: [String: String] = [:]
+        var legacyKeys: [String: String] = [:]
         var tickets: [String: String] = [:]
         var seen = Set<String>()
         // 75 全局条目与某台 Mac 自己的条目同地址时（那台 Mac 刚升级），以带 macId 的为准
         let tagged = Set(synced.filter { $0.macId != nil }.map(\.url))
         for connection in synced {
             if connection.macId == nil, tagged.contains(connection.url) { continue }
-            if hidden.contains(hideKey(macId: connection.macId, url: connection.url))
-                || hidden.contains(hideKey(macId: nil, url: connection.url)) { continue }
             var index: Int?
             if let macId = connection.macId {
                 // iCloud 条目来自同一 Apple ID 的钥匙串，比后端自报的 instance_id 可信：
@@ -267,10 +278,10 @@ enum MacDirectory {
                                    name: connection.mac.isEmpty ? displayName(connection.url) : connection.mac,
                                    url: connection.url, source: .icloud, addedAt: now,
                                    removedFromICloud: false,
-                                   credential: legacyKey == nil ? .none : .sharedKey, customName: false)
+                                   credential: .none, customName: false)
                 out.append(mac)
                 seen.insert(mac.id)
-                if let legacyKey { keys[mac.id] = legacyKey }
+                if let legacyKey { legacyKeys[mac.id] = legacyKey }
                 if let ticket = connection.ticket, !ticket.isEmpty { tickets[mac.id] = ticket }
                 continue
             }
@@ -280,15 +291,42 @@ enum MacDirectory {
             if !connection.mac.isEmpty, !out[i].customName { out[i].name = connection.mac }
             out[i].removedFromICloud = false
             if let ticket = connection.ticket, !ticket.isEmpty { tickets[out[i].id] = ticket }
-            if let legacyKey, out[i].credential != .deviceToken {
-                keys[out[i].id] = legacyKey
-                out[i].credential = .sharedKey
-            }
+            if let legacyKey { legacyKeys[out[i].id] = legacyKey }
         }
+        let gone = out.filter { $0.source == .icloud && !seen.contains($0.id) }
+        // 只有没有任何凭据的项会被移出（按构造：credential == .none）
+        let dropped = synced.isEmpty ? [] : gone.filter { $0.credential == .none && !pinned.contains($0.id) }.map(\.id)
+        out.removeAll { dropped.contains($0.id) }
         for i in out.indices where out[i].source == .icloud && !seen.contains(out[i].id) {
             out[i].removedFromICloud = true
         }
-        return Merged(macs: out, keys: keys, tickets: tickets)
+        // 设备票据从不被共享密钥顶替（也不拿它绕过 Mac 的吊销）：只给没有设备票据的项
+        let eligible = Set(out.filter { $0.credential != .deviceToken }.map(\.id))
+        legacyKeys = legacyKeys.filter { eligible.contains($0.key) }
+        return Merged(macs: out, legacyKeys: legacyKeys, tickets: tickets, dropped: dropped)
+    }
+
+    struct Unpaired: Equatable {
+        var macs: [SavedMac]
+        /// 手里是设备票据：请那台 Mac 一并吊销它（PairingAPI.forgetSelf），设备列表里不留一行
+        var forgetSelf: Bool
+        /// 本机钥匙串里要清空的账户（票据 / 共享密钥与请求凭据）
+        var clearedAccounts: [String]
+    }
+
+    /// 取消配对（iPhone 左滑「取消配对」）：本机凭据一律清掉。iCloud 里还列着的那台留在列表里、
+    /// 变成未配对（同一个 id，点按即经 Mac 同意重新配对）；扫码 / 手填的、或 Mac 已停止同步的
+    /// 移出列表——它若还在 iCloud 里，下一次合并会把它作为未配对的 Mac 重新列出。
+    static func unpair(_ macs: [SavedMac], id: String) -> Unpaired? {
+        guard let i = macs.firstIndex(where: { $0.id == id }) else { return nil }
+        var out = macs
+        let forget = out[i].credential == .deviceToken
+        if out[i].source == .icloud, !out[i].removedFromICloud {
+            out[i].credential = .none
+        } else {
+            out.remove(at: i)
+        }
+        return Unpaired(macs: out, forgetSelf: forget, clearedAccounts: [keyAccount(id), ticketAccount(id)])
     }
 
     /// 扫码配对 / 手填：同一台 Mac（macId 相同，或地址相同）就地更新，否则追加。返回该项 id。
@@ -331,6 +369,18 @@ enum MacDirectory {
     /// 点选一台时要不要先经 Mac 同意（握手）：还没凭据、读不出凭据、或当前这台已拒绝本机的
     /// 票据。freshCredential = 刚换到了这台的新凭据（扫码 / 手填）：之前的拒绝已不算数，
     /// 直接采用，绝不再为它发 /pair/request。
+    enum PairingRoute: Equatable { case legacyUpgrade(key: String), request }
+    /// 要配对的那一项走哪条路：iCloud 里有 75 旧条目的共享密钥、且本机没有可用凭据（未配对，或
+    /// 共享密钥那一项的本机密钥丢了）→ 拿它换设备票据（POST /pair/upgrade）；其余凭请求凭据握手。
+    /// 设备票据被拒的项从不走共享密钥：那是 Mac 的吊销，要重新经 Mac 同意。
+    static func pairingRoute(credential: Credential, hasKey: Bool, legacyKey: String?) -> PairingRoute {
+        if let legacyKey, !legacyKey.isEmpty,
+           credential == .none || (credential == .sharedKey && !hasKey) {
+            return .legacyUpgrade(key: legacyKey)
+        }
+        return .request
+    }
+
     static func needsHandshake(credential: Credential, hasKey: Bool, isCurrent: Bool,
                                currentRejected: Bool, freshCredential: Bool) -> Bool {
         if credential == .none || !hasKey { return true }
@@ -351,7 +401,8 @@ enum MacDirectory {
 
     /// 推送 / 灵动岛事件来自哪台：src 认得出就是那台，认不出（旧后端、手填的 Mac）退回当前那台。
     static func route(src: String?, macs: [SavedMac], current: String?) -> String? {
-        if let src, let mac = macs.first(where: { $0.macId == src }) { return mac.id }
+        // 未配对的那台不会发来推送；就算对得上也不切过去（切过去就得配对）
+        if let src, let mac = macs.first(where: { $0.macId == src }), mac.pairingState == .paired { return mac.id }
         return current
     }
 
@@ -1314,8 +1365,13 @@ final class PhoneLink: ObservableObject {
     @Published var handshake: Handshake?
     /// 当前那台拒绝了本机的票据（被 Mac 移除或已到期）：界面提示重新请求连接
     @Published private(set) var currentRejected = false
-    private var hidden: Set<String> = []
     private var lastHeal = Date.distantPast
+    /// 最近一次读 iCloud 得到的 75 旧条目共享密钥（只在内存里，见 MacDirectory.Merged.legacyKeys）
+    private var legacyKeys: [String: String] = [:]
+    /// 正在用共享密钥换票据的那台：请求在途时不再发第二次（第一次可能已经发出票据）
+    private var legacyUpgradeId: String?
+    /// 连接请求在途（还没拿到核对码）的那台；attempt 防止被取消的旧请求清掉新请求的标记
+    private var requesting: (id: String, attempt: UUID)?
     private var handshakeTask: Task<Void, Never>?
     /// 「重试」刚发起了新请求：弹窗随之关闭时（binding setter）不能把它取消。
     private var retryPending = false
@@ -1324,11 +1380,10 @@ final class PhoneLink: ObservableObject {
 
     private static let listKey = "phone.macs"
     private static let currentKey = "phone.currentMac"
-    private static let hiddenKey = "phone.hiddenMacs"
     /// 每台 Mac 的票据（或旧连接的共享密钥）：本机钥匙串、不同步（与 DenyApprovalIntent 一致）
-    static func keyAccount(_ id: String) -> String { "mac-key." + id }
+    static func keyAccount(_ id: String) -> String { MacDirectory.keyAccount(id) }
     /// 每台 Mac 的请求凭据（来自 iCloud 条目）
-    static func ticketAccount(_ id: String) -> String { "mac-ticket." + id }
+    static func ticketAccount(_ id: String) -> String { MacDirectory.ticketAccount(id) }
 
     var current: SavedMac? { macs.first { $0.id == currentId } }
 
@@ -1339,7 +1394,7 @@ final class PhoneLink: ObservableObject {
         macs = (defaults.data(forKey: Self.listKey))
             .flatMap { try? JSONDecoder().decode([SavedMac].self, from: $0) } ?? []
         currentId = defaults.string(forKey: Self.currentKey)
-        hidden = Set(defaults.stringArray(forKey: Self.hiddenKey) ?? [])
+        defaults.removeObject(forKey: "phone.hiddenMacs")   // 77 及以前藏起「删过的 Mac」的集合，78 起不再隐藏
         // build 75 只有一条连接：迁成列表第一项（共享密钥），并设为当前；随后自动换票据
         if macs.isEmpty, settings.setupCompleted,
            let first = MacDirectory.migrate(url: settings.baseURLString, source: settings.connectionSource,
@@ -1367,7 +1422,6 @@ final class PhoneLink: ObservableObject {
         let defaults = UserDefaults.standard
         if let data = try? JSONEncoder().encode(macs) { defaults.set(data, forKey: Self.listKey) }
         defaults.set(currentId, forKey: Self.currentKey)
-        defaults.set(Array(hidden).sorted(), forKey: Self.hiddenKey)
     }
 
     func key(for id: String) -> String { Keychain.load(Self.keyAccount(id)) }
@@ -1392,10 +1446,13 @@ final class PhoneLink: ObservableObject {
         let (items, status) = SharedKeychain.readAll()
         syncedError = status == errSecSuccess ? nil : SharedKeychain.describe(status)
         guard status == errSecSuccess else { return }
-        let merged = MacDirectory.merge(macs, synced: items, hidden: hidden, now: Date(), newId: Self.newId)
-        for (id, key) in merged.keys where self.key(for: id) != key {
-            Keychain.save(Self.keyAccount(id), key)
+        let pinned = Set([currentId, handshake?.macId, legacyUpgradeId, requesting?.id].compactMap { $0 })
+        let merged = MacDirectory.merge(macs, synced: items, pinned: pinned, now: Date(), newId: Self.newId)
+        for id in merged.dropped {
+            Keychain.save(Self.ticketAccount(id), "")
+            Keychain.save(Self.keyAccount(id), "")
         }
+        legacyKeys = merged.legacyKeys
         for (id, ticket) in merged.tickets where Keychain.load(Self.ticketAccount(id)) != ticket {
             Keychain.save(Self.ticketAccount(id), ticket)
         }
@@ -1422,13 +1479,64 @@ final class PhoneLink: ObservableObject {
         if MacDirectory.needsHandshake(credential: mac.credential, hasKey: !key(for: id).isEmpty,
                                        isCurrent: id == currentId, currentRejected: currentRejected,
                                        freshCredential: freshCredential) {
-            requestConnection(id)
+            requestOrUpgrade(id)
             return
         }
         currentId = id
         currentRejected = false
         persist()
         apply(mac)
+    }
+
+    /// 点开通知：只切到手里有可用凭据的那台，绝不发起配对（配对只能在 Mac 列表里点）。
+    func switchWithoutPairing(_ id: String) {
+        guard let mac = macs.first(where: { $0.id == id }),
+              !MacDirectory.needsHandshake(credential: mac.credential, hasKey: !key(for: id).isEmpty,
+                                           isCurrent: id == currentId, currentRejected: currentRejected,
+                                           freshCredential: false) else { return }
+        currentId = id
+        currentRejected = false
+        persist()
+        apply(mac)
+    }
+
+    /// 在 Mac 列表里点了要配对的一台（MacDirectory.pairingRoute 决定走哪条路）。
+    /// 共享密钥换票据在途时一律忽略：不取消、也不另发一个可能已经发出票据的请求。
+    private func requestOrUpgrade(_ id: String) {
+        guard legacyUpgradeId == nil, let mac = macs.first(where: { $0.id == id }) else { return }
+        switch MacDirectory.pairingRoute(credential: mac.credential, hasKey: !key(for: id).isEmpty,
+                                         legacyKey: legacyKeys[id]) {
+        case .legacyUpgrade(let key): upgradeLegacy(id, key: key)
+        case .request: requestConnection(id)
+        }
+    }
+
+    /// 75 旧条目的 Mac：用条目里的共享密钥向它换本机自己的设备票据（POST /pair/upgrade），
+    /// 换到后才存票据（adopt）。共享密钥本身从不存成本机凭据。
+    private func upgradeLegacy(_ id: String, key: String) {
+        guard legacyUpgradeId == nil, let mac = macs.first(where: { $0.id == id }),
+              let base = URL(string: mac.url) else { return }
+        handshakeTask?.cancel()
+        legacyUpgradeId = id
+        // 核对码为空的 .waiting：界面显示「正在配对」（不用在 Mac 上点允许）
+        handshake = Handshake(macId: id, macName: mac.name, code: "", state: .waiting)
+        let pushId = push?.deviceId
+        // 不放进 handshakeTask：弹窗的「取消」或点别的 Mac 都不取消它——票据可能已经发出，
+        // 拿到了就存下，不在 Mac 上留一张孤儿票据
+        Task { [weak self] in
+            do {
+                let issued = try await PairingAPI.upgrade(base: base, key: key, pushDeviceId: pushId)
+                await self?.adopt(id, token: issued.token, instanceId: issued.instance_id)
+                await MainActor.run { self?.legacyUpgradeId = nil }
+            } catch {
+                await MainActor.run {
+                    self?.legacyUpgradeId = nil
+                    self?.retryPending = false
+                    self?.handshake = Handshake(macId: id, macName: mac.name, code: "",
+                                                state: .failed(error.localizedDescription))
+                }
+            }
+        }
     }
 
     /// 同一 Apple ID：凭 iCloud 里的请求凭据向 Mac 提交连接请求，等你在 Mac 上点允许。
@@ -1442,7 +1550,10 @@ final class PhoneLink: ObservableObject {
         }
         handshakeTask?.cancel()
         let pushId = push?.deviceId
+        let attempt = UUID()
+        requesting = (id, attempt)
         handshakeTask = Task { [weak self] in
+            defer { Task { @MainActor in if self?.requesting?.attempt == attempt { self?.requesting = nil } } }
             do {
                 let request = try await PairingAPI.request(base: base, ticket: ticket, pushDeviceId: pushId)
                 await MainActor.run {
@@ -1501,7 +1612,7 @@ final class PhoneLink: ObservableObject {
     /// 弹窗里的「重试」：新请求接替旧的那一次。
     func retryHandshake(_ id: String) {
         retryPending = true
-        requestConnection(id)
+        requestOrUpgrade(id)
     }
 
     /// 弹窗关闭（SwiftUI 在任何按钮之后都会走 binding 的 setter）。「重试」之后的这次关闭
@@ -1592,20 +1703,19 @@ final class PhoneLink: ObservableObject {
         persist()
     }
 
-    /// 删掉一台：先向它注销推送，再删凭据。iCloud 里还有的不会再被自动加回来（扫码可以）。
+    /// 取消配对：先向它注销推送，再删本机凭据（MacDirectory.unpair）。iCloud 里还有的照常列出、
+    /// 成为未配对，点按即可重新配对；扫码的那台重新扫码。
     func remove(_ id: String) {
-        guard let mac = macs.first(where: { $0.id == id }) else { return }
+        guard let mac = macs.first(where: { $0.id == id }),
+              let plan = MacDirectory.unpair(macs, id: id) else { return }
         if let client = client(for: id) { push?.unregister(using: client) }
         // 设备票据：顺带让那台 Mac 吊销它，设备列表里不留一行用不着的连接
-        if mac.credential == .deviceToken, let base = URL(string: mac.url) {
+        if plan.forgetSelf, let base = URL(string: mac.url) {
             let token = key(for: id)
             Task { try? await PairingAPI.forgetSelf(base: base, token: token) }
         }
-        Keychain.save(Self.keyAccount(id), "")
-        Keychain.save(Self.ticketAccount(id), "")
-        hidden.insert(MacDirectory.hideKey(macId: nil, url: mac.url))
-        if mac.macId != nil { hidden.insert(MacDirectory.hideKey(macId: mac.macId, url: mac.url)) }
-        macs.removeAll { $0.id == id }
+        for account in plan.clearedAccounts { Keychain.save(account, "") }
+        macs = plan.macs
         if currentId == id {
             if let next = macs.first(where: { $0.credential != .none }) {
                 currentId = next.id
@@ -1620,6 +1730,8 @@ final class PhoneLink: ObservableObject {
         }
         persist()
         pruneOfflineCaches()
+        // 移出列表的那台若还在 iCloud 里，立即作为未配对列回来；留下的那台取回请求凭据
+        readSynced()
     }
 
     /// 用户在确认框里点了「连接」之后才调：拿一次性配对码换本机的票据，加进列表并设为当前。
@@ -1650,8 +1762,6 @@ final class PhoneLink: ObservableObject {
                 placement = placed
             })
             guard let placement else { return }
-            hidden.remove(MacDirectory.hideKey(macId: macId, url: link.base.absoluteString))
-            hidden.remove(MacDirectory.hideKey(macId: nil, url: link.base.absoluteString))
             macs = placement.macs
             // 新票据刚存：之前被拒绝（吊销 / 到期）不再算数，直接采用，不再弹握手
             select(placement.id, freshCredential: true)

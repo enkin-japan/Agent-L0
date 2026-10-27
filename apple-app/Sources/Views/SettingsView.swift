@@ -29,13 +29,14 @@ struct SettingsView: View {
     // 每次 body 重算时无绑定的 TabView 会重置回第一页——实机症状即"点击不切页/
     // 切过去又弹回第一页"。@State 存活于重渲染，选中页才稳得住。
     private enum SettingsTab: Hashable, CaseIterable, Identifiable {
-        case connection, notification, knowledge, apiTools, skills, registrations,
+        case connection, notification, permissions, knowledge, apiTools, skills, registrations,
              sidecar, appearance
         var id: Self { self }
         var title: String {
             switch self {
             case .connection:    return L("连接")
             case .notification:  return L("通知")
+            case .permissions:   return L("权限")
             case .knowledge:     return L("知识库")
             case .apiTools:      return L("API 工具")
             case .skills:        return L("剧本")
@@ -48,6 +49,7 @@ struct SettingsView: View {
             switch self {
             case .connection:    return "network"
             case .notification:  return "bell"
+            case .permissions:   return "hand.raised"
             case .knowledge:     return "books.vertical"
             case .apiTools:      return "wrench.and.screwdriver"
             case .skills:        return "book.closed"
@@ -166,6 +168,8 @@ struct SettingsView: View {
             Form { connectionSections }.formStyle(.grouped)
         case .notification:
             Form { notificationSection }.formStyle(.grouped)
+        case .permissions:
+            Form { ApprovalPolicySection() }.formStyle(.grouped)
         // 知识库是全局数据实体（跨会话），归设置而非会话菜单。embedded：复用本页
         // 外层 NavigationStack 推入文档页。
         case .knowledge:
@@ -684,3 +688,113 @@ struct SettingsView: View {
     }
     #endif
 }
+
+#if os(macOS)
+/// 「权限」：两类工具的审批模式（Contract P）。后端是权威：出现时 GET，改动时只 PATCH
+/// 改动的那个键；失败回退选择并在节内显示错误。AppSettings 里的镜像值只撑首拉前的显示。
+private struct ApprovalPolicySection: View {
+    @EnvironmentObject var store: AgentStore
+    @State private var loaded = false
+    @State private var loading = false
+    @State private var saving = false
+    @State private var errorText: String?
+
+    private enum PolicyClass { case read, write }
+
+    var body: some View {
+        Section {
+            Picker(L("读取 / 检索类"), selection: binding(.read)) { modeOptions }
+                .disabled(!loaded || saving)
+            Picker(L("写入 / 删除类"), selection: binding(.write)) { modeOptions }
+                .disabled(!loaded || saving)
+            if loading && !loaded {
+                Text(L("正在读取后端的权限设置…")).font(.caption).foregroundStyle(.secondary)
+            }
+            if let errorText {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(errorText).font(.caption).foregroundStyle(Theme.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: Theme.s2)
+                    if !loaded {
+                        Button(L("重试")) { Task { await load() } }.font(.caption)
+                    }
+                }
+            }
+        } header: {
+            Text(L("权限"))
+        } footer: {
+            Text(L("读取 / 检索类：只查看或检索信息、不改变任何东西的工具。写入 / 删除类：会修改、发送或删除内容的工具。Shell 命令按每条命令单独归类：只读命令算读取类，其余算写入类。「按工具默认」沿用各工具自身的审批设置。"))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .task(id: store.client.map { ObjectIdentifier($0) }) { await load() }
+    }
+
+    @ViewBuilder
+    private var modeOptions: some View {
+        Text(L("自动放行")).tag("auto")
+        Text(L("按工具默认")).tag("default")
+        Text(L("每次询问")).tag("ask")
+    }
+
+    private func current(_ cls: PolicyClass) -> String {
+        cls == .read ? store.settings.approvalPolicyRead : store.settings.approvalPolicyWrite
+    }
+
+    private func mirror(_ cls: PolicyClass, _ mode: String) {
+        if cls == .read { store.settings.approvalPolicyRead = mode }
+        else { store.settings.approvalPolicyWrite = mode }
+    }
+
+    private func adopt(_ policy: ApprovalPolicy) {
+        if ApprovalPolicy.modes.contains(policy.read) { mirror(.read, policy.read) }
+        if ApprovalPolicy.modes.contains(policy.write) { mirror(.write, policy.write) }
+    }
+
+    private func binding(_ cls: PolicyClass) -> Binding<String> {
+        Binding(get: { current(cls) }, set: { mode in
+            let previous = current(cls)
+            guard mode != previous, let client = store.client else { return }
+            mirror(cls, mode)
+            saving = true
+            errorText = nil
+            Task {
+                let patch = cls == .read ? ApprovalPolicyPatch(read: mode) : ApprovalPolicyPatch(write: mode)
+                do {
+                    let policy = try await client.updateApprovalPolicy(patch)
+                    guard store.client === client else { saving = false; return }
+                    adopt(policy)
+                } catch {
+                    guard store.client === client else { saving = false; return }
+                    if current(cls) == mode { mirror(cls, previous) }
+                    errorText = L("权限设置保存失败：") + error.localizedDescription
+                }
+                saving = false
+            }
+        })
+    }
+
+    private func load() async {
+        guard let client = store.client else {
+            loaded = false; errorText = L("尚未连接后端。"); return
+        }
+        loading = true
+        defer { loading = false }
+        do {
+            let policy = try await client.approvalPolicy()
+            guard store.client === client else { return }
+            adopt(policy)
+            loaded = true
+            errorText = nil
+        } catch {
+            guard store.client === client else { return }
+            loaded = false
+            if case AgentError.http(404, _) = error {
+                errorText = L("当前后端不支持权限设置（需要 build 78 及以上的执行层）。")
+            } else {
+                errorText = L("权限设置加载失败：") + error.localizedDescription
+            }
+        }
+    }
+}
+#endif
+

@@ -159,8 +159,10 @@ class _ApiCore:
         self.timeout_seconds = int(self._timeout) + 30
         ra = decl.get("requires_approval")
         self.requires_approval = bool(ra) if ra is not None else self._method in _MUTATING
+        self.approval_pinned = ra is not None   # 声明里显式写了审批 = 人的决定，"auto" 不推翻
         self.is_concurrency_safe = self._method in ("GET", "HEAD")
         self.is_read_only = self._method in ("GET", "HEAD")
+        self.effect = "read" if self._method in ("GET", "HEAD") else "write"
         self.drift_class = "api"
         self.drift_fix = (f"私人 API 探针连续失败：检查服务是否在跑、"
                           f"api_tools/ 里 {self.name} 的声明是否仍与服务端一致")

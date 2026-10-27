@@ -173,6 +173,15 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    /// 审批策略的最后已知值（Contract P MODE：auto / default / ask）。只用于首次拉取前的
+    /// 显示；权威在后端（设置页 GET / PATCH /api/v1/approval-policy）。
+    @Published var approvalPolicyRead: String {
+        didSet { UserDefaults.standard.set(approvalPolicyRead, forKey: "approval.policy.read") }
+    }
+    @Published var approvalPolicyWrite: String {
+        didSet { UserDefaults.standard.set(approvalPolicyWrite, forKey: "approval.policy.write") }
+    }
+
     /// 首启强制引导是否完成：false = 根视图只显示 OnboardingView，执行层与连接一律后置
     /// （新装 app 在填完密钥/地址前不空转尝试，省去「填完手动重启 1-2 次」）。
     /// 完成后既有设置页维持原状，作为重置入口。
@@ -219,6 +228,12 @@ final class AppSettings: ObservableObject {
         kvPersistEnabled = ud.object(forKey: "agent.kvPersist") as? Bool ?? false
         // 加载时同样钳制：手工写坏的 defaults / 老版本残值不该绕过范围
         kvTTLDays = min(max(ud.object(forKey: "agent.kvTTLDays") as? Int ?? 14, 1), 365)
+        // 合法档位写成字面量：本文件被 test_service_credentials 单独用 swiftc 编译，不能依赖 Models.swift
+        let approvalModes: Set<String> = ["auto", "default", "ask"]
+        approvalPolicyRead = ud.string(forKey: "approval.policy.read")
+            .flatMap { approvalModes.contains($0) ? $0 : nil } ?? "default"
+        approvalPolicyWrite = ud.string(forKey: "approval.policy.write")
+            .flatMap { approvalModes.contains($0) ? $0 : nil } ?? "default"
         // 老用户迁移（关键：升级用户绝不看到引导）：无 setup.completed 记录但已有配置痕迹
         // → 视为已完成并落盘。init 里对存储属性的首次赋值不触发 didSet，须显式 set。
         if let done = ud.object(forKey: "setup.completed") as? Bool {

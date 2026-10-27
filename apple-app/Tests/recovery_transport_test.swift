@@ -57,7 +57,13 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
         var eventCalls: Int { RecoveryTransport.matching("/events").count }
         RecoveryTransport.handler = { t in
             let path = t.request.url!.path
-            if path == "/health" { t.respond(["status":"ok", "compute_ready":true, "compute_state":"ready"], status: mode == "auth-offline" ? 503 : 200); return }
+            if path == "/health" {
+                var body: [String:Any] = ["status":"ok", "compute_ready":true, "compute_state":"ready"]
+                // Contract H engine_ready: absent for every other mode (older backend shape).
+                if mode == "auth-engine-starting" { body["engine_ready"] = false }
+                if mode == "auth-engine-ready" { body["engine_ready"] = true }
+                t.respond(body, status: mode == "auth-offline" ? 503 : 200); return
+            }
             if path.hasSuffix("/turns/last") && mode == "delete-failed" { t.respond(["status":false,"response":"synthetic refusal"]); return }
             if path.hasSuffix("/history") { if mode.hasPrefix("overlap") { RecoveryTransport.hold(t) } else if mode == "fresh-completed" { var h = included as! [String:Any]; h["replay_after"] = 4; t.respond(h) } else if mode == "old-count" {
                     var value = included as! [String:Any]
@@ -102,11 +108,14 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
             check(store.computeState == .unknown, "late ready probe cannot overwrite latest unauthenticated compute state")
         } else if mode.hasPrefix("auth-") {
             await store.refreshConnection()
-            check(store.computeState == (mode == "auth-ok" ? .ready : .unknown), "compute readiness requires current authenticated backend")
+            let authenticated = ["auth-ok", "auth-engine-starting", "auth-engine-ready"].contains(mode)
+            check(store.computeState == (authenticated ? .ready : .unknown), "compute readiness requires current authenticated backend")
             switch mode {
             case "auth-failed": check(store.connectionOK == false && String(describing:store.connState) == "unauthorized", "health200 is not authenticated")
             case "auth-unknown": check(store.connectionOK == false && String(describing:store.connState) == "reachable", "business status unavailable stays unknown")
             case "auth-ok": check(store.connectionOK == true && String(describing:store.connState) == "connected", "authenticated backend stays usable")
+            case "auth-engine-starting": check(store.connectionOK == true && String(describing:store.connState) == "engineStarting", "engine_ready false shows backend starting")
+            case "auth-engine-ready": check(store.connectionOK == true && String(describing:store.connState) == "connected", "engine_ready true is connected")
             default: check(store.connectionOK == false, "health failure is not connected")
             }
         } else if ["gap","included","no-queued","thin","old-count"].contains(mode) {

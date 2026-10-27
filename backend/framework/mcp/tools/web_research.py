@@ -42,6 +42,7 @@ class WebResearchTool(BaseTool):
         "and answer the user in the conversation's language regardless of the sources' language."
     )
     requires_approval = False
+    effect = "read"     # 审批策略分类：只读取，进程外无副作用
     # 只读联网调查：无本地副作用，可与其他只读调用并发（沙箱内部取推理锁，与主生成互斥、不死锁）
     is_concurrency_safe = True
     # 工具级超时 = 自身熔断 + 30s 余量（excel_research 同款）：此前只靠全局

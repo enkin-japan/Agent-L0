@@ -90,6 +90,11 @@ class CloudConsultTool(BaseTool):
         from ...utils.config_loader import load_section
         return bool(load_section("cloud").get("require_approval", True))
 
+    @property
+    def approval_pinned(self) -> bool:
+        """cloud.require_approval=true 是用户对出网的显式要求：审批策略 "auto" 不推翻它。"""
+        return self.needs_approval({})
+
     def is_available(self) -> bool:
         """无供应商或全部无密钥 = 不注册（离线纯本地形态零变化）。配置非法照样
         注册失败前置暴露（load_providers 响亮 ValueError）。"""

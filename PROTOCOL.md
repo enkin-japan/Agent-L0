@@ -595,6 +595,47 @@ GET /api/v1/files/{session_id}/offline/{kind}/{filename}   Cache-Control: privat
                                                            nosniff + attachment(用户上传的 .html/.svg 绝不同源执行)
 ```
 
+就绪信号拆分(additive,2026-10-27;不改既有字段语义,不升版本)。`compute_state` 仍是
+整条装配链的状态,但界面不得再用它代表"算力端";`/health` 另报三项,缺项按旧后端处理:
+
+```
+engine_ready        bool    首次装配装上 AgentEngine 后为 true,之后算力退化也不翻回(退化看 compute_state)
+compute_node_state  local | probing | ready | unreachable | unauthorized
+                            最近一次远端推理探测(/health + 带鉴权 /metrics)的结果;推理非 remote 模式报 local;
+                            首次探测前报 probing;/metrics 401/403 报 unauthorized;其余失败报 unreachable
+rag_state           skipped | probing | ready | unreachable | unauthorized
+                            最近一次 RAG 数据面(缺省 :14160)探测的结果;非 remote 形态不探测,报 skipped;
+                            401/403 报 unauthorized(钥不对是永久故障,走退避,不进 2 s 快重试)
+```
+
+三项在每次装配尝试都刷新;就绪后的监控周期里,`compute_node_state` 与 `compute_state` 共用同一个
+连续失败阈值翻转,两者在稳态永不相悖(单次丢包不闪)。三项是信息字段,不是闸门:503 闸仍只看
+`compute_ready`。装配前只差本机 RAG(回环地址)时按 2 s 固定间隔重试,最多 120 s,之后回到 2→30 s
+退避;RAG 地址非回环或鉴权失败一律走退避。客户端口径:算力端标签只看 `compute_node_state`;
+后端标签在可达但 `engine_ready=false` 时显示"后端启动中"(`rag_state=unreachable` 附注等待检索服务)。
+
+### 2.11 审批策略:按工具效果分两类统一控制(additive,2026-10-27;不改既有事件语义,不升版本)
+
+每个工具带静态元数据 `effect ∈ read | write`(缺省 write,宁严勿宽);`run_shell_command` 的
+effect 按命令逐次判定(只读命令 → read),API 工具 GET/HEAD → read。`GET /api/v1/tools` 条目
+多报 `effect`。策略每类一档,`auto`(不问)/ `default`(沿用工具自身 `requires_approval` /
+`needs_approval`,即 2026-10-27 前的行为)/ `ask`(必问);两类缺省均为 default。闸门判定:
+未注册工具名不进闸门,沿旧路径直接报错(`approval_required` 本身对未知名恒必问);否则按该次
+调用的 effect 取档。三条硬规则压过档位:(1)**钉死**——用户在 API 工具声明里显式写的
+`requires_approval`、以及 `cloud.require_approval` 开着的云咨询,是工具级的人为决定,`auto`
+不得越过(`ask` 仍可更严);(2)**无人值守**——`turn_origin != chat` 的轮次(计划任务等)一律按
+default 判,auto 不安全、ask 无人可答;(3)**损坏即收紧**——策略文件缺失按缺省,存在但损坏或
+不可读按 ask/ask 并告警一次。策略落盘 `<data_root>/approval_policy.json`(0600,先 chmod 临时
+文件再原子替换);改动即时生效,不重启;落盘失败回 503 `{reason: policy_save_failed}`,内存策略不变。
+
+```
+GET   /api/v1/approval-policy   → {"read": MODE, "write": MODE, "tools": {name: "read"|"write"}, "dynamic": ["run_shell_command"]}
+PATCH /api/v1/approval-policy   {"read"?: MODE, "write"?: MODE}   → 200 全量策略;非法档位或未知键 → 422
+```
+
+`awaiting_approval` 事件、`POST /turns/approval`(含锁屏 Live Activity 的拒绝路径)、计划任务的
+自动拒绝、§2.9 配对面均不受此节影响;C4 检索证据护栏继续读工具自身的 `requires_approval`。
+
 ---
 
 ## 3. 持久化与账本实现约束

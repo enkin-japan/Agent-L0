@@ -4,6 +4,7 @@
 拿到的是不是本机后端的入口。真钥匙串与 tailscale CLI 都不碰。
 """
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -61,6 +62,7 @@ def test_wiring():
         for name, scanned in (("settings connectionSections", ios), ("settings form", ios_form),
                               ("onboarding", ios_onboarding), ("PhoneConnectionSection", phone_section)):
             assert manual_entry not in scanned, (name, manual_entry)
+    _assert_unpair_wiring(sources, phone_section, app)
     # Onboarding keeps an exit for a phone with no reachable Mac yet.
     assert 'Button(L("稍后配对")) { pairLater() }' in ios_onboarding
     assert "settings.setupCompleted = true" in ios_onboarding
@@ -82,3 +84,92 @@ def test_wiring():
     project = (ROOT / "apple-app/project.yml").read_text()
     assert ("- $(AppIdentifierPrefix)dev.enkin.macagent\n"
             "          - $(AppIdentifierPrefix)dev.enkin.macagent.shared") in project
+
+
+def _code(text):
+    """Comments out, whitespace collapsed: the pins below match code tokens, not layout or wording."""
+    return re.sub(r"\s+", " ", re.sub(r"//[^\n]*", "", text))
+
+
+def _body(code, signature):
+    """Brace-matched body of the first declaration matching `signature` (a regex on collapsed code)."""
+    match = re.search(signature, code)
+    assert match, signature
+    start = code.index("{", match.end() - 1)
+    depth = 0
+    for i in range(start, len(code)):
+        depth += {"{": 1, "}": -1}.get(code[i], 0)
+        if depth == 0:
+            return code[start + 1:i]
+    raise AssertionError(signature)
+
+
+def _has(code, *tokens):
+    """The tokens appear in order, any whitespace between them."""
+    return re.search(r"\s*".join(re.escape(token) for token in tokens), code) is not None
+
+
+def _assert_unpair_wiring(sources, phone_section, app):
+    """build 78: 取消配对 instead of hiding a Mac; iCloud makes a Mac discoverable, pairing is a tap."""
+    phone = _code((sources / "App/PhoneLink.swift").read_text())
+    # Nothing hides a Mac any more: the old identifiers survive only in the line deleting the old key.
+    cleanup = 'defaults.removeObject(forKey: "phone.hiddenMacs")'
+    assert phone.count(cleanup) == 1
+    assert not re.search(r"hiddenMacs|hideKey|hiddenKey", phone.replace(cleanup, ""))
+    assert _has(phone, "static func merge(_ macs: [SavedMac], synced: [PhoneConnection], pinned: Set<String>,",
+                "now: Date, newId: () -> String) -> Merged")
+    # remove() delegates every decision to MacDirectory.unpair and never drops or hides the row itself.
+    remove = _body(phone, r"func remove\(_ id: String\)")
+    assert _has(remove, "let plan = MacDirectory.unpair(macs, id: id)") and _has(remove, "if plan.forgetSelf")
+    assert _has(remove, "for account in plan.clearedAccounts {", 'Keychain.save(account, "")', "}")
+    assert _has(remove, "macs = plan.macs") and _has(remove, "readSynced()")
+    assert not re.search(r"removeAll|\.insert\(|Keychain\.save\(Self\.", remove)
+    # readSynced: pinned rows (current, being paired) are never dropped; dropped rows lose ticket and key;
+    # the 75 shared key stays in memory and is never written as a local credential.
+    read = _body(phone, r"func readSynced\(\)")
+    pinned = re.search(r"let pinned = Set\(\[([^\]]*)\]", read)
+    assert pinned and {part.strip() for part in pinned.group(1).split(",")} == {
+        "currentId", "handshake?.macId", "legacyUpgradeId", "requesting?.id"}
+    assert _has(read, "MacDirectory.merge(macs, synced: items, pinned: pinned,")
+    dropped = _body(read, r"for id in merged\.dropped")
+    assert _has(dropped, "Keychain.save(Self.ticketAccount(id),", '"")')
+    assert _has(dropped, "Keychain.save(Self.keyAccount(id),", '"")')
+    assert "keyAccount" not in read.replace(dropped, "")
+    assert _has(read, "legacyKeys = merged.legacyKeys")
+    # Only an explicit tap in the Mac list may pair; a notification only switches to a usable Mac.
+    assert _has(_body(phone, r"func select\(_ id: String"), "requestOrUpgrade(id)")
+    assert _has(_body(phone, r"func retryHandshake\(_ id: String\)"), "requestOrUpgrade(id)")
+    switch = _body(phone, r"func switchWithoutPairing\(_ id: String\)")
+    assert _has(switch, "!MacDirectory.needsHandshake(") and _has(switch, "else { return }")
+    assert not re.search(r"requestOrUpgrade|requestConnection|upgradeLegacy|select\(", switch)
+    push = _code((sources / "App/PushManager.swift").read_text())
+    open_session = _body(push, r"func openSession\(")
+    assert _has(open_session, "phoneLink.switchWithoutPairing(id)") and "phoneLink.select(" not in open_session
+    route = _body(phone, r"private func requestOrUpgrade\(_ id: String\)")
+    assert _has(route, "guard legacyUpgradeId == nil")
+    assert _has(route, "MacDirectory.pairingRoute(credential: mac.credential, hasKey: !key(for: id).isEmpty,",
+                "legacyKey: legacyKeys[id])")
+    assert _has(route, "case .legacyUpgrade(let key): upgradeLegacy(id, key: key)")
+    assert _has(route, "case .request: requestConnection(id)")
+    # The upgrade shows the waiting state, runs once, is never cancelled, and stores only the device token.
+    legacy = _body(phone, r"private func upgradeLegacy\(_ id: String, key: String\)")
+    assert _has(legacy, "guard legacyUpgradeId == nil") and _has(legacy, "legacyUpgradeId = id")
+    assert _has(legacy, 'handshake = Handshake(macId: id, macName: mac.name, code: "", state: .waiting)')
+    assert _has(legacy, "PairingAPI.upgrade(base: base, key: key") and _has(legacy, "self?.adopt(id, token: issued.token")
+    assert "handshakeTask =" not in legacy and "Keychain" not in legacy
+    assert _has(_code(app), "case .waiting where handshake.code.isEmpty:")
+    # The iOS list: paired rows swipe to 取消配对, unpaired rows have no swipe; both badges shown.
+    view = _code(phone_section)
+    assert ".onDelete" not in view and 'L("删除")' not in view and view.count('L("取消配对")') == 1
+    assert _has(view, ".swipeActions(edge: .trailing) {", "if mac.pairingState == .paired {",
+                'Button(L("取消配对"), role: .destructive) {', "phoneLink.remove(mac.id)", "}", "}", "}")
+    assert re.search(r'switch mac\.pairingState \{ case \.paired: Text\(L\("已配对"\)\)[^}]*?'
+                     r'\.foregroundStyle\(\.tint\)[^}]*?case \.unpaired: Text\(L\("未配对"\)\)[^}]*?'
+                     r'\.foregroundStyle\(\.secondary\)', view)
+    assert _has(_body(view, r"private func row\(_ mac: SavedMac\)"), "pairingBadge(mac)")
+    assert "取消配对后 Mac 仍会列出，可随时重新配对。" in view
+    assert _has(view, 'Button(L("重新检查")) {', "phoneLink.readSynced()", "}")
+    l10n = (sources / "App/L10n.swift").read_text()
+    for added in ("已配对", "未配对", "取消配对", "正在与「", "」配对…"):
+        assert f'"{added}": (' in l10n, added
+    assert "点选切换，左滑删除。" not in l10n

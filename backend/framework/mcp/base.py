@@ -39,6 +39,15 @@ class BaseTool(ABC):
     parameters: Dict[str, Any] = {}
     # 安全属性：标识执行该工具前是否需要人工/系统审批
     requires_approval: bool = False
+    # 审批策略分类（build 78 approval policy）："read" = 只读取/检索/列举、进程外无副作用；
+    # 其余一律 "write"（写、删、发送、通知、UI 动作、出网咨询……）。默认 "write" = 新工具
+    # 忘了声明时落在保守一侧。用户的 read/write 两档旋钮按此分类生效，见
+    # framework/core/approval_policy.py 与 MCPRegistry.approval_required。
+    effect: str = "write"
+    # 钉死的人工审批：用户/配置对本工具显式要求过审批（API 声明里写了 requires_approval、
+    # cloud.require_approval=true）时为 True。钉死且本次调用需审批 ⇒ 任何策略档位都审批，
+    # "auto" 不得推翻人的显式决定（"ask" 本就更严）。
+    approval_pinned: bool = False
     # 并发安全：可与同批其他安全调用并发执行（无副作用且可重入）设 True。
     # 默认 False（保守串行）；有状态或有副作用的工具（GUI 变更、写库、shell）保持 False。
     is_concurrency_safe: bool = False
@@ -71,6 +80,11 @@ class BaseTool(ABC):
         风险随参数变化的工具（如 shell：只读命令放行、变更命令弹窗）应覆写本方法。
         """
         return self.requires_approval
+
+    def effect_for(self, arguments: Dict[str, Any] = None) -> str:
+        """按调用的效果分类（"read" | "write"）。默认返回类属性 effect；
+        效果随参数变化的工具（shell：只读命令 = read）覆写本方法。"""
+        return self.effect
 
     def is_available(self) -> bool:
         """

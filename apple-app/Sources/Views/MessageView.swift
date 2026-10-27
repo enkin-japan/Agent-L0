@@ -42,6 +42,8 @@ struct MessageView: View {
             } else {
                 toolView
             }
+        case .toolGroup:
+            ToolGroupView(message: message)
         }
     }
 
@@ -125,25 +127,8 @@ struct MessageView: View {
 
     private var toolView: some View {
         DisclosureGroup {
-            VStack(alignment: .leading, spacing: Theme.s2) {
-                if let thoughts = message.thoughts, !thoughts.isEmpty {
-                    Text(thoughts)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .selectableOnIOS()
-                }
-                HStack {
-                    Text(L("详细信息")).font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                    Spacer(minLength: Theme.s2)
-                    CopyActionButton(text: message.toolDetail ?? "", help: L("复制全文"))
-                }
-                Text(message.toolDetail ?? "")
-                    .font(.system(.caption, design: .monospaced))
-                    .selectableOnIOS()
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.top, Theme.s2)
+            ToolDetailBody(thoughts: message.thoughts, detail: message.toolDetail ?? "")
+                .padding(.top, Theme.s2)
         } label: {
             Label {
                 Text(message.toolLabel ?? L("工具"))
@@ -400,6 +385,171 @@ extension View {
 }
 
 /// 引用仅使用工具声明的结构化载荷，展开后保留完整摘录和路径。
+/// 工具行展开后的正文（思考 + 详细信息 + 复制）：单条工具行与执行过程组内各步共用。
+struct ToolDetailBody: View {
+    let thoughts: String?
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.s2) {
+            if let thoughts, !thoughts.isEmpty {
+                Text(thoughts)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .selectableOnIOS()
+            }
+            HStack {
+                Text(L("详细信息")).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                Spacer(minLength: Theme.s2)
+                CopyActionButton(text: detail, help: L("复制全文"))
+            }
+            Text(detail)
+                .font(.system(.caption, design: .monospaced))
+                .selectableOnIOS()
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// 步骤状态符号：执行中转圈（计划步骤用清单符号）/ ✓ / ✕ / ⏱；状态未知（无可靠回执）
+/// 只画中性的工具符号。✓ 只表示「工具已返回」——后端只知道 ok / timeout。
+struct StepGlyph: View {
+    let status: String?
+    var kind: String? = nil
+
+    var body: some View {
+        Group {
+            switch status {
+            case "running" where kind == "plan":
+                Image(systemName: "list.bullet.clipboard").foregroundStyle(Theme.accent)
+            case "running":
+                ProgressView().controlSize(.mini)
+            case "pending":
+                Image(systemName: "circle.dotted").foregroundStyle(Theme.secondaryText)
+            case "ok":
+                Image(systemName: "checkmark").foregroundStyle(Theme.success)
+            case "failed":
+                Image(systemName: "xmark").foregroundStyle(Theme.danger)
+            case "timeout":
+                Image(systemName: "timer").foregroundStyle(Theme.warning)
+            default:
+                Image(systemName: "wrench.and.screwdriver").foregroundStyle(Theme.secondaryText)
+            }
+        }
+        .font(.system(size: 10, weight: .semibold))
+        .frame(width: 14, height: 14)
+        .accessibilityLabel(Self.accessibilityText(status))
+    }
+
+    static func accessibilityText(_ status: String?) -> String {
+        switch status {
+        case "running": return L("执行中")
+        case "pending": return L("准备调用")
+        case "ok": return L("已返回")
+        case "failed": return L("失败")
+        case "timeout": return L("超时")
+        default: return L("工具")
+        }
+    }
+}
+
+/// 一行紧凑步骤：符号 + 名称 + 单行截断的详情（直播预览与执行过程组共用）。
+struct CompactStepRow: View {
+    let status: String?
+    var kind: String? = nil
+    let label: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            StepGlyph(status: status, kind: kind)
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Theme.secondaryText)
+                .lineLimit(1)
+                .layoutPriority(1)
+            if let line = Self.firstLine(detail) {
+                Text(line)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    static func firstLine(_ detail: String) -> String? {
+        let line = detail.split(whereSeparator: \.isNewline).first.map(String.init)?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        return line.isEmpty ? nil : String(line.prefix(200))
+    }
+}
+
+/// 执行过程组：一轮里连续的工具行合成一个折叠块（默认折叠；展开态存在 AgentStore，
+/// 会话打开期间保持）。展开后每步一行紧凑行，单步可再展开看完整详情。
+struct ToolGroupView: View {
+    let message: ChatMessage
+    @EnvironmentObject var store: AgentStore
+
+    private var title: String {
+        let count = message.toolInvocationCount
+        // L10n 只有一个键：英文单数单独处理（"1 step"），中日文无单复数。
+        let unit = count == 1 && L10n.resolved == "en" ? "step" : L("步")
+        var text = "\(L("执行过程")) · \(count) \(unit)"
+        if let seconds = message.stepsDuration {
+            text += " · " + (seconds < 10 ? String(format: "%.1f", seconds) : String(Int(seconds.rounded())))
+                + " " + L("秒")
+        }
+        return text
+    }
+
+    private var key: String { message.toolGroupKey ?? message.id.uuidString }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: Binding(
+            get: { store.isToolGroupExpanded(key) },
+            set: { store.setToolGroup(key, expanded: $0) })) {
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(message.toolSteps) { step in
+                    ToolStepRow(step: step)
+                }
+            }
+            .padding(.top, Theme.s2)
+        } label: {
+            Label {
+                Text(title)
+            } icon: {
+                Image(systemName: "list.bullet.rectangle")
+                    .foregroundStyle(Theme.accent)
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, Theme.s3)
+        .padding(.vertical, Theme.s2)
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .background(Theme.wash)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
+    }
+}
+
+/// 组内一行：紧凑行作标题，展开看完整详情（复用单条工具行的正文）。引用格不进组。
+private struct ToolStepRow: View {
+    let step: ToolStep
+
+    var body: some View {
+        DisclosureGroup {
+            ToolDetailBody(thoughts: step.thoughts, detail: step.detail)
+                .padding(.vertical, Theme.s1)
+        } label: {
+            CompactStepRow(status: step.status, label: step.label, detail: step.detail)
+        }
+    }
+}
+
 struct CitationsView: View {
     let items: [CitationItem]
     let label: String

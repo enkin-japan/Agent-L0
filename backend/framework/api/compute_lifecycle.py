@@ -25,6 +25,16 @@ RAG_KEY_GUIDANCE = ("RAG 数据面拒绝鉴权——RAG 密钥缺失或不对：
                     "RAG_API_KEY 同值、不含引号")
 _HOST_MARKERS = ("算力端地址为空", "INFER_REMOTE_HOST", "http://:", "https://:")
 _RAG_PATHS = ("/api/v1/category",)
+# Readiness split (/health, PROTOCOL §2.10): compute_state is the whole assembly; these
+# say which dependency it is waiting for. Values are the HTTP contract with the app.
+COMPUTE_NODE_STATES = ("local", "probing", "ready", "unreachable", "unauthorized")
+RAG_STATES = ("probing", "ready", "unreachable", "unauthorized", "skipped")
+# The launcher starts the local RAG data plane alongside the backend, so the first
+# assembly attempts usually find it still loading. While only that LOCAL dependency is
+# missing, retry at the initial interval instead of backing off (backoff exists to
+# spare a remote node; it turned a ~14 s RAG cold start into a ~30 s wait). Past this
+# much local waiting RAG is broken rather than starting, and the normal backoff applies.
+LOCAL_WAIT_SECONDS = 120
 
 
 _BEARER = re.compile(r"(?i)bearer\s+[^\s'\"]+")
@@ -57,6 +67,44 @@ def _guidance_for(exc, message: str):
         url = str(getattr(getattr(exc, "request", None), "url", "") or "")
         return RAG_KEY_GUIDANCE if any(p in url for p in _RAG_PATHS) else INFER_KEY_GUIDANCE
     return None
+
+
+class LocalDependencyUnavailable(Exception):
+    """The compute node passed its probe; only a local dependency (RAG data plane) failed.
+
+    Raised `from` the original error: diagnosis and guidance are taken from __cause__,
+    so the log line is the same one the original failure would have printed.
+    """
+
+
+def compute_node_failure_state(exc) -> str:
+    """Contract H: 401/403 from the authenticated /metrics read = unauthorized, else unreachable."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status in (401, 403):
+        # Only an HTTPStatusError carries a response; its request is always set.
+        url = getattr(getattr(exc, "request", None), "url", None)
+        if str(getattr(url, "path", "") or "").endswith("/metrics"):
+            return "unauthorized"
+    return "unreachable"
+
+
+def rag_probe_host(cfg) -> str:
+    """The host probe_rag_data actually dials (empty/wildcard binds are probed on loopback)."""
+    host = str(cfg.get("host") or "127.0.0.1")
+    return "127.0.0.1" if host in ("0.0.0.0", "::") else host
+
+
+def rag_failure_state(exc) -> str:
+    """rag_state for a failed probe: 401/403 = unauthorized (wrong key), else unreachable."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return "unauthorized" if status in (401, 403) else "unreachable"
+
+
+def rag_failure_is_transient(exc) -> bool:
+    """Connection-level failure or 5xx = the data plane is not up yet; anything else is not."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return isinstance(exc, (httpx.TransportError, OSError))
 
 
 async def finish_task(task):
@@ -103,9 +151,7 @@ async def probe_remote_compute(base_url, expected, api_key, previous_identity=No
 
 async def probe_rag_data(cfg, api_key):
     """The existing RAG prerequisite requires a positive authenticated response."""
-    host = str(cfg.get("host") or "127.0.0.1")
-    if host in ("0.0.0.0", "::"):
-        host = "127.0.0.1"
+    host = rag_probe_host(cfg)
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
         response = await client.get(
@@ -119,7 +165,8 @@ class ComputeLifecycle:
     """One assembly attempt at a time, followed by availability checks of that engine."""
 
     def __init__(self, app, assemble, publish, cleanup, probe=None, *,
-                 retry_initial=2, retry_max=30, monitor_interval=5, clock=time.monotonic):
+                 retry_initial=2, retry_max=30, monitor_interval=5, clock=time.monotonic,
+                 local_wait_max=LOCAL_WAIT_SECONDS):
         self.app = app
         self.assemble = assemble
         self.publish = publish
@@ -128,6 +175,7 @@ class ComputeLifecycle:
         self.retry_initial = max(0.01, retry_initial)
         self.retry_max = max(self.retry_initial, retry_max)
         self.monitor_interval = max(0.01, monitor_interval)
+        self.local_wait_max = max(0.0, local_wait_max)
         self.resources = None
         self.task = None
         self.clock = clock
@@ -137,6 +185,11 @@ class ComputeLifecycle:
         self.app.state.compute_ready = False
         self.app.state.compute_state = "starting"
         self.app.state.compute_installed = False
+        # Contract H. engine_ready mirrors "an engine is installed", not compute health.
+        self.app.state.engine_ready = False
+        self.app.state.compute_node_state = "probing" if probe is not None else "local"
+        # Without a probe (in-process layout) nothing here ever probes RAG.
+        self.app.state.rag_state = "probing" if probe is not None else "skipped"
 
     async def _install(self):
         resources = await self.assemble()
@@ -156,6 +209,7 @@ class ComputeLifecycle:
                     raise asyncio.CancelledError
             raise
         self.app.state.compute_installed = True
+        self.app.state.engine_ready = True
         self.app.state.compute_ready = True
         self.app.state.compute_state = "ready"
 
@@ -165,6 +219,8 @@ class ComputeLifecycle:
 
     @staticmethod
     def _diagnose(exc) -> str:
+        if isinstance(exc, LocalDependencyUnavailable) and exc.__cause__ is not None:
+            exc = exc.__cause__
         detail = describe_failure(exc)
         return f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
 
@@ -186,6 +242,7 @@ class ComputeLifecycle:
 
     async def _run(self):
         delay = self.retry_initial
+        local_since = None
         while self.resources is None:
             try:
                 await self._install()
@@ -194,11 +251,25 @@ class ComputeLifecycle:
             except Exception as exc:
                 self.app.state.compute_ready = False
                 self.app.state.compute_state = "retrying"
+                # Only-local failures (compute node passed) inside the local window
+                # wait the fixed initial interval and leave the backoff untouched.
+                local = False
+                if isinstance(exc, LocalDependencyUnavailable):
+                    now = self.clock()
+                    if local_since is None:
+                        local_since = now
+                    local = now - local_since < self.local_wait_max
+                wait = self.retry_initial if local else delay
                 diagnosis = self._diagnose(exc)
-                self._log(("retrying", diagnosis),
-                          f"[Compute] 计算装配未就绪（{diagnosis}），{delay:g}s 后重试")
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, self.retry_max)
+                # The retry mode is part of the state: the fixed-interval → backoff switch
+                # prints a line (the first backoff wait equals the fixed one, so keying on
+                # the wait value would hide it, and would print every backoff step).
+                self._log(("retrying", diagnosis, local),
+                          f"[Compute] 计算装配未就绪（{diagnosis}），{wait:g}s 后重试"
+                          + ("（本机依赖启动中，固定间隔）" if local else ""))
+                await asyncio.sleep(wait)
+                if not local:
+                    delay = min(delay * 2, self.retry_max)
         failures = 0
         while self.probe is not None:
             await asyncio.sleep(self.monitor_interval)
@@ -215,6 +286,10 @@ class ComputeLifecycle:
                 if failures >= MONITOR_FAILURES_BEFORE_UNAVAILABLE:
                     self.app.state.compute_ready = False
                     self.app.state.compute_state = "unavailable"
+                    # Same threshold as compute_state: the two never disagree in steady
+                    # state. The monitor probe is the compute-node probe (RAG failures
+                    # after install do not raise).
+                    self.app.state.compute_node_state = compute_node_failure_state(exc)
                     self._log(("unavailable", diagnosis),
                               f"[Compute] 计算连接未就绪（{diagnosis}）；保留本地记录与既有引擎")
                 else:
@@ -228,6 +303,7 @@ class ComputeLifecycle:
                 failures = 0
                 self.app.state.compute_ready = True
                 self.app.state.compute_state = "ready"
+                self.app.state.compute_node_state = "ready"
 
     async def stop(self):
         # Clear both flags before cleanup: half-released dependencies would make
@@ -235,6 +311,7 @@ class ComputeLifecycle:
         # compute_installed to decide whether local control is still served).
         self.app.state.compute_ready = False
         self.app.state.compute_installed = False
+        self.app.state.engine_ready = False
         self.app.state.compute_state = "stopping"
         if self.task is not None:
             self.task.cancel()
@@ -244,6 +321,7 @@ class ComputeLifecycle:
         # have republished readiness after the clearing above.
         self.app.state.compute_ready = False
         self.app.state.compute_installed = False
+        self.app.state.engine_ready = False
         if self.resources is not None:
             resources, self.resources = self.resources, None
             await finish_task(asyncio.create_task(self.cleanup(resources)))

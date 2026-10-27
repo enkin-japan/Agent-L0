@@ -53,10 +53,11 @@ struct ChatView: View {
                         }
                         // 右键/长按菜单在 MessageView 内部挂到气泡上（挂整行会让
                         // iOS 长按预览高亮整排、超出内容边界）
-                        ForEach(store.messages) { message in
+                        // 显示投影：连续工具行已合成「执行过程」组（逻辑仍读 store.messages）
+                        ForEach(store.displayMessages) { message in
                             MessageView(message: message)
                             if let index = message.turnIndex,
-                               store.messages.last(where: { $0.turnIndex == index })?.id == message.id,
+                               store.displayMessages.last(where: { $0.turnIndex == index })?.id == message.id,
                                let group = store.retryGroups.first(where: { $0.displayIndex == index }) {
                                 RetryAttemptsView(group: group)
                             }
@@ -66,7 +67,7 @@ struct ChatView: View {
                         // 决策上下文（账本协议下暂停轮不再经 turn_end 落部分消息）
                         if store.isGenerating || ((store.pendingTools?.isEmpty == false || store.isSuspended)
                                                   && (!store.streamText.isEmpty || !store.thinkingText.isEmpty
-                                                      || !store.liveSteps.isEmpty)) {
+                                                      || !store.liveStepItems.isEmpty)) {
                             #if os(macOS)
                             // 常量高度内滚台：直播期外层布局零变化。流式内容任何高度
                             // 增长（正文/思考/步骤）都被吸收在这个恒定外框内——27 beta
@@ -84,14 +85,8 @@ struct ChatView: View {
                             #endif
                         }
 
-                        if let tools = store.pendingTools, !tools.isEmpty,
-                           let target = store.pendingApprovalTarget {
-                            ApprovalCard(tools: tools) { approve in
-                                store.decideApproval(approve: approve, target: target)
-                            }
-                            .id(target.sessionId + ":" + target.turnId + ":" + String(target.seq))
-                            .disabled(store.isSessionDeleting(target.sessionId) || store.historyIsReadOnly)
-                        }
+                        // 审批卡已移到输入区正上方（免滚动可见）；这里只留一行占位
+                        approvalPlaceholder
 
                         if store.isSuspended {
                             suspendedBanner
@@ -123,11 +118,17 @@ struct ChatView: View {
                 .onChange(of: store.streamText) {
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
+                // 审批横幅出现（新一批待审批）时把消息流滚到底一次：占位行与上下文贴着横幅
+                .onChange(of: store.pendingApprovalTarget) { _, target in
+                    guard target != nil, store.pendingTools?.isEmpty == false else { return }
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
                 // 软键盘收纳（iOS）：下拉跟手收起 + 点聊天记录区域即收起
                 .scrollDismissesKeyboard(.interactively)
                 .tapToDismissKeyboard()
             }
 
+            approvalBanner
             ComposerView()
         }
         .background(Theme.canvas)
@@ -348,11 +349,10 @@ struct ChatView: View {
                 MarkdownText(text: store.streamText, streaming: true)
             }
 
-            VStack(alignment: .leading, spacing: Theme.s2) {
-                ForEach(Array(store.liveSteps.suffix(6).enumerated()), id: \.offset) { _, step in
-                    Label(step, systemImage: "circle.dotted")
-                        .font(.caption)
-                        .foregroundStyle(Theme.secondaryText)
+            VStack(alignment: .leading, spacing: 3) {
+                // 紧凑步骤行：状态符号 + 名称 + 单行截断的详情，无逐行卡片
+                ForEach(Array(store.liveStepItems.suffix(6).enumerated()), id: \.offset) { _, step in
+                    CompactStepRow(status: step.status, kind: step.kind, label: step.label, detail: step.detail)
                 }
                 HStack(spacing: Theme.s2) {
                     ProgressView().controlSize(.small).tint(Theme.accent)
@@ -367,13 +367,59 @@ struct ChatView: View {
                     }
 
                 }
+                .padding(.top, store.liveStepItems.isEmpty ? 0 : Theme.s1)
             }
-            .padding(Theme.s3)
-            .background(Theme.sidebar, in: RoundedRectangle(cornerRadius: Theme.radiusCard))
-            .overlay(RoundedRectangle(cornerRadius: Theme.radiusCard).strokeBorder(Theme.separator))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    /// 消息流里审批卡原位置的一行占位：待审批时报数量；决议后按账本 resumed 的
+    /// trigger 显示结果，直到本轮终态（之后由权威轮次记录接替）。
+    @ViewBuilder
+    private var approvalPlaceholder: some View {
+        if let tools = store.pendingTools, !tools.isEmpty {
+            // 没有可绑定的审批目标时与 build 77 一致：卡片与占位都不显示
+            if store.pendingApprovalTarget != nil {
+                Label("\(L("等待审批")) \(tools.count) \(L("项…"))", systemImage: "hand.raised")
+                    .font(.caption)
+                    .foregroundStyle(Theme.warning)
+            }
+        } else if let outcome = store.approvalOutcome {
+            Label(L(outcome == .approved ? "已批准" : "已拒绝"),
+                  systemImage: outcome == .approved ? "checkmark.shield" : "xmark.shield")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// 输入区正上方的审批横幅：全宽 + 顶部分隔线，无需滚动即可见。同一 decideApproval
+    /// 调用与批次身份；多个工具仍在同一张卡里。
+    @ViewBuilder
+    private var approvalBanner: some View {
+        if let tools = store.pendingTools, !tools.isEmpty,
+           let target = store.pendingApprovalTarget {
+            VStack(spacing: 0) {
+                Rectangle().fill(Theme.separator).frame(height: 1)
+                ApprovalCard(tools: tools, toolListMaxHeight: Self.approvalListMaxHeight) { approve in
+                    store.decideApproval(approve: approve, target: target)
+                }
+                .id(target.sessionId + ":" + target.turnId + ":" + String(target.seq))
+                .disabled(store.isSessionDeleting(target.sessionId) || store.historyIsReadOnly)
+                .frame(maxWidth: Theme.readingWidth)
+                .padding(.horizontal, Theme.contentPadding)
+                .padding(.vertical, Theme.s3)
+                .frame(maxWidth: .infinity)
+            }
+            .background(Theme.canvas)
+        }
+    }
+
+    /// 横幅里工具清单的高度上限（超出在卡内滚动；标题与批准/拒绝按钮始终可见）。
+    #if os(macOS)
+    private static let approvalListMaxHeight: CGFloat = 260
+    #else
+    private static let approvalListMaxHeight: CGFloat = 160
+    #endif
 
     private var activityLine: String {
         if let current = store.activity?.current, !current.isEmpty { return current }

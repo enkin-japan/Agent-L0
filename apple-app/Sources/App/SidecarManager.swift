@@ -40,7 +40,16 @@ final class SidecarManager: ObservableObject {
         case healthy       // 身份 + 钥匙都对得上
     }
 
-    @Published private(set) var state: State = .disabled
+    @Published private(set) var state: State = .disabled {
+        didSet {
+            // The backend on 14159 just became usable (we started it, or adopted one):
+            // let the composition root ask the store for an immediate status refresh
+            // instead of waiting out the monitor's current sleep.
+            if state != oldValue, state == .running || state == .external { onBackendUp?() }
+        }
+    }
+    /// Wired once by MacAgentApp (the composition root that owns both objects).
+    var onBackendUp: (@MainActor () -> Void)?
     @Published private(set) var restartCount = 0
     /// 本 app 解析出的布局形态（"bundle" / "repo"，nil = 尚未解析或解析失败）。
     /// 事故根因之一是 bundle 判据失败**静默退 repo 布局**（密钥换源）——形态必须可见。

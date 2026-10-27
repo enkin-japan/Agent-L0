@@ -31,6 +31,7 @@ class GetLocationTool(BaseTool):
         "environment info or ask the user. Takes no arguments."
     )
     requires_approval = False        # 同意与否由设备端系统定位授权弹窗承担（TCC）
+    effect = "read"     # 审批策略分类：只读取，进程外无副作用
     is_concurrency_safe = True       # 只读、无副作用
     timeout_seconds = 40             # 编排层等待上限 = 通道 25s + 余量
     parameters = {"properties": {}, "required": []}

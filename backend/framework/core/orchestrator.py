@@ -22,7 +22,7 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import events
+from . import approval_policy, events
 from .journal import TurnJournal
 from .task_state import TaskState, call_fingerprint
 from ..memory.session import ChatSession
@@ -762,7 +762,8 @@ class Orchestrator:
                         tool_calls=_calls,
                         thoughts=[f"[System upgrade] 编排层代发起云端咨询（{_d.trigger}：{_d.reason}）"
                                   "——仍需审批；云端只顾问，落地本地。"])
-                    if self.registry.requires_approval(_calls[0]["name"], _calls[0]["arguments"]):
+                    if self._gate_requires_approval(_calls[0]["name"], _calls[0]["arguments"],
+                                                    self._approval_policy_for(journal)):
                         return _suspend_for_approval(_calls, [], _calls)
                     # 审批旋钮已关：直接执行（L0 与台账仍恒开），观察落历史后进主循环
                     _tracker = session.task_state.recent_calls if session.task_state is not None else no_task_calls
@@ -1039,11 +1040,13 @@ class Orchestrator:
                             })
 
                 # [审批闸门] 物理调用中含敏感调用：先落元工具结果，再整批挂起
-                # （按调用动态判定：同一 shell 工具只读命令放行、变更命令弹窗）
+                # （按调用动态判定：同一 shell 工具只读命令放行、变更命令弹窗；
+                #  用户的 read/write 审批策略在此生效，见 core/approval_policy.py）
+                _policy = self._approval_policy_for(journal)
                 approval_needed = [
                     c for c in phys_calls
                     if c.get("type") != "error"
-                    and self.registry.requires_approval(c.get("name"), c.get("arguments", {}))
+                    and self._gate_requires_approval(c.get("name"), c.get("arguments", {}), _policy)
                 ]
                 if approval_needed:
                     return _suspend_for_approval(phys_calls, responses, approval_needed)
@@ -1172,7 +1175,8 @@ class Orchestrator:
                                 tool_calls=_calls,
                                 thoughts=[f"[System upgrade] 编排层代发起云端咨询（failures：{_fd.reason}）"
                                           "——仍需审批；云端只顾问，落地本地。"])
-                            if self.registry.requires_approval(_calls[0]["name"], _calls[0]["arguments"]):
+                            if self._gate_requires_approval(_calls[0]["name"], _calls[0]["arguments"],
+                                                            self._approval_policy_for(journal)):
                                 return _suspend_for_approval(_calls, [], _calls)
                             _resp = await self._execute_physical(session, _calls, tracker, parse_errors,
                                                                  journal=journal)
@@ -1385,6 +1389,25 @@ class Orchestrator:
                 # 上下文长度粗估：历史文本字符 / 1.3（中文 ≈1.24 字/token；只供长度类谓词）
                 return facts_from_user_message(msg, context_tokens=int(self._history_chars(session.history) / 1.3))
         return RequestFacts()
+
+    @staticmethod
+    def _approval_policy_for(journal: TurnJournal):
+        """本轮审批闸门的有效策略（Contract P）。无人值守轮（turn_origin != "chat"，
+        定时任务 origin=schedule；与 _effective_upgrade_cfg 同一判据）恒用 DEFAULT：
+        不用 "auto"（没人在场，放开不安全），也不用 "ask"（没人能答，read=ask 会让每次
+        定时只读调用被自动拒绝、整轮被拒批保险丝掐断）——即 build 77 的工具自身判定。"""
+        if getattr(journal, "turn_origin", "chat") != "chat":
+            return approval_policy.DEFAULT
+        return approval_policy.current()
+
+    def _gate_requires_approval(self, name: str, arguments: Dict[str, Any], policy) -> bool:
+        """闸门判定：只有已注册工具进入审批判定；未注册名（模型幻觉）不弹审批卡，
+        落回原有执行错误路径（"No tool named …"，build 77 行为）。
+        registry.approval_required 本身对未知工具仍 fail-closed（API 调用方用）。"""
+        names = getattr(self.registry, "tool_names", None)
+        if callable(names) and name not in names():
+            return False
+        return self.registry.approval_required(name, arguments or {}, policy)
 
     def _effective_upgrade_cfg(self, journal: TurnJournal):
         """无人值守轮（定时任务 origin=schedule）没人点审批：auto 降为 suggest，免得代发起的

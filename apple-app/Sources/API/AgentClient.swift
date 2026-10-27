@@ -821,6 +821,15 @@ final class AgentClient {
         return res.tools
     }
 
+    /// Contract P：审批策略（GET 读全量；PATCH 只发改动的键，回全量）。旧后端没有该路由 → 404 抛出。
+    func approvalPolicy() async throws -> ApprovalPolicy {
+        try await send(try request("GET", "/api/v1/approval-policy", timeout: 10))
+    }
+
+    func updateApprovalPolicy(_ patch: ApprovalPolicyPatch) async throws -> ApprovalPolicy {
+        try await send(try request("PATCH", "/api/v1/approval-policy", json: patch, timeout: 10))
+    }
+
     func skills() async throws -> [SkillItem] {
         let res: SkillsResponse = try await send(try request("GET", "/api/v1/skills"))
         return res.skills

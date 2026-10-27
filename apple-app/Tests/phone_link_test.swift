@@ -269,30 +269,30 @@ struct PhoneLinkTest {
         func newId() -> String { counter += 1; return "saved-\(counter)" }
         let a = conn("http://m6.ts.net:14159", mac: "m6", macId: macA, ticket: "tA")
         let b = conn("http://studio.ts.net:14159", mac: "studio", macId: macB, ticket: "tB")
-        let two = MacDirectory.merge([], synced: [a, b], hidden: [], now: now, newId: newId)
+        let two = MacDirectory.merge([], synced: [a, b], pinned: [], now: now, newId: newId)
         check(two.macs.map(\.macId) == [macA, macB] && two.macs.allSatisfy { $0.source == .icloud },
               "two Macs, two entries")
         check(two.macs.allSatisfy { $0.credential == .none }, "a Mac read from iCloud still needs the Mac's approval")
-        check(two.tickets == ["saved-1": "tA", "saved-2": "tB"] && two.keys.isEmpty,
+        check(two.tickets == ["saved-1": "tA", "saved-2": "tB"] && two.legacyKeys.isEmpty,
               "each entry gets its own Mac's ticket and no key")
 
         // The current Mac (A) is never rewritten with another Mac's address or ticket.
         let current = saved("cur", macId: macA, url: "http://m6.ts.net:14159")
         let rotatedB = conn("https://studio.ts.net", mac: "studio", macId: macB, ticket: "tB2")
-        let onlyB = MacDirectory.merge([current], synced: [rotatedB], hidden: [], now: now, newId: newId)
+        let onlyB = MacDirectory.merge([current], synced: [rotatedB], pinned: [], now: now, newId: newId)
         var gone = current
         gone.removedFromICloud = true
         check(onlyB.macs.first == gone, "A untouched by B's item (only flagged as gone from iCloud)")
-        check(onlyB.tickets["cur"] == nil && onlyB.keys["cur"] == nil, "A's credentials never replaced by B's")
+        check(onlyB.tickets["cur"] == nil && onlyB.legacyKeys["cur"] == nil, "A's credentials never replaced by B's")
         check(onlyB.macs.count == 2 && onlyB.macs[1].macId == macB, "B added beside A")
         // Same Mac changed its address / rotated its ticket: applied to that entry only, token kept.
         let movedA = conn("https://m6.ts.net", mac: "m6", macId: macA, ticket: "tA2")
-        let healed = MacDirectory.merge([current], synced: [movedA, rotatedB], hidden: [], now: now, newId: newId)
+        let healed = MacDirectory.merge([current], synced: [movedA, rotatedB], pinned: [], now: now, newId: newId)
         check(healed.macs[0].id == "cur" && healed.macs[0].url == "https://m6.ts.net" && healed.tickets["cur"] == "tA2"
               && healed.macs[0].credential == .deviceToken, "current Mac's new address is picked up in place")
         // A name the user chose on the iPhone survives iCloud updates.
         let renamed = saved("cur", macId: macA, url: a.url, name: "书房", custom: true)
-        check(MacDirectory.merge([renamed], synced: [a], hidden: [], now: now, newId: newId).macs[0].name == "书房",
+        check(MacDirectory.merge([renamed], synced: [a], pinned: [], now: now, newId: newId).macs[0].name == "书房",
               "custom name kept")
 
         // 75 connection migrated without an id adopts it by address and keeps its shared key for the upgrade.
@@ -300,32 +300,127 @@ struct PhoneLinkTest {
         check(migrated.url == "http://m6.ts.net:14159" && migrated.name == "m6" && migrated.credential == .sharedKey,
               "migration trims, names, and marks the shared key for upgrade")
         check(MacDirectory.migrate(url: "  ", source: .manual, now: now, id: "x") == nil, "nothing to migrate")
-        let adopted = MacDirectory.merge([migrated], synced: [a], hidden: [], now: now, newId: newId)
+        let adopted = MacDirectory.merge([migrated], synced: [a], pinned: [], now: now, newId: newId)
         check(adopted.macs.count == 1 && adopted.macs[0].id == "old" && adopted.macs[0].macId == macA
               && adopted.macs[0].credential == .sharedKey, "legacy entry adopts the Mac's id")
 
         // QR / manual entries are not silently overwritten, nor flagged.
         let paired = saved("qr", macId: macA, url: "http://m6.ts.net:14159", source: .qr)
-        let keepQR = MacDirectory.merge([paired], synced: [movedA], hidden: [], now: now, newId: newId)
-        check(keepQR.macs == [paired] && keepQR.keys.isEmpty && keepQR.tickets.isEmpty, "scanned connection kept as is")
-        check(MacDirectory.merge([paired], synced: [], hidden: [], now: now, newId: newId).macs == [paired],
+        let keepQR = MacDirectory.merge([paired], synced: [movedA], pinned: [], now: now, newId: newId)
+        check(keepQR.macs == [paired] && keepQR.legacyKeys.isEmpty && keepQR.tickets.isEmpty, "scanned connection kept as is")
+        check(MacDirectory.merge([paired], synced: [], pinned: [], now: now, newId: newId).macs == [paired],
               "non-iCloud entry not flagged as removed")
 
         // A legacy synced item (75 Mac) matches by address only, and never replaces a device token.
+        // Its shared key never becomes a local credential (build 78): iCloud makes the Mac discoverable,
+        // pairing is a tap (POST /pair/upgrade with that key, then the device token is stored).
         let legacyB = conn("http://studio.ts.net:14159", mac: "studio", macId: nil, key: "kL")
-        let withLegacy = MacDirectory.merge([current], synced: [legacyB], hidden: [], now: now, newId: newId)
-        check(withLegacy.keys["cur"] == nil && withLegacy.macs.count == 2 && withLegacy.macs[1].macId == nil
-              && withLegacy.macs[1].credential == .sharedKey, "75 item from another Mac becomes its own entry")
+        let withLegacy = MacDirectory.merge([current], synced: [legacyB], pinned: [], now: now, newId: newId)
+        check(withLegacy.legacyKeys["cur"] == nil && withLegacy.macs.count == 2 && withLegacy.macs[1].macId == nil
+              && withLegacy.macs[1].credential == .none && withLegacy.macs[1].pairingState == .unpaired,
+              "75 item from another Mac is listed as its own entry, unpaired, with no credential")
+        check(withLegacy.macs.count == 2 && withLegacy.legacyKeys == [withLegacy.macs[1].id: "kL"],
+              "the 75 item's shared key is only held for the tap that pairs it")
         let tokenHolder = saved("tok", macId: nil, url: legacyB.url, name: "studio")
-        let notDowngraded = MacDirectory.merge([tokenHolder], synced: [legacyB], hidden: [], now: now, newId: newId)
-        check(notDowngraded.keys.isEmpty && notDowngraded.macs[0].credential == .deviceToken,
+        let notDowngraded = MacDirectory.merge([tokenHolder], synced: [legacyB], pinned: [], now: now, newId: newId)
+        check(notDowngraded.legacyKeys.isEmpty && notDowngraded.macs[0].credential == .deviceToken,
               "a stale shared key never replaces this device's token")
 
-        // Deleted Macs stay deleted.
-        let hiddenMerge = MacDirectory.merge([], synced: [a, legacyB],
-                                             hidden: [macA, MacDirectory.hideKey(macId: nil, url: legacyB.url)],
-                                             now: now, newId: newId)
-        check(hiddenMerge.macs.isEmpty, "hidden Macs are not added back")
+        // ---- Unpairing (build 78: 取消配对 replaces hiding a deleted Mac) ----
+        // A synced entry with a local credential is paired; one read from iCloud only is not.
+        check(saved("p", macId: macA, url: a.url).pairingState == .paired
+              && saved("s", macId: nil, url: a.url, credential: .sharedKey).pairingState == .paired,
+              "a synced entry with a local credential reads paired")
+        check(two.macs.allSatisfy { $0.pairingState == .unpaired }, "an entry known only from iCloud reads unpaired")
+        // Unpairing an iCloud Mac keeps the same row, unpaired, and the next merge still lists it.
+        let pairedA = saved("pa", macId: macA, url: a.url)
+        let listed = [pairedA, saved("pb", macId: macB, url: b.url, name: "studio")]
+        if let unpaired = MacDirectory.unpair(listed, id: "pa") {
+            check(unpaired.macs.count == 2 && unpaired.macs[0].id == "pa" && unpaired.macs[0].pairingState == .unpaired
+                  && unpaired.macs[1] == listed[1], "unpairing keeps the Mac listed, unpaired, others untouched")
+            let next = MacDirectory.merge(unpaired.macs, synced: [a, b], pinned: [], now: now, newId: newId)
+            check(next.macs.map(\.id) == ["pa", "pb"] && next.macs[0].pairingState == .unpaired
+                  && next.macs[1].pairingState == .paired && next.dropped.isEmpty,
+                  "after unpairing, the next merge still lists the Mac, unpaired")
+            check(next.tickets["pa"] == "tA", "the unpaired Mac gets its iCloud ticket back for re-pairing")
+            // The local credential and request ticket are gone (accounts DenyApprovalIntent reads).
+            check(unpaired.clearedAccounts == ["mac-key.pa", "mac-ticket.pa"],
+                  "unpairing clears the Mac's local credential and ticket")
+            check(unpaired.forgetSelf, "unpairing a device token asks the Mac to revoke it (forgetSelf)")
+        } else {
+            check(false, "unpairing keeps the Mac listed, unpaired, others untouched")
+        }
+        check(MacDirectory.unpair(listed, id: "nope") == nil, "unpairing an unknown id does nothing")
+        // Unpairing a 75 Mac stays unpaired: the next merge with the same shared-key item re-creates
+        // no credential (what the 77 hidden set used to prevent by hiding the Mac).
+        for held in [Credential.deviceToken, .sharedKey] {
+            let legacyRow = saved("lg", macId: nil, url: legacyB.url, credential: held, name: "studio")
+            let again = MacDirectory.unpair([legacyRow], id: "lg").map {
+                MacDirectory.merge($0.macs, synced: [legacyB], pinned: [], now: now, newId: newId)
+            }
+            check(again?.macs.map(\.id) == ["lg"] && again?.macs[0].credential == Credential.none
+                  && again?.legacyKeys == ["lg": "kL"],
+                  "after unpairing a 75 Mac (\(held)), merging its shared-key item re-creates no credential")
+        }
+        // Only a device token is revoked on the Mac; a shared key is just dropped locally.
+        let shared = saved("sk", macId: nil, url: legacyB.url, credential: .sharedKey, name: "studio")
+        check(MacDirectory.unpair([shared], id: "sk").map { !$0.forgetSelf && $0.clearedAccounts == ["mac-key.sk", "mac-ticket.sk"] } == true,
+              "a shared key is cleared without forgetSelf")
+        // An iCloud Mac that already stopped syncing has nothing to re-pair with: it leaves the list.
+        var stoppedMac = saved("st", macId: macB, url: b.url, name: "studio")
+        stoppedMac.removedFromICloud = true
+        check(MacDirectory.unpair([pairedA, stoppedMac], id: "st")
+                .map { $0.macs == [pairedA] && $0.forgetSelf && $0.clearedAccounts == ["mac-key.st", "mac-ticket.st"] } == true,
+              "unpairing an iCloud Mac that stopped syncing removes it from the list")
+        // A scanned Mac leaves the list; if it is also in iCloud the next merge lists it again, unpaired.
+        let scanned = saved("qr", macId: macA, url: a.url, source: .qr)
+        if let gone = MacDirectory.unpair([scanned], id: "qr") {
+            check(gone.macs.isEmpty && gone.forgetSelf, "an unpaired scanned Mac leaves the list")
+            let back = MacDirectory.merge(gone.macs, synced: [a], pinned: [], now: now, newId: newId)
+            check(back.macs.count == 1 && back.macs[0].macId == macA && back.macs[0].pairingState == .unpaired,
+                  "an unpaired scanned Mac still in iCloud is listed again, unpaired")
+        } else {
+            check(false, "an unpaired scanned Mac leaves the list")
+        }
+        // An unpaired row whose iCloud item is gone leaves the list (nothing to re-pair with);
+        // a paired one is only flagged.
+        // Only a non-empty read that lacks the item drops it; an empty read (iCloud signed out) is no information.
+        let otherMac = conn("http://other.ts.net:14159", mac: "other", macId: "cccccccc-other", ticket: "tC")
+        let unpairedGone = saved("ug", macId: macB, url: b.url, credential: .none, name: "studio")
+        let pruned = MacDirectory.merge([pairedA, unpairedGone], synced: [otherMac], pinned: [], now: now, newId: newId)
+        check(pruned.macs.map(\.id) == ["pa", "saved-\(counter)"] && pruned.macs[0].removedFromICloud
+              && pruned.dropped == ["ug"], "an unpaired Mac that left iCloud is dropped; a paired one is flagged")
+        let emptyRead = MacDirectory.merge([pairedA, unpairedGone], synced: [], pinned: [], now: now, newId: newId)
+        check(emptyRead.dropped.isEmpty && emptyRead.macs.map(\.id) == ["pa", "ug"],
+              "an empty iCloud read drops nothing")
+        // The current Mac and the one being paired are never dropped; a row with any credential never is.
+        let sharedGone = saved("sg", macId: nil, url: "http://old.ts.net:14159", credential: .sharedKey, name: "old")
+        let rows = [pairedA, unpairedGone, sharedGone, saved("u2", macId: "dddddddd-gone", url: "http://u2.ts.net", credential: .none)]
+        for pinned in [Set<String>(), ["ug"], ["u2"], ["ug", "u2"]] {
+            let result = MacDirectory.merge(rows, synced: [otherMac], pinned: pinned, now: now, newId: newId)
+            let unpairedIds = Set(rows.filter { $0.credential == .none }.map(\.id))
+            check(Set(result.dropped) == unpairedIds.subtracting(pinned)
+                  && result.macs.filter { $0.credential != .none }.count == 2
+                  && pinned.allSatisfy { id in result.macs.contains { $0.id == id } },
+                  "dropped holds only unpaired rows outside pinned (\(pinned.sorted()))")
+        }
+        // Tap routing: the 75 shared key only pairs a row with no usable local credential;
+        // a rejected device token always goes back through the Mac's approval.
+        check(MacDirectory.pairingRoute(credential: .none, hasKey: false, legacyKey: "kL") == .legacyUpgrade(key: "kL"),
+              "an unpaired 75 Mac pairs through the upgrade")
+        check(MacDirectory.pairingRoute(credential: .sharedKey, hasKey: false, legacyKey: "kL") == .legacyUpgrade(key: "kL"),
+              "a shared-key row whose local key is gone pairs through the upgrade")
+        check(MacDirectory.pairingRoute(credential: .sharedKey, hasKey: true, legacyKey: "kL") == .request
+              && MacDirectory.pairingRoute(credential: .deviceToken, hasKey: false, legacyKey: "kL") == .request
+              && MacDirectory.pairingRoute(credential: .deviceToken, hasKey: true, legacyKey: "kL") == .request,
+              "a device token (even a rejected one) never pairs through the shared key")
+        check(MacDirectory.pairingRoute(credential: .none, hasKey: false, legacyKey: nil) == .request
+              && MacDirectory.pairingRoute(credential: .none, hasKey: false, legacyKey: "") == .request,
+              "no shared key: the ticket handshake")
+        let sharedRow = saved("sr", macId: nil, url: legacyB.url, credential: .sharedKey, name: "studio")
+        check(MacDirectory.merge([sharedRow], synced: [legacyB], pinned: [], now: now, newId: newId).legacyKeys == ["sr": "kL"]
+              && MacDirectory.merge([sharedRow], synced: [legacyB], pinned: [], now: now, newId: newId).macs == [sharedRow],
+              "a shared-key row gets the 75 key for its tap, and its credential is not rewritten")
 
         // ---- Scanning / manual entry ----
         let byId = MacDirectory.upsert([current], url: "https://m6.ts.net", macId: macA, source: .qr,
@@ -344,6 +439,9 @@ struct PhoneLinkTest {
         check(MacDirectory.route(src: macB, macs: list, current: "cur") == "b", "routed to the source Mac")
         check(MacDirectory.route(src: "unknown-mac-id", macs: list, current: "cur") == "cur", "unknown source: current")
         check(MacDirectory.route(src: nil, macs: list, current: "cur") == "cur", "old backend: current")
+        let unpairedList = [current, saved("b", macId: macB, url: b.url, credential: .none, name: "studio")]
+        check(MacDirectory.route(src: macB, macs: unpairedList, current: "cur") == "cur",
+              "a notification from an unpaired source Mac falls back to the current Mac")
 
         // Approvals are stricter: an unknown source never lands on another known Mac.
         check(MacDirectory.approvalTarget(src: macB, macs: list, current: "cur") == "b", "approval to source")
@@ -363,19 +461,15 @@ struct PhoneLinkTest {
         // A legacy twin of a per-Mac item (same address) is ignored. Keychain order is arbitrary: check both.
         let twin = conn(a.url, mac: "m6", macId: nil, key: "stale")
         for order in [[twin, a], [a, twin]] {
-            let dual = MacDirectory.merge([], synced: order, hidden: [], now: now, newId: newId)
-            check(dual.macs.count == 1 && dual.macs[0].macId == macA && dual.keys.isEmpty
+            let dual = MacDirectory.merge([], synced: order, pinned: [], now: now, newId: newId)
+            check(dual.macs.count == 1 && dual.macs[0].macId == macA && dual.legacyKeys.isEmpty
                   && dual.macs[0].credential == .none,
                   "legacy twin of a per-Mac item is ignored (\(order[0].macId == nil ? "legacy first" : "tagged first"))")
         }
         // Address changed before the Mac's first 76 write: adopt by tailnet name.
-        let movedMac = MacDirectory.merge([migrated], synced: [movedA], hidden: [], now: now, newId: newId)
+        let movedMac = MacDirectory.merge([migrated], synced: [movedA], pinned: [], now: now, newId: newId)
         check(movedMac.macs.count == 1 && movedMac.macs[0].id == "old" && movedMac.macs[0].macId == macA
               && movedMac.tickets["old"] == "tA2", "legacy entry adopted by name after an address change")
-        // A Mac deleted while it was on 75 stays deleted after it starts publishing its id.
-        let stillHidden = MacDirectory.merge([], synced: [a], hidden: [MacDirectory.hideKey(macId: nil, url: a.url)],
-                                             now: now, newId: newId)
-        check(stillHidden.macs.isEmpty, "hidden by address survives the Mac gaining an id")
 
         // Mac side: items under an old id of this Mac (same address) are cleaned up; others stay.
         let staleItems = [a, b, conn(a.url, mac: "m6", macId: "1111aaaa-old-identity", ticket: "x"),
@@ -392,12 +486,17 @@ struct PhoneLinkTest {
         check(MacDirectory.adoptableId("bad", for: "rogue", macs: withA) == nil, "invalid id refused")
         // The iCloud item wins over a non-iCloud entry claiming its id from another host.
         let squatter = saved("sq", macId: macA, url: "http://rogue.ts.net", source: .manual, name: "rogue")
-        let reclaimed = MacDirectory.merge([squatter], synced: [a], hidden: [], now: now, newId: newId)
+        let reclaimed = MacDirectory.merge([squatter], synced: [a], pinned: [], now: now, newId: newId)
         check(reclaimed.macs.count == 2 && reclaimed.macs[0].macId == nil
               && reclaimed.macs[1].macId == macA && reclaimed.macs[1].url == a.url,
               "a squatting entry loses the id to the real Mac's iCloud item")
-        check(MacDirectory.route(src: macA, macs: reclaimed.macs, current: "sq") == reclaimed.macs[1].id,
+        var pairedReal = reclaimed.macs
+        if pairedReal.count == 2 { pairedReal[1].credential = .deviceToken }
+        check(pairedReal.count == 2 && MacDirectory.route(src: macA, macs: pairedReal, current: "sq") == pairedReal[1].id,
               "approvals for the real Mac go to the real Mac")
+        // A notification from a Mac this iPhone is not paired with never switches (switching would pair).
+        check(MacDirectory.route(src: macA, macs: reclaimed.macs, current: "sq") == "sq",
+              "a notification from an unpaired Mac stays on the current Mac")
 
         check(MacDirectory.validMacId(macA) && !MacDirectory.validMacId("short")
               && !MacDirectory.validMacId("../../x/../../y") && !MacDirectory.validMacId(String(repeating: "a", count: 65)),

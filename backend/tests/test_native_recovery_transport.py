@@ -42,7 +42,7 @@ def test_native_deferred_cleanup(native_deferred_cleanup):
                             capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr
 
-@pytest.mark.parametrize('mode',['gap','included','no-queued','thin','old-count','fresh-completed','old-cleanup','overlap','overlap-same','overlap-early','overlap-same-early','overlap-error','404','late-accepted','late-duplicate','late-error','late-conflict','late-accepted-aba','late-duplicate-aba','late-error-aba','late-conflict-aba','late-resume-conflict-aba','client-change','delete-failed','auth-failed','auth-unknown','auth-ok','auth-offline','auth-late'])
+@pytest.mark.parametrize('mode',['gap','included','no-queued','thin','old-count','fresh-completed','old-cleanup','overlap','overlap-same','overlap-early','overlap-same-early','overlap-error','404','late-accepted','late-duplicate','late-error','late-conflict','late-accepted-aba','late-duplicate-aba','late-error-aba','late-conflict-aba','late-resume-conflict-aba','client-change','delete-failed','auth-failed','auth-unknown','auth-ok','auth-engine-starting','auth-engine-ready','auth-offline','auth-late'])
 def test_native_recovery_transport(native_recovery,mode):
     result=subprocess.run([str(native_recovery),str(ROOT/'protocol/fixtures'),mode],capture_output=True,text=True,timeout=15)
     assert result.returncode == 0, result.stdout+result.stderr

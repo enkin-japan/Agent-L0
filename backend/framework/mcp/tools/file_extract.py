@@ -37,6 +37,7 @@ class FileExtractTool(BaseTool):
         "document -> full text. Read-only."
     )
     requires_approval = False
+    effect = "read"     # 审批策略分类：只读取，进程外无副作用
     is_concurrency_safe = True  # 只读文件解析，可与其他只读调用并发
 
     parameters = {

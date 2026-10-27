@@ -184,6 +184,46 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
         func mapped(_ value: [String:Any]) throws -> [ChatMessage] {
             ChatMessage.from(turn:try JSONDecoder().decode(Turn.self,from:JSONSerialization.data(withJSONObject:value)))
         }
+        // Build 78 execution groups: receipts carry call ids, response rows do not, so a
+        // name's receipts attach only when rows and receipts are equally many. A denied call
+        // (row, no receipt) must not inherit the later same-name result.
+        if mode == "steps-denied-same-name" || mode == "steps-paired-same-name" {
+            let paired = mode == "steps-paired-same-name"
+            var value = terminal
+            value["status"] = "success"
+            let call: [String:Any] = ["role":"assistant","tool_calls":[["name":"write_file","arguments":["path":"a.txt"]]]]
+            value["response"] = [
+                call,
+                ["role":"tool","tool_responses":[["name":"write_file","response":paired ? "first write timed out" : "The user denied this tool call."]]],
+                call,
+                ["role":"tool","tool_responses":[["name":"write_file","response":"wrote a.txt"]]],
+                ["role":"assistant","content":"done"],
+            ]
+            func receipt(_ seq: Int, _ type: String, _ status: String?) -> [String:Any] {
+                var item: [String:Any] = ["seq":seq,"ts":Double(100 + seq),"type":type,"name":"write_file","call_id":"c\(seq)","detail":""]
+                if let status { item["status"] = status }
+                return item
+            }
+            let items = paired
+                ? [receipt(1,"tool_started",nil), receipt(2,"tool_result","timeout"), receipt(3,"tool_started",nil), receipt(4,"tool_result","ok")]
+                : [receipt(3,"tool_started",nil), receipt(4,"tool_result","ok")]
+            value["execution_receipts"] = ["items":items,"truncated":false]
+            let messages = try mapped(value)
+            let results = messages.filter { $0.kind == .tool && $0.stepRole == .result }
+            check(results.count == 2, "both returns are rendered")
+            let groups = ChatMessage.groupedForDisplay(messages).filter { $0.kind == .toolGroup }
+            check(groups.count == 1 && groups[0].toolInvocationCount == 2, "a call and its return count as one step")
+            if paired {
+                check(results[0].stepStatus == "timeout" && results[1].stepStatus == "ok", "equal counts pair receipts in order")
+                check(groups[0].stepsDuration == 3, "duration spans the paired receipts")
+            } else {
+                check(results[0].stepStatus == nil, "denied call never inherits a later same-name result")
+                check(results.allSatisfy { $0.stepStatus == nil } && !messages.contains { $0.stepTimestamp != nil },
+                      "unequal counts leave every same-name status and time unknown")
+                check(groups[0].stepsDuration == nil, "no duration without reliable receipts")
+            }
+            print("PASS " + mode);exit(0)
+        }
         if mode.hasPrefix("facts") && !["facts-history","facts-live"].contains(mode) {
             var value = terminal
             switch mode {

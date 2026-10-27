@@ -293,8 +293,9 @@ final class PushManager: NSObject, ObservableObject {
     private func openSession(_ sessionId: String, src: String?) {
         #if os(iOS)
         // 来自另一台 Mac 的通知：先切到那台，再定位会话
+        // 只切到已配对、凭据可用的那台；点通知绝不发起配对
         if let phoneLink, let id = phoneLink.route(src: src), id != phoneLink.currentId {
-            phoneLink.select(id)
+            phoneLink.switchWithoutPairing(id)
         }
         #endif
         store?.select(sessionId: sessionId)

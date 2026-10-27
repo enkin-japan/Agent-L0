@@ -108,6 +108,7 @@ class RAGListCategoriesTool(BaseTool):
         "already exists."
     )
     requires_approval = False
+    effect = "read"     # 审批策略分类：只读取，进程外无副作用
     is_concurrency_safe = True  # 只读列举分类，无副作用（写/删类 RAG 工具保持串行）
     parameters = {"properties": {}, "required": []}
 

@@ -34,6 +34,7 @@ class ListDirTool(BaseTool):
         "in Downloads) before reading or opening a specific file."
     )
     requires_approval = False
+    effect = "read"     # 审批策略分类：只读取，进程外无副作用
     is_concurrency_safe = True  # 纯只读
 
     parameters = {
@@ -86,6 +87,7 @@ class FindFilesTool(BaseTool):
         # D2-减法(类A):返回条数/排序句删——输出首行自报 "N matches (showing M, newest first)"。
     )
     requires_approval = False
+    effect = "read"     # 审批策略分类：只读取，进程外无副作用
     is_concurrency_safe = True  # 只读查询
     timeout_seconds = 30
 

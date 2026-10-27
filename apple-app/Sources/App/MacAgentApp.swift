@@ -115,6 +115,9 @@ struct MacAgentApp: App {
         #if os(macOS)
         let sidecar = SidecarManager()
         sidecar.configure(settings: settings)
+        sidecar.onBackendUp = { [weak store] in
+            Task { await store?.refreshConnection() }
+        }
         _sidecar = StateObject(wrappedValue: sidecar)
         MacAppDelegate.sidecar = sidecar
         let retier = RetierMonitor()
@@ -200,6 +203,9 @@ struct MacAgentApp: App {
                     }
                 } message: { handshake in
                     switch handshake.state {
+                    case .waiting where handshake.code.isEmpty:
+                        // 75 旧条目的共享密钥换票据：没有核对码，也不用在 Mac 上点允许
+                        Text(L("正在与「") + handshake.macName + L("」配对…"))
                     case .waiting:
                         Text(L("请在「") + handshake.macName + L("」上点「允许」。核对码 ") + handshake.code
                              + "\n" + L("请确认 Mac 上显示的是同一个核对码。"))
@@ -286,6 +292,8 @@ struct MenuBarPanel: View {
             switch store.connState {
             case .connected:
                 Text("\(L("后端已连接")) · \(store.settings.baseURL?.host() ?? "")")
+            case .engineStarting:
+                Text(store.engineStartingLabel)
             case .connecting:
                 Text(L("连接中…"))
             case .offline:

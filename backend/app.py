@@ -335,6 +335,11 @@ async def lifespan(app: FastAPI):
     app.state.compute_ready = False
     app.state.compute_state = "starting"
     app.state.compute_installed = False
+    # Contract H（PROTOCOL §2.10）：compute_state 是整个装配的态；下面三项拆开说它在等谁。
+    app.state.engine_ready = False
+    app.state.compute_node_state = "probing" if _remote_transport else "local"
+    # 非 remote 形态本进程从不探 RAG（单机契约由 lib_edge 启动门把关）：如实报 skipped。
+    app.state.rag_state = "probing" if _remote_transport else "skipped"
     # RAG 可用性单记一处：它不参与 compute_ready 判定（装配后掉线只影响检索类工具）。
     app.state.rag_ready = False
     feed = GlobalFeed()
@@ -399,21 +404,40 @@ async def lifespan(app: FastAPI):
     async def _probe_dependencies():
         """只有推理活体/鉴权决定 compute_ready；RAG 只是装配期前置，装完即与执行解耦。"""
         nonlocal identity, last_rescan
-        from framework.api.compute_lifecycle import describe_failure, probe_rag_data
+        from framework.api.compute_lifecycle import (
+            LocalDependencyUnavailable, compute_node_failure_state, describe_failure,
+            probe_rag_data, rag_failure_is_transient, rag_failure_state, rag_probe_host)
         remote = inference_cfg.get("remote") or {}
-        identity = await probe_remote_compute(
-            f"http://{remote.get('host', '127.0.0.1')}:{int(remote.get('port', 14161))}",
-            {"repo": MODEL, "revision": MODEL_REVISION},
-            os.environ.get("INFER_API_KEY", ""), identity)
         installed = getattr(app.state, "compute_installed", False)
+        # 装配期每次探活结果先落 app.state 再抛（/health 的 compute_node_state / rag_state）。
+        # 装配后 compute_node_state 归生命周期监视器发布：与 compute_state 同一道连续失败
+        # 门槛才翻，单个丢包周期不让 UI 闪、两个字段稳态下不打架。
         try:
-            await probe_rag_data(config.get("rag") or {}, os.environ.get("RAG_API_KEY", ""))
+            identity = await probe_remote_compute(
+                f"http://{remote.get('host', '127.0.0.1')}:{int(remote.get('port', 14161))}",
+                {"repo": MODEL, "revision": MODEL_REVISION},
+                os.environ.get("INFER_API_KEY", ""), identity)
+        except Exception as exc:
+            if not installed:
+                app.state.compute_node_state = compute_node_failure_state(exc)
+            raise
+        if not installed:
+            app.state.compute_node_state = "ready"
+        rag_cfg = config.get("rag") or {}
+        try:
+            await probe_rag_data(rag_cfg, os.environ.get("RAG_API_KEY", ""))
         except Exception as exc:
             was_ready = getattr(app.state, "rag_ready", None)
             app.state.rag_ready = False
+            app.state.rag_state = rag_failure_state(exc)
             # 装配前 RAG 仍是前置（工具探活一次性，启动契约不变）；装配完成后 RAG 掉线
             # 只让 rag_search 失败（本次改动之前的行为），绝不把执行能力一起拉下来。
+            # 装配前：算力端已过、只差**本机**数据面且只是还没起来（连接级失败/5xx）→
+            # 标成本地依赖，生命周期按固定短间隔重试。钥匙错（401/403）是永久故障、
+            # 远端 RAG 主机不归本机编队——两者都走普通退避，快速重试帮不了谁。
             if not installed:
+                if is_loopback_bind(rag_probe_host(rag_cfg)) and rag_failure_is_transient(exc):
+                    raise LocalDependencyUnavailable("RAG 数据面未就绪") from exc
                 raise
             if was_ready is not False:
                 print(f"[Compute] RAG 数据面不可用（{describe_failure(exc) or type(exc).__name__}）；"
@@ -422,6 +446,7 @@ async def lifespan(app: FastAPI):
             if getattr(app.state, "rag_ready", None) is False:
                 print("[Compute] RAG 数据面已恢复")
             app.state.rag_ready = True
+            app.state.rag_state = "ready"
         if installed and time.monotonic() - last_rescan >= 30:
             last_rescan = time.monotonic()
             try:
@@ -552,7 +577,13 @@ async def lifespan(app: FastAPI):
                 except (TypeError, ValueError):
                     raise SystemExit(f"❌ [backend] inference.remote.port 不是数值：{_rm.get('port')!r}")
                 _base = f"http://{str(_rm.get('host') or '').strip()}:{_port}"
-                _found = await blocking_call(lambda: discover_remote_model(_base))
+                try:
+                    _found = await blocking_call(lambda: discover_remote_model(_base))
+                except Exception:
+                    # 发现即对算力端 /health 的一次探问：不可达要如实反映，否则算力端
+                    # 宕机期间每次装配都卡在这里、compute_node_state 永远停在 probing。
+                    app.state.compute_node_state = "unreachable"
+                    raise
                 if _found:
                     adopt_model(_found[0], _found[1])
                     MODEL, MODEL_REVISION, _model_source = resolve_selected_model()
@@ -887,6 +918,13 @@ _HEALTH_KEY_FP = key_fingerprint(API_KEY)
 _HEALTH_LAYOUT = os.environ.get("AGENT_LAYOUT") or "unknown"
 
 
+def _health_node_default() -> str:
+    """lifespan 尚未落值时的缺省：与 lifespan 的 _remote_transport 同一判据（零 IO）。"""
+    inf = config.get("inference") or {}
+    remote = str(inf.get("mode", "inprocess")) == "remote" or inf.get("backend") == "remote"
+    return "probing" if remote else "local"
+
+
 @app.get("/health")
 async def health():
     return {
@@ -897,6 +935,13 @@ async def health():
         "data_ready": getattr(app.state, "data_ready", False),
         "compute_ready": getattr(app.state, "compute_ready", False),
         "compute_state": getattr(app.state, "compute_state", "starting"),
+        # Contract H：engine_ready=引擎已装上（算力后来掉线看 compute_state）；
+        # compute_node_state=远端算力端探活（装配期取最近一次，就绪后按监视器连续失败门槛）；
+        # rag_state=RAG 数据面最近一次探活（非 remote 形态不探 = skipped）。
+        "engine_ready": getattr(app.state, "engine_ready", False),
+        "compute_node_state": getattr(app.state, "compute_node_state", _health_node_default()),
+        "rag_state": getattr(app.state, "rag_state",
+                             "probing" if _health_node_default() == "probing" else "skipped"),
     }
 
 # 自托管 deck 打印页(Phase 4b 解除后端→前端倒挂):`./devctl.sh bundle-print` 把

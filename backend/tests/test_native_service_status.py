@@ -182,3 +182,68 @@ def test_native_service_status_and_knowledge_management(tmp_path):
     assert result.returncode == 0, result.stderr
     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# Contract H (build 78) projection oracles. Pure: BackendConnectionStatus is built from
+# decoded /health bodies, no transport. Each line is a mutation target (see the precondition
+# messages): node "unauthorized" must never read as ready, "local" defers to compute_state,
+# stopping/stopped wins over a ready node, and only real startup polls fast.
+CONTRACT_H_HARNESS = r'''
+import Foundation
+func L(_ value: String) -> String { value }
+@main struct ContractH {
+    static func status(_ json: String, _ access: BackendAccess = .authenticated) -> BackendConnectionStatus {
+        BackendConnectionStatus(access: access, health: try! JSONDecoder().decode(BackendHealth.self, from: Data(json.utf8)))
+    }
+    static func main() {
+        func check(_ ok: Bool, _ what: String) { if !ok { print("FAIL " + what); exit(1) } }
+        check(status(#"{"compute_ready":true,"compute_state":"ready","compute_node_state":"unauthorized"}"#).compute == .unauthorized,
+              "node unauthorized is never ready")
+        check(status(#"{"compute_ready":true,"compute_state":"ready","compute_node_state":"unreachable"}"#).compute == .unreachable,
+              "node unreachable is never ready")
+        check(status(#"{"compute_ready":false,"compute_state":"starting","compute_node_state":"probing"}"#).compute == .probing,
+              "node probing reads as connecting")
+        check(status(#"{"compute_ready":true,"compute_state":"ready","compute_node_state":"ready"}"#).compute == .ready,
+              "node ready reads as ready")
+        check(status(#"{"compute_ready":false,"compute_state":"starting","compute_node_state":"local"}"#).compute == .starting,
+              "local mode defers to compute_state starting")
+        check(status(#"{"compute_ready":true,"compute_state":"ready","compute_node_state":"local"}"#).compute == .ready,
+              "local mode defers to compute_state ready")
+        check(status(#"{"compute_ready":false,"compute_state":"stopped","compute_node_state":"ready"}"#).compute == .unavailable,
+              "stopped assembly is unavailable even with a ready node")
+        check(status(#"{"compute_ready":true,"compute_state":"stopping","compute_node_state":"ready"}"#).compute == .unavailable,
+              "stopping assembly is unavailable even with a ready node")
+        check(status(#"{"compute_ready":true,"compute_state":"ready","compute_node_state":"unauthorized"}"#, .unauthorized).compute == .unknown,
+              "unauthenticated access never projects compute")
+        check(status(#"{"engine_ready":false}"#).engineStarting, "engine_ready false is starting")
+        check(!status(#"{"compute_ready":true,"compute_state":"ready"}"#).engineStarting, "missing engine_ready is not starting")
+        check(status(#"{"engine_ready":false,"rag_state":"unauthorized"}"#).ragNotice == "unauthorized", "rag unauthorized notice")
+        check(status(#"{"engine_ready":false,"rag_state":"unreachable"}"#).ragNotice == "unreachable", "rag unreachable notice")
+        check(status(#"{"engine_ready":false,"rag_state":"skipped"}"#).ragNotice == nil, "rag skipped has no notice")
+        check(status(#"{"engine_ready":true,"compute_node_state":"probing"}"#).pollIntervalSeconds == 2, "probing polls at 2 s")
+        check(status(#"{"engine_ready":false,"compute_node_state":"ready"}"#).pollIntervalSeconds == 2, "engine_ready false polls at 2 s")
+        check(status(#"{"engine_ready":true,"compute_node_state":"unreachable"}"#).pollIntervalSeconds == 15, "unreachable node polls at 15 s")
+        check(status(#"{"engine_ready":true,"compute_node_state":"unauthorized"}"#).pollIntervalSeconds == 15, "unauthorized node polls at 15 s")
+        check(status(#"{"engine_ready":true,"compute_node_state":"ready"}"#).pollIntervalSeconds == 15, "ready polls at 15 s")
+        check(status(#"{"compute_ready":true,"compute_state":"ready"}"#).pollIntervalSeconds == 15, "nil fields poll at 15 s")
+        check(status(#"{}"#, .offline).pollIntervalSeconds == 2, "offline polls at 2 s")
+        check(status(#"{"engine_ready":false}"#, .unauthorized).pollIntervalSeconds == 15, "unauthenticated never fast-polls")
+        print("PASS contract-h")
+    }
+}
+'''
+
+
+@pytest.mark.skipif(sys.platform != "darwin" or not shutil.which("xcrun"), reason="requires Swift toolchain")
+def test_native_contract_h_projection(tmp_path):
+    source = ROOT / "apple-app/Sources"
+    test = tmp_path / "contract-h.swift"
+    test.write_text(CONTRACT_H_HARNESS)
+    binary = tmp_path / "contract-h"
+    result = subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-module-cache-path", str(tmp_path / "modules"),
+        *[str(p) for p in sorted((source / "API").glob("*.swift"))],
+        *map(str, sorted((source / "Store").glob("Offline*.swift"))), str(source / "Store/TurnReducer.swift"),
+        str(test), "-o", str(binary)], capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr
+    result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr

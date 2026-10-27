@@ -34,3 +34,13 @@ def make_session(tmp_path):
         return ChatSession(session_id, tmp_path / "sessions", system_prompt)
 
     return _make
+
+
+@pytest.fixture(autouse=True)
+def _isolate_approval_policy():
+    """审批策略持有者按测试钉在缺省（read/write 均 default = build 77 行为）：
+    dev 数据根（backend/）里若有用户调过的 approval_policy.json，不许漏进金测试。"""
+    from framework.core import approval_policy
+    approval_policy.replace(approval_policy.DEFAULT)
+    yield
+    approval_policy.replace(approval_policy.DEFAULT)

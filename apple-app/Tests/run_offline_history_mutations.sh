@@ -19,7 +19,7 @@ for file in ('recovery_support.swift','offline_history_test.swift'):
 mutations={
  'draft-selection': ('draft-selection','OfflineHistoryStore.swift', 'removed.contains(selected)', '!valid.contains(selected)'),
  'readonly': ('readonly','AgentStore.swift', 'guard historyIsReadOnly else { return false }', 'guard false else { return false }'),
- 'readonly-transient': ('readonly-transient','AgentStore.swift', 'case .reachable: connFailures = 0; connState = .reachable', 'case .reachable: connFailures = 0; connState = .reachable; markHistoryReadOnly()'),
+ 'readonly-transient': ('readonly-transient','AgentStore.swift', 'case .reachable: connFailures = 0; setConn(.reachable)', 'case .reachable: connFailures = 0; setConn(.reachable); markHistoryReadOnly()'),
  'readonly-cached-auth': ('readonly-transient','AgentStore.swift', 'if historyIsReadOnly, selectedSessionIsAttached { historyIsReadOnly = false }', 'if historyIsReadOnly, selectedSessionIsAttached || true { historyIsReadOnly = false }'),
  'readonly-debounce': ('readonly-transient','AgentStore.swift', 'if connState == .offline || !selectedSessionIsAttached { markHistoryReadOnly() }', 'markHistoryReadOnly()'),
  'mirror-evicted': ('mirror-budget','AgentStore.swift', 'markEvicted: { ids in try await cache.markAssetsEvicted(ids, namespace: namespace) })', 'markEvicted: { _ in })'),

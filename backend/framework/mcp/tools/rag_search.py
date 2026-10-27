@@ -115,6 +115,7 @@ class RAGSearchTool(BaseTool):
         "documents are written in) before concluding the knowledge base doesn't have it."
     )
     requires_approval = False
+    effect = "read"     # 审批策略分类：只读取，进程外无副作用
     is_concurrency_safe = True  # 只读向量检索，可与其他只读调用并发
     timeout_seconds = RAG_QUERY_TOOL_TIMEOUT_SECONDS
     # 渲染格（R3 试点）：召回结果今天是灰框里一大坨格式化文本——命中分、来源、路径全
@@ -263,6 +264,7 @@ class RagGetContextTool(BaseTool):
         "entries without positions — this tool won't work for those."
     )
     requires_approval = False
+    effect = "read"     # 审批策略分类：只读取，进程外无副作用
     is_concurrency_safe = True   # 纯只读数据操作
 
     parameters = {

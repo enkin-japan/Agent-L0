@@ -245,6 +245,7 @@ struct SessionListView: View {
     private var backendCompactLabel: String {
         switch store.connState {
         case .connected: return L("后端已连接")
+        case .engineStarting: return store.engineStartingLabel
         case .connecting: return L("后端连接中")
         case .offline: return L("后端未连接")
         case .unauthorized: return L("后端未认证")
@@ -255,8 +256,8 @@ struct SessionListView: View {
     private var computeColor: Color {
         switch store.computeState {
         case .ready: return Theme.success
-        case .starting: return Theme.warning
-        case .unavailable: return Theme.danger
+        case .starting, .probing: return Theme.warning
+        case .unavailable, .unreachable, .unauthorized: return Theme.danger
         case .unknown, .unsupported: return Theme.secondaryText
         }
     }
@@ -675,7 +676,7 @@ struct SessionListView: View {
     private var connectionColor: Color {
         switch store.connState {
         case .connected: return Theme.success
-        case .connecting: return Theme.warning
+        case .connecting, .engineStarting: return Theme.warning
         case .unauthorized, .reachable: return Theme.warning
         case .offline: return .red
         }
@@ -684,6 +685,7 @@ struct SessionListView: View {
     private var connectionLabel: String {
         switch store.connState {
         case .connected: return L("后端已连接")
+        case .engineStarting: return store.engineStartingLabel
         case .connecting: return L("连接中…")
         case .offline: return L("未连接")
         case .unauthorized: return L("服务可达 · 请检查连接密钥")

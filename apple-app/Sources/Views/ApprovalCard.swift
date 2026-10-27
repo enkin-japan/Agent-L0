@@ -88,8 +88,11 @@ struct ApprovalArguments {
 /// 敏感工具审批卡片：账本 awaiting_approval 时出现，决议受理后由事件流续跑。
 struct ApprovalCard: View {
     let tools: [PendingTool]
+    /// 设了上限（输入区上方的横幅形态）：工具清单超出时在卡内滚动，标题与按钮不随之滚走。
+    var toolListMaxHeight: CGFloat? = nil
     let onDecision: (Bool) -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var toolListHeight: CGFloat?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.s3) {
@@ -109,6 +112,26 @@ struct ApprovalCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            if let cap = toolListMaxHeight {
+                ScrollView {
+                    toolList
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { toolListHeight = $0 }
+                }
+                .frame(height: min(toolListHeight ?? cap, cap))
+            } else {
+                toolList
+            }
+            decisionActions
+        }
+        .padding(Theme.s4)
+        .background(Theme.card)
+        .overlay(RoundedRectangle(cornerRadius: Theme.radiusBubble)
+            .strokeBorder(Theme.separator, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusBubble))
+    }
+
+    private var toolList: some View {
+        VStack(alignment: .leading, spacing: Theme.s3) {
             ForEach(Array(tools.enumerated()), id: \.offset) { index, tool in
                 VStack(alignment: .leading, spacing: Theme.s2) {
                     HStack(alignment: .firstTextBaseline, spacing: Theme.s2) {
@@ -153,13 +176,7 @@ struct ApprovalCard: View {
                 .background(Theme.wash)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
             }
-            decisionActions
         }
-        .padding(Theme.s4)
-        .background(Theme.card)
-        .overlay(RoundedRectangle(cornerRadius: Theme.radiusBubble)
-            .strokeBorder(Theme.separator, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusBubble))
     }
 
     @ViewBuilder

@@ -655,7 +655,9 @@ stop_searx() {
     return "$failed"
 }
 
-# ---- RAG 数据面（B2c 拆分：rag.host 为本机时归 edge 编队，先于 backend）----
+# ---- RAG 数据面（B2c 拆分：rag.host 为本机时归 edge 编队）----
+# 编队顺序见 edge_up：单机（inprocess）形态先于 backend 就绪；remote 形态与 backend
+# 同时拉起（backend 就绪失败时撤掉本次拉起的 RAG）。
 # 判据：rag.host 指本机（回环/通配/空）= 数据面是本机编队成员；指远端 = 只探活不管
 #（拆分切换前的过渡拓扑：整个 RAG 还在算力端，本判据让 edge 行为与切换前逐字一致）。
 rag_is_local() {
@@ -665,7 +667,13 @@ rag_is_local() {
     esac
 }
 
-start_rag_local() {
+# 拉起与等就绪可拆开（远端编队并行起 backend 与 RAG）：start_* 带 --no-wait 时只过前置门
+# 并拉起，真拉起了才记一笔待等，由 wait_*_spawned 补等；不带参数时行为与 CLI 一致不变。
+# 「已在运行」「本实例启动中（守门已等到就绪）」两条路本来就不留待等。
+start_rag_local() {  # [--no-wait]
+    local nowait=0
+    [ "${1:-}" = "--no-wait" ] && nowait=1
+    _EDGE_PENDING_RAG=0
     if is_ready "$RAG_READY_URL"; then
         managed_or_report "RAG" "$RAG_PORT" "$EDGE_LOG_DIR/rag.pid" rag || return 1
         info "RAG 已在运行，跳过"; return 0
@@ -682,13 +690,23 @@ start_rag_local() {
     spawn_daemon "$EDGE_RAG_DIR" "$EDGE_LOG_DIR/rag.log" "$EDGE_LOG_DIR/rag.pid" \
         env RAG_CONFIG="$EDGE_CONFIG" RAG_DATA_DIR="${EDGE_RAG_DATA_DIR:-}" \
         "$EDGE_RAG_PY" rag_server.py || return 1
+    if [ "$nowait" = 1 ]; then _EDGE_PENDING_RAG=1; return 0; fi
+    wait_ready "RAG" "$RAG_READY_URL" "$RAG_TIMEOUT" "$(cat "$EDGE_LOG_DIR/rag.pid")" "$EDGE_LOG_DIR/rag.log"
+}
+
+wait_rag_spawned() {  # 补等 start_rag_local --no-wait 拉起的进程；未拉起则无事可等
+    [ "${_EDGE_PENDING_RAG:-0}" = 1 ] || return 0
+    _EDGE_PENDING_RAG=0
     wait_ready "RAG" "$RAG_READY_URL" "$RAG_TIMEOUT" "$(cat "$EDGE_LOG_DIR/rag.pid")" "$EDGE_LOG_DIR/rag.log"
 }
 
 stop_rag_local() { stop_one "RAG" "$RAG_PORT" "$EDGE_LOG_DIR/rag.pid" 15; }
 
 # ---- backend ----
-start_backend() {
+start_backend() {  # [--no-wait]（见 start_rag_local 上方说明）
+    local nowait=0
+    [ "${1:-}" = "--no-wait" ] && nowait=1
+    _EDGE_PENDING_BACKEND=0
     if is_ready "$BACKEND_READY_URL"; then
         managed_or_report "backend" "$BACKEND_PORT" "$EDGE_LOG_DIR/backend.pid" backend || return 1
         info "backend 已在运行，跳过"; return 0
@@ -723,6 +741,13 @@ start_backend() {
     info "启动 backend (port $BACKEND_PORT) → $EDGE_LOG_DIR/backend.log"
     spawn_daemon "$EDGE_BACKEND_DIR" "$EDGE_LOG_DIR/backend.log" "$EDGE_LOG_DIR/backend.pid" \
         "$EDGE_BACKEND_PY" app.py || return 1
+    if [ "$nowait" = 1 ]; then _EDGE_PENDING_BACKEND=1; return 0; fi
+    wait_ready "backend" "$BACKEND_READY_URL" "$BACKEND_TIMEOUT" "$(cat "$EDGE_LOG_DIR/backend.pid")" "$EDGE_LOG_DIR/backend.log"
+}
+
+wait_backend_spawned() {  # 补等 start_backend --no-wait 拉起的进程；未拉起则无事可等
+    [ "${_EDGE_PENDING_BACKEND:-0}" = 1 ] || return 0
+    _EDGE_PENDING_BACKEND=0
     wait_ready "backend" "$BACKEND_READY_URL" "$BACKEND_TIMEOUT" "$(cat "$EDGE_LOG_DIR/backend.pid")" "$EDGE_LOG_DIR/backend.log"
 }
 
@@ -744,9 +769,25 @@ edge_up() {
         return $?
     fi
     # 先提供本地历史；依赖服务可以稍后就绪，失败不撤掉数据服务。
-    start_backend || return 1
+    # backend 与本机 RAG 先后拉起、再逐个等就绪：RAG 冷启与 backend 启动/装配重叠，
+    # 装配首试就可能见到 RAG（串行时首试必撞 RAG 未起）。backend 拉起或就绪失败仍是
+    # 硬失败（拉起失败时 RAG 不拉；就绪失败时撤掉本次拉起的 RAG，守住「没有 backend
+    # 就没有 RAG」——事先已在跑的 RAG 不是本次拉起的，不动）；RAG 任一步失败只警告。
+    local rag_ok=1
+    start_backend --no-wait || return 1
     if rag_is_local; then
-        start_rag_local || warn "RAG 未就绪，本地历史可用；执行能力等待依赖恢复"
+        start_rag_local --no-wait || rag_ok=0
+    fi
+    if ! wait_backend_spawned; then
+        if [ "${_EDGE_PENDING_RAG:-0}" = 1 ]; then
+            _EDGE_PENDING_RAG=0
+            stop_rag_local || warn "撤掉本次拉起的 RAG 失败（${EDGE_LOG_DIR}/rag.pid），请 down 收摊"
+        fi
+        return 1
+    fi
+    if rag_is_local; then
+        if [ "$rag_ok" = 1 ]; then wait_rag_spawned || rag_ok=0; fi
+        [ "$rag_ok" = 1 ] || warn "RAG 未就绪，本地历史可用；执行能力等待依赖恢复"
     fi
     start_searx || warn "SearXNG 未就绪，联网搜索暂不可用"
     return 0

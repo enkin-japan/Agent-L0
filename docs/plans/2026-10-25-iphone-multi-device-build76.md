@@ -462,3 +462,72 @@ iCloud 条目出现后点选、在 Mac 上点允许）。
   用），显式传 `/Applications/Xcode.app/Contents/Developer` 后重跑成功。已改默认为 `xcode-select -p`（见后续提交）。
 - 真机待确认：iOS 引导页「稍后配对」后能否扫码连接；macOS 设置页在捆绑形态下显示的是状态行而非输入框；Sparkle 从 76 升 77 的
   delta 更新是否正常（本机是重装而非 delta 升级，未验）。
+
+## 16. build 78：就绪信号拆分、审批策略、聊天执行过程折叠、iPhone 取消配对（2026-10-27）
+
+### 16.1 问题与根因（用户 2026-10-27 提出五项）
+
+- 「计算端启动中」约 30 s：捆绑形态 `scripts/lib_edge.sh` 远端分支先起 backend、等其 `/health` 后才起
+  RAG；backend 后台装配首试探算力端（通常通过）后探本机 RAG（:14160 未起）必败，进入 2/4/8/16/30 s
+  退避；RAG 冷启约 14 s 赶不上第 14 s 那次重试即落到约 30 s；app 可达后每 15 s 轮询一次再取整。两层
+  错配：「后端已就绪」只代表 HTTP 端口通（装配在后台），「计算端启动中」实际是整条本地装配链。
+- iPhone 删除 Mac 后「重新检查」找不回：删除把 macId 与 url 写进 UserDefaults `phone.hiddenMacs`
+  永久隐藏名单，merge 过滤；唯一解除路径是扫码 `claim()`。
+- 聊天页被执行过程条目填满；审批卡在消息流末尾被输入栏盖住；权限无统一控制。
+
+### 16.2 决策与实现
+
+- **Contract H**（PROTOCOL §2.10 增补）：`/health` 新增 `engine_ready`、`compute_node_state`
+  （local/probing/ready/unreachable/unauthorized）、`rag_state`（skipped/probing/ready/unreachable/
+  unauthorized）；`compute_state` 语义不变（`backend/app.py:339-343,938-943`）。装配前只差本机（回环）
+  RAG 且为连接级/5xx 失败 → 2 s 固定重试 ≤120 s，钥错/远端 RAG 走退避；就绪后监控期
+  `compute_node_state` 与 `compute_state` 共用连续失败阈值翻转（不闪，`backend/app.py:412-449,584-585`）。
+  `lib_edge.sh` 远端分支 backend 与 RAG 并行拉起（`start_*` 带 `--no-wait` 只过前置门并拉起，真拉起了
+  才记一笔待等，由 `wait_*_spawned` 补等；`scripts/lib_edge.sh:670-789`），backend 就绪失败撤掉本次
+  拉起的 RAG。app：计算端标签只看 `compute_node_state`；可达但 `engine_ready=false` 显示「后端启动中
+  （等待检索服务）」；未就绪时 2 s 轮询（probing 或 engine 未就绪），unreachable/unauthorized 与旧后端
+  仍 15 s；sidecar 起来即刷新一次。
+- **Contract P**（PROTOCOL §2.11 新增）：`BaseTool.effect` ∈ read|write（缺省 write，18 read / 42
+  write，`backend/framework/mcp/tools/*`；`run_shell_command` 按命令动态，API 工具 GET/HEAD=read；
+  `run_math`/`math_research` 因沙箱放行子进程归 write）；策略 {read, write} ∈ auto/default/ask，缺省
+  均为 default（等于 build 77 行为，`backend/framework/core/approval_policy.py`）。
+  `MCPRegistry.approval_required`（`backend/framework/mcp/registry.py`）：未知名恒审批（闸门侧未注册
+  名不进闸、沿旧路径报 `No tool named`）；三条硬规则压过档位——钉死（API 工具声明里显式写的
+  `requires_approval`、`cloud.require_approval` 开着的云咨询）auto 不得越过；无人值守轮
+  （`turn_origin != chat`）一律按 default 判；策略文件缺失按缺省、存在但损坏按 ask/ask 并告警一次。
+  `GET`/`PATCH /api/v1/approval-policy`（`approval_policy.py:73-156`；PATCH 落盘失败 503
+  `policy_save_failed`，内存策略不变），两路由首次装配前可用；`GET /api/v1/tools` 多报 `effect`。
+  macOS 设置新增「权限」页。
+- 聊天：实时步骤单行紧凑（状态符号+标签+单行详情）；结束后同一轮连续工具行折叠为「执行过程 · N
+  步 · X 秒」（N 按调用对计，回执按 callId 匹配、匹配不上不贴状态）；展开态按 `turnIndex` 加首行序号
+  的稳定键存于 `AgentStore`（`apple-app/Sources/Views/ChatView.swift:58-59,280-485`、
+  `MessageView.swift:112,186,259`）。审批卡移到输入栏上方，消息流留「等待审批 N 项…」占位、决议后按
+  `resumed` 事件显示已批准/已拒绝；引用卡仍在顶层。
+- iPhone：删除隐藏名单机制，启动时移除旧 UserDefaults 键
+  `phone.hiddenMacs`（`apple-app/Sources/App/PhoneLink.swift:1397`）；左滑改「取消配对」（仅已配对行）=
+  注销推送 + `DELETE /pair/self` + 清本机 mac-key/mac-ticket（`PhoneLink.swift:1706-1715`，
+  `MacDirectory.unpair`、`PairingAPI.forgetSelf` 见 `:320-329,610`）。iCloud 仍有的留在列表为「未配对」，
+  点按经 `/pair/request`（Mac 点允许）重配；iCloud 条目消失的未配对行移出；merge 不再自动采用 75 旧
+  共享密钥（列为未配对，点按走 `/pair/upgrade`），通知点击不触发配对，握手中/当前/请求中的行不被丢，
+  空读不丢。
+
+### 16.3 复审与证明
+
+reviewer 对四路各一遍：health 无 Major；macOS UI 3 Major（local 短路成就绪、2 s 轮询永不停、回执按名
+FIFO 错贴）；policy 3 Major（math 工具沙箱、API 显式审批被 auto 越过、云咨询被 auto 越过）；iOS 1
+Major（75 Mac 不再能从 iCloud 连上——明确接受）。均已修或接受。变异清单：health 8（H-M1…M7+M3b）、
+policy 14（P-M1…M14）、iOS 29（`unpair_mutants.py`）、macOS 状态映射 7（`test_native_service_status`）；
+结果留给提交说明记录。
+
+### 16.4 残留/已知
+
+- 75 Mac 需升级；`forgetSelf` 失败时 Mac 侧留僵尸设备行（同 77）。
+- `upgradeLegacy` 对残留 75 条目的 76+ Mac 无需 Mac 同意（同 77 暴露面）。
+- read=auto 下 `web_read` 等出网读工具可被注入链式调用（同 77）。
+- `ToolInfo.requires_approval` 在 app API 工具面板不反映旋钮。
+- 时长包含人工审批等待。
+
+变异证明结果（verifier，2026-10-27）：后端 22/22 被杀（health H-M1…M7+M3b，policy P-M1…M14；H-M1 实际由
+`test_local_retries_do_not_advance_the_backoff` 杀死，清单里点名的两条在该场景下与原码等价）、全量 3463 passed /
+3 skipped；Swift 侧 iOS 29/29（复件驱动 unpair_mutants.py）、macOS 状态映射 7/7、connState 1/1、回执匹配与步数 2/2 全红；
+macOS/iOS Debug 构建通过，原生测试 432 passed，reducer 夹具 16/16。构建与发布记录见 §16.5。

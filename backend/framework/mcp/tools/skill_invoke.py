@@ -38,6 +38,7 @@ class SkillInvokeTool(BaseTool):
             index = "; ".join(f"{n}: {reg.get(n).description}" for n in reg.names())
             self.description = f"{self._DESC_HEAD} Available skills — {index}"
     requires_approval = False
+    effect = "read"     # 审批策略分类：只读取，进程外无副作用
     is_concurrency_safe = True
     is_read_only = True
     parameters = {

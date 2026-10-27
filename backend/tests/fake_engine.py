@@ -8,6 +8,8 @@ FakeEngine 鸭子类型对齐 AgentEngine.generate_once 的调用契约(编排�
 """
 from typing import Any, Dict, List, Optional
 
+from framework.mcp.registry import MCPRegistry
+
 
 class FakeCacheHandle:
     """CacheHandle 替身:无物理缓存,token_ids 恒 None(冷启动语义)。"""
@@ -97,8 +99,11 @@ class FakeTool:
     def __init__(self, name: str, result: str = "ok-result", *,
                  approval: bool = False, read_only: bool = True,
                  concurrency_safe: bool = True, timeout: Optional[int] = None,
-                 raises: Optional[Exception] = None, validate=None, render=None):
+                 raises: Optional[Exception] = None, validate=None, render=None,
+                 effect: Optional[str] = None):
         self.name = name
+        # 审批策略分类（Contract P）：未显式给出时跟随 read_only（只读替身 = read）
+        self.effect = effect if effect is not None else ("read" if read_only else "write")
         self.result = result
         self.approval = approval
         self.read_only = read_only
@@ -107,6 +112,9 @@ class FakeTool:
         self.raises = raises
         self.validate = validate  # 可选参数预检: (args)->Optional[str]，对齐 validate_arguments
         self.render = render      # 渲染格(R3): {hint,payload} 字面量或 (result)->dict
+
+    def effect_for(self, arguments=None):
+        return self.effect
 
 
 class FakeRegistry:
@@ -130,6 +138,11 @@ class FakeRegistry:
         t = self._tools.get(name)
         return bool(t and t.approval)
 
+    # 审批闸门判定直接借用 MCPRegistry 的实现（只经 _tools / effect_for / requires_approval），
+    # 编排层金测试跑的就是生产判定，而不是一份会漂移的替身副本
+    effect_of = MCPRegistry.effect_of
+    approval_required = MCPRegistry.approval_required
+
     def is_read_only(self, name, arguments=None):
         t = self._tools.get(name)
         return bool(t and t.read_only)
@@ -152,7 +165,8 @@ class FakeRegistry:
     def list_tools(self):
         return [{"name": t.name, "description": f"fake tool {t.name}",
                  "parameters": {"properties": {}, "required": []},
-                 "requires_approval": t.approval} for t in self._tools.values()]
+                 "requires_approval": t.approval, "effect": t.effect}
+                for t in self._tools.values()]
 
     # --- 执行面(编排层经 asyncio.to_thread 调用,保持同步签名) ---
     def execute_tool(self, name, arguments):

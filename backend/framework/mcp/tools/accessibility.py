@@ -265,6 +265,7 @@ class ListApplicationsTool(BaseTool):
         "Use it to see what is open before reading a window's UI or driving an app."
     )
     requires_approval = False
+    effect = "read"     # 审批策略分类：只读取，进程外无副作用
     is_concurrency_safe = True  # 只读枚举运行中的应用，无副作用
     parameters = {"properties": {}, "required": []}
 
@@ -297,6 +298,7 @@ class ReadUITreeTool(BaseTool):
         "the result. Pass 'app' to target a specific application, otherwise the frontmost app is used."
     )
     requires_approval = False
+    effect = "read"     # 审批策略分类：只读取，进程外无副作用
     # 只读（对系统无副作用，参与取代去重），但**不可并发**：读树会覆写模块级的
     # _element_cache 编号索引，同批并发两次读树会让编号↔元素错位、后续点击点错元素。
     is_concurrency_safe = False

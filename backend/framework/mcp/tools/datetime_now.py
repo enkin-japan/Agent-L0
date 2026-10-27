@@ -18,6 +18,7 @@ class CurrentTimeTool(BaseTool):
         "time is it now', measuring elapsed time, or timestamping output. Takes no arguments."
     )
     requires_approval = False
+    effect = "read"     # 审批策略分类：只读取，进程外无副作用
     is_concurrency_safe = True  # 只读、无副作用，可与其他只读调用并发
     parameters = {"properties": {}, "required": []}
 

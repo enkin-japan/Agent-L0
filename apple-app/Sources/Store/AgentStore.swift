@@ -55,6 +55,9 @@ final class AgentStore: ObservableObject {
     @Published var connectionOK: Bool?
     @Published var connState: ConnState = .connecting
     @Published var computeState: ComputeState = .unknown
+    /// Latest authenticated /health data-plane failure (Contract H `rag_state`:
+    /// "unreachable" / "unauthorized", else nil); only qualifies the 「后端启动中」 label.
+    @Published private(set) var ragNotice: String?
     // 会话
     @Published var sessions: [SessionMetaItem] = []
     @Published var retentionPolicy: SessionRetentionPolicy?
@@ -65,6 +68,8 @@ final class AgentStore: ObservableObject {
     /// 存进去，恢复时经 restoreLocalHistory / loadSessions 的存在性校验过滤。
     @Published var selectedSessionId: String? {
         didSet {
+            // Expanded execution groups belong to the open session only.
+            if oldValue != selectedSessionId, !expandedToolGroups.isEmpty { expandedToolGroups.removeAll() }
             guard persistSelectedSession, let namespace = client?.cacheNamespace else { return }
             let selected = selectedSessionId, cache = offlineHistory
             Task { try? await cache.saveSelection(selected, namespace: namespace) }
@@ -103,7 +108,18 @@ final class AgentStore: ObservableObject {
         errorMessage = L("当前为离线阅读；连接并同步后可继续操作。")
         return true
     }
-    @Published var messages: [ChatMessage] = []
+    @Published var messages: [ChatMessage] = [] {
+        didSet { displayMessages = ChatMessage.groupedForDisplay(messages) }
+    }
+    /// 显示投影：连续工具行合成「执行过程」组（ChatView 渲染它；逻辑一律读 messages）。
+    @Published private(set) var displayMessages: [ChatMessage] = []
+    /// 用户展开过的执行过程组，按稳定键（turnIndex + 组首行在该轮工具行里的序号，见
+    /// ChatMessage.toolGroupKey）记：同一会话内历史重投影后仍保持展开；换会话即清空。
+    @Published var expandedToolGroups: Set<String> = []
+    func isToolGroupExpanded(_ key: String) -> Bool { expandedToolGroups.contains(key) }
+    func setToolGroup(_ key: String, expanded: Bool) {
+        if expanded { expandedToolGroups.insert(key) } else { expandedToolGroups.remove(key) }
+    }
     @Published private(set) var canonicalTurns: [Turn] = []
     @Published private(set) var retryGroups: [RetryGroup] = []
     @Published private(set) var lastTurnRef: String?
@@ -155,6 +171,12 @@ final class AgentStore: ObservableObject {
     @Published var streamText = ""
     @Published var thinkingText = ""
     @Published var liveSteps: [String] = []
+    /// 直播步骤的结构化投影（与 liveSteps 同源 live.preview.steps；ChatView 画紧凑行）。
+    @Published private(set) var liveStepItems: [NormalizedStep] = []
+    /// 本轮最近一次审批的结果，取自账本 `resumed` 事件的 trigger（approve / deny）；
+    /// 预览级状态：新一轮受理、轮次终态、换会话时清空。
+    enum ApprovalOutcome: Equatable { case approved, denied }
+    @Published private(set) var approvalOutcome: ApprovalOutcome?
     @Published var activity: LiveActivity?
     @Published var taskSnapshot: TaskSnapshot?
     @Published var pendingTools: [PendingTool]?
@@ -380,20 +402,44 @@ final class AgentStore: ObservableObject {
     }
 
     func refreshConnection() async {
-        guard let client else { connectionOK = false; connState = .offline; computeState = .unknown; return }
+        guard let client else {
+            if connectionOK != false { connectionOK = false }
+            if connState != .offline { connState = .offline }
+            if computeState != .unknown { computeState = .unknown }
+            return
+        }
         connectionRequest += 1
         let request = connectionRequest
         let status = await client.connectionStatus()
-        let access = status.access
         guard !Task.isCancelled, self.client === client, request == connectionRequest else { return }
-        recordBackendAccess(access)
-        computeState = status.compute
+        recordConnection(status)
+    }
+
+    /// One place applies a probe result: access, engine phase and compute label.
+    /// Published values are assigned only when they change — the monitor ticks every
+    /// 2 s during startup and every view observing the store would re-render otherwise.
+    private func recordConnection(_ status: BackendConnectionStatus) {
+        recordBackendAccess(status.access, engineStarting: status.engineStarting)
+        let notice = status.engineStarting ? status.ragNotice : nil
+        if ragNotice != notice { ragNotice = notice }
+        let compute = status.compute
+        if computeState != compute { computeState = compute }
     }
 
     // MARK: - 连接状态监控（实机反馈：信号原来只在设置页关闭时刷一次，静态且滞后）
 
     /// Backend access only; an authenticated API does not prove every compute capability.
-    enum ConnState { case connecting, connected, offline, unauthorized, reachable }
+    /// `engineStarting`: authenticated, but /health reports `engine_ready == false`.
+    enum ConnState { case connecting, connected, engineStarting, offline, unauthorized, reachable }
+
+    /// 「后端启动中」, qualified while the data plane has not answered yet.
+    var engineStartingLabel: String {
+        switch ragNotice {
+        case "unreachable": return L("后端启动中") + L("（等待检索服务）")
+        case "unauthorized": return L("后端启动中") + L("（检索服务密钥不匹配）")
+        default: return L("后端启动中")
+        }
+    }
 
     typealias ComputeState = ComputeAvailability
     var computeStatusLabel: String {
@@ -403,6 +449,9 @@ final class AgentStore: ObservableObject {
         case .unavailable: return L("计算端未就绪")
         case .unknown: return L("计算端待确认")
         case .unsupported: return L("计算端状态未知")
+        case .probing: return L("计算端连接中")
+        case .unreachable: return L("计算端不可达")
+        case .unauthorized: return L("计算端密钥不匹配")
         }
     }
     var computeStatusDetail: String {
@@ -412,6 +461,9 @@ final class AgentStore: ObservableObject {
         case .unavailable: return L("计算端尚未就绪，本地历史仍可阅读。")
         case .unknown: return L("尚未取得经过认证的计算端状态。")
         case .unsupported: return L("当前后端未提供计算端状态。")
+        case .probing: return L("后端正在探测推理计算端，本地历史仍可阅读。")
+        case .unreachable: return L("后端连不上推理计算端：请检查算力端地址与网络。本地历史仍可阅读。")
+        case .unauthorized: return L("推理计算端拒绝了后端的密钥：请核对两端的 INFER 密钥。")
         }
     }
 
@@ -419,22 +471,24 @@ final class AgentStore: ObservableObject {
     /// projection. `.reachable` means the health endpoint answered but the index
     /// probe did not settle in time — a transient failure that must not take Stop /
     /// Suspend / Approve away from a live turn.
-    private func recordBackendAccess(_ access: BackendAccess) {
-        connectionOK = access == .authenticated
+    private func recordBackendAccess(_ access: BackendAccess, engineStarting: Bool = false) {
+        let ok = access == .authenticated
+        if connectionOK != ok { connectionOK = ok }
+        func setConn(_ state: ConnState) { if connState != state { connState = state } }
         switch access {
         case .authenticated:
-            connFailures = 0; connState = .connected
+            connFailures = 0; setConn(engineStarting ? .engineStarting : .connected)
             // This backend just authenticated, so a session it recovered and is
             // still attached to keeps its control authority. A cache-only
             // projection (no attachment) stays read only.
             if historyIsReadOnly, selectedSessionIsAttached { historyIsReadOnly = false }
         case .unauthorized:
-            connFailures = 0; connState = .unauthorized
+            connFailures = 0; setConn(.unauthorized)
             markHistoryReadOnly()
-        case .reachable: connFailures = 0; connState = .reachable
+        case .reachable: connFailures = 0; setConn(.reachable)
         case .offline:
             connFailures += 1
-            connState = connFailures >= 10 ? .offline : .connecting
+            setConn(connFailures >= 10 ? .offline : .connecting)
             // An attached live stream is its own authority, and health is probed
             // every 2s while unreachable: a single missed probe must not take
             // Approve / Stop away mid-turn. Honour the same debounce the signal
@@ -455,7 +509,10 @@ final class AgentStore: ObservableObject {
     }
 
     /// Existing monitor verifies reachability and backend authentication every 15s;
-    /// unreachable services retry every 2s to follow sidecar startup.
+    /// unreachable services retry every 2s to follow sidecar startup, and so does an
+    /// authenticated backend that is still starting (engine not installed, or the first
+    /// compute-node probe pending — `BackendConnectionStatus.pollIntervalSeconds`). The session index is refreshed on
+    /// the slow cadence only, so the fast phase does not double the index traffic.
     /// 连续 10 次失败（约 20s）才降级红灯——短暂波动/启动窗口都算「连接中」。
     func startConnectionMonitor() {
         connMonitorTask?.cancel()
@@ -463,8 +520,11 @@ final class AgentStore: ObservableObject {
         connFailures = 0
         connState = .connecting
         computeState = .unknown
+        ragNotice = nil
         connectionOK = nil
         connMonitorTask = Task { [weak self] in
+            var lastSessionsLoad: Date?
+            var wasStarting = false
             while !Task.isCancelled {
                 guard let self else { return }
                 guard let client = self.client else { return }
@@ -477,14 +537,19 @@ final class AgentStore: ObservableObject {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                     continue
                 }
-                self.recordBackendAccess(access)
-                self.computeState = status.compute
+                self.recordConnection(status)
                 if access == .authenticated {
                     // 顺带巡刷会话列表（macOS 无下拉刷新后的自动更新通道）：
-                    // 等值守卫兜底，列表没变不会引起任何视图重建
-                    await self.loadSessions()
+                    // 等值守卫兜底，列表没变不会引起任何视图重建。快轮询（启动中）期间
+                    // 只按慢节奏刷，刚就绪的那一轮立即补一次。
+                    let becameReady = !status.stillStarting && wasStarting
+                    if becameReady || lastSessionsLoad.map({ Date().timeIntervalSince($0) >= 14 }) ?? true {
+                        lastSessionsLoad = Date()
+                        await self.loadSessions()
+                    }
                 }
-                try? await Task.sleep(nanoseconds: access == .offline ? 2_000_000_000 : 15_000_000_000)
+                wasStarting = status.stillStarting
+                try? await Task.sleep(nanoseconds: status.pollIntervalSeconds * 1_000_000_000)
             }
         }
     }
@@ -1512,6 +1577,8 @@ final class AgentStore: ObservableObject {
         thinkingBuffer = ""
         flushScheduled = false
         liveSteps = []
+        liveStepItems = []
+        approvalOutcome = nil
         activity = nil
         taskSnapshot = nil
         pendingTools = nil
@@ -1600,6 +1667,13 @@ final class AgentStore: ObservableObject {
         case "turn_queued":
             onTurnQueued(env)
         case "turn_started", "resumed":
+            if env.type == "resumed" {
+                switch env.str("trigger") {
+                case "approve": approvalOutcome = .approved
+                case "deny": approvalOutcome = .denied
+                default: break   // resume after suspend: no approval decision
+                }
+            }
             if liveTurnId == nil { liveTurnId = env.turnId }
             isGenerating = true
             pendingTools = nil
@@ -1627,6 +1701,7 @@ final class AgentStore: ObservableObject {
         case "awaiting_approval":
             flushStreamNow()
             isGenerating = false
+            approvalOutcome = nil
             pendingTools = env.decode([PendingTool].self, at: "pending_tools") ?? []
             pendingApprovalTarget = env.turnId.flatMap { id in
                 id.isEmpty ? nil : PendingApprovalTarget(sessionId: sessionId, turnId: id, seq: env.seq)
@@ -1779,6 +1854,7 @@ final class AgentStore: ObservableObject {
     /// 直播步骤流投影：归约的 preview.steps → 展示行（含结果详情与正确的成败标记;
     /// pending = 生成中预告,执行前就知道要调什么——Phase 3 粒度）。
     private func renderSteps() {
+        liveStepItems = live.preview.steps
         liveSteps = live.preview.steps.map { step in
             let mark = step.kind == "plan" ? "📋" : "⚙️"
             switch step.status {
@@ -1816,6 +1892,8 @@ final class AgentStore: ObservableObject {
         streamBuffer = ""
         thinkingBuffer = ""
         liveSteps = []
+        liveStepItems = []
+        approvalOutcome = nil
         activity = nil
         taskSnapshot = nil
     }

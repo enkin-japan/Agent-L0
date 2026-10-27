@@ -133,7 +133,16 @@ class ToolsResponse(BaseModel):
     """
     status: bool
     count: int
-    tools: List[Dict[str, Any]]  # 每项含 name / description / parameters / requires_approval
+    tools: List[Dict[str, Any]]  # 每项含 name / description / parameters / requires_approval / effect
+
+class ApprovalPolicyResponse(BaseModel):
+    """审批策略（Contract P）：read/write 两档 ∈ auto|default|ask；tools = 已注册工具的类级
+    效果分类；dynamic = 效果随实参变化的工具（shell：只读命令按 read 计）。
+    PATCH 请求体刻意不在此建模：校验唯一真相在 core/approval_policy.validate（422）。"""
+    read: str
+    write: str
+    tools: Dict[str, str]
+    dynamic: List[str]
 
 class SkillsResponse(BaseModel):
     """

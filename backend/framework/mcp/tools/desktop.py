@@ -120,6 +120,7 @@ class ClipboardReadTool(BaseTool):
         "refers to something they copied ('summarize what I just copied'); never poll it."
     )
     requires_approval = False
+    effect = "read"     # 审批策略分类：只读取，进程外无副作用
     is_concurrency_safe = True  # 只读
 
     parameters = {"properties": {}, "required": []}
@@ -204,6 +205,7 @@ class SystemStatusTool(BaseTool):
         "and uptime. Use for questions like 'how much battery/disk do I have left'."
     )
     requires_approval = False
+    effect = "read"     # 审批策略分类：只读取，进程外无副作用
     is_concurrency_safe = True  # 只读
 
     parameters = {"properties": {}, "required": []}

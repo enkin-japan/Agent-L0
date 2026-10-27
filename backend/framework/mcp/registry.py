@@ -158,6 +158,50 @@ class MCPRegistry:
             print(f"[MCP] ⚠️ 工具 {name} 审批判定异常，按需审批处理: {e}")
             return True
 
+    def effect_of(self, name: str, arguments: Dict[str, Any] = None) -> str:
+        """本次调用的效果分类："read" | "write"（审批策略的分档依据）。
+        未知工具、钩子异常、声明值不是字面 "read" —— 一律按 "write"（保守一侧）。"""
+        tool = self._tools.get(name)
+        if tool is None:
+            return "write"
+        try:
+            effect = tool.effect_for(arguments or {})
+        except Exception as e:
+            print(f"[MCP] ⚠️ 工具 {name} 效果分类异常，按 write 处理: {e}")
+            return "write"
+        return "read" if effect == "read" else "write"
+
+    def approval_required(self, name: str, arguments: Dict[str, Any], policy) -> bool:
+        """审批闸门的唯一判定（Contract P）：策略 policy[read|write] ∈ auto/default/ask。
+        - 未知工具 ⇒ 恒审批（fail closed，不论策略）；
+        - 钉死审批（approval_pinned）且工具本次要求审批 ⇒ 恒审批（"auto" 不推翻人的显式决定）；
+        - "auto" ⇒ 免审批；"ask" ⇒ 审批；
+        - "default" ⇒ 沿用 requires_approval（工具自身的静态/动态判定，build 77 行为）；
+        - 取不到档位或档位非法 ⇒ 审批。
+        """
+        tool = self._tools.get(name)
+        if tool is None:
+            return True
+        try:
+            pinned = getattr(tool, "approval_pinned", False) is True
+        except Exception as e:
+            print(f"[MCP] ⚠️ 工具 {name} 钉死审批判定异常，按需审批处理: {e}")
+            return True
+        if pinned and self.requires_approval(name, arguments):
+            return True
+        try:
+            mode = policy[self.effect_of(name, arguments)]
+        except Exception as e:
+            print(f"[MCP] ⚠️ 审批策略取值异常，按需审批处理: {e}")
+            return True
+        if mode == "auto":
+            return False
+        if mode == "ask":
+            return True
+        if mode == "default":
+            return self.requires_approval(name, arguments)
+        return True
+
     def validate_call(self, name: str, arguments: Dict[str, Any] = None) -> "str | None":
         """
         审批/执行前的参数预检（工具可选实现 validate_arguments(arguments) -> Optional[str]）。
@@ -231,9 +275,24 @@ class MCPRegistry:
                     "required": tool.parameters.get("required", []),
                 },
                 "requires_approval": tool.requires_approval,
+                "effect": self.static_effect(tool),
             }
             for tool in self._tools.values()
         ]
+
+    @staticmethod
+    def static_effect(tool: BaseTool) -> str:
+        """类级（不看实参的）效果分类，供清单展示；非字面 "read" 一律 "write"。"""
+        return "read" if getattr(tool, "effect", "write") == "read" else "write"
+
+    def dynamic_effect_tools(self) -> List[str]:
+        """覆写了 effect_for（效果随实参变化）的已注册工具名，排序。"""
+        return sorted(name for name, tool in self._tools.items()
+                      if type(tool).effect_for is not BaseTool.effect_for)
+
+    def tool_effects(self) -> Dict[str, str]:
+        """{工具名: 类级效果}（GET /api/v1/approval-policy 的 tools 映射）。"""
+        return {name: self.static_effect(tool) for name, tool in sorted(self._tools.items())}
 
     def execute_tool(self, name: str, arguments: dict) -> "tuple[str, Dict[str, Any]]":
         """核心分发逻辑：纯粹的物理调用。返回 `(给模型的文本, 渲染格 或 None)`。
