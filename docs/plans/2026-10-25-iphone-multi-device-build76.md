@@ -557,3 +557,11 @@ macOS/iOS Debug 构建通过，原生测试 432 passed，reducer 夹具 16/16。
   `apple-app/Tests/run_unpair_mutations.py`（29 个 iOS 复件变异），全跑 32/32、29/29 被杀。
 - Minor：全量数字以定稿树 3468 passed 为准；PROTOCOL §2.11 补 PATCH 仅 owner/403；§16.2 回执匹配与引用改正；README 取消配对措辞收窄。
 已发出的 build 78 含 M1（捆绑后端，仅 write=auto 时暴露）与 M2/M3 的 app 侧回归：修复过两道门与变异证明后升 build 79 重发。
+
+### 16.7 build 79 提交与发布（2026-10-27）
+- 提交 `76c529d`（20 文件，+993/−26）：§16.6 的四项修复 + 变异驱动入库，pre-commit 四门一次全过（1079 s）；修复 diff 过 reviewer
+  一遍（又改两处：RAG 临时不可达仍按冷启 2 s 轮询、只有 RAG 鉴权失败算已定；`schedule_delete` / `register_skill` 同样钉死）。
+  新变异 P-M15/P-M16、S-k/S-l/S-l2/S-l3、S-m/S-n/S-o 全红（驱动现 41 项）。已推送 origin/main。
+- macOS：Release `macos-0.16.0-79` 指向 76c529d，6 个资产（DMG + 79-74/75/76/77/78 delta），两仓 `updates` 仅 appcast，feed 列 77/78/79；
+  本机已装钉票版。iOS：归档、导出、上传 ASC 成功，等处理后 TestFlight 可见。build 78 的二进制保留在各自 Release 里，appcast 已不再指向它。
+- 教训：阶段复审应在发布前完成；本次 78 发完才审出 M1–M3，当天补发 79。
