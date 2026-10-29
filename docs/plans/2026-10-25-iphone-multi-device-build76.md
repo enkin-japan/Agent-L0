@@ -651,4 +651,7 @@ macOS/iOS Debug 构建通过，原生测试 432 passed，reducer 夹具 16/16。
   即拒绝停止，疑是 backend 计算探活 / searx 初始化的短命子进程撞上快照。shutdownSync 现把 down 的 rc 与末 40 行追加到
   `logs/sidecar-down.log`，再现时有原话。孤儿由下次启动的 reap 回收。
 - 发布机坑：macOS 无 `timeout` 命令；bundle-macos.sh 装机不公证不进 appcast，仅本机可见。
+- **提交与发布**：`261a4ee`（10 文件，+208/−13），pre-commit 四门一次全过（18 分 48 秒），已推送。macOS：Release
+  `macos-0.16.0-81` 指向 261a4ee，6 个资产（DMG + 81-76/77/78/79/80 delta），appcast 已更新，本机已装钉票版 81。
+  iOS：归档、导出、上传 ASC 成功（18:07），`wait-testflight.py 81` 轮询到 VALID，TestFlight 内部组可见。
 
