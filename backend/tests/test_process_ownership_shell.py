@@ -599,3 +599,31 @@ stop_one backend 14159 "$2" 0
     assert r.returncode != 0 and pidfile.exists()
     assert '根进程已退出' not in r.stdout
     assert 'unexpected-signal' not in r.stderr
+
+
+def test_immortal_process_after_kill_is_reported_alive(tmp_path):
+    """KILL 发出后仍存活：按 $SECONDS 墙钟观察满 5 s 才判「仍存活」，保留身份记录（2026-10-29 改墙钟后的行为用例）。"""
+    import time
+    pidfile = tmp_path / 'backend.pid'
+    pidfile.write_text('100\n')
+    Path(str(pidfile) + '.identity').write_text('v1:100:501:darwin:1000:1\n')
+    signals = tmp_path / 'signals'
+    script = r'''
+source "$1"
+edge_process_identity() { echo v1:100:501:darwin:1000:1; }
+edge_process_snapshot() { echo '100 v1:100:501:darwin:1000:1'; }
+kill() { echo "$*" >> "$SIGNALS"; return 0; }
+sleep() { command sleep 0.05; }
+listen_pids() { echo 999; }
+stop_one backend 14159 "$2" 0
+'''
+    t0 = time.monotonic()
+    r = subprocess.run(['bash', '-c', script, '_', str(LIB), str(pidfile)],
+                       env=dict(ENV, EDGE_LOG_DIR=str(tmp_path), SIGNALS=str(signals)),
+                       capture_output=True, text=True, timeout=30)
+    elapsed = time.monotonic() - t0
+    assert r.returncode != 0 and pidfile.exists()
+    assert signals.read_text().splitlines() == ['-TERM 100', '-KILL 100'], r.stderr
+    assert '仍存活' in r.stdout + r.stderr and '已停止' not in r.stdout
+    assert 4.0 <= elapsed < 12, elapsed   # $SECONDS 整秒粒度：实际窗口落在 (4, 5] s
+

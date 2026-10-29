@@ -1,0 +1,20 @@
+mode=early ready=1 after 2 s
+QUIT_ELAPSED=1.09s
+listeners after quit: 0
+12:INFO:     Shutting down
+14:INFO:     Application shutdown complete.
+15:INFO:     Finished server process [96240]
+--- sidecar-down.log tail
+[edge] 停止 backend（已验证本实例父子进程身份）
+[edge] backend 本实例进程已停止（其他端口占用者不受影响）
+[edge] 停止 SearXNG（已验证本实例父子进程身份）
+[edge] SearXNG 本实例进程已停止（其他端口占用者不受影响）
+[edge] 停止 RAG（已验证本实例父子进程身份）
+[edge] RAG 本实例进程已停止（其他端口占用者不受影响）
+[2026-10-29T08:07:32Z] down rc=0 state=starting
+[edge] 停止 backend（已验证本实例父子进程身份）
+[edge] backend 本实例进程已停止（其他端口占用者不受影响）
+[edge] SearXNG 无本实例运行记录
+[edge] 停止 RAG（已验证本实例父子进程身份）
+[edge] RAG 本实例进程已停止（其他端口占用者不受影响）
+--- pidfiles: 

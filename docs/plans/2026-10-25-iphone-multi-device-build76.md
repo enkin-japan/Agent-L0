@@ -620,18 +620,21 @@ macOS/iOS Debug 构建通过，原生测试 432 passed，reducer 夹具 16/16。
   用户已手动结束。
 
 ### 17.6 build 80 提交与发布（2026-10-29）
-- 提交 `605aaa9`（15 文件：§17.5 列的 14 个 + `apple-app/project.yml` 79→80），sectioned message 记第二道门读法（ServiceStatus /
+- 提交 `605aaa9`（15 文件：PROTOCOL.md、apple-app/README.md、ServiceStatus/MacAgentApp/AgentStore/ChatView/RootView/
+  SessionListView、recovery_transport_test.swift、backend/app.py、test_compute_readiness_split/test_native_recovery_transport/
+  test_native_service_status、本计划，加 `apple-app/project.yml` 79→80），sectioned message 记第二道门读法（ServiceStatus /
   AgentStore / app.py 逐行，其余按摘要）与变异 6/6。pre-commit 四门一次全过（backend 3547 / colab 130 / web 252 / apple 16，1127 s）。
   已推送 origin/main。
 - macOS：`release-macos.sh` 一次通过，Release `macos-0.16.0-80` 指向 605aaa9，6 个资产（DMG + 80-75/76/77/78/79 delta），appcast 已更新；
-  本机 /Applications/MacAgent.app 已重装钉票版（CFBundleVersion 80）。发布说明 `releases/notes-80.md`（gitignored）。
+  本机 /Applications/MacAgent.app 已重装钉票版（CFBundleVersion 80）。发布说明 `apple-app/releases/notes-80.md`（gitignored）。
 - iOS：`release-ios.sh` 归档、导出、上传 ASC 成功（12:41），`wait-testflight.py 80` 轮询到 VALID，TestFlight 内部组已可见。
 - 真机确认项仍是 §17.5 那四条，装好 80 后由用户过一遍。
 
 ### 17.7 build 81：三色按钮真正回归 + ⌘Q 退出 7.0 s → 1.2 s（2026-10-29）
 - **80 的三色按钮没出来**：RootView 残留 `.toolbar(.hidden, for: .windowToolbar)`，hiddenTitleBar 下它把系统三色按钮一并抹掉；
-  80 只验了编译与测试没看真窗口。最小 SwiftUI 探针（scratchpad titleprobe）实测：带该句不画按钮，去掉即回来；探针还量到
-  SwiftUI 给了 32 pt 顶部安全区，故 `titleBarClearance` 实际为 0。已删该句并在两处注释钉死，`test_native_layout_contract`
+  80 只验了编译与测试没看真窗口。最小 SwiftUI 探针（`benchmarks/titleprobe/`，含两张截图与文字输出）实测：带该句不画按钮，去掉即回来——
+  结论只由截图区分，AppKit 层两种情况都报按钮 hidden=false；探针还量到 SwiftUI 给了 32 pt 顶部安全区，故
+  `titleBarClearance` 实际为 0。已删该句并在两处注释钉死，`test_native_layout_contract`
   新增守卫。先按用户要求 bundle-macos.sh 装到本机看过再发。
 - **「后端已连接」两三秒是真的**：backend.log 显示启动后计算端域名（tailnet）解析即刻失败 → `compute_node_state` 立刻定格
   unreachable，首个 /health 即满足「已鉴权 + 已定格」。不是谎报；计算端栏承载故障。
@@ -641,8 +644,12 @@ macOS/iOS Debug 构建通过，原生测试 432 passed，reducer 夹具 16/16。
   修法：`AgentStore.prepareForTermination`（取消五个监听 Task + `AgentClient.cancelInFlightRequests` 即
   `session.getAllTasks` 逐个 cancel，不作废 session——reviewer M1：退出途中仍有协程在同一 session 发请求，对已作废 session
   建任务抛 NSGenericException）→ 再 `shutdownSync`；`stop_one` 改 0.2 s 轮询、宽限按 `$SECONDS` 墙钟截止（reviewer m1：
-  tick 计数会被 python 启动开销拉长）。**修后 1.20 s（全就绪）/ 1.09 s（启动中）/ 1.17 s（searx 拉起未就绪）**，三次均
-  无孤儿、无 "Cancel" 行。`test_native_quit_path` 钉顺序/取消方式/轮询粒度/墙钟宽限，附四个内存变异用例。
+  tick 计数会被 python 启动开销拉长）。**修后 1.20 s（本机三服务就绪、引擎未装配——计算端域名不可达，故不含引擎释放路径）/ 1.09 s（启动中）/
+  1.17 s（searx 拉起未就绪）**，三次均无孤儿、无 "Cancel" 行。口径与原始输出：`benchmarks/quit_measure.sh`、
+  `benchmarks/reports/2026-10-29-quit-timing.md`（7.00 与 1.20 两条转录自会话工具输出、未留原始文件；1.09 / 1.17 原样入库；
+  阶段复审后复测全就绪 1.26 s 由脚本直接写入）。`test_native_quit_path` 钉顺序/取消方式/轮询粒度/墙钟宽限，附五个内存变异用例（顺序互换 / 去掉取消 / 改回 invalidate /
+  1 s 轮询 / tick 宽限；261a4ee 提交信息误写「四个」）。verifier 跑的「三个 swiftc 单编原生用例（109）」= test_native_service_status +
+  test_native_recovery_transport + test_native_task_control。
 - reviewer 首审：M1 采纳（改 getAllTasks）；M2 注释理由错误（waitUntilExit 转 run loop、Task.cancel 同步传播）已改正；
   m1/m2/m4 采纳；m3 残留：RetierMonitor.startRebuild（URLSession.shared，35 s）与 PhoneLink 轮询的短请求退出时不断，
   极窄窗口下仍会等 5 s。n1 残留：SidecarManager.down()（设置页「停止执行层」）不断 SSE，照等 5 s。
@@ -651,7 +658,28 @@ macOS/iOS Debug 构建通过，原生测试 432 passed，reducer 夹具 16/16。
   即拒绝停止，疑是 backend 计算探活 / searx 初始化的短命子进程撞上快照。shutdownSync 现把 down 的 rc 与末 40 行追加到
   `logs/sidecar-down.log`，再现时有原话。孤儿由下次启动的 reap 回收。
 - 发布机坑：macOS 无 `timeout` 命令；bundle-macos.sh 装机不公证不进 appcast，仅本机可见。
-- **提交与发布**：`261a4ee`（10 文件，+208/−13），pre-commit 四门一次全过（18 分 48 秒），已推送。macOS：Release
+- **提交与发布**：`261a4ee`（10 文件，+208/−13），pre-commit 四门一次全过（1125 s，commit81.log），已推送。macOS：Release
   `macos-0.16.0-81` 指向 261a4ee，6 个资产（DMG + 81-76/77/78/79/80 delta），appcast 已更新，本机已装钉票版 81。
   iOS：归档、导出、上传 ASC 成功（18:07），`wait-testflight.py 81` 轮询到 VALID，TestFlight 内部组可见。
+- §17.5 四条真机项判决：① 三色按钮与 Logo 行间距——用户真机确认 + Debug 截图；② 聊天头不被拖拽条压住——截图里聊天头
+  控件在顶部约 80 pt 处，拖拽条 32 pt，不重叠；③ 红点关窗后进程常驻、再次打开复现——build 81 实测（File → Close 后进程在、
+  无主窗口；`open -a` 等同点 Dock 后主窗口复现）；④ 计算端未启动时「后端已连接」——用户真机确认。
+
+### 17.8 阶段复审（build 80 + 81，a649225..c2d0a99；2026-10-29）
+- stage-reviewer：0 Critical / 1 Major / 5 Minor / 4 Nit。Major M1（测量脚本与探针只在会话 scratchpad，7.00 与 1.20 无原始件）
+  经 skeptic 降为 Minor：结论本身有截图与 1.09/1.17 原始件支持，缺的是当天入库。处置：quit_measure.sh、titleprobe（源码 +
+  两张截图 + 文字输出）、两份原始运行记录入 benchmarks/，报告注明哪两条是转录；复测一次全就绪（1.26 s）由脚本直接落盘。
+- m1 README 口径过头：本机 RAG 数据面起不来（rag_state=unreachable）不算定格，仍「后端启动中（等待检索服务）」并快轮询——
+  README 已加限定；**残留**：是否该把 RAG 数据面不可达也算定格，待定。
+- m2 四条真机项只判了两条——已补判（见 §17.7 末）。m3 布局守卫只扫 RootView、无变异证明——改扫整棵 Swift 源树（.toolbar /
+  .toolbarVisibility 两种写法），变异表 +5（RootView 重加旧句 / ChatView 用 toolbarVisibility / 去掉 hiddenTitleBar / 具名文件之外藏一句 /
+  `for: .navigationBar, .windowToolbar` 可变参数写法——后两条是 build 82 首审补的）。
+  m4 quit_path 钉得窄——补钉五个 Task 的 cancel 与 `$SECONDS` 起点，变异 +2；KILL 后「仍存活」分支补行为用例
+  （test_process_ownership_shell::test_immortal_process_after_kill_is_reported_alive，墙钟 4–5 s）。m5 「全就绪 1.20 s」
+  未含引擎装配——措辞已改。m6 测试计数无文件名——已补。
+- n1「四个变异」实为五个（已改）；n2 文件清单 / notes 路径 / 1125 s（已改）；n3 `$SECONDS` 整秒粒度使宽限落在
+  (grace−1, grace]（记档不改）；n4 sidecar-down.log 的 FileHandle 改抛错版 API、时间戳改本地时区（已改）。
+- 复审确认无问题的面：app.py cancelling 守卫不改正常失败路径；ServiceStatus 新旧式等价、iOS 不受影响；down 路径不输出密钥、
+  logs/ 被 gitignore 且不进 bundle；整段 diff 密扫为空；门禁数字与日志一致。
+- 以上修补随 build 82 一起提交发布（用户 2026-10-29 授权：复审完成后直接推送发布）。
 

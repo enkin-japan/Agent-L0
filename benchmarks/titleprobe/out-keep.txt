@@ -1,0 +1,4 @@
+WINDOWID 60418 styleMask=32783 titleVisibility=1 titlebarTransparent=true toolbar=false
+BTN0 hidden=false alpha=1.0 inWindow=true superHidden=false frame=(9.0, 9.0, 14.0, 14.0)
+BTN1 hidden=false alpha=1.0 inWindow=true superHidden=false frame=(32.0, 9.0, 14.0, 14.0)
+BTN2 hidden=false alpha=1.0 inWindow=true superHidden=false frame=(55.0, 9.0, 14.0, 14.0)

@@ -31,8 +31,11 @@ def assert_quit_contract(app, store, client, lib):
     assert j >= 0, "shutdownSync not called on quit"
     assert i < j, "long connections must be dropped before sidecar down blocks the main thread"
     assert "MacAppDelegate.store = store" in app, "delegate has no store reference"
-    assert "func prepareForTermination()" in store
-    assert re.search(r"func prepareForTermination\(\)\s*\{[^}]*client\?\.cancelInFlightRequests\(\)", store, re.S), \
+    prep = re.search(r"func prepareForTermination\(\)\s*\{(.*?)\n    \}", store, re.S)
+    assert prep, "prepareForTermination missing"
+    for task in ("monitorTask", "connMonitorTask", "attachTask", "recoveryTask", "historySyncTask"):
+        assert f"{task}?.cancel()" in prep.group(1), f"{task} not cancelled on quit (it would reopen a stream)"
+    assert "client?.cancelInFlightRequests()" in prep.group(1), \
         "prepareForTermination must cancel the client's in-flight requests (the SSE socket stays open otherwise)"
     assert re.search(r"func cancelInFlightRequests\(\)\s*\{\s*session\.getAllTasks \{ tasks in tasks\.forEach \{ \$0\.cancel\(\) \} \}", client), \
         "cancelInFlightRequests must cancel tasks without invalidating the session"
@@ -40,6 +43,8 @@ def assert_quit_contract(app, store, client, lib):
         "never invalidate the shared session: a request issued during quit would throw NSGenericException"
     # stop_one: 0.2 s poll, grace measured on the wall clock (not tick counts), 5 s post-KILL window
     assert '[ $((SECONDS - started)) -lt "$grace" ]' in lib, "TERM grace must be a wall-clock deadline in seconds"
+    assert "local started=$SECONDS alive" in lib and lib.count("started=$SECONDS") >= 2, \
+        "grace windows must start from the wall clock ($SECONDS), not a constant"
     assert lib.count("        sleep 0.2\n") == 2, "stop_one must poll at 0.2 s granularity"
     assert "if [ $((SECONDS - started)) -ge 5 ]; then" in lib, "post-KILL observation window must stay 5 s"
 
@@ -117,3 +122,28 @@ def test_mutation_tick_grace_fails():
         assert "wall-clock" in str(e)
     else:
         raise AssertionError("tick grace survived")
+
+
+def test_mutation_task_not_cancelled_fails():
+    s = _sources()
+    store = s["store"].replace("        monitorTask?.cancel(); monitorTask = nil\n", "")
+    assert store != s["store"]
+    try:
+        assert_quit_contract(s["app"], store, s["client"], s["lib"])
+    except AssertionError as e:
+        assert "monitorTask not cancelled" in str(e)
+    else:
+        raise AssertionError("uncancelled monitorTask survived")
+
+
+def test_mutation_constant_start_fails():
+    s = _sources()
+    lib = s["lib"].replace("local started=$SECONDS alive", "local started=0 alive")
+    assert lib != s["lib"]
+    try:
+        assert_quit_contract(s["app"], s["store"], s["client"], lib)
+    except AssertionError as e:
+        assert "wall clock" in str(e)
+    else:
+        raise AssertionError("constant start survived")
+

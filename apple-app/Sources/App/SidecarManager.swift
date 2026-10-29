@@ -171,11 +171,15 @@ final class SidecarManager: ObservableObject {
         let code = run.wait()
         // 退出路径没有人看 state，down 的原话只在这里留痕（2026-10-29：退出后 backend/searx
         // 留孤儿却无从得知 down 说了什么）。只追加末 40 行，不含密钥（lib 输出本就不回显密钥）。
-        let stamp = ISO8601DateFormatter().string(from: Date())
+        let fmt = ISO8601DateFormatter()
+        fmt.timeZone = .current   // 与 edge 日志同用本地时间，对照不易看错
+        let stamp = fmt.string(from: Date())
         let entry = "[\(stamp)] down rc=\(code) state=\(state)\n" + run.outputTail(lines: 40) + "\n"
         let url = layout.logDir.appendingPathComponent("sidecar-down.log")
+        // 全部走抛错版 API：旧式 seekToEndOfFile/write(_:) 遇 I/O 错误抛 ObjC 异常，会把 app 崩在退出路上。
         if let h = try? FileHandle(forWritingTo: url) {
-            h.seekToEndOfFile(); h.write(Data(entry.utf8)); try? h.close()
+            if (try? h.seekToEnd()) != nil { try? h.write(contentsOf: Data(entry.utf8)) }   // 定位失败就不写，免得盖掉开头
+            try? h.close()
         } else {
             try? Data(entry.utf8).write(to: url)
         }
