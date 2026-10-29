@@ -682,4 +682,7 @@ macOS/iOS Debug 构建通过，原生测试 432 passed，reducer 夹具 16/16。
 - 复审确认无问题的面：app.py cancelling 守卫不改正常失败路径；ServiceStatus 新旧式等价、iOS 不受影响；down 路径不输出密钥、
   logs/ 被 gitignore 且不进 bundle；整段 diff 密扫为空；门禁数字与日志一致。
 - 以上修补随 build 82 一起提交发布（用户 2026-10-29 授权：复审完成后直接推送发布）。
+- **build 82 提交与发布**：`26ed43d`（17 文件），pre-commit 四门一次全过（1129 s），已推送。macOS：Release `macos-0.16.0-82`
+  指向 26ed43d，6 个资产（DMG + 82-77/78/79/80/81 delta），appcast 已更新，本机已装钉票版 82。iOS：归档、导出、上传 ASC 成功
+  （19:34），`wait-testflight.py 82` 轮询到 VALID，TestFlight 内部组可见。阶段（80/81/82）收官。
 
