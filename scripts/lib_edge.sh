@@ -490,15 +490,18 @@ stop_one() {  # 名称, 端口, pidfile, 宽限秒
         current="$(edge_process_identity "$p")" || continue
         [ "$current" = "$identity" ] && kill -TERM "$p" 2>/dev/null
     done <<< "$snapshot"
-    local waited=0 alive
-    while [ "$waited" -lt "$grace" ]; do
+    # 0.2 s 粒度轮询、宽限按墙钟截止（grace 仍以秒计）：服务通常在 TERM 后几十毫秒内退出，
+    # 1 s 粒度让每个服务白等近 1 s，三个服务串行就是 ~3 s 的 ⌘Q 卡顿（2026-10-29）。
+    # 不按 tick 计数：每 tick 对每个 pid 起一次 python 核身份，计数会把宽限悄悄拉长。
+    local started=$SECONDS alive
+    while [ $((SECONDS - started)) -lt "$grace" ]; do
         alive=0
         while read -r p identity; do
             current="$(edge_process_identity "$p")" || continue
             [ "$current" = "$identity" ] && alive=1
         done <<< "$snapshot"
         [ "$alive" = 0 ] && break
-        sleep 1; waited=$((waited + 1))
+        sleep 0.2
     done
     while read -r p identity; do
         current="$(edge_process_identity "$p")" || continue
@@ -511,7 +514,7 @@ stop_one() {  # 名称, 端口, pidfile, 宽限秒
         fi
     done <<< "$snapshot"
     # KILL 成功只表示信号已发送，退出仍须观察；身份读取失败不能冒充退出。
-    waited=0
+    started=$SECONDS
     while :; do
         alive=0
         while read -r p identity; do
@@ -524,11 +527,11 @@ stop_one() {  # 名称, 端口, pidfile, 宽限秒
             [ "$current" = "$identity" ] && alive=1
         done <<< "$snapshot"
         [ "$alive" = 0 ] && break
-        if [ "$waited" -ge 5 ]; then
+        if [ $((SECONDS - started)) -ge 5 ]; then
             fail "$name 已发送停止信号，但本实例仍存活，保留身份记录"
             return 1
         fi
-        sleep 1; waited=$((waited + 1))
+        sleep 0.2
     done
     # 与 spawn 的发布共享锁，CAS 比较到删除之间不能插入新代写入。
     _edge_process_record delete "$pidfile" "$recorded_pid" "$recorded_identity" || {

@@ -25,6 +25,9 @@ def assert_layout_contract(files):
     assert not re.search(r"\bNavigationSplitView\s*[{(]", root), "system split view reintroduced"
     assert re.search(r"HStack\(spacing: 0\).*?SessionListView\(\).*?\.frame\(width: 260\)", root, re.S), "fixed sidebar missing"
     assert ".frame(minWidth: 760, minHeight: 480)" in root, "root minimum size missing"
+    # hiddenTitleBar 下隐藏窗口工具栏会连系统三色按钮一起抹掉（build 80 回归，2026-10-29 探针实测）
+    assert ".toolbar(.hidden, for: .windowToolbar)" not in root, "window toolbar hidden again: traffic lights vanish"
+    assert ".windowStyle(.hiddenTitleBar)" in app, "hidden title bar style missing"
     assert "store.showInspector ? 960 : 760" in app, "inspector minimum width missing"
     assert ".navigationDestination(item: chatRoute)" in root, "iOS item route missing"
     assert re.search(r"set: \{ route in\s*if route == nil \{\s*store.selectedSessionId = nil", root), "iOS pop binding missing"

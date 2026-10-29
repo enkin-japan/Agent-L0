@@ -161,12 +161,24 @@ final class SidecarManager: ObservableObject {
         }
     }
 
-    /// app 退出路径（applicationShouldTerminate 里同步等待）。
+    /// app 退出路径（applicationWillTerminate 里同步等待，主线程阻塞到脚本退出；
+    /// 调用前 AgentStore.prepareForTermination 已断掉本 app 的长连）。
     /// 只收自己拉起的：external 状态下一个进程都不碰。
     func shutdownSync() {
         guard let layout, state == .running || state == .starting else { return }
         cancelWatchers()
-        _ = try? runLib(layout, command: "down").wait()
+        guard let run = try? runLib(layout, command: "down") else { return }
+        let code = run.wait()
+        // 退出路径没有人看 state，down 的原话只在这里留痕（2026-10-29：退出后 backend/searx
+        // 留孤儿却无从得知 down 说了什么）。只追加末 40 行，不含密钥（lib 输出本就不回显密钥）。
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let entry = "[\(stamp)] down rc=\(code) state=\(state)\n" + run.outputTail(lines: 40) + "\n"
+        let url = layout.logDir.appendingPathComponent("sidecar-down.log")
+        if let h = try? FileHandle(forWritingTo: url) {
+            h.seekToEndOfFile(); h.write(Data(entry.utf8)); try? h.close()
+        } else {
+            try? Data(entry.utf8).write(to: url)
+        }
     }
 
     // MARK: - up / down / 监护

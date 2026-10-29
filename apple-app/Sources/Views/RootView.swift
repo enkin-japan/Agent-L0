@@ -85,7 +85,8 @@ struct RootView: View {
                 .environment(\.titleBarClearance, max(0, hiddenTitleBarHeight - geo.safeAreaInsets.top))
             }
             .frame(minWidth: 760, minHeight: 480)
-            .toolbar(.hidden, for: .windowToolbar)
+            // 不要再加 .toolbar(.hidden, for: .windowToolbar)：hiddenTitleBar 下它会把系统
+            // 三色按钮一并抹掉（2026-10-29 探针实测：加了按钮不画，去掉即回来）。
         }
         #endif
     }

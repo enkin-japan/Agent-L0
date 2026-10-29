@@ -44,6 +44,16 @@ final class AgentClient {
         self.session = URLSession(configuration: config)
     }
 
+    /// app 退出前调用：显式取消本 session 上所有在途请求（含 /events SSE 长连），
+    /// 让 backend 侧的连接立刻断开——uvicorn 优雅停机只等在途请求，连接一断就不再等
+    /// timeout_graceful_shutdown（5 s）。不作废 session：退出途中仍可能有协程在同一
+    /// session 上发新请求（离线资产同步、历史同步、连接探测），对已作废 session 建任务
+    /// 会抛 NSGenericException 把 app 崩在退出路上（reviewer 首审 M1）。
+    /// getAllTasks 的回调在 session 自己的队列上执行，不依赖调用线程继续转。
+    func cancelInFlightRequests() {
+        session.getAllTasks { tasks in tasks.forEach { $0.cancel() } }
+    }
+
     // MARK: - 请求构造
 
     private func request(_ method: String, _ path: String, json: Encodable? = nil,

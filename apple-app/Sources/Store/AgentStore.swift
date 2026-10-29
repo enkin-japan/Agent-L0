@@ -306,6 +306,20 @@ final class AgentStore: ObservableObject {
     /// 通知去重：同一会话 30s 内只报一次（自发轮次与全局监听两条路径都会命中完结）。
     private var notifiedAt: [String: Date] = [:]
 
+    /// 进程退出前（macOS applicationWillTerminate）：先断自己握着的所有长连，再让 sidecar 收摊。
+    /// 否则 backend 停机时还挂着本 app 的 /api/v1/events SSE，uvicorn 要等满
+    /// timeout_graceful_shutdown（5 s）才取消它——用户感知的「⌘Q 卡几秒」主因（2026-10-29 实测 7.0 s）。
+    /// 先取消会重连的监听 Task（否则流一断它们会立刻再开一条），再显式取消 session 上的在途请求。
+    /// 调用顺序必须在 SidecarManager.shutdownSync 之前，见 MacAppDelegate.applicationWillTerminate。
+    func prepareForTermination() {
+        monitorTask?.cancel(); monitorTask = nil
+        connMonitorTask?.cancel(); connMonitorTask = nil
+        attachTask?.cancel(); attachTask = nil
+        recoveryTask?.cancel(); recoveryTask = nil
+        historySyncTask?.cancel(); historySyncTask = nil
+        client?.cancelInFlightRequests()
+    }
+
     // ---- 附着流簿记（单附着策略：只对选中会话保持一条 /events 长连） ----
     private var attachTask: Task<Void, Never>?
     private var attachmentId: UUID?

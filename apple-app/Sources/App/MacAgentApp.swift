@@ -18,6 +18,7 @@ import Sparkle
 final class MacAppDelegate: NSObject, NSApplicationDelegate {
     static weak var sidecar: SidecarManager?
     static weak var retier: RetierMonitor?
+    static weak var store: AgentStore?
 
     /// 执行层生命周期随 **app 进程**（R5-4 修）：启动时触发一次，与窗口无关——
     /// 挂在窗口 `.task` 上会随窗口重开重入，reap 误杀本代健在服务→凭空重启。
@@ -36,8 +37,14 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // willTerminate 在主线程回调；shutdownSync 是 @MainActor，直接借道
-        MainActor.assumeIsolated { Self.sidecar?.shutdownSync() }
+        // willTerminate 在主线程回调；两者都是 @MainActor，直接借道。
+        // 顺序钉死：先断 app 自己的 SSE 长连（否则 backend 停机要等满 5 s 优雅超时），
+        // 再同步等 sidecar 收摊（waitUntilExit 期间 run loop 仍转，主线程续体照常执行）。
+        // test_native_quit_path 钉住这个顺序。
+        MainActor.assumeIsolated {
+            Self.store?.prepareForTermination()
+            Self.sidecar?.shutdownSync()
+        }
     }
 
     /// 红点 / ⌘W 只关窗口：进程留在菜单栏常驻（MenuBarExtra），⌘Q 或菜单栏「退出」才退出。
@@ -125,6 +132,7 @@ struct MacAgentApp: App {
         }
         _sidecar = StateObject(wrappedValue: sidecar)
         MacAppDelegate.sidecar = sidecar
+        MacAppDelegate.store = store
         let retier = RetierMonitor()
         retier.configure(settings: settings)
         _retier = StateObject(wrappedValue: retier)
@@ -254,7 +262,7 @@ struct MacAgentApp: App {
         #if os(macOS)
         // 标题栏隐藏、内容通顶：系统三色按钮（关闭 / 最小化 / 全屏）留在左上角原生位置，
         // 悬停符号、⌥缩放、全屏退出全由系统包办；侧栏头部为按钮让位见 SessionListView.sidebarHeader。
-        // 工具栏早已隐藏（RootView），此前整条标题栏连同三色按钮一起没了。
+        // RootView 不得再隐藏窗口工具栏：hiddenTitleBar 下那一句会连三色按钮一起抹掉（build 80 复现）。
         .windowStyle(.hiddenTitleBar)
         .commands {
             // 惯例位置：应用菜单「关于」之后

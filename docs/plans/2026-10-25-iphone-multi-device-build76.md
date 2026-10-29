@@ -627,3 +627,28 @@ macOS/iOS Debug 构建通过，原生测试 432 passed，reducer 夹具 16/16。
   本机 /Applications/MacAgent.app 已重装钉票版（CFBundleVersion 80）。发布说明 `releases/notes-80.md`（gitignored）。
 - iOS：`release-ios.sh` 归档、导出、上传 ASC 成功（12:41），`wait-testflight.py 80` 轮询到 VALID，TestFlight 内部组已可见。
 - 真机确认项仍是 §17.5 那四条，装好 80 后由用户过一遍。
+
+### 17.7 build 81：三色按钮真正回归 + ⌘Q 退出 7.0 s → 1.2 s（2026-10-29）
+- **80 的三色按钮没出来**：RootView 残留 `.toolbar(.hidden, for: .windowToolbar)`，hiddenTitleBar 下它把系统三色按钮一并抹掉；
+  80 只验了编译与测试没看真窗口。最小 SwiftUI 探针（scratchpad titleprobe）实测：带该句不画按钮，去掉即回来；探针还量到
+  SwiftUI 给了 32 pt 顶部安全区，故 `titleBarClearance` 实际为 0。已删该句并在两处注释钉死，`test_native_layout_contract`
+  新增守卫。先按用户要求 bundle-macos.sh 装到本机看过再发。
+- **「后端已连接」两三秒是真的**：backend.log 显示启动后计算端域名（tailnet）解析即刻失败 → `compute_node_state` 立刻定格
+  unreachable，首个 /health 即满足「已鉴权 + 已定格」。不是谎报；计算端栏承载故障。
+- **⌘Q 退出慢**（用户在意已久）。scout 梳理链路：`applicationWillTerminate` 主线程同步等 `lib_edge.sh down`；app 的
+  `/api/v1/events` SSE 没断 → backend 必等满 uvicorn `timeout_graceful_shutdown=5`（日志 "Cancel 1 running task(s)"）；
+  `stop_one` 三个服务串行 1 s 粒度轮询、每 tick 起 python 核身份。实测（已装 81、quit-measure.sh）：**修前 7.00 s**。
+  修法：`AgentStore.prepareForTermination`（取消五个监听 Task + `AgentClient.cancelInFlightRequests` 即
+  `session.getAllTasks` 逐个 cancel，不作废 session——reviewer M1：退出途中仍有协程在同一 session 发请求，对已作废 session
+  建任务抛 NSGenericException）→ 再 `shutdownSync`；`stop_one` 改 0.2 s 轮询、宽限按 `$SECONDS` 墙钟截止（reviewer m1：
+  tick 计数会被 python 启动开销拉长）。**修后 1.20 s（全就绪）/ 1.09 s（启动中）/ 1.17 s（searx 拉起未就绪）**，三次均
+  无孤儿、无 "Cancel" 行。`test_native_quit_path` 钉顺序/取消方式/轮询粒度/墙钟宽限，附四个内存变异用例。
+- reviewer 首审：M1 采纳（改 getAllTasks）；M2 注释理由错误（waitUntilExit 转 run loop、Task.cancel 同步传播）已改正；
+  m1/m2/m4 采纳；m3 残留：RetierMonitor.startRebuild（URLSession.shared，35 s）与 PhoneLink 轮询的短请求退出时不断，
+  极窄窗口下仍会等 5 s。n1 残留：SidecarManager.down()（设置页「停止执行层」）不断 SSE，照等 5 s。
+- **残留（未修，已留痕）**：装机后第一次实测在 searx 刚拉起时退出，backend/searx 各留一个孤儿（记录与实时身份一致，手动
+  `down` 可停），rag 已停；之后三次同窗口复现均干净。`_edge_owned_snapshot` 的语义是快照期间任一后代消失（tree 模式 rc 3）
+  即拒绝停止，疑是 backend 计算探活 / searx 初始化的短命子进程撞上快照。shutdownSync 现把 down 的 rc 与末 40 行追加到
+  `logs/sidecar-down.log`，再现时有原话。孤儿由下次启动的 reap 回收。
+- 发布机坑：macOS 无 `timeout` 命令；bundle-macos.sh 装机不公证不进 appcast，仅本机可见。
+
