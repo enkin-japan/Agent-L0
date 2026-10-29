@@ -55,14 +55,27 @@ struct BackendConnectionStatus {
         }
     }
 
-    /// Authenticated, but the backend says its engine is not installed yet.
-    /// nil field (older backend) never reports "starting".
-    var engineStarting: Bool {
-        access == .authenticated && health?.engineReady == false
+    /// A failure the backend has settled on while the engine is not installed: the compute
+    /// node is unreachable / rejects the key, or the RAG data plane rejects the key. The
+    /// backend retries those on its own backoff, so they are a terminal display state, not
+    /// "starting". rag_state "unreachable" is not settled: a local RAG that is not up yet
+    /// is the normal cold start. "local" / nil / unknown node values are not failures.
+    private var settledFailure: Bool {
+        ["unreachable", "unauthorized"].contains(health?.computeNodeState ?? "")
+            || health?.ragState == "unauthorized"
     }
 
-    /// Data-plane qualifier for the 「后端启动中」 label: only the two failure values the
-    /// backend reports are surfaced; "ready" / "probing" / "skipped" / unknown ⇒ nil.
+    /// Authenticated, the backend says its engine is not installed yet, and nothing has
+    /// settled as a failure (PROTOCOL §2.10): a settled failure shows 「后端已连接」 and the
+    /// compute label / RAG qualifier carry the fault. nil field (older backend) never
+    /// reports "starting".
+    var engineStarting: Bool {
+        access == .authenticated && health?.engineReady == false && !settledFailure
+    }
+
+    /// Data-plane qualifier for the backend label while the engine is not installed: only
+    /// the two failure values the backend reports are surfaced; "ready" / "probing" /
+    /// "skipped" / unknown ⇒ nil.
     var ragNotice: String? {
         switch health?.ragState {
         case "unreachable": return "unreachable"
@@ -72,18 +85,11 @@ struct BackendConnectionStatus {
     }
 
     /// Still coming up: authenticated and either the first node probe has not answered, or
-    /// the engine is not installed yet while nothing has settled as a permanent failure.
-    /// A settled node failure (compute_node_state unreachable / unauthorized) or a rejected
-    /// RAG key (rag_state unauthorized) is not "starting" even while engine_ready is false —
-    /// the backend retries those on its own backoff, so fast-polling them would be 2 s
-    /// forever. rag_state "unreachable" is not settled: a local RAG that is not up yet is the
-    /// normal cold start and keeps the 2 s cadence. Older backends that omit the fields are
-    /// not "starting" either.
+    /// the engine is still starting (`engineStarting`, same settled-failure criterion) — a
+    /// settled failure is retried on the backend's own backoff, so fast-polling it would be
+    /// 2 s forever. Older backends that omit the fields are not "starting" either.
     var stillStarting: Bool {
-        access == .authenticated && (health?.computeNodeState == "probing"
-            || (health?.engineReady == false
-                && !["unreachable", "unauthorized"].contains(health?.computeNodeState ?? "")
-                && health?.ragState != "unauthorized"))
+        access == .authenticated && (health?.computeNodeState == "probing" || engineStarting)
     }
 
     /// Monitor cadence: 2 s while offline or still starting; 15 s for every settled state.

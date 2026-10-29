@@ -612,7 +612,12 @@ rag_state           skipped | probing | ready | unreachable | unauthorized
 连续失败阈值翻转,两者在稳态永不相悖(单次丢包不闪)。三项是信息字段,不是闸门:503 闸仍只看
 `compute_ready`。装配前只差本机 RAG(回环地址)时按 2 s 固定间隔重试,最多 120 s,之后回到 2→30 s
 退避;RAG 地址非回环或鉴权失败一律走退避。客户端口径:算力端标签只看 `compute_node_state`;
-后端标签在可达但 `engine_ready=false` 时显示"后端启动中"(`rag_state=unreachable` 附注等待检索服务)。
+后端标签在可达、`engine_ready=false` 且故障尚未定格时显示"后端启动中"(`rag_state=unreachable`
+附注等待检索服务);定格失败——`compute_node_state ∈ {unreachable, unauthorized}` 或
+`rag_state=unauthorized`——时后端标签回到"后端已连接",故障由算力端标签(或检索附注)承载,
+判据与 2 s 快轮询的退出判据相同(2026-10-29 修订:此前 `engine_ready` 单独决定标签,算力端
+起不来时后端标签永远"启动中",没有终态)。`compute_node_state` 还须有终态:远端地址缺失或
+端口非法这类装配前就失败的情形报 `unreachable`,不得停在 `probing`。
 
 ### 2.11 审批策略:按工具效果分两类统一控制(additive,2026-10-27;不改既有事件语义,不升版本)
 

@@ -551,7 +551,13 @@ async def lifespan(app: FastAPI):
         global MODEL, MODEL_REVISION, MODEL_OPTIONS, _model_source
         resources = {}
         try:
-            require_remote_inference_host(config)
+            try:
+                require_remote_inference_host(config)
+            except SystemExit:
+                # 装配前就定格的失败（地址缺失）也要给 compute_node_state 一个终态：
+                # 否则 /health 永远 probing，app 的快轮询与「启动中」标签都退不出来。
+                app.state.compute_node_state = "unreachable"
+                raise
             # 推理承载（B1）先于路径解析定夺：mode=remote 时本进程只当编排端，权重在设备 A 的
             # inference-server 里——这里若走全量 resolve_model_path，edge 机会照样拉满 4.9G，
             # devctl 的 --tokenizer-only 预取也拦不住（那只让分词器先到位，全量解析看的是
@@ -575,6 +581,7 @@ async def lifespan(app: FastAPI):
                 try:
                     _port = int(_rm.get("port", 14161))
                 except (TypeError, ValueError):
+                    app.state.compute_node_state = "unreachable"   # 端口非法同属定格失败，不得停在 probing
                     raise SystemExit(f"❌ [backend] inference.remote.port 不是数值：{_rm.get('port')!r}")
                 _base = f"http://{str(_rm.get('host') or '').strip()}:{_port}"
                 try:
@@ -800,6 +807,11 @@ async def lifespan(app: FastAPI):
                 # 永远在讲收摊的那个异常，没人知道装配为什么失败）。
                 print(f"[App] 装配失败后的收摊出错（{type(cleanup_exc).__name__}）；"
                       f"保留原始装配错误")
+            # finish_task 刻意吞掉取消、坚持把收摊 join 完：落在这一下的 stop() 取消已被消费。
+            # 这里把它还原成 CancelledError（先于下面的 SystemExit 转换），否则装配错误被 _run
+            # 当普通失败接住进入重试，3.13 不会重投取消，重试循环永不结束、stop() 永远等。
+            if asyncio.current_task().cancelling():
+                raise asyncio.CancelledError
             if isinstance(exc, SystemExit):
                 raise RuntimeError(str(exc)) from exc  # Bad compute config cannot exit the data service.
             raise

@@ -565,3 +565,57 @@ macOS/iOS Debug 构建通过，原生测试 432 passed，reducer 夹具 16/16。
 - macOS：Release `macos-0.16.0-79` 指向 76c529d，6 个资产（DMG + 79-74/75/76/77/78 delta），两仓 `updates` 仅 appcast，feed 列 77/78/79；
   本机已装钉票版。iOS：归档、导出、上传 ASC 成功，等处理后 TestFlight 可见。build 78 的二进制保留在各自 Release 里，appcast 已不再指向它。
 - 教训：阶段复审应在发布前完成；本次 78 发完才审出 M1–M3，当天补发 79。
+
+## 17. 窗口三色按钮 + 「后端启动中」终态（2026-10-29）
+
+### 17.1 问题（用户提出）
+- macOS 主窗口顶部没有关闭 / 最小化 / 全屏控件；要求关闭只关窗口、不退出 app，且尺寸与现有设计协调。
+- 计算端未启动时打开 macOS app，左下角后端一栏**永远**「后端启动中」；计算端已启动时数秒即「计算端就绪」。用户猜测是计算端判定阻塞了后端判定。
+
+### 17.2 根因（scout，只读）
+- 窗口：`RootView` 早已 `.toolbar(.hidden, for: .windowToolbar)`，整条标题栏连同系统三色按钮一起没了；关窗本就不退出（MenuBarExtra 常驻），只是没有按钮可关。
+- 启动中：后端**没有**被探测卡住——远端不可达时 5 s 左右就把 `compute_node_state` 写成 `unreachable` 并如实上报。真因是 `engine_ready`
+  要等引擎装配完成，而装配必须先连上计算端，计算端起不来它永远 false；app 的 `engineStarting` 只看这一位（PROTOCOL §2.10 原口径如此），
+  标签没有终态。另有一条潜在「永远 probing」：远端地址为空 / 端口非法在探测前就抛错，节点状态从未写过。
+
+### 17.3 决策与实现
+- 外观：用户在两案矢量图（A 系统原生红黄绿 / B 自绘单色顶栏）中选 A。`WindowGroup.windowStyle(.hiddenTitleBar)`，三色按钮留在左上角原生位置，
+  悬停符号 / ⌥缩放 / 全屏退出全由系统包办；侧栏 `sidebarHeader` 顶距 20→40pt（按钮条约 28pt + 12pt），底距 22→20pt，Logo 行尺寸不变。
+  `MacAppDelegate.applicationShouldTerminateAfterLastWindowClosed → false` 把「关窗不退出」钉成显式合同。
+- 口径（PROTOCOL §2.10 修订）：后端标签在可达、`engine_ready=false` 且故障尚未定格时才是「后端启动中」；定格失败
+  （`compute_node_state ∈ {unreachable, unauthorized}` 或 `rag_state=unauthorized`）时回到「后端已连接」，故障由算力端标签 / 检索附注承载，
+  判据与 2 s 快轮询退出判据相同；`compute_node_state` 须有终态，装配前失败报 `unreachable`。
+- app：`ServiceStatus.settledFailure` 抽出，`engineStarting` 排除之，`stillStarting = probing || engineStarting`（与原式等价）；
+  `AgentStore.ragNotice` 只要 engine 未装配就保留（不再绑 engineStarting），新增 `connectedLabel`（「后端已连接（检索服务密钥不匹配）」等）
+  供侧栏两处与菜单栏面板共用；菜单栏面板在 connected / engineStarting 时补一行计算端状态。
+- 后端：`_assemble_compute` 地址为空 / 端口非法两条分支在抛错前写 `compute_node_state = "unreachable"`；重试、退避、`engine_ready` 不动。
+- 测试：`test_native_service_status` 合同 H 工具加 7 例（定格三例不算 starting / 瞬态四例仍算）；`recovery_transport_test.swift` 加
+  `auth-engine-blocked`、`auth-engine-rag-key` 两模式；`test_compute_readiness_split` 加地址为空（selection/default）与端口非法三例。
+
+### 17.4 复审与证明（2026-10-29）
+- reviewer 首审：1 Major + 4 Minor + 7 Nit。Major 经主会话读码确认成立：`_assemble_compute` 失败分支的 `finish_task` 刻意吞掉取消，
+  随后 RuntimeError 被 `_run` 接住继续退避重试，`stop()` 永远等不到（`_install` 的 publish 分支有 `cancelling()` 守卫，这里没有）；
+  改动前就有，新用例让「每轮立即失败、间隔 0.01 s」的触发窗口更密，疑为 implementer 遇到的一次 15 分钟 pytest 挂起（verifier 3 次复现未中）。
+  修法同 publish 分支：收摊后 `current_task().cancelling()` 则改抛 CancelledError，并补取消用例。
+- Minor 采纳：侧栏后端栏 `.connected` 带检索附注时颜色改琥珀（文案带故障不能配绿点）；标题栏让位改为按实际安全区自适应——RootView 用
+  GeometryReader 算 `titleBarClearance = max(0, 28 − safeAreaInsets.top)` 下发环境值，侧栏头 `12 + clearance`、聊天头 `clearance`，
+  SwiftUI 给不给顶部安全区两种情况 Logo 行都落在按钮条之下；`ConnState` 注释、`connectedLabel` 两分支写法对称；
+  `recovery_transport_test` 的 `!contains("启动中")` 空断言改为精确相等；端口非法用例补 selection 参数。
+- 主会话第二道门：ServiceStatus / AgentStore / app.py 三处逐行；`stillStarting` 展开后与原式严格等价，`ragNotice` 在 engine 变 true
+  或失去认证时清空，后端两条失败分支均在抛错前写终态。
+- verifier（串行）：xcodebuild MacAgent-macOS Debug 成功（0 error，6 warning，本次文件仅 MacAgentApp.swift:58 Swift 6 捕获旧警告）；
+  8 个测试文件 177 passed；`test_compute_readiness_split` 单独 3 次各 ~3 s。变异 5/5 被杀，sha256 逐字节恢复一致：
+  M1 `settledFailure→false` → contract_h_projection + recovery[auth-engine-blocked] + [auth-engine-rag-key] 红；
+  M2 去 rag unauthorized 分支 → contract_h_projection + [auth-engine-rag-key] 红；M3 `connectedLabel` 恒「后端已连接」→ [auth-engine-rag-key] 红；
+  M4/M5 去掉 app.py 两处 unreachable 写入 → `test_missing_remote_host_reports_unreachable[selection|default]` / `test_invalid_remote_port_reports_unreachable` 红。
+- 修补批后最终轮（verifier）：xcodebuild MacAgent-macOS Debug 成功（0 error；本批文件无新警告，MacAgentApp.swift:58 为旧警告）；
+  8 个测试文件 182 passed；M6 去掉取消守卫 → `test_stop_during_failed_assembly_cleanup_is_not_swallowed[missing_host|probe_offline]`
+  红（`stop() hung` 断言，7 s 内结束不挂），sha256 恢复一致、复跑绿。变异合计 6/6 被杀。
+
+### 17.5 状态（2026-10-29）
+- 全部改动在工作树，**未提交**：14 个文件（PROTOCOL.md、apple-app/README.md、ServiceStatus/MacAgentApp/AgentStore/ChatView/RootView/
+  SessionListView、recovery_transport_test.swift、backend/app.py、三个后端测试文件、本计划）。commit message 草稿已备。
+- 真机待确认（无法在本会话替代，app 未运行且不能由会话拉起）：三色按钮位置与侧栏 Logo 行间距（安全区两种情况之一会生效）、
+  聊天头控件不被拖拽条压住、红点关窗后进程留在菜单栏且点 Dock 图标能复现窗口、计算端未启动时左下角「后端已连接」+「计算端不可达」
+  并在计算端起来后转「计算端就绪」。若 Dock 点击不复现窗口，补 `applicationShouldHandleReopen` 走 openWindow。
+- 遗留：一个卡住的 pytest（PID 72580，守卫加入前启动，卡在 stop() 吞取消——即 M6 所修缺陷的活体），主会话 kill 被权限拦下，由用户处理。

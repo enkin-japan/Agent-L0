@@ -240,6 +240,31 @@ func L(_ value: String) -> String { value }
         check(status(#"{"compute_ready":true,"compute_state":"ready"}"#).pollIntervalSeconds == 15, "nil fields poll at 15 s")
         check(status(#"{}"#, .offline).pollIntervalSeconds == 2, "offline polls at 2 s")
         check(status(#"{"engine_ready":false}"#, .unauthorized).pollIntervalSeconds == 15, "unauthenticated never fast-polls")
+        // PROTOCOL §2.10: a settled failure leaves 「后端启动中」 — engineStarting shares the
+        // stillStarting criterion, so the label and the 2 s cadence end together.
+        for (json, name) in [
+            (#"{"engine_ready":false,"compute_node_state":"unreachable"}"#, "settled-node-unreachable"),
+            (#"{"engine_ready":false,"compute_node_state":"unauthorized"}"#, "settled-node-unauthorized"),
+            (#"{"engine_ready":false,"compute_node_state":"ready","rag_state":"unauthorized"}"#, "settled-rag-unauthorized"),
+        ] {
+            let s = status(json)
+            check(!s.engineStarting, "\(name): engine down with a settled failure is not starting")
+            check(!s.stillStarting, "\(name): engine down with a settled failure is not still starting")
+            check(s.pollIntervalSeconds == 15, "\(name): engine down with a settled failure polls at 15 s")
+        }
+        for (json, name) in [
+            (#"{"engine_ready":false,"compute_node_state":"probing"}"#, "starting-node-probing"),
+            (#"{"engine_ready":false,"compute_node_state":"local"}"#, "starting-node-local"),
+            (#"{"engine_ready":false}"#, "starting-node-missing"),
+            (#"{"engine_ready":false,"compute_node_state":"ready","rag_state":"unreachable"}"#, "starting-rag-unreachable"),
+        ] {
+            let s = status(json)
+            check(s.engineStarting, "\(name): engine down with no settled failure is starting")
+            check(s.stillStarting, "\(name): engine down with no settled failure is still starting")
+            check(s.pollIntervalSeconds == 2, "\(name): engine down with no settled failure polls at 2 s")
+        }
+        check(!status(#"{"engine_ready":false,"compute_node_state":"unreachable"}"#, .unauthorized).engineStarting,
+              "unauthenticated is never starting")
         print("PASS contract-h")
     }
 }

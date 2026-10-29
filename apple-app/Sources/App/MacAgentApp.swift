@@ -39,6 +39,11 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         // willTerminate 在主线程回调；shutdownSync 是 @MainActor，直接借道
         MainActor.assumeIsolated { Self.sidecar?.shutdownSync() }
     }
+
+    /// 红点 / ⌘W 只关窗口：进程留在菜单栏常驻（MenuBarExtra），⌘Q 或菜单栏「退出」才退出。
+    /// MenuBarExtra 在场时 SwiftUI 本就不会因末窗关闭而退出，这里把语义钉成显式合同，
+    /// 免得日后撤掉常驻面板时关窗变成退出。
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 #endif
 
@@ -247,6 +252,10 @@ struct MacAgentApp: App {
                 #endif
         }
         #if os(macOS)
+        // 标题栏隐藏、内容通顶：系统三色按钮（关闭 / 最小化 / 全屏）留在左上角原生位置，
+        // 悬停符号、⌥缩放、全屏退出全由系统包办；侧栏头部为按钮让位见 SessionListView.sidebarHeader。
+        // 工具栏早已隐藏（RootView），此前整条标题栏连同三色按钮一起没了。
+        .windowStyle(.hiddenTitleBar)
         .commands {
             // 惯例位置：应用菜单「关于」之后
             CommandGroup(after: .appInfo) {
@@ -291,7 +300,7 @@ struct MenuBarPanel: View {
         Group {
             switch store.connState {
             case .connected:
-                Text("\(L("后端已连接")) · \(store.settings.baseURL?.host() ?? "")")
+                Text("\(store.connectedLabel) · \(store.settings.baseURL?.host() ?? "")")
             case .engineStarting:
                 Text(store.engineStartingLabel)
             case .connecting:
@@ -302,6 +311,10 @@ struct MenuBarPanel: View {
                 Text(L("服务可达 · 请检查连接密钥"))
             case .reachable:
                 Text(L("服务可达 · 业务状态未知"))
+            }
+            // 后端可达时计算端是另一道独立状态（定格失败由它承载，PROTOCOL §2.10）；其它态无意义
+            if store.connState == .connected || store.connState == .engineStarting {
+                Text(store.computeStatusLabel)
             }
             if let label = sidecarLabel {
                 Text(label)

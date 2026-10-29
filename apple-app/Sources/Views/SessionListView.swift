@@ -12,6 +12,7 @@ struct SessionListView: View {
     #if os(macOS)
     @EnvironmentObject var sidecar: SidecarManager
     @FocusState private var searchFocused: Bool
+    @Environment(\.titleBarClearance) private var titleBarClearance
     #endif
     @State private var showSettings = false
     @State private var showSchedules = false
@@ -149,8 +150,11 @@ struct SessionListView: View {
                 Text("MacAgent").font(.system(size: 16, weight: .semibold))
             }
             .padding(.horizontal, 9)
-            .padding(.top, 20)
-            .padding(.bottom, 22)
+            // 窗口标题栏已隐藏（hiddenTitleBar），系统三色按钮占侧栏左上约 28pt 高的一条：
+            // Logo 行从按钮条下 12pt 起（安全区没推开时由 titleBarClearance 补足那 28pt），
+            // 尺寸节奏与原来的 20pt 顶距一致。
+            .padding(.top, 12 + titleBarClearance)
+            .padding(.bottom, 20)
 
             Button { store.newSession() } label: {
                 Label(L("新对话"), systemImage: "square.and.pencil")
@@ -244,7 +248,7 @@ struct SessionListView: View {
 
     private var backendCompactLabel: String {
         switch store.connState {
-        case .connected: return L("后端已连接")
+        case .connected: return store.connectedLabel
         case .engineStarting: return store.engineStartingLabel
         case .connecting: return L("后端连接中")
         case .offline: return L("后端未连接")
@@ -675,7 +679,8 @@ struct SessionListView: View {
     /// 绿=已连接；黄=连接中（探活在跑、还没放弃——含 sidecar 启动窗口）；红=未连接。
     private var connectionColor: Color {
         switch store.connState {
-        case .connected: return Theme.success
+        // 已连接但检索附注在（引擎未装配、RAG 定格失败）：文案带故障，颜色不能是绿
+        case .connected: return store.ragNotice == nil ? Theme.success : Theme.warning
         case .connecting, .engineStarting: return Theme.warning
         case .unauthorized, .reachable: return Theme.warning
         case .offline: return .red
@@ -684,7 +689,7 @@ struct SessionListView: View {
 
     private var connectionLabel: String {
         switch store.connState {
-        case .connected: return L("后端已连接")
+        case .connected: return store.connectedLabel
         case .engineStarting: return store.engineStartingLabel
         case .connecting: return L("连接中…")
         case .offline: return L("未连接")

@@ -279,6 +279,92 @@ def test_discovery_failure_reports_unreachable(offline_app, monkeypatch):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("source", ["selection", "default"])
+def test_missing_remote_host_reports_unreachable(offline_app, monkeypatch, source):
+    # PROTOCOL §2.10: a failure that settles before any probe still gets a terminal
+    # compute_node_state; /health must not stay "probing" (app would show starting forever).
+    import app as entry
+    app, control, _ = offline_app
+    monkeypatch.setattr(entry, "_model_source", source)
+    monkeypatch.setitem(entry.config["inference"]["remote"], "host", "")
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            await eventually(lambda: app.state.compute_state == "retrying")
+            health = await _health(app)
+            assert health["compute_node_state"] == "unreachable"
+            assert health["engine_ready"] is False
+            assert control.probes == 0  # refused before probe_remote_compute
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("source", ["selection", "default"])
+def test_invalid_remote_port_reports_unreachable(offline_app, monkeypatch, source):
+    # source=default parses the port ahead of discovery; source=selection skips discovery
+    # and fails at int(port) while _probe_dependencies builds the probe URL, which
+    # compute_node_failure_state maps to "unreachable". Either way the failure is settled
+    # and probe_remote_compute itself is never called.
+    import app as entry
+    app, control, _ = offline_app
+    monkeypatch.setattr(entry, "_model_source", source)
+    monkeypatch.setitem(entry.config["inference"]["remote"], "port", "not-a-port")
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            await eventually(lambda: app.state.compute_state == "retrying")
+            health = await _health(app)
+            assert health["compute_node_state"] == "unreachable"
+            assert health["engine_ready"] is False
+            assert control.probes == 0  # refused before discovery and probe_remote_compute
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", ["missing_host", "probe_offline"])
+def test_stop_during_failed_assembly_cleanup_is_not_swallowed(offline_app, monkeypatch, failure):
+    # finish_task deliberately joins the post-failure cleanup through cancellation. A
+    # stop() landing in that join must still end the startup task: otherwise the
+    # assembly error is retried as an ordinary failure and stop() waits forever.
+    import app as entry
+    app, control, _ = offline_app
+    if failure == "missing_host":   # SystemExit → RuntimeError conversion path
+        monkeypatch.setitem(entry.config["inference"]["remote"], "host", "")
+    # probe_offline: the fixture's probe raises ConnectionError (bare re-raise path)
+    original = mod.finish_task
+    state = {"in_cleanup": False}
+
+    async def slow_cleanup_join(task):
+        current = asyncio.current_task()
+        if current is not None and current.get_name() == "compute-startup" and not state["in_cleanup"]:
+            async def slow():
+                await asyncio.sleep(0.05)
+                return await task
+            state["in_cleanup"] = True
+            return await original(asyncio.ensure_future(slow()))
+        return await original(task)
+    # lifespan imports finish_task when it starts, so the patch reaches _assemble_compute.
+    monkeypatch.setattr(mod, "finish_task", slow_cleanup_join)
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            lifecycle = app.state.compute_lifecycle
+            await eventually(lambda: state["in_cleanup"])
+            stopping = asyncio.create_task(lifecycle.stop())
+            done, _ = await asyncio.wait({stopping}, timeout=2)
+            hung = stopping not in done
+            if hung:
+                # Unwind the retry loop so a regression fails instead of hanging the run.
+                for _ in range(200):
+                    if lifecycle.task.done():
+                        break
+                    lifecycle.task.cancel()
+                    await asyncio.sleep(0.01)
+                await asyncio.wait({stopping}, timeout=2)
+            assert not hung, "stop() hung: the cancellation was consumed by the cleanup join"
+            assert lifecycle.task.done() and lifecycle.task.cancelled()
+            assert app.state.compute_state == "stopped"
+    asyncio.run(scenario())
+
+
 def test_monitor_refreshes_node_and_rag_state_and_engine_stays_ready(offline_app, monkeypatch):
     app, control, _ = offline_app
     control.infer = control.rag = True

@@ -10,6 +10,21 @@ struct SessionRoute: Identifiable, Hashable {
 ///   清回 nil，同一行可反复进入（此前用 List selection + onDisappear 手工清理，
 ///   时机不可靠，会出现「进入即弹回/只能看一次」的死锁）。
 /// - macOS 保留手工定宽双栏，避免流式更新触发系统分栏的约束重入。
+#if os(macOS)
+/// 系统标题栏（含三色按钮）的标准高度；hiddenTitleBar 下按钮条仍占这一段。
+private let hiddenTitleBarHeight: CGFloat = 28
+
+/// 隐藏标题栏后，内容若没被系统安全区推到三色按钮之下，各栏顶部须自补的让位（pt）。
+/// 由 RootView 按实际安全区算出；侧栏头与聊天头读它，不各自硬编码。
+private struct TitleBarClearanceKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+extension EnvironmentValues {
+    var titleBarClearance: CGFloat {
+        get { self[TitleBarClearanceKey.self] }
+        set { self[TitleBarClearanceKey.self] = newValue }
+    }
+}
+#endif
+
 struct RootView: View {
     @EnvironmentObject var store: AgentStore
     @EnvironmentObject var push: PushManager
@@ -47,21 +62,27 @@ struct RootView: View {
         // 代价：侧栏不可拖宽、无折叠动画。27 正式版修复重入执法后可整段回退
         // NavigationSplitView（git 可查）。
         NavigationStack {
-            HStack(spacing: 0) {
-                SessionListView()
-                    .frame(width: 260)
-                    .background(Theme.sidebar)
-                Rectangle().fill(Theme.separator).frame(width: 1)
-                Group {
-                    if store.selectedSessionId != nil {
-                        ChatView()
-                    } else {
-                        ConversationWelcomeView()
-                            .padding(Theme.contentPadding)
+            GeometryReader { geo in
+                HStack(spacing: 0) {
+                    SessionListView()
+                        .frame(width: 260)
+                        .background(Theme.sidebar)
+                    Rectangle().fill(Theme.separator).frame(width: 1)
+                    Group {
+                        if store.selectedSessionId != nil {
+                            ChatView()
+                        } else {
+                            ConversationWelcomeView()
+                                .padding(Theme.contentPadding)
+                        }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Theme.canvas)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Theme.canvas)
+                // 标题栏隐藏（hiddenTitleBar）后三色按钮悬在左上角。SwiftUI 若已按标题栏高度给了
+                // 顶部安全区，内容本就从按钮条下方起，让位 0；若没给（内容真正通顶），各栏顶部
+                // 自补 28pt。两种情况下 Logo 行 / 聊天头都落在按钮条之下，不靠实机猜。
+                .environment(\.titleBarClearance, max(0, hiddenTitleBarHeight - geo.safeAreaInsets.top))
             }
             .frame(minWidth: 760, minHeight: 480)
             .toolbar(.hidden, for: .windowToolbar)

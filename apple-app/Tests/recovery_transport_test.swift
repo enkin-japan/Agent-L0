@@ -63,6 +63,15 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
                 // Contract H engine_ready: absent for every other mode (older backend shape).
                 if mode == "auth-engine-starting" { body["engine_ready"] = false }
                 if mode == "auth-engine-ready" { body["engine_ready"] = true }
+                // PROTOCOL §2.10 settled failures: engine still down, the fault is final.
+                if mode == "auth-engine-blocked" {
+                    body["engine_ready"] = false; body["compute_ready"] = false; body["compute_state"] = "retrying"
+                    body["compute_node_state"] = "unreachable"; body["rag_state"] = "probing"
+                }
+                if mode == "auth-engine-rag-key" {
+                    body["engine_ready"] = false; body["compute_ready"] = false; body["compute_state"] = "retrying"
+                    body["compute_node_state"] = "ready"; body["rag_state"] = "unauthorized"
+                }
                 t.respond(body, status: mode.hasPrefix("auth-offline") ? 503 : 200); return
             }
             if path.hasSuffix("/turns/last") && mode == "delete-failed" { t.respond(["status":false,"response":"synthetic refusal"]); return }
@@ -123,14 +132,25 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
             tickSub.cancel(); connSub.cancel()
         } else if mode.hasPrefix("auth-") {
             await store.refreshConnection()
-            let authenticated = ["auth-ok", "auth-engine-starting", "auth-engine-ready"].contains(mode)
-            check(store.computeState == (authenticated ? .ready : .unknown), "compute readiness requires current authenticated backend")
+            let authenticated = ["auth-ok", "auth-engine-starting", "auth-engine-ready", "auth-engine-rag-key"].contains(mode)
+            let expectedCompute: ComputeAvailability = mode == "auth-engine-blocked" ? .unreachable : authenticated ? .ready : .unknown
+            check(store.computeState == expectedCompute, "compute readiness requires current authenticated backend")
             switch mode {
             case "auth-failed": check(store.connectionOK == false && String(describing:store.connState) == "unauthorized", "health200 is not authenticated")
             case "auth-unknown": check(store.connectionOK == false && String(describing:store.connState) == "reachable", "business status unavailable stays unknown")
             case "auth-ok": check(store.connectionOK == true && String(describing:store.connState) == "connected", "authenticated backend stays usable")
             case "auth-engine-starting": check(store.connectionOK == true && String(describing:store.connState) == "engineStarting", "engine_ready false shows backend starting")
             case "auth-engine-ready": check(store.connectionOK == true && String(describing:store.connState) == "connected", "engine_ready true is connected")
+            case "auth-engine-blocked":
+                // Settled compute failure: the backend label leaves 「后端启动中」, the compute label carries it.
+                check(store.connectionOK == true && String(describing:store.connState) == "connected", "settled unreachable node is connected, not starting")
+                check(store.connectedLabel == L("后端已连接"), "backend label is plain connected (no qualifier): \(store.connectedLabel)")
+                check(store.computeStatusLabel == L("计算端不可达"), "compute label carries the fault: \(store.computeStatusLabel)")
+            case "auth-engine-rag-key":
+                // Settled RAG key mismatch: connected, and the qualifier survives the move off 「启动中」.
+                check(store.connectionOK == true && String(describing:store.connState) == "connected", "settled RAG key mismatch is connected, not starting")
+                check(store.ragNotice == "unauthorized", "RAG notice kept while the engine is down")
+                check(store.connectedLabel == L("后端已连接") + L("（检索服务密钥不匹配）"), "connected label carries the RAG key mismatch: \(store.connectedLabel)")
             default: check(store.connectionOK == false, "health failure is not connected")
             }
         } else if ["gap","included","no-queued","thin","old-count"].contains(mode) {

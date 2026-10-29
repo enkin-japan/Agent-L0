@@ -6,6 +6,9 @@ import UIKit
 /// 会话主界面：消息列表 + 流式预览 + 活动条 + 审批卡片 + 挂起横幅 + 输入区。
 struct ChatView: View {
     @EnvironmentObject var store: AgentStore
+    #if os(macOS)
+    @Environment(\.titleBarClearance) private var titleBarClearance
+    #endif
     @State private var showMemory = false
     @State private var showDeck = false
     @State private var exportDocument: MarkdownFileDocument?
@@ -267,6 +270,10 @@ struct ChatView: View {
         .padding(.horizontal, Theme.contentPadding)
         .padding(.vertical, Theme.s3)
         .frame(minHeight: 62)
+        #if os(macOS)
+        // 隐藏标题栏后顶部 28pt 是窗口拖拽条：头部控件不能压在它下面（见 RootView）
+        .padding(.top, titleBarClearance)
+        #endif
         .background(Theme.canvas)
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.separator).frame(height: 1) }
     }

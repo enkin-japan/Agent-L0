@@ -62,7 +62,8 @@ final class AgentStore: ObservableObject {
     let probeTick = PassthroughSubject<ConnState, Never>()
     @Published var computeState: ComputeState = .unknown
     /// Latest authenticated /health data-plane failure (Contract H `rag_state`:
-    /// "unreachable" / "unauthorized", else nil); only qualifies the 「后端启动中」 label.
+    /// "unreachable" / "unauthorized", else nil) while the engine is not installed; only
+    /// qualifies the backend label (「后端启动中」 or, once a failure settled, 「后端已连接」).
     @Published private(set) var ragNotice: String?
     // 会话
     @Published var sessions: [SessionMetaItem] = []
@@ -427,7 +428,10 @@ final class AgentStore: ObservableObject {
     /// 2 s during startup and every view observing the store would re-render otherwise.
     private func recordConnection(_ status: BackendConnectionStatus) {
         recordBackendAccess(status.access, engineStarting: status.engineStarting)
-        let notice = status.engineStarting ? status.ragNotice : nil
+        // Kept while the engine is not installed, not only while it is "starting": a
+        // settled RAG key mismatch moves the label to 「后端已连接」 and must keep its qualifier.
+        let notice = status.access == .authenticated && status.health?.engineReady == false
+            ? status.ragNotice : nil
         if ragNotice != notice { ragNotice = notice }
         let compute = status.compute
         if computeState != compute { computeState = compute }
@@ -436,7 +440,9 @@ final class AgentStore: ObservableObject {
     // MARK: - 连接状态监控（实机反馈：信号原来只在设置页关闭时刷一次，静态且滞后）
 
     /// Backend access only; an authenticated API does not prove every compute capability.
-    /// `engineStarting`: authenticated, but /health reports `engine_ready == false`.
+    /// `engineStarting`: authenticated, /health reports `engine_ready == false`, and no failure
+    /// has settled. A settled failure (compute node unreachable/unauthorized, or RAG
+    /// unauthorized) shows `.connected`, with the compute label / RAG qualifier carrying the fault.
     enum ConnState { case connecting, connected, engineStarting, offline, unauthorized, reachable }
 
     /// 「后端启动中」, qualified while the data plane has not answered yet.
@@ -445,6 +451,18 @@ final class AgentStore: ObservableObject {
         case "unreachable": return L("后端启动中") + L("（等待检索服务）")
         case "unauthorized": return L("后端启动中") + L("（检索服务密钥不匹配）")
         default: return L("后端启动中")
+        }
+    }
+
+    /// 「后端已连接」, qualified while the engine is not installed and the data plane failed
+    /// (PROTOCOL §2.10: a settled failure leaves 「后端启动中」 and is carried by the compute
+    /// label or this RAG qualifier). Meaningful only while `connState == .connected`: every
+    /// caller reads it from that branch, so the cases below do not re-check the state.
+    var connectedLabel: String {
+        switch ragNotice {
+        case "unauthorized": return L("后端已连接") + L("（检索服务密钥不匹配）")
+        case "unreachable": return L("后端已连接") + L("（等待检索服务）")
+        default: return L("后端已连接")
         }
     }
 
