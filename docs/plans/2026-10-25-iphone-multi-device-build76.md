@@ -612,10 +612,18 @@ macOS/iOS Debug 构建通过，原生测试 432 passed，reducer 夹具 16/16。
   8 个测试文件 182 passed；M6 去掉取消守卫 → `test_stop_during_failed_assembly_cleanup_is_not_swallowed[missing_host|probe_offline]`
   红（`stop() hung` 断言，7 s 内结束不挂），sha256 恢复一致、复跑绿。变异合计 6/6 被杀。
 
-### 17.5 状态（2026-10-29）
-- 全部改动在工作树，**未提交**：14 个文件（PROTOCOL.md、apple-app/README.md、ServiceStatus/MacAgentApp/AgentStore/ChatView/RootView/
-  SessionListView、recovery_transport_test.swift、backend/app.py、三个后端测试文件、本计划）。commit message 草稿已备。
+### 17.5 状态（2026-10-29，提交前）
 - 真机待确认（无法在本会话替代，app 未运行且不能由会话拉起）：三色按钮位置与侧栏 Logo 行间距（安全区两种情况之一会生效）、
   聊天头控件不被拖拽条压住、红点关窗后进程留在菜单栏且点 Dock 图标能复现窗口、计算端未启动时左下角「后端已连接」+「计算端不可达」
   并在计算端起来后转「计算端就绪」。若 Dock 点击不复现窗口，补 `applicationShouldHandleReopen` 走 openWindow。
-- 遗留：一个卡住的 pytest（PID 72580，守卫加入前启动，卡在 stop() 吞取消——即 M6 所修缺陷的活体），主会话 kill 被权限拦下，由用户处理。
+- 遗留：一个卡住的 pytest（PID 72580，守卫加入前启动，卡在 stop() 吞取消——即 M6 所修缺陷的活体），主会话 kill 被权限拦下，
+  用户已手动结束。
+
+### 17.6 build 80 提交与发布（2026-10-29）
+- 提交 `605aaa9`（15 文件：§17.5 列的 14 个 + `apple-app/project.yml` 79→80），sectioned message 记第二道门读法（ServiceStatus /
+  AgentStore / app.py 逐行，其余按摘要）与变异 6/6。pre-commit 四门一次全过（backend 3547 / colab 130 / web 252 / apple 16，1127 s）。
+  已推送 origin/main。
+- macOS：`release-macos.sh` 一次通过，Release `macos-0.16.0-80` 指向 605aaa9，6 个资产（DMG + 80-75/76/77/78/79 delta），appcast 已更新；
+  本机 /Applications/MacAgent.app 已重装钉票版（CFBundleVersion 80）。发布说明 `releases/notes-80.md`（gitignored）。
+- iOS：`release-ios.sh` 归档、导出、上传 ASC 成功（12:41），`wait-testflight.py 80` 轮询到 VALID，TestFlight 内部组已可见。
+- 真机确认项仍是 §17.5 那四条，装好 80 后由用户过一遍。
