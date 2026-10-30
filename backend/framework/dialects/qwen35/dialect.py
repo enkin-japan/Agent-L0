@@ -84,6 +84,10 @@ class Qwen35Dialect:
         # 关思考：空 <think> 块在 build 里已随 prompt 预填，种子为空（gemma4 同构）。
         return f"{THINK_OPEN}\n" if enable_thinking else ""
 
+    def thinking_preopened(self, enable_thinking: bool) -> bool:
+        # 开思考时生成从 <think> 内部起步、块无频道名：首个 </think> 前全是思考
+        return bool(enable_thinking)
+
     def tool_call_grammar(self, tools: List[Dict[str, Any]]) -> ToolCallGrammar:
         raise NotImplementedError(
             "qwen35 方言使用原生 XML 调用体（<function=…><parameter=…>），按设计不启用 "

@@ -46,7 +46,8 @@ class VisibleTextStreamer:
                  stc: str = "<|tool_call>", etc: str = "<tool_call|>",
                  in_thought: bool = False,
                  on_thinking: Optional[Callable[[str], None]] = None,
-                 on_tool_pending: Optional[Callable[[str], None]] = None):
+                 on_tool_pending: Optional[Callable[[str], None]] = None,
+                 on_tool_text: Optional[Callable[[str], None]] = None):
         self.soc, self.eoc, self.stc, self.etc = soc, eoc, stc, etc
         self._maxlen = max(len(soc), len(eoc), len(stc), len(etc))
         self.buf = ""
@@ -54,6 +55,8 @@ class VisibleTextStreamer:
         self._name = "thought" if in_thought else ""  # NAME 态下累积的频道名(播种态即思考)
         self.on_thinking = on_thinking
         self.on_tool_pending = on_tool_pending
+        # 工具调用块内容增量（不进正文；复读护栏把它算作 content 频道，见 engine）
+        self.on_tool_text = on_tool_text
         self._tool_buf = ""        # 当前工具块已累积文本(仅为解析 name,有限长)
         self._tool_announced = False
 
@@ -78,6 +81,7 @@ class VisibleTextStreamer:
         self.buf += delta
         out: List[str] = []
         thinking: List[str] = []   # 本次 feed 产出的思考增量(批量回吐一次)
+        tool_text: List[str] = []  # 本次 feed 产出的工具块内容增量(同上)
         i = 0
         n = len(self.buf)
         while i < n:
@@ -152,6 +156,8 @@ class VisibleTextStreamer:
                     self.mode = self.OUT
                     i += len(m)
                     continue
+                if self.on_tool_text is not None:
+                    tool_text.append(self.buf[i])
                 # 工具块内容:累积有限长文本,一解析出工具名即预告一次
                 if not self._tool_announced and len(self._tool_buf) < _TOOL_NAME_SCAN_LIMIT:
                     self._tool_buf += self.buf[i]
@@ -165,6 +171,8 @@ class VisibleTextStreamer:
         self.buf = self.buf[i:]
         if thinking and self.on_thinking is not None:
             self.on_thinking("".join(thinking))
+        if tool_text:
+            self.on_tool_text("".join(tool_text))
         return "".join(out)
 
     def close(self) -> str:

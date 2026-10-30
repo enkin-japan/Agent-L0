@@ -41,7 +41,7 @@ from .schemas import (
     SkillsResponse,
     ToolsResponse,
 )
-from .auth import require_owner
+from .auth import require_owner_or_paired
 from ..core import approval_policy
 from ..core.journal import BOOT_ID, TurnJournal
 from ..core.turn_runner import TurnConflict, public_turn, turn_reference, retry_history_projection
@@ -80,7 +80,7 @@ _LOCAL_READ_ROUTES = {
     ("GET", "/api/v1/chat/{session_id}/offline-files"),
     ("GET", "/api/v1/files/{session_id}/offline/{kind}/{filename}"),
     # 本集合的含义是「首次装配前即可用」，不是「只读」：审批策略是本地状态，设置页在
-    # 算力就绪前也要能读写（PATCH 另挂 require_owner）
+    # 算力就绪前也要能读写（PATCH 另挂 require_owner_or_paired）
     ("GET", "/api/v1/approval-policy"), ("PATCH", "/api/v1/approval-policy"),
 }
 _EXECUTION_ROUTES = {
@@ -164,10 +164,11 @@ async def get_approval_policy(request: Request):
 
 
 @router.patch("/api/v1/approval-policy", response_model=ApprovalPolicyResponse,
-              dependencies=[Depends(require_owner)])
+              dependencies=[Depends(require_owner_or_paired)])
 async def patch_approval_policy(request: Request, body: Any = Body(...)):
     """部分更新 {"read"?: MODE, "write"?: MODE}：落盘后立即对下一次工具闸门生效。
-    只给 Mac（共享密钥）；配对设备票据 403——放开免审批是本机主人的决定。
+    Mac（共享密钥）或已配对设备票据都可改（用户决定 2026-10-30：配对可由 Mac 一键解除、
+    票据可撤销）；无效/吊销票据由 verify_api_key 先回 401。§2.11 三条硬规则不受档位影响。
     非法取值 / 未知键 / 非对象 → 422，策略与文件都不变。"""
     try:
         policy = await asyncio.to_thread(approval_policy.update, body)
@@ -176,6 +177,9 @@ async def patch_approval_policy(request: Request, body: Any = Body(...)):
     except OSError as e:
         print(f"[ApprovalPolicy] ⚠️ 策略落盘失败，内存策略不变: {type(e).__name__}: {e}")
         raise HTTPException(status_code=503, detail={"reason": "policy_save_failed"})
+    print(f"[Approval] policy patched by device="
+          f"{getattr(request.state, 'device_id', None) or 'local'} "
+          f"read={policy.read} write={policy.write}")
     return _approval_policy_payload(request, policy)
 
 

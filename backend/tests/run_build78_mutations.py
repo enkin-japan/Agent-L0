@@ -271,9 +271,10 @@ MUTANTS = [
      T_POLICY, ["test_orchestrator_initiated_consult_follows_policy"]),
     ("P-M10", ROUTES,
      '@router.patch("/api/v1/approval-policy", response_model=ApprovalPolicyResponse,\n'
-     '              dependencies=[Depends(require_owner)])\n',
+     '              dependencies=[Depends(require_owner_or_paired)])\n',
      '@router.patch("/api/v1/approval-policy", response_model=ApprovalPolicyResponse)\n',
-     T_POLICY, ["test_patch_with_a_device_ticket_is_forbidden_", "test_patch_route_mounts_require_owner"]),
+     # build 83：PATCH 对配对设备开放（用户决定 2026-10-30），依赖改名、守卫用例同步改名
+     T_POLICY, ["test_patch_route_mounts_require_owner_or_paired"]),
     ("P-M11", ROUTES,
      '    ("GET", "/api/v1/approval-policy"), ("PATCH", "/api/v1/approval-policy"),\n',
      '',

@@ -42,6 +42,7 @@ class FakeEngine:
                            {"type":"error", raw_input, error_msg} 表示解析失败项)
       truncated: bool      本次生成被 max_tokens 截断
       cancelled: bool      本次生成期间命中取消
+      repetition_guard: dict  本次生成被流式复读护栏打断({"channel","reason"},引擎终态同构)
       metrics: dict        自定义指标(缺省给一份最小合法指标)
       stream: bool         False 时不经 on_text_delta 回吐(默认 True)
     """
@@ -81,7 +82,7 @@ class FakeEngine:
         if text and step.get("stream", True) and on_text_delta is not None \
                 and not step.get("tool_calls") and not step.get("cancelled"):
             on_text_delta(text)
-        return {
+        out = {
             "cancelled": step.get("cancelled", False),
             "thoughts": step.get("thoughts", []),
             "text": text,
@@ -90,6 +91,9 @@ class FakeEngine:
             "metrics": step.get("metrics", {"prompt_tokens": 100, "generation_tokens": 20,
                                             "generation_tps": 50.0}),
         }
+        if step.get("repetition_guard"):
+            out["repetition_guard"] = step["repetition_guard"]
+        return out
 
     async def summarize(self, content, prior_summary="", **kwargs):
         return "[fake summary]"

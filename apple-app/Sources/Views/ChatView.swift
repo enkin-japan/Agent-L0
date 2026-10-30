@@ -334,6 +334,26 @@ struct ChatView: View {
         return (title?.isEmpty == false ? title! : sid)
     }
 
+    private enum LiveEntry {
+        case note(String)
+        case step(NormalizedStep)
+    }
+
+    /// 直播步骤区：中途说明按 beforeStep 插在它之后开始的那一步前面。
+    private var liveEntries: [LiveEntry] {
+        var out: [LiveEntry] = []
+        var notes = store.liveNotes[...]
+        for (index, step) in store.liveStepItems.enumerated() {
+            while let note = notes.first, note.beforeStep <= index {
+                out.append(.note(note.text))
+                notes = notes.dropFirst()
+            }
+            out.append(.step(step))
+        }
+        out.append(contentsOf: notes.map { .note($0.text) })
+        return out
+    }
+
     /// 流式过程预览：思考 + 正文 token + 工具步骤 + 任务计划（turn_end 后整体被权威消息替换）。
     private var streamingPreview: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -357,9 +377,16 @@ struct ChatView: View {
             }
 
             VStack(alignment: .leading, spacing: 3) {
-                // 紧凑步骤行：状态符号 + 名称 + 单行截断的详情，无逐行卡片
-                ForEach(Array(store.liveStepItems.suffix(6).enumerated()), id: \.offset) { _, step in
-                    CompactStepRow(status: step.status, kind: step.kind, label: step.label, detail: step.detail)
+                // 紧凑步骤行：状态符号 + 名称 + 单行截断的详情，无逐行卡片。
+                // 工具步之前流出的正文（中途说明，3b′）按切下时的位置穿插在步骤之间，可折叠；
+                // id 用全表下标，suffix 滑动时各行（含展开态）身份不变。
+                ForEach(Array(liveEntries.enumerated()).suffix(6), id: \.offset) { _, entry in
+                    switch entry {
+                    case .note(let text):
+                        ProcessNoteRow(text: text)
+                    case .step(let step):
+                        CompactStepRow(status: step.status, kind: step.kind, label: step.label, detail: step.detail)
+                    }
                 }
                 HStack(spacing: Theme.s2) {
                     ProgressView().controlSize(.small).tint(Theme.accent)

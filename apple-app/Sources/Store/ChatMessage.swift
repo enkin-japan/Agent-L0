@@ -17,6 +17,8 @@ struct ToolStep: Identifiable {
     /// 回执里的工具返回状态（"ok" / "timeout" / …）；推不出时 nil，不冒充成功。
     let status: String?
     let thoughts: String?
+    /// 「中途说明」（3b′）：来自一条 `.note` 消息，组内画成可折叠的弱化说明行，不计步数。
+    var isNote = false
 }
 
 /// UI 侧消息模型：把后端轮次（Turn.response 的 role 消息）铺平成可渲染列表。
@@ -27,6 +29,9 @@ struct ChatMessage: Identifiable {
         case system
         /// 工具调用/返回的折叠行（detail 收在 DisclosureGroup 里）
         case tool
+        /// 「中途说明」（3b′）：同一轮里后面还有工具步的助手正文——是过程说明而非答复，
+        /// 显示投影里并入相邻的执行过程组；轮内最后一段正文始终留作气泡。
+        case note
         /// 显示投影：同一轮里连续的 `.tool` 行合成的「执行过程」组（toolSteps）。
         /// 只由 `groupedForDisplay` 产生；`from(turn:)` 与 store.messages 仍是逐行的。
         case toolGroup
@@ -71,6 +76,10 @@ struct ChatMessage: Identifiable {
 
     static func assistant(_ text: String, thoughts: String? = nil) -> ChatMessage {
         ChatMessage(kind: .assistant, text: text, thoughts: thoughts)
+    }
+
+    static func note(_ text: String, thoughts: String? = nil) -> ChatMessage {
+        ChatMessage(kind: .note, text: text, thoughts: thoughts)
     }
 
     static func system(_ text: String) -> ChatMessage {
@@ -124,7 +133,17 @@ extension ChatMessage {
                 : turn.status == "cancelled" ? "本轮已取消，后续执行已停止。已完成的副作用不会自动撤销；请查看执行记录后决定是否重试。"
                 : "本轮执行失败，后续执行已停止。已完成的副作用不会自动撤销；请查看执行记录后决定是否重试。")))
         }
-        for msg in turn.response ?? [] {
+        let response = turn.response ?? []
+        // 3b′ 中途说明：正文之后本轮还有工具步 → 过程说明；轮内最后一段正文（含以提问收尾、
+        // 计划未完成的轮）始终是气泡。
+        let lastTextIndex = response.lastIndex { msg in
+            msg.role == "assistant" && (msg.toolCalls ?? []).isEmpty && !(msg.content ?? "").isEmpty
+        }
+        let lastStepIndex = response.lastIndex { msg in
+            (msg.role == "assistant" && !(msg.toolCalls ?? []).isEmpty) ||
+            (msg.role == "tool" && !(msg.toolResponses ?? []).isEmpty)
+        }
+        for (responseIndex, msg) in response.enumerated() {
             switch msg.role {
             case "assistant":
                 if let calls = msg.toolCalls, !calls.isEmpty {
@@ -148,7 +167,11 @@ extension ChatMessage {
                         out.append(last)
                     }
                 } else if let content = msg.content, !content.isEmpty {
-                    out.append(.assistant(content, thoughts: msg.thoughts))
+                    if let lastStepIndex, responseIndex < lastStepIndex, responseIndex != lastTextIndex {
+                        out.append(.note(content, thoughts: msg.thoughts))
+                    } else {
+                        out.append(.assistant(content, thoughts: msg.thoughts))
+                    }
                 }
             case "tool":
                 for item in msg.toolResponses ?? [] {
@@ -186,7 +209,9 @@ extension ChatMessage {
         // Reuse the ordinary tool disclosure rows for journal facts in both live and history paths.
         let hasToolMessages = out.contains { $0.kind == .tool }
         if stopped || !hasToolMessages, let facts = turn.executionReceipts {
-            for item in facts.items where item.type == "tool_started" || item.type == "tool_result" {
+            // 3c：回执先并入它所描述的应答行（一次执行 = 一个 call_id），只有对不上任何
+            // 应答行的回执才各追加一次——不再为已经显示的调用/返回再铺一组「已开始/已返回」。
+            for item in mergeReceipts(facts.items, into: &out) {
                 let started = item.type == "tool_started"
                 var detail = item.detail ?? ""
                 if started && item.truncated == true {
@@ -197,18 +222,6 @@ extension ChatMessage {
                 if !started {
                     detail += "\n" + L("工具已返回；返回状态不保证外部操作成功。")
                     if let status = item.status { detail += "\n" + L("返回状态：") + status }
-                }
-                // A retained response may already contain this exact result (not a proposed call).
-                // Enrich that same disclosure row instead of duplicating its complete payload.
-                if !started, let existing = out.firstIndex(where: {
-                    $0.kind == .tool && $0.toolLabel == "\(item.name) \(L("返回"))" &&
-                    $0.toolDetail == (item.detail ?? "")
-                }) {
-                    out[existing].toolLabel = item.name + " · " + L("已返回")
-                    out[existing].toolDetail = detail
-                    out[existing].stepStatus = item.status
-                    out[existing].stepTimestamp = item.ts
-                    continue
                 }
                 // These rows ARE the receipts, so their status and time are exact.
                 var row = ChatMessage.tool(label: item.name + " · " + L(started ? "已开始" : "已返回"), detail: detail)
@@ -276,6 +289,67 @@ extension ChatMessage {
         }
     }
 
+    /// 停止轮的回执并入（3c）。应答行不带 call_id，回执带：同一 call_id 的 started/result
+    /// 是同一次执行。返回对不上任何应答行、需要各追加一次的回执：
+    /// 1. 返回按内容认行：result 回执的 detail 与某条同名返回行全文相同（回执被截断时为其前缀）
+    ///    → 就是那一行；同一 call_id 的 started 回执并入该行之前最近的同名调用行。
+    /// 2. 调用按等量认行：剩余同名调用行与 started 回执一样多 → 第 k 行就是第 k 次执行
+    ///    （attachReceipts 同理；数量不等时不猜，避免把被拒调用的行冒认成后来那次执行）。
+    ///    返回行不做按序兜底：内容对不上的返回宁可另起一行，也不冒认。
+    /// 同一 (call_id, type) 的重复回执只算一次。
+    fileprivate static func mergeReceipts(_ items: [ExecutionReceipt], into out: inout [ChatMessage]) -> [ExecutionReceipt] {
+        var seen = Set<String>()
+        let receipts = items.filter { item in
+            guard item.type == "tool_started" || item.type == "tool_result" else { return false }
+            guard let callId = item.callId, !callId.isEmpty else { return true }
+            return seen.insert(item.type + "\u{1F}" + callId).inserted
+        }
+        var claimedRows = Set<UUID>()
+        var merged = Set<Int>()   // receipt indices already represented by a row
+        func isRow(_ row: ChatMessage, _ role: StepRole, _ name: String) -> Bool {
+            row.kind == .tool && row.stepRole == role && row.stepName == name && !claimedRows.contains(row.id)
+        }
+        func sameContent(_ row: ChatMessage, _ item: ExecutionReceipt) -> Bool {
+            let detail = item.detail ?? "", shown = row.toolDetail ?? ""
+            return shown == detail || (item.truncated == true && !detail.isEmpty && shown.hasPrefix(detail))
+        }
+        func mergeStarted(_ k: Int, into i: Int) {
+            out[i].stepTimestamp = receipts[k].ts
+            // 「执行已开始」是安全信号：并入调用行后要在标签上留痕，否则与从未执行的提案行无从分辨
+            let started = L("已开始")
+            if !(out[i].toolLabel ?? "").hasSuffix(started) { out[i].toolLabel = (out[i].toolLabel ?? "") + " · " + started }
+            claimedRows.insert(out[i].id); merged.insert(k)
+        }
+        // 1. a retained result row with the receipt's content IS that execution's return
+        for (k, item) in receipts.enumerated() {
+            let started = item.type == "tool_started"
+            if !started, let existing = out.firstIndex(where: { isRow($0, .result, item.name) && sameContent($0, item) }) {
+                var detail = out[existing].toolDetail ?? ""
+                // 全文相同的行就是回执本身：回执被截断，这一行同样不完整
+                if detail == (item.detail ?? "") && item.truncated == true { detail += "\n" + L("记录已截断，部分内容未保留。") }
+                detail += "\n" + L("工具已返回；返回状态不保证外部操作成功。")
+                if let status = item.status { detail += "\n" + L("返回状态：") + status }
+                out[existing].toolLabel = item.name + " · " + L("已返回")
+                out[existing].toolDetail = detail
+                out[existing].stepStatus = item.status
+                out[existing].stepTimestamp = item.ts
+                claimedRows.insert(out[existing].id); merged.insert(k)
+                guard let callId = item.callId, !callId.isEmpty,
+                      let s = receipts.indices.first(where: { !merged.contains($0) && receipts[$0].type == "tool_started" && receipts[$0].callId == callId }),
+                      let c = out.indices[..<existing].last(where: { isRow(out[$0], .call, item.name) }) else { continue }
+                mergeStarted(s, into: c)
+            }
+        }
+        // 2. calls: equal remaining counts per name → k-th call row is the k-th execution
+        for name in Set(receipts.map(\.name)) {
+            let pending = receipts.indices.filter { !merged.contains($0) && receipts[$0].type == "tool_started" && receipts[$0].name == name }
+            let open = out.indices.filter { isRow(out[$0], .call, name) }
+            guard !pending.isEmpty, pending.count == open.count else { continue }
+            for (k, i) in zip(pending, open) { mergeStarted(k, into: i) }
+        }
+        return receipts.indices.filter { !merged.contains($0) }.map { receipts[$0] }
+    }
+
     /// 显示投影：同一轮（turnIndex 相同）里连续的普通 `.tool` 行合成一条 `.toolGroup`；
     /// 引用格（citations）行留在顶层原位（build 77 的摆放），并打断连续段。
     /// 纯函数；输入的逐行消息原样保留在 store.messages（导出、审批/重试逻辑、原生测试都读它）。
@@ -291,11 +365,15 @@ extension ChatMessage {
             group.turnIndex = first.turnIndex
             group.timestamp = first.timestamp
             group.toolGroupKey = first.turnIndex.map { "\($0):\(runOrdinal)" } ?? first.id.uuidString
+            // 只有中途说明、没有工具步的段（被引用格隔开）不成组，原样留给 MessageView
+            guard run.contains(where: { $0.kind == .tool }) else { out.append(contentsOf: run); run.removeAll(); return }
             group.toolSteps = run.map {
-                ToolStep(id: $0.id, label: $0.toolLabel ?? L("工具"), detail: $0.toolDetail ?? "",
-                         status: $0.stepStatus, thoughts: $0.thoughts)
+                $0.kind == .note
+                    ? ToolStep(id: $0.id, label: L("中途说明"), detail: $0.text, status: nil, thoughts: $0.thoughts, isNote: true)
+                    : ToolStep(id: $0.id, label: $0.toolLabel ?? L("工具"), detail: $0.toolDetail ?? "",
+                               status: $0.stepStatus, thoughts: $0.thoughts)
             }
-            group.toolInvocationCount = invocationCount(run)
+            group.toolInvocationCount = invocationCount(run.filter { $0.kind == .tool })
             let times = run.compactMap(\.stepTimestamp)
             if times.count >= 2, let lo = times.min(), let hi = times.max(), hi > lo {
                 group.stepsDuration = hi - lo
@@ -304,6 +382,13 @@ extension ChatMessage {
             run.removeAll()
         }
         for message in messages {
+            if message.kind == .note {
+                // 中途说明并入相邻执行过程组（同一轮）；不占工具行序号，组键保持稳定
+                if let last = run.last, last.turnIndex != message.turnIndex { flush() }
+                if run.isEmpty { runOrdinal = message.turnIndex.map { toolOrdinal[$0, default: 0] } ?? 0 }
+                run.append(message)
+                continue
+            }
             guard message.kind == .tool else { flush(); out.append(message); continue }
             let ordinal = message.turnIndex.map { toolOrdinal[$0, default: 0] } ?? 0
             if let index = message.turnIndex { toolOrdinal[index] = ordinal + 1 }

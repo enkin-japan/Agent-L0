@@ -677,6 +677,18 @@ agent:
   sediment_to_rag: true         # 关闭则只压缩不沉淀（被折叠内容仅留摘要，不可召回细节）
 
 
+# 流式复读护栏（core/repetition_guard.py）：生成途中按频道（thinking / content，工具调用块
+# 计入 content）检测复读，命中即像用户取消一样停掉本次生成；编排层本轮首次命中推回换思路，
+# 第二次终止本轮。缺本段 = 全取下列缺省（开启）。
+guardrails:
+  repetition:
+    enabled: true          # 总开关；false = 不建检测器，生成路径零开销
+    window_chars: 2000     # 判据 a 的滚动窗口：只看该频道最近这么多字符
+    min_chars: 600         # 判据 a 的起判量：该频道累计不足这么多字符不判
+    ngram: 16              # 判据 a 的字符 n-gram 长度
+    max_dup_ratio: 0.80    # 判据 a：窗口内重复 n-gram 占比 ≥ 此值即命中
+    line_repeats: 10       # 判据 b：同一非空行（strip 后 ≥ 8 字且含 ≥ 4 字母/汉字）连续出现这么多次即命中
+
 # 云端顾问（混合架构第 2/3 站；CHARTER 铁律 6：云端只顾问不执行）。cloud_consult 工具把
 # question+context 经 **L0 出网守卫脱敏后**发给所选供应商、取回纯文本建议并本地回填
 # 占位符；落地动作永远由本地模型走既有审批闸门。出网前人工审批按 require_approval 旋钮；

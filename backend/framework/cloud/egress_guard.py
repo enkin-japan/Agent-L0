@@ -138,6 +138,10 @@ async def detect_sensitive_spans(engine, payload: str, max_tokens: int = 512) ->
     # 短板是 9B 档能力问题（D1：模型智力优化等生产机），不靠思考预算硬补。
     r = await engine.generate_once(sess, tools=None, temperature=0.1,
                                    max_tokens=max_tokens)
+    if r.get("repetition_guard"):
+        # 流式复读护栏把这腿的产出整体丢了：空文本 ≠「没有敏感段」。抛出让 sanitize 记
+        # model_leg="unavailable: …"（fail-closed：缺模型腿是可见状态，不是静默放行）
+        raise RuntimeError("model leg aborted by repetition guard")
     return _parse_spans((r.get("text") or ""), payload)
 
 

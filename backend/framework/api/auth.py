@@ -86,3 +86,18 @@ async def require_owner(request: Request) -> None:
     未启用鉴权的 dev 后端没有 device_id，视同本机。须挂在 verify_api_key 之后。"""
     if getattr(request.state, "device_id", DEFAULT_DEVICE_ID) != DEFAULT_DEVICE_ID:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有 Mac 本机能管理配对与设备。")
+
+
+async def require_owner_or_paired(request: Request) -> None:
+    """Mac 本机（共享密钥）或已配对设备（有效设备票据）都放行；须挂在 verify_api_key 之后。
+
+    审批策略 PATCH 用它（用户决定 2026-10-30）：配对可由 Mac 一键解除、票据可撤销，故把
+    「放开/收紧免审批」交给配对设备不扩大信任面。无效/吊销/过期票据走不到这里——
+    verify_api_key 已先回 401。fail-closed 纵深：鉴权已启用却没有 device_id（依赖没挂在
+    verify_api_key 之后）→ 401，而不是按本机放行；未启用鉴权的 dev 后端视同本机。"""
+    if getattr(request.state, "device_id", None):
+        return
+    configured = bool(getattr(request.app.state, "api_key", "") or "") \
+        or bool(getattr(request.app.state, "auth_devices", None))
+    if configured:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="API 密钥无效。")

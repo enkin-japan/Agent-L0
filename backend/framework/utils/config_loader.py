@@ -112,6 +112,14 @@ def kv_persist_enabled() -> bool:
     return load_section("inference").get("kv_persist", False) is True
 
 
+def repetition_guard_config() -> Dict[str, Any]:
+    """流式复读护栏阈值（config.yaml `guardrails.repetition`；缺段 = 全取
+    core/repetition_guard.DEFAULTS，即缺省开启）。引擎每次生成现取（load_config 有缓存）。"""
+    guards = load_section("guardrails")
+    sect = guards.get("repetition") if isinstance(guards, dict) else None
+    return sect if isinstance(sect, dict) else {}
+
+
 def kv_ttl_days() -> float:
     """KV 落盘留存天数（执行端设置，随 persist 请求发给算力端做逐份到期）。
     值域 [1, 365]：落盘一旦开启就必须有界留存是 D 方案的立场——0 在这里**不是**

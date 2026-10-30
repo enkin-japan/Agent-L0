@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..base import BaseTool
+from ...core.spill import resolve_spill_ref
 from ...ingestion.parsers import asr, pdf, document, text as textparser
 # 扩展名口径与摄入层共享单一真相（防两份拷贝漂移，S.7）
 from ...ingestion.router import LEGACY_DOC_EXTS, LEGACY_TEXTUTIL_EXTS, OFFICE_EXTS
@@ -59,7 +60,13 @@ class FileExtractTool(BaseTool):
         # 模型退化 cat 二进制死路）。路径处理必须全工具面均匀。
         p = Path(path).expanduser()
         if not p.exists():
-            return f"System Error: file not found: {path}"
+            # 超长观察的落盘回取（spill.py）：短句柄 `spill:<hash>`，或抄错了中间段的落盘
+            # 绝对路径——只在当前会话 spill 目录内解析，越界/不存在一律照旧报 not found
+            from ...agents import runtime
+            resolved = resolve_spill_ref(runtime.get_current_session(), path)
+            if resolved is None:
+                return f"System Error: file not found: {path}"
+            p = resolved
         suf = p.suffix.lower()
 
         if suf == ".pdf":

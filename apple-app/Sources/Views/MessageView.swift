@@ -44,6 +44,9 @@ struct MessageView: View {
             }
         case .toolGroup:
             ToolGroupView(message: message)
+        case .note:
+            // 只在没有相邻执行过程组可并入时单独出现（如被引用格隔开）
+            ProcessNoteRow(text: message.text, thoughts: message.thoughts)
         }
     }
 
@@ -536,11 +539,63 @@ struct ToolGroupView: View {
     }
 }
 
+/// 「中途说明」（3b′）：轮内工具步之前的助手正文。弱化的可折叠行，默认折叠，
+/// 标题后带首行摘要；展开看完整正文。执行过程组内、直播步骤区与单独出现时共用。
+struct ProcessNoteRow: View {
+    let text: String
+    var thoughts: String? = nil
+
+    var body: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: Theme.s2) {
+                if let thoughts, !thoughts.isEmpty {
+                    Text(thoughts)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .selectableOnIOS()
+                }
+                MarkdownText(text: text)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, Theme.s1)
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "text.bubble")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.secondaryText)
+                    .frame(width: 14, height: 14)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                Text(L("中途说明"))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.secondaryText)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                if let line = CompactStepRow.firstLine(text) {
+                    Text(line)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
 /// 组内一行：紧凑行作标题，展开看完整详情（复用单条工具行的正文）。引用格不进组。
 private struct ToolStepRow: View {
     let step: ToolStep
 
     var body: some View {
+        if step.isNote {
+            ProcessNoteRow(text: step.detail, thoughts: step.thoughts)
+        } else {
+            stepDisclosure
+        }
+    }
+
+    private var stepDisclosure: some View {
         DisclosureGroup {
             ToolDetailBody(thoughts: step.thoughts, detail: step.detail)
                 .padding(.vertical, Theme.s1)

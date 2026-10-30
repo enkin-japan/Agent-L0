@@ -11,7 +11,9 @@ from .dialect_protocol import ModelDialect
 from .stream_filter import VisibleTextStreamer
 from .constrained import ToolConstraintEngine, ToolCallGuard, llguidance as _llg
 from ..memory.session import ChatSession
-from ..utils.config_loader import kv_persist_enabled
+from ..utils.config_loader import kv_persist_enabled, repetition_guard_config
+from . import events
+from .repetition_guard import RepetitionDetector
 
 
 class AgentEngine:
@@ -406,13 +408,24 @@ class AgentEngine:
                 return None
             return lambda s: _loop_for_hooks.call_soon_threadsafe(cb, s)
 
-        if on_text_delta is not None or on_thinking_delta is not None or on_tool_pending is not None:
+        # 流式复读护栏（guardrails.repetition）：按频道喂增量，命中即走取消同一条路停生成。
+        # 频道切分复用同一个 streamer——护栏开着时即便没有直播回调也要建它（回调为 None
+        # 时增量只喂护栏，不外发）。思考/工具块增量在推理线程里先收进本地槽，feed 返回后
+        # 再统一分发：直播回调照旧跳回主循环，护栏就地判定（判定必须与停止同线程）。
+        detector = RepetitionDetector.from_config(repetition_guard_config())
+        _thinking_out: List[str] = []
+        _tool_out: List[str] = []
+        _hop_thinking = _hop(on_thinking_delta)
+
+        if on_text_delta is not None or on_thinking_delta is not None \
+                or on_tool_pending is not None or detector is not None:
             _mk = self.dialect.markers
             streamer = VisibleTextStreamer(
                 soc=_mk.soc, eoc=_mk.eoc, stc=_mk.stc, etc=_mk.etc,
                 in_thought=enable_thinking,
-                on_thinking=_hop(on_thinking_delta),
+                on_thinking=_thinking_out.append,
                 on_tool_pending=_hop(on_tool_pending),
+                on_tool_text=_tool_out.append if detector is not None else None,
             )
 
         # [Phase 2] 工具调用段约束采样：每次生成一个新 guard（纯逻辑状态机），
@@ -471,47 +484,80 @@ class AgentEngine:
         # 可见增量经 call_soon_threadsafe 回主循环（账本 emit 必须在循环线程,FIFO 保序）。
         loop = asyncio.get_running_loop()
 
+        def _dispatch(visible: str):
+            """一次 feed 的产出分发：直播回调回主循环，护栏就地判定；返回首个命中。"""
+            hit = None
+            if _thinking_out:
+                t = "".join(_thinking_out)
+                _thinking_out.clear()
+                if _hop_thinking is not None:
+                    _hop_thinking(t)
+                if detector is not None:
+                    hit = detector.feed("thinking", t)
+            if visible:
+                if on_text_delta is not None:
+                    loop.call_soon_threadsafe(on_text_delta, visible)
+                if detector is not None and hit is None:
+                    hit = detector.feed("content", visible)
+            if _tool_out:
+                t = "".join(_tool_out)
+                _tool_out.clear()
+                if detector is not None and hit is None:
+                    hit = detector.feed("content", t)
+            return hit
+
         def _blocking_generate() -> Dict[str, Any]:
             gen_text = ""
             gen_metrics: Dict[str, Any] = {}
             gen_cancelled = False
+            gen_repetition = None
             gen_extra: Dict[str, Any] = {}
-            for chunk in self.backend.stream_generate(
+            stream = self.backend.stream_generate(
                 formatted_prompt,
                 cache=session.brain_memory_state,
                 images=session.images or None,
                 audios=session.audios or None,
                 sampling=sampling,
                 features=features,
-            ):
-                gen_text += chunk.text
-                gen_metrics = {
-                    "prompt_tokens": chunk.prompt_tokens,
-                    "generation_tokens": chunk.generation_tokens,
-                    "prompt_tps": chunk.prompt_tps,
-                    "generation_tps": chunk.generation_tps,
-                    "peak_memory": chunk.peak_memory
-                }
-                if chunk.extra:
-                    gen_extra = chunk.extra
-                # 真流式：取本段的可见文本增量 → 过滤成可见正文 → 回吐主循环。
-                # delta=None 表示后端无 detokenizer 级差分能力，退回规范文本段增量。
-                if streamer is not None:
-                    visible = streamer.feed(chunk.delta if chunk.delta is not None
-                                            else chunk.text)
-                    if visible and on_text_delta is not None:
-                        loop.call_soon_threadsafe(on_text_delta, visible)
-                # 取消检查点（token 段粒度;bool 读在 GIL 下安全）：立即停止消耗生成流
-                if session.cancel_requested:
-                    gen_cancelled = True
-                    break
+            )
+            try:
+                for chunk in stream:
+                    gen_text += chunk.text
+                    gen_metrics = {
+                        "prompt_tokens": chunk.prompt_tokens,
+                        "generation_tokens": chunk.generation_tokens,
+                        "prompt_tps": chunk.prompt_tps,
+                        "generation_tps": chunk.generation_tps,
+                        "peak_memory": chunk.peak_memory
+                    }
+                    if chunk.extra:
+                        gen_extra = chunk.extra
+                    # 真流式：取本段的可见文本增量 → 过滤成可见正文 → 回吐主循环。
+                    # delta=None 表示后端无 detokenizer 级差分能力，退回规范文本段增量。
+                    if streamer is not None:
+                        gen_repetition = _dispatch(streamer.feed(
+                            chunk.delta if chunk.delta is not None else chunk.text))
+                    # 取消检查点（token 段粒度;bool 读在 GIL 下安全）：立即停止消耗生成流。
+                    # 复读护栏命中走同一出口（停止消耗 = 远程后端发 cancel 并断开 SSE）。
+                    if session.cancel_requested:
+                        gen_cancelled = True
+                        break
+                    if gen_repetition is not None:
+                        break
+            finally:
+                # 提前离场时显式关闭生成器：远程后端的 finally（POST cancel + 断开 SSE）
+                # 在此刻就跑，而不是等 GC 回收迭代器
+                _close = getattr(stream, "close", None)
+                if _close is not None:
+                    _close()
             # 冲刷过滤器尾部（未闭合频道的残留按语义丢弃）
-            if streamer is not None and not gen_cancelled:
-                tail = streamer.close()
-                if tail and on_text_delta is not None:
-                    loop.call_soon_threadsafe(on_text_delta, tail)
+            # 尾部照常分发（思考残留回直播、正文回 on_text_delta）；生成已自然结束，
+            # 此处护栏即便命中也不再处置——没有可停的东西了
+            if streamer is not None and not gen_cancelled and gen_repetition is None:
+                _dispatch(streamer.close())
             return {"text": gen_text, "metrics": gen_metrics,
-                    "cancelled": gen_cancelled, "extra": gen_extra}
+                    "cancelled": gen_cancelled, "repetition": gen_repetition,
+                    "extra": gen_extra}
 
         async with self._inference_lock:
             outcome = await loop.run_in_executor(self._inference_executor, _blocking_generate)
@@ -544,10 +590,29 @@ class AgentEngine:
         if cancelled:
             return {"cancelled": True, "thoughts": [], "text": "", "tool_calls": [], "metrics": metrics}
 
+        rep = outcome.get("repetition")
+        if rep is not None:
+            # 复读护栏命中：与取消同语义（后端记录未前进，prompt_stream 保留，产出整体丢弃），
+            # 但如实记仪表——这些 token 真烧了算力。终态 repetition_guard 交编排层决定推回/终止。
+            gen_n = metrics.get("generation_tokens", 0) or 0
+            metrics["token_breakdown"] = self._token_breakdown(
+                generated_text, gen_n, enable_thinking=enable_thinking)
+            sample = rep.sample.replace("\n", "⏎")
+            print(f"[Guard] 复读输出 channel={rep.channel} reason={rep.reason} gen={gen_n} tokens"
+                  f" sample={sample!r}")
+            events.emit("repetition", session=getattr(session, "session_id", None),
+                        channel=rep.channel, reason=rep.reason,
+                        turn=getattr(getattr(session, "journal", None), "current_turn_id", None))
+            return {"cancelled": False,
+                    "repetition_guard": {"channel": rep.channel, "reason": rep.reason},
+                    "thoughts": [], "text": "", "tool_calls": [], "truncated": False,
+                    "metrics": metrics}
+
         # [仪表 Phase 0] token 去向分解：thinking / 可见正文 / 工具 JSON / 标记开销。
         # 收益评估的分母（约束采样只作用于 tool_json 段、thinking 分级只压 thinking 段）。
         metrics["token_breakdown"] = self._token_breakdown(
-            generated_text, metrics.get("generation_tokens", 0) or 0
+            generated_text, metrics.get("generation_tokens", 0) or 0,
+            enable_thinking=enable_thinking,
         )
 
         parsed = self.dialect.parse_response(generated_text)
@@ -620,11 +685,18 @@ class AgentEngine:
             return None
 
     # ---------- 仪表（inference-speedup Phase 0） ----------
-    def _token_breakdown(self, generated_text: str, generation_tokens: int) -> Dict[str, int]:
+    def _token_breakdown(self, generated_text: str, generation_tokens: int, *,
+                         enable_thinking: bool = False) -> Dict[str, int]:
         """
         按频道把单次生成的原始输出切段并重编码计数，得到 token 去向分解。
         重编码计数与实际生成 token 数在段边界处有 ±1 级误差（可接受，仪表口径）；
         差值记为 marker_overhead（频道/工具标记本身的开销），下限截到 0。
+
+        思考预开（方言 thinking_preopened，qwen35 开思考时为真）：生成从已打开的思考块
+        **内部**起步，块不带频道名（gemma4 的 `thought` 名在这里不存在），故首个收尾标记
+        之前的全部文本都是思考；未闭合则整段算思考（与 parser 把未闭合思考整段路由进
+        thoughts 同口径）。不看这个标志，按频道名判会把整段思考算成可见正文（实测
+        qwen35 六次生成、数千字思考全记 visible、thinking 恒 0）。
         """
         def enc(s: str) -> int:
             if not s:
@@ -633,6 +705,19 @@ class AgentEngine:
 
         thinking = visible = tool_json = 0
         _mk = self.dialect.markers
+        _pre = getattr(self.dialect, "thinking_preopened", None)
+        if enable_thinking and callable(_pre) and _pre(enable_thinking):
+            # 引擎会把思考播种串拼在产出前（generate_once），有就先剥掉
+            seed = self.dialect.thinking_prefill(True)
+            if seed and generated_text.startswith(seed):
+                generated_text = generated_text[len(seed):]
+            cut = generated_text.find(_mk.eoc)
+            if cut == -1:
+                thinking += enc(generated_text.strip())
+                generated_text = ""
+            else:
+                thinking += enc(generated_text[:cut].strip())
+                generated_text = generated_text[cut + len(_mk.eoc):]
         ch_pat = re.compile(
             rf"{re.escape(_mk.soc)}(.*?){re.escape(_mk.eoc)}", re.DOTALL)
         for m in ch_pat.finditer(generated_text):

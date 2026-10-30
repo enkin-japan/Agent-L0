@@ -18,6 +18,12 @@ final class OfflineSessionIndexFence: @unchecked Sendable {
     }
 }
 
+/// 直播预览里的一条「中途说明」：工具步开始前已流出的正文（beforeStep = 当时已有的步数）。
+struct LiveNote: Equatable {
+    let text: String
+    let beforeStep: Int
+}
+
 /// 审批卡片捕获的账本身份；seq 区分同一轮中后续的一批审批。
 struct PendingApprovalTarget: Equatable {
     let sessionId: String
@@ -180,6 +186,9 @@ final class AgentStore: ObservableObject {
     @Published var liveSteps: [String] = []
     /// 直播步骤的结构化投影（与 liveSteps 同源 live.preview.steps；ChatView 画紧凑行）。
     @Published private(set) var liveStepItems: [NormalizedStep] = []
+    /// 直播期的「中途说明」（3b′）：工具步开始前已流出的正文移出正文区、收进步骤区，
+    /// 让最终答复从空白重新流出。beforeStep = 被切下时已有的步数（ChatView 按它穿插）。
+    @Published private(set) var liveNotes: [LiveNote] = []
     /// 本轮最近一次审批的结果，取自账本 `resumed` 事件的 trigger（approve / deny）；
     /// 预览级状态：新一轮受理、轮次终态、换会话时清空。
     enum ApprovalOutcome: Equatable { case approved, denied }
@@ -1618,6 +1627,7 @@ final class AgentStore: ObservableObject {
         flushScheduled = false
         liveSteps = []
         liveStepItems = []
+        liveNotes = []
         approvalOutcome = nil
         activity = nil
         taskSnapshot = nil
@@ -1628,27 +1638,64 @@ final class AgentStore: ObservableObject {
         composerPrefill = nil
     }
 
+    /// 首帧 stream_attached 报出的账本游标落后于本端已消费游标：账本不再认这个游标。
+    private struct AttachCursorRejected: Error {}
+
+    /// 事件流对未知/过旧游标没有专门的拒收码（PROTOCOL §2.4：404 是唯一终局，服务端从不
+    /// 拒收游标）；其余 4xx 一律按「游标被拒」处理 → 经 /turn 重锚。
+    private static func isCursorRejection(_ error: Error) -> Bool {
+        switch error {
+        case AgentError.http(let code, _): return (400..<500).contains(code) && code != 404
+        case SSEError.badStatus(let code): return (400..<500).contains(code) && code != 404
+        default: return false
+        }
+    }
+
+    /// 单附着循环。首次附着（anchored == false）按 history → /turn 的读取下界定位；
+    /// 断线重连一律带已消费游标续播（PROTOCOL §2.4 / §2.5「已有消费游标的断线仍续播」）——
+    /// iOS 切后台挂起 URLSession 就是一次断线，倒回本轮 first_seq 会让整轮进度重刷一遍。
+    /// 只有游标被拒（cursorRejected）才经 /turn 重锚，且优先用快照即时复原预览而不倒带。
     private func attachLoop(sessionId: String, epoch: UUID, client: AgentClient, id: UUID) async {
         var backoff: UInt64 = 1_000_000_000
         var anchored = false
+        var cursorRejected = false
         func ownsAttachment() -> Bool {
             !Task.isCancelled && isCurrent(sessionId, epoch, client) && attachmentId == id
         }
         while ownsAttachment() {
             do {
                 var after = cursor
-                if !anchored {
+                if !anchored || cursorRejected {
                     let ts = try await client.turnState(sessionId: sessionId)
                     guard ownsAttachment() else { return }
-                    after = min(replayAfter ?? 0, ts.turn.flatMap { ($0.firstSeq ?? 1) - 1 } ?? (ts.lastSeq ?? 0))
+                    if !anchored {
+                        after = min(replayAfter ?? 0, ts.turn.flatMap { ($0.firstSeq ?? 1) - 1 } ?? (ts.lastSeq ?? 0))
+                        historyIsReadOnly = false
+                        anchored = true
+                        if ts.turn == nil && optimisticReceipt == nil { isGenerating = false }
+                    } else if let seeded = reanchorFromSnapshot(ts) {
+                        after = seeded
+                    } else {
+                        // 快照里不是本端正在展示的那一轮：倒带不可避免，走同一个
+                        // history → turn → events 入口（与 thin 终态缺历史同一条路）。
+                        recoverHistoryProjection(sessionId: sessionId)
+                        return
+                    }
                     cursor = after
-                    historyIsReadOnly = false
-                    anchored = true
-                    if ts.turn == nil && optimisticReceipt == nil { isGenerating = false }
+                    cursorRejected = false
                 }
+                var receivedFrame = false
                 for try await env in try client.attachEvents(sessionId: sessionId, after: after) {
                     guard ownsAttachment() else { return }
-                    backoff = 1_000_000_000
+                    if env.type == "stream_attached", case .number(let last)? = env.data["last_seq"],
+                       last.isFinite, last < Double(after) {
+                        throw AttachCursorRejected()
+                    }
+                    backoff = 1_000_000_000   // 首帧过了拒收检查才算真连上；反复被拒仍按指数退避
+                    if !receivedFrame {
+                        receivedFrame = true
+                        historyIsReadOnly = false
+                    }
                     if env.seq > 0 {
                         if env.seq <= cursor { continue }
                         cursor = env.seq
@@ -1669,12 +1716,63 @@ final class AgentStore: ObservableObject {
             } catch {
                 if !ownsAttachment() { return }
                 if !canonicalTurns.isEmpty, optimisticReceipt == nil { historyIsReadOnly = true }
-                anchored = false
                 if case AgentError.http(404, _) = error { return }
                 if case SSEError.badStatus(404) = error { return }
+                // 断线重连保留 anchored：下一轮带已消费游标续播；只有游标被拒才重锚。
+                if error is AttachCursorRejected || Self.isCursorRejection(error) { cursorRejected = true }
                 try? await Task.sleep(nanoseconds: backoff)
                 backoff = min(backoff * 2, 10_000_000_000)
             }
+        }
+    }
+
+    /// 游标被拒后的重锚：快照仍是本端正在展示的那一轮时，按 /turn 的 partial_text /
+    /// partial_thinking / task 即时复原预览，从快照的 last_seq 续播（不倒回 first_seq 重放）。
+    /// 返回 nil = 快照里是别的轮或已无活跃轮，只能走完整恢复入口。
+    private func reanchorFromSnapshot(_ ts: TurnStateResponse) -> Int? {
+        guard let turn = ts.turn, let turnId = turn.turnId, turnId == liveTurnId else { return nil }
+        // 快照不带审批事件的 seq 与待批目标：跳到 last_seq 会把 awaiting_approval 落在缺口里
+        // （pendingTools 有、pendingApprovalTarget 无 → 审批卡不显示，轮次干挂）。暂停态走完整恢复。
+        guard turn.state != "awaiting_approval" else { return nil }
+        seedPreview(from: turn)
+        return turn.lastSeq ?? ts.lastSeq ?? cursor
+    }
+
+    private func seedPreview(from turn: TurnStateSnapshot) {
+        flushStreamNow()
+        live.turnState = turn.state
+        ledgerPhase = live.turnState
+        if let text = turn.partialText {
+            live.preview.text = text
+            // 已切成「中途说明」的前缀不再回到正文区
+            let noted = liveNotes.map(\.text).joined()
+            if text.hasPrefix(noted) {
+                streamText = String(text.dropFirst(noted.count))
+            } else {
+                liveNotes = []
+                streamText = text
+            }
+        }
+        if let thinking = turn.partialThinking {
+            live.preview.thinking = thinking
+            thinkingText = thinking
+        }
+        if let task = turn.task { taskSnapshot = task }
+        switch turn.state {
+        case "awaiting_approval":
+            isGenerating = false
+            isSuspended = false
+            pendingTools = turn.pendingTools ?? []
+        case "suspended":
+            isGenerating = false
+            isSuspended = true
+            pendingTools = nil
+            pendingApprovalTarget = nil
+        default:
+            isGenerating = true
+            isSuspended = false
+            pendingTools = nil
+            pendingApprovalTarget = nil
         }
     }
 
@@ -1726,6 +1824,16 @@ final class AgentStore: ObservableObject {
             scheduleStreamFlush()
         case "tool_call_pending", "tool_started", "tool_progress", "tool_result",
              "step_completed", "step_failed":
+            // 3b′：工具**真正开始执行**时，其前已流出的正文是过程说明，收进步骤区、插在该步之前。
+            // 刻意不在 tool_call_pending 折：等审批期间那段正文正是用户据以判断的理由，留在正文区
+            // （「最后一段正文是答复」在暂停态同样成立）。并行调用取最早在跑的那步：正文在它们全部之前。
+            if env.type == "tool_started" {
+                let steps = live.preview.steps
+                if let i = steps.firstIndex(where: { $0.kind == "tool" && $0.status == "running" })
+                    ?? steps.lastIndex(where: { $0.kind == "tool" }) {
+                    foldStreamedTextIntoNote(beforeStep: i)
+                }
+            }
             renderSteps()
         case "queue_moved":
             // 排队位次可见(Phase 3):单 worker 忙碌时,黑盒排队变成明确位次
@@ -1788,6 +1896,7 @@ final class AgentStore: ObservableObject {
     /// 轮次受理：确保用户气泡存在——收编本端乐观气泡;其他来源（web/定时任务/别的设备）
     /// 的轮次按事件补建,本端从此实时看到别端发起的任务。
     private func onTurnQueued(_ env: EventEnvelope) {
+        let previousLiveTurnId = liveTurnId
         resetPreview()
         isGenerating = true
         liveTurnId = env.turnId
@@ -1803,6 +1912,10 @@ final class AgentStore: ObservableObject {
             liveUserMessageId = optimisticUserMessageId
             optimisticTurnId = env.turnId
             optimisticFirstSeq = env.seq
+        } else if let existing = liveUserMessageId, previousLiveTurnId != nil, previousLiveTurnId == env.turnId,
+                  messages.contains(where: { $0.id == existing }) {
+            // 重放的 turn_queued（重锚倒回本轮起点）：本轮的用户气泡已在，不追加第二个——
+            // onTurnEnded 只撤 liveUserMessageId 指向的那一个，多出来的会永久残留。
         } else {
             let prompt = env.str("prompt")
             liveUserMessageId = nil
@@ -1926,7 +2039,16 @@ final class AgentStore: ObservableObject {
         }
     }
 
+    /// 把已流出的正文切成一条「中途说明」，正文区清空，最终答复从空白重新流出。
+    private func foldStreamedTextIntoNote(beforeStep: Int) {
+        flushStreamNow()
+        guard !streamText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        liveNotes.append(LiveNote(text: streamText, beforeStep: beforeStep))
+        streamText = ""
+    }
+
     private func resetPreview() {
+        liveNotes = []
         streamText = ""
         thinkingText = ""
         streamBuffer = ""

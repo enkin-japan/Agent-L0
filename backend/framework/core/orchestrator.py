@@ -666,6 +666,7 @@ class Orchestrator:
         mutated_ok_this_turn = resume_mutated_ok
         failure_nudges = 0
         fabrication_nudges = 0
+        repetition_hits = 0          # 流式复读护栏本轮命中次数（第 1 次推回、第 2 次终止）
         goal_verified = False        # 收尾目标校验预算（每次 run_turn 最多审计一次）
         thinking_only_nudges = 0     # 全思考空产出推回预算（THINKING_ONLY_NUDGE_MAX）
         base_max_tokens = int(gen_kwargs.get("max_tokens", 4096))
@@ -858,6 +859,35 @@ class Orchestrator:
             _stamp_turn_stats()
             if task is not None and task.plan and task.current_step() is not None:
                 task.step_iterations += 1
+
+            # --- 护栏：流式复读（engine 已当场停生成、记日志与 repetition 事件） ---
+            # 产出整体丢弃（不落 history，与 runaway 同：KV 前缀下次生成自动裁剪对齐）。
+            # 本轮首次 → 一次性尾注推回换思路（failure_swallow_nudge 同机制）；
+            # 第二次 → 终止本轮，答复里如实说明（runaway/parse_loop 同出口形态）。
+            rep = result.get("repetition_guard")
+            if rep:
+                channel = str(rep.get("channel") or "content")
+                repetition_hits += 1
+                if repetition_hits >= 2:
+                    msg = "模型连续两次陷入重复输出，本轮已停止。"
+                    session.add_assistant_message(content=msg)
+                    session.set_activity("已终止（模型连续两次陷入重复输出）", phase="done")
+                    events.emit("turn_abort", session=session.session_id,
+                                reason="repetition_guard", channel=channel)
+                    _stamp_turn_stats()
+                    _exit_audit()
+                    return {
+                        "status": "warning",
+                        "response": _with_retrieval_note(msg),
+                        "thoughts": ["System: repeated output loop detected twice; aborted."],
+                        "metrics": metrics,
+                    }
+                _transition("repetition_nudge")
+                session.push_activity("note", "检测到重复输出，已打断并换思路")
+                pending_tail_notes.append(
+                    f"检测到输出在重复（{channel}）。请换一种思路继续，或直接给出目前能给的结论；"
+                    "不要重复刚才的内容。")
+                continue
 
             tool_calls = result["tool_calls"]
             text = result["text"]

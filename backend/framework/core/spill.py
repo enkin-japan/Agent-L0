@@ -12,7 +12,8 @@
 修法：截断前把原文落到会话目录，中缝改成给一条**真能走通**的路。刻意**不新增元工具**
 ——`file_extract` 已经是免审批、可并发的只读工具，且对 text 支持 start/end 行区间，
 正好是「按行窄取回」的现成能力；新增元工具要给稳定前缀加钱，还稀释注意力。
-句柄格式**只有一种**（会话目录下的绝对路径 + file_extract），模型面容不下第二种。
+回取**调用**只有一种（file_extract + 行区间）；路径另给一个短句柄 `spill:<hash>` 作同一调用的
+等价写法（模型抄长绝对路径会抄错，见 resolve_spill_ref），压缩层仍只认长路径那一串。
 """
 import os
 import re
@@ -41,6 +42,48 @@ _CALL_ID_RE = re.compile(r"^[0-9a-f]{1,16}$")
 # 冷恢复兜底用：`_` 前缀元数据落盘时被剥，重载会话后压缩桩要从观察正文里把句柄捞回来。
 _SPILL_CALL_RE = re.compile(r'file_extract\(path="[^"]+", start=\d+, end=\d+, max_chars=\d+\)')
 _SPILL_TOTAL_RE = re.compile(r"\((\d+) chars total\)")
+# 落盘文件名（不含 .txt）：`<call_id>` 或撞名改名后的 `<call_id>-<n>`（见 spill_observation）
+_SPILL_STEM_RE = re.compile(r"^[0-9a-f]{1,16}(?:-[0-9]{1,2})?$")
+# 短句柄 `spill:<stem>`：模型抄长绝对路径会抄错（实案 app-9daf9c9fee44：`dev.enkin.macagent`
+# 两次抄成 `dev.inkin` / `dev.injin`，回取全挂）。短句柄只在**当前会话**的 spill 目录内解析。
+SPILL_HANDLE_PREFIX = "spill:"
+
+
+def spill_handle(path: str) -> str:
+    """落盘绝对路径 → 短句柄 `spill:<stem>`（中缝与 file_extract 共用这一种拼法）。"""
+    return SPILL_HANDLE_PREFIX + Path(path).stem
+
+
+def resolve_spill_ref(session, path: str) -> Optional[Path]:
+    """把短句柄 / 抄错的落盘路径解析到**当前会话** spill 目录里的真实文件；不成立返回 None。
+
+    两种入口：① `spill:<stem>`（可带 `.txt`）；② 绝对路径不存在、但路径里有 `/spill/` 且
+    文件名形如落盘名（`<hex>.txt` / `<hex>-<n>.txt`）——按文件名在当前会话 spill 目录重试。
+    fail-closed：文件名必须过落盘名正则，且 realpath 必须落在当前会话 spill 目录的 realpath
+    之内（符号链接出逃、`spill:../x` 一律拒）；任何一条不成立都返回 None，调用方照旧报
+    not found——绝不把会话外的文件当成句柄目标。
+    """
+    if session is None or getattr(session, "session_dir", None) is None:
+        return None
+    raw = str(path or "").strip()
+    if raw.startswith(SPILL_HANDLE_PREFIX):
+        name = raw[len(SPILL_HANDLE_PREFIX):]
+        if name.endswith(".txt"):
+            name = name[:-4]
+    else:
+        if f"/{_SPILL_DIRNAME}/" not in raw or not raw.endswith(".txt"):
+            return None
+        name = raw.rsplit("/", 1)[-1][:-4]
+    if not _SPILL_STEM_RE.fullmatch(name):
+        return None
+    try:
+        root = os.path.realpath(Path(session.session_dir) / _SPILL_DIRNAME)
+        target = os.path.realpath(os.path.join(root, f"{name}.txt"))
+        if os.path.commonpath([root, target]) != root or target == root:
+            return None
+        return Path(target) if os.path.isfile(target) else None
+    except (OSError, ValueError):
+        return None
 
 
 def _spill_dir_bytes(d: Path) -> int:
@@ -132,7 +175,8 @@ def truncate_observation(text: str, cap: int, spill: Optional[Tuple[str, int]]) 
         # 那是这种载荷仅剩的退路。
         seam = (f"\n...[observation truncated: showing the first {head_n} and last {tail_n} "
                 f"of {total} chars ({total} chars total). The full output was saved verbatim to "
-                f"{path}{kept}, but it has no line breaks, so a line range cannot address the "
+                f"{path} (short handle: path=\"{spill_handle(path)}\"){kept}, but it has no "
+                f"line breaks, so a line range cannot address the "
                 f"omitted middle — narrow the query at the source instead]...\n")
         return head + seam + tail
 
@@ -144,5 +188,6 @@ def truncate_observation(text: str, cap: int, spill: Optional[Tuple[str, int]]) 
     seam = (f"\n...[observation truncated: showing lines 1-{head_end} and "
             f"{tail_start}-{n_lines} of {n_lines} lines ({total} chars total). "
             f"The full output was saved verbatim{kept}; read the omitted middle with "
-            f"{handle}. Do NOT re-run this tool just to see it again]...\n")
+            f"{handle} — or the same call with the short handle path=\"{spill_handle(path)}\" "
+            f"instead of the long path. Do NOT re-run this tool just to see it again]...\n")
     return head + seam + tail

@@ -152,6 +152,15 @@ class ModelDialect(Protocol):
         """
         ...
 
+    def thinking_preopened(self, enable_thinking: bool) -> bool:
+        """（可选方法，缺省视为 False）生成是否从一个**不带频道名**的已打开思考块内部起步。
+
+        为真时首个 eoc 之前的产出全是思考（qwen35：prompt 收尾在 `<think>` 内）。
+        gemma4 的思考块带 `thought` 频道名、按名即可切分，不实现本方法。
+        引擎的 token 去向分解（_token_breakdown）据此切思考段。
+        """
+        ...
+
     def tool_call_grammar(self, tools: List[Dict[str, Any]]) -> "ToolCallGrammar":
         """本方言回放格式对应的调用体约束语法（约束采样用）。
 

@@ -23,7 +23,11 @@ enum ConversationExport {
             case .tool:
                 lines.append("> 🔧 \(message.toolLabel ?? "工具")")
             case .toolGroup:
-                lines.append(contentsOf: message.toolSteps.map { "> 🔧 \($0.label)" })
+                lines.append(contentsOf: message.toolSteps.map { step in
+                    step.isNote ? "> 💬 中途说明：\(step.detail.replacingOccurrences(of: "\n", with: " "))" : "> 🔧 \(step.label)"
+                })
+            case .note:
+                lines.append("> 💬 中途说明：\(message.text.replacingOccurrences(of: "\n", with: " "))")
             case .system:
                 lines.append("> ⚠️ \(message.text.replacingOccurrences(of: "\n", with: " "))")
             }

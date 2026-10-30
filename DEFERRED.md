@@ -259,3 +259,61 @@ Resources/backend → `SidecarManager.resolveLayout()` bundle 判据失败**静�
 
 ### 重启触发条件（余项 3/4）
 external 态用户真的需要「接管重启」时上 3；再出现「崩溃自愈后密钥失效」实案时上 4。
+
+---
+
+## 6. Computer Use：GUI 任务子回路（2026-10-30 用户决定「方案含 P0 探针落档，先不执行」）
+
+**完整设计**：`docs/plans/2026-10-30-computer-use-design.md`（含外部方案逐条取舍、
+事实核对表、P0 探针详细设计 §11.1、恢复前置条件 §11.2）。本条只记账本四要素。
+
+### 轻量版（已交付，承重代码）
+- AX 六工具：`backend/framework/mcp/tools/accessibility.py`（`list_applications / read_ui_tree /
+  click_ui_element / set_ui_element_value / type_text / press_keys`，pyobjc + CGEvent，树上限
+  深 18 / 节点 400）。
+- `run_applescript` 恒审批（`apple_script.py:37`）、`open_path`（`desktop.py`）；系统提示词
+  已定「终端 → AppleScript → GUI」优先级（`memory/session.py:125`）。
+- 机械压缩器保「读树→点击→再读树」（`memory/compactor.py`）。
+
+### 完整版（设计见计划文档）
+- 短命视觉子会话承载 `ui_task` 子回路（图不进主会话；先例 `ppt/deck_critique.py:146`）。
+- 新工具 `capture_window / zoom / wait_for / ui_actions`（动作批 + `observe_after`，批内中止）。
+- 审批分级进现有 read/write 框架：四个 AX 写工具显式 `effect="write"`；`ui_actions`
+  钉死 + 批内高危判定；`approval-policy` 加 `ui_apps_allow/deny`；安全输入检测；急停热键
+  → `POST /api/v1/chat/{sid}/task/cancel`。
+- 引擎放开「只追加」图会话的 KV 前缀复用（现状 `core/engine.py:440,482` 含图即全量）。
+
+### 为什么先轻量 / 搁置
+- 现有「终端 + AppleScript + AX」已覆盖日常；截图型 CU 的收益取决于三件未验之事：
+  打包形态下屏幕录制的 TCC 归责、Qwen3.8 在 mlx-vlm 下的坐标约定、含图 prefill 代价。
+- 单 GPU 机器上探针 B/C 要切离 gemma 生产档，需用户在场放行；用户决定先不投入。
+
+### 重启触发条件
+- 用户点名重启；或日常任务反复卡在「必须点界面」且 AX 六工具失败率明显。
+- 恢复步骤按计划文档 §11.2：GPU 空窗、Qwen3.8-27B-8bit 已就位、用户在场；先复核官方是否
+  已公布 GUI 坐标约定，再决定探针 B 的规模。
+
+### 已知缺口（即使不做完整版也该补的两处，列于此备查）
+- 四个 AX 写工具未声明 `effect`，默认策略下点击 / 键入不审批（`registry.py:201-202`）。
+- `read_ui_tree` 未排除 `AXSecureTextField` 的值（grep 0 命中）。
+
+## 7. 本机 MLX + BPE 方言（qwen）：流式去 token 器延迟吐字，复读护栏拦不住中途
+- **现象**（2026-10-30 一审发现，未实测）：`backends/mlx/backend.py` 对 BPE 模型给的 `delta = result.text`，
+  而 mlx_vlm `BPEStreamingDetokenizer` 只在下一 token 以空格开头时 flush（`tokenizer_utils.py:234`）。
+  无空格的纯中文产出要到末块才到 `VisibleTextStreamer` / `RepetitionDetector`，护栏只能在生成自然结束后
+  命中：产出照样丢弃并推回，但算力一点没省。
+- **影响面**：仅本机 MLX 跑 qwen35 系（注册表里的 Qwen3.8-27B 条目）。现生产远端算力（Colab vLLM）逐 token
+  推 SSE 不受影响；本机 gemma4 是 SentencePiece 去 token 器，也不受影响。
+- **修法候选**：MLX 后端对 BPE 模型按「已解码出完整 UTF-8 且不以不完整字节结尾」flush，或在 engine 侧用
+  `generation_tokens` 步进为检测器补一条「字节级」喂入。两者都要对表 computer use 方案里的 qwen 探针一起做。
+
+## 8. 中途正文：同一次生成里「正文 + 工具调用」的正文不入历史（直播有、落盘无）
+- **现象**（build 83 一审）：模型在一次生成里先写「让我查一下…」再发工具调用时，正文经 `token_delta` 直播出来、
+  直播态按 3b′ 切成「中途说明」；但编排层工具分支只 `add_assistant_message(tool_calls=…)`，正文不入 history，
+  turn_ended 后权威消息替换预览，这段说明消失；导出同样没有。护栏推回型（纯文本消息其后再有工具步）才会在
+  落盘轮次里出现 `.note`。
+- **为什么没顺手修**：补进 history 会改变模型可见上下文（方言拼装要支持 content+tool_calls 同在一条 assistant
+  消息）并牵动大量以 history 形状为断言的金测试；需要单独一波，含 KV 前缀影响评估。
+- **同波记下的小项**：取消轮回执按首匹配认行（同名同内容两条返回行时可能错认）；/events 单端点持续 4xx 且无
+  活跃轮 → 1 s 级重装历史循环（需代理级异常才触发）；`ConversationExport` 把中途说明压成单行；直播窗
+  `suffix(6)` 把说明行也计入。

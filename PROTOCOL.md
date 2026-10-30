@@ -638,8 +638,13 @@ default 判,auto 不安全、ask 无人可答;(3)**损坏即收紧**——策略
 ```
 GET   /api/v1/approval-policy   → {"read": MODE, "write": MODE, "tools": {name: "read"|"write"}, "dynamic": ["run_shell_command"]}
 PATCH /api/v1/approval-policy   {"read"?: MODE, "write"?: MODE}   → 200 全量策略;非法档位或未知键 → 422
-                                仅 Mac 本体(共享密钥 require_owner);配对设备票据 → 403
+                                Mac 本体(共享密钥)或已配对设备票据(require_owner_or_paired);
+                                无效/吊销/过期票据 → 401(verify_api_key)
 ```
+
+PATCH 对配对设备开放(用户决定 2026-10-30):配对可由 Mac 一键解除、票据可撤销,改档不扩大
+信任面;每次改动记一行 `[Approval] policy patched by device=<id> read=… write=…`。上面三条
+硬规则不随调用方变化。
 
 `awaiting_approval` 事件、`POST /turns/approval`(含锁屏 Live Activity 的拒绝路径)、计划任务的
 自动拒绝、§2.9 配对面均不受此节影响;C4 检索证据护栏继续读工具自身的 `requires_approval`。

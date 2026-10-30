@@ -783,26 +783,73 @@ def test_hallucinated_tool_name_fails_as_before_under_every_mode(make_session, t
     assert types == BASELINE_UNKNOWN_TYPES
 
 
-# ── PATCH is owner-only; both routes work before the first assembly ───────────
+# ── PATCH: owner or paired device (user decision 2026-10-30); both routes work before the first assembly
 
-def test_patch_with_a_device_ticket_is_forbidden_get_is_allowed(client):
+def test_patch_with_a_paired_device_ticket_changes_the_policy(client, capsys):
+    """配对设备票据 PATCH → 200，策略落盘并即时生效；日志记下是哪台设备改的。"""
     import app as entry
     http, path = client
-    token, _, _ = entry.app.state.device_store.issue(name="iPhone", via="qr")
+    token, record, _ = entry.app.state.device_store.issue(name="iPhone", via="qr")
     device = {"Authorization": f"Bearer {token}"}
     r = http.patch("/api/v1/approval-policy", json={"write": "auto"}, headers=device)
-    assert r.status_code == 403, r.text
-    assert not path.exists() and approval_policy.current() == approval_policy.DEFAULT
+    assert r.status_code == 200, r.text
+    assert (r.json()["read"], r.json()["write"]) == ("default", "auto")
+    assert json.loads(path.read_text()) == {"read": "default", "write": "auto"}
+    assert approval_policy.current() == ApprovalPolicy(read="default", write="auto")
+    assert f"[Approval] policy patched by device={record['id']} read=default write=auto" \
+        in capsys.readouterr().out
     assert http.get("/api/v1/approval-policy", headers=device).status_code == 200
 
 
-def test_patch_route_mounts_require_owner():
+def test_patch_with_the_shared_key_still_works(client):
+    http, path = client
+    r = http.patch("/api/v1/approval-policy", json={"read": "ask"}, headers=AUTH)
+    assert r.status_code == 200, r.text
+    assert approval_policy.current() == ApprovalPolicy(read="ask", write="default")
+
+
+def test_patch_with_a_revoked_or_unknown_ticket_is_rejected(client):
     import app as entry
-    from framework.api.auth import require_owner
+    http, path = client
+    store = entry.app.state.device_store
+    token, record, _ = store.issue(name="iPhone", via="qr")
+    store.revoke(record["id"])
+    for bearer in (token, "never-issued-ticket"):
+        r = http.patch("/api/v1/approval-policy", json={"write": "auto"},
+                       headers={"Authorization": f"Bearer {bearer}"})
+        assert r.status_code == 401, (bearer, r.status_code, r.text)   # verify_api_key 先拒；新依赖不再产生 403
+    assert http.patch("/api/v1/approval-policy", json={"write": "auto"}).status_code == 401
+    assert not path.exists() and approval_policy.current() == approval_policy.DEFAULT
+
+
+def test_require_owner_or_paired_fails_closed_without_a_device_id():
+    """纵深：鉴权已配置、却没经 verify_api_key 落 device_id → 401（不按本机放行）；
+    dev 未配置鉴权 → 放行（与 require_owner 同口径）。"""
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from framework.api.auth import require_owner_or_paired
+
+    def req(api_key, device_id=None):
+        state = SimpleNamespace() if device_id is None else SimpleNamespace(device_id=device_id)
+        return SimpleNamespace(state=state,
+                               app=SimpleNamespace(state=SimpleNamespace(api_key=api_key,
+                                                                         auth_devices=None)))
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(require_owner_or_paired(req("k")))
+    assert e.value.status_code == 401
+    asyncio.run(require_owner_or_paired(req("")))
+    asyncio.run(require_owner_or_paired(req("k", "default")))
+    asyncio.run(require_owner_or_paired(req("k", "d_paired")))
+
+
+def test_patch_route_mounts_require_owner_or_paired():
+    import app as entry
+    from framework.api.auth import require_owner, require_owner_or_paired
     routes = [r for r in entry.app.routes if getattr(r, "path", "") == "/api/v1/approval-policy"]
     deps = {method: {d.call for d in r.dependant.dependencies}
             for r in routes for method in r.methods}
-    assert require_owner in deps["PATCH"] and require_owner not in deps["GET"]
+    assert require_owner_or_paired in deps["PATCH"] and require_owner_or_paired not in deps["GET"]
+    assert require_owner not in deps["PATCH"]
     assert entry.verify_api_key in deps["PATCH"] and entry.verify_api_key in deps["GET"]
 
 

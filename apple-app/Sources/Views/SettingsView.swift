@@ -90,6 +90,8 @@ struct SettingsView: View {
             #else
             Form {
                 connectionSections
+                // 审批策略（Contract P）：配对的 iPhone 同样能读写，自成一节紧随连接设置
+                ApprovalPolicySection(title: L("审批策略"))
                 notificationSection
                 // 知识库入口（全局数据实体归设置；NavigationLink 推入外层栈）
                 Section(L("数据")) {
@@ -169,7 +171,7 @@ struct SettingsView: View {
         case .notification:
             Form { notificationSection }.formStyle(.grouped)
         case .permissions:
-            Form { ApprovalPolicySection() }.formStyle(.grouped)
+            Form { ApprovalPolicySection(title: L("权限")) }.formStyle(.grouped)
         // 知识库是全局数据实体（跨会话），归设置而非会话菜单。embedded：复用本页
         // 外层 NavigationStack 推入文档页。
         case .knowledge:
@@ -689,11 +691,13 @@ struct SettingsView: View {
     #endif
 }
 
-#if os(macOS)
-/// 「权限」：两类工具的审批模式（Contract P）。后端是权威：出现时 GET，改动时只 PATCH
-/// 改动的那个键；失败回退选择并在节内显示错误。AppSettings 里的镜像值只撑首拉前的显示。
-private struct ApprovalPolicySection: View {
+/// 两类工具的审批模式（Contract P），双平台共用：macOS 在「权限」标签页，iPhone 在设置页
+/// 「审批策略」一节。后端是权威：出现时 GET，改动时只 PATCH 改动的那个键；失败回退选择并在
+/// 节内显示服务端给的原因（旧执行层对配对设备的 PATCH 回 403，原文照显）。AppSettings 里的
+/// 镜像值只撑首拉前的显示。
+struct ApprovalPolicySection: View {
     @EnvironmentObject var store: AgentStore
+    var title: String = L("权限")
     @State private var loaded = false
     @State private var loading = false
     @State private var saving = false
@@ -721,7 +725,7 @@ private struct ApprovalPolicySection: View {
                 }
             }
         } header: {
-            Text(L("权限"))
+            Text(title)
         } footer: {
             Text(L("读取 / 检索类：只查看或检索信息、不改变任何东西的工具。写入 / 删除类：会修改、发送或删除内容的工具。Shell 命令按每条命令单独归类：只读命令算读取类；会改变东西的 Shell 命令始终询问，定时任务的创建/修改与 API 工具注册同样始终询问，「自动放行」只对其他写入工具生效。「按工具默认」沿用各工具自身的审批设置。"))
                 .font(.caption).foregroundStyle(.secondary)
@@ -766,7 +770,7 @@ private struct ApprovalPolicySection: View {
                 } catch {
                     guard store.client === client else { saving = false; return }
                     if current(cls) == mode { mirror(cls, previous) }
-                    errorText = L("权限设置保存失败：") + error.localizedDescription
+                    errorText = L("权限设置保存失败：") + Self.serverMessage(error)
                 }
                 saving = false
             }
@@ -791,10 +795,22 @@ private struct ApprovalPolicySection: View {
             if case AgentError.http(404, _) = error {
                 errorText = L("当前后端不支持权限设置（需要 build 78 及以上的执行层）。")
             } else {
-                errorText = L("权限设置加载失败：") + error.localizedDescription
+                errorText = L("权限设置加载失败：") + Self.serverMessage(error)
             }
         }
     }
+
+    /// 服务端拒绝的原因原文：FastAPI 的 {"detail": "…"}（如配对设备 403「只有 Mac 本机能…」）
+    /// 取出 detail 字符串，带上状态码；取不出就用错误本身的描述。
+    static func serverMessage(_ error: Error) -> String {
+        if case AgentError.http(let code, let body) = error,
+           let data = body.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            for key in ["detail", "reason", "response"] {
+                if let text = object[key] as? String, !text.isEmpty { return "HTTP \(code)：\(text)" }
+            }
+        }
+        return error.localizedDescription
+    }
 }
-#endif
 
