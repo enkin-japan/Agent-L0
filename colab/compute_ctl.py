@@ -264,9 +264,17 @@ def prior_resources(previous):
 
 
 def registered_models():
+    """CUDA registry entries. Every one must be a prequantized checkpoint (D25, 2026-10-31):
+    the A100 is bandwidth-bound, so online fp8 quantization would halve decode speed and
+    no other precision is admitted. An entry without the flag is a config error, not a
+    deployable model."""
     import yaml
     registry = yaml.safe_load((ROOT / 'config.yaml').read_text())['inference']['model_registry']
-    return {e['repo']: e for e in registry if 'mlx' not in e['repo'].lower() and e.get('revision')}
+    cuda = {e['repo']: e for e in registry if 'mlx' not in e['repo'].lower() and e.get('revision')}
+    for repo, entry in cuda.items():
+        if (entry.get('cuda_deployment') or {}).get('prequantized') is not True:
+            raise ValueError(f'CUDA 注册条目一律预量化（D25）：{repo} 缺 cuda_deployment.prequantized: true')
+    return cuda
 
 
 def deployment_options(args):
@@ -275,11 +283,8 @@ def deployment_options(args):
     if not entry:
         raise ValueError('模型必须是已注册的 CUDA 模型；运行 deploy.sh models 查看')
     quantization = opt(args, 'quantization')
-    prequantized = (entry.get('cuda_deployment') or {}).get('prequantized') is True
-    if model.startswith('google/gemma-4-') and quantization == 'none' and not prequantized:
-        raise ValueError('该 BF16 模型超出 A100 40GB 显存，请加 --quantization fp8')
-    if prequantized and quantization != 'none':
-        raise ValueError('该模型自带量化（registry cuda_deployment.prequantized），不要再加 --quantization')
+    if quantization != 'none':  # D25: registry entries are prequantized; no online quantization
+        raise ValueError('CUDA 条目一律预量化（D25），不接受 --quantization；旧 fp8 路径见 git 历史')
     supports_mtp = (entry.get('cuda_deployment') or {}).get('supports_mtp') is True
     speculative = opt(args, 'speculative')
     if speculative is None:  # MTP wherever the registry says the model has it
@@ -1422,7 +1427,6 @@ def build_parser():
 
     def deployment(p):
         p.add_argument('--model', default=DEFAULTS['model'], help=f'已注册的 CUDA 模型（默认 {MODEL}）；见 models')
-        p.add_argument('--quantization', choices=['none', 'fp8'], default='none')
         p.add_argument('--speculative', choices=['off', 'mtp'], default=None,
                        help='CUDA 投机解码模式（默认：注册表标明支持 MTP 的模型开 mtp，'
                             '如 Qwen3.8-27B；其余关，如 gemma-4 系列）')

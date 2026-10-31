@@ -39,7 +39,7 @@ common = _load_common()
 
 PRIVATE = Path(common.LAYOUT['private'])
 APP = Path(common.LAYOUT['app'])
-MODEL = 'RedHatAI/gemma-4-26B-A4B-it-NVFP4'
+MODEL = 'RedHatAI/Qwen3.8-27B-INT4'  # D27 default; overwritten by apply_model from the deploy options
 # Pinned like every other dependency: an exact release plus its published digest.
 TAILSCALE_VERSION = '1.104.2'
 TAILSCALE_SHA256 = '512f613ed7d04fc7282f7dc5bd76aa105aae28168fbb9357eb749ebcbc29f0ae'

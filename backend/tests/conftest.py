@@ -44,3 +44,18 @@ def _isolate_approval_policy():
     approval_policy.replace(approval_policy.DEFAULT)
     yield
     approval_policy.replace(approval_policy.DEFAULT)
+
+
+@pytest.fixture()
+def chart_caveat_live(monkeypatch):
+    """B1 `vision_chart_numeric` 在 D27（2026-10-31）后降为 pending（26b-4bit 口径，待对新生产档
+    重探），缺省不触发。caveat 机制本身（尾注文案、审计键、审批续跑）仍要守：本 fixture 把该条
+    临时恢复为 confirmed，其余字段原样。"""
+    import dataclasses
+
+    import framework.cloud.boundary as bd
+    b1 = bd.by_id("vision_chart_numeric")
+    assert b1.status == "pending" and b1.action == "caveat"
+    monkeypatch.setattr(bd, "CATALOG", tuple(
+        dataclasses.replace(b, status="confirmed") if b.id == "vision_chart_numeric" else b
+        for b in bd.CATALOG))

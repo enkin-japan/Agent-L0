@@ -41,7 +41,7 @@ from pathlib import Path
 s=importlib.util.spec_from_file_location('compute_ctl',%r)
 m=importlib.util.module_from_spec(s); s.loader.exec_module(m)
 m.ROOT=Path(__file__).parent; m.STATE=m.ROOT/'.colab-compute'; m.__file__=__file__
-m.registered_models=lambda: {'RedHatAI/gemma-4-26B-A4B-it-NVFP4':{'revision':'a'*40},'RedHatAI/Qwen3.8-27B-INT4':{'revision':'91bd022d5b49442a868bc35008f6c21e1860edfa','dialect':'qwen35','cuda_deployment':{'supports_mtp':True}}}
+m.registered_models=lambda: {'google/gemma-4-31B-it-qat-w4a16-ct':{'revision':'a'*40,'cuda_deployment':{'prequantized':True}},'RedHatAI/Qwen3.8-27B-INT4':{'revision':'91bd022d5b49442a868bc35008f6c21e1860edfa','dialect':'qwen35','cuda_deployment':{'prequantized':True,'supports_mtp':True}}}
 import os,time
 m.check_start_resources=lambda *args: (time.sleep(float(os.environ.get('SYNTHETIC_PREFLIGHT_DELAY','0'))) or 'example.ts.net')
 m.verify_dns=lambda *args: None
@@ -204,7 +204,7 @@ elif cmd!='usage': raise SystemExit(2)
 
     def test_background_switch_reuses_retained_vm_while_watch_owns_lease(self):
         # Start on another model: waiting for the model field is how this test sees the switch land.
-        starter=self.launch('start','--retain','--model','RedHatAI/gemma-4-26B-A4B-it-NVFP4',
+        starter=self.launch('start','--retain','--model','google/gemma-4-31B-it-qat-w4a16-ct',
                             '--auth-key',str(self.key))
         self.until(lambda:self.data().get('state')=='ready')
         starter.communicate(timeout=3)
@@ -230,7 +230,7 @@ elif cmd!='usage': raise SystemExit(2)
 
     def test_stop_during_background_switch_cannot_be_revived(self):
         self.env['SYNTHETIC_SWITCH_WAIT']='1'
-        starter=self.launch('start','--retain','--model','RedHatAI/gemma-4-26B-A4B-it-NVFP4','--auth-key',str(self.key))
+        starter=self.launch('start','--retain','--model','google/gemma-4-31B-it-qat-w4a16-ct','--auth-key',str(self.key))
         self.until(lambda:self.data().get('state')=='ready')
         starter.communicate(timeout=3)
         self.workers.append(self.data()['worker_pid'])
@@ -245,7 +245,7 @@ elif cmd!='usage': raise SystemExit(2)
         self.until(lambda:self.log_contains('切换已终止'))
         self.assertEqual(self.data()['state'],'stopped')
         self.assertFalse((self.root/'assignment.json').exists())
-        self.assertEqual(self.data()['model'],'RedHatAI/gemma-4-26B-A4B-it-NVFP4')
+        self.assertEqual(self.data()['model'],'google/gemma-4-31B-it-qat-w4a16-ct')
 
 
 class DeployProgressTests(unittest.TestCase):

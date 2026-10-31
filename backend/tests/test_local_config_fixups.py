@@ -2,7 +2,7 @@
 
 守的是什么：`_apply_local_config_fixups` 按注册表条目的点分路径修正 model_dir/config.json——
 声明命中即改、幂等（已是目标值零写盘）、路径不存在只警告不崩、无声明零动作；
-以及 config.yaml 注册表阵容与 D.20 收束决策（2026-08-16）没有漂移。
+以及 config.yaml 注册表阵容与 D.20（2026-08-16）/ D27（2026-10-31）收束决策没有漂移。
 （机制的原始消费方 Ornith 已随 D.20 舍弃；机制保留，现无在册声明方。）
 """
 import json
@@ -83,17 +83,18 @@ def test_fixup_no_declaration_is_noop(tmp_path, monkeypatch):
     assert before == after
 
 
-# ---- 5. 真 config 钉：D.20 阵容收束（2026-08-16）不漂移 ----
+# ---- 5. 真 config 钉：D27 阵容收束（2026-10-31）不漂移 ----
 
-_KEPT_MLX = (
-    "mlx-community/gemma-4-e4b-it-8bit",
-    "mlx-community/gemma-4-26b-a4b-it-4bit",
-    "mlx-community/gemma-4-26b-a4b-it-8bit",
-    "mlx-community/gemma-4-31b-it-4bit",
-    "mlx-community/Qwen3.8-27B-8bit",
-    "mlx-community/Qwen3.8-27B-4bit",
+# D27（用户 10-31 拍板）：计算端只 Colab、模型只留 Qwen3.8 27B + Gemma 4 31B，各一件 MLX
+# （本机）+ 一件 CUDA 预量化件（Colab）。顺序 = 注册表声明序；revision 逐条钉死。
+_ROSTER = (
+    ("mlx-community/gemma-4-31b-it-4bit", "696d436c404745a59f30e4939a658162b0a9e57f"),
+    ("mlx-community/Qwen3.8-27B-4bit", "3e6447f082e89cc7f0bc6e5441afd38dfce760ff"),
+    ("google/gemma-4-31B-it-qat-w4a16-ct", "52f3f65bc7a02d555763bc923bd1d9094898219d"),
+    ("RedHatAI/Qwen3.8-27B-INT4", "91bd022d5b49442a868bc35008f6c21e1860edfa"),
 )
 _DROPPED = (
+    # D.20（2026-08-16）
     "mlx-community/gemma-4-e4b-it-4bit",
     "mlx-community/gemma-4-e4b-it-nvfp4",
     "mlx-community/gemma-4-12b-it-4bit",
@@ -108,39 +109,61 @@ _DROPPED = (
     "Qwen/Qwen3.6-35B-A3B",
     "ornith-ai/Ornith-1.0-35B",
     "sakamakismile/Ornith-1.0-35B-NVFP4",
-)
-
-
-# 2026-08-24 入册评测的 Ornith-1.5-35B-A3B 三件 MLX 量化（纯文本件，dialect qwen35）。
-# 与 D.20 舍弃的 Ornith-1.0 无关：1.0 条目当年靠 local_config_fixups 修 vision
-# model_type，1.5 的 MLX 件没有视觉塔，走 backends/mlx/patch/text_only_vlm.py。
-_ADDED_0824 = (
+    # D27（2026-10-31）
+    "mlx-community/gemma-4-e4b-it-8bit",
+    "mlx-community/gemma-4-26b-a4b-it-4bit",
+    "mlx-community/gemma-4-26b-a4b-it-8bit",
+    "mlx-community/Qwen3.8-27B-8bit",
     "ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit",
     "ornith-ai/Ornith-1.5-35B-A3B-MLX-6bit",
     "ornith-ai/Ornith-1.5-35B-A3B-MLX-8bit",
+    "google/gemma-4-31B-it",
+    "google/gemma-4-26B-A4B-it",
+    "RedHatAI/gemma-4-26B-A4B-it-NVFP4",
 )
+_DROPPED_FRAGMENTS = ("e4b", "26b", "26B", "ornith", "NVFP4", "27B-8bit")
 
 
-def test_registry_matches_d20_roster():
-    entries = {e.get("repo"): e for e in _registry()}
-    # D.20 9 + Ornith-1.5 3 + 正式 CUDA Qwen MTP 1 + 10-31 Gemma 4 31B QAT 评测件 1 = 14；
+def _config():
+    return yaml.safe_load(_CONFIG.read_text(encoding="utf-8"))
+
+
+def test_registry_matches_d27_roster():
+    reg = _registry()
     # 长度钉防"静默加档不触钉"
-    assert len(entries) == 14, f"注册表应为 14 条（D.20 9 + 08-24 3 + CUDA Qwen 1 + 10-31 31B QAT 1），实际 {len(entries)}: {sorted(entries)}"
-    # 10-31 评测件：自带量化、无 profile（路由绝不选中）、不带 MLX drafter
-    qat31 = entries['google/gemma-4-31B-it-qat-w4a16-ct']
-    assert qat31['revision'] == '52f3f65bc7a02d555763bc923bd1d9094898219d'
-    assert qat31['dialect'] == 'gemma4'
-    assert qat31['cuda_deployment'] == {'prequantized': True}
-    assert 'profile' not in qat31 and 'speculative' not in qat31
-    cuda_qwen = entries['RedHatAI/Qwen3.8-27B-INT4']
-    assert cuda_qwen['revision'] == '91bd022d5b49442a868bc35008f6c21e1860edfa'
-    assert cuda_qwen['dialect'] == 'qwen35'
-    assert cuda_qwen['cuda_deployment']['supports_mtp'] is True
-    assert 'speculative' not in cuda_qwen  # CUDA built-in MTP must not load an MLX drafter.
-    for repo in _KEPT_MLX + _ADDED_0824:
-        assert repo in entries, f"{repo} 注册表条目缺失（D.20 保留档 / 08-24 入册）"
+    assert len(reg) == 4, f"注册表应为 4 条（D27），实际 {len(reg)}: {[e.get('repo') for e in reg]}"
+    assert [e.get("repo") for e in reg] == [repo for repo, _ in _ROSTER]
+    entries = {e["repo"]: e for e in reg}
+    for repo, revision in _ROSTER:
+        assert entries[repo].get("revision") == revision, f"{repo} revision 漂移"
     for repo in _DROPPED:
-        assert repo not in entries, f"{repo} 应已随 D.20 阵容收束删除"
+        assert repo not in entries, f"{repo} 应已随 D.20 / D27 阵容收束删除"
+    for repo in entries:
+        for frag in _DROPPED_FRAGMENTS:
+            assert frag.lower() not in repo.lower(), f"{repo} 含已出册片段 {frag!r}"
     # fixups 机制保留但现无在册声明方（原消费方 Ornith 已舍弃）
     declared = [r for r, e in entries.items() if e.get("local_config_fixups")]
     assert not declared, f"意外的 local_config_fixups 声明方: {declared}"
+
+
+def test_d27_local_default_is_qwen_4bit_with_registry_revision():
+    inf = _config()["inference"]
+    assert inf["model"] == "mlx-community/Qwen3.8-27B-4bit"
+    entry = next(e for e in inf["model_registry"] if e["repo"] == inf["model"])
+    assert inf["model_revision"] == entry["revision"]
+
+
+def test_d27_cuda_entries_are_prequantized():
+    inf = _config()["inference"]
+    entries = {e["repo"]: e for e in inf["model_registry"]}
+    qat31 = entries["google/gemma-4-31B-it-qat-w4a16-ct"]
+    cuda_qwen = entries["RedHatAI/Qwen3.8-27B-INT4"]
+    for e in (qat31, cuda_qwen):
+        assert e["cuda_deployment"]["prequantized"] is True   # D25：CUDA 条目一律预量化
+        assert "profile" not in e                            # 未画像：路由绝不选中
+        assert "speculative" not in e                        # CUDA 原生 MTP 不加载 MLX drafter
+    assert cuda_qwen["cuda_deployment"]["supports_mtp"] is True
+    assert cuda_qwen["dialect"] == "qwen35"
+    assert qat31["dialect"] == "gemma4"
+    assert qat31["capabilities"] == ["text", "vision"]
+    assert inf["cuda"]["quantization"] is None               # D25：无在线量化缺省

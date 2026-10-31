@@ -68,13 +68,13 @@ inference:
                             #   开启：app 设置 → 执行层，或 .env.local 写 INFER_KV_PERSIST=1
   kv_ttl_days: 14           # 落盘 KV 留存天数（1-365；随请求发给算力端逐份记到期，用到即续）
   cuda:                     # backend: "cuda" 时生效：量化档 / 显存占比 / 投机解码等 vLLM 旋钮
-    quantization: "fp8"     # 置空/null = 不量化
+    quantization: null      # D25：CUDA 条目一律预量化，不做在线量化（null = 不量化）
   # endpoints:               # 多模型常驻的追加端点（缺省注释掉=单端点现状）：每模型一实例一端口，
   #   - name: "moe-fast"      #   host 共享 remote.host，repo 须先在 model_registry 注册
   #     repo: "..."
   #     port: 14163
-  model: "mlx-community/gemma-4-e4b-it-8bit"
-  model_revision: "4255b21b…"    # 钉死 HF commit（缺省档随 D.20 收束改 8bit，2026-08-16）；勿改指 main
+  model: "mlx-community/Qwen3.8-27B-4bit"
+  model_revision: "3e6447f0…"    # 钉死 HF commit（缺省档随 D27 收束改 Qwen3.8-27B-4bit，2026-10-31）；勿改指 main
   model_registry: [...]     # `devctl model` 的候选集（各项钉死 revision + 显存/验证等级备注）
   audio_max_length: 29      # 原生音频 VAD 切片的最大时长（秒），仅原生音频能力启用时用
   modalities: ["text", "image"]  # 模型原生模态：含 "audio" 才原生直喂音频，否则一律 ASR 转写

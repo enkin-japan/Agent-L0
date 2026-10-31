@@ -84,7 +84,7 @@ def tier_entry(monkeypatch):
     return entry
 
 
-def test_turn_start_decision_table():
+def test_turn_start_decision_table(chart_caveat_live):
     c = cloud()
     up = U.UpgradeConfig(mode="suggest")
     D = lambda text, cfg=up, cc=c, reg=True, **k: U.decide_at_turn_start(
@@ -275,7 +275,7 @@ def test_tier_suggest_appends_user_notice_only(make_session, tier_entry):
                                   cloud_cfg=cloud(), consult_registered=True) == []
 
 
-def test_caveat_appends_user_notice_only(make_session):
+def test_caveat_appends_user_notice_only(make_session, chart_caveat_live):
     """B1（用户 08-23 拍板降为 caveat）：带图图表问法 → 答复末尾一行核对提醒；不换档、不出网、不扰模型。"""
     engine = FakeEngine([{"text": "峰值约 42。"}])
     registry = FakeRegistry([consult_tool()])
@@ -365,7 +365,7 @@ def test_explicit_request_but_cloud_unavailable_is_told(make_session):
 
 @pytest.mark.parametrize("prompt,images", [("请严格证明这个不等式", None), ("按状态分组统计条数与读数合计", None),
                                            ("问问云端导师", None), ("这张柱状图的峰值是多少", ["chart.png"])])
-def test_off_mode_never_triggers(make_session, prompt, images):
+def test_off_mode_never_triggers(make_session, prompt, images, chart_caveat_live):
     engine = FakeEngine([{"text": "ok"}])
     orch = make_orch(engine, FakeRegistry([consult_tool(), FakeTool("run_math", result="0", read_only=True)]),
                      cloud_cfg=cloud("off"))
@@ -469,7 +469,7 @@ def test_suspend_resume_does_not_retrigger(make_session):
     # 续跑段没有轮首决策 → 没有尾注（轮首那段的提醒已随挂起作废）；这是已知口径，记档即可
 
 
-def test_tier_notice_survives_approval_resume(make_session):
+def test_tier_notice_survives_approval_resume(make_session, chart_caveat_live):
     """评审 M2：轮首决策（此处 B1 caveat）经审批续跑后仍落提示与审计键。"""
     engine = FakeEngine([
         {"tool_calls": [call("danger", x=1)]},

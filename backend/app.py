@@ -566,8 +566,9 @@ async def lifespan(app: FastAPI):
             _mode = str(_inference_cfg.get("mode", "inprocess"))
             _remote = _mode == "remote"
             # 模型发现采纳（分离部署铁则，build 72 实机复盘）：remote 形态先问算力端 /health
-            # 拿真身就地采纳——app bundle 没有 .model-selection、config 默认键按 J5 决策只管
-            # 小内存回落（e4b），不发现就必然与生产选型（26b）错配、被身份护栏正确拒启。
+            # 拿真身就地采纳——app bundle 没有 .model-selection、config 默认键（D27 起为本机
+            # Qwen3.8-27B-4bit，条目级 drafter 随之默认开）只管 inprocess 回落，不发现就必然
+            # 与算力端实跑模型（Colab Qwen INT4）错配、被身份护栏正确拒启。
             # 只在本地无显式选型（source=default）时采纳（修正评审 S6）：操作员写下的
             # .model-selection 是决定不是建议（评测臂强钉某档），显式选型走「不采纳 + 装配
             # 护栏响亮比对」。采纳落在 model_selection 模块态（adopt_model）而非仅 app 全局：

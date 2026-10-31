@@ -86,5 +86,5 @@ def test_finish_reason_boundary():
 
 
 def test_models_response():
-    r = oai.models_response("gemma-4-e4b")
-    assert r["data"][0]["id"] == "gemma-4-e4b" and r["object"] == "list"
+    r = oai.models_response("Qwen3.8-27B-4bit")
+    assert r["data"][0]["id"] == "Qwen3.8-27B-4bit" and r["object"] == "list"

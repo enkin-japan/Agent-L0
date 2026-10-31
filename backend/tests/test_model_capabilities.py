@@ -2,9 +2,10 @@
 
 守两件事：
   1. config.yaml 声明合法：每条注册表条目都有 capabilities，值域 ⊆ {text,vision,audio}
-     且含 text；e4b 档含 audio、26b/31b 档不含——这是按各仓 config.json 的
-     vision_config/audio_config 实测钉下的事实（e4b 独有音频编码器），不是家族推断。
-     谁往 26b 条目里写 audio（或给新条目漏 capabilities），这里当场红。
+     且含 text；gemma-4 条目一律不含 audio——这是按各仓 config.json 的
+     vision_config/audio_config 实测钉下的事实（家族里唯一带音频编码器的小档已随 D27
+     2026-10-31 出册），不是家族推断。谁往 31b 条目里写 audio（或给新条目漏
+     capabilities），这里当场红。
   2. 消费面 model_capabilities()：注册表内条目返回声明集合；表外 repo / None /
      畸形值一律回落 {"text"}（路由代码永远拿到非空、词汇受控的集合）。
 """
@@ -33,16 +34,14 @@ def test_every_entry_declares_valid_capabilities():
         assert "text" in caps, f"{e.get('repo')} capabilities 必含 text"
 
 
-def test_audio_is_e4b_only_within_gemma_family():
-    # 实测事实钉死：gemma-4 家族里音频编码器是 e4b 独有（audio_config: gemma4_audio；
-    # 26b/31b 的 audio_config 为 null）。
-    for e in _registry():
-        repo = e.get("repo", "")
-        if "gemma-4" not in repo:
-            continue
-        has_audio = "audio" in (e.get("capabilities") or [])
-        assert has_audio == ("-e4b-" in repo), \
-            f"{repo} 的 audio 声明与实测事实不符（e4b 独有音频编码器）"
+def test_no_registered_gemma_entry_declares_audio():
+    # 实测事实钉死：在册 gemma-4 档（31b MLX 4bit / 31B QAT W4A16）的 audio_config 为 null；
+    # 唯一带音频编码器的小档已随 D27 出册（见 git 历史）。
+    gemma = [e for e in _registry() if "gemma-4" in e.get("repo", "")]
+    assert gemma, "注册表里没有 gemma-4 条目？"
+    for e in gemma:
+        assert "audio" not in (e.get("capabilities") or []), \
+            f"{e['repo']} 的 audio 声明与实测事实不符（在册 gemma-4 档无音频编码器）"
 
 
 def test_capabilities_accessor_known_repo():

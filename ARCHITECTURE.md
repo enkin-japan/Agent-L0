@@ -316,7 +316,7 @@ Agent/                           （monorepo 根）
 │   │                            assets/(图表PNG/PDF) deck/deck.json(PPT真相)
 │   ├── schedules/{id}/          schedule.json(定义) runs.jsonl(运行历史)
 │   ├── static/webapp/           deck 打印页自托管包（devctl bundle-print 生成，gitignored）
-│   └── models/                  gemma-4-e4b-it-8bit / whisper-large-v3-turbo
+│   └── models/                  Qwen3.8-27B-4bit（+ MTP-4bit drafter）/ gemma-4-31b-it-4bit / whisper-large-v3-turbo
 ├── rag/
 │   ├── chroma_data/             ChromaDB 持久化（每分类一个 collection + meta 库）
 │   ├── storage/raw_files/{类}/  入库文档原文备份；unclassified_raw/ 未分类池

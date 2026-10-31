@@ -745,7 +745,7 @@ def test_resume_rejects_mismatched_model_sampling_or_seed(tmp_path):
     assert K.main(["--dry-run", "--levels", "0", "--reps", "1", "--limit", "1", "--out", str(out),
                    "--sampling", "temperature=0.5"]) == 0
     for extra in (["--sampling", "temperature=0.6"], ["--seed", "8"],
-                  ["--model", "gemma-4-26b-a4b-it-4bit", "--sampling", "temperature=0.5"]):
+                  ["--model", "gemma-4-31b-it-4bit", "--sampling", "temperature=0.5"]):
         with pytest.raises(SystemExit, match="口径不一致"):
             K.main(["--dry-run", "--levels", "0,4096", "--reps", "1", "--limit", "1", "--out", str(out),
                     "--resume", *extra])

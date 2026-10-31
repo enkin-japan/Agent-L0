@@ -381,7 +381,7 @@ def test_fuse_exit_still_records_degradation_in_metrics(make_session):
     assert "本回答由本地模型独立完成" not in result["response"]
 
 
-def test_audit_keys_recorded_on_parse_loop_exit(make_session):
+def test_audit_keys_recorded_on_parse_loop_exit(make_session, chart_caveat_live):
     """阶段复审 M2：parse_loop 出口也要落 cloud_degraded / cloud_upgrade 审计键。"""
     from .fake_engine import bad_call
     engine = FakeEngine([
@@ -466,7 +466,7 @@ def test_consult_tool_timeout_tracks_config(monkeypatch):
     assert tool.timeout_seconds == 180                          # `or` 回落与 advisor 同口径
 
 
-def test_abandoned_pending_turn_metrics_carry_audit_keys(make_session):
+def test_abandoned_pending_turn_metrics_carry_audit_keys(make_session, chart_caveat_live):
     """复审 M1′：审批挂起态的 metrics 也带审计键——用户改发新消息时它就是 turn_ended 的终态。"""
     engine = FakeEngine([
         {"tool_calls": [call("cloud_consult", question="q")]},

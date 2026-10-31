@@ -165,7 +165,7 @@ def test_gemma4_entry_with_effort_warns_but_serves(capsys):
 # ---------- 差分基准：官方模板渲染（本机无依据件则跳过） ----------
 
 def _qwen_dir():
-    for name in ("Qwen3.8-27B-8bit", "Qwen3.8-27B-4bit"):
+    for name in ("Qwen3.8-27B-4bit",):  # D27 唯一在册 qwen38 MLX 档
         d = _MODELS / name
         if (d / "chat_template.jinja").exists():
             return d

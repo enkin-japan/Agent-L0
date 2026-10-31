@@ -109,6 +109,10 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 - 代码与测试：Ornith 专用 `backends/mlx/patch/text_only_vlm.py` 及其测试成死代码 → 删；注册表长度钉 14 → 4 并逐条钉 revision；model_router / local_config_fixups / inference_endpoints / cuda_backend / compute_ctl 测试里引用被删模型的用例改到留档模型上。
 - 顺序：先 `scout` 列出全部引用点（path:line；排除 docs/history、benchmarks/data、colab/legacy），再按清单改；护栏型改动按仓规做变异证明。config.yaml / compute_ctl / compute_vm 由主会话亲自改。
 - 验收：`./devctl.sh check` 全过；`deploy.sh models` 只列两条 CUDA 条目；Colab 部署 31B QAT 一次，图文请求与纯文本各通过一次（视觉塔 vLLM 端到端）；本机「能跑」验证排到全部工作包之后（§5 P-last）。
+- **执行记录（10-31 晚，代码提交随本波）**：注册表 14→4、`inference.model`/`model_revision` 换 Qwen 4bit、`cuda.quantization` fp8→null、QAT 条目 text+vision、Qwen INT4 补 `prequantized`；compute_ctl 两道 D25 门（注册表缺标即拒、`--quantization` 整个移除并在选项层拒绝）；`text_only_vlm` 补丁及测试删除；`cloud/boundary.py` 生产档改 Qwen 4bit、B1 图表 caveat 降 pending（目录全部为 26b-4bit 口径，运行期有消费方 orchestrator→upgrade.decide_at_turn_start）；`deploy.sh models` 已只列两条。
+  **带出的决定**：真分词器两道门（gemma4 DSL 语法 `test_grammar_headroom`、D.26 可见文本预算 12300 `test_model_visible_text`）钉到在册 gemma4 条目 31b-4bit 的分词器，不再跟 `inference.model` 走——同一段工具文本用 Qwen 分词器量得 14,181 tok，越 D.26 线；D.26 定线须用户拍板，qwen35 口径要不要另立预算线归 W-1（见下）。
+  **残留（有意不动）**：`backend/scripts/` 压测脚本缺省仍写已出册模型（M4 Max 时期测量件，bench_baseline 遇未注册臂静默跳过；本机测速已无意义，随 P-last 一并处理或归档）；`colab/legacy/` 归档脚本仍指 26B NVFP4（归档不动，重跑须检出 ≤ aa89f8c）；`backend/models/` 磁盘上 e4b/26b/8bit/bf16 权重未删（用户自行清理）；本机 `.model-selection` 已由 26b-4bit 改指 Qwen 4bit（否则启动告警后回落缺省，结果相同）；边界目录其余条目（`deep_reasoning` weak 仍会触发）待对新档重探。
+  **仍欠验收**：Colab 部署 31B QAT 一次图文 + 纯文本（本次提交后做）。
 
 ### W-1 远端推理配置修复（P0 实测带出，优先级最高）【新】
 - **Colab 部署默认关 MTP**：`colab/compute_ctl.py` 对标明 `supports_mtp` 的模型默认开投机解码；W0 显示它在 0 档就损失 25 点、16K 起崩。
@@ -118,6 +122,7 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 - **按模型卡配采样**：engine.py:440-444 硬编码 temp 0.2 / rep 1.1（vLLM 下 rep 为 HF 语义、罚整个 prompt）；改为按模型注册表条目配 `sampling`
   （Qwen3.8 思考档 temp 1.0 / top_p 0.95 / top_k 20 / rep 1.0；Gemma 4 temp 1.0 / top_p 0.95 / top_k 64），缺省沿用现值。W0 显示采样差异在噪声内，
   故此项是「合规与可配」而非「性能修复」，排在 MTP 之后。
+- **qwen35 口径的可见文本预算线**（W-3 带出）：D.26 的 12,300 tok 线是 gemma4 分词器口径，Qwen 分词器下同一工具文本 14,181 tok；现门钉 gemma4 尺（`backend/tests/_tool_fleet.py` `GEMMA4_TOKENIZER_REPO`），Qwen 档当前无预算门。随 W-2 前缀瘦身一起由用户定：另立 qwen35 线，或瘦身后两家族共用一条。
 - 服务端：客户端断连后挂死生成不释放（W0 观察到 active_generations 持续为 1）→ 核查 inference server 的断连止损路径；harness 客户端 SIGTERM 不死（推理线程阻塞读）→ 可中断。
 
 ### W-2 本机路径静态前缀瘦身（用户 10-31 采纳）【新】
@@ -242,3 +247,4 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 - 代码附带改动：`cuda/backend.py` 可选采样键透传 + 单测；`config.yaml` 注册表加 31B QAT 评测件条目（`cuda_deployment.prequantized`，无 profile 不会被路由选中）；`colab/compute_ctl.py` 对 prequantized 条目免 Gemma fp8 强制规则、拒绝再叠 `--quantization`。
 - 用户决定：P0 结果与修正落盘后停下等 /compact，P1 不自动开。
 - 10-31 下午：31B QAT-W4A16 补测提交 `6885f18`；讨论 Qwen vs 31B 对比（逐题差在固定题：Qwen 把 dict repr 写进 .json / 只说不写文件 / 超步；31B 把换行写成字面 `\\n` / 心算错）→ 两者各有一个可在 dialect 层归一的习惯，W-1 顺带查；用户修正方向（见 §0），核实 31B QAT 含视觉塔；方案按新方向改（W-3、D25–D27、P-last），纯文档提交。等用户 /compact 后从 W-3 开工。
+- 10-31 晚：W-3 阵容收束代码落地（scout → 主会话改 config/compute_ctl/compute_vm → implementer 删补丁改测试 → reviewer 一审无 Critical/Major → verifier 变异证明 → 提交）；执行记录与残留见 W-3 节。Colab 31B QAT 图文联调待做。

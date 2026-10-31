@@ -18,13 +18,18 @@
   无谓出网花钱 + 审批打扰）。英文一律字母边界锚定（`prove` 不得命中 improve/approve，
   `formal` 不得命中 informal——评审 C1 实测过）；
 - 角色边界：建议动作里的「云端导师」= 商用 API；Colab 与生产无关，不出现在这里。
+
+2026-10-31（D27）：生产单档改为 `mlx-community/Qwen3.8-27B-4bit`。本目录全部条目是在
+26b-4bit（已随 D27 出册）上探出来的，对新生产档**须重探**；在重探之前，会在运行期触达用户的
+B1 图表 caveat 降为 pending（缺省不触发），其余条目状态未动。
 """
 import re
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
-#: 生产单档（定档 2026-08-23 用户拍板，暂且）——目录只对它有效；换档须重评
-PRODUCTION_TIER = "mlx-community/gemma-4-26b-a4b-it-4bit"
+#: 生产单档（D27 2026-10-31 用户拍板改为 Qwen3.8-27B-4bit；原 26b-4bit 已出册）——目录证据
+#: 仍是 26b-4bit 口径，对本档待重探；换档须重评
+PRODUCTION_TIER = "mlx-community/Qwen3.8-27B-4bit"
 
 STATUSES = ("confirmed", "weak", "pending", "cleared")
 ACTIONS = ("cloud_consult", "switch_tier", "tool_assist", "caveat")
@@ -147,13 +152,14 @@ CATALOG: Tuple[Boundary, ...] = (
         id="vision_chart_numeric",
         title="图表数值读取（ChartQA 型）",
         predicate=_vision_chart,
-        status="confirmed",
+        status="pending",
         action="caveat",
         action_target=None,
         evidence=("08-16 横评 vision 212 题：26b-4bit 0.84 vs qwen38 4bit 0.958 / 8bit 0.943；"
                   "逐题差分 30 题 26b 错而两档 qwen38 全对（全部 vi-chartqa），对称反向（两档 qwen 都错而 "
                   "26b 对）5 题（宽口径 10），三档同错 3 题——见 BOUNDARY.md §B1 与 "
-                  "benchmarks/data/boundary-probe-20260823/vision_diff.json"),
+                  "benchmarks/data/boundary-probe-20260823/vision_diff.json。"
+                  "2026-10-31 D27：生产档改为 Qwen3.8-27B-4bit，本目录全部为 26b-4bit 口径，待重探"),
         probes="items/vision/chartqa_hard*.jsonl 中 vision_diff.json 列出的 30 题",
         rationale="带图 + 图表/读数类问法。qwen38 为 vision 特长位（0.958），但 64G 上两档不共驻：换档 = "
                   "卸 26b/装 qwen38（丢 KV 前缀、重载半分钟）+ 之后每轮生成 45 vs 90 tps、prefill 慢 5.5×——"
@@ -168,14 +174,14 @@ CATALOG: Tuple[Boundary, ...] = (
         predicate=_never,
         status="cleared",
         action="switch_tier",
-        action_target="mlx-community/gemma-4-26b-a4b-it-8bit",
+        action_target="mlx-community/gemma-4-31b-it-4bit",
         evidence=("08-14 哨兵矩阵 26b-4bit tool@32k/64k ✗ 为 JSON 声明体旧口径，DSL 迁移后翻正"
                   "（20260814-dsl-fullmatrix）；⑤′-2 探针 items/text/longctx_struct.jsonl 任务 A"
                   "（JSON 提取，8k/16k/32k/48k）26b-4bit 4/4 全过、每档 12/12 记录全中 → cleared；"
                   "见 BOUNDARY.md §B2"),
         probes="items/text/longctx_struct.jsonl 的 tx-lcs-*-json（gen_longctx_struct.py 确定性重建）",
         rationale="原谓词（上下文 ≥24k 且要结构化产出）保留在 _long_context_structured 供重探；"
-                  "cleared 期间恒不命中。26b-8bit 仍是定档的长上下文×结构化静态后备位。",
+                  "cleared 期间恒不命中。静态后备位原为 26b-8bit（D27 出册），现记 gemma-4-31b-it-4bit（未就本条重探）。",
     ),
     Boundary(
         id="implicit_aggregation",

@@ -117,26 +117,22 @@ def test_config_cuda_knobs_and_registry_entries():
     cfg = yaml.safe_load((REPO_ROOT / "config.yaml").read_text(encoding="utf-8"))
     inf = cfg["inference"]
     cuda = inf.get("cuda") or {}
-    assert cuda.get("quantization") == "fp8"
+    # D25（2026-10-31）：CUDA 条目一律预量化，无在线量化缺省；backend 把 None/"" 映射为
+    # vLLM quantization=None（INFER_QUANT 未设时同样落到这里）
+    assert cuda.get("quantization") is None
     assert cuda.get("enable_prefix_caching") is True
     reg = {e["repo"]: e for e in inf["model_registry"]}
-    # D.20 阵容收束（2026-08-16）：Qwen3.6 / Ornith-35B 两条已随舍弃移出本钉。
-    # RedHatAI NVFP4（L4 日用档，colab/legacy/daily_serve_chain.sh 消费）无 profile 属预期
-    # （评测件不入路由优先选中），单独钉在册+方言+revision。
-    l4 = reg.get("RedHatAI/gemma-4-26B-A4B-it-NVFP4")
-    assert l4 is not None, "L4 日用档 RedHatAI NVFP4 未注册（colab/legacy/daily.sh 起服会拒启）"
-    assert l4["dialect"] == "gemma4" and l4.get("revision")
-    for repo, dialect in (("google/gemma-4-31B-it", "gemma4"),
-                          ("google/gemma-4-26B-A4B-it", "gemma4")):
-        assert repo in reg, f"CUDA 档 {repo} 未注册（表外拒启）"
-        assert reg[repo]["dialect"] == dialect
-        # 画像回填后（model_eval 2026-08-08）：条目必须携真实画像且钉死 revision
-        # ——profile 缺失=路由绝不优先选中，回填即解锁；数值来自 A100 实测非拍脑袋
-        prof = reg[repo].get("profile")
-        assert isinstance(prof, dict), f"{repo} 画像缺失（评测已回填，不应回退）"
-        for k in ("tool_call", "longchain", "tps"):
-            assert isinstance(prof.get(k), (int, float)), f"{repo} 画像缺 {k}"
-        assert reg[repo].get("revision"), f"{repo} revision 未钉死（常驻纪律）"
+    # D27 阵容收束（2026-10-31）：CUDA 只剩两件预量化 checkpoint（compute_ctl registered_models
+    # 的全部来源）；均无 profile 属预期（未画像件不入路由优先选中），单独钉在册+方言+revision。
+    cuda_entries = {r: e for r, e in reg.items() if "mlx" not in r.lower()}
+    assert sorted(cuda_entries) == ["RedHatAI/Qwen3.8-27B-INT4", "google/gemma-4-31B-it-qat-w4a16-ct"]
+    for repo, dialect in (("RedHatAI/Qwen3.8-27B-INT4", "qwen35"),
+                          ("google/gemma-4-31B-it-qat-w4a16-ct", "gemma4")):
+        e = cuda_entries[repo]
+        assert e["dialect"] == dialect
+        assert e["cuda_deployment"]["prequantized"] is True, f"{repo} 未声明预量化（D25）"
+        assert e.get("revision"), f"{repo} revision 未钉死（常驻纪律）"
+        assert "profile" not in e, f"{repo} 未评测却带画像"
 
 
 # ---- ⑤ server 环境覆盖锚点 ----

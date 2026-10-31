@@ -128,14 +128,10 @@ def test_config_profiles_legal():
         if "vision" in prof:
             assert "vision" in (entry.get("capabilities") or []), \
                 f"{entry['repo']} 有 vision 画像却未声明 vision 能力"
-    # D.20 保留六档的画像必须在位（路由的实测原料；重跑评测后回填而非删除）
-    for repo in ("mlx-community/gemma-4-e4b-it-8bit",
-                 "mlx-community/gemma-4-26b-a4b-it-4bit",
-                 "mlx-community/gemma-4-26b-a4b-it-8bit",
-                 "mlx-community/gemma-4-31b-it-4bit",
-                 "mlx-community/Qwen3.8-27B-8bit",
-                 "mlx-community/Qwen3.8-27B-4bit"):
-        assert repo in profiled, f"{repo} 缺 profile（PROFILES.md 已有实测数据）"
+    # D27 保留的两件 MLX 档画像必须在位（路由的实测原料；重跑评测后回填而非删除）；
+    # CUDA 预量化件未画像（路由绝不优先选中），不在此钉
+    assert sorted(profiled) == ["mlx-community/Qwen3.8-27B-4bit",
+                                "mlx-community/gemma-4-31b-it-4bit"], profiled
 
 
 # ---- ⑤ 执行面接线 ----

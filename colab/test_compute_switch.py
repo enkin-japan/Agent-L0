@@ -15,7 +15,7 @@ SOURCE = Path(__file__).parent
 spec = importlib.util.spec_from_file_location('ctl_switch_test', SOURCE / 'compute_ctl.py')
 ctl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ctl)
-GEMMA = 'RedHatAI/gemma-4-26B-A4B-it-NVFP4'
+GEMMA = 'google/gemma-4-31B-it-qat-w4a16-ct'
 QWEN = 'RedHatAI/Qwen3.8-27B-INT4'
 REVISION = '91bd022d5b49442a868bc35008f6c21e1860edfa'
 
@@ -29,8 +29,8 @@ class SwitchTests(unittest.TestCase):
         self.stack.enter_context(patch.object(ctl, 'STATE', self.root / 'state'))
         self.stack.enter_context(patch.object(ctl, 'ROOT', self.root))
         self.stack.enter_context(patch.object(ctl, 'registered_models', return_value={
-            GEMMA: {'revision': 'a' * 40, 'dialect': 'gemma4'},
-            QWEN: {'revision': REVISION, 'dialect': 'qwen35', 'cuda_deployment': {'supports_mtp': True}},
+            GEMMA: {'revision': 'a' * 40, 'dialect': 'gemma4', 'cuda_deployment': {'prequantized': True}},
+            QWEN: {'revision': REVISION, 'dialect': 'qwen35', 'cuda_deployment': {'prequantized': True, 'supports_mtp': True}},
         }))
         files = ['config.yaml', 'devctl.sh', 'backend/scripts/fetch_model.py',
                  'backend/framework/inference/runtime.py', 'inference/server.py',

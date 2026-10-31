@@ -16,10 +16,10 @@ from framework.utils.model_selection import resolve_endpoints
 
 def _cfg(endpoints=None):
     return {
-        "model": "mlx-community/gemma-4-e4b-it-4bit",
+        "model": "mlx-community/gemma-4-31b-it-4bit",
         "model_revision": "deadbeef",
         "remote": {"host": "100.64.0.1", "port": 14161},
-        "model_registry": [{"repo": "mlx-community/gemma-4-e4b-it-4bit",
+        "model_registry": [{"repo": "mlx-community/gemma-4-31b-it-4bit",
                             "revision": "deadbeef", "dialect": "gemma4"},
                            {"repo": "mlx-community/Qwen3.5-9B-4bit",
                             "revision": "cafebabe", "dialect": "qwen35"}],
@@ -33,7 +33,7 @@ def test_main_only_when_no_endpoints_declared():
     ep = endpoints[0]
     assert ep["name"] == "main"
     assert ep["port"] == 14161
-    assert ep["repo"] == "mlx-community/gemma-4-e4b-it-4bit"
+    assert ep["repo"] == "mlx-community/gemma-4-31b-it-4bit"
     assert ep["host"] == "100.64.0.1"
 
 

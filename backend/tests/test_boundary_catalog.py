@@ -84,7 +84,7 @@ def test_production_tier_is_the_designated_one():
     assert sum(1 for e in reg if "★ 定档生产单档" in str(e.get("note", ""))) == 1
 
 
-def test_vision_chart_predicate():
+def test_vision_chart_predicate(chart_caveat_live):
     assert ids_of(RequestFacts(text="这张柱状图里 2023 年的值是多少", has_images=True)) == ["vision_chart_numeric"]
     assert ids_of(RequestFacts(text="What is the peak value in the chart?", has_images=True)) == ["vision_chart_numeric"]
     assert ids_of(RequestFacts(text="这张图里 2023 年的数值是多少", has_images=True)) == ["vision_chart_numeric"]
@@ -118,8 +118,18 @@ def test_long_context_structured_is_cleared_but_raw_predicate_kept_for_reprobe()
     assert B._long_context_structured(RequestFacts(text="整理成表格", attachments_chars=60_000)) is True
 
 
+def test_b1_pending_after_d27_never_triggers_by_default():
+    """D27（2026-10-31）：生产档改为 Qwen3.8-27B-4bit，B1 证据是 26b-4bit 口径 → pending 待重探；
+    缺省不触发（不再向用户提示 26b 的弱项），harvest/巡检面（include_pending）仍可见。"""
+    b = B.by_id("vision_chart_numeric")
+    assert b.status == "pending" and "待重探" in b.evidence
+    f = RequestFacts(text="这张柱状图里 2023 年的值是多少", has_images=True)
+    assert ids_of(f) == []
+    assert ids_of(f, include_pending=True) == ["vision_chart_numeric"]
+
+
 def test_pending_entries_never_trigger_by_default():
-    """护栏不建在猜测上：pending 条目缺省排除（目录里现无 pending，用临时条目证明门在）。"""
+    """护栏不建在猜测上：pending 条目缺省排除（用与目录内容无关的临时条目证明门在）。"""
     tmp = B.Boundary(id="tmp_pending", title="t", predicate=lambda f: True, status="pending",
                      action="cloud_consult", action_target=None, evidence="e", probes="p")
     import framework.cloud.boundary as mod
@@ -161,7 +171,7 @@ def test_deep_reasoning_predicate():
     assert ids_of(RequestFacts(text="今天吃什么")) == []
 
 
-def test_match_preserves_catalog_order_and_can_multi_hit():
+def test_match_preserves_catalog_order_and_can_multi_hit(chart_caveat_live):
     f = RequestFacts(text="请严格证明图表里各组合计的峰值趋势", has_images=True)
     assert ids_of(f) == ["vision_chart_numeric", "implicit_aggregation", "deep_reasoning"]
 

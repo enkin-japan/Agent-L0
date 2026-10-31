@@ -303,9 +303,41 @@ class ComputeCtlTests(unittest.TestCase):
     def test_model_validation_precedes_allocation(self):
         with self.assertRaisesRegex(ValueError,'已注册的 CUDA'):
             ctl.deployment_options(argparse.Namespace(model='mlx-community/synthetic'))
-        with patch.object(ctl,'registered_models',return_value={'google/gemma-4-31B-it':{'revision':'a'*40}}):
-            with self.assertRaisesRegex(ValueError,'超出 A100'):
-                ctl.deployment_options(argparse.Namespace(model='google/gemma-4-31B-it'))
+
+    def test_online_quantization_is_rejected_d25(self):
+        # D25: every CUDA entry is a prequantized checkpoint; no --quantization path survives.
+        qat = 'google/gemma-4-31B-it-qat-w4a16-ct'
+        with patch.object(ctl,'registered_models',return_value={
+                qat:{'revision':'a'*40,'dialect':'gemma4','cuda_deployment':{'prequantized':True}}}):
+            with self.assertRaisesRegex(ValueError,'D25'):
+                ctl.deployment_options(argparse.Namespace(model=qat,quantization='fp8'))
+            self.assertEqual(ctl.deployment_options(argparse.Namespace(model=qat))['quantization'],'none')
+
+    def test_registered_models_requires_prequantized_cuda_entries_d25(self):
+        # setUp patches registered_models; REAL_REGISTRY (module bottom) is the unpatched function.
+        def registry_with(entries):
+            directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
+            root = Path(directory.name)
+            (root/'config.yaml').write_text(json.dumps({'inference':{'model_registry':entries}}))
+            return root
+        mlx = {'repo':'mlx-community/synthetic-4bit','revision':'c'*40}        # MLX: not a CUDA entry
+        ok = {'repo':'org/prequantized','revision':'a'*40,'cuda_deployment':{'prequantized':True}}
+        for bad in ({'repo':'org/bf16','revision':'b'*40},
+                    {'repo':'org/bf16','revision':'b'*40,'cuda_deployment':{'supports_mtp':True}},
+                    {'repo':'org/bf16','revision':'b'*40,'cuda_deployment':{'prequantized':'yes'}}):
+            with self.subTest(bad=bad), patch.object(ctl,'ROOT',registry_with([mlx,ok,bad])):
+                with self.assertRaisesRegex(ValueError,'D25.*org/bf16|org/bf16.*D25'):
+                    REAL_REGISTRY()
+        with patch.object(ctl,'ROOT',registry_with([mlx,ok])):
+            self.assertEqual(set(REAL_REGISTRY()),{'org/prequantized'})
+
+    def test_quantization_flag_is_gone_from_the_cli(self):
+        parser = ctl.build_parser()
+        for command in ('start','switch'):
+            with self.subTest(command=command), contextlib.redirect_stderr(io.StringIO()) as err:
+                with self.assertRaises(SystemExit):
+                    parser.parse_args([command,'--quantization','fp8'])
+                self.assertIn('unrecognized arguments',err.getvalue())
 
     def test_stop_terminal_state_survives_stale_boot_progress(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(ctl,'STATE',Path(directory)):
@@ -770,18 +802,19 @@ class GuardTests(unittest.TestCase):
         self.assertEqual((ctl.MODEL, ctl.DEFAULTS['max_model_len']), ('RedHatAI/Qwen3.8-27B-INT4', 65536))
         # MTP defaults on exactly where the registry declares it (Qwen3.8), off elsewhere (gemma-4).
         registry = {ctl.MODEL: {'revision': 'a' * 40, 'dialect': 'qwen35',
-                                'cuda_deployment': {'supports_mtp': True}},
-                    'RedHatAI/gemma-4-26B-A4B-it-NVFP4': {'revision': 'b' * 40, 'dialect': 'gemma4'}}
+                                'cuda_deployment': {'prequantized': True, 'supports_mtp': True}},
+                    'google/gemma-4-31B-it-qat-w4a16-ct': {'revision': 'b' * 40, 'dialect': 'gemma4',
+                                                           'cuda_deployment': {'prequantized': True}}}
         with patch.object(ctl, 'registered_models', return_value=registry):
             self.assertEqual(ctl.deployment_options(args)['speculative_config'],
                              {'method': 'mtp', 'num_speculative_tokens': ctl.MTP_DRAFT_TOKENS})
-            gemma = parser.parse_args(['start', '--model', 'RedHatAI/gemma-4-26B-A4B-it-NVFP4'])
+            gemma = parser.parse_args(['start', '--model', 'google/gemma-4-31B-it-qat-w4a16-ct'])
             self.assertIsNone(ctl.deployment_options(gemma)['speculative_config'])
             off = parser.parse_args(['switch', '--speculative', 'off'])
             self.assertIsNone(ctl.deployment_options(off)['speculative_config'])
             with self.assertRaises(ValueError):  # draft tokens on a model whose default is off
                 ctl.deployment_options(parser.parse_args(
-                    ['start', '--model', 'RedHatAI/gemma-4-26B-A4B-it-NVFP4', '--draft-tokens', '2']))
+                    ['start', '--model', 'google/gemma-4-31B-it-qat-w4a16-ct', '--draft-tokens', '2']))
         self.assertNotIn('_worker', parser.format_help())
 
     def test_internal_workers_log_once(self):
@@ -834,7 +867,11 @@ class RegistryTests(unittest.TestCase):
         registry = REAL_REGISTRY()
         self.assertIn(ctl.MODEL, registry)
         self.assertIs(registry[ctl.MODEL]['cuda_deployment']['supports_mtp'], True)
-        self.assertNotIn('cuda_deployment', registry['RedHatAI/gemma-4-26B-A4B-it-NVFP4'])
+        # D27 roster: exactly the two prequantized CUDA checkpoints (D25), gemma without MTP.
+        self.assertEqual(set(registry), {'google/gemma-4-31B-it-qat-w4a16-ct', 'RedHatAI/Qwen3.8-27B-INT4'})
+        for entry in registry.values():
+            self.assertIs(entry['cuda_deployment']['prequantized'], True)
+        self.assertNotIn('supports_mtp', registry['google/gemma-4-31B-it-qat-w4a16-ct']['cuda_deployment'])
 
 
 if __name__ == '__main__':

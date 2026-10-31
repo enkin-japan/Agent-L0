@@ -55,8 +55,8 @@ def discover_remote_model(base_url: str, timeout: float = 5.0
                           ) -> Optional[Tuple[str, Optional[str], dict]]:
     """算力端模型**发现**（分离部署铁则：模型状态靠发现不靠抄；build 72 实机复盘）。
 
-    remote 形态的执行端（尤其 app bundle：没有 .model-selection、config 默认键按
-    J5 决策只管小内存机回落）启动时问算力端 /health 拿真身，就地采纳——分词器/
+    remote 形态的执行端（尤其 app bundle：没有 .model-selection、config 默认键 D27 起
+    为本机 Qwen3.8-27B-4bit，只管 inprocess 回落）启动时问算力端 /health 拿真身，就地采纳——分词器/
     方言/条目开关全部跟着算力端在跑的模型走，不再依赖两侧手抄一致。
 
     返回 (repo, revision, entry)：revision 取**本地注册表钉扎**而非活体值——分词器

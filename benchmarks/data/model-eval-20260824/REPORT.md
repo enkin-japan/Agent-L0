@@ -84,6 +84,7 @@ Ornith-4bit 少写一个换行按失手记。
 - `identity_probe.json`：Ornith-4bit 身份探针（贪心、双语全文）
 - `speed/baseline_v3_ornith.jsonl`：Ornith 三档 × ctx 5 格（15/15 complete）
 - `campaign.sh` / `rerun020.sh` / `rerun_m10.sh` / `probe_identity.py` / `report.py` / `rescore.py`；
+  〔2026-10-31 D27：`probe_identity.py` 依赖的 `backends/mlx/patch/text_only_vlm.py` 已随 Ornith 出册删除，重跑须检出 ≤ aa89f8c 的树。〕
   progress.log / 各步日志
 - 速度对表源：`benchmarks/baseline/20260816-overnight/speed_off/baseline_v3.jsonl`（gemma/qwen38
   S-off）与 `speed_mtp/mtp_v3.jsonl`（表 6 全部「生产 MTP」行的出处，含 gemma 两档与 qwen38 两档）

@@ -38,7 +38,7 @@ Colab 上只使用合成提示与测试资料。
 ./colab/deploy.sh <命令> --help            # 每个命令只接受与它相关的选项
 ```
 
-`start` / `switch` 的部署选项：`--model <完整 repo>`（默认 `RedHatAI/Qwen3.8-27B-INT4`）、`--quantization none|fp8`、
+`start` / `switch` 的部署选项：`--model <完整 repo>`（默认 `RedHatAI/Qwen3.8-27B-INT4`）、
 `--speculative off|mtp`（默认按模型：注册表标明 `supports_mtp` 的开 mtp，如 Qwen3.8-27B；其余关，如 gemma-4 系列）、
 `--draft-tokens 1..5`（只配 mtp，默认 3）、
 `--attention-backend auto|triton|flashinfer`、`--kv-cache-dtype auto|bfloat16|fp8`、
@@ -53,17 +53,20 @@ Colab 上只使用合成提示与测试资料。
 
 ## 模型与 MTP
 
-模型只能选 `models` 列表里的 CUDA 条目，不能把 MLX 权重交给 CUDA。BF16 Gemma 原件超过 A100 40GB，须显式
-`--quantization fp8`；列表只表示已注册，其他组合的显存、质量和速度仍需实测。Qwen3.8-27B 注册为
-`RedHatAI/Qwen3.8-27B-INT4`（revision `91bd022d5b49442a868bc35008f6c21e1860edfa`）：CUDA compressed-tensors
-INT4 权重，自带原生 MTP 头，无需另下 MLX drafter；`--quantization none` 表示不再在线二次量化。
+模型只能选 `models` 列表里的 CUDA 条目，不能把 MLX 权重交给 CUDA。`./colab/deploy.sh models` 列出的就是注册表里
+的两件 CUDA checkpoint（D27，2026-10-31）：`RedHatAI/Qwen3.8-27B-INT4`（revision
+`91bd022d5b49442a868bc35008f6c21e1860edfa`，默认；CUDA compressed-tensors INT4 权重，自带原生 MTP 头，无需另下
+MLX drafter）与 `google/gemma-4-31B-it-qat-w4a16-ct`（revision `52f3f65bc7a02d555763bc923bd1d9094898219d`；QAT
+W4A16，不开 MTP）。D25：CUDA 条目一律是预量化 4-bit（注册表 `cuda_deployment.prequantized: true`，缺这一项
+`registered_models()` 直接报错），不做在线量化，`--quantization` 已删除、传入即被拒绝。列表只表示已注册，
+其他组合的显存、质量和速度仍需实测。
 
 ```bash
 # 新建 VM（仅在没有现存租约时）：默认即 Qwen3.8-27B + MTP 3 + 上下文 65536 + 显存 0.72
 ./colab/deploy.sh start --retain
 
-# Gemma 4 26B（默认不开 MTP）
-./colab/deploy.sh start --retain --model RedHatAI/gemma-4-26B-A4B-it-NVFP4
+# Gemma 4 31B QAT W4A16（默认不开 MTP）
+./colab/deploy.sh start --retain --model google/gemma-4-31B-it-qat-w4a16-ct
 
 # 复用已有 READY VM：后台切换推理，保留 VM、Tailnet 名称和 RAG 服务
 # （switch 不带 --model 时同样切到默认模型）
@@ -189,6 +192,7 @@ VM 的 `config.yaml` 把推理显存上限设为 `--gpu-memory`、并发 1、上
 Python 3.12 隔离环境（避开 Colab 系统 Python 缺 ensurepip）；直接依赖见 `requirements-compute.txt`，Linux
 解析版本锁在 `requirements-compute.lock`，实际安装版本写入 VM 私密部署日志。
 
+（历史证据：下文的 26B NVFP4 件已随 D27 出册，数字只用来说明 CUDA Graph 相对 eager 的收益。）
 A100 上 NVFP4 实际走 Marlin W4A16，不是原生 FP4/FP8 运算。2026-10-23 同一 A100 40GB、26B NVFP4、单请求、
 256 token 输出、各预热一次后测三次：51 token 提示的 decode 中位数从 eager 的 11.81 升至 163.46 token/s；
 13,704 token 提示从 11.71 升至 122.78 token/s（VM 回环 SSE，排除首 token，正式样本命中前缀缓存；Graph 配置下

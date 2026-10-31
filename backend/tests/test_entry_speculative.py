@@ -92,15 +92,12 @@ def test_resolve_draft_repo_id_pins_revision(monkeypatch):
 # ---- 真 config 钉（D.21 阵容事实）----
 
 def test_real_config_d21_speculative_pins():
-    """qwen38 两档条目声明 drafter 配对（钉扎 SHA 恒等）；其余条目一律无 speculative 键。"""
+    """qwen38 MLX 条目声明 drafter 配对（钉扎 SHA 恒等；D27 起只剩 4bit 一档，8bit 已出册）；
+    其余条目一律无 speculative 键。"""
     reg = ms.load_section("inference").get("model_registry") or []
     by_repo = {e.get("repo"): e for e in reg}
-    q8 = by_repo["mlx-community/Qwen3.8-27B-8bit"].get("speculative")
+    assert "mlx-community/Qwen3.8-27B-8bit" not in by_repo
     q4 = by_repo["mlx-community/Qwen3.8-27B-4bit"].get("speculative")
-    assert q8 == {"mode": "drafter",
-                  "draft_model": "mlx-community/Qwen3.8-27B-MTP-8bit",
-                  "draft_revision": "e88e48d055732ad75d9435f3059139d5279f2064",
-                  "draft_block_size": 5}
     assert q4 == {"mode": "drafter",
                   "draft_model": "mlx-community/Qwen3.8-27B-MTP-4bit",
                   "draft_revision": "b643c01b6d3b094e325edb6ebd832e16c486c575",

@@ -67,9 +67,9 @@ def _full_fleet():
 
 
 def _real_lltokenizer():
-    """真 LLTokenizer——取数统一走 tests/_tool_fleet.real_lltokenizer(经 model_selection
-    决议,与引擎同源;D1 复审 S8:原实现只读 config inference.model,与 .model-selection
-    脱钩,换 Qwen 档会拿错家族的尺)。"""
+    """真 LLTokenizer——取数统一走 tests/_tool_fleet.real_lltokenizer(钉在册 gemma4 条目:
+    本门测的是 gemma4 DSL 语法,D27 后本机缺省为 Qwen 档,跟 model_selection 走会拿错
+    家族的尺;历史见 D1 复审 S8)。"""
     from ._tool_fleet import real_lltokenizer
     return real_lltokenizer()
 
