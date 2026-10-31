@@ -271,4 +271,4 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
   verifier 变异证明 8 个变异体（采样校验 bool/NaN/top_p 边界/条目生效、compute_ctl 缺省、MLX 透传、server scope.cancel、CUDA 钩子 q.close）全红、源文件逐字节恢复。
   W-1 实测数：gemma4 预算 12,036 / qwen35 12,144（同口径，线 12,300）；qwen35 整块 12,325 含固定教学文本归 W-2。
   残留（不阻断 W-1 收口）：聊天轮温度/min_p 仍是 App 与 Form 缺省 0.2/0.05 的旋钮（改协议归后续）；batch_lane 不透传 top_p/top_k；门面非流式路未接取消入口；
-  CUDA 取消异常靶文案匹配而非专用异常类；MLX 预填期不可中断（无等待点）；MLX drafter 是否同 MTP 病归 P-last。提交 __COMMIT__。
+  CUDA 取消异常靶文案匹配而非专用异常类；MLX 预填期不可中断（无等待点）；MLX drafter 是否同 MTP 病归 P-last。提交 `4cb0286`（全量 check 通过）。
