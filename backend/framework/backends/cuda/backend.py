@@ -422,18 +422,38 @@ class CudaVLLMBackend:
                 self._produce(q, request_id, prompt, cache, images, audios,
                               sampling, features, self._engine),
                 self._loop)
+        aborted = threading.Event()
+
+        def _abort_hook():
+            # 调用方（server 事件循环线程）跨线程取消：与下方 finally 同一顺序——先投递
+            # 任务取消，再 close 桥（唤醒阻塞在 get 的推理线程；_produce 的 finally 见
+            # q.closed 即走 engine.abort）。预填期（首包前）取消也由此生效，不必等
+            # 600 s 的 get 超时。两步都线程安全且非阻塞（CancelScope 钩子契约）。
+            aborted.set()
+            if not fut.done():
+                fut.cancel()
+            q.close()
+
+        scope = features.get("cancel_scope")
+        unhook = scope.add_hook(_abort_hook) if hasattr(scope, "add_hook") else None
         try:
             while True:
                 try:
                     item = q.get(timeout=600)
                 except _queue.Empty:
                     raise RuntimeError("CUDA 生成 600s 无产出（引擎挂死？）")
+                except RuntimeError:
+                    if aborted.is_set():
+                        raise RuntimeError("CUDA 生成已被调用方取消") from None
+                    raise
                 if item is None:
                     break
                 if isinstance(item, BaseException):
                     raise item
                 yield item
         finally:
+            if unhook is not None:
+                unhook()        # 正常结束后再 cancel 不得打到已完成的请求上
             if not fut.done() and not q.closed:
                 # 先投递任务取消，再唤醒背压；反序会先进入abort，随后被cancel打断。
                 fut.cancel()

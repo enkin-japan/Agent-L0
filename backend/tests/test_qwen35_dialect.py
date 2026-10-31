@@ -40,6 +40,29 @@ def test_build_prompt_thinking_off_prefills_empty_think():
     assert out.endswith("<think>\n\n</think>\n\n")
 
 
+def test_public_tools_declaration_is_byte_identical_to_builder_path():
+    """D28 公开 format_tools_declaration（预算闸按它计数）：与 builder 内部路径、与
+    抽出前的原表达式逐字节同；整段 prompt 里出现的正是它被 system 块包裹的形态。"""
+    import json
+    from framework.dialects.qwen35 import prompt_builder as pb
+    tools = _TOOLS + [{"name": "写文件", "description": "中文描述 \"引号\"",
+                       "parameters": {"properties": {}}}]
+    pub = pb.format_tools_declaration(tools)
+    legacy = ("# Tools\n\nYou have access to the following functions:\n\n"
+              "<tools>\n" + "\n".join(json.dumps(t, ensure_ascii=False) for t in tools)
+              + "\n</tools>" + pb._TOOL_FORMAT_GUIDE)
+    builder = pb.Qwen35PromptBuilder(None)
+    assert pub == legacy == builder._build_tools_declaration(tools)
+    # 预算闸数的逐件声明 = 块内逐行（同口径的前提：闸数的就是 prompt 里那几行）
+    assert [pb.format_tool_declaration(t) for t in tools] == \
+        pub.split("<tools>\n", 1)[1].split("\n</tools>", 1)[0].split("\n")
+    out = builder.build(messages=[{"role": "system", "content": "s"},
+                                  {"role": "user", "content": "hi"}],
+                        tools=tools, enable_thinking=False)
+    assert f"<|im_start|>system\n{pub}<|im_end|>\n" in out
+    assert pb.format_tools_declaration([]) == "" == pb.format_tools_declaration(None)
+
+
 # ---- 2. 思考恒回放 ----
 
 def test_assistant_thoughts_always_replayed():

@@ -117,15 +117,28 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
   修正（用户 10-31 拍板）：盯梢改由主会话直接起 `scripts/watch_until.sh` 后台循环（退出即唤醒主会话，中间无模型）；`task-sentinel` 降为分诊员；付费算力消费动作与租约链进同一脚本 `benchmarks/w3_vision_smoke/run_colab.sh`（起机→等 READY→跑→必停机）；CLAUDE.md 新增「Long tasks」节，主会话工作预算 400k→180k（实测自动压缩线约 230k）。
 
 ### W-1 远端推理配置修复（P0 实测带出，优先级最高）【新】
-- **Colab 部署默认关 MTP**：`colab/compute_ctl.py` 对标明 `supports_mtp` 的模型默认开投机解码；W0 显示它在 0 档就损失 25 点、16K 起崩。
-  改为默认 `off`，`--speculative mtp` 显式开启才用；config.yaml 的 `cuda_deployment.supports_mtp` 注释补上实测结论。
-  （付费算力脚本与 config.yaml 属主会话亲自改的范围。）重新验证 MTP 只能在 vLLM 升级或换 draft 配置后、用同一 harness 重测。
-- **CUDA 采样键透传**（已随 P0 落地，待随本波提交）：`cuda/backend.py` 对 top_p / top_k / presence_penalty / frequency_penalty 按需透传；此前被静默丢弃。
-- **按模型卡配采样**：engine.py:440-444 硬编码 temp 0.2 / rep 1.1（vLLM 下 rep 为 HF 语义、罚整个 prompt）；改为按模型注册表条目配 `sampling`
-  （Qwen3.8 思考档 temp 1.0 / top_p 0.95 / top_k 20 / rep 1.0；Gemma 4 temp 1.0 / top_p 0.95 / top_k 64），缺省沿用现值。W0 显示采样差异在噪声内，
-  故此项是「合规与可配」而非「性能修复」，排在 MTP 之后。
-- **qwen35 口径的可见文本预算线**（W-3 带出）：D.26 的 12,300 tok 线是 gemma4 分词器口径，Qwen 分词器下同一工具文本 14,181 tok；现门钉 gemma4 尺（`backend/tests/_tool_fleet.py` `GEMMA4_TOKENIZER_REPO`），Qwen 档当前无预算门。随 W-2 前缀瘦身一起由用户定：另立 qwen35 线，或瘦身后两家族共用一条。
-- 服务端：客户端断连后挂死生成不释放（W0 观察到 active_generations 持续为 1）→ 核查 inference server 的断连止损路径；harness 客户端 SIGTERM 不死（推理线程阻塞读）→ 可中断。
+- **Colab 部署默认关 MTP**【已落地，10-31 晚】：`colab/compute_ctl.py` 原对标明 `supports_mtp` 的模型默认开投机解码；W0 显示它在 0 档就损失 25 点、16K 起崩。
+  现改为**所有模型缺省 `off`**，`--speculative mtp` 显式开启才用（仍只允许 `supports_mtp` 条目）；`--draft-tokens` 不带 `--speculative mtp` 即报错；
+  README「模型与 MTP」与 config.yaml `supports_mtp` 注释补实测结论（「可开」≠「默认开」）。colab 门 133 全过。
+  重新验证 MTP 只能在 vLLM 升级或换 draft 配置后、用同一 harness 重测。MLX drafter（本机 Qwen 条目）是否同病：本机只做执行端（D26），随 P-last 复核。
+- **CUDA 采样键透传**【已在 P0 提交 `89ae1b4` 落地】：`cuda/backend.py` 对 top_p / top_k / presence_penalty / frequency_penalty 按需透传；此前被静默丢弃。
+- **按模型卡配采样**【本波】：engine.py 主路径与 oneshot 路径两处硬编码 temp 0.2 / min_p 0.05 / rep 1.1 / rep_ctx 50（vLLM 下 rep 为 HF 语义、罚整个 prompt）；
+  改为注册表条目可选键 `sampling`（白名单 8 键、数值且范围校验、构造时拒启），优先级「调用方显式值 > 条目 > 旧常量」；MLX 后端补
+  top_p / top_k / presence / frequency 透传（此前静默丢弃，下层 sampler 本就支持；prompt_lookup 投机路不承接 presence/frequency）；turn_runner
+  审批续跑与挂起恢复两处不再自补 0.2/0.05（语义改正，但见下）。**温度与 min_p 不入条目**（reviewer 10-31 Major 1）：App 与 `/turns`、`/chat`
+  的 Form 缺省每轮显式带 0.2 / 0.05，显式值优先，条目温度在聊天轮永不生效，只会在摘要/oneshot 路径冒出来造成混合口径；改协议缺省与 App 旋钮
+  超出本波，留作残留。因此 config.yaml 两条 CUDA 条目只填不依赖调用方的键：Qwen3.8 top_p 0.95 / top_k 20、Gemma 4 top_p 0.95 / top_k 64，
+  rep 均 1.0；MLX 两条目不设键 = 沿用旧常量（profile 即该口径）。W0 显示采样差异在噪声内，故此项是「合规与可配」而非「性能修复」。
+  残留：batch_lane 只读 temp/min_p/rep（top_p/top_k 走泳道会丢，MLX 条目未设故未暴露）；OpenAI 门面非流式路未接取消入口。
+- **可见文本预算线：两家族共用一条**【D28，用户 10-31 拍板；本波落门】：D.26 的 12,300 tok 线原只量 gemma4 口径（gemma4 DSL 逐件声明、gemma4 分词器）。
+  决定：**两家族共用同一条 12,300 线、同口径**——各按自家方言逐件渲染工具声明（gemma4 DSL 单件 / qwen35 `<tools>` 块内单行 JSON）、自家分词器计数，
+  都不含包裹与固定教学文本。实测 gemma4 12,036 / qwen35 12,144，两档都在线内，门直接生效（无需 xfail）。旧注释里的 14,181 是「gemma4 DSL 文本
+  用 Qwen 分词器数」的错口径，已废。qwen35 整块含 `# Tools` 头与调用格式教学为 12,325，这段固定文本无门，归 W-2 瘦身时一并看。
+- **服务端断连止损**【本波】：W0 观察 active_generations 持续为 1。核实：server.py 断连只置 `cancel` 标志，生成线程仅在每个 chunk 入队时检查，
+  不 close 后端流生成器、不调引擎 abort；预填期无 chunk → 最长等 CUDA 首包 600 s。修法：取消时触发后端 abort 链（CUDA `_produce` finally 已有
+  `engine.abort`）。harness `run_knee.py` 无信号处理、推理线程阻塞在 `iter_lines` 且 executor 非守护 → SIGTERM 不死；补 SIGINT/SIGTERM 处理 + 兜底退出。
+- 顺带查（dialect 层归一）：方言层无字面 `\n` 清洗钩子（qwen35 `_coerce` 只还原 JSON 字面量；gemma4 `_scalar`/`parse_arguments`）。
+  两模型各一个习惯（Qwen 把 dict repr 写进 .json、31B 写字面 `\n`）是否值得在 dialect 层归一，留待 W-2/W1 有同口径复测数据再定，本波不做。
 
 ### W-2 本机路径静态前缀瘦身（用户 10-31 采纳）【新】
 - 事实：system + 全量工具 schema 稳定前缀 9,424 tok（engine.py:140），30 个工具模块；`tool_schema_mode: full | catalog` 已实现未启用
@@ -208,13 +221,14 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 | D18 | 组装顺序 | 维持：不变在前、可变（task_block / tail_notes / 环境）在后 | 1.5 |
 | D19（新） | 思考回放 | 跨轮丢弃 + 轮内 last_k=2【测】 | 1.3-3 |
 | D20（新） | 落刀位置 | 轮首 / 步骤边界 / 溢出兜底 | 1.5 |
-| D21（新） | 远端投机解码 | **Colab 部署默认关 MTP**；重开须经同一 harness 复测 | W0 F9 |
+| D21（新） | 远端投机解码 | **Colab 部署默认关 MTP**【已落地 W-1，10-31 晚：compute_ctl 所有模型缺省 off】；重开须经同一 harness 复测 | W0 F9 |
 | D23 | 本机/Gemma 侧模型 | **Gemma 4 26B A4B 出阵容**（用户 10-31：上限在那里；实测 8K 拐点）。**Gemma 4 31B 定为 Gemma 侧唯一选项**：Colab 用 `google/gemma-4-31B-it-qat-w4a16-ct`（49K 无拐点、回忆 100%、含 bf16 视觉塔），本机用 `mlx-community/gemma-4-31b-it-4bit` 只需能跑 | 用户决定 + P0.5 |
 | D24（新） | 前缀披露策略 | 本机 catalog + 工具路由 + skill 按需；远端 full | W-2 |
-| D22（新） | 采样参数来源 | 按模型注册表条目配，缺省沿用现值；CUDA 透传 top_p/top_k/presence | W0 F1/F5 |
+| D22（新） | 采样参数来源 | 按模型注册表条目配（`sampling` 键，W-1；温度/min_p 不入条目，仍是 App 旋钮），缺省沿用现值；CUDA 透传 top_p/top_k/presence/frequency（`89ae1b4`）；MLX 同四键透传（W-1） | W0 F1/F5 |
 | D25（新） | CUDA 精度 | **只用预量化 4 bit**（Qwen INT4、Gemma QAT W4A16），不上 fp8 / NVFP4：A100 1.55 TB/s 单流解码受权重读取限制，INT4 实测 50–55 tok/s 已只有理论值一半，fp8 再腰斩；Ampere 无 FP8 张量核，fp8 实为 W8A16 无 prefill 收益；NVFP4 只在 Blackwell 有硬件收益。质量侧 QAT W4A16 49K 无拐点，无证据需要更高精度。Colab 出 Blackwell 档或 Google 出 QAT-NVFP4 再议 | 用户 10-31 + §1.4 |
 | D26（新） | 部署形态 | **计算端只定 Colab，本机只做执行端**；本机推理栈排 P-last，能跑即可 | 用户 10-31 |
 | D27（新） | 模型阵容 | 注册表收束到 4 条（W-3）；本机缺省 `mlx-community/Qwen3.8-27B-4bit`，compute_vm 缺省 `RedHatAI/Qwen3.8-27B-INT4`，Qwen 8bit MLX 删【定，用户 10-31】 | 用户 10-31 |
+| D28（新） | 可见文本预算线口径 | **两家族共用一条 12,300 线、同口径**（用户 10-31）：各按自家方言逐件渲染声明、自家分词器计数，不含包裹与固定教学文本；实测 gemma4 12,036 / qwen35 12,144，门已生效 | W-3 带出 / W-1 |
 
 ## 7. 风险
 | 风险 | 应对 |
@@ -250,3 +264,11 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 - 用户决定：P0 结果与修正落盘后停下等 /compact，P1 不自动开。
 - 10-31 下午：31B QAT-W4A16 补测提交 `6885f18`；讨论 Qwen vs 31B 对比（逐题差在固定题：Qwen 把 dict repr 写进 .json / 只说不写文件 / 超步；31B 把换行写成字面 `\\n` / 心算错）→ 两者各有一个可在 dialect 层归一的习惯，W-1 顺带查；用户修正方向（见 §0），核实 31B QAT 含视觉塔；方案按新方向改（W-3、D25–D27、P-last），纯文档提交。等用户 /compact 后从 W-3 开工。
 - 10-31 晚：W-3 阵容收束代码落地（scout → 主会话改 config/compute_ctl/compute_vm → implementer 删补丁改测试 → reviewer 一审无 Critical/Major → verifier 变异证明 → 提交）；执行记录与残留见 W-3 节。Colab 31B QAT 图文联调待做。
+- 11-01 凌晨（/compact 后开 W-1；用户 10-31 拍板预算线「瘦身后两家族共用一条」）：scout 一次摸清采样链路 / 预算门渲染 / 服务端断连路径；
+  主会话亲改 compute_ctl 缺省 off 与 config.yaml；两个 implementer 并行各自 worktree（A 条目级采样 + D28 预算门；C CancelScope 断连止损 + harness 信号），
+  diff 合回主树后 reviewer 一审 0 Critical / 5 Major / 8 Minor（Major 1 条目温度在聊天轮永不生效 → 改为温度/min_p 不入条目；Major 2 harness 口径续跑不报
+  → meta entry_sampling + 兼容校验；Major 3/4 看门狗与二次信号 → 12 s + 硬退处理器；Major 5 方案与门不一致 → 改方案），修补后 138 项定向测试绿；
+  verifier 变异证明 8 个变异体（采样校验 bool/NaN/top_p 边界/条目生效、compute_ctl 缺省、MLX 透传、server scope.cancel、CUDA 钩子 q.close）全红、源文件逐字节恢复。
+  W-1 实测数：gemma4 预算 12,036 / qwen35 12,144（同口径，线 12,300）；qwen35 整块 12,325 含固定教学文本归 W-2。
+  残留（不阻断 W-1 收口）：聊天轮温度/min_p 仍是 App 与 Form 缺省 0.2/0.05 的旋钮（改协议归后续）；batch_lane 不透传 top_p/top_k；门面非流式路未接取消入口；
+  CUDA 取消异常靶文案匹配而非专用异常类；MLX 预填期不可中断（无等待点）；MLX drafter 是否同 MTP 病归 P-last。提交 __COMMIT__。

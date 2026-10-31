@@ -551,7 +551,8 @@ def test_sampling_override_reaches_fake_engine_and_backend():
     proxy = K.KneeEngine(inner, [], {"temperature": 0.9, "repetition_penalty": 1.0})
     asyncio.run(run_item(proxy, _vfs_item()))
     assert inner.calls[0]["kwargs"]["temperature"] == 0.9
-    # 真 AgentEngine + 离线后端：sampling 字典层（引擎硬编码的 repetition_penalty 被覆盖）
+    # 真 AgentEngine + 离线后端：sampling 字典层（条目无 sampling 时引擎回落旧常量
+    # repetition_penalty 1.1——W-1/A 起由 _resolve_sampling 解析——这里被覆盖层盖过）
 
     class _Be:
         processor = _Proc()
@@ -753,6 +754,51 @@ def test_resume_rejects_mismatched_model_sampling_or_seed(tmp_path):
                    "--resume", "--sampling", "temperature=0.5"]) == 0
 
 
+def _rows(path, **upd):
+    """把 transcripts 每行改字段（None = 删键），模拟旧目录。"""
+    recs = [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
+    for r in recs:
+        for k, v in upd.items():
+            if v is None:
+                r.pop(k, None)
+            else:
+                r[k] = v
+    path.write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+
+
+def test_resume_compat_entry_sampling_green(tmp_path):
+    """条目采样口径相同（含 W-1 前旧行无 entry_sampling ≡ {}）：resume / append 照常。"""
+    out = tmp_path / "e"
+    base = ["--dry-run", "--levels", "0", "--reps", "1", "--limit", "1", "--out", str(out)]
+    assert K.main(base) == 0
+    rec = json.loads((out / "transcripts.jsonl").read_text().splitlines()[0])
+    assert rec["entry_sampling"] == {}                       # meta 入行
+    assert json.loads((out / "summary.json").read_text())["entry_sampling"] == {}
+    _rows(out / "transcripts.jsonl", entry_sampling=None)   # W-1 之前的旧目录
+    assert K.main(base[:2] + ["0,4096"] + base[3:] + ["--resume"]) == 0
+    assert K.main(base + ["--append"]) == 0
+    t = out / "transcripts.jsonl"
+    K.check_resume_compat(t, "dry-run/fake", {}, 7, {})      # 不抛
+
+
+def test_resume_compat_entry_sampling_red(tmp_path):
+    """条目采样口径变了：resume 与单纯 append 都拒，错误信息点明 W-1、另起目录。"""
+    out = tmp_path / "e"
+    base = ["--dry-run", "--levels", "0", "--reps", "1", "--limit", "1", "--out", str(out)]
+    assert K.main(base) == 0
+    t = out / "transcripts.jsonl"
+    _rows(t, entry_sampling={"top_k": 20})
+    for extra in (["--resume"], ["--append"]):
+        with pytest.raises(SystemExit, match="注册表条目采样口径已变（W-1），不能与旧目录合并；另起目录"):
+            K.main(base + extra)
+    _rows(t, entry_sampling=None)                            # 旧目录无键 ≡ {}，现条目非空
+    with pytest.raises(SystemExit, match="条目采样口径已变"):
+        K.check_resume_compat(t, "dry-run/fake", {}, 7, {"top_k": 20})
+    with pytest.raises(SystemExit, match="条目采样口径已变"):
+        K.check_resume_compat(t, "other/model", {}, 8, {"top_k": 20}, entry_only=True)
+    K.check_resume_compat(t, "other/model", {}, 8, {}, entry_only=True)   # append 只比条目
+
+
 def test_summary_dedupes_latest_non_error():
     recs = [dict(_rec(0, "A", 0, False), stamp="s1"), dict(_rec(0, "A", 0, True), stamp="s2"),
             {"level": 0, "item_id": "A", "rep": 0, "stamp": "s3", "error": "timeout"},
@@ -768,3 +814,122 @@ def test_summary_dedupes_latest_non_error():
 def test_blank_final_text_not_judged():
     from context_knee.quality import final_text_quality
     assert final_text_quality("  \n\t ", "zh")["coherent"] is None
+
+
+# ---- W-1/C：harness 可中断（W0：推理线程卡在远端 SSE 读时客户端信号杀不掉） ----
+
+_BLOCKING_DRIVER = r'''
+import sys, threading
+from concurrent.futures import ThreadPoolExecutor
+sys.path.append(sys.argv[1])
+from context_knee import run_knee as K
+import tests.fake_engine as fe
+
+
+class _BlockedEngine:
+    """真·非守护单线程推理执行器，generate_once 把线程永久阻塞（= iter_lines 卡死）。"""
+    def __init__(self, _script):
+        self._inference_executor = ThreadPoolExecutor(max_workers=1)
+        self.backend = fe.FakeBackend()
+
+    async def generate_once(self, session, **kw):
+        import asyncio
+
+        def _stuck():
+            print("BLOCKED", flush=True)
+            threading.Event().wait()
+        await asyncio.get_running_loop().run_in_executor(self._inference_executor, _stuck)
+
+
+fe.FakeEngine = _BlockedEngine
+sys.exit(K.main(sys.argv[2:]))
+'''
+
+
+@pytest.mark.parametrize("signame", ["SIGTERM", "SIGINT"])
+def test_second_signal_during_teardown_exits_immediately(tmp_path, signame):
+    """收尾期（首个信号后在排空 2 s 里）再来一次同信号：≤3 s 退出、退出码 128+signum。
+    改动前 finally 开头把处理器回成默认：第二次 SIGTERM 直接被杀（-15），第二次 SIGINT 以
+    KeyboardInterrupt 乱入收尾、再卡在非守护推理线程的 join 上直到看门狗（12 s）。"""
+    import signal as _signal
+    import subprocess
+    import threading
+    import time as _t
+    sig = getattr(_signal, signame)
+    driver = tmp_path / "driver.py"
+    driver.write_text(_BLOCKING_DRIVER, encoding="utf-8")
+    out = tmp_path / "o"
+    proc = subprocess.Popen(
+        [sys.executable, "-u", str(driver), str(REPO / "benchmarks"), "--dry-run",
+         "--levels", "0", "--reps", "1", "--limit", "1", "--out", str(out)],
+        cwd=str(REPO / "backend"), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    lines, blocked = [], threading.Event()
+
+    def _reader():
+        for ln in proc.stdout:
+            lines.append(ln)
+            if ln.strip() == "BLOCKED":
+                blocked.set()
+    threading.Thread(target=_reader, daemon=True).start()
+    try:
+        assert blocked.wait(60), "".join(lines)[-2000:]
+        proc.send_signal(sig)
+        _t.sleep(0.5)                       # 此时在 finally 的 drain_inference（2 s）里
+        assert proc.poll() is None, "".join(lines)[-2000:]
+        t0 = _t.monotonic()
+        proc.send_signal(sig)
+        try:
+            rc = proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            pytest.fail(f"第二次 {signame} 后 3 s 未退出：\n" + "".join(lines)[-2000:])
+        assert _t.monotonic() - t0 < 3
+        assert rc == 128 + sig, (rc, "".join(lines)[-2000:])
+        text = "".join(lines)
+        assert "收尾中收到信号" in text and "KeyboardInterrupt" not in text, text[-2000:]
+    finally:
+        if proc.poll() is None:
+            proc.kill()          # 只杀本测试自己起的子进程（红测路径）
+            proc.wait()
+
+
+@pytest.mark.parametrize("signame", ["SIGTERM", "SIGINT"])
+def test_signal_interrupts_blocked_inference_and_exits(tmp_path, signame):
+    """子进程跑 harness，推理线程阻塞时发信号：≤5 s 退出、退出码 128+signum（受控退出，
+    不是被信号直接杀掉的 -signum）、summary.json 已写（中断前的 run 照常落盘）。"""
+    import signal as _signal
+    import subprocess
+    import threading
+    import time as _t
+    sig = getattr(_signal, signame)
+    driver = tmp_path / "driver.py"
+    driver.write_text(_BLOCKING_DRIVER, encoding="utf-8")
+    out = tmp_path / "o"
+    proc = subprocess.Popen(
+        [sys.executable, "-u", str(driver), str(REPO / "benchmarks"), "--dry-run",
+         "--levels", "0", "--reps", "1", "--limit", "1", "--out", str(out)],
+        cwd=str(REPO / "backend"), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    lines, blocked = [], threading.Event()
+
+    def _reader():
+        for ln in proc.stdout:
+            lines.append(ln)
+            if ln.strip() == "BLOCKED":
+                blocked.set()
+    threading.Thread(target=_reader, daemon=True).start()
+    try:
+        assert blocked.wait(60), "".join(lines)[-2000:]
+        t0 = _t.monotonic()
+        proc.send_signal(sig)
+        try:
+            rc = proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pytest.fail(f"{signame} 后 5 s 未退出：\n" + "".join(lines)[-2000:])
+        took = _t.monotonic() - t0
+        assert rc == 128 + sig, (rc, "".join(lines)[-2000:])
+        assert took < 5
+        assert (out / "summary.json").exists()
+        assert any("收到信号" in ln for ln in lines)
+    finally:
+        if proc.poll() is None:
+            proc.kill()          # 只杀本测试自己起的子进程（红测路径）
+            proc.wait()

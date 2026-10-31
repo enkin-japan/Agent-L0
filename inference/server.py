@@ -43,6 +43,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from concurrent.futures import CancelledError as FuturesCancelled
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -67,6 +68,7 @@ from framework.utils.path_resolver import resolve_model_path
 # 「引擎不认模型家族字面量」（CHARTER 方言层）在服务入口这儿重新违反一遍。
 from framework.dialects import get_dialect_class
 from framework.core.constrained import ToolConstraintEngine, ToolCallGuard, llguidance as _llg
+from framework.core.backend_protocol import CancelScope
 from framework.backends import (AsrProviderUnavailable, get_asr_provider,
                                 get_backend_class, resolve_local_asr_provider)
 from framework.core import prompt_stream as pstream
@@ -238,6 +240,47 @@ def _busy_executor_call(loop, fn):
     fut = loop.run_in_executor(S.executor, fn)
     fut.add_done_callback(_unbusy)
     return fut
+
+
+def _cancel_gen(gen_state: Dict[str, Any]) -> None:
+    """单流路取消（断连 finally 与 /cancel 端点共用；只在事件循环线程调，不 await）。
+
+    置标志 = 推理线程在下一个 chunk 边界停（旧语义，MLX 等无钩子后端仍只靠它）；
+    scope.cancel() = 同步执行后端登记的中止钩子（CUDA：唤醒阻塞的首包 get + 私有循环
+    engine.abort），预填期也立即生效。不在这里 close 后端生成器：它此刻多半正被推理
+    线程 next() 着，跨线程 close 只会 `ValueError: generator already executing`——
+    close 由推理线程自己在退出时做（_blocking_generate 的 finally）。
+    S.gens 的注销仍挂在推理线程退出上（它是真实占用）；本函数只把「取消→退出」的
+    延迟从「首个 chunk」缩到「后端响应中止」。"""
+    gen_state["cancel"] = True
+    scope = gen_state.get("scope")
+    if scope is not None:
+        scope.cancel()
+
+
+# 后端对「调用方取消」的应答签名（CUDA：中止钩子触发后 get 抛的 RuntimeError 文案，
+# 见 backends/cuda/backend.py stream_generate）。后端未定义专用异常类型，只能按文案认。
+_CALLER_CANCEL_MARK = "已被调用方取消"
+
+
+def _note_cancel_exc(e: BaseException) -> None:
+    """取消标志已置时后端抛的异常一律按取消处理（不计 error），但非「调用方取消」
+    应答的异常（如 CUDA 的「600s 无产出（引擎挂死？）」）留一行日志，诊断不丢。"""
+    if isinstance(e, (asyncio.CancelledError, FuturesCancelled)) \
+            or _CALLER_CANCEL_MARK in str(e):
+        return
+    print(f"[Server] 取消后后端异常（按取消处理）: {type(e).__name__}: {e}")
+
+
+def _close_stream(stream) -> None:
+    """在拥有生成器的推理线程里显式关闭后端流：确定性地执行后端 finally（CUDA 的
+    fut.cancel/abort 链、MLX 的资源收尾），不依赖 CPython 引用计数回收的时机。"""
+    close = getattr(stream, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception as e:  # noqa: BLE001 —— 收尾路径只记账
+            print(f"[Server] 关闭后端生成流异常（已忽略）: {type(e).__name__}: {e}")
 
 
 # 启动探针用的最小工具声明：只为在 lifespan 内走一遍「方言语法 builder → llguidance
@@ -980,7 +1023,7 @@ async def generate_cancel(gen_id: str):
     g = S.gens.get(gen_id)
     if g is None:
         return {"cancelled": False}  # 已结束/不存在：幂等返回
-    g["cancel"] = True
+    _cancel_gen(g)
     lane_req = g.get("lane_req")
     if lane_req and S.batch_lane is not None:
         S.batch_lane.cancel(lane_req)   # 批泳道行：驱动线程在步边界 remove
@@ -1085,22 +1128,29 @@ async def generate(request: Request):
     audios = _media_paths(body.get("audios"), "audio")
 
     gen_id = uuid.uuid4().hex
-    gen_state = {"cancel": False}
+    scope = CancelScope()
+    gen_state = {"cancel": False, "scope": scope}
+    # 无条件覆盖：客户端 JSON 里同名键（标量）绝不能冒充进程内取消入口
+    features["cancel_scope"] = scope
     queue: asyncio.Queue = asyncio.Queue(maxsize=256)
     loop = asyncio.get_running_loop()
 
     def _blocking_generate():
         """推理执行器线程：消费后端生成流，逐 chunk 投回事件循环。"""
         guard = None
+        stream = None
         try:
             # 约束面在此装配：已在 gen_sem 内，与一切在飞生成互斥（评审 M4）；
             # 构建异常（含 lifespan 未预建的结构错）走下方 except → SSE error 事件
             guard = _arm_tool_guard(features, tool_specs)
-            for chunk in S.backend.stream_generate(
+            if gen_state["cancel"]:
+                return ("cancelled", {})      # 排队/装配期间已断连：不起后端
+            stream = S.backend.stream_generate(
                 prompt, cache=cache,
                 images=images or None, audios=audios or None,
                 sampling=sampling, features=features,
-            ):
+            )
+            for chunk in stream:
                 # 有界队列防内存无界（SSE 消费慢于生成时施加背压）。单一 put 协程 +
                 # 轮询其完成（绝不重试 put，防重复入队），等待期间取消标志同样生效
                 item = ("chunk", {
@@ -1124,12 +1174,20 @@ async def generate(request: Request):
                         continue  # 队列满（背压）→ 复查取消标志后继续等同一个 put
                     except Exception:
                         return ("cancelled", {})  # 事件循环已收摊等极端情形：按取消止损
+            if gen_state["cancel"]:
+                return ("cancelled", {})      # 钩子中止后后端可能安静收尾：不冒充完成
             done_payload = {}
             if guard is not None and guard.masked_positions:
                 done_payload["constrained_steps"] = guard.masked_positions
             return ("done", done_payload)
         except Exception as e:
+            if gen_state["cancel"]:
+                _note_cancel_exc(e)
+                return ("cancelled", {})      # 中止钩子让后端以异常结束：属取消，不计 error
             return ("error", {"message": f"{type(e).__name__}: {e}"})
+        finally:
+            if stream is not None:
+                _close_stream(stream)
 
     async def _sse():
         # 生成互斥：底层共享单例不可并发。acquire 被取消（排队中客户端断连）时
@@ -1163,12 +1221,13 @@ async def generate(request: Request):
                 # cancelled：客户端多半已离场，不需要终态事件（断连即语义）
                 break
         finally:
-            # 断连/取消/完成统一收尾：置取消标志（生成线程在下一 chunk 边界停）。
+            # 断连/取消/完成统一收尾：置取消标志（生成线程在下一 chunk 边界停）并触发
+            # 后端中止钩子（预填期也立即生效，见 _cancel_gen；完成路径上钩子已注销，空操作）。
             # 此处**绝不能 await**：客户端断连时本生成器经任务取消收场，粘性取消会让
             # finally 里的任何挂起点立即再抛 CancelledError、跳过其后的清理——放锁改为
             # 生成线程退出时的 done-callback（跑在事件循环线程），既保证"锁的释放严格
             # 晚于生成线程退出"（单例不并发的不变量），又对取消免疫（实测断连泄锁定此案）。
-            gen_state["cancel"] = True
+            _cancel_gen(gen_state)
 
             def _finish(_fut=None):
                 S.gens.pop(gen_id, None)
@@ -1285,16 +1344,22 @@ async def oai_chat_completions(request: Request):
     # 流式：复用 /v1/generate 的纪律（有界队列背压 + 绝不在 finally await + done-callback 放锁）
     queue: asyncio.Queue = asyncio.Queue(maxsize=256)
     stop = {"flag": False}
+    scope = CancelScope()          # 断连止损同 /v1/generate（见 _cancel_gen）
     filt = _facade_streamer()
 
     asm: Dict[str, Any] = {}   # 组装结果（在 _sse 拿到 gen_sem 后才填——评审 M6）
 
     def _blocking():
         last, raw, vis = None, [], []
+        stream = None
         try:
-            for ch in S.backend.stream_generate(
-                    asm["prompt"], cache=S.facade_cache, sampling=sampling,
-                    features={"prompt_delta_offset": asm["delta_off"]}):
+            if stop["flag"]:
+                return last, "", "", False
+            stream = S.backend.stream_generate(
+                asm["prompt"], cache=S.facade_cache, sampling=sampling,
+                features={"prompt_delta_offset": asm["delta_off"],
+                          "cancel_scope": scope})
+            for ch in stream:
                 last = ch
                 raw.append(ch.text)   # 原始字节——门面流提交用（仅完整走完才提交）
                 v = filt.feed(ch.text)
@@ -1315,10 +1380,18 @@ async def oai_chat_completions(request: Request):
                         continue
                     except Exception:
                         return last, "", "", False
+            if stop["flag"]:
+                return last, "", "", False    # 钩子中止后后端可能安静收尾：不提交
             return last, "".join(raw), "".join(vis), True
         except Exception as e:
-            print(f"[Facade] 生成异常: {type(e).__name__}: {e}")
+            if not stop["flag"]:
+                print(f"[Facade] 生成异常: {type(e).__name__}: {e}")
+            else:
+                _note_cancel_exc(e)
             return last, "", "", False
+        finally:
+            if stream is not None:
+                _close_stream(stream)
 
     async def _sse():
         await S.gen_sem.acquire()
@@ -1359,6 +1432,7 @@ async def oai_chat_completions(request: Request):
                 break
         finally:
             stop["flag"] = True
+            scope.cancel()             # 不 await；完成路径上钩子已注销，空操作
 
             def _finish(_f=None):
                 S.single_busy = max(0, S.single_busy - 1)

@@ -39,7 +39,7 @@ Colab 上只使用合成提示与测试资料。
 ```
 
 `start` / `switch` 的部署选项：`--model <完整 repo>`（默认 `RedHatAI/Qwen3.8-27B-INT4`）、
-`--speculative off|mtp`（默认按模型：注册表标明 `supports_mtp` 的开 mtp，如 Qwen3.8-27B；其余关，如 gemma-4 系列）、
+`--speculative off|mtp`（默认 off，所有模型一律；D21 2026-10-31：P0 实测 MTP 开 0 档已损 25 点、16K 起崩。`mtp` 须显式给出，且只允许注册表标明 `supports_mtp` 的模型，如 Qwen3.8-27B）、
 `--draft-tokens 1..5`（只配 mtp，默认 3）、
 `--attention-backend auto|triton|flashinfer`、`--kv-cache-dtype auto|bfloat16|fp8`、
 `--max-model-len`（默认 65536）、`--gpu-memory`（默认 0.72）、`--stall-timeout`（默认 600 秒）、
@@ -62,10 +62,13 @@ W4A16，不开 MTP）。D25：CUDA 条目一律是预量化 4-bit（注册表 `c
 其他组合的显存、质量和速度仍需实测。
 
 ```bash
-# 新建 VM（仅在没有现存租约时）：默认即 Qwen3.8-27B + MTP 3 + 上下文 65536 + 显存 0.72
+# 新建 VM（仅在没有现存租约时）：默认即 Qwen3.8-27B INT4 + MTP 关 + 上下文 65536 + 显存 0.72
 ./colab/deploy.sh start --retain
 
-# Gemma 4 31B QAT W4A16（默认不开 MTP）
+# 显式开 MTP（只在 vLLM 升级或换 draft 配置后、用 benchmarks/context_knee 同一 harness 复测通过再用于生产）
+./colab/deploy.sh start --retain --speculative mtp --draft-tokens 3
+
+# Gemma 4 31B QAT W4A16（无 MTP 头，不可开）
 ./colab/deploy.sh start --retain --model google/gemma-4-31B-it-qat-w4a16-ct
 
 # 复用已有 READY VM：后台切换推理，保留 VM、Tailnet 名称和 RAG 服务
@@ -79,7 +82,7 @@ W4A16，不开 MTP）。D25：CUDA 条目一律是预量化 4-bit（注册表 `c
   --gpu-memory 0.85 --max-model-len 32768
 ```
 
-默认组合的依据：2026-10-24 在 A100 40GB 上以 Qwen3.8-27B INT4 + MTP 3、上下文 65536、显存 0.72 启动，
+资源缺省（上下文 65536、显存 0.72）的依据：2026-10-24 在 A100 40GB 上以 Qwen3.8-27B INT4 + MTP 3 启动，
 权重 18.5 GiB，vLLM 报 KV cache 101,344 token，即单请求 65,536 token 的 1.55 倍，加载与鉴权检查均通过
 （该次 VM 随后因本机 DNS 缓存被误回收，没有测吞吐；吞吐数据见下方 32768 / 0.85 的记录）。验证脚本见
 `benchmarks/qwen-deployment/`；结果原件在本机 `logs/qwen-deployment/`（Git 忽略，未发布）。
@@ -88,6 +91,8 @@ Qwen+MTP 的 auto 解析为 **TRITON_ATTN + bfloat16**（此前 A100 实测的�
 MTP 只允许注册表明确声明 `supports_mtp` 的模型。服务并发与 vLLM `max_num_seqs` 均设为 1，避免只限 HTTP
 并发而底层仍按大并发预分配缓存。显式的其他 attention/KV 组合交给当前 vLLM 验证，不承诺 A100 都支持。
 MTP 收益随输出内容、提示长度和草稿接受率变化，`--draft-tokens` 越大不保证越快。
+**MTP 缺省关（D21，2026-10-31）**：P0 上下文拐点测量（`benchmarks/data/context-knee-20261031`）显示 Qwen INT4 开 MTP 在 0 档
+即损 25 点、16K 起崩，关 MTP 则 49K 内无拐点；速度收益不抵质量损失。重新启用须在 vLLM 升级或换 draft 配置后用同一 harness 复测。
 
 ## 切换（switch）
 

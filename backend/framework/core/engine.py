@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import math
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -14,6 +15,62 @@ from ..memory.session import ChatSession
 from ..utils.config_loader import kv_persist_enabled, repetition_guard_config
 from . import events
 from .repetition_guard import RepetitionDetector
+
+
+# 条目级采样（W-1/A）：注册表条目可声明 `sampling: {...}`，覆盖引擎的旧常量。
+# 白名单之外的键、非数值（含 bool）一律在构造时拒绝——拼错的键静默失效会把
+# 「条目配了却没生效」伪装成模型行为问题（失败关闭，启动即报）。
+SAMPLING_ENTRY_KEYS = frozenset({
+    "temperature", "min_p", "top_p", "top_k",
+    "repetition_penalty", "repetition_context_size",
+    "presence_penalty", "frequency_penalty",
+})
+# 旧常量（条目未声明时的回落值，与改动前的硬编码逐值相同）。可选键
+# （top_p/top_k/presence/frequency）不在这里：条目没声明就不出现在 sampling 字典，
+# 后端各自的缺省行为不变。
+_LEGACY_SAMPLING_MAIN = {"temperature": 0.2, "min_p": 0.05,
+                         "repetition_penalty": 1.1, "repetition_context_size": 50}
+_LEGACY_SAMPLING_ONESHOT = {"temperature": 0.3, "min_p": 0.05,
+                            "repetition_penalty": 1.1, "repetition_context_size": 50}
+
+
+# 取值范围（失败关闭）：越界值在后端里要么报错要么静默产出退化分布，都不如启动即报。
+# 整数键要求 int 本身（20.0 也拒绝：YAML 里写成浮点说明作者意图不清）。
+_SAMPLING_INT_KEYS = frozenset({"top_k", "repetition_context_size"})
+_SAMPLING_RANGES = {
+    "temperature": (lambda v: v >= 0, ">= 0"),
+    "min_p": (lambda v: 0 <= v <= 1, "∈ [0, 1]"),
+    "top_p": (lambda v: 0 < v <= 1, "∈ (0, 1]"),
+    "top_k": (lambda v: v >= 0, "整数 >= 0"),
+    "repetition_penalty": (lambda v: v > 0, "> 0"),
+    "repetition_context_size": (lambda v: v >= 1, "整数 >= 1"),
+    "presence_penalty": (lambda v: -2 <= v <= 2, "∈ [-2, 2]"),
+    "frequency_penalty": (lambda v: -2 <= v <= 2, "∈ [-2, 2]"),
+}
+assert set(_SAMPLING_RANGES) == SAMPLING_ENTRY_KEYS
+
+
+def _validate_sampling_entry(raw: Any) -> Dict[str, Any]:
+    """注册表条目 `sampling` → 校验后的字典副本；非法即 ValueError。"""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"model_registry 条目 sampling 须为映射，得到 {type(raw).__name__}")
+    unknown = sorted(set(raw) - SAMPLING_ENTRY_KEYS)
+    if unknown:
+        raise ValueError(f"model_registry 条目 sampling 含未知键 {unknown}；"
+                         f"允许 {sorted(SAMPLING_ENTRY_KEYS)}")
+    for k, v in raw.items():
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise ValueError(f"model_registry 条目 sampling.{k} 须为数值，得到 {v!r}")
+        if not math.isfinite(v):
+            raise ValueError(f"model_registry 条目 sampling.{k} 须为有限值，得到 {v!r}")
+        if k in _SAMPLING_INT_KEYS and not isinstance(v, int):
+            raise ValueError(f"model_registry 条目 sampling.{k} 须为整数，得到 {v!r}")
+        ok, desc = _SAMPLING_RANGES[k]
+        if not ok(v):
+            raise ValueError(f"model_registry 条目 sampling.{k} 越界：须 {desc}，得到 {v!r}")
+    return dict(raw)
 
 
 class AgentEngine:
@@ -106,6 +163,9 @@ class AgentEngine:
         # 同走注册表条目——见 dialects/__init__.py。缺省即默认方言（gemma4）。
         from ..dialects import get_dialect_class  # 方言命名收编在注册面（惰性导入）
         model_options = model_options or {}
+        # 条目级采样默认（W-1/A）：调用方显式值 > 条目 sampling > 旧常量（_resolve_sampling）
+        self._sampling_defaults: Dict[str, Any] = _validate_sampling_entry(
+            model_options.get("sampling"))
         self.dialect: ModelDialect = get_dialect_class(
             str(model_options.get("dialect") or "")).create(
                 backend.processor, options=model_options, env=env)
@@ -338,13 +398,24 @@ class AgentEngine:
                         env_extra=env_extra) if tail_fn is not None else None)
         return prompt, tail, None
 
+    def _resolve_sampling(self, explicit: Dict[str, Any],
+                          legacy: Dict[str, Any]) -> Dict[str, Any]:
+        """采样参数三级解析（主路径与 oneshot 共用）：调用方显式值（非 None）>
+        注册表条目 sampling > 旧常量。条目里的可选键（top_p/top_k/presence/frequency）
+        有则并入、无则不出现——字典形状与改动前一致，后端缺省行为不变。
+        返回新字典（调用方可就地追加 max_tokens）。"""
+        out = dict(legacy)
+        out.update(self._sampling_defaults)
+        out.update({k: v for k, v in explicit.items() if v is not None})
+        return out
+
     async def generate_once(self,
                             session: ChatSession,
                             tools: Optional[List[Dict[str, Any]]] = None,
                             grammar_tools: Optional[List[Dict[str, Any]]] = None,
                             task_block: Optional[str] = None,
-                            temperature: float = 0.2,
-                            min_p: float = 0.05,
+                            temperature: Optional[float] = None,
+                            min_p: Optional[float] = None,
                             enable_thinking: bool = False,
                             thinking_budget: int = 2048,
                             max_tokens: int = 4096,
@@ -436,13 +507,9 @@ class AgentEngine:
         gtools = grammar_tools if grammar_tools is not None else tools
         guard = self._tool_guard(gtools)
 
-        sampling = {
-            "temperature": temperature,
-            "min_p": min_p,
-            "max_tokens": max_tokens,
-            "repetition_penalty": 1.1,
-            "repetition_context_size": 50,
-        }
+        sampling = self._resolve_sampling(
+            {"temperature": temperature, "min_p": min_p}, _LEGACY_SAMPLING_MAIN)
+        sampling["max_tokens"] = max_tokens
         features: Dict[str, Any] = {
             "enable_thinking": enable_thinking,
             "thinking_budget": thinking_budget,
@@ -763,7 +830,7 @@ class AgentEngine:
     )
 
     async def summarize(self, content: str, prior_summary: str = "",
-                        max_tokens: int = 640, temperature: float = 0.3,
+                        max_tokens: int = 640, temperature: Optional[float] = None,
                         cancel_check=None) -> str:
         # max_tokens 512→640：给尾部 MEMO 抢救块（压缩前记忆冲洗，≤3 行）留余量
         """
@@ -781,7 +848,7 @@ class AgentEngine:
             max_tokens=max_tokens, temperature=temperature, cancel_check=cancel_check)
 
     async def oneshot_instruction(self, instruction: str, content: str, *,
-                                  max_tokens: int = 640, temperature: float = 0.3,
+                                  max_tokens: int = 640, temperature: Optional[float] = None,
                                   cancel_check=None) -> str:
         """通用一次性裸生成（summarize 的抽象化，dream 笔记整理等系统回合共用）：
         不带工具、隔离缓存、持推理锁串行、被 cancel_check 抢占即返空串。"""
@@ -790,6 +857,11 @@ class AgentEngine:
             {"role": "user", "content": content},
         ]
         prompt = self.dialect.build_prompt(messages=messages, tools=None, enable_thinking=False)
+
+        # 温度回落 0.3（摘要/整理的旧常量），条目 sampling 优先、调用方显式值最优先
+        sampling = self._resolve_sampling({"temperature": temperature},
+                                          _LEGACY_SAMPLING_ONESHOT)
+        sampling["max_tokens"] = max_tokens
 
         fresh_cache = self.backend.new_cache()  # 隔离缓存：不碰任何会话的 KV
         loop = asyncio.get_running_loop()
@@ -801,8 +873,7 @@ class AgentEngine:
             for chunk in self.backend.stream_generate(
                 prompt,
                 cache=fresh_cache,
-                sampling={"temperature": temperature, "min_p": 0.05, "max_tokens": max_tokens,
-                          "repetition_penalty": 1.1, "repetition_context_size": 50},
+                sampling=sampling,
                 features={"enable_thinking": False},
             ):
                 if cancel_check is not None and cancel_check():

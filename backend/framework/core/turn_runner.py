@@ -641,8 +641,8 @@ class TurnRunner:
             try:
                 final_result = await self.orchestrator.resume_after_approval(
                     session, approved=approve, journal=journal,
-                    temperature=turn.get("temperature", 0.2),
-                    min_p=turn.get("min_p", 0.05),
+                    temperature=turn.get("temperature"),  # 缺省交引擎解析（条目 sampling > 旧常量）
+                    min_p=turn.get("min_p"),
                     enable_thinking=turn.get("enable_thinking", False),
                     thinking_budget=turn.get("thinking_budget", 2048),
                     max_tokens=turn.get("max_tokens", 4096),
@@ -707,8 +707,8 @@ class TurnRunner:
                     session=session, journal=journal,
                     keep_recent_calls=True,  # 同一轮挂起恢复：预算、拒批与重复指纹继续累计
                     compact_history=False,  # 轮中重入:本轮未落盘观察不参与压缩(防压缩桩落盘)
-                    temperature=turn.get("temperature", 0.2),
-                    min_p=turn.get("min_p", 0.05),
+                    temperature=turn.get("temperature"),  # 缺省交引擎解析（条目 sampling > 旧常量）
+                    min_p=turn.get("min_p"),
                     enable_thinking=turn.get("enable_thinking", False),
                     thinking_budget=turn.get("thinking_budget", 2048),
                     max_tokens=turn.get("max_tokens", 4096),

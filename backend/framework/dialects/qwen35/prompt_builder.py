@@ -81,6 +81,25 @@ REASONING_INSTRUCTIONS = {
 }
 
 
+def format_tool_declaration(tool: Dict[str, Any]) -> str:
+    """单件工具声明：<tools> 块内的一行 JSON。公开给可见文本预算闸（D28：两家族同口径
+    同一条 12300 线——只数逐件声明之和，不含 "# Tools" 头、<tools> 包裹与调用格式教学，
+    对齐 gemma4 档只数逐件 DSL、不算 <|tool> 包裹；tests/test_model_visible_text.py）。
+    format_tools_declaration 同走本函数，两处不可能漂移。"""
+    return json.dumps(tool, ensure_ascii=False)
+
+
+def format_tools_declaration(tools: List[Dict[str, Any]]) -> str:
+    """工具声明块（system 块正文，不含 im_start/im_end 包裹）：官方形态 <tools> 内
+    每行一个 JSON 声明（format_tool_declaration）+ 调用格式教学。builder 内部走本函数。
+    空/None → 空串。"""
+    if not tools:
+        return ""
+    lines = "\n".join(format_tool_declaration(t) for t in tools)
+    return ("# Tools\n\nYou have access to the following functions:\n\n"
+            f"<tools>\n{lines}\n</tools>" + _TOOL_FORMAT_GUIDE)
+
+
 class Qwen35PromptBuilder:
     """ChatML 组装器。构造后只读；同一实例可被多次生成共享。"""
 
@@ -112,11 +131,7 @@ class Qwen35PromptBuilder:
 
     def _build_tools_declaration(self, tools: List[Dict[str, Any]]) -> str:
         """官方形态：system 块内 <tools> 每行一个 JSON 声明 + 调用格式教学。"""
-        if not tools:
-            return ""
-        lines = "\n".join(json.dumps(t, ensure_ascii=False) for t in tools)
-        return ("# Tools\n\nYou have access to the following functions:\n\n"
-                f"<tools>\n{lines}\n</tools>" + _TOOL_FORMAT_GUIDE)
+        return format_tools_declaration(tools)
 
     def _build_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> str:
         """历史回放：官方 XML 格式。非字符串参数值 tojson（与官方模板同口径）。"""

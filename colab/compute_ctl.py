@@ -69,7 +69,7 @@ PHASE_LABELS = {
 # ---- Options: one table of defaults, one table of limits -------------------
 DEFAULTS = {
     'minutes': 120, 'auth_key': KEY, 'hostname': HOSTNAME, 'model': MODEL,
-    'quantization': 'none', 'speculative': None, 'draft_tokens': None,  # None: per model
+    'quantization': 'none', 'speculative': None, 'draft_tokens': None,  # None → off（D21）；draft_tokens 只随 mtp
     'attention_backend': 'auto', 'kv_cache_dtype': 'auto', 'max_model_len': 65536,
     'gpu_memory': .72, 'stall_timeout': 600, 'bootstrap_timeout': 3600,
     'poll_interval': 10, 'health_interval': 60, 'lines': 80,
@@ -287,13 +287,13 @@ def deployment_options(args):
         raise ValueError('CUDA 条目一律预量化（D25），不接受 --quantization；旧 fp8 路径见 git 历史')
     supports_mtp = (entry.get('cuda_deployment') or {}).get('supports_mtp') is True
     speculative = opt(args, 'speculative')
-    if speculative is None:  # MTP wherever the registry says the model has it
-        speculative = 'mtp' if supports_mtp else 'off'
+    if speculative is None:  # D21（用户 2026-10-31）：缺省一律关 MTP；--speculative mtp 显式开
+        speculative = 'off'  # P0 实测 MTP 开在 0 档已损 25 点、16K 起崩（benchmarks/data/context-knee-20261031）
     draft_tokens = getattr(args, 'draft_tokens', None)
     if speculative not in {'off', 'mtp'}:
         raise ValueError('--speculative 只能是 off 或 mtp')
     if speculative == 'off' and draft_tokens is not None:
-        raise ValueError('--draft-tokens 只在 MTP 开启时有效（该模型默认不开，需 --speculative mtp）')
+        raise ValueError('--draft-tokens 只在 MTP 开启时有效（缺省一律关，需 --speculative mtp）')
     if speculative == 'mtp':
         draft_tokens = check_limit('draft_tokens',
                                    MTP_DRAFT_TOKENS if draft_tokens is None else draft_tokens)
@@ -1428,8 +1428,8 @@ def build_parser():
     def deployment(p):
         p.add_argument('--model', default=DEFAULTS['model'], help=f'已注册的 CUDA 模型（默认 {MODEL}）；见 models')
         p.add_argument('--speculative', choices=['off', 'mtp'], default=None,
-                       help='CUDA 投机解码模式（默认：注册表标明支持 MTP 的模型开 mtp，'
-                            '如 Qwen3.8-27B；其余关，如 gemma-4 系列）')
+                       help='CUDA 投机解码模式（默认 off：P0 实测 MTP 开长上下文退化，D21 2026-10-31；'
+                            'mtp 须显式给出，且只允许注册表标明 supports_mtp 的模型）')
         p.add_argument('--draft-tokens', type=bounded(int, 'draft_tokens'),
                        help=f'MTP draft token 数（1–5，默认 {MTP_DRAFT_TOKENS}；需 mtp）')
         p.add_argument('--attention-backend', choices=list(ATTENTION_BACKENDS), default='auto')

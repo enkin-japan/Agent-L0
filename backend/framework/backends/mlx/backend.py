@@ -538,6 +538,18 @@ class MLXBackend:
         if features.get("want_delta"):
             detok = _select_delta_detokenizer(self.processor)
 
+        # 条目级可选采样键（W-1/A）：有则透传，无则不传——下层各自缺省（top_p=1.0、
+        # top_k=0 即不截断）照旧。三条解码路的承接面：
+        # - 非投机：mlx_vlm generate_step 原生收 top_p/top_k/presence/frequency；
+        # - MTP（drafter）：top_p/top_k 进上游 sampler；presence/frequency 由补丁层
+        #   stream_generate 统一弹出构造成处理器（与 repetition_penalty 同一列表）；
+        # - prompt_lookup：lookup_generate_step 收 top_p/top_k（make_sampler），但其
+        #   处理器只按 logit_bias/repetition 构造，presence/frequency 落进 **kwargs
+        #   被**忽略**（该投机路当前不承接这两个惩罚）。
+        optional_sampling = {k: sampling[k] for k in
+                             ("top_p", "top_k", "presence_penalty", "frequency_penalty")
+                             if sampling.get(k) is not None}
+
         for result in _patched_stream_generate(
             model=self.model,
             processor=self.processor,
@@ -554,6 +566,7 @@ class MLXBackend:
             min_p=sampling.get("min_p", 0.05),
             repetition_penalty=sampling.get("repetition_penalty", 1.1),
             repetition_context_size=sampling.get("repetition_context_size", 50),
+            **optional_sampling,
             **think_kwargs,
             **kv_kwargs,
         ):

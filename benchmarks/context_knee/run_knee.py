@@ -17,7 +17,9 @@ import copy
 import json
 import math
 import os
+import signal
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,7 +84,7 @@ def parse_sampling(spec: str) -> Dict[str, Any]:
 def install_sampling_override(backend, overrides: Dict[str, Any]) -> bool:
     """在后端实例上包一层 stream_generate（RemoteBackend.stream_generate 收 `sampling`
     字典，remote/backend.py:336-341）：把覆盖值 merge 进 sampling（覆盖优先）再转发。
-    引擎 engine.py:439-445 硬编码的 repetition_penalty 1.1 只能在这一层改。幂等。"""
+    引擎按注册表条目 sampling 解析采样（W-1），这里的 --sampling 覆盖层仍优先。幂等。"""
     if not overrides or getattr(backend, "_knee_sampling", None) is not None:
         return False
     orig = backend.stream_generate
@@ -405,8 +407,11 @@ async def amain(args) -> int:
             raise SystemExit("❌ --resume 须配 --out <原产物目录>")
         args.append = True
     done = load_done(transcripts) if args.resume else set()
-    if args.resume:
-        check_resume_compat(transcripts, repo, sampling["sent"], args.seed)
+    # 注册表条目的采样键（W-1 起引擎把它并入实际发送的 sampling）：入 meta、参与合并口径
+    entry_sampling = dict(opts.get("sampling") or {})
+    if args.append:     # --resume 已隐含 --append
+        check_resume_compat(transcripts, repo, sampling["sent"], args.seed, entry_sampling,
+                            entry_only=not args.resume)
     if transcripts.exists() and not args.append:
         raise SystemExit(f"❌ {transcripts} 已存在：换 --out，或显式 --append 追加"
                          f"（或 --resume 续跑缺的 run）")
@@ -426,13 +431,16 @@ async def amain(args) -> int:
     meta = {"model": repo, "revision": opts.get("revision"),
             "dialect": opts.get("dialect") or "gemma4", "backend": args.backend,
             "tasks": args.tasks, "seed": args.seed, "token_counter": counter.mode,
-            "stamp": stamp, "sampling_overrides": sampling}
+            "stamp": stamp, "sampling_overrides": sampling, "entry_sampling": entry_sampling}
     print(f"== 拐点测量 {repo}（{args.backend}，计数 {counter.mode}）：{len(items)} 题 × "
           f"{len(levels)} 档 {levels} × {args.reps} rep → {outdir}")
 
     records: List[Dict[str, Any]] = []
     if args.resume:
         print(f"== resume：跳过 {len(done)} 个已完成 run（error 行不算完成，重跑）")
+    _INTERRUPT.reset()
+    loop = asyncio.get_running_loop()
+    installed = _install_interrupt(loop, asyncio.current_task())
     try:
         with transcripts.open("a", encoding="utf-8") as fh:
             for level in levels:
@@ -445,7 +453,17 @@ async def amain(args) -> int:
                         fh.flush()
                         records.append(rec)
                         _print_run(rec)
+    except asyncio.CancelledError:
+        if _INTERRUPT.signum is None:
+            raise
+        asyncio.current_task().uncancel()   # 信号引起的取消到此为止：收尾里的 await 照常
     finally:
+        # 收尾期（排空 / 写 summary / 同步的 backend.shutdown）不回默认处理器：默认下第二次
+        # Ctrl-C 会以 KeyboardInterrupt 乱入收尾、第二次 SIGTERM 直接被杀（-15）。改成
+        # 「立即 _hard_exit(128+signum)」，main 退出前才恢复默认（见 _restore_default_signals）
+        _arm_hard_exit_signals(loop, installed)
+        if _INTERRUPT.signum is not None and _INTERRUPT.inner is not None:
+            await drain_inference(_INTERRUPT.inner, INTERRUPT_DRAIN_S)
         try:
             from context_knee.summarize import aggregate, dedupe, load_records
             if args.append and transcripts.exists():
@@ -466,7 +484,114 @@ async def amain(args) -> int:
                     engine.backend.shutdown()
                 except Exception as e:
                     print(f"⚠️ 后端关闭异常: {e}")
-    return 0
+    return _INTERRUPT.code if _INTERRUPT.signum is not None else 0
+
+
+# ---------------- 可中断（W-1/C） ----------------
+
+#: 收到信号后的收尾上限：超过即 os._exit（收尾本身卡住——如释放缓存的 HTTP——也要能退）。
+#: 构成：proxy.release 的 DELETE 超时 5 s + 排空 INTERRUPT_DRAIN_S 2 s + 写 summary / 关后端
+#: 的余量 ≈ 5 s。原 4 s 比单个 DELETE 超时还短，正常收尾也会被看门狗截断、summary 写不出。
+INTERRUPT_GRACE_S = 12.0
+#: 收尾里给推理线程的排空等待：解码中的线程见 cancel_requested 会在下一 chunk 停并
+#: POST cancel；卡在 SSE 读（预填期无 chunk）的线程等不到，交给进程退出
+INTERRUPT_DRAIN_S = 2.0
+
+
+class _Interrupt:
+    """SIGINT/SIGTERM 的进程级状态：当前 run 的代理与引擎（信号处理器据此置取消）。"""
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.signum: Optional[int] = None
+        self.armed: List[int] = []      # 收尾期挂了「立即退出」处理器的信号（main 退出前恢复默认）
+        self.proxy = None
+        self.inner = None
+
+    @property
+    def code(self) -> int:
+        return 128 + int(self.signum or 0)
+
+
+_INTERRUPT = _Interrupt()
+
+
+def _hard_exit(code: int) -> None:
+    """最后兜底的 os._exit：推理执行器线程是非守护线程，卡在远端 SSE 的 iter_lines 时
+    （读超时 300 s）解释器退出要 join 它——进程就"SIGTERM 不死"。transcripts 每 run
+    已 flush、summary 在收尾里写完，这里只冲一下标准流。进程退出由内核关掉 socket，
+    服务端据断连走止损路径（inference/server.py _cancel_gen）。
+    不从别的线程 resp.close()：响应对象是 RemoteBackend 生成器的局部变量，且 POSIX 上
+    跨线程 close 一个正在 recv 的 socket 并不保证唤醒那次 recv（只有 shutdown 保证）。"""
+    for f in (sys.stdout, sys.stderr):
+        try:
+            f.flush()
+        except Exception:
+            pass
+    os._exit(code)
+
+
+def _install_interrupt(loop, main_task) -> List[int]:
+    """首个信号：置当前会话 cancel_requested、起收尾看门狗、取消主任务（amain 收尾写
+    summary、排空、关后端后返回 128+signum，main 再 _hard_exit）。第二个信号：立即退出。"""
+    def _on_signal(signum: int) -> None:
+        if _INTERRUPT.signum is not None:
+            print(f"== 再次收到信号 {signum}：立即退出", flush=True)
+            _hard_exit(128 + signum)
+        _INTERRUPT.signum = signum
+        print(f"== 收到信号 {signal.Signals(signum).name}：取消当前 run，写 summary 后退出"
+              f"（{INTERRUPT_GRACE_S:.0f}s 内未收尾则强制退出）", flush=True)
+        sess = getattr(_INTERRUPT.proxy, "session", None)
+        if sess is not None:
+            sess.cancel_requested = True
+        dog = threading.Timer(INTERRUPT_GRACE_S, _hard_exit, args=(128 + signum,))
+        dog.daemon = True
+        dog.start()
+        main_task.cancel()
+
+    installed = []
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _on_signal, sig)
+            installed.append(sig)
+        except (NotImplementedError, RuntimeError, ValueError):
+            pass                     # 非主线程 / 平台不支持：维持默认行为
+    return installed
+
+
+def _exit_now_handler(signum: int, _frame) -> None:
+    print(f"== 收尾中收到信号 {signal.Signals(signum).name}：立即退出", flush=True)
+    _hard_exit(128 + signum)
+
+
+def _arm_hard_exit_signals(loop, sigs: List[int]) -> None:
+    """把 loop 级信号处理器换成进程级「立即 _hard_exit(128+signum)」处理器。
+
+    用 signal.signal 而不是 loop.add_signal_handler：收尾里的 backend.shutdown() 是同步调用，
+    卡在 HTTP 上时事件循环转不动，loop 级处理器永远轮不到；进程级处理器在主线程的系统调用
+    被 EINTR 打断时即执行。loop.remove_signal_handler 会先把处理器回成默认，换手期间屏蔽
+    这两个信号，期间到达的信号在解除屏蔽后交给新处理器，不会落到默认处理器上。"""
+    if not sigs:
+        return
+    old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
+    try:
+        for sig in sigs:
+            loop.remove_signal_handler(sig)
+            signal.signal(sig, _exit_now_handler)
+            _INTERRUPT.armed.append(sig)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+
+
+def _restore_default_signals() -> None:
+    """main 退出前：收尾期的「立即退出」处理器还原为默认（与 loop.remove_signal_handler 同口径）。"""
+    for sig in _INTERRUPT.armed:
+        if signal.getsignal(sig) is _exit_now_handler:
+            signal.signal(sig, signal.default_int_handler if sig == signal.SIGINT
+                          else signal.SIG_DFL)
+    _INTERRUPT.armed = []
 
 
 async def drain_inference(engine, timeout: float) -> Optional[bool]:
@@ -502,6 +627,7 @@ async def _one_run(args, engine, counter, item, item_idx, level, rep, meta) -> D
             inner = engine
         proxy = KneeEngine(inner, plan.filler.messages,
                            (meta.get("sampling_overrides") or {}).get("sent"))
+        _INTERRUPT.proxy, _INTERRUPT.inner = proxy, inner
         timeout = getattr(args, "run_timeout", 0) or 0
         coro = run_item(proxy, plan.item, repeat_idx=rep)
         try:
@@ -535,6 +661,8 @@ async def _one_run(args, engine, counter, item, item_idx, level, rep, meta) -> D
                 "gens": proxy.gens if proxy is not None else [],
                 "wall_s": round(time.monotonic() - t0, 2)}
     finally:
+        if _INTERRUPT.signum is None:
+            _INTERRUPT.proxy = _INTERRUPT.inner = None   # 中断时留给 amain 收尾排空
         if proxy is not None:
             try:
                 proxy.release()
@@ -547,24 +675,37 @@ def _sent_of(r: Dict[str, Any]) -> Dict[str, Any]:
     return so.get("sent", so.get("applied")) or {}      # applied = 改名前的旧键
 
 
-def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], seed: int) -> None:
-    """续跑只能接同口径的批：已有行的 model / 已发送采样 / seed 任一不同即拒（混进来的 rep
-    会被 Pass^2 当作同一组）。缺这些字段的行（极旧格式）不参与比较。"""
+def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], seed: int,
+                        entry: Dict[str, Any], *, entry_only: bool = False) -> None:
+    """续跑只能接同口径的批：已有行的 model / 已发送采样 / seed / 注册表条目采样任一不同即拒
+    （混进来的 rep 会被 Pass^2 当作同一组）。缺 model/sampling/seed 字段的行（极旧格式）不参与
+    这三项比较；缺 entry_sampling 的行（W-1 之前）视为 {}——当时引擎不读条目采样。
+    entry_only（单纯 --append）：只比条目采样——summary 按整个 transcripts 聚合，条目口径
+    一变，新旧行实际发送的采样就不同，却在 sampling_overrides 上看不出来。"""
     if not transcripts.exists():
         return
     bad = set()
+    entry_bad = set()
     for ln in transcripts.read_text(encoding="utf-8").splitlines():
         if not ln.strip():
             continue
         r = json.loads(ln)
+        old_entry = r.get("entry_sampling") or {}
+        if old_entry != entry:
+            entry_bad.add(f"{json.dumps(old_entry, sort_keys=True)} ≠ {json.dumps(entry, sort_keys=True)}")
+        if entry_only:
+            continue
         if "model" in r and r["model"] != model:
             bad.add(f"model {r['model']} ≠ {model}")
         if "sampling_overrides" in r and _sent_of(r) != sent:
             bad.add(f"sampling {json.dumps(_sent_of(r), sort_keys=True)} ≠ {json.dumps(sent, sort_keys=True)}")
         if "seed" in r and r["seed"] != seed:
             bad.add(f"seed {r['seed']} ≠ {seed}")
+    if entry_bad:
+        bad.add("注册表条目采样口径已变（W-1），不能与旧目录合并；另起目录（entry_sampling "
+                + "；".join(sorted(entry_bad)) + "）")
     if bad:
-        raise SystemExit("❌ --resume 口径不一致，拒绝续跑：" + "；".join(sorted(bad)))
+        raise SystemExit("❌ --resume/--append 口径不一致，拒绝合并：" + "；".join(sorted(bad)))
 
 
 def load_done(transcripts: Path) -> set:
@@ -622,7 +763,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    return asyncio.run(amain(build_parser().parse_args(argv)))
+    try:
+        rc = asyncio.run(amain(build_parser().parse_args(argv)))
+        if _INTERRUPT.signum is not None:
+            _hard_exit(rc)      # 被信号中断：不等非守护推理线程（见 _hard_exit）
+        return rc
+    finally:
+        _restore_default_signals()   # 「立即退出」处理器只活到 main 真正退出前
 
 
 if __name__ == "__main__":

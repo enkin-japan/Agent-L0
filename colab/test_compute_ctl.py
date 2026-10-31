@@ -794,27 +794,32 @@ class GuardTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     parser.parse_args(argv)
         args = parser.parse_args(['start'])
-        self.assertIsNone(args.speculative)  # resolved per model below
+        self.assertIsNone(args.speculative)  # resolved below: off unless given explicitly (D21)
         for name in ('minutes', 'model', 'max_model_len', 'gpu_memory',
                      'stall_timeout', 'bootstrap_timeout', 'poll_interval', 'health_interval'):
             self.assertEqual(getattr(args, name), ctl.DEFAULTS[name], name)
         self.assertIsNone(args.draft_tokens)
         self.assertEqual((ctl.MODEL, ctl.DEFAULTS['max_model_len']), ('RedHatAI/Qwen3.8-27B-INT4', 65536))
-        # MTP defaults on exactly where the registry declares it (Qwen3.8), off elsewhere (gemma-4).
+        # D21 (2026-10-31): MTP is off by default for every model; `--speculative mtp` turns it on,
+        # and only where the registry declares supports_mtp (Qwen3.8).
         registry = {ctl.MODEL: {'revision': 'a' * 40, 'dialect': 'qwen35',
                                 'cuda_deployment': {'prequantized': True, 'supports_mtp': True}},
                     'google/gemma-4-31B-it-qat-w4a16-ct': {'revision': 'b' * 40, 'dialect': 'gemma4',
                                                            'cuda_deployment': {'prequantized': True}}}
         with patch.object(ctl, 'registered_models', return_value=registry):
-            self.assertEqual(ctl.deployment_options(args)['speculative_config'],
+            self.assertIsNone(ctl.deployment_options(args)['speculative_config'])  # Qwen default: off
+            on = parser.parse_args(['start', '--speculative', 'mtp'])
+            self.assertEqual(ctl.deployment_options(on)['speculative_config'],
                              {'method': 'mtp', 'num_speculative_tokens': ctl.MTP_DRAFT_TOKENS})
             gemma = parser.parse_args(['start', '--model', 'google/gemma-4-31B-it-qat-w4a16-ct'])
             self.assertIsNone(ctl.deployment_options(gemma)['speculative_config'])
+            with self.assertRaises(ValueError):  # mtp requested on a model without supports_mtp
+                ctl.deployment_options(parser.parse_args(
+                    ['start', '--model', 'google/gemma-4-31B-it-qat-w4a16-ct', '--speculative', 'mtp']))
             off = parser.parse_args(['switch', '--speculative', 'off'])
             self.assertIsNone(ctl.deployment_options(off)['speculative_config'])
-            with self.assertRaises(ValueError):  # draft tokens on a model whose default is off
-                ctl.deployment_options(parser.parse_args(
-                    ['start', '--model', 'google/gemma-4-31B-it-qat-w4a16-ct', '--draft-tokens', '2']))
+            with self.assertRaises(ValueError):  # draft tokens without --speculative mtp (default off)
+                ctl.deployment_options(parser.parse_args(['start', '--draft-tokens', '2']))
         self.assertNotIn('_worker', parser.format_help())
 
     def test_internal_workers_log_once(self):

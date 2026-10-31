@@ -6,7 +6,10 @@ cloud_consult provider 幻觉):
 
 1. **预算闸**(真分词器,D.26 重锚线 12300;原 D4 est 尺 12k 线已随 D.26 退役):
    确定性工具面的方言渲染声明总量不越线,
-   余量打进失败文案。
+   余量打进失败文案。D28(2026-10-31 用户拍板):gemma4 与 qwen35 两家族**共用这一条线**,
+   参数化两档,同口径——各按自家方言渲染、自家在册分词器计数,都只数逐件声明之和
+   (gemma4=逐件 DSL,不算 <|tool> 包裹;qwen35=<tools> 内逐行 JSON,不含 "# Tools" 头、
+   <tools> 包裹与调用格式教学)。
 2. **快照**:声明文本 + DEFAULT_SYSTEM_PROMPT 逐字节钉死,「顺手改措辞」必须显式过审。
 
 口径(与 `scripts/tool_token_audit.py` 的 full 口径同一实现,经 tests/_tool_fleet 取数):
@@ -30,15 +33,22 @@ import pytest
 
 from framework.memory.session import DEFAULT_SYSTEM_PROMPT
 
-from ._tool_fleet import GET_TOOL_SCHEMA_NAME, audit, collect_schemas, real_lltokenizer
+from framework.dialects.qwen35.prompt_builder import format_tool_declaration
 
-BUDGET = 12300            # D.26 重锚线(2026-08-28 用户;真 token 生产形口径);再动须用户拍板
+from ._tool_fleet import (GEMMA4_TOKENIZER_REPO, GET_TOOL_SCHEMA_NAME, QWEN35_TOKENIZER_REPO,
+                          audit, collect_schemas, real_lltokenizer)
+
+# D.26 重锚线(2026-08-28 用户;真 token 生产形口径);D28(2026-10-31 用户)起 gemma4 与
+# qwen35 两家族同口径共用这一条,不另立 qwen35 线。再动须用户拍板。
+# 2026-10-31 实测(W-1/A):gemma4 12036 / qwen35 12144(qwen35 整块含 "# Tools" 头与
+# 调用格式教学为 12325,不计入本闸,供 W-2 前缀瘦身参考)
+BUDGET = 12300
 EXPECTED_DECLS = 56       # 确定性工具面件数(复审 S6:枚举静默吞 import 错,缩水要报真锅)
 SNAP = Path(__file__).parent / "data" / "model_visible_text.snap"
 
 
-def _declarations():
-    """(name, 渲染后声明文本) 列表,full 口径:剔除 get_tool_schema,按名排序。"""
+def _schemas():
+    """full 口径的确定性工具面 schema:剔除 get_tool_schema,按名排序,件数/撞名守卫。"""
     schemas = [s for s in collect_schemas() if s["name"] != GET_TOOL_SCHEMA_NAME]
     names = [s["name"] for s in schemas]
     assert len(names) == len(set(names)), (
@@ -47,7 +57,20 @@ def _declarations():
         f"确定性工具面 {len(schemas)} 件 ≠ 预期 {EXPECTED_DECLS}——枚举缩水/膨胀了"
         f"(某工具模块 import 失败会被静默吞掉,先查 collect_schemas 的枚举路径,"
         f"不是文本变了)。新增/删除工具属刻意改动:改本常量并重生成快照。")
-    return sorted((s["name"], audit.format_function_declaration(s)) for s in schemas)
+    return sorted(schemas, key=lambda s: s["name"])
+
+
+def _declarations():
+    """(name, gemma4 DSL 渲染后声明文本) 列表(快照与 gemma4 预算档的取数)。"""
+    return [(s["name"], audit.format_function_declaration(s)) for s in _schemas()]
+
+
+def _gemma4_texts():
+    return [d for _, d in _declarations()]
+
+
+def _qwen35_texts():
+    return [format_tool_declaration(s) for s in _schemas()]
 
 
 def _render_snapshot() -> str:
@@ -56,17 +79,22 @@ def _render_snapshot() -> str:
     return "\n".join(parts)
 
 
-def test_tool_declarations_under_token_budget():
-    """预算闸:真分词器计数(缺 tokenizer/llguidance=可见跳过,不静默绿)。"""
-    tok = real_lltokenizer()
-    total = sum(len(tok.tokenize_str(d)) for _, d in _declarations())
+@pytest.mark.parametrize("family, render, repo", [
+    pytest.param("gemma4", _gemma4_texts, GEMMA4_TOKENIZER_REPO, id="gemma4"),
+    pytest.param("qwen35", _qwen35_texts, QWEN35_TOKENIZER_REPO, id="qwen35"),
+])
+def test_tool_declarations_under_token_budget(family, render, repo):
+    """预算闸:真分词器计数(缺 tokenizer/llguidance=可见跳过,不静默绿)。
+    D28:两家族同口径同一条 BUDGET,各按自家方言渲染 + 自家在册分词器计数。"""
+    tok = real_lltokenizer(repo)
+    total = sum(len(tok.tokenize_str(d)) for d in render())
     headroom = BUDGET - total
+    print(f"[budget] {family} full 工具声明 {total}/{BUDGET},余量 {headroom}"
+          f"(新工具落地前先跑 backend/scripts/tool_token_audit.py 看逐件账)")
     assert total <= BUDGET, (
-        f"full 工具声明 {total} tok 已越 D.26 的 {BUDGET} 线(超 {-headroom})。"
+        f"{family} full 工具声明 {total} tok 已越 D.26/D28 的 {BUDGET} 线(超 {-headroom})。"
         f"出路按 D.25 顺序:先减法(TOOL_NORMS_AUDIT.md §减法与预算,只删两类机械可判句)"
         f"→ 议重锚(用户拍板)→ catalog(最后)。逐件账:backend/scripts/tool_token_audit.py")
-    print(f"[budget] full 工具声明 {total}/{BUDGET},余量 {headroom}"
-          f"(新工具落地前先跑 backend/scripts/tool_token_audit.py 看逐件账)")
 
 
 def test_model_visible_text_snapshot():

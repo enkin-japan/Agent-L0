@@ -8,8 +8,8 @@ INFER_REMOTE_HOST=<算力端> INFER_API_KEY=<…> backend/.venv/bin/python bench
 backend/.venv/bin/python benchmarks/context_knee/summarize.py <out_dir> [<out_dir> ...] [--coherent-foreign 0.01 --coherent-mixed 0.05 --coherent-dup 0.3]
 ```
 - 缺省 `--backend remote`：本机不装载模型（单 GPU 纪律）；只拉分词器（`resolve_tokenizer_only_path`，app.py remote 同款）+ 身份护栏。mlx 走 run_eval 同款全量解析、在本进程装载。`--dry-run` = FakeEngine。
-- 产物落 `results/<模型>/<时间戳>/`（gitignored）。`--out` 已有 transcripts.jsonl 时拒绝，`--append` 追加；`--resume`（隐含 --append）跳过已成功的 (level, 题, rep)、error/timeout 行重跑，已有行的 model / 已发送采样 / seed 与本次不一致即拒。`--run-timeout`（缺省 600 s）超时：置 cancel → 排空推理执行器（等 min(60, timeout) 秒，等不到记 `drain_timeout: true` 并警告后续可能连环超时）→ 释放缓存 → 记 `{"error":"timeout"}` 行继续。summary.json 总会写出；任何率之前先去重：同 (level, 题, rep) 取最新的非 error 行（不按 stamp 拆 Pass^2）。
-- `--sampling k=v,…`：映射键（见 run_knee.SAMPLING_KEYS）记为 `sampling_overrides.sent`——**已发送、未回执核验**（服务端不回显 SamplingParams），表里标 `card(sent …)`；其余键警告后不发送、记入 `ignored`。覆盖两层：引擎入口同名形参 + 后端 `stream_generate` 的 sampling 字典（引擎硬编码的 repetition_penalty 1.1 只能在后一层改）。远端无采样 seed：同种子只对填充成立。
+- 产物落 `results/<模型>/<时间戳>/`（gitignored）。`--out` 已有 transcripts.jsonl 时拒绝，`--append` 追加；`--resume`（隐含 --append）跳过已成功的 (level, 题, rep)、error/timeout 行重跑，已有行的 model / 已发送采样 / seed / 注册表条目采样（`entry_sampling`，W-1 起引擎并入；旧行缺该键按 {} 算）与本次不一致即拒；单纯 `--append` 只比条目采样。`--run-timeout`（缺省 600 s）超时：置 cancel → 排空推理执行器（等 min(60, timeout) 秒，等不到记 `drain_timeout: true` 并警告后续可能连环超时）→ 释放缓存 → 记 `{"error":"timeout"}` 行继续。summary.json 总会写出；任何率之前先去重：同 (level, 题, rep) 取最新的非 error 行（不按 stamp 拆 Pass^2）。
+- `--sampling k=v,…`：映射键（见 run_knee.SAMPLING_KEYS）记为 `sampling_overrides.sent`——**已发送、未回执核验**（服务端不回显 SamplingParams），表里标 `card(sent …)`；其余键警告后不发送、记入 `ignored`。覆盖两层：引擎入口同名形参 + 后端 `stream_generate` 的 sampling 字典（引擎按注册表条目 `sampling` 解析，W-1；覆盖层仍优先）。SIGINT/SIGTERM：置 cancel → 排空 → 写 summary → 退出码 128+signum，12 s 看门狗兜底，收尾期二次信号立即硬退。远端无采样 seed：同种子只对填充成立。
 
 ## level 语义
 `--levels` 是**首次生成的 prompt 总 token 目标**（system + 工具 + 填充 + 任务），缺省 `0,4096,8192,16384,32768,49152,57344`。
