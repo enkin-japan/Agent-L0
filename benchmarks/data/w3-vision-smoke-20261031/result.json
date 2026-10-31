@@ -1,0 +1,106 @@
+{
+  "base_url": "http://agent-compute.tail8d18fd.ts.net:14161",
+  "expected_repo": "google/gemma-4-31B-it-qat-w4a16-ct",
+  "any_model": false,
+  "max_tokens": 128,
+  "sampling": {
+    "temperature": 0.2,
+    "min_p": 0.05,
+    "max_tokens": 128,
+    "repetition_penalty": 1.1,
+    "repetition_context_size": 50
+  },
+  "features": {
+    "enable_thinking": false
+  },
+  "started_at": "2026-10-31T22:26:55.379036+09:00",
+  "steps": {
+    "health": {
+      "pass": true,
+      "http_status": 200,
+      "latency_s": 0.412,
+      "request": "GET /health"
+    },
+    "text": {
+      "request": {
+        "question": "用一句话回答：3 乘 7 等于多少？",
+        "images": [],
+        "prompt_chars": 142,
+        "prompt": "<bos><|turn>user\n用一句话回答：3 乘 7 等于多少？<turn|>\n<|turn>system\nCurrent date: 2026-10-31 (Saturday)\n<turn|>\n<|turn>model\n<|channel>thought\n<channel|>"
+      },
+      "reply": "3 乘 7 等于 21。",
+      "raw_text": "3 乘 7 等于 21。",
+      "latency_s": 2.738,
+      "pass": true,
+      "sse": {
+        "http_status": 200,
+        "gen_id": "db60efde0f184e82bdafe4a915b916db",
+        "cache_id": "bdb0ddab936042479cdf8c07fa21f17d",
+        "chunks": 12,
+        "done": true,
+        "error": null,
+        "last_chunk": {
+          "prompt_tokens": 50,
+          "generation_tokens": 12,
+          "prompt_tps": 22.0,
+          "generation_tps": 53.0,
+          "peak_memory": 0.0
+        },
+        "done_payload": {}
+      }
+    },
+    "image": {
+      "request": {
+        "question": "图里的大字是什么？哪根柱子最高？用一句话回答。",
+        "images": [
+          "b5aff232975b1aa0a27551cb61a3b28a9ecf1c4896c8c5f79161603bfa96e13f.png"
+        ],
+        "prompt_chars": 172,
+        "prompt": "<bos><|turn>user\n<|image><|image|><image|>图里的大字是什么？哪根柱子最高？用一句话回答。<turn|>\n<|turn>system\nCurrent date: 2026-10-31 (Saturday)\n<turn|>\n<|turn>model\n<|channel>thought\n<channel|>"
+      },
+      "reply": "大字是“W3 OK 2026”，B柱最高。",
+      "raw_text": "大字是“W3 OK 2026”，B柱最高。",
+      "latency_s": 48.133,
+      "pass": true,
+      "sse": {
+        "http_status": 200,
+        "gen_id": "aeedb0b564cb46dd99c6fac67fd2f69c",
+        "cache_id": "49d70510219940e289d0c8c58ffd0b66",
+        "chunks": 18,
+        "done": true,
+        "error": null,
+        "last_chunk": {
+          "prompt_tokens": 56,
+          "generation_tokens": 18,
+          "prompt_tps": 1.2,
+          "generation_tps": 53.4,
+          "peak_memory": 0.0
+        },
+        "done_payload": {}
+      },
+      "media_upload": {
+        "status": 200,
+        "expected_media_id": "b5aff232975b1aa0a27551cb61a3b28a9ecf1c4896c8c5f79161603bfa96e13f.png",
+        "media_id": "b5aff232975b1aa0a27551cb61a3b28a9ecf1c4896c8c5f79161603bfa96e13f.png"
+      }
+    }
+  },
+  "health": {
+    "status": "ok",
+    "service": "macagent-inference",
+    "model_repo": "google/gemma-4-31B-it-qat-w4a16-ct",
+    "model_revision": "52f3f65bc7a02d555763bc923bd1d9094898219d",
+    "capabilities": [
+      "text",
+      "vision"
+    ],
+    "inference_options": {
+      "attention_backend": "auto",
+      "kv_cache_dtype": "auto",
+      "speculative_config": null
+    }
+  },
+  "dialect_repo": "google/gemma-4-31B-it-qat-w4a16-ct",
+  "png_sha256": "b5aff232975b1aa0a27551cb61a3b28a9ecf1c4896c8c5f79161603bfa96e13f",
+  "finished_at": "2026-10-31T22:27:50.853917+09:00"
+}

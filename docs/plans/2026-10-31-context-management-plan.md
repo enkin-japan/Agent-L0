@@ -112,7 +112,9 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 - **执行记录（10-31 晚，代码提交随本波）**：注册表 14→4、`inference.model`/`model_revision` 换 Qwen 4bit、`cuda.quantization` fp8→null、QAT 条目 text+vision、Qwen INT4 补 `prequantized`；compute_ctl 两道 D25 门（注册表缺标即拒、`--quantization` 整个移除并在选项层拒绝）；`text_only_vlm` 补丁及测试删除；`cloud/boundary.py` 生产档改 Qwen 4bit、B1 图表 caveat 降 pending（目录全部为 26b-4bit 口径，运行期有消费方 orchestrator→upgrade.decide_at_turn_start）；`deploy.sh models` 已只列两条。
   **带出的决定**：真分词器两道门（gemma4 DSL 语法 `test_grammar_headroom`、D.26 可见文本预算 12300 `test_model_visible_text`）钉到在册 gemma4 条目 31b-4bit 的分词器，不再跟 `inference.model` 走——同一段工具文本用 Qwen 分词器量得 14,181 tok，越 D.26 线；D.26 定线须用户拍板，qwen35 口径要不要另立预算线归 W-1（见下）。
   **残留（有意不动）**：`backend/scripts/` 压测脚本缺省仍写已出册模型（M4 Max 时期测量件，bench_baseline 遇未注册臂静默跳过；本机测速已无意义，随 P-last 一并处理或归档）；`colab/legacy/` 归档脚本仍指 26B NVFP4（归档不动，重跑须检出 ≤ aa89f8c）；`backend/models/` 磁盘上 e4b/26b/8bit/bf16 权重未删（用户自行清理）；本机 `.model-selection` 已由 26b-4bit 改指 Qwen 4bit（否则启动告警后回落缺省，结果相同）；边界目录其余条目（`deep_reasoning` weak 仍会触发）待对新档重探。
-  **仍欠验收**：Colab 部署 31B QAT 一次图文 + 纯文本（本次提交后做）。
+  **验收通过（10-31 22:15–22:28，一体化脚本第二次起机）**：31B QAT 于 A100 READY 用时 11.6 分钟；`/health` 身份核对通过（revision 52f3f65b、capabilities text+vision）；纯文本「3 乘 7」→「3 乘 7 等于 21。」2.7 s；图文（512×256 PNG，大字 W3 OK 2026 + 三柱 10/30/20）→「大字是"W3 OK 2026"，B柱最高。」48.1 s（首个图文请求含视觉塔预热）；三步全过，Colab 已 stop 并确认服务端移除，本次耗 1.2 units。证据 `benchmarks/data/w3-vision-smoke-20261031/`（result.json、PNG、两份日志）。W-3 全部验收项闭合。
+  **验收事故（10-31 晚，纪律修正随本波）**：第一次部署 18:24 起、18:38 READY，探针却等主会话被哨兵唤醒才发；哨兵把 3 分钟循环用裸 `&` 脱管后 40 秒交差，循环 18:40 写下 EXIT_READY 无人听，60 分钟租约 19:24 到期回收，A100 空转 46 分钟、验收未做。复盘本会话 26 次哨兵有 2 次同形（10-30 23:31 盯 commit 那次主会话空等 1.5 小时）。用户判断：岗位把「机制精确」交给了最便宜的模型。
+  修正（用户 10-31 拍板）：盯梢改由主会话直接起 `scripts/watch_until.sh` 后台循环（退出即唤醒主会话，中间无模型）；`task-sentinel` 降为分诊员；付费算力消费动作与租约链进同一脚本 `benchmarks/w3_vision_smoke/run_colab.sh`（起机→等 READY→跑→必停机）；CLAUDE.md 新增「Long tasks」节，主会话工作预算 400k→180k（实测自动压缩线约 230k）。
 
 ### W-1 远端推理配置修复（P0 实测带出，优先级最高）【新】
 - **Colab 部署默认关 MTP**：`colab/compute_ctl.py` 对标明 `supports_mtp` 的模型默认开投机解码；W0 显示它在 0 档就损失 25 点、16K 起崩。

@@ -36,7 +36,8 @@
   LaunchDaemons, sysctl) — these end at the user's hands anyway.
 - Anything that starts, stops, or bills paid compute (`colab/deploy.sh` and the
   `colab/compute_*.py` chain behind it, the archived `colab/legacy/` scripts, colab
-  CLI): spending units is a user-visible act.
+  CLI, and any script that wraps a lease such as
+  `benchmarks/w3_vision_smoke/run_colab.sh`): spending units is a user-visible act.
 
 ### Classifier fallback watch (quality rule, not a cost rule)
 - Cyber-adjacent work — the secrets handling in `api_tool_factory.py`, anything
@@ -57,16 +58,42 @@ context for the rest of the session.
   `scout`, or built-in `Explore` with a cheaper `model` for pure location.
 - No reading of raw run artifacts or logs, no inline recomputation: `analyst`.
 - No experiment drivers, probes, or harness scripts: `implementer`.
-- No waiting or polling: background the task, attach `task-sentinel`, end the
-  turn.
+- No waiting or polling: background the task, start the watch loop (see "Long
+  tasks" below), end the turn.
 - Never read a subagent's transcript or raw task output; its report is the
   interface.
 - Rule of thumb: more than three tool calls, or more than a hundred lines
   coming back: delegate.
 
+### Long tasks (user decision 2026-10-31; replaces "attach task-sentinel" of 2026-08-16)
+- Any task expected to run longer than 10 minutes gets a watch loop started
+  in the same action sequence that launches it: a second Bash call with
+  `run_in_background: true` running `scripts/watch_until.sh` (process
+  liveness, log/command patterns for done and fail, stall threshold, hard
+  deadline; prints one `EXIT_<STATE>` line and exits). Its exit wakes the main
+  session directly. No model sits between the loop and the wake-up.
+- Why: the sentinel agent used to start that loop itself. In 2 of 26 runs this
+  session it detached the loop with a bare `&` and handed back after 40–60 s;
+  the loop's exit then woke nobody. Once the main session waited 1.5 h for a
+  finished commit; once an A100 sat ready for 46 minutes until the lease
+  expired, with the acceptance probe never sent. Both failures were invisible
+  in the sentinel's report. The loop needs no judgement; the launch mechanism
+  needs precision — the wrong thing to ask of the cheapest model.
+- Paid compute (Colab) never depends on a wake-up at all: the consuming action
+  is chained into the same background script as the lease — start, wait for
+  READY, run, stop unconditionally (`benchmarks/w3_vision_smoke/run_colab.sh`
+  is the template). The watch loop then only reports.
+- A watch loop whose exit needs interpretation (anomaly, stall, partial
+  output) may be handed to `task-sentinel` for triage; a plain EXIT_DONE the
+  main session reads itself.
+
 ### Context discipline
-- Working budget for the main session: 400k tokens. At a phase boundary above
+- Working budget for the main session: 180k tokens. At a phase boundary above
   the budget, persist (plan file, memory) and ask the user to `/compact`.
+  (The harness auto-compacts at about 230k — observed 229k and 250k on
+  2026-10-30/31 — so the old 400k figure never triggered this rule; the
+  harness then idle-compacts "while you were away" and applies the summary
+  when the user's next message arrives.)
 - Compact before leaving, not after returning: when a work window ends and
   everything is persisted, ask for `/compact` while the cache is warm.
 - Output that may exceed 60 lines goes to a file; read the tail or a summary.
@@ -112,13 +139,11 @@ context for the rest of the session.
   stage: conclusions vs raw data, archive completeness, cross-document
   consistency, billing/secret paths. See "Stage review" below for when it is
   mandatory.
-- `task-sentinel` (Haiku 4.5, low): 3-minute real-time monitoring of ANY task expected to run
-  longer than 10 minutes (user decision 2026-08-16, superseding the old
-  "shakedown only for new scripts" rule — verified scripts get a sentinel too).
-  Pinned Haiku 4.5 + low effort + batched polling to keep cost negligible;
-  read-only, report-only; exits to wake the main session on anomaly. Attach it
-  in the same action sequence that launches the long task. It watches the
-  measurement run — the run itself stays a main-session background task.
+- `task-sentinel` (Haiku 4.5, low): triage only, after a watch loop has
+  exited and woken the main session — reads incremental evidence, returns one
+  status word with evidence lines. It no longer watches anything (user
+  decision 2026-10-31; see "Long tasks" below for why). Optional: for a plain
+  EXIT_DONE the main session reads the EXIT line itself.
 - Built-in `Explore` agent: broad read-only codebase reconnaissance that would
   otherwise flood the main context with file dumps. Pass a cheaper `model` in
   the Agent call (it has no frontmatter pin and would inherit the session
@@ -280,7 +305,7 @@ test is evidence.
      can make, or something only they can physically do).
 - Everything else is silent: phase/milestone completions inside a larger task,
   minor hiccups and recoveries the main session handles itself, watchdog or
-  sentinel alarms (they wake the MAIN SESSION, which intervenes; push only if
+  watch-loop alarms (they wake the MAIN SESSION, which intervenes; push only if
   the intervention then hits case 2), and restart-duplicated notifications.
 - Scripts must not embed mid-run notify calls. The completion push comes from
   the main session, once, after verification — never from a phase boundary

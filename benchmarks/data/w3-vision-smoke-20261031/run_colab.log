@@ -1,0 +1,13 @@
+2026-10-31 22:15:18 START deploy google/gemma-4-31B-it-qat-w4a16-ct lease 40min
+2026-10-31 22:15:18 后台部署进程已启动（尚未 READY） {"pid": 16081, "logs": "./colab/deploy.sh logs -f", "stop": "./colab/deploy.sh stop"}
+2026-10-31 22:26:54 READY host=agent-compute.tail8d18fd.ts.net; running smoke
+2026-10-31 22:27:51 smoke rc=0
+2026-10-31 22:27:51 STOP colab
+2026-10-31 22:27:51 等待正在进行的 VM 分配结束（如有），然后回收
+2026-10-31 22:27:51 正在核对并回收 VM {"session": "agent-compute-ca3cbed1d862"}
+2026-10-31 22:27:51 正在注销 Tailscale 临时节点
+2026-10-31 22:27:52 正在请求 Colab 释放 VM
+[colab] Stopping session 'agent-compute-ca3cbed1d862'...
+[colab] Session terminated.
+2026-10-31 22:27:55 已确认 VM 从 Colab 服务端移除 {"session": "agent-compute-ca3cbed1d862", "tailnet_cleanup": "ephemeral-logout-confirmed"}
+2026-10-31 22:27:55 stop rc=0

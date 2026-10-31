@@ -1,0 +1,9 @@
+[health] {"status": "ok", "service": "macagent-inference", "model_repo": "google/gemma-4-31B-it-qat-w4a16-ct", "model_revision": "52f3f65bc7a02d555763bc923bd1d9094898219d", "capabilities": ["text", "vision"], "inference_options": {"attention_backend": "auto", "kv_cache_dtype": "auto", "speculative_config": null}}
+[RemoteBackend] 模型身份核对通过：google/gemma-4-31B-it-qat-w4a16-ct（revision=52f3f65bc7a02d555763bc923bd1d9094898219d，capabilities=['text', 'vision']）
+[text] 2.738s reply='3 乘 7 等于 21。'
+[media] {"status": 200, "expected_media_id": "b5aff232975b1aa0a27551cb61a3b28a9ecf1c4896c8c5f79161603bfa96e13f.png", "media_id": "b5aff232975b1aa0a27551cb61a3b28a9ecf1c4896c8c5f79161603bfa96e13f.png"}
+[image] 48.133s reply='大字是“W3 OK 2026”，B柱最高。'
+health  PASS  0.412s  
+text    PASS  2.738s  3 乘 7 等于 21。
+image   PASS  48.133s  大字是“W3 OK 2026”，B柱最高。
+[out] benchmarks/data/w3-vision-smoke-20261031
