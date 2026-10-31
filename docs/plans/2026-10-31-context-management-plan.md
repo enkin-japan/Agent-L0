@@ -59,7 +59,7 @@ Qwen3.8 的线性注意力层意味着它的退化形态可能不是「注意力
 
 **W0 实测（2026-10-31，远端 A100 vLLM；复算与数表 `benchmarks/data/context-knee-20261031/ANALYSIS.md`，harness `benchmarks/context_knee/`）**
 longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 49K / 57K 七档，填充为按题独立的确定性伪历史 + 三张逐字回忆事实卡。
-- **Qwen3.8-27B-INT4（MTP 关）：49K 内无拐点，57K 未定**。模型卡采样各档 Pass^2 50–90% 随题抖动、不随长度单调降（低段→高段合并差 +2 点 [−10,+18]）；
+- **Qwen3.8-27B-INT4（MTP 关）：49K 内无拐点，57K 未定**。模型卡采样各档 Pass^2 50–90% 随题抖动、不随长度单调降（低段→高段合并差 +2 点 [−10,+15]）；
   当前生产采样（temp 0.2 / rep 1.1）同样 70–90%；三槽精确回忆 ≥95%，复读 0。
 - **Qwen3.8-27B-INT4（MTP 开，即 Colab 部署默认）：0 档就掉到 60–65%，16K 起成功率 20–35%、Pass^2 ≤20%、回忆 15–61%，复读命中重现**；两种采样同样糟。
   MTP 关→开按题配对：合并成功率 −49 点 [−66,−31]，Pass^2 −62 点 [−80,−45]，10 题 0 升 9 降（p=0.004）；回忆 100%→42–52%，复读 0→4–5；
@@ -67,6 +67,10 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
   → 远端路径长上下文退化与 10-30 复读事故的首要因素是 **vLLM 投机解码（原生 MTP 头，draft 3）**，不是上下文长度，采样参数差异在噪声内（推断：事故当日部署为 MTP 开）。
 - **Gemma 4 26B A4B（fp8，无 MTP）：拐点 8K（变体 8K–16K）**，低段→高段合并 Pass^2 −38 点 [−60,−15]（6 题降 0 升，p=0.03）；
   形态是执行漂移（冗余调用 0.2→1.7、终态断言失败），不是记忆丢失（回忆 ≥89%，漏召全是「无收尾答复」）。与 MRCR 44.1% 方向一致。
+- **Gemma 4 31B（官方 QAT W4A16 `gemma-4-31B-it-qat-w4a16-ct`，vLLM Marlin，MTP 关，模型卡采样）：49K 内无拐点**（0/8K/16K/32K/49K 五档 × 10 题 × 2 rep，100 run 0 错）。
+  Pass^2 90/90/70/90/80%，16K 的 70% 随题抖动、32K 回到 90%，不触发拐点规则；三槽逐字回忆 8K–49K **全部 100%**，连贯 100%，复读 0，冗余调用 0.10–0.15 不随长度增长。
+  → 26B A4B 的 8K 早退化是该 MoE（3.8B 激活）自身上限，不是 Gemma 4 家族上限（推断）；31B 质量与 Qwen3.8-27B（MTP 关）同档。
+  代价在速度：首次 prefill 49K 在 A100 已 42 s（1.17K tok/s）；本机 MLX 4bit 稠密 31B 每 token 解码读 ≈18 GB 权重，远重于 A4B 的 3.8B 激活，速度是本机采用的主要风险【P0.5 测】。
 - 未覆盖：本机 MLX 4bit + 生产前缀 9.4K 的 Gemma（测的是 A100 fp8、前缀 ~0.5K）；attention 6 题；真实脱敏历史形态（填充为合成模板）。
   采样键（top_p/top_k）只确认「已发送」，远端无回执证明进了 SamplingParams（qwen-card 两批的部署日志已轮转，无法核实是否带透传补丁）；采样对照结论因此只写「噪声内」。
 
@@ -102,6 +106,15 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
   （Qwen3.8 思考档 temp 1.0 / top_p 0.95 / top_k 20 / rep 1.0；Gemma 4 temp 1.0 / top_p 0.95 / top_k 64），缺省沿用现值。W0 显示采样差异在噪声内，
   故此项是「合规与可配」而非「性能修复」，排在 MTP 之后。
 - 服务端：客户端断连后挂死生成不释放（W0 观察到 active_generations 持续为 1）→ 核查 inference server 的断连止损路径；harness 客户端 SIGTERM 不死（推理线程阻塞读）→ 可中断。
+
+### W-2 本机路径静态前缀瘦身（用户 10-31 采纳）【新】
+- 事实：system + 全量工具 schema 稳定前缀 9,424 tok（engine.py:140），30 个工具模块；`tool_schema_mode: full | catalog` 已实现未启用
+  （catalog = 目录常驻 + `get_tool_schema` 按名取详情，约束采样语法仍建在完整 schema 上）。
+- ① 本机 Gemma 路径默认 `catalog`，远端 Qwen 维持 `full`（无拐点，无需省）；量前缀缩到多少【测】。
+- ② 工具路由：每个用户轮用 rag_server 的 embedding 对「用户请求 + 任务目标」选 top-k 相关工具进目录，核心工具（文件 / 计划 / 记忆）常驻，未入选者仍可 `get_tool_schema` 取回。
+- ③ skill 渐进披露：skill 正文不进 system prompt，只留一行索引，加 `load_skill` 工具按需读入。
+- MCP 只是接线协议本身不省 token；省的是「目录常驻、详情按需」的披露策略，MCP 服务器的工具列表走同一路由。
+- 量法：harness 加 `--prefix prod|catalog|routed` 三档，同一历史档位对比。
 
 ### W1 上下文上限护栏【新，守卫型 → 变异证明】
 - 发现上限：远端取 vLLM `/v1/models` 的 `max_model_len`（或配置 65536）；本机从模型 config 读 `max_position_embeddings`，并以 `max_kv_size`（新增配置）封顶。
@@ -151,7 +164,7 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 | 阶段 | 内容 | 出口 |
 |---|---|---|
 | P0 ✅ 2026-10-31 | W0 harness + 两端（Colab）拐点测量 | 曲线与结论见 §1.4「W0 实测」与 `ANALYSIS.md`；D1–D3 初值已回填 §6；prompt 分布未做（需 sessions 放行） |
-| P0.5 | Gemma 本机补测：MLX 4bit + 生产前缀（system+tools 9.4K）+ 3–4 档 × 5 题 × 2 rep；单 GPU 纪律、挂 sentinel | Gemma 的 D1/D2 定值；若拐点贴近前缀则 W2/W3 对本机路径优先 |
+| P0.5 | **Gemma 4 31B 本机复核**：MLX 4bit 装载与速度（prefill / decode，0 / 8K / 16K / 32K）+ 生产前缀（system+tools 9.4K）+ 3–4 档 × 5 题 × 2 rep 质量；26B 不再补测（D23）；单 GPU 纪律、挂 sentinel | 31B 是否作本机主模型（用户拍板）；本机 D1/D2 定值；若速度不可用则回到 26B + W-2 瘦前缀 + 8K 档 |
 | P1 | **W-1 远端配置修复（MTP 默认关 + 采样可配）** + W1 上限护栏 + W3 思考回放（含变异证明、差分测试更新） | MTP 关后用同一 harness 复测 4 档回到 W0 水平；护栏用例全红 → 全绿；思考回放不降成功率且峰值 prompt 下降 |
 | P1 | W1 上限护栏 + W3 思考回放（含变异证明、差分测试更新） | 护栏用例全红 → 全绿；思考回放在 P0 题集上不降成功率且峰值 prompt 下降 |
 | P2 | W2 步骤边界压缩 + W5 小修 | 拐点以上题集成功率 / Pass^2 达 §2 目标；全量重预填充次数有账 |
@@ -164,7 +177,7 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 |---|---|---|---|
 | D0 | 项目归属 | **Agent-L0 自研编排层**【定，用户 10-31】 | — |
 | D13 / D14 | 框架 / 后端 | 不换：编排层 + MLX / vLLM【定】 | 1.2 |
-| D1 / D2 | soft / hard 阈值 | **Qwen（远端，前提 MTP 关）暂定 soft 24,576 / hard 39,322**（49K 内无拐点，取 49K × 0.5 / × 0.8；57K 若成立则 28,672 / 45,875；ceiling 53,248）；MTP 开时无可用区间。**Gemma 待 P0.5**：fp8 拐点 8K–16K 按公式得 soft 4–8K / hard 6.5–13K，低于生产前缀 9.4K，不能直接执行 | W0 / ANALYSIS.md §4 |
+| D1 / D2 | soft / hard 阈值 | **Qwen（远端，前提 MTP 关）soft 24,576 / hard 39,322【定，用户 10-31】**（49K 内无拐点，取 49K × 0.5 / × 0.8；57K 若成立则 28,672 / 45,875；ceiling 53,248）；MTP 开时无可用区间。**Gemma 待 P0.5**：26B fp8 拐点 8K–16K 按公式得 soft 4–8K / hard 6.5–13K，低于生产前缀 9.4K，不能直接执行；31B W4A16 在 A100 49K 无拐点，若本机采用 31B 则同口径初值 soft 24,576 / hard 39,322，实际上限由本机速度与 9.4K 前缀决定 | W0 / ANALYSIS.md §4 |
 | D3 | 尾部保留 | keep_recent 6 / keep_tail 4 维持（W0 无压缩臂、三槽回忆无位置差，无改的依据）【测·无信号】 | W0 |
 | D4 | 摘要模板 | W4 固定节【测】 vs 现自由要点 | 成对续跑 |
 | D5 | 更新方式 | 增量 + 每 K=4 次从 TaskState 重写【测】 | W4 |
@@ -176,6 +189,8 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 | D19（新） | 思考回放 | 跨轮丢弃 + 轮内 last_k=2【测】 | 1.3-3 |
 | D20（新） | 落刀位置 | 轮首 / 步骤边界 / 溢出兜底 | 1.5 |
 | D21（新） | 远端投机解码 | **Colab 部署默认关 MTP**；重开须经同一 harness 复测 | W0 F9 |
+| D23（新） | 本机模型 | **Gemma 4 26B A4B 放弃作长链主模型**（用户 10-31：上限在那里）。Gemma 4 31B 以 `google/gemma-4-31B-it-qat-w4a16-ct`（官方 QAT W4A16）在 A100 测得 **49K 无拐点、回忆 100%**（§1.4），**升为本机长链主模型首选候选**；是否采用待 P0.5 本机 MLX 4bit 复核速度与质量后由用户拍板；26B 可保留作低延迟日常档 | 用户决定 + P0.5 |
+| D24（新） | 前缀披露策略 | 本机 catalog + 工具路由 + skill 按需；远端 full | W-2 |
 | D22（新） | 采样参数来源 | 按模型注册表条目配，缺省沿用现值；CUDA 透传 top_p/top_k/presence | W0 F1/F5 |
 
 ## 7. 风险
@@ -203,9 +218,9 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 - harness：`benchmarks/context_knee/`（run_knee / filler / quality / summarize / analyze；README）+ `backend/tests/test_context_knee_harness.py`；
   reviewer 一审 0 Critical / 3 Major（填充按题独立、伪历史命名空间与题面不相交、同口径低档基线）全部修复，另加 run 级超时与 `--resume`。
 - 产物：`benchmarks/data/context-knee-20261031/`：qwen-card（7 档）、qwen-current（4 档）、qwen-current-mtp、qwen-card-mtp（4 档，MTP 开）、
-  gemma-card（7 档）、gemma-current（4 档）、qwen-probeC；`ANALYSIS.md` + `summary_by_level.csv`。
-- 算力：Colab A100 四次租约（Qwen MTP 开 → Qwen MTP 关 → Gemma fp8 → Qwen MTP 开对照），已全部 stop。
+  gemma-card（7 档）、gemma-current（4 档）、qwen-probeC、**gemma31b-w4a16-card（5 档，用户讨论后加测）**；`ANALYSIS.md` + `summary_by_level.csv`。
+- 算力：Colab A100 五次租约（Qwen MTP 开 → Qwen MTP 关 → Gemma 26B fp8 → Qwen MTP 开对照 → Gemma 31B W4A16，约 69 分钟），已全部 stop。
 - 事故与数据缺陷：① 第 118 个 run 服务端生成挂死 15+ 分钟，客户端 SIGTERM 不死，续跑进程与旧进程并行写入 → 57344 档 6 行重复（取最新 stamp）、
   该档与 qwen-current 0 档 wall 不可用；② 4096 档 lc-hard-005 r1 / lc-hard-010 r0 填充装不下事实卡，确定性缺测；③ Qwen 对 zh 题偶有日文作答（与长度、MTP 无关）。
-- 代码附带改动：`cuda/backend.py` 可选采样键透传 + 单测。
+- 代码附带改动：`cuda/backend.py` 可选采样键透传 + 单测；`config.yaml` 注册表加 31B QAT 评测件条目（`cuda_deployment.prequantized`，无 profile 不会被路由选中）；`colab/compute_ctl.py` 对 prequantized 条目免 Gemma fp8 强制规则、拒绝再叠 `--quantization`。
 - 用户决定：P0 结果与修正落盘后停下等 /compact，P1 不自动开。

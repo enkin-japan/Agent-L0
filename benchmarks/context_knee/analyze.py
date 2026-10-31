@@ -616,7 +616,15 @@ def render(groups, aggs, args) -> str:
     L.append("| 对照 | level | 成功率差 [配对95%] | Pass^2 差 [配对95%] | 题级 升/降 p | recall a→b | 复读命中 a→b | 连贯 a→b | aborted a→b | env错均 a→b |")
     L.append("|---|---|---|---|---|---|---|---|---|---|")
     per_item_lines: List[str] = []
-    for (an, bn, lab) in comparisons(groups):
+    names = {g["name"] for g in groups}
+    extra = []
+    for spec in getattr(args, "pair", None) or []:
+        a_name, _, b_name = spec.partition(":")
+        if a_name in names and b_name in names:
+            extra.append((a_name, b_name, f"{a_name}→{b_name}（指定）"))
+        else:
+            print(f"⚠️ --pair {spec}：目录不在本次输入里，跳过", file=sys.stderr)
+    for (an, bn, lab) in comparisons(groups) + extra:
         A, B = aggs[an], aggs[bn]
         common = sorted(set(A) & set(B))
         for lv in common:
@@ -766,6 +774,8 @@ def main(argv=None) -> int:
     ap.add_argument("--max-model-len", type=int, default=65536)
     ap.add_argument("--gen-reserve", type=int, default=12288)
     ap.add_argument("--prod-prefix", type=int, default=9424)
+    ap.add_argument("--pair", action="append", default=[],
+                    help="额外对照 a:b（目录名），可重复；自动配对之外的组合用（如同家族不同模型）")
     ap.add_argument("--keep", default="latest", choices=["latest", "oldest"],
                     help="同 (level,item,rep) 重复行保留哪条（oldest 仅作敏感性检查）")
     args = ap.parse_args(argv)

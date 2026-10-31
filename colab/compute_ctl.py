@@ -275,8 +275,11 @@ def deployment_options(args):
     if not entry:
         raise ValueError('模型必须是已注册的 CUDA 模型；运行 deploy.sh models 查看')
     quantization = opt(args, 'quantization')
-    if model.startswith('google/gemma-4-') and quantization == 'none':
+    prequantized = (entry.get('cuda_deployment') or {}).get('prequantized') is True
+    if model.startswith('google/gemma-4-') and quantization == 'none' and not prequantized:
         raise ValueError('该 BF16 模型超出 A100 40GB 显存，请加 --quantization fp8')
+    if prequantized and quantization != 'none':
+        raise ValueError('该模型自带量化（registry cuda_deployment.prequantized），不要再加 --quantization')
     supports_mtp = (entry.get('cuda_deployment') or {}).get('supports_mtp') is True
     speculative = opt(args, 'speculative')
     if speculative is None:  # MTP wherever the registry says the model has it

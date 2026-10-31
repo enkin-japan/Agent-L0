@@ -281,6 +281,17 @@ inference:
       suppress_ghost_thinking: true   # 2026-08-14 用户拍板补齐（L4 日用档，实测数据见 26B 条 note）
       note: "~15GB NVFP4 | FP4 偏移评测件（Red Hat 官方量化组）| 非生产候选 | 上游 2026-08-13 有新 revision（5557756b）待下次 colab 场核"
 
+    # ── Google 官方 QAT W4A16（compressed-tensors）：2026-10-31 P0.5 评测件，作本机 MLX 4bit
+    # 候选的质量上界代理（A100 走 Marlin 只验能力不代表速度）。自带量化，部署不加 --quantization。
+    # 无 profile=路由绝不选中。
+    - repo: "google/gemma-4-31B-it-qat-w4a16-ct"
+      revision: "52f3f65bc7a02d555763bc923bd1d9094898219d"
+      dialect: "gemma4"
+      capabilities: ["text"]
+      suppress_ghost_thinking: true
+      cuda_deployment: { prequantized: true }
+      note: "~18GB QAT W4A16 | 2026-10-31 拐点评测件（见 benchmarks/data/context-knee-20261031）| 非生产候选，待本机 4bit 复核"
+
     # CUDA 原生 MTP 头保存在同一 checkpoint；不加载 MLX drafter 权重。
     - repo: "RedHatAI/Qwen3.8-27B-INT4"
       revision: "91bd022d5b49442a868bc35008f6c21e1860edfa"

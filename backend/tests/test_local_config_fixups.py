@@ -123,9 +123,15 @@ _ADDED_0824 = (
 
 def test_registry_matches_d20_roster():
     entries = {e.get("repo"): e for e in _registry()}
-    # D.20 9 + Ornith-1.5 3 + 本次正式 CUDA Qwen MTP 1 = 13；
+    # D.20 9 + Ornith-1.5 3 + 正式 CUDA Qwen MTP 1 + 10-31 Gemma 4 31B QAT 评测件 1 = 14；
     # 长度钉防"静默加档不触钉"
-    assert len(entries) == 13, f"注册表应为 13 条（D.20 9 + 08-24 3 + CUDA Qwen 1），实际 {len(entries)}: {sorted(entries)}"
+    assert len(entries) == 14, f"注册表应为 14 条（D.20 9 + 08-24 3 + CUDA Qwen 1 + 10-31 31B QAT 1），实际 {len(entries)}: {sorted(entries)}"
+    # 10-31 评测件：自带量化、无 profile（路由绝不选中）、不带 MLX drafter
+    qat31 = entries['google/gemma-4-31B-it-qat-w4a16-ct']
+    assert qat31['revision'] == '52f3f65bc7a02d555763bc923bd1d9094898219d'
+    assert qat31['dialect'] == 'gemma4'
+    assert qat31['cuda_deployment'] == {'prequantized': True}
+    assert 'profile' not in qat31 and 'speculative' not in qat31
     cuda_qwen = entries['RedHatAI/Qwen3.8-27B-INT4']
     assert cuda_qwen['revision'] == '91bd022d5b49442a868bc35008f6c21e1860edfa'
     assert cuda_qwen['dialect'] == 'qwen35'
