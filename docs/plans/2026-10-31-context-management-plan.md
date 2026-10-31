@@ -13,6 +13,8 @@
 方案因此不是「从零搭」，而是：先测拐点（W0），再补轮内压缩与上限护栏（W1/W2），再做思考回放与摘要结构（W3/W4），
 状态与校验只做小修（W5/W6）。
 
+**方向修正（用户 2026-10-31 下午拍板）**：计算端目前只定 Colab（A100），本机只做执行端；核心推理模型只留 **Qwen3.8 27B** 与 **Gemma 4 31B** 两选项，Gemma 4 26B / e4b、Ornith 全部出阵容（含 colab 部署脚本缺省）；本机推理栈的部署与测试排到所有工作包之后，验收只有「能跑」，不看速度（本机 M6 基础款，带宽 170 GB/s）；一切速度数字以 Colab A100 实测为准。CUDA 侧精度只用预量化 4 bit（INT4 / QAT W4A16），不上 fp8 / NVFP4（D25）。阵容收束是 P1 第一项（W-3）。
+
 ## 1. 问题与证据
 
 ### 1.1 本项目观察到的失败（2026-10-30 取证，`benchmarks/session_forensics/2026-10-30/`）
@@ -70,7 +72,8 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 - **Gemma 4 31B（官方 QAT W4A16 `gemma-4-31B-it-qat-w4a16-ct`，vLLM Marlin，MTP 关，模型卡采样）：49K 内无拐点**（0/8K/16K/32K/49K 五档 × 10 题 × 2 rep，100 run 0 错）。
   Pass^2 90/90/70/90/80%，16K 的 70% 随题抖动、32K 回到 90%，不触发拐点规则；三槽逐字回忆 8K–49K **全部 100%**，连贯 100%，复读 0，冗余调用 0.10–0.15 不随长度增长。
   → 26B A4B 的 8K 早退化是该 MoE（3.8B 激活）自身上限，不是 Gemma 4 家族上限（推断）；31B 质量与 Qwen3.8-27B（MTP 关）同档。
-  代价在速度：首次 prefill 49K 在 A100 已 42 s（1.17K tok/s）；本机 MLX 4bit 稠密 31B 每 token 解码读 ≈18 GB 权重，远重于 A4B 的 3.8B 激活，速度是本机采用的主要风险【P0.5 测】。
+  代价在速度：首次 prefill 49K 在 A100 已 42 s（1.17K tok/s），解码 49→35 tok/s（稠密全注意力，随长度降；Qwen 线性注意力占 3/4，解码 50–55 不随长度变）。本机不再测速（10-31 方向修正），W-2 瘦前缀与 W2 落刀对 31B 比对 Qwen 更值钱。
+  视觉塔核实（10-31，HF config.json）：`gemma-4-31B-it-qat-w4a16-ct` 为 `Gemma4ForConditionalGeneration`，27 层 `gemma4_vision` 整塔列在量化 `ignore` 清单（保持 bf16），带 processor_config 与 audio_config；注册表 capabilities 应改为 text+vision，vLLM 图文端到端待 W-3 在 Colab 联调一次。
 - 未覆盖：本机 MLX 4bit + 生产前缀 9.4K 的 Gemma（测的是 A100 fp8、前缀 ~0.5K）；attention 6 题；真实脱敏历史形态（填充为合成模板）。
   采样键（top_p/top_k）只确认「已发送」，远端无回执证明进了 SamplingParams（qwen-card 两批的部署日志已轮转，无法核实是否带透传补丁）；采样对照结论因此只写「噪声内」。
 
@@ -96,6 +99,16 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 - 跑两端：Qwen3.8-27B-INT4 于 Colab（`colab/deploy.sh`，用完 `stop`，用户 10-31 授权随用随关）；Gemma 4 26B A4B 于本机（单 GPU 纪律：期间不起 :14161 以外的真模型，挂 task-sentinel）。
 - 同时量：各档 prefill 秒与 tps（给 W2 的 KV 代价算账）；现网 prompt 规模分布 —— 从 history.jsonl 只抽 metrics 字段（不读正文），**需用户放行 sessions 目录**。
 - 出口：两条拐点曲线、D1–D3 初值、W2 的落刀代价表。
+
+### W-3 模型阵容收束（用户 10-31 方向修正，P1 第一项）【新】
+- 注册表 14 → 4：留 `mlx-community/Qwen3.8-27B-4bit`、`mlx-community/gemma-4-31b-it-4bit`（本机，只需能跑）、`RedHatAI/Qwen3.8-27B-INT4`、`google/gemma-4-31B-it-qat-w4a16-ct`（Colab）。
+  删 `gemma-4-e4b-it-8bit`、`gemma-4-26b-a4b-it-4bit/8bit`、`Qwen3.8-27B-8bit`（本机带宽下 8bit 无意义，【待拍板】）、Ornith 三条、`google/gemma-4-31B-it`（bf16，fp8 路径作废）、`google/gemma-4-26B-A4B-it`、`RedHatAI/gemma-4-26B-A4B-it-NVFP4`。
+  31B QAT 条目 capabilities 改 text+vision，去掉「非生产候选」注记，补 revision 钉。
+- 两个缺省值：`inference.model`（现 e4b-8bit）→ `mlx-community/Qwen3.8-27B-4bit`【待拍板，或 gemma-4-31b-it-4bit】；`colab/compute_vm.py` 的 `MODEL`（现 26B NVFP4）→ `RedHatAI/Qwen3.8-27B-INT4`（现行远端生产模型）。
+- `colab/compute_ctl.py`：删「Gemma 4 必须 fp8」规则（bf16 条目已出阵容，成死代码），改为「CUDA 条目一律预量化，带 `--quantization` 即拒绝」；`cuda_deployment.prequantized` 两条都标。`colab/legacy/` 归档不动。
+- 代码与测试：Ornith 专用 `backends/mlx/patch/text_only_vlm.py` 及其测试成死代码 → 删；注册表长度钉 14 → 4 并逐条钉 revision；model_router / local_config_fixups / inference_endpoints / cuda_backend / compute_ctl 测试里引用被删模型的用例改到留档模型上。
+- 顺序：先 `scout` 列出全部引用点（path:line；排除 docs/history、benchmarks/data、colab/legacy），再按清单改；护栏型改动按仓规做变异证明。config.yaml / compute_ctl / compute_vm 由主会话亲自改。
+- 验收：`./devctl.sh check` 全过；`deploy.sh models` 只列两条 CUDA 条目；Colab 部署 31B QAT 一次，图文请求与纯文本各通过一次（视觉塔 vLLM 端到端）；本机「能跑」验证排到全部工作包之后（§5 P-last）。
 
 ### W-1 远端推理配置修复（P0 实测带出，优先级最高）【新】
 - **Colab 部署默认关 MTP**：`colab/compute_ctl.py` 对标明 `supports_mtp` 的模型默认开投机解码；W0 显示它在 0 档就损失 25 点、16K 起崩。
@@ -164,12 +177,12 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 | 阶段 | 内容 | 出口 |
 |---|---|---|
 | P0 ✅ 2026-10-31 | W0 harness + 两端（Colab）拐点测量 | 曲线与结论见 §1.4「W0 实测」与 `ANALYSIS.md`；D1–D3 初值已回填 §6；prompt 分布未做（需 sessions 放行） |
-| P0.5 | **Gemma 4 31B 本机复核**：MLX 4bit 装载与速度（prefill / decode，0 / 8K / 16K / 32K）+ 生产前缀（system+tools 9.4K）+ 3–4 档 × 5 题 × 2 rep 质量；26B 不再补测（D23）；单 GPU 纪律、挂 sentinel | 31B 是否作本机主模型（用户拍板）；本机 D1/D2 定值；若速度不可用则回到 26B + W-2 瘦前缀 + 8K 档 |
-| P1 | **W-1 远端配置修复（MTP 默认关 + 采样可配）** + W1 上限护栏 + W3 思考回放（含变异证明、差分测试更新） | MTP 关后用同一 harness 复测 4 档回到 W0 水平；护栏用例全红 → 全绿；思考回放不降成功率且峰值 prompt 下降 |
-| P1 | W1 上限护栏 + W3 思考回放（含变异证明、差分测试更新） | 护栏用例全红 → 全绿；思考回放在 P0 题集上不降成功率且峰值 prompt 下降 |
+| P0.5 ✅ 2026-10-31 | Gemma 4 31B QAT-W4A16 Colab 拐点补测（用户讨论后加测） | 49K 无拐点、回忆 100%、比 26B +30 点（§1.4、ANALYSIS.md §6）；31B 定为 Gemma 侧唯一选项（D23）；本机复核取消（方向修正） |
+| P1 | **W-3 阵容收束** → **W-1 远端配置修复（MTP 默认关 + 采样可配）** → W-2 前缀瘦身 → W1 上限护栏 → W3 思考回放（含变异证明、差分测试更新） | 注册表 4 条、check 全过、31B 图文联调过；MTP 关后同一 harness 复测 4 档回到 W0 水平；护栏用例全红 → 全绿；思考回放不降成功率且峰值 prompt 下降 |
 | P2 | W2 步骤边界压缩 + W5 小修 | 拐点以上题集成功率 / Pass^2 达 §2 目标；全量重预填充次数有账 |
 | P3 | W4 结构化摘要 + 校准 + 成对续跑评估 | 模板在成对续跑上优于现模板；K 值定 |
 | P4（可选） | W7、模板自动优化（ACON/TRACE 思路，用失败案例让云端模型改模板，仅合成数据） | 视 P3 结果 |
+| P-last | 本机执行端推理栈：两条 MLX 4bit 条目装载 + 一次 longchain 冒烟 | 能跑即过，不计速度（用户 10-31） |
 每阶段：reviewer 一审 + 主会话逐行（守卫型改动变异证明）；收官跑 stage-reviewer；文档与 harness 当天入库。
 
 ## 6. 决策记录
@@ -177,7 +190,7 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 |---|---|---|---|
 | D0 | 项目归属 | **Agent-L0 自研编排层**【定，用户 10-31】 | — |
 | D13 / D14 | 框架 / 后端 | 不换：编排层 + MLX / vLLM【定】 | 1.2 |
-| D1 / D2 | soft / hard 阈值 | **Qwen（远端，前提 MTP 关）soft 24,576 / hard 39,322【定，用户 10-31】**（49K 内无拐点，取 49K × 0.5 / × 0.8；57K 若成立则 28,672 / 45,875；ceiling 53,248）；MTP 开时无可用区间。**Gemma 待 P0.5**：26B fp8 拐点 8K–16K 按公式得 soft 4–8K / hard 6.5–13K，低于生产前缀 9.4K，不能直接执行；31B W4A16 在 A100 49K 无拐点，若本机采用 31B 则同口径初值 soft 24,576 / hard 39,322，实际上限由本机速度与 9.4K 前缀决定 | W0 / ANALYSIS.md §4 |
+| D1 / D2 | soft / hard 阈值 | **Qwen（远端，前提 MTP 关）soft 24,576 / hard 39,322【定，用户 10-31】**（49K 内无拐点，取 49K × 0.5 / × 0.8；57K 若成立则 28,672 / 45,875；ceiling 53,248）；MTP 开时无可用区间。**Gemma 待 P0.5**：26B fp8 拐点 8K–16K 按公式得 soft 4–8K / hard 6.5–13K，低于生产前缀 9.4K，不能直接执行；31B W4A16 在 A100 49K 无拐点，远端同口径 soft 24,576 / hard 39,322（与 Qwen 同值）；本机不再单独定值（方向修正） | W0 / ANALYSIS.md §4 |
 | D3 | 尾部保留 | keep_recent 6 / keep_tail 4 维持（W0 无压缩臂、三槽回忆无位置差，无改的依据）【测·无信号】 | W0 |
 | D4 | 摘要模板 | W4 固定节【测】 vs 现自由要点 | 成对续跑 |
 | D5 | 更新方式 | 增量 + 每 K=4 次从 TaskState 重写【测】 | W4 |
@@ -189,9 +202,12 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 | D19（新） | 思考回放 | 跨轮丢弃 + 轮内 last_k=2【测】 | 1.3-3 |
 | D20（新） | 落刀位置 | 轮首 / 步骤边界 / 溢出兜底 | 1.5 |
 | D21（新） | 远端投机解码 | **Colab 部署默认关 MTP**；重开须经同一 harness 复测 | W0 F9 |
-| D23（新） | 本机模型 | **Gemma 4 26B A4B 放弃作长链主模型**（用户 10-31：上限在那里）。Gemma 4 31B 以 `google/gemma-4-31B-it-qat-w4a16-ct`（官方 QAT W4A16）在 A100 测得 **49K 无拐点、回忆 100%**（§1.4），**升为本机长链主模型首选候选**；是否采用待 P0.5 本机 MLX 4bit 复核速度与质量后由用户拍板；26B 可保留作低延迟日常档 | 用户决定 + P0.5 |
+| D23 | 本机/Gemma 侧模型 | **Gemma 4 26B A4B 出阵容**（用户 10-31：上限在那里；实测 8K 拐点）。**Gemma 4 31B 定为 Gemma 侧唯一选项**：Colab 用 `google/gemma-4-31B-it-qat-w4a16-ct`（49K 无拐点、回忆 100%、含 bf16 视觉塔），本机用 `mlx-community/gemma-4-31b-it-4bit` 只需能跑 | 用户决定 + P0.5 |
 | D24（新） | 前缀披露策略 | 本机 catalog + 工具路由 + skill 按需；远端 full | W-2 |
 | D22（新） | 采样参数来源 | 按模型注册表条目配，缺省沿用现值；CUDA 透传 top_p/top_k/presence | W0 F1/F5 |
+| D25（新） | CUDA 精度 | **只用预量化 4 bit**（Qwen INT4、Gemma QAT W4A16），不上 fp8 / NVFP4：A100 1.55 TB/s 单流解码受权重读取限制，INT4 实测 50–55 tok/s 已只有理论值一半，fp8 再腰斩；Ampere 无 FP8 张量核，fp8 实为 W8A16 无 prefill 收益；NVFP4 只在 Blackwell 有硬件收益。质量侧 QAT W4A16 49K 无拐点，无证据需要更高精度。Colab 出 Blackwell 档或 Google 出 QAT-NVFP4 再议 | 用户 10-31 + §1.4 |
+| D26（新） | 部署形态 | **计算端只定 Colab，本机只做执行端**；本机推理栈排 P-last，能跑即可 | 用户 10-31 |
+| D27（新） | 模型阵容 | 注册表收束到 4 条（W-3）；缺省本机模型与 compute_vm 缺省【待拍板】 | 用户 10-31 |
 
 ## 7. 风险
 | 风险 | 应对 |
@@ -203,7 +219,8 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 | 探针填充不像真实历史 → 拐点失真 | 填充取自脱敏真实观察形态；与现网 prompt 分布对照 |
 | 模板对题集过拟合 | 20% 题只做最终验证 |
 | 投机解码 / 量化件在长上下文的隐性退化（W0：MTP 开 16K 起崩） | 部署默认关；任何推理栈变更（vLLM 版本、draft 配置、量化件）都用 context_knee harness 复测 4 档 |
-| 测量形态 ≠ 生产形态（A100 fp8 vs 本机 4bit；前缀 0.5K vs 9.4K） | P0.5 本机补测；阈值按生产形态定 |
+| 测量形态 ≠ 生产形态：模型与精度已对齐（Colab INT4 / QAT W4A16 即生产），仍差前缀 0.4K vs 9.4K | W-2 的 `--prefix prod|catalog|routed` 三档补测；阈值按生产形态定 |
+| 31B QAT 的视觉塔在 vLLM 上未端到端验过 | W-3 验收项：Colab 部署后图文请求通过一次 |
 
 ## 8. 参考（已逐页核实）
 - ACON，Kang et al.，ICML 2026，arXiv 2510.00615，`microsoft/acon`（峰值 token −26–54%，蒸馏压缩器保留 >95%，MSR 页）。
@@ -224,3 +241,4 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
   该档与 qwen-current 0 档 wall 不可用；② 4096 档 lc-hard-005 r1 / lc-hard-010 r0 填充装不下事实卡，确定性缺测；③ Qwen 对 zh 题偶有日文作答（与长度、MTP 无关）。
 - 代码附带改动：`cuda/backend.py` 可选采样键透传 + 单测；`config.yaml` 注册表加 31B QAT 评测件条目（`cuda_deployment.prequantized`，无 profile 不会被路由选中）；`colab/compute_ctl.py` 对 prequantized 条目免 Gemma fp8 强制规则、拒绝再叠 `--quantization`。
 - 用户决定：P0 结果与修正落盘后停下等 /compact，P1 不自动开。
+- 10-31 下午：31B QAT-W4A16 补测提交 `6885f18`；讨论 Qwen vs 31B 对比（逐题差在固定题：Qwen 把 dict repr 写进 .json / 只说不写文件 / 超步；31B 把换行写成字面 `\\n` / 心算错）→ 两者各有一个可在 dialect 层归一的习惯，W-1 顺带查；用户修正方向（见 §0），核实 31B QAT 含视觉塔；方案按新方向改（W-3、D25–D27、P-last），纯文档提交。等用户 /compact 后从 W-3 开工。
