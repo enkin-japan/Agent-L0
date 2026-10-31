@@ -493,6 +493,12 @@ class CudaVLLMBackend:
                 skip_special_tokens=False,          # 规范文本须含频道/工具标记
                 spaces_between_special_tokens=False,
             )
+            # 可选采样键按需透传（Qwen3.8 / Gemma 4 模型卡推荐 top_p / top_k / presence_penalty；
+            # 调用方不给就不传，沿用 vLLM 缺省）。2026-10-31 P0 拐点测量加入：此前这些键被静默丢弃。
+            for _k, _cast in (("top_p", float), ("top_k", int),
+                              ("presence_penalty", float), ("frequency_penalty", float)):
+                if sampling.get(_k) is not None:
+                    sp_kwargs[_k] = _cast(sampling[_k])
             # vLLM 投机解码硬拒 min_p。依启动时实际解析的引擎配置判断：
             # env off/null 须保留普通采样，config-only MTP 也须移除 min_p。
             if self._speculative_enabled:

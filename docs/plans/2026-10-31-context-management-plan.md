@@ -57,6 +57,19 @@
 Qwen3.8 的线性注意力层意味着它的退化形态可能不是「注意力稀释」而是「状态遗忘」，探针要同时测精确回忆（路径/ID 逐字）与执行决策。
 不用 Gemma 3 / NoLiMa 的数字（用户 10-31 指出：过旧）。
 
+**W0 实测（2026-10-31，远端 A100 vLLM；复算与数表 `benchmarks/data/context-knee-20261031/ANALYSIS.md`，harness `benchmarks/context_knee/`）**
+longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 49K / 57K 七档，填充为按题独立的确定性伪历史 + 三张逐字回忆事实卡。
+- **Qwen3.8-27B-INT4（MTP 关）：49K 内无拐点，57K 未定**。模型卡采样各档 Pass^2 50–90% 随题抖动、不随长度单调降（低段→高段合并差 +2 点 [−10,+18]）；
+  当前生产采样（temp 0.2 / rep 1.1）同样 70–90%；三槽精确回忆 ≥95%，复读 0。
+- **Qwen3.8-27B-INT4（MTP 开，即 Colab 部署默认）：0 档就掉到 60–65%，16K 起成功率 20–35%、Pass^2 ≤20%、回忆 15–61%，复读命中重现**；两种采样同样糟。
+  MTP 关→开按题配对：合并成功率 −49 点 [−66,−31]，Pass^2 −62 点 [−80,−45]，10 题 0 升 9 降（p=0.004）；回忆 100%→42–52%，复读 0→4–5；
+  失败主因：终态断言 25、超步数 6–12、无收尾 7–11、复读 4–5、把填充里的旧项目当成当前任务作答（16K/32K 各 6 次）。
+  → 远端路径长上下文退化与 10-30 复读事故的首要因素是 **vLLM 投机解码（原生 MTP 头，draft 3）**，不是上下文长度，采样参数差异在噪声内（推断：事故当日部署为 MTP 开）。
+- **Gemma 4 26B A4B（fp8，无 MTP）：拐点 8K（变体 8K–16K）**，低段→高段合并 Pass^2 −38 点 [−60,−15]（6 题降 0 升，p=0.03）；
+  形态是执行漂移（冗余调用 0.2→1.7、终态断言失败），不是记忆丢失（回忆 ≥89%，漏召全是「无收尾答复」）。与 MRCR 44.1% 方向一致。
+- 未覆盖：本机 MLX 4bit + 生产前缀 9.4K 的 Gemma（测的是 A100 fp8、前缀 ~0.5K）；attention 6 题；真实脱敏历史形态（填充为合成模板）。
+  采样键（top_p/top_k）只确认「已发送」，远端无回执证明进了 SamplingParams（qwen-card 两批的部署日志已轮转，无法核实是否带透传补丁）；采样对照结论因此只写「噪声内」。
+
 ### 1.5 推理栈前缀缓存事实（决定压缩「落刀位置」）
 - 本机 MLX：严格前缀复用（`--prompt-cache-file` 「treated as a prefix」；server 旧行为「任何差异即重置」，issue #137 后改为取公共前缀），
   prefill 分块 `--prefill-step-size` 默认 2048；`--max-kv-size` 旋转缓存、`--kv-bits` KV 量化（本仓 gemma4_generate.py 透传 `max_kv_size`，无配置）。
@@ -79,6 +92,16 @@ Qwen3.8 的线性注意力层意味着它的退化形态可能不是「注意力
 - 跑两端：Qwen3.8-27B-INT4 于 Colab（`colab/deploy.sh`，用完 `stop`，用户 10-31 授权随用随关）；Gemma 4 26B A4B 于本机（单 GPU 纪律：期间不起 :14161 以外的真模型，挂 task-sentinel）。
 - 同时量：各档 prefill 秒与 tps（给 W2 的 KV 代价算账）；现网 prompt 规模分布 —— 从 history.jsonl 只抽 metrics 字段（不读正文），**需用户放行 sessions 目录**。
 - 出口：两条拐点曲线、D1–D3 初值、W2 的落刀代价表。
+
+### W-1 远端推理配置修复（P0 实测带出，优先级最高）【新】
+- **Colab 部署默认关 MTP**：`colab/compute_ctl.py` 对标明 `supports_mtp` 的模型默认开投机解码；W0 显示它在 0 档就损失 25 点、16K 起崩。
+  改为默认 `off`，`--speculative mtp` 显式开启才用；config.yaml 的 `cuda_deployment.supports_mtp` 注释补上实测结论。
+  （付费算力脚本与 config.yaml 属主会话亲自改的范围。）重新验证 MTP 只能在 vLLM 升级或换 draft 配置后、用同一 harness 重测。
+- **CUDA 采样键透传**（已随 P0 落地，待随本波提交）：`cuda/backend.py` 对 top_p / top_k / presence_penalty / frequency_penalty 按需透传；此前被静默丢弃。
+- **按模型卡配采样**：engine.py:440-444 硬编码 temp 0.2 / rep 1.1（vLLM 下 rep 为 HF 语义、罚整个 prompt）；改为按模型注册表条目配 `sampling`
+  （Qwen3.8 思考档 temp 1.0 / top_p 0.95 / top_k 20 / rep 1.0；Gemma 4 temp 1.0 / top_p 0.95 / top_k 64），缺省沿用现值。W0 显示采样差异在噪声内，
+  故此项是「合规与可配」而非「性能修复」，排在 MTP 之后。
+- 服务端：客户端断连后挂死生成不释放（W0 观察到 active_generations 持续为 1）→ 核查 inference server 的断连止损路径；harness 客户端 SIGTERM 不死（推理线程阻塞读）→ 可中断。
 
 ### W1 上下文上限护栏【新，守卫型 → 变异证明】
 - 发现上限：远端取 vLLM `/v1/models` 的 `max_model_len`（或配置 65536）；本机从模型 config 读 `max_position_embeddings`，并以 `max_kv_size`（新增配置）封顶。
@@ -127,7 +150,9 @@ Qwen3.8 的线性注意力层意味着它的退化形态可能不是「注意力
 ## 5. 实施阶段与验收
 | 阶段 | 内容 | 出口 |
 |---|---|---|
-| P0 | W0 harness + 两端拐点测量 + prompt 分布 | 曲线 + D1–D3 初值写回本文 §6 |
+| P0 ✅ 2026-10-31 | W0 harness + 两端（Colab）拐点测量 | 曲线与结论见 §1.4「W0 实测」与 `ANALYSIS.md`；D1–D3 初值已回填 §6；prompt 分布未做（需 sessions 放行） |
+| P0.5 | Gemma 本机补测：MLX 4bit + 生产前缀（system+tools 9.4K）+ 3–4 档 × 5 题 × 2 rep；单 GPU 纪律、挂 sentinel | Gemma 的 D1/D2 定值；若拐点贴近前缀则 W2/W3 对本机路径优先 |
+| P1 | **W-1 远端配置修复（MTP 默认关 + 采样可配）** + W1 上限护栏 + W3 思考回放（含变异证明、差分测试更新） | MTP 关后用同一 harness 复测 4 档回到 W0 水平；护栏用例全红 → 全绿；思考回放不降成功率且峰值 prompt 下降 |
 | P1 | W1 上限护栏 + W3 思考回放（含变异证明、差分测试更新） | 护栏用例全红 → 全绿；思考回放在 P0 题集上不降成功率且峰值 prompt 下降 |
 | P2 | W2 步骤边界压缩 + W5 小修 | 拐点以上题集成功率 / Pass^2 达 §2 目标；全量重预填充次数有账 |
 | P3 | W4 结构化摘要 + 校准 + 成对续跑评估 | 模板在成对续跑上优于现模板；K 值定 |
@@ -139,8 +164,8 @@ Qwen3.8 的线性注意力层意味着它的退化形态可能不是「注意力
 |---|---|---|---|
 | D0 | 项目归属 | **Agent-L0 自研编排层**【定，用户 10-31】 | — |
 | D13 / D14 | 框架 / 后端 | 不换：编排层 + MLX / vLLM【定】 | 1.2 |
-| D1 / D2 | soft / hard 阈值 | 拐点 × 0.5 / × 0.8【测】；探针档 8K–64K | W0 |
-| D3 | 尾部保留 | keep_recent 6 条 / keep_tail 4 轮 维持为起点【测】 | 现状 |
+| D1 / D2 | soft / hard 阈值 | **Qwen（远端，前提 MTP 关）暂定 soft 24,576 / hard 39,322**（49K 内无拐点，取 49K × 0.5 / × 0.8；57K 若成立则 28,672 / 45,875；ceiling 53,248）；MTP 开时无可用区间。**Gemma 待 P0.5**：fp8 拐点 8K–16K 按公式得 soft 4–8K / hard 6.5–13K，低于生产前缀 9.4K，不能直接执行 | W0 / ANALYSIS.md §4 |
+| D3 | 尾部保留 | keep_recent 6 / keep_tail 4 维持（W0 无压缩臂、三槽回忆无位置差，无改的依据）【测·无信号】 | W0 |
 | D4 | 摘要模板 | W4 固定节【测】 vs 现自由要点 | 成对续跑 |
 | D5 | 更新方式 | 增量 + 每 K=4 次从 TaskState 重写【测】 | W4 |
 | D6 | 压缩模型 | 主模型自己（现状）；不走外部 API（出网红线） | — |
@@ -150,6 +175,8 @@ Qwen3.8 的线性注意力层意味着它的退化形态可能不是「注意力
 | D18 | 组装顺序 | 维持：不变在前、可变（task_block / tail_notes / 环境）在后 | 1.5 |
 | D19（新） | 思考回放 | 跨轮丢弃 + 轮内 last_k=2【测】 | 1.3-3 |
 | D20（新） | 落刀位置 | 轮首 / 步骤边界 / 溢出兜底 | 1.5 |
+| D21（新） | 远端投机解码 | **Colab 部署默认关 MTP**；重开须经同一 harness 复测 | W0 F9 |
+| D22（新） | 采样参数来源 | 按模型注册表条目配，缺省沿用现值；CUDA 透传 top_p/top_k/presence | W0 F1/F5 |
 
 ## 7. 风险
 | 风险 | 应对 |
@@ -160,6 +187,8 @@ Qwen3.8 的线性注意力层意味着它的退化形态可能不是「注意力
 | Gemma 4 JSON 约束下复读塌缩（gemma#622） | 复读护栏已覆盖工具块；本机 BPE 去 token 器延迟（DEFERRED §7）仍是盲区，W0 记录命中数 |
 | 探针填充不像真实历史 → 拐点失真 | 填充取自脱敏真实观察形态；与现网 prompt 分布对照 |
 | 模板对题集过拟合 | 20% 题只做最终验证 |
+| 投机解码 / 量化件在长上下文的隐性退化（W0：MTP 开 16K 起崩） | 部署默认关；任何推理栈变更（vLLM 版本、draft 配置、量化件）都用 context_knee harness 复测 4 档 |
+| 测量形态 ≠ 生产形态（A100 fp8 vs 本机 4bit；前缀 0.5K vs 9.4K） | P0.5 本机补测；阈值按生产形态定 |
 
 ## 8. 参考（已逐页核实）
 - ACON，Kang et al.，ICML 2026，arXiv 2510.00615，`microsoft/acon`（峰值 token −26–54%，蒸馏压缩器保留 >95%，MSR 页）。
@@ -169,3 +198,14 @@ Qwen3.8 的线性注意力层意味着它的退化形态可能不是「注意力
 - Anthropic《Effective context engineering for AI agents》2025-09-29：compaction / structured note-taking / sub-agent architectures。
 - 模型卡：`Qwen/Qwen3.8-27B`、`RedHatAI/Qwen3.8-27B-INT4`、`google/gemma-4-26B-A4B-it`、deepmind.google/models/gemma/gemma-4；gemma issues #610 / #622。
 - MLX-LM README（Long Prompts and Generations、Prompt caching）、issue #137；vLLM design/prefix_caching（2026-06-23 版）。
+
+## 9. P0 执行记录（2026-10-31）
+- harness：`benchmarks/context_knee/`（run_knee / filler / quality / summarize / analyze；README）+ `backend/tests/test_context_knee_harness.py`；
+  reviewer 一审 0 Critical / 3 Major（填充按题独立、伪历史命名空间与题面不相交、同口径低档基线）全部修复，另加 run 级超时与 `--resume`。
+- 产物：`benchmarks/data/context-knee-20261031/`：qwen-card（7 档）、qwen-current（4 档）、qwen-current-mtp、qwen-card-mtp（4 档，MTP 开）、
+  gemma-card（7 档）、gemma-current（4 档）、qwen-probeC；`ANALYSIS.md` + `summary_by_level.csv`。
+- 算力：Colab A100 四次租约（Qwen MTP 开 → Qwen MTP 关 → Gemma fp8 → Qwen MTP 开对照），已全部 stop。
+- 事故与数据缺陷：① 第 118 个 run 服务端生成挂死 15+ 分钟，客户端 SIGTERM 不死，续跑进程与旧进程并行写入 → 57344 档 6 行重复（取最新 stamp）、
+  该档与 qwen-current 0 档 wall 不可用；② 4096 档 lc-hard-005 r1 / lc-hard-010 r0 填充装不下事实卡，确定性缺测；③ Qwen 对 zh 题偶有日文作答（与长度、MTP 无关）。
+- 代码附带改动：`cuda/backend.py` 可选采样键透传 + 单测。
+- 用户决定：P0 结果与修正落盘后停下等 /compact，P1 不自动开。

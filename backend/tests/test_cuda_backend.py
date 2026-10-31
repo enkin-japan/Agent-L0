@@ -708,3 +708,28 @@ def test_cuda_admitted_stream_submits_before_shutdown_can_stop_loop(cuda_stream,
             bridge.close()
         consumer.join(1)
         stopper.join(1)
+
+
+def test_cuda_optional_sampling_keys_pass_through_only_when_given(cuda_stream):
+    """top_p / top_k / presence / frequency：调用方给了才进 SamplingParams，没给沿用 vLLM 缺省
+    （2026-10-31 P0 拐点测量加入；此前这些键被静默丢弃，模型卡推荐的截断采样到不了 vLLM）。"""
+    class OneShot(_BurstEngine):
+        async def generate(self, prompt, params, rid):
+            self.requests.append((prompt, params.kwargs, rid))
+            yield _completion("ok", [1, 2], "stop")
+
+    engine = OneShot()
+    b = cuda_stream.backend
+    b._engine = engine
+    list(b.stream_generate("synthetic", cache=b.new_cache(), sampling={"max_tokens": 8},
+                           features={"want_delta": True}))
+    kw = engine.requests[0][1]
+    assert not ({"top_p", "top_k", "presence_penalty", "frequency_penalty"} & set(kw))
+    engine.requests.clear()
+    list(b.stream_generate("synthetic", cache=b.new_cache(),
+                           sampling={"max_tokens": 8, "top_p": 0.95, "top_k": "20",
+                                     "presence_penalty": 0, "repetition_penalty": 1.0},
+                           features={"want_delta": True}))
+    kw = engine.requests[0][1]
+    assert (kw["top_p"], kw["top_k"], kw["presence_penalty"]) == (0.95, 20, 0.0)
+    assert kw["repetition_penalty"] == 1.0 and "frequency_penalty" not in kw
