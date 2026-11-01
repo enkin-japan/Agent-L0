@@ -213,7 +213,7 @@ scout 11-01 校正前提：① 被压观察未必已 spill——只有 > observa
   写失败只告警、桩无句柄。3,000–4,000 字的全文读回带行号会再截一次，经中缝可续读。
 - 账：事件 `step_compaction{trigger: step|hard, count, freed_chars, level}`；轮统计 `step_compactions` / `compaction_freed_chars` / `full_renders`（全量渲染次数，engine 计）。
 - 不碰：轮首压缩（observation_keep_recent 6）、审批/挂起/定时续跑的 compact_history=False 跳过、轮间摘要（输入读落盘日志且不读 tool 轮，桩进不去）。
-- 门：reviewer 一审 + 主会话二审逐行（范围与保护窗、副本路、两处钩子、spill 补写）+ verifier 变异证明；提交 `__W2_HASH__`。
+- 门：reviewer 一审 + 主会话二审逐行（范围与保护窗、副本路、两处钩子、spill 补写）+ verifier 变异证明；提交 `6a092c8`。
 - 残留：ceiling 兜底仍是机械压缩（步骤 result 已在 TaskState 作步骤摘要，轮内摘要折叠需子生成，不做）；轮内压小后轮间摘要触发看末次 prompt_tokens 可能推迟；
   P2 验收「拐点以上题集成功率 / Pass^2 达标、全量重填有账」等 Colab 复测。
 
@@ -371,4 +371,4 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
   → 主会话定 D37（按 W1 档位触发、后端缓存语义判别、两处落刀点、副本 + 原件表、补写 spill）、亲改 config.yaml（agent.step_compaction）→ implementer（step_compaction.py、
   压缩器范围/回调/豁免、_compact_turn_range 共用、步骤边界与 hard 钩子、engine full_renders、spill 补写、66 例测试）→ reviewer 一审 0 Critical / 2 Major（范围压到未看过的同批观察；
   hard 断言为空）/ 8 Minor / 4 Nit → 同一 implementer 修 13 项（属性改名 block_prefix_cache、键改 cold_refill_trigger_level、hard 压后重量再决定尾注、豁免元工具与提醒）
-  → 主会话二审逐行 → verifier 15 变异体全红、sha256 还原一致。提交 `__W2_HASH__`（全量 check 经 pre-commit）。P1 序列 W1 → W3 → W2 完成，下一步 W4 结构化摘要模板与校准。
+  → 主会话二审逐行 → verifier 15 变异体全红、sha256 还原一致。提交 `6a092c8`（全量 check 经 pre-commit）。P1 序列 W1 → W3 → W2 完成，下一步 W4 结构化摘要模板与校准。
