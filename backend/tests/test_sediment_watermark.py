@@ -58,7 +58,7 @@ def _write_turns(session, n, *, start=0, status="success", filler="内容" * 120
 
 
 class _SummEngine:
-    async def summarize(self, batch_text, existing, cancel_check=None):
+    async def summarize(self, batch_text, existing, cancel_check=None, **kwargs):
         return "- 折叠摘要"
 
 

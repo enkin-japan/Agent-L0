@@ -28,7 +28,8 @@ from .journal import TurnJournal
 from .task_state import TaskState, call_fingerprint
 from . import tool_disclosure
 from ..memory.session import ChatSession, DEFAULT_SYSTEM_PROMPT
-from ..memory.compactor import compact_tool_observations, compact_tool_observations_detailed
+from ..memory.compactor import (compact_tool_observations, compact_tool_observations_detailed,
+                                resolve_summary_calibration)
 from ..mcp.registry import MCPRegistry
 from .spill import spill_handle, spill_observation, truncate_observation
 
@@ -455,6 +456,10 @@ class Orchestrator:
         self.summary_low_threshold = int(cfg.get("summary_low_threshold", 2000))
         self.summary_keep_tail_turns = int(cfg.get("summary_keep_tail_turns", 4))
         self.summary_idle_seconds = int(cfg.get("summary_idle_seconds", 300))  # 空闲多久进入低阈值维护
+        # W4（D4 / D5）摘要校准：生成上限 + 每 K 次折叠一次重写（0 = 永不）。不合法即 ValueError
+        # （与 context_guard 同口径：装配失败，不静默回落）。两条摘要触发路径（routes 活跃 /
+        # app 空闲）都从这里取。
+        self.summary_max_tokens, self.summary_rewrite_every = resolve_summary_calibration(cfg)
         # 长期记忆沉淀（Stage 3）：折叠旧轮时把原文沉淀进 RAG agent_memory 类目（无损承重网）。
         self.sediment_to_rag = bool(cfg.get("sediment_to_rag", True))
 
@@ -1743,6 +1748,8 @@ class Orchestrator:
                 text = _append_upgrade_notices(text, metrics, upgrade_decisions)
                 session.add_assistant_message(content=text, thoughts=thoughts)
                 if task is not None and (task.all_done() or not task.plan):
+                    # W4：弃之前留一份摘要器视图，随本轮记录落盘（摘要器的关键值逐字来源）
+                    session.last_task_state_render = task.render_for_summary()
                     # 任务完成即弃：工作过程已沉淀在本轮消息流（blackboard=消息流本身）
                     session.task_state = None
                 # [D2 谎报围堵] 推回后仍坚持吞错/零证据声明 → 放行但状态降级 warning

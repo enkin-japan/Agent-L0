@@ -47,6 +47,50 @@ DEFAULT_KEEP_RECENT = 6
 DEFAULT_DIGEST_CHARS = 200
 DEFAULT_BUDGET_CHARS = 20000  # 机械层观察总预算（保守偏大：越过才驱逐旧大观察，不越则保留原文）
 
+# W4（D4 / D5）摘要校准：生成上限与「每 K 次折叠一次重写」。与 config.yaml agent 段同缺省。
+DEFAULT_SUMMARY_MAX_TOKENS = 900       # config.yaml 缺省（一审 Major 3：640 对九节 + MEMO 偏紧）
+DEFAULT_SUMMARY_REWRITE_EVERY = 4
+# maybe_summarize_context 直调（测试 / 评估）的缺省 = engine.summarize 形参缺省；生产两条触发
+# 路径一律经编排器传 config 值
+_CALL_SUMMARY_MAX_TOKENS = 640
+SUMMARY_MAX_TOKENS_RANGE = (128, 4096)
+# 折叠输入里每轮「轮末任务状态」块的字符上限（尾部截断加 …）。块是 TaskState.render_for_summary
+# 视图：Goal ≤300 → 全部便签（满载 12×200≈2.4k）→ Plan，截断先吃 Plan，便签满载也完整进来。
+SUMMARY_TASK_STATE_CHARS = 3000
+
+
+def resolve_summary_calibration(agent_cfg: Optional[Dict[str, Any]]) -> Tuple[int, int]:
+    """从 agent 段解析 (summary_max_tokens, summary_rewrite_every)；不合法即 ValueError。
+
+    与 context_guard 同口径 fail-closed：装配期就拒，不在运行期静默回落缺省。
+    bool 是 int 子类，`true` 不能被当成 1；字符串数字也不收（YAML 里写成 "640" 多半是笔误）。
+    """
+    cfg = agent_cfg or {}
+    max_tokens = cfg.get("summary_max_tokens", DEFAULT_SUMMARY_MAX_TOKENS)
+    rewrite_every = cfg.get("summary_rewrite_every", DEFAULT_SUMMARY_REWRITE_EVERY)
+    lo, hi = SUMMARY_MAX_TOKENS_RANGE
+    if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) \
+            or not lo <= max_tokens <= hi:
+        raise ValueError(
+            f"agent.summary_max_tokens 必须是 {lo}..{hi} 的整数，得到 {max_tokens!r}")
+    if isinstance(rewrite_every, bool) or not isinstance(rewrite_every, int) \
+            or rewrite_every < 0:
+        raise ValueError(
+            f"agent.summary_rewrite_every 必须是 ≥0 的整数（0 = 永不重写），得到 {rewrite_every!r}")
+    return max_tokens, rewrite_every
+
+
+def summary_mode(session, rewrite_every: int) -> str:
+    """本次折叠用 merge 还是 rewrite（D5）：第 K、2K… 次折叠重写，其余增量合并。
+
+    没有旧摘要时（首次折叠）恒 merge——无旧可重写，且 merge 指令在无 [Existing summary]
+    时本就是全写；rewrite_every=0 永不重写。
+    """
+    if rewrite_every > 0 and (session.summary_folds + 1) % rewrite_every == 0 \
+            and session.rolling_summary.strip():
+        return "rewrite"
+    return "merge"
+
 
 def _spill_meta(tr: Dict[str, Any]) -> Tuple[Optional[str], Optional[int]]:
     """取这条观察的回取句柄与原始体积，返回 (调用串, 原始字符数)。
@@ -254,7 +298,16 @@ def _defuse_memo_marker(text: str) -> str:
 
 
 def _turn_to_text(turn: Dict[str, Any]) -> str:
-    """把一条已落盘轮次抽成供摘要的纯文本（用户输入 + 助手答复 + 用到的工具名）。
+    """把一条已落盘轮次抽成供摘要的纯文本（用户输入 + 助手答复 + 用到的工具名
+    + 轮末任务状态）。
+
+    轮末任务状态（W4）：记录带 "task_state" 键（session._stamp_task_state，内容是
+    TaskState.render_for_summary 视图：无系统头 / Budget / Rules 样板）时追加
+    `[Task state at end of turn]` 块，截到 SUMMARY_TASK_STATE_CHARS 字——摘要器据它逐字
+    填 [Done]/[State]/[Key values]。老记录无该键则不追加。**rag 沉淀同走本函数**
+    （_collect_turn_texts → _sediment_range / last_chance_sediment），故沉淀原文里也会带
+    这段系统维护的 plan/notes——有意接受：它就是那一轮的真实工作状态，召回时同样有用。
+    整段末尾统一经 _defuse_memo_marker，task_state 里独占一行的 MEMO 同样被拆引信。
 
     头部盖轮次日期戳（时间锚定纪律，源自 mem0 评估）：这段文本有两个下游——
     摘要器（靠它把「明天/上周」换算成绝对日期）与 rag_sink 沉淀（agent_memory
@@ -287,6 +340,11 @@ def _turn_to_text(turn: Dict[str, Any]) -> str:
             parts.append(f"System: {msg['content']}")
     if tools_used:
         parts.append(f"(tools called this turn: {', '.join(tools_used)})")
+    task_state = str(turn.get("task_state") or "").strip()
+    if task_state:
+        if len(task_state) > SUMMARY_TASK_STATE_CHARS:
+            task_state = task_state[:SUMMARY_TASK_STATE_CHARS] + "…"
+        parts.append("[Task state at end of turn]\n" + task_state)
     return _defuse_memo_marker("\n".join(parts))
 
 
@@ -522,11 +580,19 @@ def _flush_rescued_notes(memo_lines: List[str], session_id: str) -> int:
 
 async def maybe_summarize_context(session, engine, *, threshold_tokens: int,
                                   keep_tail_turns: int, last_prompt_tokens: Optional[int],
-                                  batch_min: int = 1, sediment: bool = True) -> int:
+                                  batch_min: int = 1, sediment: bool = True,
+                                  max_tokens: int = _CALL_SUMMARY_MAX_TOKENS,
+                                  rewrite_every: int = DEFAULT_SUMMARY_REWRITE_EVERY,
+                                  instruction: Optional[str] = None) -> int:
     """
     若 model-facing 上下文（以 last_prompt_tokens 估）越过 threshold_tokens，则把最旧的、
     尾部保留之外的已落盘轮次折叠进滚动摘要，推进水位线并落盘，随后重建为 [system]+[摘要]+[尾部]。
     返回本次新折叠的轮次数（0 表示未触发或无可折叠）。需在会话锁内、轮次边界调用。
+
+    W4：max_tokens 透传摘要生成；rewrite_every=K 时第 K、2K… 次成功折叠走 rewrite 模式
+    （summary_mode），成功（摘要非空）后 session.summary_folds += 1 随 memory.json 落盘；
+    空摘要失败与「全是作废轮次直接推进水位线」两条路都不计折叠。instruction 仅供评估
+    A/B 替换模板（benchmarks/summary_trace），生产调用不传。
     """
     if not last_prompt_tokens or last_prompt_tokens < threshold_tokens:
         return 0
@@ -550,8 +616,10 @@ async def maybe_summarize_context(session, engine, *, threshold_tokens: int,
         return fold_until - old_watermark
 
     batch_text = "\n\n---\n\n".join(batch)
+    mode = summary_mode(session, rewrite_every)
     new_summary = await engine.summarize(
         batch_text, session.rolling_summary,
+        max_tokens=max_tokens, mode=mode, instruction=instruction,
         cancel_check=lambda: bool(getattr(session, "cancel_requested", False)))
     # 压缩前记忆冲洗：剥出尾部 MEMO 抢救块（滚动摘要绝不能被它污染——
     # 下次合并时 [Existing summary] 里冒出 MEMO 会教坏模型重复输出）
@@ -561,6 +629,7 @@ async def maybe_summarize_context(session, engine, *, threshold_tokens: int,
 
     session.rolling_summary = new_summary
     session.summarized_turns = fold_until
+    session.summary_folds += 1
     session.save_memory()
 
     # 沉淀（Stage 3）：把被折叠掉的对话原文存入 RAG 长期记忆（无损承重网），

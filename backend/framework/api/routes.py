@@ -131,6 +131,8 @@ async def _maybe_summarize_active(session, orchestrator, scheduler, session_id):
             keep_tail_turns=orchestrator.summary_keep_tail_turns,
             last_prompt_tokens=session.last_prompt_tokens,
             sediment=orchestrator.sediment_to_rag,
+            max_tokens=orchestrator.summary_max_tokens,
+            rewrite_every=orchestrator.summary_rewrite_every,
         )
         if n:
             print(f"[Routes] 摘要压缩：折叠 {n} 轮入滚动摘要（活跃高阈值）")

@@ -261,7 +261,17 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
   turn 放置走续跑入口跳过轮首云端升级判定（history + turn-compaction off 同样跳过）；in_turn 形态的 token 定档只在 FakeEngine 计数下核过，Colab 真分词器下的残差随复测看。
 - 替代：`backend/benchmarks/attention/driver.py` 经 HTTP 打 /turns 走编排层，但要起栈、题短难到 soft，不如 W-K 可控。
 
-### W4 结构化摘要模板与校准【改】
+### W4 结构化摘要模板与校准【已落地 11-02；D4 / D5 初值进生产，K 与 900 待 TRACE 评估】
+- 落地（11-02）：`SUMMARY_INSTRUCTION` 九节固定模板（[Goal] [Constraints] [Done] [State] [Key values] [Decisions] [Issues] [Next] [User]，节名逐字、每节硬上限、空节省略、正文用对话语言、[Key values] 逐字不改写），旧指令留档 `SUMMARY_INSTRUCTION_LEGACY`；
+  `summarize(mode="merge"|"rewrite", instruction=)`；摘要块头加「do not redo items listed under [Done]」；截断感知（输出估算 ≥ max_tokens×0.95 → 告警 + 事件 `summary_truncated_suspect`，成功判定不变）。
+- 落地偏差 1（scout 纠前提）：代码里没有「偏好与身份」节，只有一句 "Keep: the user's long-term preferences and identity"，W4 以 [User] 节承接；「压缩后首步提醒」orchestrator 的 name=system 机制是步骤边界提醒而非压缩后提醒，W4 的前缀改放在摘要块头，W5 提醒本身未做。
+- 落地偏差 2（TaskState 来源）：轮间摘要在轮次边界触发，任务完成即弃（orchestrator / turn_runner 置 None），摘要器原本只收 User/Assistant/System 文本与工具名——拿不到 plan/notes。补：`TaskState.render_for_summary()`（[Goal] 首行 → [Scratchpad] 便签原文 → [Plan] 步状态/标题/note，无系统头/Budget/Rules），
+  轮次记录新键 `task_state`（PROTOCOL §2.3 additive；`append_log` 唯一漏斗盖章，任务完成即弃的由编排器置 None 前留 `last_task_state_render`；fail/cancelled 不写），`_turn_to_text` 追加 `[Task state at end of turn]` 块（≤3000 字先截 Plan；rag 沉淀同走）。「从 TaskState + 尾部原文重写」= rewrite 模式输入 = 旧摘要 + 新段（含各轮 task_state 块），输入有界。
+- 校准：config.yaml `summary_max_tokens: 900`（一审 Major：640 对九节 + MEMO 块偏紧，截断先丢 [Next]/[User]/MEMO）、`summary_rewrite_every: 4`（0 = 永不）；装配期校验 fail-closed；`session.summary_folds` 随 memory.json 落盘（老存档 0）；第 K、2K… 次成功折叠走 rewrite，首次无旧摘要恒 merge。
+- 评估驾驭器 `benchmarks/summary_trace/`（§4 TRACE 式）：turn 1 跑到迭代上限落盘 → 同一 env 深拷贝分 PRE（原文）/ POST（整轮折叠为摘要）续跑 ≤5 步，计 repeated（重复 turn 1 已做的 (name,args)，被拦截的不计）+ blocked、env_errors、pass、首次 prompt token、摘要长度；`--template legacy|new`（legacy 连旧摘要块头）、`--task-state on|off`、`--drop-task on|off`（模拟任务完成后被弃、只能靠摘要的目标场景）。`--dry-run` FakeEngine 跑通；真模型在 Colab 另排（D4 模板 / 900 vs 640 的结论等它）。
+- 残留：D5 的 K 值用单次折叠的成对续跑量不出来（驾驭器钉 rewrite_every=0），要多轮长会话的离线回放才能比 K；驾驭器两支都保留未完成 TaskState 时量的是「摘要 + 任务块」，看 W4 本身的效果用 `--drop-task on`；
+  `task_state` 键进 history.jsonl / turn_ended 全量负载（便签满载约 3K 字，`/chat` 的 ChatResponse 不含）；截断感知只估不改判；legacy 臂 MEMO 块若被模型写在节中间，锚点后非 `-` 行会被 `_split_memo` 丢弃（与 W4 前同）。
+- 原设计（保留）：
 - `SUMMARY_INSTRUCTION` 改为固定节：`[压缩摘要，仅供参考；不要重做「已完成」]` 前缀 → 总目标（原文照抄）→ 约束与偏好 → 已完成（过去时事实）→ 当前状态（目录 / 已改文件 / 进程）
   → 关键值表（路径 / ID / 数字，逐字）→ 决策 → 已知问题 → 下一步 → 用户长期事实（现有「偏好与身份」保留）。每节硬上限，总长仍 ≤ 640 tok（可上调到 900【测】）。
 - MEMO 抢救不变。时间锚定（绝对日期）不变。
@@ -293,7 +303,7 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
 | P0.5 ✅ 2026-10-31 | Gemma 4 31B QAT-W4A16 Colab 拐点补测（用户讨论后加测） | 49K 无拐点、回忆 100%、比 26B +30 点（§1.4、ANALYSIS.md §6）；31B 定为 Gemma 侧唯一选项（D23）；本机复核取消（方向修正） |
 | P1 ✅代码 / ⏳Colab 出口 | **W-3 阵容收束** → **W-1 远端配置修复（MTP 默认关 + 采样可配）** → W-2 前缀瘦身 → W1 上限护栏 → W3 思考回放（含变异证明、差分测试更新）→ W2 提前并入；11-01 阶段复审 1C/1M/7m 已处置 | 注册表 4 条 ✅、check 全过 ✅、31B 图文联调过 ✅；护栏用例全红 → 全绿 ✅；**待 Colab 复测**：MTP 关后同一 harness 复测 4 档回到 W0 水平；思考回放不降成功率且峰值 prompt 下降（W3 在 harness 路径上，可测） |
 | P2 | W-K harness 编排器模式 ✅ 11-01（前置）+ W5 小修（W2 已在 P1 落地） | 拐点以上题集成功率 / Pass^2 达 §2 目标；全量重预填充次数有账——两条都只能经 W-K 的编排器路径量到 |
-| P3 | W4 结构化摘要 + 校准 + 成对续跑评估 | 模板在成对续跑上优于现模板；K 值定 |
+| P3 ✅代码 11-02 / ⏳评估 | W4 结构化摘要 + 校准 + 成对续跑评估驾驭器 | 模板在成对续跑上优于现模板（`benchmarks/summary_trace` 真模型待 Colab）；K 值定（需多轮回放，驾驭器量不到） |
 | P4（可选） | W7、模板自动优化（ACON/TRACE 思路，用失败案例让云端模型改模板，仅合成数据） | 视 P3 结果 |
 | P-last | 本机执行端推理栈：两条 MLX 4bit 条目装载 + 一次 longchain 冒烟 | 能跑即过，不计速度（用户 10-31） |
 每阶段：reviewer 一审 + 主会话逐行（守卫型改动变异证明）；收官跑 stage-reviewer；文档与 harness 当天入库。
@@ -305,8 +315,8 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
 | D13 / D14 | 框架 / 后端 | 不换：编排层 + MLX / vLLM【定】 | 1.2 |
 | D1 / D2 | soft / hard 阈值 | **Qwen（远端，前提 MTP 关）soft 24,576 / hard 39,322【定，用户 10-31】**（49K 内无拐点，取 49K × 0.5 / × 0.8；57K 若成立则 28,672 / 45,875；ceiling 53,248）；MTP 开时无可用区间。**Gemma 待 P0.5**：26B fp8 拐点 8K–16K 按公式得 soft 4–8K / hard 6.5–13K，低于生产前缀 9.4K，不能直接执行；31B W4A16 在 A100 49K 无拐点，远端同口径 soft 24,576 / hard 39,322（与 Qwen 同值）；本机不再单独定值（方向修正） | W0 / ANALYSIS.md §4 |
 | D3 | 尾部保留 | keep_recent 6 / keep_tail 4 维持（W0 无压缩臂、三槽回忆无位置差，无改的依据）【测·无信号】 | W0 |
-| D4 | 摘要模板 | W4 固定节【测】 vs 现自由要点 | 成对续跑 |
-| D5 | 更新方式 | 增量 + 每 K=4 次从 TaskState 重写【测】 | W4 |
+| D4 | 摘要模板 | **九节固定模板已进生产（11-02，W4）**，`summary_max_tokens` 900【测：vs 640】；旧模板留档作 A/B 对照 | 成对续跑（summary_trace，待 Colab） |
+| D5 | 更新方式 | **增量 + 每 K=4 次 rewrite 已进生产（11-02，`summary_rewrite_every`）**；重写输入 = 旧摘要 + 新段（含轮末 TaskState 块）；K 值【测，需多轮回放】 | W4 |
 | D6 | 压缩模型 | 主模型自己（现状）；不走外部 API（出网红线） | — |
 | D7 | 截断长度 | 4000 字维持；W7 再议 | — |
 | D8–D10 | 状态存储 / 写入 / 注入 | TaskState + 每迭代渲染（现状）；框架写为主 | 1.2 |
@@ -406,3 +416,7 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
 - 11-01 深夜 W-K（用户「先做 W-K」）：scout 摸底（校正「ceiling 只压本轮」前提）→ 主会话定 D38 → implementer（run_knee `--orchestrator`、orch_tools.py、filler in_turn 形态、34 条测试）
   → 主会话收口三处（轮内填充形态、构造顺序、续跑口径含生效 cfg）→ reviewer 一审 0C/3M/11m/5n → 同一 implementer 修（审计生成不劫持主会话、SpillReadTool、对照组各臂同放置、事件/审批还原、游标、指纹）
   → 主会话二审逐行 → verifier 7 变异体 6 红 1 等价存活（mode 比较冗余）。提交 `c21a042`（全量 check：backend 4125 passed / 3 skipped，colab 135，web 252）。backend/framework 零改动。
+- 11-02 凌晨（用户「先 colab 复测…测完直接开 W4」）：Colab 复测链式脚本 `benchmarks/context_knee/run_colab.sh`（起机 --retain → 冒烟 → 8 臂 → 必停；挂死判据 stop+start 续跑）跑 Qwen3.8-27B-INT4，首次起机被 colab CLI 60 s 超时打断（瞬时），重跑成功，批次进行中（结果另记）。
+  并行开 W4：scout 摸底（纠三前提：无「偏好与身份」节、提醒机制是步骤边界提醒、TaskState 任务完成即弃）→ 主会话定模板/TaskState 入折叠/K 重写/截断感知、亲改 config.yaml 两键与 PROTOCOL §2.3
+  → implementer → reviewer 一审 0C/3M/8m（任务块截断先砍便签 → render_for_summary；配对键缺维度 → 分组 + 碰撞报错；640 截断无感知 → 900 + 事件）→ 同一 implementer 全修 → 主会话二审逐行（守卫、折叠计数、盖章与弃前渲染、透传、模板文本）
+  → verifier 11 变异体 10 红 1 等价存活（max_tokens 的 bool 判断）。提交见下一条。

@@ -167,6 +167,13 @@ suspended 轮时，TurnRunner 发 `turn_ended`，status 为 cancelled，response
 注意 `sub_generation_tokens` 是跨模型合计(excel 的视觉 QA 可能路由到专职视觉端点),
 是算力量级仪表,不是单一 tokenizer 口径。
 
+`task_state`（可选 additive，2026-11-02 W4；不升版本）：轮末任务状态的摘要用渲染
+（`TaskState.render_for_summary()`：目标首行 / 记事板原文 / 计划各步状态与备注，不含系统头与规则文本），
+落盘时由 `append_log` 盖章（任务仍在时现渲染，任务完成已弃时取编排层丢弃前记下的那份），
+是轮间摘要「关键值逐字」的数据源。**只在本轮有任务状态且轮次非 fail/cancelled 时出现**；
+与 `timestamp` 同为落盘漏斗盖章，`/history`、`turn_ended` 与 `history.jsonl` 三面同值，`turn_ref` 哈希含它
+（旧行无此键，哈希不变）；`/chat` 的 `ChatResponse` 模型不含该字段。客户端按未知字段规矩忽略即可。
+
 `execution_receipts`（可选 additive，2026-10-11 R16）：TurnRunner在正常最终落盘点
 从同轮内存journal投影已有tool_started/tool_result，随history与turn_ended保存。
 这份数据只作执行事实凭据，不进模型上下文，不参与任务恢复，不新增账本/端点。

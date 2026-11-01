@@ -45,7 +45,7 @@ class FakeBackend:
 class _SummEngine:
     """只为 compactor 服务的替身：summarize 返回固定摘要。"""
 
-    async def summarize(self, batch_text, existing, cancel_check=None):
+    async def summarize(self, batch_text, existing, cancel_check=None, **kwargs):
         return "- 折叠摘要"
 
 

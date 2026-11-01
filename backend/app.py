@@ -72,6 +72,8 @@ async def _idle_maintenance_loop(session_manager, scheduler, orchestrator, inter
                             keep_tail_turns=orchestrator.summary_keep_tail_turns,
                             last_prompt_tokens=session.last_prompt_tokens,
                             sediment=orchestrator.sediment_to_rag,
+                            max_tokens=orchestrator.summary_max_tokens,
+                            rewrite_every=orchestrator.summary_rewrite_every,
                         )
                         if n:
                             print(f"[Maintenance] 空闲摘要压缩 {sid}：折叠 {n} 轮（低阈值）")

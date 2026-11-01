@@ -652,6 +652,11 @@ agent:
   summary_low_threshold: 2000   # 空闲将冻结前：历史超出前缀 2k 即折叠旧轮
   summary_keep_tail_turns: 4    # 折叠时尾部保留的最近轮次数（这些保持原文）
   summary_idle_seconds: 300     # 会话空闲超过此秒数即进入低阈值摘要维护（应 < 冻结超时 1800）
+  # W4（D4 / D5，2026-11-02）：摘要模板改固定节（Goal / Constraints / Done / State / Key values / Decisions / Issues / Next / User，
+  # 节名逐字、每节硬上限、正文用对话语言），折叠输入带轮末 TaskState 渲染（关键值逐字来源）；每 K 次增量折叠做一次
+  # 「从旧摘要 + 新段 + TaskState 重写」（去陈旧、去重）而非增量合并。非法值装配即拒（与 context_guard 同）。
+  summary_max_tokens: 900       # 摘要生成 max_tokens（128–4096）；旧值 640 对九节 + MEMO 块偏紧（一审 Major 3：截断先丢 [Next]/[User]/MEMO），初值取方案的 900【测，D4】
+  summary_rewrite_every: 4      # 每 K 次折叠一次重写（K 初值 4【测，D5】；0 = 永不重写，恒增量合并）
 
   # 长期记忆沉淀（Stage 3）：折叠旧轮次时把其原文沉淀进 RAG 的 agent_memory 类目，
   # 作为压缩的无损承重网——上下文摘要有损，被折叠掉的细节仍可经 rag_search 召回。

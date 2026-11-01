@@ -138,6 +138,14 @@ Style:
 - Always respond in the same language as the user's most recent message. Never switch to another language just because tool output, search results, or system text are in English or any other language.
 """
 
+# 滚动摘要注入块的首行（_seed_summary_block 每次调用时读模块常量）。W4 起提醒模型别重做
+# [Done] 下的事；旧头留档给 TRACE 评估的 legacy 臂（benchmarks/summary_trace 在 run 期间
+# 临时换回旧头，A/B 两臂只差指令 + 头）。
+SUMMARY_BLOCK_HEADER = ("[Memory summary of earlier conversation (system-compacted, for "
+                        "reference only; do not redo items listed under [Done])]")
+SUMMARY_BLOCK_HEADER_LEGACY = ("[Memory summary of earlier conversation (system-compacted, for "
+                               "reference)]")
+
 class ChatSession:
     """
     单个会话状态机，负责管理该会话的上下文、历史记录及物理文件生命周期
@@ -190,6 +198,10 @@ class ChatSession:
         # 多步任务状态（编排循环的状态对象）：任务可跨轮存续（如中途向用户提问），
         # 空闲冻结时随 task.json 落盘、恢复时重建，保证冷启动后任务不丢
         self.task_state: Optional[TaskState] = None
+        # W4：轮末任务状态的摘要器视图（TaskState.render_for_summary；摘要器输入里「关键值逐字」
+        # 的数据源）。编排层在「任务完成即弃」置 None 之前把渲染留在这里，下一次 append_log 写进轮次记录的 "task_state" 键后清空。
+        # 仅内存，不落 task.json（任务已弃，它只服务于这一条轮次记录）。
+        self.last_task_state_render: str = ""
         # 会话级路由保留集合（W-2 / D31 修订，主会话 2026-11-01）：catalog 模式下最近一个任务
         # 建立时路由选中的工具名。任务结束（task_state 置 None）后前缀照旧带这些件，直到下一个
         # 任务建立才被替换——退出任务不再造成一次前缀失配。None = 本会话尚无任务路由过。
@@ -241,6 +253,9 @@ class ChatSession:
         # 相互独立——沉淀不需要模型，折叠需要。短会话（≤keep_tail_turns 轮）永远够不着折叠，
         # 此前因此**长期记忆产出恒为零**；这条水位线让沉淀独立于折叠推进。
         self.sedimented_turns: int = 0
+        # W4（D5）：已成功折叠次数（每 summary_rewrite_every 次做一次重写而非增量合并）。
+        # 随 memory.json 落盘；老存档缺该键读作 0。
+        self.summary_folds: int = 0
         # 最近一次生成的 prompt token 数（上下文规模估计，摘要压缩阈值判定用；空闲维护回合亦读它）
         self.last_prompt_tokens: int = 0
         # 上下文上限护栏（W1）：本轮（跨审批/挂起续跑段）主循环 prompt 峰值与最高档位。
@@ -429,8 +444,7 @@ class ChatSession:
         if self.rolling_summary.strip():
             self.history.append({
                 "role": "system",
-                "content": ("[Memory summary of earlier conversation (system-compacted, for reference)]\n"
-                            + self.rolling_summary.strip()),
+                "content": (SUMMARY_BLOCK_HEADER + "\n" + self.rolling_summary.strip()),
             })
 
     def _replay_history_log(self, start_turn: int = 0):
@@ -559,6 +573,9 @@ class ChatSession:
 
         清除条件必须带上 sedimented_turns：短会话只有第二水位线（永远没有摘要），
         漏掉它就等于每次落盘都把水位线抹回 0——同一段原文会被反复沉淀进 RAG。
+        summary_folds 不进清除条件：它只在折叠成功（摘要非空）后递增，此后 rolling_summary
+        非空、文件必保留。本类没有任何「清空摘要」的路径，计数只在 load_memory 时按文件
+        重读（文件缺失 / 缺该键 = 0；分支退回全量重放时写的是不带该键的新 dict，故分支读作 0）。
         """
         if self.rolling_summary.strip() or self.summarized_turns > 0 \
                 or self.sedimented_turns > 0:
@@ -567,6 +584,7 @@ class ChatSession:
                     "summary": self.rolling_summary,
                     "summarized_turns": self.summarized_turns,
                     "sedimented_turns": self.sedimented_turns,
+                    "summary_folds": self.summary_folds,
                     "updated_at": time.time(),
                 }, f, ensure_ascii=False)
         else:
@@ -577,6 +595,7 @@ class ChatSession:
         self.rolling_summary = ""
         self.summarized_turns = 0
         self.sedimented_turns = 0
+        self.summary_folds = 0
         if self.memory_file.exists():
             try:
                 with open(self.memory_file, "r", encoding="utf-8") as f:
@@ -587,6 +606,8 @@ class ChatSession:
                 # 兜底——那部分原文在折叠时确已入库，是有据可依的下界。
                 self.sedimented_turns = int(
                     data.get("sedimented_turns", self.summarized_turns))
+                # W4 之前的存档没有折叠计数：读作 0（下一次重写最多晚 K 次，无害）
+                self.summary_folds = int(data.get("summary_folds", 0))
                 # 存量摘要水位线是按旧口径（非空物理行，含坏行）记的，可能大于新口径的
                 # 有效记录数——越界态可证伪即修：不夹的话 _replay_history_log 的切片
                 # 会把落在越界区间里的真实轮次静默藏掉（磁盘在、前端可见、模型看不见，
@@ -659,11 +680,38 @@ class ChatSession:
         # 有意 setdefault 在**调用方的原 dict** 上——/chat 响应与 turn_end 事件
         # 在落盘之后引用同一 dict，三个面（响应/事件/历史）天然同值。
         response_data.setdefault("timestamp", time.time())
+        # 轮末任务状态（W4）：与 timestamp 同理盖在调用方原 dict 上，响应/事件/历史三面同值
+        self._stamp_task_state(response_data)
         # 写前修尾 + 追加（B1，core/jsonl 唯一口径）；default=str 兜底：个别字段（如 Path）
         # 不可序列化时降级为字符串，避免推理已成功却因落盘序列化失败导致整个请求 500
         append_record(self.history_log, _strip_internal_meta(response_data))
         # 轮次已成为落盘事实 → 撤销预写标记（write-ahead 闭环，见 write_inflight）
         self.clear_inflight()
+
+    def _stamp_task_state(self, response_data: dict) -> None:
+        """给轮次记录盖 "task_state" 键（W4）：轮末任务状态的摘要器视图
+        （TaskState.render_for_summary），供摘要器逐字取关键值。
+
+        取值优先级：仍在的 session.task_state 现渲染 > 编排层在「任务完成即弃」前留下的
+        last_task_state_render。**无任务时不写该键**（不写空串），老记录同样无该键，读侧一律
+        `turn.get("task_state")`。作废轮次（fail / cancelled）不写：任务状态已随回滚复原、
+        这些轮次本就不进摘要/沉淀。无论写没写，last_task_state_render 都在这里清空——
+        它只属于紧随其后的这一条记录。落盘漏斗唯一，故审批续跑、挂起放弃、冻结作废、
+        定时轮等所有路径一并覆盖。
+        """
+        render = ""
+        if response_data.get("status") not in ("fail", "cancelled"):
+            if self.task_state is not None:
+                try:
+                    render = self.task_state.render_for_summary()
+                except Exception as e:  # 渲染失败不得拖垮落盘
+                    print(f"[Memory] 轮末任务状态渲染失败（本条记录不带 task_state）: {e}")
+                    render = ""
+            if not render:
+                render = self.last_task_state_render
+        self.last_task_state_render = ""
+        if render and "task_state" not in response_data:
+            response_data["task_state"] = render
 
     def disk_turn_count(self) -> int:
         """history.jsonl 的落盘轮数(**有效记录数**,core/jsonl 唯一口径)。

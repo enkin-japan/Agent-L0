@@ -133,6 +133,8 @@ agent:                      # 编排循环护栏（多步任务）
   summary_low_threshold: 2000    # 空闲将冻结前上下文越过即折叠旧轮
   summary_keep_tail_turns: 4     # 折叠时尾部保留的最近轮次数（保持原文）
   summary_idle_seconds: 300      # 会话空闲超过此秒数即进入低阈值摘要维护（应 < 冻结超时 1800）
+  summary_max_tokens: 900        # 摘要生成 max_tokens（128–4096，非法即装配失败；输出估算 ≥95% 记 summary_truncated_suspect 事件）
+  summary_rewrite_every: 4       # 每 K 次折叠一次「重写」而非增量合并（0 = 永不重写）
 
   # 长期记忆沉淀：折叠旧轮时把其原文沉淀进 RAG agent_memory 类目（无损承重网，可经 rag_search 召回）
   sediment_to_rag: true          # 关闭则只压缩不沉淀

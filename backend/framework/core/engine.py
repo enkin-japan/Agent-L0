@@ -932,7 +932,9 @@ class AgentEngine:
                 "tool_json": tool_json, "marker_overhead": overhead}
 
     # ---------- 上下文摘要（Step 2：摘要式压缩用） ----------
-    SUMMARY_INSTRUCTION = (
+    # W4 前的自由要点指令，逐字留档：TRACE 成对续跑评估（benchmarks/summary_trace，
+    # `--template legacy`）拿它做 A/B 对照组。生产路径不用它。
+    SUMMARY_INSTRUCTION_LEGACY = (
         "You are a conversation-context compressor. Condense the conversation history below "
         "into a concise bullet-point summary, written in the same language the conversation "
         "itself is in.\n"
@@ -955,23 +957,119 @@ class AgentEngine:
         "If nothing qualifies, do not output a MEMO block at all."
     )
 
+    # W4（D4）：固定节结构化模板。节名英文方括号**逐字**、顺序固定、每节硬上限、空节省略；
+    # 正文用对话本身的语言。约束（tests/test_summary_template.py 锁定）：
+    # - 时间锚定两子串 `[YYYY-MM-DD HH:MM]` / `absolute dates` 保留（test_time_anchoring）；
+    # - MEMO 抢救段逐字保留且在**最后**：`_split_memo` 只认整行 `MEMO:` 锚点、取第一个，
+    #   故任何节名都不能独占一行写成 MEMO，MEMO 块也必须落在所有节之后；
+    # - `[Task state at end of turn]` 是折叠输入里系统维护的 plan/notes（compactor._turn_to_text）。
+    SUMMARY_INSTRUCTION = (
+        "You are a conversation-context compressor. Condense the conversation history below "
+        "into a structured summary. Write the section bodies in the same language the "
+        "conversation itself is in; keep the section names exactly as given below (English, in "
+        "square brackets, one per line, in this order). Omit any section that would be empty. "
+        "Never exceed a section's line limit.\n"
+        "[Goal] 1-2 lines: the user's overall objective, quoted as literally as possible\n"
+        "[Constraints] at most 4 lines: constraints and preferences the user stated\n"
+        "[Done] at most 6 lines: completed work as past-tense facts (what was changed or "
+        "produced, and where)\n"
+        "[State] at most 4 lines: current working state - directories, files already modified, "
+        "running processes\n"
+        "[Key values] at most 8 lines: paths, identifiers, numbers, names - copied verbatim, one "
+        "per line\n"
+        "[Decisions] at most 4 lines: decisions taken and the reason in a few words\n"
+        "[Issues] at most 3 lines: known problems and open questions\n"
+        "[Next] at most 3 lines: the next concrete steps\n"
+        "[User] at most 3 lines: the user's long-term identity and stable preferences\n"
+        "Copy every value under [Key values] character for character - never rewrite, "
+        "abbreviate or translate it. Items under [Done] are finished: write them so that they "
+        "are not redone later.\n"
+        "A turn may end with a [Task state at end of turn] block: its plan, step notes and "
+        "scratchpad are facts maintained by the system, not by the model - prefer them as the "
+        "source for [Done], [State] and [Key values].\n"
+        "Drop: small talk, procedural detail, resolved items with no future value.\n"
+        "Ground time references: conversation turns are prefixed with [YYYY-MM-DD HH:MM] "
+        "timestamps — resolve relative time words ('yesterday', 'next week', '明天') against "
+        "them and write absolute dates in the summary. 'Trip next week' is useless a month "
+        "later; 'trip the week of 2026-07-20' stays meaningful.\n"
+        "If [Existing summary] is provided, merge [New conversation] into it and output the "
+        "updated complete summary without losing still-valid information from the old one. "
+        "Output only the summary body — no explanations, no preamble or suffix.\n"
+        "Finally, rescue durable facts: if [New conversation] contains facts worth keeping "
+        "across sessions (who the user is, stable preferences, confirmed decisions, "
+        "ongoing-project facts), append a block starting with the exact line 'MEMO:' followed "
+        "by at most 3 lines, each formatted as:\n"
+        "- kebab-case-name | user|feedback|project|reference | one self-contained factual "
+        "sentence with absolute dates\n"
+        "If nothing qualifies, do not output a MEMO block at all."
+    )
+
+    # W4（D5）：每 K 次折叠一次的「重写」模式附加段（compactor 按 summary_rewrite_every 选 mode）。
+    # 追加在指令末尾——MEMO 规则段之后：它只改合并方式，不改 MEMO 块的位置要求。
+    SUMMARY_REWRITE_ADDENDUM = (
+        "\nRewrite mode: do NOT merge incrementally. Re-derive every section from scratch from "
+        "[Existing summary] + [New conversation] (and any [Task state at end of turn] blocks), "
+        "drop superseded or stale items, de-duplicate [Key values], and keep the result within "
+        "the same section limits. The MEMO rule above still applies and the MEMO block, if "
+        "any, still comes last."
+    )
+    SUMMARY_MODES = ("merge", "rewrite")
+
     async def summarize(self, content: str, prior_summary: str = "",
                         max_tokens: int = 640, temperature: Optional[float] = None,
-                        cancel_check=None) -> str:
+                        cancel_check=None, *, mode: str = "merge",
+                        instruction: Optional[str] = None) -> str:
         # max_tokens 512→640：给尾部 MEMO 抢救块（压缩前记忆冲洗，≤3 行）留余量
         """
         对一段对话历史做要点摘要（摘要式压缩）。一次性裸生成：不带工具、不复用会话 KV
         （用后端新建的隔离缓存），与任何会话的推理状态隔离。持有推理锁保证与生成串行。
         cancel_check：可选无参回调，逐 token 段轮询；返回真则中断生成并返回空串
         （调用侧把空摘要视为失败、水位线不推进、下次触发重试——调度器抢占后台摘要靠它让位）。
+        mode（W4/D5）："merge" 增量合并（缺省）；"rewrite" 在指令末尾追加
+        SUMMARY_REWRITE_ADDENDUM，要求从旧摘要 + 新段重推全部节（去陈旧、去重）。其它值 ValueError。
+        instruction：None 用 self.SUMMARY_INSTRUCTION；传入则替换（评估 A/B 用，生产不传）。
         """
+        if mode not in self.SUMMARY_MODES:
+            raise ValueError(f"summarize mode 须为 {self.SUMMARY_MODES} 之一，得到 {mode!r}")
+        text_instruction = self.SUMMARY_INSTRUCTION if instruction is None else instruction
+        if mode == "rewrite":
+            text_instruction = text_instruction + self.SUMMARY_REWRITE_ADDENDUM
         parts = []
         if prior_summary.strip():
             parts.append("[Existing summary]\n" + prior_summary.strip())
         parts.append("[New conversation]\n" + content.strip())
-        return await self.oneshot_instruction(
-            self.SUMMARY_INSTRUCTION, "\n\n".join(parts),
+        out = await self.oneshot_instruction(
+            text_instruction, "\n\n".join(parts),
             max_tokens=max_tokens, temperature=temperature, cancel_check=cancel_check)
+        if out:
+            self._flag_summary_truncation(out, max_tokens, mode)
+        return out
+
+    # 输出估算长度 ≥ max_tokens × 此比例即疑似被截断（九节 + MEMO 块，截断先丢尾部的 [Next]/[User]/MEMO）
+    SUMMARY_TRUNCATION_RATIO = 0.95
+
+    def _summary_tokens_est(self, text: str):
+        """摘要输出长度估算 → (tokens, method)：有分词器用分词器（measure_prompt 同一取法），
+        否则 chars/3.5（与 benchmarks/context_knee 的 fake 计数同口径）。"""
+        proc = getattr(getattr(self, "backend", None), "processor", None)
+        tok = getattr(proc, "tokenizer", None) if proc is not None else None
+        if tok is None and proc is not None and callable(getattr(proc, "encode", None)):
+            tok = proc
+        if tok is not None and callable(getattr(tok, "encode", None)):
+            try:
+                return len(tok.encode(text, add_special_tokens=False)), "tokenizer"
+            except Exception:
+                pass
+        return math.ceil(len(text) / 3.5), "chars/3.5"
+
+    def _flag_summary_truncation(self, text: str, max_tokens: int, mode: str) -> None:
+        """疑似截断只告警 + 记护栏事件 summary_truncated_suspect，不改成功判定（非空仍算成功）。
+        估算是解析后的可见正文（思考/标记已剥），故只会低估——超阈值即值得看。"""
+        est, method = self._summary_tokens_est(text)
+        if est >= max_tokens * self.SUMMARY_TRUNCATION_RATIO:
+            print(f"[summarize] ⚠️ 摘要疑被 max_tokens 截断（est {est} / max {max_tokens}）")
+            events.emit("summary_truncated_suspect", est_tokens=est, max_tokens=max_tokens,
+                        mode=mode, method=method)
 
     async def oneshot_instruction(self, instruction: str, content: str, *,
                                   max_tokens: int = 640, temperature: Optional[float] = None,

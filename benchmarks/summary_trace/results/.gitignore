@@ -1,0 +1,3 @@
+# 运行产物不入库（轨迹含大段生成文本）；结论走计划文件/报告（与 model_eval/results 同一纪律）
+*
+!.gitignore

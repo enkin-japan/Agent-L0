@@ -256,6 +256,40 @@ class TaskState:
             "directly (plain text, no more tool calls)."
         )
 
+    # 摘要器视图的单项上限（render_for_summary）：目标首行、步骤标题、步骤 note
+    SUMMARY_GOAL_CHARS = 300
+    SUMMARY_TITLE_CHARS = 80
+    SUMMARY_STEP_NOTE_CHARS = 120
+
+    @staticmethod
+    def _clip(text: str, n: int) -> str:
+        text = str(text or "")
+        return text if len(text) <= n else text[:n] + "…"
+
+    def render_for_summary(self) -> str:
+        """轮末任务状态的**摘要器视图**（W4：轮次记录的 task_state 键 → 折叠输入）。
+
+        与 render() 的 prompt 尾部块不同：不含系统头、Budget、Rules 样板，按「关键值来源」
+        排序——[Goal]（首行 ≤300 字）→ [Scratchpad]（全部便签原文逐条，关键值逐字来源）→
+        [Plan]（每步：序号、状态、标题 ≤80 字、note ≤120 字）。下游按字符上限尾部截断时
+        先截的是 Plan，便签满载（12×200 字）也能完整保留。空段省略。
+        """
+        parts = []
+        goal = str(self.goal or "").strip().splitlines()
+        if goal:
+            parts.append("[Goal] " + self._clip(goal[0].strip(), self.SUMMARY_GOAL_CHARS))
+        if self.notes:
+            parts.append("[Scratchpad]\n" + "\n".join(f"- {n}" for n in self.notes))
+        if self.plan:
+            lines = []
+            for step in self.plan:
+                note = (" — " + self._clip(step["note"], self.SUMMARY_STEP_NOTE_CHARS)
+                        if step.get("note") else "")
+                lines.append(f"{step['id']}. [{step['status']}] "
+                             f"{self._clip(step['title'], self.SUMMARY_TITLE_CHARS)}{note}")
+            parts.append("[Plan]\n" + "\n".join(lines))
+        return "\n".join(parts)
+
     # ---------- 序列化（/task 接口、挂起恢复、冷启动） ----------
     def snapshot(self) -> Dict[str, Any]:
         return {
