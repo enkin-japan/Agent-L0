@@ -419,4 +419,4 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
 - 11-02 凌晨（用户「先 colab 复测…测完直接开 W4」）：Colab 复测链式脚本 `benchmarks/context_knee/run_colab.sh`（起机 --retain → 冒烟 → 8 臂 → 必停；挂死判据 stop+start 续跑）跑 Qwen3.8-27B-INT4，首次起机被 colab CLI 60 s 超时打断（瞬时），重跑成功，批次进行中（结果另记）。
   并行开 W4：scout 摸底（纠三前提：无「偏好与身份」节、提醒机制是步骤边界提醒、TaskState 任务完成即弃）→ 主会话定模板/TaskState 入折叠/K 重写/截断感知、亲改 config.yaml 两键与 PROTOCOL §2.3
   → implementer → reviewer 一审 0C/3M/8m（任务块截断先砍便签 → render_for_summary；配对键缺维度 → 分组 + 碰撞报错；640 截断无感知 → 900 + 事件）→ 同一 implementer 全修 → 主会话二审逐行（守卫、折叠计数、盖章与弃前渲染、透传、模板文本）
-  → verifier 11 变异体 10 红 1 等价存活（max_tokens 的 bool 判断）。提交见下一条。
+  → verifier 11 变异体 10 红 1 等价存活（max_tokens 的 bool 判断）。提交 `5e2626e`（全量 check：backend 4180 passed / 3 skipped，colab 135，web 252；首轮被 test_native_task_control Swift nil 解包偶发拦下，单跑通过后重跑全过）。
