@@ -123,3 +123,18 @@ def test_pass_hat_bootstrap_item_level_centered():
     assert p["lo"] <= -0.5 <= p["hi"]
     assert abs(p["median"] - (-0.5)) <= 0.05
     assert p["down"] == 5 and p["up"] == 0
+
+
+# ---- W1 峰值列 ----
+
+def test_aggregate_peak_prompt_median_and_csv_tail_column(tmp_path):
+    """峰值中位数按 run 级 peak_prompt_tokens；W1 前的旧行缺键不进分母；CSV 新列在末尾。"""
+    g = A.load_group(_write(tmp_path / "g", [
+        _row(0, "a", 0, True, peak_prompt_tokens=3000),
+        _row(0, "a", 1, True, peak_prompt_tokens=5000),
+        _row(0, "b", 0, False)]))
+    agg = A.aggregate(g, A.th_global, set())
+    assert agg[0]["peak_prompt_tokens_median"] == 4000
+    assert A.CSV_COLS[-1] == "peak_prompt_tokens_median"
+    g2 = A.load_group(_write(tmp_path / "g2", [_row(0, "a", 0, True)]))
+    assert A.aggregate(g2, A.th_global, set())[0]["peak_prompt_tokens_median"] is None

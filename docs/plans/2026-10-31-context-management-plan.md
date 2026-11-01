@@ -170,11 +170,31 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 - **残留**：词法路由对英文/口语请求召回有限（W-2b embedding）；`stable_prefix_tokens_est` 不含路由件（+0.5–1.4K，W1 定阈值按真实声明算）；
   prod/catalog/routed 三档 Colab 复测另排时段（低于前缀 base 的档位 filler 报 error 行是旧行为）；qwen35 固定教学文本 122 tok 与 skill_invoke 325 tok 不动（事故驱动措辞）；
   catalog 下的 31B 质量（目录行 → get_tool_schema 逃生口是否被用）尚无实机数据，随三档复测看；gemma4 profile 数字仍是 full 口径。
-### W1 上下文上限护栏【新，守卫型 → 变异证明】
-- 发现上限：远端取 vLLM `/v1/models` 的 `max_model_len`（或配置 65536）；本机从模型 config 读 `max_position_embeddings`，并以 `max_kv_size`（新增配置）封顶。
-- 三档预算随上限派生：soft = 拐点×0.5【测】，hard = 拐点×0.8【测】，ceiling = 上限 − 生成预留（max_tokens 升档最大 12288）。
-- 每次生成前估 prompt 规模（已有 token 账 + 字符/4 兜底）；≥ hard 触发 W2 压缩；≥ ceiling 强制摘要折叠后重试一次，再超 → 以 warning 终止本轮（像复读护栏那样可解释地失败，不让后端报 context overflow）。
-- 阈值比较基准改为**本轮峰值**（修 1.3-5）。
+### W1 上下文上限护栏【已落地 11-01；守卫型 → 变异证明】
+- **前提修正（scout 11-01）**：① 远端执行端打的是自家 inference/server.py `/v1/generate`，**没有 vLLM `/v1/models`** 可查，上限只能由算力端 `/health inference_options` 暴露；
+  ② MLX `max_kv_size` 对 gemma4 / qwen3_5 **无效**（二者自带 make_cache，mlx_vlm 直接忽略），本机上限只能是编排层预算；③ 执行端在 remote 模式**也有分词器**
+  （remote/backend.py `_ProcessorShim(AutoTokenizer)`），不必字符/4；④ `maybe_summarize_context` 只能在轮边界调（rebuild_from_log 会清掉进行中的本轮），
+  轮内「强制摘要折叠」归 W2；⑤ 轮内 history 只增不减，末次 prompt_tokens ≈ 峰值，真缺口是**轮中不判定**而非基准错位；⑥ `stable_prefix_tokens_est` 还漏了 system 提示；
+  ⑦ 客户端 max_tokens 从未钳制（ceiling = 上限 − 12,288 的前提不成立）；⑧ 总熔断与 runaway 的 warning 都没 add_assistant_message，用户看不到提示文字——样板只能是复读护栏。
+- **落地（D1/D2 + D33–D35）**：
+  - D33 上限来源：后端可选属性 `context_limit`（engine getattr 探测，与 runtime_options 同手法）：remote = 算力端 `/health inference_options.max_model_len`
+    （cuda `public_options` 新增；复用模型身份护栏那一次 /health），缺则回落执行端 `inference.cuda.max_model_len` 并告警 + 事件 `context_limit_fallback`，再缺 65536；
+    inprocess mlx = 新键 `inference.mlx.context_limit`（65536）；inprocess cuda = `max_model_len`。app lifespan 引擎装载后 `bind_context_limit()`；阈值与上限不相容（hard ≥ ceiling）→ ValueError **拒启**。
+  - D34 量法：每次主循环生成前 `engine.measure_prompt(**prompt_args)`——与 `generate_once` 共用同一份 prompt_args 与同一个 `_render_full_prompt`（全量渲染，纯函数，
+    不碰 prompt_stream），执行端分词器 encode 计数（无分词器才退 `fallback_estimate` = ASCII/4 + 非 ASCII 字数，宁高估），每张图片 +1,024（占位符文本量不到视觉 token）。
+    hard 尾注追加后重量，量到的就是发出去的。只守主循环；goal-verify / 沙箱 / 摘要子生成不守。
+  - D35 四档处置（`agent.context_guard`，绝对 token 口径，含前缀；缺省 soft 24,576 / hard 39,322 = D1/D2，generation_reserve 12,288，未知键/非正整数/soft≥hard 拒启）：
+    soft 只记事件；hard 记事件 + 尾注提醒收敛（W2 落地后在此触发步骤边界压缩）；ceiling = 上限 − reserve → 先**轮内应急机械压缩一次**
+    （保护窗口 2 条之外的工具观察折成桩；先把 dict 换成拷贝断开与落盘切片/暂存轮的别名，原件登记 `session.guard_persist_originals`，落盘切片一律经
+    `session.persistable_messages()` 换回原件——turn_runner 两处 + schedule/runner 一处；代价前缀缓存整段失配一次），仍 ≥ ceiling → 照复读护栏样板以 warning 终止本轮
+    （add_assistant_message / set_activity done / turn_abort reason=context_guard / 轮统计），**后端收不到那次请求**。客户端 max_tokens > reserve 一律钳回 + 事件（guard 关掉也钳）。
+    本轮峰值 `peak_prompt_tokens`（量值与实测取大）与最高档 `context_guard_level` 进轮统计 metrics；inspector 暴露 limit / ceiling / soft / hard / 峰值。
+  - `stable_prefix_tokens_est` 纳入 system 提示估算（summary_* 阈值随之 +~1.4K，仍是「前缀之上」口径）。
+  - harness：run_knee 每条记录 `peak_prompt_tokens = max(gens.prompt_tokens)`，summarize/analyze 加「峰值 prompt 中位」列（§2 验收「峰值 ≤ 拐点 70%」的字段）。
+- **门**：reviewer 一审 0 Critical / 2 Major（增量路量法偏低→改走 _assemble_prompt；算力端重开不重绑→探活复核重算重绑）/ 8 Minor / 5 Nit，除 m5（图片常量）与 n5 外全修；verifier 变异证明 14 个变异体全红、sha256 逐字节还原；backend 全量 3941 passed / 3 skipped（原 3851，+90：test_context_guard 88 条、harness 分析 2 条）。
+- **残留**：ceiling 兜底是机械压缩不是摘要折叠（W2 做保住本轮尾部的折叠变体后替换）；hard 档只提醒不压缩（W2 接）；子生成不守（沙箱自有熔断 max_sub_generations）；
+  图文轮计数靠 +1,024/图常量；量法在事件循环线程 encode（50K 量级数十毫秒）；算力端过旧未报 max_model_len 时 ceiling 按执行端配置算，`--max-model-len` 改值感知不到（告警已发）；
+  Colab 实机 ceiling 终止路径未跑过（FakeEngine 证明），随三档复测看；MLX 本机上限只是预算，KV 实际无界（P-last）。
 
 ### W2 轮内步骤边界压缩【改】
 - 在 `complete_step` 落地时（已有 step_completed 事件）对**该步的工具观察**调用 compact_tool_observations（同一预算器，keep_recent 保护窗照旧），
@@ -249,6 +269,9 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 | D30（新） | 目录行文本 | `BaseTool.summary`（不进 full schema）或描述首句，硬截 80 字【定，用户 11-01】 | W-2 |
 | D31（新） | 工具路由时点 | 只在 catalog；任务建立时算一次、任务期冻结、任务结束后保留到下一任务；core 七件常驻；每任务一次前缀失配【定，用户 11-01；退出不失配为主会话修订】 | W-2 |
 | D32（新） | 路由打分器 | 本波纯本地词法 BM25（确定性、离线可用）；embedding 版归 W-2b（rag_server 融合模式需 /embed）【定，用户 11-01】 | W-2 |
+| D33（新） | 上下文上限来源 | 后端可选属性 `context_limit`：remote 取算力端 `/health inference_options.max_model_len`（缺则回落执行端 `inference.cuda.max_model_len` 并告警），inprocess mlx 取新键 `inference.mlx.context_limit`（`max_kv_size` 对两款模型无效，只是编排层预算），cuda 取 `max_model_len`；装配后绑定，探活复核处重算重绑；hard ≥ ceiling 装配失败【定，主会话 11-01】 | W1 |
+| D34（新） | prompt 量法 | 每次主循环生成前 `engine.measure_prompt`，与 generate_once 同一份入参、同一个 `_assemble_prompt` 判定，执行端分词器 encode；无分词器/encode 异常退 ASCII/4+非 ASCII 字数；每图 +1024；只守主循环【定，主会话 11-01】 | W1 |
+| D35（新） | 四档处置 | `agent.context_guard` 绝对 token 口径：soft 24,576 记事件、hard 39,322 记事件+尾注收敛（W2 接压缩）、ceiling = 上限 − 12,288 → 轮内应急机械压缩一次（落盘经 persistable_messages 保全文）仍超则照复读护栏样板 warning 终止；max_tokens 钳到 reserve；峰值与最高档入轮统计【定，主会话 11-01；数值 D1/D2 用户 10-31】 | W1 |
 | D22（新） | 采样参数来源 | 按模型注册表条目配（`sampling` 键，W-1；温度/min_p 不入条目，仍是 App 旋钮），缺省沿用现值；CUDA 透传 top_p/top_k/presence/frequency（`89ae1b4`）；MLX 同四键透传（W-1） | W0 F1/F5 |
 | D25（新） | CUDA 精度 | **只用预量化 4 bit**（Qwen INT4、Gemma QAT W4A16），不上 fp8 / NVFP4：A100 1.55 TB/s 单流解码受权重读取限制，INT4 实测 50–55 tok/s 已只有理论值一半，fp8 再腰斩；Ampere 无 FP8 张量核，fp8 实为 W8A16 无 prefill 收益；NVFP4 只在 Blackwell 有硬件收益。质量侧 QAT W4A16 49K 无拐点，无证据需要更高精度。Colab 出 Blackwell 档或 Google 出 QAT-NVFP4 再议 | 用户 10-31 + §1.4 |
 | D26（新） | 部署形态 | **计算端只定 Colab，本机只做执行端**；本机推理栈排 P-last，能跑即可 | 用户 10-31 |
@@ -302,3 +325,9 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
   （tool_disclosure 纯函数模块、编排器接线、60 件 summary、measure_prefix）‖ implementer B harness 四档（prefix.py）→ reviewer 一审 0 Critical / 1 Major（core 件数断言过期）/ 9 Minor，
   复审 0/0/5 Minor/4 Nit（分支继承路由集合、轮级与定时轮回滚恢复、英文停用词补全、audit 声明顺序对齐生产注册序、transcript 行体积）全部修 → verifier 变异证明 12 个变异体全红、
   sha256 逐字节还原。实测与残留见 W-2 节。主会话复审读法：tool_disclosure / 编排器·会话·快照·app 接线 / config.yaml / prefix.py / run_knee 增删行 / 路由冻结测试断言逐行，summary 行与文档按摘要。
+- 11-01 下午（/compact 后开 W1）：scout 推翻四前提（无 /v1/models、MLX max_kv_size 无效、执行端有分词器、摘要折叠只能轮边界）→ 主会话定 D33–D35、亲改 config.yaml
+  （inference.mlx.context_limit、agent.context_guard）→ implementer（context_guard 纯函数模块、三后端 context_limit、engine.measure_prompt、编排层四档护栏与应急压缩、
+  persistable_messages 落盘保全文、inspector、harness 峰值）→ reviewer 一审 0 Critical / 2 Major（增量路量法偏低；算力端重开不重绑）/ 8 Minor / 5 Nit → 同一 implementer 修补
+  （量法改走 _assemble_prompt；compute_lifecycle.refresh_context_limit 探活重绑含回滚；encode 异常退估算；旗标/还原表按轮挂 session；缺键 max_tokens 受钳；复合路径与落盘端到端测试补齐）
+  → 主会话二审逐行（护栏段/量法/重绑/钳制/落盘换回）→ verifier 变异证明 14 个变异体全红（边界等号、soft≥hard、hard<ceiling、钳制、终止 return、尾注重量、三遍循环、
+  拷贝断别名、persistable_messages、remote 取值、增量路量法、重绑赋值、turn_runner/schedule 落盘切片）、sha256 逐字节还原。backend 3941 passed。残留见 W1 节。

@@ -669,9 +669,14 @@ def test_summary_thresholds_anchor_stable_prefix():
     orch_small = make_orch(engine, small, **cfg)
     orch_big = make_orch(engine, big, **cfg)
 
+    from framework.core.context_guard import fallback_estimate
+    from framework.memory.session import DEFAULT_SYSTEM_PROMPT
+    sys_est = fallback_estimate(DEFAULT_SYSTEM_PROMPT)
+    assert sys_est > 0
     for orch in (orch_small, orch_big):
+        # 前缀 = 工具声明 chars/4 + 系统提示（W1 起纳入；注释一直说地板含系统提示，此前漏算）
         est = sum(len(_json.dumps(t, ensure_ascii=False))
-                  for t in orch._tools_decl) // 4
+                  for t in orch._tools_decl) // 4 + sys_est
         assert orch.stable_prefix_tokens_est == est > 0
         assert orch.summary_high_threshold == 8000 + est
         assert orch.summary_low_threshold == 2000 + est

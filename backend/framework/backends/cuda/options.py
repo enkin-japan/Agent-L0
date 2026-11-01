@@ -5,7 +5,7 @@ Never hand it configuration objects owned by the caller/config loader.
 """
 from copy import deepcopy
 import json
-from typing import Mapping
+from typing import Mapping, Optional
 
 
 def engine_options(cfg: Mapping, env: Mapping) -> dict:
@@ -50,11 +50,19 @@ def engine_options(cfg: Mapping, env: Mapping) -> dict:
     return out
 
 
-def public_options(options: Mapping) -> dict:
-    """A startup configuration receipt, not evidence of actual speculative work."""
+def public_options(options: Mapping, max_model_len: Optional[int] = None) -> dict:
+    """A startup configuration receipt, not evidence of actual speculative work.
+
+    max_model_len (W1): the engine's context limit, reported via /health
+    inference_options so the executor's context guard can derive its ceiling.
+    It is an AsyncEngineArgs argument, not part of engine_options, hence passed
+    separately; omitted from the receipt when not given."""
     spec = options.get("speculative_config")
     public_spec = None if spec is None else {
         k: deepcopy(spec[k]) for k in ("method", "num_speculative_tokens") if k in spec}
-    return {"attention_backend": (options.get("attention_config") or {}).get("backend", "auto"),
-            "kv_cache_dtype": options.get("kv_cache_dtype", "auto"),
-            "speculative_config": public_spec}
+    out = {"attention_backend": (options.get("attention_config") or {}).get("backend", "auto"),
+           "kv_cache_dtype": options.get("kv_cache_dtype", "auto"),
+           "speculative_config": public_spec}
+    if max_model_len is not None:
+        out["max_model_len"] = int(max_model_len)
+    return out

@@ -9,7 +9,7 @@ import shutil
 import copy
 import stat
 import threading
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 from ..core.jsonl import append_record, count_records, iter_records
 from ..core.task_state import TaskState
@@ -243,6 +243,14 @@ class ChatSession:
         self.sedimented_turns: int = 0
         # 最近一次生成的 prompt token 数（上下文规模估计，摘要压缩阈值判定用；空闲维护回合亦读它）
         self.last_prompt_tokens: int = 0
+        # 上下文上限护栏（W1）：本轮（跨审批/挂起续跑段）主循环 prompt 峰值与最高档位。
+        # 新用户轮在 run_turn 轮首归零；仅内存，经轮统计 metrics 落盘。
+        self.turn_peak_prompt_tokens: int = 0
+        self.turn_context_guard_level: Optional[str] = None
+        # 轮内应急压缩的落盘还原表（W1）：id(model-facing 压缩副本) → (副本, 原件)。
+        # 应急压缩只改 model-facing 副本，落盘切片经 persistable_messages 换回原件，
+        # 持久化日志保留全量。新用户轮在 run_turn 轮首清空。
+        self.guard_persist_originals: Dict[int, Tuple[dict, dict]] = {}
 
         # 确保物理结构存在
         self.image_dir.mkdir(parents=True, exist_ok=True)
@@ -367,6 +375,8 @@ class ChatSession:
             self.images.clear()
             self.audios.clear()
             self.prompt_stream = None
+            # 应急压缩还原表（W1）钉着原件全文，history 清了它也必须放（与 prompt_stream 同理）
+            self.guard_persist_originals = {}
 
             self.is_cold = True
 
@@ -401,6 +411,7 @@ class ChatSession:
         self.images.clear()
         self.audios.clear()
         self.prompt_stream = None   # 历史整体重建=流必然失效，直接释放（评审 M5）
+        self.guard_persist_originals = {}   # W1 还原表随 history 一并作废（副本已不在 history 里）
         self._init_system_prompt("")  # 从 system.json 恢复原提示词
         self.load_memory()
         self._seed_summary_block()
@@ -619,6 +630,16 @@ class ChatSession:
 
     def add_tool_message(self, tool_responses: List[dict]):
         self.history.append({"role": "tool", "tool_responses": tool_responses})
+
+    def persistable_messages(self, start_idx: int) -> List[dict]:
+        """history[start_idx:] 的落盘视图：轮内应急压缩（W1）换进 history 的 model-facing
+        副本在这里换回原件，持久化日志永远拿全文。没有压缩过时与直接切片逐项同一。"""
+        originals = getattr(self, "guard_persist_originals", None) or {}
+        out = []
+        for m in self.history[start_idx:]:
+            hit = originals.get(id(m))
+            out.append(hit[1] if hit is not None and hit[0] is m else m)
+        return out
 
     def append_log(self, response_data: dict):
         """将一轮的最终结果落盘追加到历史文件"""

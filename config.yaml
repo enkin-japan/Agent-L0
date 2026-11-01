@@ -85,6 +85,11 @@ inference:
   # 但本值维持 1——进宪合法化形态 ≠ 生产放开，编排层准入闸未建前不动。
   mlx:
     max_concurrency: 1
+    context_limit: 65536        # W1（D33，2026-11-01）：MLX 进程内后端的上下文上限（prompt+生成 token），
+                                # 编排层上限护栏据此派生 ceiling。注意 `max_kv_size` 对 gemma4 / qwen3_5 无效
+                                # （二者自带 make_cache，mlx_vlm 直接忽略该参数），所以这是编排层预算，不是
+                                # 后端硬限。远端模式不读本键：上限取算力端 /health inference_options.max_model_len，
+                                # 算力端过旧未报时回落 inference.cuda.max_model_len 并告警。
   model: "mlx-community/Qwen3.8-27B-4bit"
   # 本机 inference.model 缺省（D27，2026-10-31 用户拍板）：本机 M6 基础款 32G / 170GB/s，
   # 只作执行端，推理「能跑即可」，带宽下 8bit 比 4bit 慢一半故 4bit。revision 与下方
@@ -525,6 +530,25 @@ agent:
       - list_dir
       - skill_invoke
       - run_shell_command   # 描述自称 PRIMARY tool、system 提示词点名；目录行+一次取详情的往返不值 ~460 tok（主会话 11-01）
+  # 上下文上限护栏（W1，D1/D2/D33–D35，2026-11-01）：每次主循环生成前用执行端分词器实测整段 prompt
+  # （dialect.build_prompt 渲染 + tokenizer.encode；无分词器才退 字符/4），与三档比较：
+  #   soft  ：只记账（本轮峰值 turn_peak_prompt_tokens、事件 context_soft）；
+  #   hard  ：记账 + 事件 context_hard + 尾注提醒模型收敛（W2 步骤边界压缩落地后在此触发压缩）；
+  #   ceiling = 上限 − generation_reserve：先做一次轮内应急机械压缩（旧观察折叠为桩，落盘日志不改）
+  #            再量一次，仍 ≥ ceiling 则像复读护栏那样以 warning 可解释地终止本轮，不让后端报 overflow。
+  # 上限来源：remote = 算力端 /health 报的 max_model_len（缺则回落 inference.cuda.max_model_len）；
+  # inprocess mlx = inference.mlx.context_limit；inprocess cuda = inference.cuda.max_model_len。
+  # 阈值是整段 prompt 的绝对 token 数（含前缀），不是「前缀之上」口径（与 summary_* 不同）。
+  # 数值来源 D1/D2（用户 10-31）：Qwen3.8-27B-INT4 与 Gemma 4 31B QAT 远端 49K 内无拐点，
+  # soft = 49,152 × 0.5、hard = 49,152 × 0.8；两家族同值。校验：0 < soft < hard < ceiling 否则装配失败
+  # （inprocess = 进程拒启；remote = 计算装配失败并退避重试、数据服务照常；算力端重开换 --max-model-len 时
+  # 探活复核处重算上限并重绑）；
+  # 客户端 max_tokens 超过 generation_reserve 时钳回并记事件（否则 ceiling 不成立）。
+  context_guard:
+    enabled: true
+    soft_tokens: 24576
+    hard_tokens: 39322
+    generation_reserve: 12288 # = 截断升档上限 ESCALATED_MAX_TOKENS；ceiling = 上限 − 本值（65536 → 53248）
   react_max_steps: 4          # 单步内自纠预算：一步连续多少次迭代未完成即判定失败并路由
   max_total_iterations: 40    # 一轮任务的总推理次数熔断（只数主循环迭代）
   max_sub_generations: 80     # 子沙箱生成的独立熔断（F6）：web/math/excel 调研在一次性

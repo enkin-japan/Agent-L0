@@ -49,6 +49,7 @@ backend/.venv/bin/python benchmarks/context_knee/summarize.py <out_dir> [<out_di
 transcripts.jsonl 每 run 一行：
 - `fill`：目标 / 估算 / 实际 token、fill_error、warning、cards、fingerprint；`score`：longchain 原字段 + recall_* + repetition_hits。
 - `gens`：每次生成的 prompt_tokens、reused_prefix、prompt_tps、generation_tps、repetition_guard。
+- `peak_prompt_tokens`（W1）：本 run 各次生成实测 prompt_tokens 的最大值（gens 空或全缺 = null）；summarize / analyze 汇总为「峰值prompt中位」`peak_prompt_tokens_median`（W1 前的旧行缺键，不进中位数）。harness 不经编排层，W1 护栏动作（钳制/压缩/终止）不在此计数。
 - 其余：`final_text_quality`、`sampling_overrides`、`turns`。
 - 前缀（meta，每行与 summary.json 都有）：`prefix_mode`（W-2 前的旧行缺键 = mock）；`prefix_base_tokens` = 生产稳定前缀 token（system + 生产声明，未剔撞名、不含 mock 工具与路由件、`include_env=False`，与 `measure_prefix.py` 的 full / catalog(meta+core) 行同口径；mock 档 = 极简 system 无工具）。真后端用引擎分词器；fake 用 `backend/models/<repo 末段>` 离线分词器（`--model` 给了且目录在时），不可得记 null 并告警一次（mock + fake 不载分词器、不告警）。非 mock 档另有 `prefix_shadowed` / `prefix_core_skipped` / `prefix_n_tools`（按题：prompt 面件数、其中完整件数、语法面件数）；routed 档另有 `prefix_top_k`、`prefix_routed`（选中名单）。这四个按题的键在 meta / summary.json 是 `{题: 值}` 全批字典，transcript 每行只放本题的值（`run_knee.PER_ITEM_META_KEYS`）。
 

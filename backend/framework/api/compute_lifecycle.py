@@ -3,6 +3,7 @@ import asyncio
 import re
 import time
 from contextlib import suppress
+from typing import Optional
 
 import httpx
 
@@ -147,6 +148,34 @@ async def probe_remote_compute(base_url, expected, api_key, previous_identity=No
         auth = await client.get(f"{base_url}/metrics", headers=headers)
         auth.raise_for_status()
     return identity
+
+
+def refresh_context_limit(orchestrator, health, inference_cfg) -> Optional[int]:
+    """W1：装配后算力端可能重开并换了 max_model_len（compute_ctl 允许 512–131072），引擎与编排器
+    却保留着——探活拿到的新 /health 在这里重算上限，变了就更新后端并重绑编排器护栏。
+
+    只对 RemoteBackend 生效（进程内后端的上限是本机配置，不随探活变）。derive_limits 的
+    ValueError 原样抛出、后端值回滚：探活失败 → 生命周期按既有迟滞把算力端标为不可用，
+    与模型身份不符（guard_model_identity 抛错）同一处理；回滚保证下次探活仍会重判、仍失败，
+    直到算力端上限回到可容范围。返回新上限（未变 / 不适用 = None）。"""
+    from ..backends.remote.backend import RemoteBackend, resolve_context_limit
+    from ..core import events
+    backend = getattr(getattr(orchestrator, "engine", None), "backend", None)
+    if not isinstance(backend, RemoteBackend):
+        return None
+    new, src = resolve_context_limit(health, inference_cfg or {})
+    if new == backend.context_limit:
+        return None
+    prev = backend.context_limit
+    backend.context_limit = new
+    try:
+        orchestrator.bind_context_limit()
+    except ValueError:
+        backend.context_limit = prev
+        raise
+    events.emit("context_limit_rebound", previous=prev, value=new, source=src)
+    print(f"[Compute] 算力端上下文上限变化 {prev} → {new}（来源 {src}），上限护栏已重绑")
+    return new
 
 
 async def probe_rag_data(cfg, api_key):

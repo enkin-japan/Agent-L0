@@ -268,7 +268,8 @@ class ScheduleRunner:
                     response_data = self._turn_data(full_prompt, "cancelled", [
                         {"role": "system", "content": "Scheduled run cancelled by the user."}])
                 else:
-                    new_messages = session.history[history_start_idx:]
+                    # 落盘视图：轮内应急压缩（W1 上限护栏）的副本换回原件，日志保留全文
+                    new_messages = session.persistable_messages(history_start_idx)
                     status = final_result.get("status", "success")
                     if run["status"] != "denied_approval":
                         run["status"] = status

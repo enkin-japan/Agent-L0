@@ -30,6 +30,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 import requests
 
+from ...core import events
 from ...core.backend_protocol import GenChunk
 
 # 逐 chunk 读超时要容纳最坏的冷启动 prefill（长会话冷恢复在弱机上可达分钟级）
@@ -40,6 +41,26 @@ _PERSIST_TIMEOUT = 30.0     # KV 落盘/恢复（服务端序列化百 MB 级文
 _RELEASE_TIMEOUT = 5.0      # 释放走事件循环线程（freeze 是同步路径），必须短；TTL 兜底
 _MEDIA_CACHE_FRESH_SECONDS = 3600.0   # 上传缓存鲜度：远小于服务端 media TTL（≥1 天），
                                       # 量级差即无「刚确认就被清」竞态窗
+_CONTEXT_LIMIT_DEFAULT = 65536        # 算力端未报、执行端 inference.cuda.max_model_len 也缺时的末位回落
+
+
+def _positive_int(v) -> Optional[int]:
+    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else None
+
+
+def resolve_context_limit(health: Any, cfg: Dict[str, Any]) -> "tuple[int, str]":
+    """远端上下文上限（W1）：算力端 /health inference_options.max_model_len（int 且 > 0）优先；
+    缺则回落执行端 inference.cuda.max_model_len，再缺 65536。返回 (值, 来源)，来源
+    "health" | "config" | "default"。执行端那份 config 与算力端相等只是两侧缺省碰巧一致，
+    算力端 `--max-model-len` 覆盖时它是错的——故回落必告警（调用方负责）。"""
+    opts = health.get("inference_options") if isinstance(health, dict) else None
+    got = _positive_int(opts.get("max_model_len")) if isinstance(opts, dict) else None
+    if got is not None:
+        return got, "health"
+    local = _positive_int((cfg.get("cuda") or {}).get("max_model_len"))
+    if local is not None:
+        return local, "config"
+    return _CONTEXT_LIMIT_DEFAULT, "default"
 
 
 def guard_model_identity(ident: dict, expected: dict, base_url: str) -> None:
@@ -161,13 +182,20 @@ class RemoteBackend:
             # 模型身份护栏（分离部署缺陷二）：期望身份由装配方注入 cfg.expected_model
             # （app.py 主端点 / engine_pool 专科端点），服务端真身取自刚拿到的 /health。
             # 注意放在可达性 try 之外：档位错开是配置性错误，不得被包装成「不可达」。
+            try:
+                health = r.json()
+            except ValueError:
+                health = {}
             expected = cfg.get("expected_model") or {}
             if expected.get("repo"):
-                try:
-                    ident = r.json()
-                except ValueError:
-                    ident = {}
-                guard_model_identity(ident, expected, backend.base_url)
+                guard_model_identity(health, expected, backend.base_url)
+            # 上下文上限（W1）：复用同一次 /health，不多打一次
+            backend.context_limit, _src = resolve_context_limit(health, cfg)
+            if _src != "health":
+                print(f"[RemoteBackend] ⚠️ 算力端 /health 未报 inference_options.max_model_len（服务过旧？）："
+                      f"上下文上限回落 {_src}={backend.context_limit}；算力端若以别的 --max-model-len "
+                      f"启动，上限护栏的 ceiling 会算错")
+                events.emit("context_limit_fallback", source=_src, value=backend.context_limit)
             print(f"[RemoteBackend] 已连接 inference-server: {backend.base_url}")
             return backend
         except BaseException:
@@ -180,6 +208,8 @@ class RemoteBackend:
     def __init__(self, processor, base_url: str):
         self.model = None          # 远程模式设备 B 不持有权重（装配面 app.state.model 为 None）
         self.processor = processor
+        # 上下文上限（W1）：load 时取自算力端 /health；直接构造（测试/脚本）= 未知
+        self.context_limit: Optional[int] = None
         self.base_url = base_url.rstrip("/")
         # 端点名 → 拨号地址（load 时按 config inference.endpoints 追加；直接构造=单端点）
         self._endpoint_urls = {"main": self.base_url}

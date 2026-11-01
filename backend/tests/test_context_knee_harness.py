@@ -226,6 +226,14 @@ def test_aggregate_recall_slots_and_repetition():
     assert a["repetition_hits"] == 2 and a["aborted"] == 1
 
 
+def test_aggregate_peak_prompt_median_skips_legacy_rows():
+    """W1：峰值中位数按 run 级 peak_prompt_tokens 取；旧行（缺键）不进分母。"""
+    recs = [_rec(0, "A", 0, True), _rec(0, "A", 1, True), _rec(0, "B", 0, True)]
+    recs[0]["peak_prompt_tokens"], recs[1]["peak_prompt_tokens"] = 3000, 5000
+    assert S.aggregate(recs)["0"]["peak_prompt_tokens_median"] == 4000
+    assert S.aggregate([_rec(0, "A", 0, True)])["0"]["peak_prompt_tokens_median"] is None
+
+
 # ---- ⑤ 复读护栏记录 + 填充注入位置 ----
 
 class _SpyEngine(FakeEngine):
@@ -270,6 +278,7 @@ def test_repetition_guard_recorded_and_filler_injected_before_task():
     rec = K.build_record(plan, traj, proxy.gens, score, item, {"model": "m"}, 1.0)
     assert rec["repetition_events"] == [{"gen": 1, **guard}]
     assert rec["fill"]["prompt_tokens_actual"] == 4100
+    assert rec["peak_prompt_tokens"] == 4200       # W1：峰值取各次生成 max，不是首生成
     assert rec["fill"]["fill_error"] == 100
     assert rec["recall_suffix"].strip().startswith("另外")
 
@@ -398,6 +407,10 @@ def test_level_below_min_fill_warns_and_is_recorded():
     assert len(plan.filler.turns) >= 3
     rec = K.build_record(plan, {"turns": []}, [], {"recall_hits": 0}, item, {}, 0.0)
     assert rec["fill"]["warning"] == plan.warning
+    assert rec["peak_prompt_tokens"] is None       # W1：无生成 = null
+    rec = K.build_record(plan, {"turns": []}, [{"i": 0, "prompt_tokens": None}],
+                         {"recall_hits": 0}, item, {}, 0.0)
+    assert rec["peak_prompt_tokens"] is None       # 全缺 prompt_tokens 同样 null
     ok = K.plan_run(K.fake_counter(), item, 8192, 0, 7)
     assert ok.warning is None
     assert K.parse_levels(K.DEFAULT_LEVELS) == [0, 4096, 8192, 16384, 32768, 49152, 57344]

@@ -253,6 +253,9 @@ class CudaVLLMBackend:
         cfg = cfg or {}
         self.model_key = ""
         self._cfg = deepcopy(cfg.get("cuda") or {})
+        # 上下文上限（W1）：与 AsyncEngineArgs.max_model_len 同源；经 runtime_options 回执随
+        # /health inference_options 报给执行端（远端模式的上限护栏据此派生 ceiling）
+        self.context_limit = int(self._cfg.get("max_model_len", 32768))
         self._runtime_options = None
         self._speculative_enabled = False
         self.processor = None            # server 方言层依赖（backend.processor）
@@ -292,7 +295,7 @@ class CudaVLLMBackend:
         options = engine_options(self._cfg, os.environ)
         # Keep the receipt separate: vLLM mutates speculative_config while creating
         # its engine config (e.g. adds the MTP model and parallel configuration).
-        self._runtime_options = public_options(options)
+        self._runtime_options = public_options(options, max_model_len=self.context_limit)
         self._speculative_enabled = options["speculative_config"] is not None
         args = AsyncEngineArgs(
             model=model_path,
@@ -307,7 +310,7 @@ class CudaVLLMBackend:
             quantization=(lambda q: None if q in ("", "none") else q)(
                 os.environ.get("INFER_QUANT", "").strip()
                 or str(self._cfg.get("quantization") or "")),
-            max_model_len=int(self._cfg.get("max_model_len", 32768)),
+            max_model_len=self.context_limit,
             tensor_parallel_size=int(self._cfg.get("tensor_parallel", 1)),
             enable_prefix_caching=bool(self._cfg.get("enable_prefix_caching", True)),
             enforce_eager=bool(self._cfg.get("enforce_eager", False)),

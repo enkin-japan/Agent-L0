@@ -8,6 +8,7 @@ FakeEngine 鸭子类型对齐 AgentEngine.generate_once 的调用契约(编排�
 """
 from typing import Any, Dict, List, Optional
 
+from framework.core.context_guard import PromptMeasure
 from framework.mcp.registry import MCPRegistry
 
 
@@ -45,12 +46,39 @@ class FakeEngine:
       repetition_guard: dict  本次生成被流式复读护栏打断({"channel","reason"},引擎终态同构)
       metrics: dict        自定义指标(缺省给一份最小合法指标)
       stream: bool         False 时不经 on_text_delta 回吐(默认 True)
+
+    上下文上限护栏(W1)面:
+      context_limit        后端上限(缺省 65536;置 None 模拟引擎报不出上限)
+      measure_script       measure_prompt 依次返回的 token 数(用尽沿用最后一个);
+                           None 时取下一步脚本 metrics.prompt_tokens(缺省 100)
+      measure_calls        每次 measure_prompt 的入参摘要(tools 名单、tail_notes 等)
+    编排层只在 bind_context_limit 之后才会量——存量金测试不 bind,行为不变。
     """
 
     def __init__(self, script: List[Dict[str, Any]]):
         self.script = list(script)
         self.calls: List[Dict[str, Any]] = []  # 每次生成收到的关键参数(断言用)
         self.backend = FakeBackend()           # 缓存面(沙箱/审计替身经此取全新缓存)
+        self.context_limit: Optional[int] = 65536
+        self.measure_script: Optional[List[int]] = None
+        self.measure_calls: List[Dict[str, Any]] = []
+
+    def measure_prompt(self, session, tools=None, task_block=None, tail_notes=None,
+                       enable_thinking=False):
+        self.measure_calls.append({
+            "tool_names": [t.get("name") for t in (tools or [])],
+            "tools": list(tools or []),        # 完整声明（防分叉断言比 schema 内容，不只比名字）
+            "tail_notes": list(tail_notes or []),
+            "task_block": task_block,
+            "enable_thinking": enable_thinking,
+            "n_history": len(getattr(session, "history", None) or []),
+        })
+        if self.measure_script:
+            n = self.measure_script.pop(0) if len(self.measure_script) > 1 else self.measure_script[0]
+        else:
+            nxt = self.script[0] if self.script else {}
+            n = (nxt.get("metrics") or {}).get("prompt_tokens", 100)
+        return PromptMeasure(tokens=int(n), method="tokenizer", chars=0, images=0)
 
     async def generate_once(self, session, tools=None, grammar_tools=None, task_block=None,
                             tail_notes=None, on_text_delta=None, **kwargs):

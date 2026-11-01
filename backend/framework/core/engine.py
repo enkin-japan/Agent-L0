@@ -15,6 +15,14 @@ from ..memory.session import ChatSession
 from ..utils.config_loader import kv_persist_enabled, repetition_guard_config
 from . import events
 from .repetition_guard import RepetitionDetector
+from .context_guard import IMAGE_TOKENS_EST, PromptMeasure, fallback_estimate
+
+
+# 主路径 max_tokens 缺省（generate_once 签名与编排层 W1 钳制共用这一个值，不另抄一份）
+DEFAULT_MAX_TOKENS = 4096
+
+# W1 量法分词器故障告警：每进程一次（事件 + print），之后静默退字符估算
+_measure_fallback_warned = False
 
 
 # 条目级采样（W-1/A）：注册表条目可声明 `sampling: {...}`，覆盖引擎的旧常量。
@@ -212,6 +220,17 @@ class AgentEngine:
     def processor(self):
         return self.backend.processor
 
+    @property
+    def context_limit(self) -> Optional[int]:
+        """后端上下文上限（prompt+生成 token；W1 上限护栏派生 ceiling 用）。
+
+        后端可选属性（backend_protocol 文档），getattr 探测——与 runtime_options 同一手法；
+        缺失或非正整数（含 bool）= 未知，编排层据此不绑定护栏并告警。"""
+        v = getattr(self.backend, "context_limit", None)
+        if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+            return None
+        return v
+
     @staticmethod
     def _notes_index() -> "Optional[List[str]]":
         """长期记忆索引（R4）。笔记本未装配（测试/未启用）时返回 None。
@@ -378,7 +397,9 @@ class AgentEngine:
         增量偏移 = 流字节长（prompt[:offset] 即上轮已喂+已生成的字节）——后端据此
         走 token 级增量喂入（历史段取缓存记录、永不重分词，根除采样出非规范 BPE
         序列时的再分词错位）。None = 走了全量路。
-        tail_state is None 表示方言不支持流机制——本轮不提交流。"""
+        tail_state is None 表示方言不支持流机制——本轮不提交流。
+        纯判定：不改 session / prompt_stream（提交在 generate_once 生成成功之后），
+        W1 的 measure_prompt 依赖这一点复用本函数。"""
         ps = getattr(session, "prompt_stream", None)
         delta_fn = getattr(self.dialect, "build_prompt_delta", None)
         if delta_fn is not None and prompt_stream.stream_valid(ps, session.history, tools):
@@ -389,14 +410,77 @@ class AgentEngine:
             if out is not None:
                 delta, tail = out
                 return ps.stream + delta, tail, len(ps.stream)
-        prompt = self.dialect.build_prompt(
-            messages=session.history, tools=tools, enable_thinking=enable_thinking,
-            task_block=task_block, tail_notes=tail_notes,
-            include_env=include_env, env_extra=env_extra)
+        prompt = self._render_full_prompt(
+            session, tools, enable_thinking=enable_thinking, task_block=task_block,
+            tail_notes=tail_notes, include_env=include_env, env_extra=env_extra)
         tail_fn = getattr(self.dialect, "tail_state", None)
         tail = (tail_fn(task_block=task_block, include_env=include_env,
                         env_extra=env_extra) if tail_fn is not None else None)
         return prompt, tail, None
+
+    def _render_full_prompt(self, session: ChatSession,
+                            tools: Optional[List[Dict[str, Any]]], *,
+                            enable_thinking: bool, task_block: Optional[str],
+                            tail_notes: Optional[List[str]], include_env: bool,
+                            env_extra: Optional[List[str]]) -> str:
+        """全量渲染（纯函数：只读 session.history，不碰 prompt_stream）。_assemble_prompt 的
+        全量分支即调这里；generate_once 与 measure_prompt 都经 _assemble_prompt，量到的文本
+        就是会发出去的文本（W1 防分叉）。"""
+        return self.dialect.build_prompt(
+            messages=session.history, tools=tools, enable_thinking=enable_thinking,
+            task_block=task_block, tail_notes=tail_notes,
+            include_env=include_env, env_extra=env_extra)
+
+    def _prompt_env(self, session: ChatSession):
+        """(include_env, env_extra)：generate_once 与 measure_prompt 共用同一取法。
+        环境事实只注入主编排会话；沙箱一次性会话替身默认 False（隐私边界，opt-in）。
+        长期记忆索引（R4）：模型得先"知道自己知道"，才谈得上去召回正文。同样是个人
+        事实，故与静态环境事实共用 include_env 这一道门（门在 builder 里，此处即便传了，
+        沙箱也拿不到）。"""
+        return getattr(session, "inject_env_context", False), self._notes_index()
+
+    def measure_prompt(self, session: ChatSession,
+                       tools: Optional[List[Dict[str, Any]]] = None,
+                       task_block: Optional[str] = None,
+                       tail_notes: Optional[List[str]] = None,
+                       enable_thinking: bool = False) -> PromptMeasure:
+        """W1 上限护栏的量法：数**这次生成真会发出去的** prompt token。
+
+        入参与 generate_once 的 prompt 相关入参逐一对应（编排层用同一份 dict 传给两者），
+        走与 generate_once 同一个 _assemble_prompt 判定：流有效 → 「已记录字节流 + 增量段」
+        （流里累积着历次任务块快照与 env 块，比全量渲染长），否则全量渲染。_assemble_prompt
+        是纯判定（只读 session.history / prompt_stream，方言 delta/tail 只返回新串与新字典），
+        这里也不做缓存失效与落盘、不改 session。
+        有分词器 → encode 计数（method=tokenizer）；无分词器或 encode 抛异常 →
+        fallback_estimate（method=chars；异常时每进程告警一次）——仪表故障不得杀掉本可生成的轮。
+        两种都按会话图片数加 IMAGE_TOKENS_EST（占位符的文本 token 量不到视觉 token）。"""
+        global _measure_fallback_warned
+        include_env, env_extra = self._prompt_env(session)
+        text, _tail, _offset = self._assemble_prompt(
+            session, tools, enable_thinking=enable_thinking, task_block=task_block,
+            tail_notes=tail_notes, include_env=include_env, env_extra=env_extra)
+        images = len(getattr(session, "images", None) or [])
+        # 取分词器与 _tool_guard 同口径：processor.tokenizer 优先，裸 tokenizer 次之
+        proc = getattr(self.backend, "processor", None)
+        tok = getattr(proc, "tokenizer", None) if proc is not None else None
+        if tok is None and proc is not None and callable(getattr(proc, "encode", None)):
+            tok = proc
+        n, method = None, "chars"
+        if tok is not None and callable(getattr(tok, "encode", None)):
+            try:
+                n, method = len(tok.encode(text, add_special_tokens=False)), "tokenizer"
+            except Exception as e:
+                if not _measure_fallback_warned:
+                    _measure_fallback_warned = True
+                    print(f"[Engine] ⚠️ 上限护栏量法分词器失败，退字符估算（本进程不再提示）："
+                          f"{type(e).__name__}: {e}")
+                    events.emit("context_guard_measure_fallback",
+                                session=getattr(session, "session_id", None),
+                                error=f"{type(e).__name__}: {e}")
+        if n is None:
+            n, method = fallback_estimate(text), "chars"
+        return PromptMeasure(tokens=n + images * IMAGE_TOKENS_EST, method=method,
+                             chars=len(text), images=images)
 
     def _resolve_sampling(self, explicit: Dict[str, Any],
                           legacy: Dict[str, Any]) -> Dict[str, Any]:
@@ -418,7 +502,7 @@ class AgentEngine:
                             min_p: Optional[float] = None,
                             enable_thinking: bool = False,
                             thinking_budget: int = 2048,
-                            max_tokens: int = 4096,
+                            max_tokens: int = DEFAULT_MAX_TOKENS,
                             tail_notes: Optional[List[str]] = None,
                             on_text_delta: Optional[Callable[[str], None]] = None,
                             on_thinking_delta: Optional[Callable[[str], None]] = None,
@@ -450,17 +534,14 @@ class AgentEngine:
         if getattr(session, "inject_env_context", False):
             self._prepare_session_cache(session)
 
+        _include_env, _env_extra = self._prompt_env(session)   # 与 measure_prompt 同一取法
         formatted_prompt, _stream_tail, _delta_offset = self._assemble_prompt(
             session, tools,
             enable_thinking=enable_thinking,
             task_block=task_block,
             tail_notes=tail_notes,
-            # 环境事实只注入主编排会话；沙箱一次性会话替身默认 False（隐私边界，opt-in）
-            include_env=getattr(session, "inject_env_context", False),
-            # 长期记忆索引（R4）：模型得先"知道自己知道"，才谈得上去召回正文。
-            # 同样是个人事实，故与静态环境事实共用 include_env 这一道门（门在 builder 里，
-            # 此处即便传了，沙箱也拿不到）。
-            env_extra=self._notes_index(),
+            include_env=_include_env,
+            env_extra=_env_extra,
         )
         # 思考播种用方言的实际 token（而非硬编码字面量）：换模型/token 表时保持一致
         generated_text = self.dialect.thinking_prefill(enable_thinking)

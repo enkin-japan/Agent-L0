@@ -100,6 +100,11 @@ class MemoryStatusResponse(BaseModel):
     session_id: str
     loaded: bool                       # 会话是否在内存（热）；冷会话读盘快照
     last_prompt_tokens: int = 0        # 当前 model-facing 上下文规模（prompt token）
+    turn_peak_prompt_tokens: Optional[int] = None  # 本轮（最近一轮）主循环 prompt 峰值（W1；冷会话 null）
+    context_limit: Optional[int] = None    # 上下文上限（W1 护栏；未绑定时 null）
+    context_ceiling: Optional[int] = None  # 上限 − 生成预留：越过即应急压缩/终止本轮
+    context_soft: Optional[int] = None     # soft 档阈值（整段 prompt 绝对 token）
+    context_hard: Optional[int] = None     # hard 档阈值
     total_turns: int = 0               # 全量落盘历史轮次
     summarized_turns: int = 0          # 已并入滚动摘要的前导历史水位线
     sedimented_turns: int = 0          # 原文已进 RAG 长期记忆的前导历史水位线（零 LLM，独立推进）

@@ -411,12 +411,16 @@ async def lifespan(app: FastAPI):
     identity = None
     last_rescan = 0.0
 
-    async def _probe_dependencies():
-        """只有推理活体/鉴权决定 compute_ready；RAG 只是装配期前置，装完即与执行解耦。"""
+    async def _probe_dependencies(orchestrator=None):
+        """只有推理活体/鉴权决定 compute_ready；RAG 只是装配期前置，装完即与执行解耦。
+
+        orchestrator：装配期末尾那次探活显式传入（尚未发布到 app.state）；生命周期监视的
+        探活不传，取已发布的那个。用于 W1 上限重绑（算力端重开换了 max_model_len）。"""
         nonlocal identity, last_rescan
         from framework.api.compute_lifecycle import (
             LocalDependencyUnavailable, compute_node_failure_state, describe_failure,
-            probe_rag_data, rag_failure_is_transient, rag_failure_state, rag_probe_host)
+            probe_rag_data, rag_failure_is_transient, rag_failure_state, rag_probe_host,
+            refresh_context_limit)
         remote = inference_cfg.get("remote") or {}
         installed = getattr(app.state, "compute_installed", False)
         # 装配期每次探活结果先落 app.state 再抛（/health 的 compute_node_state / rag_state）。
@@ -431,6 +435,17 @@ async def lifespan(app: FastAPI):
             if not installed:
                 app.state.compute_node_state = compute_node_failure_state(exc)
             raise
+        # W1：对这次 /health 重算上下文上限，变了就重绑护栏；不相容（hard ≥ 新 ceiling）→
+        # ValueError 照身份不符处理（抛出 = 本次探活失败，算力端按迟滞标为不可用）
+        _orch = orchestrator if orchestrator is not None else (
+            getattr(app.state, "orchestrator", None) if installed else None)
+        if _orch is not None:
+            try:
+                refresh_context_limit(_orch, identity, inference_cfg)
+            except ValueError as exc:
+                if not installed:
+                    app.state.compute_node_state = compute_node_failure_state(exc)
+                raise
         if not installed:
             app.state.compute_node_state = "ready"
         rag_cfg = config.get("rag") or {}
@@ -705,6 +720,11 @@ async def lifespan(app: FastAPI):
             resources["engine"] = engine
             model, processor = engine.model, engine.processor
             orchestrator = _make_orchestrator(engine, mcp_registry)
+            # 2.0b 上下文上限护栏（W1）：引擎已装载（remote 已拿到算力端 /health），绑定上限——
+            #      先于任何 run_turn。阈值与上限不相容 → ValueError（inprocess = 启动失败；remote =
+            #      计算装配失败并退避重试，数据服务照常）；引擎报不出上限 → 不绑、主循环首轮告警。
+            #      guard disabled 也绑（inspector 暴露数字）。装配后由 _probe_dependencies 跟踪变化。
+            orchestrator.bind_context_limit()
 
             # 2.1 联网调查沙箱运行时：把引擎与主事件循环登记给 web_research（受限沙箱工具经
             #     run_coroutine_threadsafe 投回本循环复用主模型生成，见 framework/agents）。
@@ -808,7 +828,8 @@ async def lifespan(app: FastAPI):
                 file_handler=file_handler, ingestion=ingestion,
                 rebuild_skills=_rebuild_skills, rescan_tools=_rescan_tools)
             if _remote_transport:
-                await _probe_dependencies()  # Auth/identity may have changed during tokenizer/tool IO.
+                # Auth/identity (and W1 context limit) may have changed during tokenizer/tool IO.
+                await _probe_dependencies(orchestrator)
             return resources
         except BaseException as exc:
             try:

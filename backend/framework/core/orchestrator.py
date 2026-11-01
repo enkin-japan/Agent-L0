@@ -22,11 +22,12 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import approval_policy, events
+from . import approval_policy, context_guard, events
+from .engine import DEFAULT_MAX_TOKENS
 from .journal import TurnJournal
 from .task_state import TaskState, call_fingerprint
 from . import tool_disclosure
-from ..memory.session import ChatSession
+from ..memory.session import ChatSession, DEFAULT_SYSTEM_PROMPT
 from ..memory.compactor import compact_tool_observations
 from ..mcp.registry import MCPRegistry
 from .spill import spill_observation, truncate_observation
@@ -156,7 +157,9 @@ def _finalize_cloud_degraded(session: ChatSession, metrics: Dict[str, Any], text
 
     不依赖模型是否听话转述（降级观察里已要求它说，但交付不能建在转写忠实度上——
     与 _append_missing_asset_links 同一路数）。已含同一句则不重复。"""
-    kinds, succeeded = _cloud_degraded_scan(session.history)
+    # 落盘视图（W1）：轮内应急压缩后 history 里是桩，降级判据要看原文
+    _view = getattr(session, "persistable_messages", None)
+    kinds, succeeded = _cloud_degraded_scan(_view(0) if callable(_view) else session.history)
     if not kinds:
         return text
     metrics["cloud_degraded"] = list(kinds)
@@ -454,6 +457,15 @@ class Orchestrator:
         # 收尾目标校验开关（DEFERRED §2 完整版）：大计划完成后一次独立审计生成，防虚报完成。
         self.goal_verify = bool(cfg.get("goal_verify", True))
 
+        # 上下文上限护栏（W1）：配置在构造期校验（未知键/非正整数/soft ≥ hard 即 ValueError——
+        # inprocess 为启动失败；remote 为计算装配失败并退避重试，数据服务照常）；
+        # 上限要等引擎装载完才知道（remote 取算力端 /health），由 bind_context_limit 绑定，
+        # 装配后的算力端探活（app._probe_dependencies）发现上限变化时重绑。
+        # 只守主循环生成；goal-verify / 沙箱 / 摘要等子生成不守（残留由方案记档）。
+        self.context_guard = context_guard.resolve_context_guard(cfg)
+        self.context_limits: Optional[context_guard.ContextLimits] = None
+        self._guard_unbound_warned = False
+
         # 工具声明属于稳定前缀（注册表就是单一数据源）。full 模式：启动时构建一次，
         # 此后恒定。catalog 模式（W-2 / D31）：基座声明（元工具 + core 完整、其余目录行）
         # 同样启动时构建一次；任务建立时按词法路由选出的 top_k 件另以完整 schema 入前缀，
@@ -468,7 +480,8 @@ class Orchestrator:
     def refresh_tools_declaration(self) -> None:
         """重建工具声明并重锚摘要阈值（__init__ 与热重扫共用）。
 
-        前缀 token 估算：后端无 tokenizer，用 chars/4（对本声明 JSON 实测 4.02 字/token）；
+        前缀 token 估算：启动期引擎未必已装载，故仍用字符估算（声明 JSON chars/4，实测 4.02
+        字/token；系统提示走 context_guard.fallback_estimate）；与 context_guard 的实测量法无关。
         catalog 模式下声明变小，估算与阈值随之自动收紧。"""
         known = {s.get("name") for s in self.registry.get_all_schemas()}
         self._core_names, unknown = tool_disclosure.split_core(self._core_cfg, known)
@@ -490,9 +503,56 @@ class Orchestrator:
         # 二者在 full 模式下逐字相同，只有 catalog 模式才分叉（见 _build_grammar_tools）。
         self._grammar_tools = self._build_grammar_tools()
         self.stable_prefix_tokens_est = sum(
-            len(json.dumps(t, ensure_ascii=False)) for t in self._tools_decl) // 4
+            len(json.dumps(t, ensure_ascii=False)) for t in self._tools_decl) // 4 \
+            + context_guard.fallback_estimate(DEFAULT_SYSTEM_PROMPT)
         self.summary_high_threshold = self._summary_high_base + self.stable_prefix_tokens_est
         self.summary_low_threshold = self._summary_low_base + self.stable_prefix_tokens_est
+
+    # ---------- 上下文上限护栏（W1） ----------
+    def bind_context_limit(self) -> None:
+        """绑定上限：app lifespan 在引擎装载后调（须先于任何 run_turn）；远端算力端重开换了
+        max_model_len 时由探活路径（compute_lifecycle.refresh_context_limit）再调。
+
+        引擎报不出上限（None）→ 不绑，主循环首轮告警一次并跳过测量；阈值与上限不相容 →
+        derive_limits 的 ValueError 原样抛出（装配期 = 计算装配失败并重试；探活期 = 算力端
+        标为不可用，与模型身份不符同一处理），原绑定不变。guard disabled 也绑（只为在
+        inspector 暴露数字）。model_router / engine_pool 的专科引擎不走主循环，不参与绑定。"""
+        lim = self.engine.context_limit
+        if lim is None:
+            return
+        self.context_limits = context_guard.derive_limits(self.context_guard, lim)
+
+    def _emergency_compact(self, session: ChatSession) -> int:
+        """轮内应急机械压缩（ceiling 兜底）：model-facing history 里保护窗口（最近 2 条）之外的
+        工具观察一律折成桩，返回被压缩条数。摘要折叠只能在轮边界做（rebuild_from_log 会清掉
+        进行中的本轮），归 W2。
+
+        落盘日志保留全文：本轮观察的 dict 与暂存轮次（审批/挂起）的 response 共享引用，且
+        轮末落盘就是 history 切片——故先把本轮（session.turn_history_start_idx 起，含审批/挂起
+        前的段）每条工具消息换成拷贝（tool_responses 逐项拷）断开别名，原件登记进
+        session.guard_persist_originals，落盘切片经 session.persistable_messages 换回原件。
+        本轮之前的消息早已落盘，与轮首机械压缩同样就地改即可。代价：history 指纹变化，前缀
+        缓存整段失配一次（接受：此刻已顶到上限，失配一次远比 overflow 便宜）。"""
+        originals = getattr(session, "guard_persist_originals", None)
+        if originals is None:
+            originals = session.guard_persist_originals = {}
+        hist = session.history
+        start = getattr(session, "turn_history_start_idx", None)
+        start = start if isinstance(start, int) and 0 <= start <= len(hist) else 0
+        for i in range(start, len(hist)):
+            m = hist[i]
+            if m.get("role") != "tool" or not isinstance(m.get("tool_responses"), list):
+                continue
+            if id(m) in originals and originals[id(m)][0] is m:
+                continue   # 已是本轮早先换进来的副本：原件已登记，直接复用
+            cp = dict(m)
+            cp["tool_responses"] = [dict(tr) if isinstance(tr, dict) else tr
+                                    for tr in m["tool_responses"]]
+            originals[id(cp)] = (cp, m)
+            hist[i] = cp
+        # budget_chars=1：任何超出保护窗口、体量 > digest 的观察都在驱逐之列（0/None 会跳过预算阶段）
+        return compact_tool_observations(
+            hist, keep_recent=2, digest_chars=self.observation_compact_chars, budget_chars=1)
 
     # ---------- 工具目录（两级可见性） ----------
     def _meta_schemas(self) -> List[Dict[str, Any]]:
@@ -647,6 +707,14 @@ class Orchestrator:
             session.carried_turn_stats = {}
             # [D2 谎报围堵] 拒批指纹按轮生效：新用户轮清零，审批/挂起续跑沿用
             session.denied_call_fps = set()
+            # [W1 上限护栏] 本轮峰值/最高档、一次性动作旗标、应急压缩还原表与本轮起点按轮生效
+            # （审批/挂起续跑段沿用：不重复压缩、不重复发尾注与事件）。还原表可清：上一轮的
+            # 落盘切片早已换回原件。
+            session.turn_peak_prompt_tokens = 0
+            session.turn_context_guard_level = None
+            session.turn_guard_flags = {}
+            session.guard_persist_originals = {}
+            session.turn_history_start_idx = len(session.history)
         # 无任务态指纹也属于整轮：不能靠暂停/审批重入清掉重复调用屏障。
         no_task_calls: List[str] = list(session.carried_turn_stats.get("no_task_calls") or [])
         turn_start_idx = len(session.history)  # 本轮起点：收尾时扫描本轮工具产出的资产链接
@@ -712,6 +780,13 @@ class Orchestrator:
                       "goal_verify_generations", "goal_verify_generation_tokens"):
                 if turn_usage.get(k):
                     metrics[k] = turn_usage[k]
+            # [W1] 本轮主循环 prompt 峰值（守卫测量值与生成实测值取大）与护栏最高档；同样只在有值时出现
+            _peak = int(getattr(session, "turn_peak_prompt_tokens", 0) or 0)
+            if _peak:
+                metrics["peak_prompt_tokens"] = _peak
+            _lvl = getattr(session, "turn_context_guard_level", None)
+            if _lvl:
+                metrics["context_guard_level"] = _lvl
 
         def _carry_turn_state() -> None:
             """审批/挂起共用检查点；先stamp再转存，当前段iterations只计一次。"""
@@ -746,7 +821,7 @@ class Orchestrator:
         repetition_hits = 0          # 流式复读护栏本轮命中次数（第 1 次推回、第 2 次终止）
         goal_verified = False        # 收尾目标校验预算（每次 run_turn 最多审计一次）
         thinking_only_nudges = 0     # 全思考空产出推回预算（THINKING_ONLY_NUDGE_MAX）
-        base_max_tokens = int(gen_kwargs.get("max_tokens", 4096))
+        base_max_tokens = int(gen_kwargs.get("max_tokens", DEFAULT_MAX_TOKENS))
         # T3-c：一次性护栏提醒走可变尾部注入（用完即弃、不进历史、不被摘要压缩）。
         # 下一次生成消费后立即清空；由 T1-2/T1-3 分支按需填充。
         pending_tail_notes: List[str] = []
@@ -754,6 +829,100 @@ class Orchestrator:
         def _transition(reason: str) -> None:
             """标注一次续跑原因（可审计：为什么又转一圈），便于日志追踪与死循环定位。"""
             print(f"[Orchestrator] transition → {reason}")
+
+        # [W1 上限护栏] 每轮一次的事件/动作闸：挂在 session 上，跨审批/挂起续跑段沿用
+        guard_cfg = self.context_guard
+        guard_flags = getattr(session, "turn_guard_flags", None)
+        if not isinstance(guard_flags, dict):
+            guard_flags = session.turn_guard_flags = {}
+        for _k in ("clamped", "soft", "hard", "compacted"):
+            guard_flags.setdefault(_k, False)
+
+        def _note_peak(tokens: Any) -> None:
+            if isinstance(tokens, int) and not isinstance(tokens, bool) \
+                    and tokens > (getattr(session, "turn_peak_prompt_tokens", 0) or 0):
+                session.turn_peak_prompt_tokens = tokens
+
+        def _guard_measure(prompt_args: Dict[str, Any], limits: "context_guard.ContextLimits"):
+            m = self.engine.measure_prompt(**prompt_args)
+            _note_peak(m.tokens)
+            level = context_guard.classify(m.tokens, guard_cfg, limits)
+            if context_guard.level_rank(level) > context_guard.level_rank(
+                    getattr(session, "turn_context_guard_level", None)):
+                session.turn_context_guard_level = level
+            return m, level
+
+        def _context_guard_pre(prompt_args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            """生成前护栏（max_tokens 钳制之后）：量 → 四档处理。返回非 None = 本轮已终止的结果，
+            调用方原样返回、**不得**再发生成请求。prompt_args 与 generate_once 的 prompt 入参
+            是同一份 dict（hard 尾注追加后就地更新），measure_prompt 与 generate_once 又走同一个
+            _assemble_prompt 判定（流有效 = 流+增量段，否则全量渲染），故量到的就是要发出去的。
+            残差：增量路后端按记录的 token 喂历史段，与对同一文本重分词可在边界差几个 token。"""
+            if not guard_cfg.enabled:
+                return None
+            limits = self.context_limits
+            if limits is None:
+                if not self._guard_unbound_warned:
+                    self._guard_unbound_warned = True
+                    events.emit(context_guard.EVT_UNBOUND, session=session.session_id)
+                    print("[Orchestrator] ⚠️ 上下文上限未绑定（引擎报不出 context_limit，或装配未调 "
+                          "bind_context_limit）：上限护栏本进程不生效")
+                return None
+
+            def _detail(m, level):
+                return dict(prompt_tokens=m.tokens, method=m.method, level=level,
+                            limit=limits.limit, ceiling=limits.ceiling,
+                            iteration=session.carried_iterations + iterations + 1)
+
+            m, level = _guard_measure(prompt_args, limits)
+            # 每个分支各翻一面旗，最多各走一次；循环只为让「压缩后落到 hard」与「尾注把 hard
+            # 推到 ceiling」都回到同一套判定，不出现分支间漏判
+            for _ in range(3):
+                if level == "ceiling" and not guard_flags["compacted"]:
+                    guard_flags["compacted"] = True
+                    before = m.tokens
+                    n = self._emergency_compact(session)
+                    m, level = _guard_measure(prompt_args, limits)
+                    if level != "ceiling":
+                        events.emit(context_guard.EVT_FOLD, session=session.session_id,
+                                    before=before, after=m.tokens, ceiling=limits.ceiling,
+                                    compacted=n, iteration=session.carried_iterations + iterations + 1)
+                        session.push_activity("note", "上下文接近上限，已折叠旧观察")
+                        print(f"[Orchestrator] 上下文上限护栏：应急压缩 {n} 条观察，"
+                              f"{before:,} → {m.tokens:,} token（ceiling {limits.ceiling:,}）")
+                    continue
+                if level == "hard" and not guard_flags["hard"]:
+                    guard_flags["hard"] = True
+                    events.emit(context_guard.EVT_HARD, session=session.session_id, **_detail(m, level))
+                    # TODO(W2，方案 docs/plans/2026-10-31-context-management-plan.md W2)：步骤边界压缩在此触发
+                    pending_tail_notes.append(
+                        f"上下文已用 {m.tokens:,}/{limits.limit:,} token，接近上限。请收敛：少回灌大段观察，"
+                        "尽快给出结论或完成当前步骤。")
+                    prompt_args["tail_notes"] = list(pending_tail_notes)
+                    m, level = _guard_measure(prompt_args, limits)   # 量的是含尾注、真要发出去的那份
+                    continue
+                break
+            if level == "ceiling":
+                msg = (f"上下文已达模型上限（{m.tokens:,} / 上限 {limits.limit:,} token，"
+                       f"生成预留 {guard_cfg.reserve:,}），本轮已停止。可以试试：①新开会话继续；"
+                       "②把任务拆小分别发起；③减少大输出工具的连续调用。")
+                session.add_assistant_message(content=msg)
+                session.set_activity("已终止（上下文达模型上限）", phase="done")
+                events.emit("turn_abort", session=session.session_id,
+                            reason=context_guard.ABORT_REASON, **_detail(m, level))
+                print(f"[Orchestrator] 上下文上限护栏：{m.tokens:,} ≥ ceiling {limits.ceiling:,}，终止本轮")
+                _stamp_turn_stats()
+                _exit_audit()
+                return {
+                    "status": "warning",
+                    "response": _with_retrieval_note(msg),
+                    "thoughts": ["System: context ceiling reached; aborted."],
+                    "metrics": metrics,
+                }
+            if level == "soft" and not guard_flags["soft"]:
+                guard_flags["soft"] = True
+                events.emit(context_guard.EVT_SOFT, session=session.session_id, **_detail(m, level))
+            return None
 
         session.reset_activity()  # 新一轮的实时步骤流从空开始
 
@@ -905,20 +1074,42 @@ class Orchestrator:
             # 思考位置策略（见 __init__ 注释）：翻译本次迭代的实际思考态
             call_kwargs["enable_thinking"] = self._thinking_for_iteration(
                 bool(call_kwargs.get("enable_thinking")), iterations)
+            # [W1 上限护栏 ①] max_tokens 钳到 generation_reserve：ceiling = 上限 − reserve 的前提。
+            # guard disabled 也钳（关掉的是测量与处置，不是这条不变量）。
+            # 缺键 = 引擎缺省（engine.DEFAULT_MAX_TOKENS），同样受钳：最终总写回 min(请求, reserve)
+            _req_max = call_kwargs.get("max_tokens", DEFAULT_MAX_TOKENS)
+            if isinstance(_req_max, int) and not isinstance(_req_max, bool) \
+                    and _req_max > guard_cfg.reserve:
+                call_kwargs["max_tokens"] = guard_cfg.reserve
+                if not guard_flags["clamped"]:
+                    guard_flags["clamped"] = True
+                    events.emit(context_guard.EVT_CLAMP, session=session.session_id,
+                                requested=_req_max, clamped_to=guard_cfg.reserve)
+            elif "max_tokens" not in call_kwargs:
+                call_kwargs["max_tokens"] = _req_max
+            # prompt 入参只组这一份：护栏量它、生成发它（防分叉，W1）
+            prompt_args: Dict[str, Any] = {
+                "session": session, "tools": self._tools_decl_for(session),
+                "task_block": task_block, "tail_notes": pending_tail_notes or None,
+                "enable_thinking": call_kwargs.pop("enable_thinking"),
+            }
+            # [W1 上限护栏 ②–⑤] 量 → soft/hard/ceiling；终止时后端收不到这次请求
+            _aborted = _context_guard_pre(prompt_args)
+            if _aborted is not None:
+                return _aborted
             journal.emit("iteration_started", {
-                "n": iterations + 1, "thinking": bool(call_kwargs["enable_thinking"]),
+                "n": iterations + 1, "thinking": bool(prompt_args["enable_thinking"]),
             })
             provisional_generation = retrieval.unresolved
             result = await self.engine.generate_once(
-                session=session, tools=self._tools_decl_for(session),
-                grammar_tools=self._grammar_tools, task_block=task_block,
-                tail_notes=pending_tail_notes or None, **call_kwargs
+                **prompt_args, grammar_tools=self._grammar_tools, **call_kwargs
             )
             pending_tail_notes = []  # 一次性提醒已被本次生成消费，清空（T3-c）
             fresh_metrics = result.get("metrics")
             metrics = fresh_metrics or metrics
             if metrics.get("prompt_tokens"):
                 session.last_prompt_tokens = metrics["prompt_tokens"]  # 上下文规模估计（摘要阈值/空闲维护用）
+                _note_peak(metrics["prompt_tokens"])   # [W1] 生成实测值也入本轮峰值
             # [仪表 Phase 0] 累计本次生成的分解与投机计数，并 stamp 到 metrics。
             # 只在拿到本次生成的新 metrics 时累计——沿用旧 dict（其值已是累计口径）会双计。
             if fresh_metrics:
@@ -1406,7 +1597,9 @@ class Orchestrator:
                         continue
 
                 session.set_activity("已完成", phase="done")
-                text = _append_missing_asset_links(text, session.history[turn_start_idx:])
+                # 落盘视图（W1）：应急压缩桩会截掉观察头部之后的资产链接
+                text = _append_missing_asset_links(
+                    text, session.persistable_messages(turn_start_idx))
                 # ⑤′-1 降级路：云端导师本轮不可用过 → 答复末尾明示「本地作答」，不静默装满血
                 text = _finalize_cloud_degraded(session, metrics, text, append_notice=True)
                 # ⑤′-3：换档建议 / 显式要求但云端不可用 → 收尾确定性提示（用户要自己动手的事）

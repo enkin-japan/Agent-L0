@@ -279,6 +279,7 @@ def aggregate(g: Dict[str, Any], th: Dict[str, float], wall_invalid: set) -> Dic
             "aborted": sum(1 for s in sc if s.get("aborted")),
             "coherent_rate": (sum(cohs) / len(cohs)) if cohs else None, "coherent_n": len(cohs),
             "prompt_tokens_median": median(f.get("prompt_tokens") for f in firsts),
+            "peak_prompt_tokens_median": median(r.get("peak_prompt_tokens") for r in rs),
             "prefill_s_median": median(prefill_s(f) for f in firsts),
             "first_prompt_tps_median": median(f.get("prompt_tps") for f in firsts),
             "gen_tps_median": median(f.get("generation_tps") for f in firsts),
@@ -461,7 +462,8 @@ CSV_COLS = ["group", "model", "sampling", "mtp_by_dirname", "level", "n", "missi
             "recall_mid", "recall_back", "recall_partial", "recall_zero_nofinal", "recall_zero_withfinal", "legacy_mention", "zero_step", "redundant_mean", "env_errors_mean", "repetition_hits",
             "repetition_runs", "aborted", "coherent_rate", "coherent_n", "prompt_tokens_median",
             "prefill_s_median", "first_prompt_tps_median", "gen_tps_median", "n_gens_median",
-            "wall_median", "wall_invalid", "fail_primary", "incoherent"]
+            "wall_median", "wall_invalid", "fail_primary", "incoherent",
+            "peak_prompt_tokens_median"]   # W1 新列放末尾：按位置读旧 CSV 的下游不错位
 
 
 def render(groups, aggs, args) -> str:
@@ -506,8 +508,8 @@ def render(groups, aggs, args) -> str:
     L.append("")
 
     L.append("### B. 每档汇总（成功率单位 run，Pass^2 单位 题；区间 Wilson 95%）\n")
-    L.append("| 组 | level | n | 缺测 | 成功率 [CI] | Pass^2 [CI] (题数) | Pass@2 | recall (分母) | 前/中/后 | recall漏：部分/零命中且无收尾 | 冗余均 | env错均 | 复读命中(run) | aborted | 连贯 (分母) | 首prompt中位 | prefill秒中位 | wall中位 |")
-    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    L.append("| 组 | level | n | 缺测 | 成功率 [CI] | Pass^2 [CI] (题数) | Pass@2 | recall (分母) | 前/中/后 | recall漏：部分/零命中且无收尾 | 冗余均 | env错均 | 复读命中(run) | aborted | 连贯 (分母) | 首prompt中位 | 峰值prompt中位 | prefill秒中位 | wall中位 |")
+    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for g in groups:
         for lv, a in aggs[g["name"]].items():
             L.append(
@@ -515,7 +517,8 @@ def render(groups, aggs, args) -> str:
                 f"{pct(a['pass_hat_2'])} {ci(a['pass_hat_2_lo'], a['pass_hat_2_hi'])} ({a['n_items2']}) | {pct(a['pass_at_2'])} | "
                 f"{pct(a['recall_rate'])} ({a['recall_n']}) | {pct(a['recall_front'])}/{pct(a['recall_mid'])}/{pct(a['recall_back'])} | {a['recall_partial']}/{a['recall_zero_nofinal']} | "
                 f"{num(a['redundant_mean'], 2)} | {num(a['env_errors_mean'], 2)} | {a['repetition_hits']}({a['repetition_runs']}) | {a['aborted']} | "
-                f"{pct(a['coherent_rate'])} ({a['coherent_n']}) | {num(a['prompt_tokens_median'], 0)} | {num(a['prefill_s_median'])} | "
+                f"{pct(a['coherent_rate'])} ({a['coherent_n']}) | {num(a['prompt_tokens_median'], 0)} | "
+                f"{num(a['peak_prompt_tokens_median'], 0)} | {num(a['prefill_s_median'])} | "
                 f"{num(a['wall_median'])}{'*' if a['wall_invalid'] else ''} |")
     L.append("\n`*` = wall 因并发不可用（已知清单或同档多 stamp 重复行自动检测）。\n")
     L.append("不连贯 run 的归因（判据触发项:题 ×次；不判语义）：\n")

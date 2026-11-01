@@ -350,6 +350,9 @@ class MLXBackend:
         self.kv_bits = cfg.get("kv_bits", None)
         self.kv_quant_scheme = cfg.get("kv_quant_scheme", "turboquant")
         self.quantized_kv_start = int(cfg.get("quantized_kv_start", 0))
+        # 上下文上限（W1，config inference.mlx.context_limit）：编排层上限护栏据此派生 ceiling。
+        # 是编排层预算而非后端硬限——max_kv_size 对 gemma4 / qwen3_5 无效（二者自带 make_cache）。
+        self.context_limit = int((cfg.get("mlx") or {}).get("context_limit", 65536))
 
         # prompt-lookup 投机采样配置（mode=off 时不带 kwargs，路径与未启用时一致）
         spec_cfg = cfg.get("speculative") or {}

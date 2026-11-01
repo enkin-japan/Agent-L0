@@ -109,7 +109,14 @@ class CacheHandle(Protocol):
 
 
 class InferenceBackend(Protocol):
-    """推理后端协议。除 load 外全部为同步方法（在推理执行器线程内被调）。"""
+    """推理后端协议。除 load 外全部为同步方法（在推理执行器线程内被调）。
+
+    可选属性（不在协议签名里，消费方 getattr 探测，与 runtime_options() 同一手法）：
+    - context_limit: int —— 上下文上限（prompt + 生成 token）。W1 上限护栏据此派生
+      ceiling = context_limit − generation_reserve。mlx = inference.mlx.context_limit
+      （编排层预算）；cuda = max_model_len；remote = 算力端 /health 报的 max_model_len
+      （缺则回落并告警）。缺失 / 非正整数 = 未知，护栏不绑定并告警。
+    """
 
     @classmethod
     async def load(cls, model_path, **cfg) -> "InferenceBackend":

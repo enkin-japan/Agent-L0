@@ -548,7 +548,8 @@ class TurnRunner:
                         {"role": "system", "content": "本轮已被用户取消,未产生任何记忆变更。"},
                     ], final_result.get("metrics"))
                 else:
-                    new_messages = session.history[ctx["_history_start_idx"]:]
+                    # 落盘视图：轮内应急压缩（W1 上限护栏）的副本换回原件，日志保留全文
+                    new_messages = session.persistable_messages(ctx["_history_start_idx"])
                     response_data = self._turn_record(
                         ctx, final_result.get("status", "success"), new_messages,
                         final_result.get("metrics"))
@@ -779,7 +780,7 @@ class TurnRunner:
             turn["response"].append(note)
             turn["pending_tools"] = None
             return {**turn, "response": [note]}
-        new_messages = session.history[history_start_idx:]
+        new_messages = session.persistable_messages(history_start_idx)   # W1：压缩副本换回原件
         turn["response"].extend(new_messages)      # 累计到完整轮次(落盘用)
         turn["status"] = final_result.get("status", "success")
         turn["pending_tools"] = final_result.get("pending_tools")

@@ -301,6 +301,9 @@ def build_record(plan: RunPlan, traj: Dict[str, Any], gens: List[Dict[str, Any]]
                  wall_s: float) -> Dict[str, Any]:
     first = gens[0] if gens else {}
     actual = first.get("prompt_tokens")
+    # 峰值 prompt（W1）：本 run 各次生成实测 prompt_tokens 取大；无生成/全缺 = null
+    _pts = [g["prompt_tokens"] for g in gens if g.get("prompt_tokens")]
+    peak = max(_pts) if _pts else None
     fill = {
         "target_tokens": plan.level,
         "base_tokens": plan.base_tokens,
@@ -321,7 +324,7 @@ def build_record(plan: RunPlan, traj: Dict[str, Any], gens: List[Dict[str, Any]]
             "dimension": original_item["dimension"], "lang": original_item.get("lang"),
             "task_fp": task_fingerprint(original_item),
             "recall_suffix": plan.item["task"]["user"][len(original_item["task"]["user"]):],
-            "fill": fill, "score": score, "gens": gens,
+            "fill": fill, "score": score, "gens": gens, "peak_prompt_tokens": peak,
             "repetition_events": [{"gen": g["i"], **g["repetition_guard"]}
                                   for g in gens if g.get("repetition_guard")],
             "wall_s": round(wall_s, 2),

@@ -794,6 +794,9 @@ async def get_memory_status(session_id: str, request: Request):
     """
     session_manager = request.app.state.session_manager
     orchestrator = request.app.state.orchestrator
+    # 上下文上限护栏（W1）：未绑定（引擎报不出上限）时四个数都是 null
+    _limits = getattr(orchestrator, "context_limits", None)
+    _guard = getattr(orchestrator, "context_guard", None)
     base = {
         "status": True,
         "session_id": session_id,
@@ -801,6 +804,10 @@ async def get_memory_status(session_id: str, request: Request):
         "low_threshold": orchestrator.summary_low_threshold,
         "keep_tail_turns": orchestrator.summary_keep_tail_turns,
         "sediment_to_rag": orchestrator.sediment_to_rag,
+        "context_limit": _limits.limit if _limits is not None else None,
+        "context_ceiling": _limits.ceiling if _limits is not None else None,
+        "context_soft": _guard.soft if (_limits is not None and _guard is not None) else None,
+        "context_hard": _guard.hard if (_limits is not None and _guard is not None) else None,
     }
 
     session = session_manager._all_sessions.get(session_id)
@@ -810,6 +817,8 @@ async def get_memory_status(session_id: str, request: Request):
             **base,
             "loaded": True,
             "last_prompt_tokens": session.last_prompt_tokens,
+            # 本会话尚无主循环生成（0/缺）与冷会话同口径回 null
+            "turn_peak_prompt_tokens": getattr(session, "turn_peak_prompt_tokens", None) or None,
             "total_turns": session.disk_turn_count(),  # 统一口径:落盘轮数(原为消息条数,冷热不一致)
             "summarized_turns": session.summarized_turns,
             "sedimented_turns": session.sedimented_turns,
@@ -840,6 +849,7 @@ async def get_memory_status(session_id: str, request: Request):
         **base,
         "loaded": False,
         "last_prompt_tokens": 0,   # 冷会话无 model-facing 上下文（KV 已释放）
+        "turn_peak_prompt_tokens": None,   # 仅内存量，冷会话无从得知
         "total_turns": total_turns,
         "summarized_turns": summarized_turns,
         "sedimented_turns": sedimented_turns,
