@@ -222,6 +222,38 @@ def test_history_matches_official_template(tok, label, ours, theirs):
     assert _history(tok, ours, _TOOLS) == _jinja(tok, theirs, tools=_NESTED)
 
 
+def test_tool_turns_projection_matches_official_thinking_replay(tok):
+    """W3（D36）差分：两轮 user、各带思考与 tool_calls——引擎 `tool_turns` 投影 + 我方 builder
+    == 官方 4bit 模板（它只回放「末条 user 之后且带 tool_calls」的思考，见 jinja :238-241）。
+
+    官方字段名 reasoning，本仓 thoughts；投影的轮起点走 turn_start_index 回落（无会话属性
+    → 末条 user 之后），与官方 last_user_idx 同口径。"""
+    from framework.core.thinking_replay import (ThinkingReplayPolicy, project_thoughts,
+                                                turn_start_index)
+    ours = [{"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "", "tool_calls": [_CALL], "thoughts": "T1 call"},
+            {"role": "tool", "tool_responses": [{"name": "get_weather", "content": "22C"}]},
+            {"role": "assistant", "content": "It is 22C.", "thoughts": "T1 answer"},
+            {"role": "user", "content": "u2"},
+            {"role": "assistant", "content": "", "tool_calls": [_CALL2], "thoughts": "T2 call"},
+            {"role": "tool", "tool_responses": [{"name": "get_weather", "content": "25C"}]},
+            {"role": "assistant", "content": "It is 25C.", "thoughts": "T2 answer"}]
+    theirs = [{"role": "user", "content": "u1"},
+              {"role": "assistant", "content": "", "tool_calls": [_CALL], "reasoning": "T1 call"},
+              {"role": "tool", "tool_call_id": "c1", "content": "22C"},
+              {"role": "assistant", "content": "It is 22C.", "reasoning": "T1 answer"},
+              {"role": "user", "content": "u2"},
+              {"role": "assistant", "content": "", "tool_calls": [_CALL2], "reasoning": "T2 call"},
+              {"role": "tool", "tool_call_id": "c2", "content": "25C"},
+              {"role": "assistant", "content": "It is 25C.", "reasoning": "T2 answer"}]
+    view, stats = project_thoughts(ours, turn_start_index(None, ours),
+                                   ThinkingReplayPolicy("tool_turns", 2))
+    assert stats["kept"] == 1 and stats["dropped"] == 3
+    want = _jinja(tok, theirs, tools=_NESTED)
+    assert "T2 call" in want and "T1 call" not in want     # 官方口径自检（防模板换了没察觉）
+    assert _history(tok, view, _TOOLS) == want
+
+
 def test_tool_result_then_user_closes_the_turn(tok):
     """有意偏离官方的唯一轮结构项：观测后直接换 user 说话时我方收口。
 

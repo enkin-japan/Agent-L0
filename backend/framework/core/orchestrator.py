@@ -715,6 +715,7 @@ class Orchestrator:
             session.turn_guard_flags = {}
             session.guard_persist_originals = {}
             session.turn_history_start_idx = len(session.history)
+            session.turn_thinking_replay = None   # [W3] 投影统计按轮：不让上一轮的值盖进本轮
         # 无任务态指纹也属于整轮：不能靠暂停/审批重入清掉重复调用屏障。
         no_task_calls: List[str] = list(session.carried_turn_stats.get("no_task_calls") or [])
         turn_start_idx = len(session.history)  # 本轮起点：收尾时扫描本轮工具产出的资产链接
@@ -787,6 +788,13 @@ class Orchestrator:
             _lvl = getattr(session, "turn_context_guard_level", None)
             if _lvl:
                 metrics["context_guard_level"] = _lvl
+            # [W3] 最近一次生成 prompt 的思考回放投影统计（engine.generate_once 写）；有才出现
+            # all 模式不投影（计数恒 0），不凭空加字段
+            _replay = getattr(session, "turn_thinking_replay", None)
+            if isinstance(_replay, dict) and _replay.get("mode") != "all":
+                metrics["thinking_replay"] = {k: _replay.get(k) for k in
+                                              ("mode", "kept", "dropped", "kept_chars",
+                                               "dropped_chars")}
 
         def _carry_turn_state() -> None:
             """审批/挂起共用检查点；先stamp再转存，当前段iterations只计一次。"""
@@ -916,7 +924,7 @@ class Orchestrator:
                 return {
                     "status": "warning",
                     "response": _with_retrieval_note(msg),
-                    "thoughts": ["System: context ceiling reached; aborted."],
+                    "thoughts": "System: context ceiling reached; aborted.",
                     "metrics": metrics,
                 }
             if level == "soft" and not guard_flags["soft"]:
@@ -1007,8 +1015,8 @@ class Orchestrator:
                         continue
                     session.add_assistant_message(
                         tool_calls=_calls,
-                        thoughts=[f"[System upgrade] 编排层代发起云端咨询（{_d.trigger}：{_d.reason}）"
-                                  "——仍需审批；云端只顾问，落地本地。"])
+                        thoughts=(f"[System upgrade] 编排层代发起云端咨询（{_d.trigger}：{_d.reason}）"
+                                  "——仍需审批；云端只顾问，落地本地。"))
                     if self._gate_requires_approval(_calls[0]["name"], _calls[0]["arguments"],
                                                     self._approval_policy_for(journal)):
                         return _suspend_for_approval(_calls, [], _calls)
@@ -1042,7 +1050,7 @@ class Orchestrator:
                         f"本轮主循环 {session.carried_iterations + iterations} 次、"
                         f"子调研生成 {turn_usage.get('sub_generations', 0)} 次。"
                         "可以试试：①减少调研类工具的连续调用；②把任务拆小分别发起。"),
-                    "thoughts": ["System Warning: sandbox generation budget exceeded."],
+                    "thoughts": "System Warning: sandbox generation budget exceeded.",
                     "metrics": metrics,
                 }
             # --- 取消检查点（迭代边界；token 级检查在 engine 内） ---
@@ -1147,7 +1155,7 @@ class Orchestrator:
                     return {
                         "status": "warning",
                         "response": _with_retrieval_note(msg),
-                        "thoughts": ["System: repeated output loop detected twice; aborted."],
+                        "thoughts": "System: repeated output loop detected twice; aborted.",
                         "metrics": metrics,
                     }
                 _transition("repetition_nudge")
@@ -1202,7 +1210,7 @@ class Orchestrator:
                                 "多次生成工具调用参数失控（超长复读），已终止本次任务。"
                                 "可以试试：①把需求拆成几件更小的事分别发起；"
                                 "②如果涉及长文本，让我分段处理。"),
-                            "thoughts": ["System: repeated runaway constrained tool calls; aborted."],
+                            "thoughts": "System: repeated runaway constrained tool calls; aborted.",
                             "metrics": metrics,
                         }
                     _transition("runaway_tool_call_retry")
@@ -1425,7 +1433,7 @@ class Orchestrator:
                             "多次未能解析要调用的工具格式，已终止本次任务。"
                             "可以试试：①原样重发一次；②把需求说得更简单具体些；"
                             "③把任务拆成几个更小的步骤分别提出。"),
-                        "thoughts": ["System: repeated tool-call parse failures; aborted to avoid a loop."],
+                        "thoughts": "System: repeated tool-call parse failures; aborted to avoid a loop.",
                         "metrics": metrics,
                     }
 
@@ -1471,8 +1479,8 @@ class Orchestrator:
                                 continue
                             session.add_assistant_message(
                                 tool_calls=_calls,
-                                thoughts=[f"[System upgrade] 编排层代发起云端咨询（failures：{_fd.reason}）"
-                                          "——仍需审批；云端只顾问，落地本地。"])
+                                thoughts=(f"[System upgrade] 编排层代发起云端咨询（failures：{_fd.reason}）"
+                                          "——仍需审批；云端只顾问，落地本地。"))
                             if self._gate_requires_approval(_calls[0]["name"], _calls[0]["arguments"],
                                                             self._approval_policy_for(journal)):
                                 return _suspend_for_approval(_calls, [], _calls)
@@ -1654,7 +1662,7 @@ class Orchestrator:
                 f"任务在 {self.max_total_iterations} 次主循环迭代内未能收敛{_budget_detail}，已终止。"
                 "可以试试：①把任务拆成几个更小的目标分别发起；②缩小范围（只处理一部分）；"
                 "③告诉我可以跳过哪些环节。"),
-            "thoughts": ["System Warning: orchestration loop threshold exceeded."],
+            "thoughts": "System Warning: orchestration loop threshold exceeded.",
             "metrics": metrics,
         }
 

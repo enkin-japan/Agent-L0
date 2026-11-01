@@ -1,8 +1,9 @@
 """Qwen3.5 家族方言（多模型接口准备波）：ChatML 模板 + XML 式工具调用体。
 
 覆盖 Qwen3.5 与其衍生档 Ornith-1.0（架构同为 Qwen3_5ForConditionalGeneration，
-chat template 逐行 diff 仅一处：思考回放范围——本方言取 Ornith 的"恒回放"口径，
-对 Qwen3.5 是良性超集，且历史字节稳定对 KV 前缀友好）。
+chat template 逐行 diff 仅一处：思考回放范围——本方言曾取 Ornith 的"恒回放"口径，
+对 Qwen3.5 是良性超集，且历史字节稳定对 KV 前缀友好；W3 起回放范围归引擎 thinking_replay
+投影（D36），builder 回放拿到的全部 thoughts，`all` 模式即旧口径）。
 
 与 gemma4 方言的两点结构差异：
 - markers 是**家族字面量**（<think>/</think>/<tool_call>/</tool_call>，两模型

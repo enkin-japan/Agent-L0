@@ -16,6 +16,7 @@ from ..utils.config_loader import kv_persist_enabled, repetition_guard_config
 from . import events
 from .repetition_guard import RepetitionDetector
 from .context_guard import IMAGE_TOKENS_EST, PromptMeasure, fallback_estimate
+from .thinking_replay import project_thoughts, resolve_thinking_replay, turn_start_index
 
 
 # 主路径 max_tokens 缺省（generate_once 签名与编排层 W1 钳制共用这一个值，不另抄一份）
@@ -174,6 +175,9 @@ class AgentEngine:
         # 条目级采样默认（W-1/A）：调用方显式值 > 条目 sampling > 旧常量（_resolve_sampling）
         self._sampling_defaults: Dict[str, Any] = _validate_sampling_entry(
             model_options.get("sampling"))
+        # 条目级思考回放策略（W3 / D36）：哪些历史 thoughts 进 prompt 由引擎投影决定，
+        # 方言 builder 照常渲染拿到的全部 thoughts。非法值装配期 ValueError（同 sampling）。
+        self.thinking_replay = resolve_thinking_replay(model_options)
         self.dialect: ModelDialect = get_dialect_class(
             str(model_options.get("dialect") or "")).create(
                 backend.processor, options=model_options, env=env)
@@ -356,11 +360,15 @@ class AgentEngine:
         # 上位解（评审 M11）：流仍有效时预热是危险的 no-op——全量渲染字节与
         # 流字节在首个冻结 env 块处分叉，喂进会话缓存反而把下一轮增量路的纯追加
         # 命中打碎。流失效（压缩改写后正是如此）才值得预热。
-        if prompt_stream.stream_valid(getattr(session, "prompt_stream", None),
-                                      session.history, tools):
+        # W3：预热发生在两轮之间，下一次生成必是新用户轮——现有 history 全部按历史轮投影
+        # （不走 turn_start_index：本轮起点属性此刻还指着刚结束的那一轮），预热字节才是
+        # 下一轮首次全量渲染的前缀。
+        view, _stats = project_thoughts(session.history, len(session.history),
+                                        self.thinking_replay)
+        if self._stream_usable(session, view, tools):
             return False
         prompt = self.dialect.build_prompt(
-            messages=session.history, tools=tools,
+            messages=view, tools=tools,
             include_env=getattr(session, "inject_env_context", False),
             env_extra=self._notes_index(),
         )
@@ -393,41 +401,65 @@ class AgentEngine:
                          env_extra: Optional[List[str]]):
         """本轮 prompt 组装：优先「已记录字节流 + 方言增量段」（跨轮 token 纯追加，
         T8 门对全部缓存类型放行复用），流失效/方言不支持则退全量重渲染。
-        返回 (prompt, 尾块快照 tail_state 或 None, 增量偏移或 None)。
+        返回 (prompt, 尾块快照 tail_state 或 None, 增量偏移或 None, 投影视图 view, 投影统计 stats)。
         增量偏移 = 流字节长（prompt[:offset] 即上轮已喂+已生成的字节）——后端据此
         走 token 级增量喂入（历史段取缓存记录、永不重分词，根除采样出非规范 BPE
         序列时的再分词错位）。None = 走了全量路。
         tail_state is None 表示方言不支持流机制——本轮不提交流。
         纯判定：不改 session / prompt_stream（提交在 generate_once 生成成功之后），
-        W1 的 measure_prompt 依赖这一点复用本函数。"""
+        W1 的 measure_prompt 依赖这一点复用本函数。
+        W3：思考回放投影在这里**只算一次**，流有效性判定、增量段、全量渲染全用同一个 view；
+        generate_once 把同一个 view 交给 prompt_stream.commit（指纹算在投影后视图上）。"""
+        view, stats = self._prompt_view(session)
         ps = getattr(session, "prompt_stream", None)
         delta_fn = getattr(self.dialect, "build_prompt_delta", None)
-        if delta_fn is not None and prompt_stream.stream_valid(ps, session.history, tools):
-            out = delta_fn(session.history[ps.seen + 1:],
+        if delta_fn is not None and self._stream_usable(session, view, tools):
+            out = delta_fn(view[ps.seen + 1:],
                            enable_thinking=enable_thinking, task_block=task_block,
                            tail_notes=tail_notes, include_env=include_env,
                            env_extra=env_extra, prev_tail=ps.tail)
             if out is not None:
                 delta, tail = out
-                return ps.stream + delta, tail, len(ps.stream)
+                return ps.stream + delta, tail, len(ps.stream), view, stats
         prompt = self._render_full_prompt(
             session, tools, enable_thinking=enable_thinking, task_block=task_block,
-            tail_notes=tail_notes, include_env=include_env, env_extra=env_extra)
+            tail_notes=tail_notes, include_env=include_env, env_extra=env_extra, view=view)
         tail_fn = getattr(self.dialect, "tail_state", None)
         tail = (tail_fn(task_block=task_block, include_env=include_env,
                         env_extra=env_extra) if tail_fn is not None else None)
-        return prompt, tail, None
+        return prompt, tail, None, view, stats
+
+    def _prompt_view(self, session: ChatSession):
+        """(view, stats)：本次装配的思考回放投影（W3 / D36，见 core/thinking_replay.py）。
+        纯函数：不改 session.history（改动的消息是浅拷贝，未改的消息原对象原位）。"""
+        history = session.history
+        return project_thoughts(history, turn_start_index(session, history), self.thinking_replay)
+
+    @staticmethod
+    def _stream_usable(session: ChatSession, view: List[Dict[str, Any]],
+                       tools: Optional[List[Dict[str, Any]]]) -> bool:
+        """流可作前缀：stream_valid 在**投影后视图**上判（指纹与 commit 同口径），且第 seen 条
+        （流里以原始生成字节记账的那条 assistant）在视图里仍是原对象——投影若改写了它
+        （丢掉了它的思考），流字节与视图不符，必须退全量。"""
+        ps = getattr(session, "prompt_stream", None)
+        if not prompt_stream.stream_valid(ps, view, tools):
+            return False
+        return view[ps.seen] is session.history[ps.seen]
 
     def _render_full_prompt(self, session: ChatSession,
                             tools: Optional[List[Dict[str, Any]]], *,
                             enable_thinking: bool, task_block: Optional[str],
                             tail_notes: Optional[List[str]], include_env: bool,
-                            env_extra: Optional[List[str]]) -> str:
+                            env_extra: Optional[List[str]],
+                            view: Optional[List[Dict[str, Any]]] = None) -> str:
         """全量渲染（纯函数：只读 session.history，不碰 prompt_stream）。_assemble_prompt 的
         全量分支即调这里；generate_once 与 measure_prompt 都经 _assemble_prompt，量到的文本
-        就是会发出去的文本（W1 防分叉）。"""
+        就是会发出去的文本（W1 防分叉）。view = 本次装配已算好的思考回放投影（W3）；
+        缺省现算（同一投影函数，结果相同），供直调。"""
+        if view is None:
+            view, _stats = self._prompt_view(session)
         return self.dialect.build_prompt(
-            messages=session.history, tools=tools, enable_thinking=enable_thinking,
+            messages=view, tools=tools, enable_thinking=enable_thinking,
             task_block=task_block, tail_notes=tail_notes,
             include_env=include_env, env_extra=env_extra)
 
@@ -456,7 +488,7 @@ class AgentEngine:
         两种都按会话图片数加 IMAGE_TOKENS_EST（占位符的文本 token 量不到视觉 token）。"""
         global _measure_fallback_warned
         include_env, env_extra = self._prompt_env(session)
-        text, _tail, _offset = self._assemble_prompt(
+        text, _tail, _offset, _view, _stats = self._assemble_prompt(
             session, tools, enable_thinking=enable_thinking, task_block=task_block,
             tail_notes=tail_notes, include_env=include_env, env_extra=env_extra)
         images = len(getattr(session, "images", None) or [])
@@ -535,7 +567,8 @@ class AgentEngine:
             self._prepare_session_cache(session)
 
         _include_env, _env_extra = self._prompt_env(session)   # 与 measure_prompt 同一取法
-        formatted_prompt, _stream_tail, _delta_offset = self._assemble_prompt(
+        # _view：本次装配的思考回放投影（W3），流提交须用同一个、不再重算
+        formatted_prompt, _stream_tail, _delta_offset, _view, _replay_stats = self._assemble_prompt(
             session, tools,
             enable_thinking=enable_thinking,
             task_block=task_block,
@@ -779,11 +812,16 @@ class AgentEngine:
         if _stream_tail is not None:
             if not tail_notes \
                     and not any(c.get("type") == "error" for c in parsed["tool_calls"]):
+                # 指纹算在本次装配用的投影视图上（W3）：下一次装配同在视图上判 stream_valid。
+                # all 模式下 _view 就是 live history（seen 取提交时刻的 len），其他模式是装配
+                # 时刻的快照——生成期间无人写 history（会话锁下单写者），二者等价。
                 session.prompt_stream = prompt_stream.commit(
-                    formatted_prompt, outcome["text"], session.history, tools,
+                    formatted_prompt, outcome["text"], _view, tools,
                     _stream_tail)
             else:
                 session.prompt_stream = None
+        # W3 仪表：本次生成 prompt 的思考回放投影统计（编排层 _stamp_turn_stats 取用）
+        session.turn_thinking_replay = _replay_stats
         # 截断检测（供上层 max_tokens 恢复用）：底层生成流遇 EOS/停止符会 break、
         # 生成 token 数 < max_tokens；撞上 max_tokens 上限则是生成器自然耗尽、恰好产满
         # max_tokens 个 token。故 generation_tokens >= max_tokens 即判定本次生成被长度截断。

@@ -27,6 +27,9 @@ backend/.venv/bin/python benchmarks/context_knee/summarize.py <out_dir> [<out_di
 - 披露模式由 `--prefix` 显式决定，**不读**注册表条目的 `tool_schema_mode`（D29）：同一模型可分别量 full 与 catalog（D29 的选择正需要这组对比）。`prefix_base_tokens` 是整段前缀（含包裹与教学文本）的数，与 D28 门（逐件声明之和 12,300 线、两家族同口径）不是同一口径，不可直接对比。
 - `summarize.py` 不按 `prefix_mode` 分组：不同档放不同 `--out` 目录，并排给 summarize 比较（同目录混档被续跑校验拒绝）。
 
+## 思考回放口径 `--thinking-replay`（W3）
+W3（D36，2026-11-01）起引擎按注册表条目的 `thinking_replay` 投影历史思考（缺省 `last_k`、K=2，Colab 两条目即此；本机 MLX 两条目 `tool_turns`），计数器 `PromptCounter` 与引擎同一投影。题面之前的填充属历史轮，填充里的思考会被丢掉，plan_run 为凑到 level 会多铺填充。10-30/31 的已有结果是**全部回放**口径，要同口径对比就传 `--thinking-replay all`。`--thinking-replay {all,tool_turns,last_k}` / `--thinking-replay-k N` 缺省都不给 = 沿用条目策略；只给一个时另一个取条目值，非法值启动即拒。实际生效的口径记入 meta。续跑 / 追加会校验这三个键里的口径（mode，last_k 时连 K）：旧行缺键视为 `all`，与本次不同即拒——不同口径请放不同 `--out` 目录。
+
 ## level 语义
 `--levels` 是**首次生成的 prompt 总 token 目标**（system + 工具 + 填充 + 任务），缺省 `0,4096,8192,16384,32768,49152,57344`。
 0 = 自然基线（无填充、无回忆句）；4096 = 带回忆句的最小填充、与高档同口径的基线；57344 = 顶档，给远端 max_model_len 65536 留生成余量。level 低于「基础 prompt + 3 个伪轮次」时打警告并记入 `fill.warning`。
@@ -51,6 +54,7 @@ transcripts.jsonl 每 run 一行：
 - `gens`：每次生成的 prompt_tokens、reused_prefix、prompt_tps、generation_tps、repetition_guard。
 - `peak_prompt_tokens`（W1）：本 run 各次生成实测 prompt_tokens 的最大值（gens 空或全缺 = null）；summarize / analyze 汇总为「峰值prompt中位」`peak_prompt_tokens_median`（W1 前的旧行缺键，不进中位数）。harness 不经编排层，W1 护栏动作（钳制/压缩/终止）不在此计数。
 - 其余：`final_text_quality`、`sampling_overrides`、`turns`。
+- 思考回放（meta，每行与 summary.json 都有，W3）：`thinking_replay_mode` / `thinking_replay_k`（实际生效值）、`thinking_replay_source`（`cli` = 命令行覆盖，`entry` = 条目显式键，`default` = 条目没写、模块缺省 last_k/2）；W3 之前的旧行缺键 = 全部回放。
 - 前缀（meta，每行与 summary.json 都有）：`prefix_mode`（W-2 前的旧行缺键 = mock）；`prefix_base_tokens` = 生产稳定前缀 token（system + 生产声明，未剔撞名、不含 mock 工具与路由件、`include_env=False`，与 `measure_prefix.py` 的 full / catalog(meta+core) 行同口径；mock 档 = 极简 system 无工具）。真后端用引擎分词器；fake 用 `backend/models/<repo 末段>` 离线分词器（`--model` 给了且目录在时），不可得记 null 并告警一次（mock + fake 不载分词器、不告警）。非 mock 档另有 `prefix_shadowed` / `prefix_core_skipped` / `prefix_n_tools`（按题：prompt 面件数、其中完整件数、语法面件数）；routed 档另有 `prefix_top_k`、`prefix_routed`（选中名单）。这四个按题的键在 meta / summary.json 是 `{题: 值}` 全批字典，transcript 每行只放本题的值（`run_knee.PER_ITEM_META_KEYS`）。
 
 summarize 口径：

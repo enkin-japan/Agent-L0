@@ -183,6 +183,8 @@ class PromptBuilder:
             # （官方在正文为空时也保留它；旧的整串 rstrip 会连轮头一起削）。
             body_start = len(prompt)
 
+            # 拿到的 thoughts 全部回放；哪些历史思考进来由引擎 thinking_replay 投影决定
+            # （D36，W3 2026-11-01，core/thinking_replay.py）——本 builder 不做轮边界判断。
             thoughts = msg.get("thoughts", "")
             if thoughts:
                 prompt += f"{self.soc_token}thought\n{thoughts}\n{self.eoc_token}"

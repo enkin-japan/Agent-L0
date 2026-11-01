@@ -133,6 +133,8 @@ def run_arm(repo: str, mode: str, draft_dir, block_size, out_fh, run_id: str) ->
         # v3（上位解验收口径）：镜像引擎 _assemble_prompt/commit 的流式组装——
         # turn1 全量渲染，turn2+ 走「记录流+方言增量段」，prompt 字节只增不改。
         # v2 的客户端全量重渲染口径测不到新机制（env 块逐轮后移正是被修掉的破坏者）。
+        # W3（D36）后注意：此处不接引擎的思考回放投影，是 thinking_replay=all 口径；生产按
+        # 注册表条目策略投影，换用户轮会丢上轮思考、首次生成全量重渲——TTFT 数字引用时注明口径。
         ps = None
         prev_total = None      # 上轮 prompt_tokens + generation_tokens（复用期望值）
         overhang_falls = 0     # drafter 臂「停止符后同块已接受 token」的合法门拒次数

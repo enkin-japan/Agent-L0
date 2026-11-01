@@ -203,11 +203,26 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 - KV 代价：按 W0 的 prefill 曲线定「值不值」规则 —— 当被压掉的 token 数 × 后续预计迭代数 > 一次全量重预填充成本时才落刀；否则等到轮首。远端 vLLM 块粒度小，可放宽。
 - 不碰的：审批 / 挂起续跑路径（compact_history=False）继续跳过；最近 keep_recent 条永不改。
 
-### W3 思考回放策略【改】
-- 跨用户轮：落盘轮次的 thoughts 不再渲染进 prompt（Gemma 卡要求；Qwen 等价于 `preserve_thinking=False`），history.jsonl 照旧全量。
-- 轮内：保留最近 K 步思考（K 初值 2【测】），更早步只留一行「(思考已省略)」或并入步骤 result。
-- 按方言可配（`thinking_replay: all | tool_turns | last_k`），qwen35 头注的「思考恒回放」改为可配项并记录当年选它的理由（差分测试锚点），差分测试样本随之更新。
-- 这是最便宜的大头：10-30 失败会话 token_breakdown visible 6200 / thinking 0 是计数缺口，修正后思考占比才看得见（W0 顺带量）。
+### W3 思考回放策略【已落地 11-01；守卫型 → 变异证明】
+scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解析器产 str），落盘每轮全量；两方言 builder 对每条带 thoughts 的消息都回放、无轮边界概念；
+**只改渲染在增量路上无效**——`prompt_stream` 存的是含思考的原始生成字节，有效性只比 `messages_fingerprint(history[:seen])`（内容哈希）与工具集，
+流有效时旧思考照原样回放。KV 代价：MLX 两款缓存不可裁（递归/线性状态，excess>0 拒复用），历史消息渲染一变即整段冷预填；Colab vLLM 前缀缓存按块、只重填分叉点之后。
+官方口径：Gemma 4 QAT 模板回放「末条 user 之后」全部思考，Gemma 4 MLX 4bit 模板只回放末条 user 之后**带 tool_calls** 的；Qwen3.8 preserve_thinking 缺省 true（= 旧恒回放）。
+- **D36 投影在引擎层、方言不变**：`core/thinking_replay.py` 纯函数 `project_thoughts(history, turn_start, policy)` 产等长 view（未改消息同对象、改动消息浅拷贝），
+  `engine._assemble_prompt` 一次装配只投影一次，`stream_valid` / 增量 delta / 全量渲染 / `prompt_stream.commit` 全走 view——投影一变指纹即变、自然退全量；
+  另加 `view[ps.seen] is history[ps.seen]` 身份校验（占位消息的思考被投影掉时流里原始字节与视图不符）。W1 的 measure_prompt 经同一 `_assemble_prompt`，量到的即发出的。
+- 模式（注册表条目级 `thinking_replay`，缺省 `last_k`；`thinking_replay_k` 缺省 2；非法装配期拒启）：`all` = 全部回放（旧行为，差分锚点）；
+  `tool_turns` = 历史轮一律丢（Gemma 卡禁回放上轮思考），本轮只回放带 tool_calls 的生成；`last_k` = 历史轮丢、本轮只留最近 K 次带思考的生成。
+  纯思考消息（无正文无调用，全思考 nudge 留档）本轮恒保留不占名额、历史轮改一行占位 `(earlier thinking omitted)`，避免空 assistant 轮。
+  轮边界取 `session.turn_history_start_idx`（W1 已在审批/挂起续跑与定时任务保留），缺则回落「末条 user 之后」（沙箱/门面路 = 官方模板语义）。
+- 按部署形态配（config.yaml 四条目）：本机 MLX 两条 `tool_turns`（轮内 ≈ 全留，只在换用户轮时冷填一次；last_k 在 MLX 上每步冷填不可接受），Colab 两条 `last_k`（K=2 待测）。
+- 顺手修：orchestrator 两处合成 `[System upgrade]` 思考是 list（以 Python repr 进 prompt、Swift 端解码 nil）改 str；轮统计加 `thinking_replay`（mode/kept/dropped/dropped_chars），思考占 prompt 的比例首次可见。
+- 不做：非纯思考消息丢思考后不留占位（步骤 result 已在 task_block 逐步渲染，占位是假思考；占位只给历史轮的纯思考消息，免空 assistant 轮）；并入 result（已是现状）；history 落盘不改。
+- 门：reviewer 一审 + 主会话二审逐行（投影规则、流校验、commit 用 view）+ verifier 变异证明；提交 `__W3_HASH__`。
+- 残留：K=2 是初值，验收「思考回放不降成功率且峰值 prompt 下降」要等 Colab 三档复测（`--prefix` 一并）；本机 MLX 轮内不省思考（设计取舍，P-last）；
+  tool_turns 下仅 content 的生成思考会被丢（官方同形）：verify_nudge / premature_finish 推回后同轮再生成时 ps.seen 身份校验失败退全量，MLX 上即一次整段冷预填；
+  注册表外模型（本地路径，options 为 {}）无处配键、走模块缺省 last_k，本机 MLX 跑表外模型每步冷填（主会话裁定不按后端形态分缺省，表外是实验路）；
+  backend/scripts 的 bench_a8_multiturn / soak_longrun 镜像装配不接投影，是 all 口径（头注已注明）。
 
 ### W4 结构化摘要模板与校准【改】
 - `SUMMARY_INSTRUCTION` 改为固定节：`[压缩摘要，仅供参考；不要重做「已完成」]` 前缀 → 总目标（原文照抄）→ 约束与偏好 → 已完成（过去时事实）→ 当前状态（目录 / 已改文件 / 进程）
@@ -260,7 +275,8 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 | D8–D10 | 状态存储 / 写入 / 注入 | TaskState + 每迭代渲染（现状）；框架写为主 | 1.2 |
 | D16 | Pass^k | k=2 | TRACE 可比 |
 | D18 | 组装顺序 | 维持：不变在前、可变（task_block / tail_notes / 环境）在后 | 1.5 |
-| D19（新） | 思考回放 | 跨轮丢弃 + 轮内 last_k=2【测】 | 1.3-3 |
+| D19（新） | 思考回放 | 跨轮丢弃 + 轮内 last_k=2【测，K 初值；落地见 D36】 | 1.3-3 |
+| D36（新） | 思考回放实现 | 投影在引擎层（`core/thinking_replay.py`），view 参与 prompt_stream 指纹与 commit、加 ps.seen 身份校验，方言 builder 不变；条目级 `thinking_replay: all \| tool_turns \| last_k`（缺省 last_k、K=2，非法拒启）；本机 MLX 两条 tool_turns（缓存不可裁）、Colab 两条 last_k；纯思考消息本轮恒留/历史轮占位【定，主会话 11-01】 | W3 |
 | D20（新） | 落刀位置 | 轮首 / 步骤边界 / 溢出兜底 | 1.5 |
 | D21（新） | 远端投机解码 | **Colab 部署默认关 MTP**【已落地 W-1，10-31 晚：compute_ctl 所有模型缺省 off】；重开须经同一 harness 复测 | W0 F9 |
 | D23 | 本机/Gemma 侧模型 | **Gemma 4 26B A4B 出阵容**（用户 10-31：上限在那里；实测 8K 拐点）。**Gemma 4 31B 定为 Gemma 侧唯一选项**：Colab 用 `google/gemma-4-31B-it-qat-w4a16-ct`（49K 无拐点、回忆 100%、含 bf16 视觉塔），本机用 `mlx-community/gemma-4-31b-it-4bit` 只需能跑 | 用户决定 + P0.5 |

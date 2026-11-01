@@ -6,9 +6,12 @@
   [追加区]   对话历史（只增不改）
   [可变尾部] task_block + tail_notes + 环境锚点块
 与官方模板的三处刻意差异（都有据）：
-  1. **思考恒回放**：官方 Qwen3.5 模板只回放"末问之后"轮次的 <think>，Ornith 模板
-     恒回放全部——本 builder 取 Ornith 口径（长链任务保留推理轨迹 + 历史字节稳定
-     不随"哪条是末问"漂移，KV 前缀不断裂）。对 Qwen3.5 是良性超集。
+  1. **思考回放范围归引擎**：本 builder 回放拿到的全部 thoughts；**哪些 thoughts 进来
+     由引擎 `thinking_replay` 投影决定（D36，W3 2026-11-01；core/thinking_replay.py，
+     注册表条目键）**。历史记录：此前本 builder 恒回放全部——官方 Qwen3.5 模板只回放
+     "末问之后"轮次的 <think>，Ornith 模板恒回放全部，当时取 Ornith 口径（长链任务保留
+     推理轨迹 + 历史字节稳定不随"哪条是末问"漂移，KV 前缀不断裂），对 Qwen3.5 是良性
+     超集。`thinking_replay: all` 即等于这一旧行为。
   2. **工具声明格式沿官方**（system 块 <tools> JSON 清单 + XML 调用格式教学），但
      教学文案压缩为要点——官方全文近千 token，弱模型注意力稀释（D4 口径）。
   3. 环境锚点块/任务块/尾注放历史之后的独立 system 轮（官方模板无此概念，ChatML
@@ -205,7 +208,7 @@ class Qwen35PromptBuilder:
             body = ""
             thoughts = msg.get("thoughts", "")
             if thoughts and role == "assistant":
-                # 思考恒回放（Ornith 官方口径，见文件头差异 1）
+                # 拿到即回放；回放范围由引擎 thinking_replay 投影决定（见文件头差异 1，D36）
                 body += f"{THINK_OPEN}\n{thoughts}\n{THINK_CLOSE}\n\n"
 
             content = msg.get("content", "")

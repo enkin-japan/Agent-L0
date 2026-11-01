@@ -689,11 +689,12 @@ def test_resume_skips_done_and_reruns_errors(tmp_path, capsys):
     out.mkdir()
     items = K.select_items(type("A", (), {"tasks": "hard", "ids": "", "limit": 2})())
     a, b = items[0]["id"], items[1]["id"]
+    tr = {"thinking_replay_mode": "last_k", "thinking_replay_k": 2}   # W3 口径同本次缺省
     pre = [{"level": 4096, "item_id": a, "rep": 0, "stamp": "old", "score": {"pass": True},
-            "gens": [], "fill": {}},
+            "gens": [], "fill": {}, **tr},
            {"level": 4096, "item_id": a, "rep": 1, "stamp": "old", "score": {"pass": True},
-            "gens": [], "fill": {}},
-           {"level": 4096, "item_id": b, "rep": 0, "stamp": "old", "error": "timeout"}]
+            "gens": [], "fill": {}, **tr},
+           {"level": 4096, "item_id": b, "rep": 0, "stamp": "old", "error": "timeout", **tr}]
     (out / "transcripts.jsonl").write_text("\n".join(json.dumps(r) for r in pre) + "\n")
     assert K.main(["--dry-run", "--levels", "4096", "--reps", "2", "--limit", "2",
                    "--out", str(out), "--resume"]) == 0
@@ -1213,3 +1214,140 @@ def test_resume_compat_prefix_mode(tmp_path):
     K.check_resume_compat(t, "dry-run/fake", {}, 7, {}, prefix_mode="mock", entry_only=True)
     with pytest.raises(SystemExit, match="mock ≠ prod"):
         K.check_resume_compat(t, "dry-run/fake", {}, 7, {}, prefix_mode="prod")
+
+
+# ---------- W3 思考回放口径开关（--thinking-replay / --thinking-replay-k） ----------
+
+def test_thinking_replay_override_syncs_engine_and_counter():
+    """不给参数 = 条目策略（无覆盖、计数器取引擎条目策略、历史填充思考被投影掉）；
+    给 all = 引擎属性换成新策略，计数器随之全部回放。"""
+    from types import SimpleNamespace
+    from framework.core.engine import AgentEngine
+    from framework.core.thinking_replay import ThinkingReplayPolicy
+    f = _build(8000)
+    first_thought = f.messages[1]["thoughts"]
+    history = [{"role": "system", "content": "sys"}, *f.messages, {"role": "user", "content": "task"}]
+    opts = {"dialect": "gemma4", "thinking_replay": "tool_turns"}
+    ap = K.build_parser()
+
+    none = ap.parse_args([])
+    assert K.resolve_replay_override(none, opts) is None
+    eng = AgentEngine(SimpleNamespace(processor=_Proc()), model_options=opts, env={})
+    c0 = K.engine_counter(eng)
+    assert c0.replay == ThinkingReplayPolicy("tool_turns", 2)
+    assert first_thought not in c0.render(history, None, True)
+
+    pol = K.resolve_replay_override(ap.parse_args(["--thinking-replay", "all"]), opts)
+    assert pol == ThinkingReplayPolicy("all", 2)
+    eng.thinking_replay = pol
+    c1 = K.engine_counter(eng)
+    assert first_thought in c1.render(history, None, True)
+    assert K.resolve_replay_override(ap.parse_args(["--thinking-replay-k", "3"]), opts) \
+        == ThinkingReplayPolicy("tool_turns", 3)                          # 只给 K：模式取条目
+    with pytest.raises(ValueError, match="thinking_replay_k"):
+        K.resolve_replay_override(ap.parse_args(["--thinking-replay-k", "0"]), opts)
+
+
+@pytest.mark.parametrize("extra,mode,source", [([], "last_k", "default"),
+                                               (["--thinking-replay", "all"], "all", "cli")])
+def test_thinking_replay_dry_run_records_meta(tmp_path, capsys, extra, mode, source):
+    out = tmp_path / "r"
+    assert K.main(["--dry-run", "--levels", "0", "--reps", "1", "--limit", "1",
+                   "--out", str(out), *extra]) == 0
+    summ = json.loads((out / "summary.json").read_text())
+    recs = [json.loads(ln) for ln in (out / "transcripts.jsonl").read_text().splitlines()]
+    for d in (summ, *recs):
+        assert (d["thinking_replay_mode"], d["thinking_replay_k"],
+                d["thinking_replay_source"]) == (mode, 2, source)
+
+
+def test_resume_compat_thinking_replay(tmp_path):
+    """思考回放口径不同：resume 与单纯 append 都拒；旧行缺键按 (all, None)；k 只在 last_k 时比。"""
+    out = tmp_path / "tr"
+    base = ["--dry-run", "--levels", "0", "--reps", "1", "--limit", "1", "--out", str(out)]
+    assert K.main(base) == 0                                              # 缺省 last_k/2
+    t = out / "transcripts.jsonl"
+    for extra in (["--resume"], ["--append"]):
+        with pytest.raises(SystemExit, match=r"思考回放口径 --thinking-replay 不同（W3）.*last_k/2 ≠ all"):
+            K.main(base + extra + ["--thinking-replay", "all"])
+        with pytest.raises(SystemExit, match=r"last_k/2 ≠ last_k/3"):
+            K.main(base + extra + ["--thinking-replay-k", "3"])
+    assert K.main(base + ["--append"]) == 0                               # 同口径绿
+    _rows(t, thinking_replay_mode=None, thinking_replay_k=None)           # W3 之前的旧目录
+    with pytest.raises(SystemExit, match=r"all/None ≠ last_k/2"):
+        K.main(base + ["--append"])                                       # 本次缺省 last_k → 拒
+    assert K.main(base + ["--append", "--thinking-replay", "all"]) == 0  # 显式 all → 通过
+    K.check_resume_compat(t, "dry-run/fake", {}, 7, {}, thinking_replay=("all", None))
+    with pytest.raises(SystemExit, match=r"all/None ≠ last_k/2"):
+        K.check_resume_compat(t, "dry-run/fake", {}, 7, {})               # 直调缺省 = last_k/2
+    _rows(t, thinking_replay_mode="tool_turns", thinking_replay_k=2)
+    K.check_resume_compat(t, "dry-run/fake", {}, 7, {}, thinking_replay=("tool_turns", 5))  # 非 last_k 不比 k
+
+
+class _KneeLenTok:
+    special_tokens_map = {}
+
+    def encode(self, s, add_special_tokens=False):
+        return [1] * max(1, len(s) // 4)
+
+
+class _KneeBe:
+    """真后端路替身：只捕获 prompt，不装载任何模型。"""
+
+    def __init__(self):
+        from types import SimpleNamespace
+        self.processor = SimpleNamespace(tokenizer=_KneeLenTok())
+        self.prompts = []
+
+    def new_cache(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(state=SimpleNamespace(cache=None, token_ids=None))
+
+    def clone_cache(self, src):
+        return None
+
+    def release_cache(self, h):
+        pass
+
+    def shutdown(self):
+        pass
+
+    def stream_generate(self, prompt, *, cache, **kw):
+        from types import SimpleNamespace
+        self.prompts.append(prompt)
+        yield SimpleNamespace(text="完成。", delta=None, prompt_tokens=1, generation_tokens=1,
+                              prompt_tps=1.0, generation_tps=1.0, peak_memory=0.0, extra={})
+
+
+def test_thinking_replay_override_on_real_engine_path(tmp_path, monkeypatch, capsys):
+    """真后端路（make_engine 换成假后端引擎）：--thinking-replay all 覆盖引擎属性，
+    engine_counter 取到同一策略并渲染出历史填充思考；meta 记 cli。"""
+    import re
+    from framework.core.engine import AgentEngine
+    from framework.core.thinking_replay import ThinkingReplayPolicy
+    made, counters = [], []
+
+    async def fake_make_engine(args, repo, opts):
+        eng = AgentEngine(_KneeBe(), model_options=opts, env={})
+        made.append(eng)
+        return eng
+
+    orig_counter = K.engine_counter
+
+    def spy_counter(engine):
+        c = orig_counter(engine)
+        counters.append(c)
+        return c
+    monkeypatch.setattr(K, "make_engine", fake_make_engine)
+    monkeypatch.setattr(K, "engine_counter", spy_counter)
+    out = tmp_path / "real"
+    assert K.main(["--model", "gemma-4-31b-it-4bit", "--backend", "remote", "--levels", "4096",
+                   "--reps", "1", "--limit", "1", "--out", str(out),
+                   "--thinking-replay", "all"]) == 0
+    (eng,), (counter,) = made, counters
+    assert eng.thinking_replay == ThinkingReplayPolicy("all", 2) == counter.replay
+    first = eng.backend.prompts[0]
+    history_part = first[:first.rfind("<|turn>user")]
+    assert re.search(r"<\|channel>thought\n[^<]", history_part)            # 历史填充思考在
+    summ = json.loads((out / "summary.json").read_text())
+    assert (summ["thinking_replay_mode"], summ["thinking_replay_source"]) == ("all", "cli")

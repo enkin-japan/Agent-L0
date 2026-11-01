@@ -141,12 +141,23 @@ inference:
     # 线性涨，49K 首填 42 s），qwen35 两条目不设 = full（线性注意力占 3/4、49K 无拐点，省不出什么）。
     # catalog 下前缀 = system + 元工具 + agent.tool_routing.core + 任务期路由选中工具的完整 schema，其余
     # 工具只留「名字 — summary」目录行，模型用 get_tool_schema 按名取详情。
+    # thinking_replay（可选，D36 / W3 2026-11-01）：条目级思考回放策略，值限 all | tool_turns | last_k，缺省 last_k；
+    # thinking_replay_k（可选，仅 last_k 用）正整数，缺省 2（D19）。其他值装配期拒启。三种都只决定「哪些历史
+    # thoughts 渲染进 prompt」，history.jsonl 照旧全量落盘；投影在引擎装配 prompt 时做（core/thinking_replay.py），
+    # 方言 builder 照常渲染拿到的 thoughts。all = 全部回放（旧行为，差分锚点）；tool_turns = 历史轮一律丢
+    #（Gemma 4 模型卡禁回放上轮思考），本轮只回放带 tool_calls 的生成的思考（Gemma 4 MLX 官方模板口径）；
+    # last_k = 历史轮丢、本轮只留最近 K 次带思考的生成。纯思考消息（无正文无调用，复读/全思考 nudge 留档）
+    # 本轮内恒保留，历史轮改一行占位。
+    # KV 代价：历史消息的渲染一变，prompt_stream 即失效退全量；MLX 两款缓存不可裁（递归/线性状态），全量 =
+    # 整段冷预填——last_k 在 MLX 上每步都冷填，故本机两条目取 tool_turns（轮内 ≈ 全留、只在换用户轮时重填一次）；
+    # Colab vLLM 前缀缓存按块、只重填分叉点之后的尾段，两条 CUDA 件取 last_k。
     - repo: "mlx-community/gemma-4-31b-it-4bit"
       revision: "696d436c404745a59f30e4939a658162b0a9e57f"
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
       tool_schema_mode: "catalog"   # D29（W-2）：gemma4 家族目录模式；profile 数字是 full 口径，重画像前引用须注明
+      thinking_replay: "tool_turns"   # D36（W3）：本机 MLX 缓存不可裁，轮内不滑窗；换用户轮丢上轮思考
       profile: { tool_call: 0.96, longchain: 0.83, vision: 0.90, tps: 27.8 }  # tool run 20260817-005105，其余 20260816-025147（M4 Max 口径）
       note: "18.4GB | 本机第二候选（D27 2026-10-31：本机只需能跑；Colab 同款 QAT W4A16 49K 内无拐点）| 静态校验 ✓ | 08-16 画像 ✓ | 稠密，建议 ≥32GB 统一内存"
     # ── Qwen 家族（qwen35 方言）────────────────────────────────────────────
@@ -166,6 +177,7 @@ inference:
       revision: "3e6447f082e89cc7f0bc6e5441afd38dfce760ff"
       dialect: "qwen35"
       capabilities: ["text", "vision"]
+      thinking_replay: "tool_turns"   # D36（W3）：同上，本机 MLX 轮内不滑窗
       speculative: { mode: "drafter", draft_model: "mlx-community/Qwen3.8-27B-MTP-4bit",
                      draft_revision: "b643c01b6d3b094e325edb6ebd832e16c486c575",
                      draft_block_size: 3 }
@@ -188,6 +200,7 @@ inference:
       suppress_ghost_thinking: true
       cuda_deployment: { prequantized: true }
       tool_schema_mode: "catalog"   # D29（W-2）：gemma4 家族目录模式；10-31 拐点评测是 harness 短前缀口径，与本键无关
+      thinking_replay: "last_k"   # D36（W3）：Colab vLLM 按块前缀缓存，轮内滑窗 K 缺省 2（D19，待测）
       # Gemma 4 模型卡 top_p 0.95 / top_k 64；rep 1.0（vLLM 下 repetition_penalty 为 HF 语义罚整段 prompt，不再用 1.1）；温度见上方说明不设
       sampling: { top_p: 0.95, top_k: 64, repetition_penalty: 1.0 }
       note: "~18GB QAT W4A16 | Colab 第二候选 | 2026-10-31 拐点评测 49K 内无拐点（Pass^2 90/90/70/90/80）| vLLM 图文端到端待 W-3 验收"
@@ -197,6 +210,7 @@ inference:
       dialect: "qwen35"
       capabilities: ["text", "vision"]
       cuda_deployment: { prequantized: true, supports_mtp: true }
+      thinking_replay: "last_k"   # D36（W3）：同上，K 缺省 2（D19，待测）
       # Qwen3.8 模型卡 top_p 0.95 / top_k 20；rep 1.0（同上，不罚 prompt）；温度 / min_p 见上方说明不设
       sampling: { top_p: 0.95, top_k: 20, repetition_penalty: 1.0 }
       note: "CUDA INT4 checkpoint（预量化）| Colab 现行生产模型（compute_vm 缺省，D27）| 原生 MTP 可开但缺省关（D21：P0 实测开 16K 起退化，远端退化首因；W-1 已把 compute_ctl 缺省改 off）| 完整能力画像待评测"

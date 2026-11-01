@@ -647,6 +647,8 @@ class Soak:
         上位解修掉的两个破坏者），前缀复用一次都不会命中——chat 腿会静默退化成
         「每轮冷预填」，而 KV 增长与复用这两条恰恰是长稳最该盯的。
         与 bench_a8_multiturn v3 同源。
+        W3（D36）后注意：此处不接引擎的思考回放投影，是 thinking_replay=all 口径；生产按注册表
+        条目策略投影，换用户轮会丢上轮思考、首次生成全量重渲——长跑数字引用时注明口径。
         """
         history.append({"role": "user",
                         "content": self.rng.choice(FOLLOWUPS) if history

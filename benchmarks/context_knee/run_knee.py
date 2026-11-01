@@ -23,7 +23,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -41,6 +41,11 @@ from benchmarks.model_eval.scorers import get_scorer                       # noq
 from context_knee.filler import Filler, build_filler, recall_suffix, score_recall  # noqa: E402
 from context_knee import prefix as prefix_mod                               # noqa: E402
 from context_knee.quality import final_text_quality                        # noqa: E402
+from framework.core.thinking_replay import DEFAULT_K as DEFAULT_REPLAY_K           # noqa: E402
+from framework.core.thinking_replay import DEFAULT_MODE as DEFAULT_REPLAY_MODE     # noqa: E402
+from framework.core.thinking_replay import (THINKING_REPLAY_MODES, ThinkingReplayPolicy,  # noqa: E402
+                                            project_thoughts, resolve_thinking_replay,
+                                            turn_start_index)
 
 ITEMS_DIR = BACKEND / "benchmarks" / "model_eval" / "items" / "longchain"
 FAKE_CHARS_PER_TOKEN = 3.5
@@ -117,13 +122,20 @@ class PromptCounter:
 
     组装参数照 engine.generate_once 首次生成（全量路）：task_block/tail_notes 为空，
     include_env = ChatSession.inject_env_context（缺省 True），env_extra = 引擎的笔记索引。
+    replay = 引擎的思考回放策略（W3 / D36）：渲染前做与引擎同一投影（轮起点取「末条 user 之后」，
+    即首次生成时编排层置的 turn_history_start_idx）——填充里题面之前的思考属历史轮、按策略丢弃，
+    不投影则计数与实发 prompt 不等。None = 不投影（全部回放）。
     """
     dialect: Any
     encode_len: Callable[[str], int]
     env_extra: Optional[List[str]] = None
     mode: str = "engine"            # engine = 引擎分词器；chars/3.5 = fake 估算
+    replay: Optional[ThinkingReplayPolicy] = None
 
     def render(self, messages: List[Dict[str, Any]], tools, enable_thinking: bool) -> str:
+        if self.replay is not None:
+            messages, _stats = project_thoughts(messages, turn_start_index(None, messages),
+                                                self.replay)
         return self.dialect.build_prompt(
             messages=messages, tools=tools, enable_thinking=enable_thinking,
             task_block=None, tail_notes=None, include_env=True, env_extra=self.env_extra)
@@ -137,7 +149,20 @@ def engine_counter(engine) -> PromptCounter:
     notes = getattr(engine, "_notes_index", None)
     return PromptCounter(dialect=engine.dialect,
                          encode_len=lambda s: len(tok.encode(s, add_special_tokens=False)),
-                         env_extra=notes() if callable(notes) else None, mode="engine")
+                         env_extra=notes() if callable(notes) else None, mode="engine",
+                         replay=getattr(engine, "thinking_replay", None))
+
+
+def resolve_replay_override(args, opts: Dict[str, Any]) -> Optional[ThinkingReplayPolicy]:
+    """--thinking-replay / --thinking-replay-k（W3）→ 本次运行的思考回放策略；两个都不给 = None
+    （沿用注册表条目策略，行为不变）。只给一个时另一个取条目值，合并后走与引擎同一个
+    resolve_thinking_replay（非法值同样 ValueError）。"""
+    mode, k = getattr(args, "thinking_replay", None), getattr(args, "thinking_replay_k", None)
+    if mode is None and k is None:
+        return None
+    return resolve_thinking_replay({
+        "thinking_replay": mode if mode is not None else opts.get("thinking_replay"),
+        "thinking_replay_k": k if k is not None else opts.get("thinking_replay_k")})
 
 
 def fake_counter(model_options: Optional[Dict[str, Any]] = None) -> PromptCounter:
@@ -147,7 +172,8 @@ def fake_counter(model_options: Optional[Dict[str, Any]] = None) -> PromptCounte
         _DummyProc(), options=opts, env={})
     return PromptCounter(dialect=dialect,
                          encode_len=lambda s: math.ceil(len(s) / FAKE_CHARS_PER_TOKEN),
-                         mode=f"chars/{FAKE_CHARS_PER_TOKEN}")
+                         mode=f"chars/{FAKE_CHARS_PER_TOKEN}",
+                         replay=resolve_thinking_replay(opts))
 
 
 # ---------------- 计划 ----------------
@@ -506,9 +532,17 @@ async def amain(args) -> int:
     done = load_done(transcripts) if args.resume else set()
     # 注册表条目的采样键（W-1 起引擎把它并入实际发送的 sampling）：入 meta、参与合并口径
     entry_sampling = dict(opts.get("sampling") or {})
+    # W3 思考回放口径：CLI 覆盖 > 条目键 > 模块缺省；装载前解析（写错不白等装配），参与合并口径
+    replay_override = resolve_replay_override(args, opts)
+    replay = replay_override if replay_override is not None else resolve_thinking_replay(opts)
+    replay_source = ("cli" if replay_override is not None else
+                     "entry" if any(opts.get(k) is not None
+                                    for k in ("thinking_replay", "thinking_replay_k")) else
+                     "default")
     if args.append:     # --resume 已隐含 --append
         check_resume_compat(transcripts, repo, sampling["sent"], args.seed, entry_sampling,
-                            entry_only=not args.resume, prefix_mode=args.prefix)
+                            entry_only=not args.resume, prefix_mode=args.prefix,
+                            thinking_replay=(replay.mode, replay.k))
     if transcripts.exists() and not args.append:
         raise SystemExit(f"❌ {transcripts} 已存在：换 --out，或显式 --append 追加"
                          f"（或 --resume 续跑缺的 run）")
@@ -517,10 +551,14 @@ async def amain(args) -> int:
     if args.backend == "fake":
         engine = None
         counter = fake_counter(opts)
+        if replay_override is not None:
+            counter.replay = replay_override
     else:
         engine = await make_engine(args, repo, opts)
         try:
             install_sampling_override(engine.backend, sampling["sent"])
+            if replay_override is not None:
+                engine.thinking_replay = replay_override   # 计数器随后从引擎取，自然同步
             counter = engine_counter(engine)
         except BaseException:
             engine.backend.shutdown()
@@ -535,6 +573,11 @@ async def amain(args) -> int:
             "dialect": opts.get("dialect") or "gemma4", "backend": args.backend,
             "tasks": args.tasks, "seed": args.seed, "token_counter": counter.mode,
             "stamp": stamp, "sampling_overrides": sampling, "entry_sampling": entry_sampling,
+            # W3：实际生效的思考回放口径（计数器与引擎同一策略）；
+            # source = cli（--thinking-replay*）| entry（条目显式键）| default（条目没写、模块缺省）
+            "thinking_replay_mode": counter.replay.mode if counter.replay else None,
+            "thinking_replay_k": counter.replay.k if counter.replay else None,
+            "thinking_replay_source": replay_source,
             **prefix_meta}
     print(f"== 拐点测量 {repo}（{args.backend}，计数 {counter.mode}，前缀 {args.prefix}"
           f"{'' if prefix_meta['prefix_base_tokens'] is None else ' ' + str(prefix_meta['prefix_base_tokens']) + ' tok'}"
@@ -790,19 +833,24 @@ def _sent_of(r: Dict[str, Any]) -> Dict[str, Any]:
 
 def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], seed: int,
                         entry: Dict[str, Any], *, entry_only: bool = False,
-                        prefix_mode: str = "mock") -> None:
+                        prefix_mode: str = "mock",
+                        thinking_replay: Tuple[str, Optional[int]] = (DEFAULT_REPLAY_MODE, DEFAULT_REPLAY_K)) -> None:
     """续跑只能接同口径的批：已有行的 model / 已发送采样 / seed / 注册表条目采样任一不同即拒
     （混进来的 rep 会被 Pass^2 当作同一组）。缺 model/sampling/seed 字段的行（极旧格式）不参与
     这三项比较；缺 entry_sampling 的行（W-1 之前）视为 {}——当时引擎不读条目采样。
     entry_only（单纯 --append）：只比条目采样与前缀档——summary 按整个 transcripts 聚合，条目口径
     一变，新旧行实际发送的采样就不同，却在 sampling_overrides 上看不出来。
     前缀档（W-2 --prefix）：缺 prefix_mode 的行（W-2 之前）视为 mock；档不同 resume / append 都拒
-    （system 与工具声明不同 = 不同测量形态，混算即把两条曲线揉成一条）。"""
+    （system 与工具声明不同 = 不同测量形态，混算即把两条曲线揉成一条）。
+    思考回放口径（W3）：thinking_replay = 本次 (mode, k)（缺省 = 模块缺省 last_k/2，即条目没写键时的口径）；缺 thinking_replay_mode 的行（W3 之前）视为
+    (all, None)——当时引擎全部回放；mode 不同即拒，k 只在 mode == last_k 时比较；resume / append 都拒。"""
     if not transcripts.exists():
         return
     bad = set()
     entry_bad = set()
     prefix_bad = set()
+    replay_bad = set()
+    new_mode, new_k = thinking_replay
     for ln in transcripts.read_text(encoding="utf-8").splitlines():
         if not ln.strip():
             continue
@@ -810,6 +858,10 @@ def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], see
         old_prefix = r.get("prefix_mode") or "mock"
         if old_prefix != prefix_mode:
             prefix_bad.add(f"{old_prefix} ≠ {prefix_mode}")
+        old_mode = r.get("thinking_replay_mode") or "all"
+        old_k = r.get("thinking_replay_k") if "thinking_replay_mode" in r else None
+        if old_mode != new_mode or (new_mode == "last_k" and old_k != new_k):
+            replay_bad.add(f"{old_mode}/{old_k} ≠ {new_mode}/{new_k}")
         old_entry = r.get("entry_sampling") or {}
         if old_entry != entry:
             entry_bad.add(f"{json.dumps(old_entry, sort_keys=True)} ≠ {json.dumps(entry, sort_keys=True)}")
@@ -827,6 +879,9 @@ def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], see
     if prefix_bad:
         bad.add("前缀档 --prefix 不同（W-2），不能与旧目录合并；另起目录（prefix_mode "
                 + "；".join(sorted(prefix_bad)) + "）")
+    if replay_bad:
+        bad.add("思考回放口径 --thinking-replay 不同（W3），不能与旧目录合并；另起目录（thinking_replay "
+                + "；".join(sorted(replay_bad)) + "）")
     if bad:
         raise SystemExit("❌ --resume/--append 口径不一致，拒绝合并：" + "；".join(sorted(bad)))
 
@@ -887,6 +942,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "prod=生产 system + 生产工具全量完整 schema；catalog=生产 system + 元工具/"
                          "core 完整、其余目录行；routed=catalog + 按题面路由 top_k 件完整。"
                          "题目 mock 工具恒完整、同名优先；生产工具只声明不执行")
+    ap.add_argument("--thinking-replay", default=None, choices=list(THINKING_REPLAY_MODES),
+                    help="思考回放口径覆盖（W3 / D36）：缺省沿用注册表条目策略；all = 全部回放"
+                         "（10-30/31 已有结果的口径，同口径对比用）")
+    ap.add_argument("--thinking-replay-k", type=int, default=None,
+                    help="last_k 的 K 覆盖（正整数；缺省沿用条目值，条目也无则 2）")
     return ap
 
 
