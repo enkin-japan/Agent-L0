@@ -403,3 +403,6 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
   测试改真 `public_options` 造回执 + 不一致必抛用例；变异体「删期望键」→ 两条 ready 用例红）；m1/m2/m3/m7 主会话改；m4/m5/端到端 ceiling 用例/harness 量测记录 → implementer；
   M1 立 W-K 工作包待拍板；m6 记残留。修补一次提交 `e435f28`（reviewer 一审 0C/0M/6m/4n 全修主要项；pre-commit 全量 check：backend 4091 passed / 3 skipped，colab 135，web 252）。全量 pytest 两条失败（call_id 含 "1250" 子串偶发、Swift 变异体 nil 解包）在本阶段 diff 之外，见 precommit-under-load 记忆。
   已核无问题面：W-3 冒烟数字、measure_prefix 前缀表、P0 拐点 CSV 0 差异、守卫链构造期失败关闭、persistable_messages 三处覆盖、W3 指纹与身份校验、计费出口、密扫 0 命中、旧测试期望零改动。
+- 11-01 深夜 W-K（用户「先做 W-K」）：scout 摸底（校正「ceiling 只压本轮」前提）→ 主会话定 D38 → implementer（run_knee `--orchestrator`、orch_tools.py、filler in_turn 形态、34 条测试）
+  → 主会话收口三处（轮内填充形态、构造顺序、续跑口径含生效 cfg）→ reviewer 一审 0C/3M/11m/5n → 同一 implementer 修（审计生成不劫持主会话、SpillReadTool、对照组各臂同放置、事件/审批还原、游标、指纹）
+  → 主会话二审逐行 → verifier 7 变异体 6 红 1 等价存活（mode 比较冗余）。提交 `c21a042`（全量 check：backend 4125 passed / 3 skipped，colab 135，web 252）。backend/framework 零改动。
