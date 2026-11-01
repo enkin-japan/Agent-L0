@@ -45,6 +45,8 @@ _LEGACY_NOTE = {"zh": "（这是上一个已归档、与当前无关的项目 le
                 "en": "(This is the previous, archived project legacy-2025q3, unrelated to current work.) "}
 MAX_CARD_REDRAWS = 20
 MAX_PSEUDO_TURNS = 5000
+#: 填充形态：turns = 完整伪轮次（历史轮放置 / 直调模式）；in_turn = 只留调用 + 观察配对（W-K turn 放置）
+FILL_SHAPES = ("turns", "in_turn")
 
 # 填充正文里绝不出现这些串（卡的唯一性靠它；_assert_clean 在生成期守门）
 _CARD_MARKERS = ("halyard", "OPS-", "queue_depth_alert_threshold")
@@ -222,7 +224,13 @@ class PseudoTurn:
             return json.dumps({"error": f"File not found: {self.path}"}, ensure_ascii=False)
         raise ValueError(self.kind)
 
-    def messages(self, inserts: Sequence[Tuple[int, str]] = ()) -> List[Dict[str, Any]]:
+    def messages(self, inserts: Sequence[Tuple[int, str]] = (),
+                 shape: str = "turns") -> List[Dict[str, Any]]:
+        """shape="turns"（缺省）：完整伪轮次 user → assistant 调用 → tool → assistant 收尾。
+        shape="in_turn"（编排器模式 turn 放置，W-K）：只留 assistant(tool_calls) + tool 配对——
+        本轮内已做过的工具工作，无伪 user、无纯文本收尾。"""
+        if shape not in FILL_SHAPES:
+            raise ValueError(f"填充形态须为 {FILL_SHAPES}，得到 {shape!r}")
         name = self.call["name"]
         obs: Dict[str, Any] = {"name": name, "response": self.observation(inserts),
                                "_failed": self.kind == "error"}
@@ -230,13 +238,15 @@ class PseudoTurn:
             obs["_safe"] = True
             if self.path:
                 obs["_target"] = self.path
-        return [
-            {"role": "user", "content": self.user},
+        pair = [
             {"role": "assistant", "thoughts": self.thoughts, "content": "",
              "tool_calls": [self.call]},
             {"role": "tool", "tool_responses": [obs]},
-            {"role": "assistant", "thoughts": "", "content": self.closing, "tool_calls": []},
         ]
+        if shape == "in_turn":
+            return pair
+        return [{"role": "user", "content": self.user}, *pair,
+                {"role": "assistant", "thoughts": "", "content": self.closing, "tool_calls": []}]
 
 
 def _target_len(rng: random.Random) -> int:
@@ -402,11 +412,14 @@ class Filler:
 
 def build_filler(target_tokens: int, *, seed: int, rep: int, tool_names: Sequence[str],
                  turn_cost: Callable[[List[Dict[str, Any]]], int], task_key: str = "",
-                 rotation: int = 0, min_turns: int = 3, with_cards: bool = True) -> Filler:
+                 rotation: int = 0, min_turns: int = 3, with_cards: bool = True,
+                 shape: str = "turns") -> Filler:
     """取伪轮次流前 n 轮，使估算 token 和最接近 target（target>0 时至少 min_turns 轮）。
 
     turn_cost(该轮 messages) → 该轮在 prompt 里的 token 增量（调用方用引擎分词器量）。
     n 只由各轮代价的前缀和决定 → 对 target 单调 → 高档是低档的超集。
+    shape（FILL_SHAPES）：各轮按该形态出消息、按该形态计代价（in_turn 去掉伪 user 与收尾后每轮更小，
+    同一目标会多取几轮）；伪轮次流、卡值与卡落位规则不随形态变。
     """
     if target_tokens <= 0:
         return Filler(0, [], [], [], [])
@@ -414,7 +427,7 @@ def build_filler(target_tokens: int, *, seed: int, rep: int, tool_names: Sequenc
     costs: List[int] = []
     total = 0
     for t in iter_pseudo_turns(seed, rep, tool_names, task_key):
-        c = turn_cost(t.messages())
+        c = turn_cost(t.messages(shape=shape))
         if c <= 0 or len(turns) >= MAX_PSEUDO_TURNS:
             # 计数器失灵（代价恒 0 的分词器替身等）会让流无穷取下去——响亮失败而不是挂死
             raise ValueError(f"伪轮次代价 {c}、已取 {len(turns)} 轮仍未达目标 {target_tokens}："
@@ -432,7 +445,7 @@ def build_filler(target_tokens: int, *, seed: int, rep: int, tool_names: Sequenc
         if total >= target_tokens and len(turns) >= min_turns:
             break
     if not with_cards:
-        messages = [m for t in turns for m in t.messages()]
+        messages = [m for t in turns for m in t.messages(shape=shape)]
         return Filler(target_tokens, turns, costs, [], messages)
     starts = [sum(costs[:i]) for i in range(len(costs))]
     eligible = [i for i, t in enumerate(turns) if t.card_eligible]
@@ -464,7 +477,7 @@ def build_filler(target_tokens: int, *, seed: int, rep: int, tool_names: Sequenc
                           "line": line, "frac_est": frac_est, "redraws": attempt})
         messages = []
         for i, t in enumerate(turns):
-            messages.extend(t.messages(inserts.get(i, ())))
+            messages.extend(t.messages(inserts.get(i, ()), shape=shape))
         blob = json.dumps(messages, ensure_ascii=False)
         if all(len(value_pattern(c["value"]).findall(blob)) == 1 for c in cards):
             break

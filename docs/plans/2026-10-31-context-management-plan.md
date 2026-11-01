@@ -239,11 +239,26 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
   注册表外模型（本地路径，options 为 {}）无处配键、走模块缺省 last_k，本机 MLX 跑表外模型每步冷填（主会话裁定不按后端形态分缺省，表外是实验路）；
   backend/scripts 的 bench_a8_multiturn / soak_longrun 镜像装配不接投影，是 all 口径（头注已注明）。
 
-### W-K knee harness 编排器模式（P1 阶段复审 M1 带出）【待拍板，P2 前置】
+### W-K knee harness 编排器模式（P1 阶段复审 M1 带出；用户 11-01「先做 W-K」）【已落地 11-01；D38】
 - 事实：`benchmarks/context_knee/run_knee.py` → `model_eval/executor.py` 直调 `engine.generate_once`，无 Orchestrator；W1 的 `_context_guard_pre`/钳制/终止、W2 的两处钩子、轮统计都不在路径上（knee README「harness 不经编排层」一句已声明）。
   W3 投影在引擎层，可测；W1 的 context_limit 发现与 full_renders 计数在引擎层生效但 harness 未记——P1 复审修补已补记 measure/prompt_tokens/context_limit/turn_full_renders（最小补丁）。
-- 要做：harness 加 `--orchestrator` 模式——构造 Orchestrator，mock env 包成工具，**填充改成本轮内注入**（现填充铺在任务前属历史轮，W2/ceiling 只对 [轮起点, end) 下刀；轮首 compact 还会把 `response` 键的填充压掉；顶档 57,344 > ceiling 53,248 首次生成即进 ceiling 路），
-  step_compaction / context_guard 加对照开关（§4「+W2 / 全开」组）。估 300–600 行 + 测试，implementer；是 P2 两条出口与 W1「ceiling 实机路径」的唯一验收路。
+- scout 校正（11-01）：ceiling 应急压缩压**整段** history（轮起点之前就地改、之内走副本），只有 W2 两处钩子受轮起点约束；step 钩子读 guard 写的档位——guard 关则 W2 永不触发；
+  轮首机械压缩（预算 20,000 字、保护 6 条观察）在 compact_history=True 时不分新轮/续跑都跑，会压掉 `response` 键的填充；顶档 57,344 > ceiling 53,248，首次量测即进 ceiling 路（这是要量的事实，不是故障）。
+- 设计 D38（见 §6）：`--orchestrator` + `--fill-placement history|turn`（缺省 turn）+ 对照开关 `--guard/--step-compaction/--turn-compaction/--goal-verify`（goal_verify 缺省关，省一次生成）；
+  工具 = 真注册表指空目录 + env 工具（read 类）+ 生产声明桩（Unknown tool JSON，与直调模式回执同口径），披露交给条目 `tool_schema_mode`；每 run 新建 Orchestrator，直调 `run_turn`（不走 TurnRunner，harness 自记录）；
+  traj 从 `history[锚点:]` 映射（response→content、元工具另记 `meta_calls`、`dup_blocked`/`system_errors` 另计），`aborted_reason` ceiling→context_guard；记录新键 `turn_status/turn_metrics/guard_events/session_dir`；
+  summarize/analyze 加 step_compactions / full_renders 中位与 ceiling_aborts 列；resume 口径含 mode 与开关。
+- 落地要点（implementer，主会话接受的偏离）：工具按读写分类（list_files/read_file/todo_list 为 read 可并发，其余 write 串行——全标只读会让零变更守门误推、写屏障不解禁复读）；
+  aborted_reason 按本 run 的 turn_abort 事件定；`--prefix` 编排器模式只支持 mock|prod（catalog/routed 的披露形态在编排器里由条目 tool_schema_mode 决定，无对应档）；
+  turn 放置的填充改「轮内形态」`fill_shape=in_turn`（只留 assistant 调用 + tool 观察配对、末条 tool，避免真模型去续伪对话），last_k 下逐对代价去思考再量（修前偏低 11–13%）、整块再估一次补对；
+  新增 SpillReadTool（file_extract 名，只读本会话 spill 句柄，其余路径回 Unknown tool）让 W2 折叠桩的回读句柄在编排器模式可用；goal_verify 审计生成记 audit_gens 不劫持主会话；
+  事件流与审批策略在 make_engine 前装、amain finally 还原；续跑口径含 mode / 放置 / 形态 / 四开关 / 生效阈值 / step_compaction 参数 / agent 段指纹 / 披露模式。
+- 对照组（README「编排器模式」节）：各臂固定同一放置只切开关——turn：无管理（guard off, step off）→ +W1 → +W1+W2；history 单列「现状参照」；turns 与 in_turn 配对数差 10–20%，不跨放置比。
+- 门：reviewer 一审 0 Critical / 3 Major / 11 Minor / 5 Nit（Major：审计生成换代理 session；spill 回读句柄调不通；对照组混放置与 W2）全修或写进 README；主会话二审逐行 orch_tools / OrchKneeEngine / 注入与锚点 / 全局还原；
+  verifier 变异证明见提交说明。backend/framework 零改动。
+- 残留：turn 放置下首次 hard 不压填充（turn_step_start_idx=None、hard 钩子要 s0>t0），W2 只剩 complete_step 一路；mock 档系统提示不教 update_plan/complete_step，+W2 臂有效性看 meta_calls（建议 --prefix prod）；
+  元工具/推回与环境调用同计 max_total_iterations，预算比直调紧；System Error / Duplicate blocked 不计 env_errors（另列）；last_k K 很大时会多铺约 K 对思考代价；
+  turn 放置走续跑入口跳过轮首云端升级判定（history + turn-compaction off 同样跳过）；in_turn 形态的 token 定档只在 FakeEngine 计数下核过，Colab 真分词器下的残差随复测看。
 - 替代：`backend/benchmarks/attention/driver.py` 经 HTTP 打 /turns 走编排层，但要起栈、题短难到 soft，不如 W-K 可控。
 
 ### W4 结构化摘要模板与校准【改】
@@ -277,7 +292,7 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
 | P0 ✅ 2026-10-31 | W0 harness + 两端（Colab）拐点测量 | 曲线与结论见 §1.4「W0 实测」与 `ANALYSIS.md`；D1–D3 初值已回填 §6；prompt 分布未做（需 sessions 放行） |
 | P0.5 ✅ 2026-10-31 | Gemma 4 31B QAT-W4A16 Colab 拐点补测（用户讨论后加测） | 49K 无拐点、回忆 100%、比 26B +30 点（§1.4、ANALYSIS.md §6）；31B 定为 Gemma 侧唯一选项（D23）；本机复核取消（方向修正） |
 | P1 ✅代码 / ⏳Colab 出口 | **W-3 阵容收束** → **W-1 远端配置修复（MTP 默认关 + 采样可配）** → W-2 前缀瘦身 → W1 上限护栏 → W3 思考回放（含变异证明、差分测试更新）→ W2 提前并入；11-01 阶段复审 1C/1M/7m 已处置 | 注册表 4 条 ✅、check 全过 ✅、31B 图文联调过 ✅；护栏用例全红 → 全绿 ✅；**待 Colab 复测**：MTP 关后同一 harness 复测 4 档回到 W0 水平；思考回放不降成功率且峰值 prompt 下降（W3 在 harness 路径上，可测） |
-| P2 | W-K harness 编排器模式（前置）+ W5 小修（W2 已在 P1 落地） | 拐点以上题集成功率 / Pass^2 达 §2 目标；全量重预填充次数有账——两条都只能经 W-K 的编排器路径量到 |
+| P2 | W-K harness 编排器模式 ✅ 11-01（前置）+ W5 小修（W2 已在 P1 落地） | 拐点以上题集成功率 / Pass^2 达 §2 目标；全量重预填充次数有账——两条都只能经 W-K 的编排器路径量到 |
 | P3 | W4 结构化摘要 + 校准 + 成对续跑评估 | 模板在成对续跑上优于现模板；K 值定 |
 | P4（可选） | W7、模板自动优化（ACON/TRACE 思路，用失败案例让云端模型改模板，仅合成数据） | 视 P3 结果 |
 | P-last | 本机执行端推理栈：两条 MLX 4bit 条目装载 + 一次 longchain 冒烟 | 能跑即过，不计速度（用户 10-31） |
@@ -301,6 +316,7 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
 | D36（新） | 思考回放实现 | 投影在引擎层（`core/thinking_replay.py`），view 参与 prompt_stream 指纹与 commit、加 ps.seen 身份校验，方言 builder 不变；条目级 `thinking_replay: all \| tool_turns \| last_k`（缺省 last_k、K=2，非法拒启）；本机 MLX 两条 tool_turns（缓存不可裁）、Colab 两条 last_k；纯思考消息本轮恒留/历史轮占位【定，主会话 11-01】 | W3 |
 | D20（新） | 落刀位置 | 轮首 / 步骤边界 / 溢出兜底 | 1.5 |
 | D37（新） | 步骤边界压缩触发与路线 | 按 W1 档位触发（块级前缀缓存后端 soft 起、缓存不可裁后端 hard 起，后端属性 `block_prefix_cache` 判别），不用「token×迭代 > 秒」公式；落刀点 = complete_step 落地后 + hard 首次（只压已完成段）；副本 + 原件表落盘保全文；被压观察补写全文 spill 带回读句柄；`agent.step_compaction` 非法拒启【定，主会话 11-01】 | W2 |
+| D38（新） | 拐点 harness 编排器模式 | `--orchestrator`：每 run 新建 Orchestrator（真 MCPRegistry 指空目录；mock env 工具包成 read 类 BaseTool，`--prefix` 该档生产声明包成只回 `{"error":"Unknown tool"}` 的桩，绝不注册生产实现；审批进程内全放行；事件文件重定向结果目录）；填充放置成开关 `--fill-placement history|turn`（缺省 turn：插 user 之后、锚点置 2，借审批续跑语义 `run_turn(keep_recent_calls=True, compact_history=False)` 续跑，W1+W2 全在路径上；history = 现状臂，轮首压缩与 ceiling 整段压碰得到、W2 碰不到）；对照开关 `--guard/--step-compaction/--turn-compaction/--goal-verify`；traj 从 history 映射给 longchain 评分器，元工具不计 steps 另记；直调模式字节级不变、两种行不混 jsonl【定，主会话 11-01】 | W-K |
 | D21（新） | 远端投机解码 | **Colab 部署默认关 MTP**【已落地 W-1，10-31 晚：compute_ctl 所有模型缺省 off】；重开须经同一 harness 复测 | W0 F9 |
 | D23 | 本机/Gemma 侧模型 | **Gemma 4 26B A4B 出阵容**（用户 10-31：上限在那里；实测 8K 拐点）。**Gemma 4 31B 定为 Gemma 侧唯一选项**：Colab 用 `google/gemma-4-31B-it-qat-w4a16-ct`（49K 无拐点、回忆 100%、含 bf16 视觉塔），本机用 `mlx-community/gemma-4-31b-it-4bit` 只需能跑 | 用户决定 + P0.5 |
 | D24（改） | 前缀披露策略 | ~~本机 catalog / 远端 full~~ → **按模型家族/条目分档**（prompt 在执行端装配、原样上行，D26）；skill 按需已是现状 | W-2 scout 11-01 |

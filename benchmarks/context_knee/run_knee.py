@@ -8,6 +8,8 @@
 (level × 题 × rep)：新建会话 → 首次生成前把填充历史铺进 system 与任务之间 → 照 run_item
 跑题 → longchain 评分 + 精确回忆评分。产物：<out>/transcripts.jsonl（每 run 一行，
 增量追加）+ summary.json；表格用 summarize.py。用法细节见 README.md。
+--orchestrator（W-K）：改为每 run 新建 Orchestrator、填充铺好后直调 run_turn（W1 护栏 / W2 步骤边界
+压缩 / 轮统计在路径上），见 README「编排器模式」与 orch_tools.py；不给该 flag 时行为同上。
 """
 from __future__ import annotations
 
@@ -21,8 +23,9 @@ import signal
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dc_replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 HERE = Path(__file__).resolve().parent
@@ -132,16 +135,22 @@ class PromptCounter:
     mode: str = "engine"            # engine = 引擎分词器；chars/3.5 = fake 估算
     replay: Optional[ThinkingReplayPolicy] = None
 
-    def render(self, messages: List[Dict[str, Any]], tools, enable_thinking: bool) -> str:
+    def render(self, messages: List[Dict[str, Any]], tools, enable_thinking: bool,
+               turn_start: Optional[int] = None) -> str:
+        """turn_start：显式本轮起点（编排器模式 turn 放置 = 题面 user 之后一条，同
+        session.turn_history_start_idx）；None = 「末条 user 之后」（直调模式口径）。"""
         if self.replay is not None:
-            messages, _stats = project_thoughts(messages, turn_start_index(None, messages),
+            anchor = (SimpleNamespace(turn_history_start_idx=turn_start)
+                      if turn_start is not None else None)
+            messages, _stats = project_thoughts(messages, turn_start_index(anchor, messages),
                                                 self.replay)
         return self.dialect.build_prompt(
             messages=messages, tools=tools, enable_thinking=enable_thinking,
             task_block=None, tail_notes=None, include_env=True, env_extra=self.env_extra)
 
-    def count(self, messages: List[Dict[str, Any]], tools, enable_thinking: bool) -> int:
-        return self.encode_len(self.render(messages, tools, enable_thinking))
+    def count(self, messages: List[Dict[str, Any]], tools, enable_thinking: bool,
+              turn_start: Optional[int] = None) -> int:
+        return self.encode_len(self.render(messages, tools, enable_thinking, turn_start))
 
 
 def engine_counter(engine) -> PromptCounter:
@@ -194,6 +203,8 @@ class RunPlan:
     system_prompt: Optional[str] = None             # run_item(system_prompt=)
     grammar_tools: Optional[List[Dict[str, Any]]] = None
     mock_tools: Optional[List[Dict[str, Any]]] = None
+    # W-K turn 放置：level − 整块估算（逐对代价和与整块渲染不可加，凑数后按整块补对）；直调 None
+    fill_est_delta: Optional[int] = None
 
 
 def item_tools(item: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -211,7 +222,12 @@ def item_prefix(item: Dict[str, Any], mode: str = "mock",
 
 def plan_run(counter: PromptCounter, item: Dict[str, Any], level: int, rep: int,
              seed: int, item_idx: int = 0,
-             prefix: Optional["prefix_mod.PrefixAssembly"] = None) -> RunPlan:
+             prefix: Optional["prefix_mod.PrefixAssembly"] = None, *,
+             fill_after_user: bool = False) -> RunPlan:
+    """fill_after_user（编排器模式 turn 放置，W-K）：填充取轮内形态 in_turn（只留 assistant 调用 +
+    tool 观察配对，无伪 user、无纯文本收尾，末条是 tool），逐轮代价与整段估算都按 [system, user, *填充]、
+    本轮起点 = 2 计，按 level 目标重新凑数（每轮更小 → 多取几轮）。伪轮次流与卡值同源。
+    缺省 False = 直调模式原口径（完整伪轮次铺在 user 之前）。"""
     run_item_obj = copy.deepcopy(item)
     task = run_item_obj["task"]
     if level > 0:
@@ -225,14 +241,39 @@ def plan_run(counter: PromptCounter, item: Dict[str, Any], level: int, rep: int,
     base = counter.count([system, user], tools, et)
 
     def turn_cost(msgs: List[Dict[str, Any]]) -> int:
+        if fill_after_user:
+            # 轮内配对的代价按「长填充中段」的渲染计：last_k 下本轮只回放最近 K 次生成的思考，
+            # 绝大多数配对的思考被投影丢掉——逐对单独量（思考保留）会让和式高估、凑数偏少
+            if counter.replay is not None and counter.replay.mode == "last_k":
+                msgs = [{k: v for k, v in m.items() if k != "thoughts"}
+                        if m.get("role") == "assistant" else m for m in msgs]
+            return counter.count([system, user, *msgs], tools, et, turn_start=2) - base
         return counter.count([system, *msgs, user], tools, et) - base
 
     # 填充流按题目 mock 工具取名（不随 --prefix 变）：同一 (seed, rep, 题) 各档填充同源，
     # 高前缀档只是伪轮次更少（level 是 prompt 总量目标）
-    filler = build_filler(max(level - base, 1) if level > 0 else 0, seed=seed, rep=rep,
-                          tool_names=[t["name"] for t in asm.mock_tools], turn_cost=turn_cost,
-                          task_key=task_fingerprint(item), rotation=(item_idx + rep) % 3)
-    est = counter.count([system, *filler.messages, user], tools, et)
+    def _build(target: int) -> Filler:
+        return build_filler(target, seed=seed, rep=rep,
+                            tool_names=[t["name"] for t in asm.mock_tools], turn_cost=turn_cost,
+                            task_key=task_fingerprint(item), rotation=(item_idx + rep) % 3,
+                            shape="in_turn" if fill_after_user else "turns")
+    target = max(level - base, 1) if level > 0 else 0
+    filler = _build(target)
+    fill_est_delta = None
+    if fill_after_user:
+        # 逐对单独渲染各付一次包裹开销、和式与整块渲染不可加（实测整块系统性偏低）：凑数后量整块，
+        # 缺口超过一对（平均）代价就把缺口加进目标重凑（目标增大 → 前缀超集），最多 8 次
+        est = counter.count([system, user, *filler.messages], tools, et, turn_start=2)
+        for _ in range(8):
+            mean_cost = sum(filler.turn_costs) / max(len(filler.turn_costs), 1)
+            if level <= 0 or level - est <= mean_cost:
+                break
+            target += level - est
+            filler = _build(target)
+            est = counter.count([system, user, *filler.messages], tools, et, turn_start=2)
+        fill_est_delta = (level - est) if level > 0 else None
+    else:
+        est = counter.count([system, *filler.messages, user], tools, et)
     min_fill = sum(filler.turn_costs[:3])
     warning = None
     if level > 0 and level < base + min_fill:
@@ -242,7 +283,7 @@ def plan_run(counter: PromptCounter, item: Dict[str, Any], level: int, rep: int,
                    base_tokens=base, prompt_tokens_est=est, tools=tools,
                    min_fill_tokens=min_fill, warning=warning, prefix_mode=asm.mode,
                    system_prompt=asm.system_prompt, grammar_tools=asm.grammar_tools,
-                   mock_tools=asm.mock_tools)
+                   mock_tools=asm.mock_tools, fill_est_delta=fill_est_delta)
 
 
 # ---------------- 引擎代理 ----------------
@@ -320,6 +361,80 @@ class KneeEngine:
         m = r.get("metrics") or {}
         self.gens.append({
             "i": len(self.gens),
+            "wall_s": round(time.monotonic() - t0, 3),
+            "prompt_tokens": m.get("prompt_tokens"),
+            "reused_prefix": m.get("reused_prefix"),
+            **measured,
+            "prompt_tps": m.get("prompt_tps"),
+            "generation_tps": m.get("generation_tps"),
+            "generation_tokens": m.get("generation_tokens"),
+            "cancelled": bool(r.get("cancelled")),
+            "truncated": bool(r.get("truncated")),
+            "repetition_guard": r.get("repetition_guard"),
+        })
+        return r
+
+
+class OrchKneeEngine(KneeEngine):
+    """编排器模式（--orchestrator）的引擎代理：Orchestrator 直接持有它。
+
+    - 不注入填充（填充在 run_turn 之前由 harness 铺进 session.history：_context_guard_pre 的量测
+      在 generate_once 之前，代理内注入会让首次量测看不到填充）；
+    - 不改写 tools / grammar_tools（声明由编排器按注册表与披露模式自己组）；采样覆盖经 run_turn
+      的 gen_kwargs 进编排层（max_tokens 先受 generation_reserve 钳制），代理不再覆盖；
+    - 主会话由 harness 预置（self.session），generate_once **不改写它**：编排层的子生成（收尾目标
+      校验的 EphemeralSession 等）也经代理，若像直调代理那样 `self.session = session`，release()
+      会释放错缓存、full_renders 取错会话、信号处理器取消错对象。主会话的生成记 gens，其余记
+      audit_gens（不量测、不进 gens）；
+    - measure_prompt 只在内层有该方法时存在（__getattr__ 包一层），并记下最后一次量值：主会话生成
+      记账的 measure_tokens 取护栏刚量过的那一份（量到的就是要发出去的），护栏没量（guard off /
+      未绑上限）时代理自己量一次；
+    - 其余属性（context_limit、tokenizer/processor、thinking_replay、prewarm_* 等）经 __getattr__
+      透传内层引擎；gens 记账键与直调模式同口径。"""
+
+    def __init__(self, inner):
+        super().__init__(inner, [])
+        self._injected = True             # 关闭直调模式的首次生成注入路径
+        self._last_measure: Optional[Dict[str, Any]] = None
+        self.audit_gens: List[Dict[str, Any]] = []
+
+    def __getattr__(self, name):
+        # 只在常规查找失败时调用；_inner 本身缺失（构造早期）不递归
+        if name == "_inner":
+            raise AttributeError(name)
+        if name == "measure_prompt":
+            fn = getattr(self._inner, "measure_prompt")      # 内层没有 → AttributeError 原样
+
+            def measure_prompt(session, tools=None, task_block=None, tail_notes=None,
+                               enable_thinking=False):
+                pm = fn(session, tools=tools, task_block=task_block, tail_notes=tail_notes,
+                        enable_thinking=enable_thinking)
+                if session is self.session:
+                    self._last_measure = {"measure_tokens": pm.tokens, "measure_method": pm.method,
+                                          "measure_source": "guard"}
+                return pm
+            return measure_prompt
+        return getattr(self._inner, name)
+
+    def _measure(self, session, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        cached, self._last_measure = self._last_measure, None
+        if cached is not None:
+            return cached
+        out = super()._measure(session, kwargs)
+        out["measure_source"] = "proxy" if out.get("measure_method") else None
+        return out
+
+    async def generate_once(self, session, **kwargs):
+        if self.session is None:
+            self.session = session            # harness 未预置时首个会话即主会话
+        main = session is self.session
+        measured = self._measure(session, kwargs) if main else {}
+        t0 = time.monotonic()
+        r = await self._inner.generate_once(session, **kwargs)
+        m = r.get("metrics") or {}
+        sink = self.gens if main else self.audit_gens
+        sink.append({
+            "i": len(sink),
             "wall_s": round(time.monotonic() - t0, 3),
             "prompt_tokens": m.get("prompt_tokens"),
             "reused_prefix": m.get("reused_prefix"),
@@ -550,7 +665,49 @@ def build_prefixes(mode: str, items: List[Dict[str, Any]], engine, repo: str,
     return prefixes, meta
 
 
+class _OrchGlobals:
+    """编排器模式改动的两个进程级全局：护栏事件流落盘路径与审批策略持有者。install 在批次装配
+    最早处（make_engine 之前：远端装配期的 context_limit_fallback 等事件也要落产物目录），
+    restore 在 amain 的 finally——异常退出同样还原。"""
+
+    def __init__(self) -> None:
+        self.events_prev = None
+        self.policy_prev = None
+        self.installed = False
+
+    def install(self, ctx: "OrchContext") -> None:
+        from framework.core import approval_policy, events
+        self.events_prev = events.get_path()
+        # 私有持有者（无公开读取器；current() 首次会读 data_dir() 的 approval_policy.json）
+        self.policy_prev = getattr(approval_policy, "_current", None)
+        self.installed = True
+        # 缺省落 data_dir()/guardrail_events.jsonl = backend/ 或用户数据根，绝不能写进去
+        events.set_path(ctx.events_path)
+        ctx.cursor = _orch_tools().EventCursor(ctx.events_path)
+        # 审批进程内全放行（不落盘、不读数据根）
+        approval_policy.replace(approval_policy.ApprovalPolicy(read="auto", write="auto"))
+
+    def restore(self) -> None:
+        if not self.installed:
+            return
+        from framework.core import approval_policy, events
+        events.set_path(self.events_prev)
+        if self.policy_prev is not None:
+            approval_policy.replace(self.policy_prev)
+        else:
+            approval_policy._current = None     # 回到「未装载」：下次 current() 照旧惰性读
+        self.installed = False
+
+
 async def amain(args) -> int:
+    g = _OrchGlobals()
+    try:
+        return await _amain(args, g)
+    finally:
+        g.restore()
+
+
+async def _amain(args, orch_globals: "_OrchGlobals") -> int:
     from framework.utils.model_selection import model_options
     levels = parse_levels(args.levels)
     items = select_items(args)
@@ -585,14 +742,20 @@ async def amain(args) -> int:
                      "entry" if any(opts.get(k) is not None
                                     for k in ("thinking_replay", "thinking_replay_k")) else
                      "default")
+    # W-K 编排器模式：开关 → 装配上下文（config.yaml agent 段只读）；直调模式 None
+    orch_ctx = make_orch_context(args, outdir, opts) if getattr(args, "orchestrator", False) else None
+    mode_meta = orch_meta(orch_ctx)
     if args.append:     # --resume 已隐含 --append
         check_resume_compat(transcripts, repo, sampling["sent"], args.seed, entry_sampling,
                             entry_only=not args.resume, prefix_mode=args.prefix,
-                            thinking_replay=(replay.mode, replay.k))
+                            thinking_replay=(replay.mode, replay.k),
+                            harness_mode=harness_mode_of(mode_meta))
     if transcripts.exists() and not args.append:
         raise SystemExit(f"❌ {transcripts} 已存在：换 --out，或显式 --append 追加"
                          f"（或 --resume 续跑缺的 run）")
     outdir.mkdir(parents=True, exist_ok=True)
+    if orch_ctx is not None:
+        orch_globals.install(orch_ctx)
 
     if args.backend == "fake":
         engine = None
@@ -625,7 +788,9 @@ async def amain(args) -> int:
             "thinking_replay_k": counter.replay.k if counter.replay else None,
             "thinking_replay_source": replay_source,
             **context_limit_meta(engine),
-            **prefix_meta}
+            **prefix_meta,
+            # W-K：harness 口径（mode = direct | orchestrator；直调模式其余键 null）
+            **mode_meta}
     print(f"== 拐点测量 {repo}（{args.backend}，计数 {counter.mode}，前缀 {args.prefix}"
           f"{'' if prefix_meta['prefix_base_tokens'] is None else ' ' + str(prefix_meta['prefix_base_tokens']) + ' tok'}"
           f"）：{len(items)} 题 × {len(levels)} 档 {levels} × {args.reps} rep → {outdir}")
@@ -633,6 +798,11 @@ async def amain(args) -> int:
     records: List[Dict[str, Any]] = []
     if args.resume:
         print(f"== resume：跳过 {len(done)} 个已完成 run（error 行不算完成，重跑）")
+    if orch_ctx is not None:
+        print(f"== 编排器模式：放置 {orch_ctx.fill_placement}，guard {mode_meta['guard']}，"
+              f"W2 {mode_meta['step_compaction']}，轮首压缩 {mode_meta['turn_compaction']}，"
+              f"goal_verify {mode_meta['goal_verify']}，披露 {mode_meta['tool_schema_mode_effective']}"
+              f"；事件 → {orch_ctx.events_path}")
     _INTERRUPT.reset()
     loop = asyncio.get_running_loop()
     installed = _install_interrupt(loop, asyncio.current_task())
@@ -643,8 +813,12 @@ async def amain(args) -> int:
                     for rep in range(args.reps):
                         if (level, item["id"], rep) in done:
                             continue
-                        rec = await _one_run(args, engine, counter, item, item_idx, level, rep, meta,
-                                             prefixes[item["id"]])
+                        if orch_ctx is not None:
+                            rec = await _one_run_orch(args, engine, counter, item, item_idx, level,
+                                                      rep, meta, prefixes[item["id"]], orch_ctx)
+                        else:
+                            rec = await _one_run(args, engine, counter, item, item_idx, level, rep,
+                                                 meta, prefixes[item["id"]])
                         fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
                         fh.flush()
                         records.append(rec)
@@ -875,6 +1049,290 @@ async def _one_run(args, engine, counter, item, item_idx, level, rep, meta,
                 print(f"⚠️ 释放会话缓存失败: {e}")
 
 
+# ---------------- 编排器模式（W-K，--orchestrator） ----------------
+
+#: 编排器模式专属 CLI 开关（直调模式给了即 argparse error）与缺省值
+ORCH_FLAGS = {"fill_placement": "turn", "guard": "on", "step_compaction": "on",
+              "turn_compaction": "on", "goal_verify": "off"}
+#: 编排器模式支持的前缀档：披露（full / catalog + get_tool_schema 路由）由编排器按注册表条目
+#: tool_schema_mode 自己做，--prefix 只决定生产工具桩在不在——catalog / routed 的「目录行 /
+#: 路由件」是直调模式在 harness 里手工装配的披露形态，编排器模式下没有对应物
+ORCH_PREFIX_MODES = ("mock", "prod")
+#: meta 里的口径键（续跑校验比这一组）。guard_thresholds / step_compaction_cfg = 覆盖后的生效值
+HARNESS_MODE_KEYS = ("mode", "fill_placement", "guard", "step_compaction", "turn_compaction",
+                     "goal_verify", "fill_shape", "guard_thresholds", "step_compaction_cfg",
+                     "tool_schema_mode_effective", "agent_cfg_fingerprint")
+#: 直调模式（及缺 mode 的旧行）的口径：只认 mode 与填充形态，其余不比
+_DIRECT_HARNESS = {"mode": "direct", "fill_shape": "turns"}
+
+
+def harness_mismatch(r: Dict[str, Any], new: Tuple[Any, ...]) -> bool:
+    """一条已有行与本次口径是否不同。直调 / 缺 mode 的旧行按直调口径整组比；编排器行只比它
+    **有的**键（后加的口径键旧行缺 = 不比），mode 恒比。"""
+    old = harness_mode_of(r)
+    if old[0] == "direct" or new[0] == "direct":
+        return old != tuple(new)
+    return any(o != n for k, o, n in zip(HARNESS_MODE_KEYS, old, new)
+               if k == "mode" or k in r)
+
+
+def agent_cfg_fingerprint(cfg: Dict[str, Any]) -> str:
+    """生效 agent 段（开关覆盖后、逐题 max_total_iterations 覆盖前）的指纹：json.dumps(sort_keys) 的
+    sha256 前 16 位。config.yaml agent 段任何键变了，续跑即拒。"""
+    import hashlib
+    blob = json.dumps(cfg, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def harness_mode_of(r: Dict[str, Any]) -> Tuple[Any, ...]:
+    """一行（或 meta）的 harness 口径元组；缺 mode 的旧行 / 直调行 = 直调口径（完整伪轮次填充，
+    编排器开关与 cfg 键不比）。"""
+    if not r.get("mode") or r.get("mode") == "direct":
+        return tuple(_DIRECT_HARNESS.get(k) for k in HARNESS_MODE_KEYS)
+    return tuple(r.get(k) for k in HARNESS_MODE_KEYS)
+
+
+def effective_cfg_meta(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """覆盖后 agent 段的 W1 阈值与 W2 参数生效值（与 Orchestrator 构造期同一解析）。"""
+    from framework.core import context_guard, step_compaction
+    g = context_guard.resolve_context_guard(cfg)
+    sc = step_compaction.resolve_step_compaction(cfg)
+    return {"guard_thresholds": {"soft": g.soft, "hard": g.hard, "reserve": g.reserve},
+            "step_compaction_cfg": {"trigger_level": sc.trigger_level,
+                                    "cold_refill_trigger_level": sc.cold_refill_trigger_level,
+                                    "keep_recent": sc.keep_recent, "digest_chars": sc.digest_chars}}
+
+
+@dataclass
+class OrchContext:
+    """一批编排器模式 run 的共用装配：agent 段基线、开关、目录与事件游标。"""
+    out_dir: Path
+    agent_base: Dict[str, Any]
+    model_options: Dict[str, Any]
+    fill_placement: str = "turn"
+    guard: bool = True
+    step_compaction: bool = True
+    turn_compaction: bool = True        # 已按放置生效（turn 放置恒 False）
+    goal_verify: bool = False
+    cursor: Any = None                  # orch_tools.EventCursor（指向 out_dir 的事件文件）
+
+    @property
+    def sessions_dir(self) -> Path:
+        return self.out_dir / "sessions"
+
+    @property
+    def tools_dir(self) -> Path:
+        return self.out_dir / "tools-empty"
+
+    @property
+    def events_path(self) -> Path:
+        return self.out_dir / "guardrail_events.jsonl"
+
+
+def orch_meta(ctx: Optional[OrchContext], args=None) -> Dict[str, Any]:
+    """meta 的 harness 口径键。ctx=None = 直调模式（mode=direct、其余 null）。"""
+    if ctx is None:
+        return {"mode": "direct", "fill_placement": None, "guard": None, "step_compaction": None,
+                "turn_compaction": None, "goal_verify": None, "fill_shape": "turns",
+                "guard_thresholds": None, "step_compaction_cfg": None,
+                "orchestrator_cfg_source": None, "tool_schema_mode_effective": None}
+    from framework.core import tool_disclosure
+    cfg, over = _orch_tools().agent_cfg(ctx.agent_base, guard=ctx.guard, step=ctx.step_compaction,
+                                        goal_verify=ctx.goal_verify)
+    if "max_total_iterations" in ctx.agent_base:
+        over["max_total_iterations"] = "per item: task.max_turns 或 executor 缺省（记入行 max_total_iterations）"
+    onoff = lambda b: "on" if b else "off"      # noqa: E731
+    return {"mode": "orchestrator", "fill_placement": ctx.fill_placement,
+            "guard": onoff(ctx.guard), "step_compaction": onoff(ctx.step_compaction),
+            "turn_compaction": onoff(ctx.turn_compaction), "goal_verify": onoff(ctx.goal_verify),
+            # turn 放置 = 轮内形态（调用 + 观察配对）；history 放置 = 完整伪轮次
+            "fill_shape": "in_turn" if ctx.fill_placement == "turn" else "turns",
+            **effective_cfg_meta(cfg),
+            "agent_cfg_fingerprint": agent_cfg_fingerprint(cfg),
+            "orchestrator_cfg_source": {"section": "config.yaml:agent", "overrides": over},
+            "tool_schema_mode_effective": tool_disclosure.resolve_tool_schema_mode(
+                ctx.model_options, ctx.agent_base)}
+
+
+def _orch_tools():
+    from context_knee import orch_tools
+    return orch_tools
+
+
+def make_orch_context(args, out_dir: Path, opts: Dict[str, Any]) -> OrchContext:
+    """CLI 开关 → OrchContext（agent 段从 config.yaml 读，不改文件）。"""
+    from framework.utils.config_loader import load_section
+    placement = args.fill_placement or ORCH_FLAGS["fill_placement"]
+    on = lambda k: (getattr(args, k) or ORCH_FLAGS[k]) == "on"   # noqa: E731
+    turn_comp = on("turn_compaction")
+    if placement == "turn" and turn_comp:
+        if args.turn_compaction == "on":
+            print("⚠️ --fill-placement turn 下轮首压缩强制 off（续跑语义：run_turn compact_history=False）")
+        turn_comp = False
+    return OrchContext(out_dir=Path(out_dir), agent_base=dict(load_section("agent") or {}),
+                       model_options=dict(opts or {}), fill_placement=placement,
+                       guard=on("guard"), step_compaction=on("step_compaction"),
+                       turn_compaction=turn_comp, goal_verify=on("goal_verify"))
+
+
+def _gen_kwargs(item: Dict[str, Any], sent: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """run_turn 的生成入参：executor.run_item 同款四键 + --sampling 里同名形参（覆盖优先）。"""
+    gen = item.get("gen") or {}
+    out = {"enable_thinking": bool(gen.get("enable_thinking", True)),
+           "thinking_budget": int(gen.get("thinking_budget", 1024)),
+           "max_tokens": int(gen.get("max_tokens", 2048)),
+           "temperature": float(gen.get("temperature", 0.2))}
+    out.update({k: v for k, v in (sent or {}).items() if k in _GEN_KWARGS})
+    return out
+
+
+async def _one_run_orch(args, engine, counter, item, item_idx, level, rep, meta,
+                        prefix: Optional["prefix_mod.PrefixAssembly"],
+                        ctx: OrchContext) -> Dict[str, Any]:
+    """编排器模式单 run：每 run 新建注册表 / Orchestrator / ChatSession，填充按放置铺好后直调
+    orch.run_turn，按 history 映射轨迹打分。任何异常收成一条 {"error": …} 记录（同 _one_run）。"""
+    import uuid
+    from benchmarks.model_eval.executor import _default_max_turns
+    from framework.core.journal import new_turn_id
+    from framework.core.orchestrator import Orchestrator
+    from framework.memory.session import ChatSession
+    OT = _orch_tools()
+    meta = row_meta(meta, item["id"])
+    sampling_seed = args.seed * 1000 + rep
+    proxy = None
+    session = None
+    sid = None
+    t0 = time.monotonic()
+    mark = ctx.cursor.mark()          # 本 run 的事件区间从装配起算（任何出口都结算游标）
+    try:
+        asm = prefix if prefix is not None else item_prefix(item)
+        task = item["task"]
+        if not task.get("env"):
+            raise ValueError(f"[{item['id']}] 编排器模式只支持带 mock env 的题（task.env）")
+        env = make_env(task["env"], task.get("env_init"))
+        summaries = prefix_mod.production_toolset().summaries if asm.mode != "mock" else {}
+        spill = OT.SpillReadTool()            # W2 / ceiling 桩里的 spill 句柄经它回读
+        registry = OT.build_registry(ctx.tools_dir, env, OT.stub_schemas(asm), summaries,
+                                     spill_tool=spill)
+        max_turns = int(task.get("max_turns") or _default_max_turns(task))
+        cfg, _over = OT.agent_cfg(ctx.agent_base, guard=ctx.guard, step=ctx.step_compaction,
+                                  goal_verify=ctx.goal_verify, max_total_iterations=max_turns)
+        if args.backend == "fake":
+            # 干跑脚本要按计划估算出（prompt_tokens），计划又要先有编排器的声明：先以空脚本构造，
+            # 计划后再填 dry_script（脚本已非空 = 测试替身自带脚本，不覆盖）
+            from tests.fake_engine import FakeEngine
+            inner = FakeEngine([])
+        else:
+            inner = engine
+        proxy = OrchKneeEngine(inner)
+        orch = Orchestrator(proxy, registry, cfg, model_options=ctx.model_options)
+        turn = ctx.fill_placement == "turn"
+        # 首次生成的 prompt 面声明给计划估算。_tools_decl 是 Orchestrator 的私有属性（无公开访问器）：
+        # 改名 / 改形态时 test_context_knee_orchestrator.py 的
+        # test_orchestrator_end_to_end_plan_steps_meta_calls_and_score（及全部 _run 用例）记 error 行变红
+        plan = plan_run(counter, item, level, rep, args.seed, item_idx,
+                        dc_replace(asm, tools=list(orch._tools_decl)), fill_after_user=turn)
+        if plan.warning:
+            print(f"⚠️ {plan.warning}")
+        if args.backend == "fake" and not inner.script:
+            inner.script.extend(dry_script(plan))
+        applied = _seed_sampler(args.backend, sampling_seed)
+        bound = getattr(inner, "context_limit", None) is not None
+        if bound:
+            orch.bind_context_limit()
+        system = task.get("system") or asm.system_prompt or DEFAULT_SYSTEM_PROMPT
+        sid = f"L{level}-{item['id']}-r{rep}-{uuid.uuid4().hex[:6]}"
+        session = ChatSession(sid, ctx.sessions_dir, system_prompt=system,
+                              backend=getattr(inner, "backend", None))
+        session.add_user_message(plan.item["task"]["user"])     # TurnRunner 同一方法
+        fill = copy.deepcopy(plan.filler.messages)
+        if turn:
+            # 本轮内：user 之后，锚点 2；keep_recent_calls=True 沿用锚点（审批续跑语义），其余轮字段
+            # （步骤锚 None、峰值 / 档位 / 计数 0）是新建 ChatSession 的构造缺省
+            session.history[2:2] = fill
+            session.turn_history_start_idx = 2
+        else:
+            session.history[1:1] = fill                      # 历史轮：system 之后、user 之前
+        own_start = len(session.history)
+        proxy.session = session
+        spill.session = session
+        _INTERRUPT.proxy, _INTERRUPT.inner = proxy, inner
+        session.journal.emit("turn_queued", {"prompt": task["user"], "attachments": [],
+                                             "gen": {}, "origin": "chat"}, turn_id=new_turn_id())
+        session.journal.emit("turn_started", {})
+        gen_kwargs = _gen_kwargs(item, (meta.get("sampling_overrides") or {}).get("sent"))
+        timeout = getattr(args, "run_timeout", 0) or 0
+        coro = orch.run_turn(session, journal=session.journal, keep_recent_calls=turn,
+                             compact_history=ctx.turn_compaction, **gen_kwargs)
+        try:
+            result = await (asyncio.wait_for(coro, timeout) if timeout > 0 else coro)
+        except asyncio.TimeoutError:
+            # 编排器的取消钩子 = session.cancel_requested（迭代边界 + 引擎逐 chunk 都认）
+            session.cancel_requested = True
+            elapsed = round(time.monotonic() - t0, 2)
+            print(f"⏱ L{level} {item['id']} r{rep} timeout（{elapsed}s > {timeout}s）")
+            drain_timeout = await drain_inference(inner, min(60.0, timeout))
+            ev, _ab, lines = ctx.cursor.since(mark, sid)
+            return {**meta, "level": level, "rep": rep, "item_id": item["id"],
+                    "error": "timeout", "elapsed_s": elapsed, "run_timeout_s": timeout,
+                    "drain_timeout": drain_timeout,
+                    "drain_s": round(time.monotonic() - t0 - elapsed, 2),
+                    "gens": proxy.gens, "full_renders": proxy.full_renders,
+                    "guard_events": ev, "guard_events_lines": lines,
+                    "session_dir": str(session.session_dir),
+                    "wall_s": round(time.monotonic() - t0, 2)}
+        ev, aborts, lines = ctx.cursor.since(mark, sid)
+        status = str(result.get("status") or "")
+        aborted = OT.aborted_reason_for(status, aborts, max_turns)
+        traj, extra = OT.traj_from_history(
+            session.history, own_start, item_id=item["id"], rep=rep, env=env,
+            aborted_reason=aborted, wall_s=time.monotonic() - t0)
+        if aborted == "context_guard" and traj["turns"]:
+            traj["turns"][-1]["text"] = ""    # 护栏终止样板不是答案（原文另记 turn_response）
+        score = score_run(plan, traj, proxy.gens, item)
+        rec = build_record(plan, traj, proxy.gens, score, item,
+                           {**meta, "sampling_seed": sampling_seed,
+                            "sampling_seed_applied": applied}, time.monotonic() - t0,
+                           full_renders=proxy.full_renders)
+        tm = dict(result.get("metrics") or {})
+        peaks = [p for p in (rec.get("peak_prompt_tokens"), tm.get("peak_prompt_tokens"))
+                 if isinstance(p, int) and not isinstance(p, bool) and p > 0]
+        rec["fill"]["fill_est_delta"] = plan.fill_est_delta
+        rec.update({"peak_prompt_tokens": max(peaks) if peaks else None,
+                    "turn_status": status, "turn_metrics": tm,
+                    "turn_response": result.get("response"),
+                    "audit_generations": len(proxy.audit_gens), "audit_gens": proxy.audit_gens,
+                    "spill_readbacks": spill.readbacks,
+                    "guard_events": ev, "guard_events_lines": lines,
+                    "meta_calls": extra["meta_calls"], "dup_blocked": extra["dup_blocked"],
+                    "system_errors": extra["system_errors"],
+                    "session_dir": str(session.session_dir),
+                    "max_total_iterations": cfg.get("max_total_iterations"),
+                    "context_guard_bound": bound,
+                    "tool_effects": registry.tool_effects() if asm.mode == "mock" else
+                    {n: e for n, e in registry.tool_effects().items()
+                     if n in {t["name"] for t in asm.mock_tools}}})
+        return rec
+    except Exception as e:      # noqa: BLE001 —— 批次纪律：单 run 失败只记账
+        import traceback
+        ev, _ab, lines = ctx.cursor.since(mark, sid)    # 结算游标：后续 run 的行号不漂
+        return {**meta, "level": level, "rep": rep, "item_id": item["id"],
+                "error": f"{type(e).__name__}: {e}",
+                "traceback": traceback.format_exc()[-2000:],
+                "gens": proxy.gens if proxy is not None else [],
+                "guard_events": ev, "guard_events_lines": lines,
+                "session_dir": str(session.session_dir) if session is not None else None,
+                "wall_s": round(time.monotonic() - t0, 2)}
+    finally:
+        if _INTERRUPT.signum is None:
+            _INTERRUPT.proxy = _INTERRUPT.inner = None   # 中断时留给 amain 收尾排空
+        if proxy is not None:
+            try:
+                proxy.release()
+            except Exception as e:
+                print(f"⚠️ 释放会话缓存失败: {e}")
+
+
 def _sent_of(r: Dict[str, Any]) -> Dict[str, Any]:
     so = r.get("sampling_overrides") or {}
     return so.get("sent", so.get("applied")) or {}      # applied = 改名前的旧键
@@ -883,7 +1341,8 @@ def _sent_of(r: Dict[str, Any]) -> Dict[str, Any]:
 def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], seed: int,
                         entry: Dict[str, Any], *, entry_only: bool = False,
                         prefix_mode: str = "mock",
-                        thinking_replay: Tuple[str, Optional[int]] = (DEFAULT_REPLAY_MODE, DEFAULT_REPLAY_K)) -> None:
+                        thinking_replay: Tuple[str, Optional[int]] = (DEFAULT_REPLAY_MODE, DEFAULT_REPLAY_K),
+                        harness_mode: Optional[Tuple[Any, ...]] = None) -> None:
     """续跑只能接同口径的批：已有行的 model / 已发送采样 / seed / 注册表条目采样任一不同即拒
     （混进来的 rep 会被 Pass^2 当作同一组）。缺 model/sampling/seed 字段的行（极旧格式）不参与
     这三项比较；缺 entry_sampling 的行（W-1 之前）视为 {}——当时引擎不读条目采样。
@@ -892,13 +1351,19 @@ def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], see
     前缀档（W-2 --prefix）：缺 prefix_mode 的行（W-2 之前）视为 mock；档不同 resume / append 都拒
     （system 与工具声明不同 = 不同测量形态，混算即把两条曲线揉成一条）。
     思考回放口径（W3）：thinking_replay = 本次 (mode, k)（缺省 = 模块缺省 last_k/2，即条目没写键时的口径）；缺 thinking_replay_mode 的行（W3 之前）视为
-    (all, None)——当时引擎全部回放；mode 不同即拒，k 只在 mode == last_k 时比较；resume / append 都拒。"""
+    (all, None)——当时引擎全部回放；mode 不同即拒，k 只在 mode == last_k 时比较；resume / append 都拒。
+    harness 口径（W-K）：harness_mode = HARNESS_MODE_KEYS 元组（None = 直调模式）；缺 mode 的旧行 =
+    直调模式；直调行与编排器行、或编排器行开关 / 放置 / 填充形态 fill_shape / 生效阈值 guard_thresholds /
+    W2 参数 step_compaction_cfg / 披露生效值 tool_schema_mode_effective / 生效 agent 段指纹
+    agent_cfg_fingerprint 不同，resume / append 都拒（直调行只比 mode 与 fill_shape；编排器旧行缺的键不比）。"""
     if not transcripts.exists():
         return
     bad = set()
     entry_bad = set()
     prefix_bad = set()
     replay_bad = set()
+    harness_bad = set()
+    new_harness = harness_mode if harness_mode is not None else harness_mode_of({})
     new_mode, new_k = thinking_replay
     for ln in transcripts.read_text(encoding="utf-8").splitlines():
         if not ln.strip():
@@ -911,6 +1376,8 @@ def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], see
         old_k = r.get("thinking_replay_k") if "thinking_replay_mode" in r else None
         if old_mode != new_mode or (new_mode == "last_k" and old_k != new_k):
             replay_bad.add(f"{old_mode}/{old_k} ≠ {new_mode}/{new_k}")
+        if harness_mismatch(r, tuple(new_harness)):
+            harness_bad.add(f"{_harness_label(harness_mode_of(r))} ≠ {_harness_label(tuple(new_harness))}")
         old_entry = r.get("entry_sampling") or {}
         if old_entry != entry:
             entry_bad.add(f"{json.dumps(old_entry, sort_keys=True)} ≠ {json.dumps(entry, sort_keys=True)}")
@@ -931,8 +1398,18 @@ def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], see
     if replay_bad:
         bad.add("思考回放口径 --thinking-replay 不同（W3），不能与旧目录合并；另起目录（thinking_replay "
                 + "；".join(sorted(replay_bad)) + "）")
+    if harness_bad:
+        bad.add("harness 模式 / 编排器开关不同（W-K），直调行与编排器行不能混入同一 transcripts；另起目录（"
+                + "；".join(sorted(harness_bad)) + "）")
     if bad:
         raise SystemExit("❌ --resume/--append 口径不一致，拒绝合并：" + "；".join(sorted(bad)))
+
+
+def _harness_label(t: Tuple[Any, ...]) -> str:
+    if t[0] == "direct":
+        return "direct"
+    return "/".join(f"{k}={json.dumps(v, sort_keys=True, ensure_ascii=False) if isinstance(v, dict) else v}"
+                    for k, v in zip(HARNESS_MODE_KEYS, t))
 
 
 def load_done(transcripts: Path) -> set:
@@ -996,12 +1473,43 @@ def build_parser() -> argparse.ArgumentParser:
                          "（10-30/31 已有结果的口径，同口径对比用）")
     ap.add_argument("--thinking-replay-k", type=int, default=None,
                     help="last_k 的 K 覆盖（正整数；缺省沿用条目值，条目也无则 2）")
+    # W-K 编排器模式：以下开关只在 --orchestrator 下有效（缺省 None = 未给；直调模式给了即报错）
+    ap.add_argument("--orchestrator", action="store_true",
+                    help="编排器模式：每 run 新建 Orchestrator 直调 run_turn（W1 护栏 / W2 步骤边界压缩 / "
+                         "轮统计在路径上）；缺省 = 直调 engine.generate_once（executor.run_item）")
+    ap.add_argument("--fill-placement", default=None, choices=["history", "turn"],
+                    help="[编排器] 填充放置：history = 题面 user 之前（历史轮）；turn = user 之后、"
+                         "本轮内（缺省）")
+    ap.add_argument("--guard", default=None, choices=["on", "off"],
+                    help="[编排器] W1 上限护栏 agent.context_guard.enabled（缺省 on）")
+    ap.add_argument("--step-compaction", default=None, choices=["on", "off"],
+                    help="[编排器] W2 步骤边界压缩 agent.step_compaction.enabled（缺省 on）")
+    ap.add_argument("--turn-compaction", default=None, choices=["on", "off"],
+                    help="[编排器] 轮首机械压缩 run_turn(compact_history=)（缺省 on；turn 放置强制 off）")
+    ap.add_argument("--goal-verify", default=None, choices=["on", "off"],
+                    help="[编排器] 收尾目标校验 agent.goal_verify（缺省 off：省一次生成）")
     return ap
+
+
+def check_mode_args(ap: argparse.ArgumentParser, args) -> None:
+    """编排器专属开关只在 --orchestrator 下有效；编排器模式只支持 ORCH_PREFIX_MODES。"""
+    if not args.orchestrator:
+        given = [f"--{k.replace('_', '-')}" for k in ORCH_FLAGS if getattr(args, k) is not None]
+        if given:
+            ap.error(f"{' '.join(given)} 只在 --orchestrator 下有效")
+        return
+    if args.prefix not in ORCH_PREFIX_MODES:
+        ap.error(f"--orchestrator 只支持 --prefix {'|'.join(ORCH_PREFIX_MODES)}（得到 {args.prefix}）："
+                 "编排器模式的披露（full / catalog + 路由）由编排器按注册表条目 tool_schema_mode 自己做，"
+                 "--prefix 只决定生产工具桩在不在；catalog / routed 是直调模式的手工披露形态")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     try:
-        rc = asyncio.run(amain(build_parser().parse_args(argv)))
+        ap = build_parser()
+        args = ap.parse_args(argv)
+        check_mode_args(ap, args)
+        rc = asyncio.run(amain(args))
         if _INTERRUPT.signum is not None:
             _hard_exit(rc)      # 被信号中断：不等非守护推理线程（见 _hard_exit）
         return rc

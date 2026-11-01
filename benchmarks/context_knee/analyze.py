@@ -46,6 +46,7 @@ for _p in (_HERE.parents[1] / "backend", _HERE.parent):
     if str(_p) not in sys.path:
         sys.path.append(str(_p))
 from context_knee.quality import COHERENT_THRESHOLDS, final_text_quality, is_coherent  # noqa: E402
+from context_knee.summarize import orch_stats  # noqa: E402  (W-K 三列：与 summarize 同一口径)
 
 BEGIN, END = "<!-- BEGIN AUTO -->", "<!-- END AUTO -->"
 DEFAULT_WALL_INVALID = "qwen-card:57344,qwen-current:0"
@@ -292,6 +293,7 @@ def aggregate(g: Dict[str, Any], th: Dict[str, float], wall_invalid: set) -> Dic
             "recall_zero_withfinal": sum(1 for s in rec if (s.get("recall_hits") or 0) == 0
                                          and s.get("final_text_ok") is not False),
             "fail_labels": fails, "fail_primary": prim, "_items": items,
+            **orch_stats(rs),       # W-K 编排器模式三列（直调行 None）
         }
     return out
 
@@ -508,8 +510,8 @@ def render(groups, aggs, args) -> str:
     L.append("")
 
     L.append("### B. 每档汇总（成功率单位 run，Pass^2 单位 题；区间 Wilson 95%）\n")
-    L.append("| 组 | level | n | 缺测 | 成功率 [CI] | Pass^2 [CI] (题数) | Pass@2 | recall (分母) | 前/中/后 | recall漏：部分/零命中且无收尾 | 冗余均 | env错均 | 复读命中(run) | aborted | 连贯 (分母) | 首prompt中位 | 峰值prompt中位 | prefill秒中位 | wall中位 |")
-    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    L.append("| 组 | level | n | 缺测 | 成功率 [CI] | Pass^2 [CI] (题数) | Pass@2 | recall (分母) | 前/中/后 | recall漏：部分/零命中且无收尾 | 冗余均 | env错均 | 复读命中(run) | aborted | 连贯 (分母) | 首prompt中位 | 峰值prompt中位 | prefill秒中位 | wall中位 | W2压缩中位 | 全量渲染中位 | ceiling终止 |")
+    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for g in groups:
         for lv, a in aggs[g["name"]].items():
             L.append(
@@ -519,7 +521,9 @@ def render(groups, aggs, args) -> str:
                 f"{num(a['redundant_mean'], 2)} | {num(a['env_errors_mean'], 2)} | {a['repetition_hits']}({a['repetition_runs']}) | {a['aborted']} | "
                 f"{pct(a['coherent_rate'])} ({a['coherent_n']}) | {num(a['prompt_tokens_median'], 0)} | "
                 f"{num(a['peak_prompt_tokens_median'], 0)} | {num(a['prefill_s_median'])} | "
-                f"{num(a['wall_median'])}{'*' if a['wall_invalid'] else ''} |")
+                f"{num(a['wall_median'])}{'*' if a['wall_invalid'] else ''} | "
+                f"{num(a['step_compactions_median'])} | {num(a['full_renders_median'])} | "
+                f"{'—' if a['ceiling_aborts'] is None else a['ceiling_aborts']} |")
     L.append("\n`*` = wall 因并发不可用（已知清单或同档多 stamp 重复行自动检测）。\n")
     L.append("不连贯 run 的归因（判据触发项:题 ×次；不判语义）：\n")
     for g in groups:

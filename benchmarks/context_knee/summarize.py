@@ -73,6 +73,21 @@ def _later_prompt_tps(rec: Dict[str, Any]) -> Optional[float]:
     return _median(g.get("prompt_tps") for g in (rec.get("gens") or [])[1:])
 
 
+def orch_stats(rs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """编排器模式（W-K）三列：W2 步骤边界压缩次数中位、全量渲染次数中位（turn_metrics 里「非零才
+    出现」→ 缺键按 0）、ceiling 终止计数（aborted_reason == context_guard）。只看编排器行
+    （有 turn_metrics 键）；没有编排器行（直调 / 旧行）= None（表里显示 —）。"""
+    orch = [r for r in rs if isinstance(r.get("turn_metrics"), dict)]
+    if not orch:
+        return {"step_compactions_median": None, "full_renders_median": None,
+                "ceiling_aborts": None}
+    return {"step_compactions_median": _median(int(r["turn_metrics"].get("step_compactions") or 0)
+                                               for r in orch),
+            "full_renders_median": _median(int(r["turn_metrics"].get("full_renders") or 0)
+                                           for r in orch),
+            "ceiling_aborts": sum(1 for r in orch if r.get("aborted_reason") == "context_guard")}
+
+
 def dedupe(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """同 (level, item_id, rep) 只留一条：有非 error 行就取其中最新的（stamp 大者，同 stamp 取
     文件序靠后者），全是 error 才留最新的 error 行。无 rep 字段的行原样保留。"""
@@ -151,6 +166,7 @@ def aggregate(records: List[Dict[str, Any]],
             "coherent_rate": (sum(1 for c in cohs if c) / len(cohs)) if cohs else None,
             "coherent_n": len(cohs),
             "wall_s_mean": _mean(r.get("wall_s") for r in rs),
+            **orch_stats(rs),
         }
     return out
 
@@ -201,6 +217,9 @@ COLUMNS = [
     ("后续prompt_tps中位", "later_prompt_tps_median", "int"),
     ("连贯率", "coherent_rate", "pct"), ("连贯分母", "coherent_n", "int"),
     ("wall秒均", "wall_s_mean", "f1"),
+    # W-K 编排器模式列（直调行 —）
+    ("W2压缩中位", "step_compactions_median", "f1"), ("全量渲染中位", "full_renders_median", "f1"),
+    ("ceiling终止", "ceiling_aborts", "int"),
 ]
 
 
