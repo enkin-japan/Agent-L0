@@ -28,6 +28,7 @@ def _human_size(n: int) -> str:
 
 class ListDirTool(BaseTool):
     name = "list_dir"
+    summary = "列出文件夹内容"
     description = (
         "List the contents of a folder on the user's Mac: sub-folders first, then files with "
         "size and modified date. Use this to browse/navigate the file system (e.g. see what is "
@@ -80,6 +81,7 @@ class ListDirTool(BaseTool):
 
 class FindFilesTool(BaseTool):
     name = "find_files"
+    summary = "按名字或内容查找本机文件"
     description = (
         "Find files on the user's Mac via Spotlight: matches file names first and automatically "
         "falls back to searching file contents. Use this whenever the user asks to locate a file "

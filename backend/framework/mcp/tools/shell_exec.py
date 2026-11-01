@@ -789,6 +789,7 @@ def _is_readonly(command: str, cwd: str = "") -> bool:
 class ShellExecTool(BaseTool):
     """在本机执行终端命令（只读命令自动放行，其余需用户审批）"""
     name = "run_shell_command"
+    summary = "终端执行 shell 命令（多数任务首选）"
     description = (
         "Run a shell command on the user's macOS machine. This is your PRIMARY tool — prefer the "
         "terminal for most tasks (files, processes, network, dev tools, system queries). "

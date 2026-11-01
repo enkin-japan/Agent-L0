@@ -16,6 +16,7 @@ from ...agents import runtime
 
 class SkillInvokeTool(BaseTool):
     name = "skill_invoke"
+    summary = "按名字载入技能剧本并照做"
     # 线索例句必须多语言并含斜杠形态：26B 档实测只认英文 "use the deck skill"，
     # "/deck" 与中文「用 deck 剧本」都不触发（31B 能自行桥接）——L4 站路由调参实案
     _DESC_HEAD = (

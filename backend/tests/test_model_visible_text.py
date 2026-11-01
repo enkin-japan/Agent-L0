@@ -35,8 +35,8 @@ from framework.memory.session import DEFAULT_SYSTEM_PROMPT
 
 from framework.dialects.qwen35.prompt_builder import format_tool_declaration
 
-from ._tool_fleet import (GEMMA4_TOKENIZER_REPO, GET_TOOL_SCHEMA_NAME, QWEN35_TOKENIZER_REPO,
-                          audit, collect_schemas, real_lltokenizer)
+from ._tool_fleet import (GEMMA4_TOKENIZER_REPO, GET_TOOL_SCHEMA_NAME, META_NAMES,
+                          QWEN35_TOKENIZER_REPO, audit, collect_schemas, real_lltokenizer)
 
 # D.26 重锚线(2026-08-28 用户;真 token 生产形口径);D28(2026-10-31 用户)起 gemma4 与
 # qwen35 两家族同口径共用这一条,不另立 qwen35 线。再动须用户拍板。
@@ -95,6 +95,43 @@ def test_tool_declarations_under_token_budget(family, render, repo):
         f"{family} full 工具声明 {total} tok 已越 D.26/D28 的 {BUDGET} 线(超 {-headroom})。"
         f"出路按 D.25 顺序:先减法(TOOL_NORMS_AUDIT.md §减法与预算,只删两类机械可判句)"
         f"→ 议重锚(用户拍板)→ catalog(最后)。逐件账:backend/scripts/tool_token_audit.py")
+
+
+# catalog 口径门（W-2 / D30，2026-11-01）：声明 = 元工具四件（含 get_tool_schema）+
+# agent.tool_routing.core 完整 schema + 其余确定性工具的目录行（名字 + summary），不含任务期
+# 路由件（每任务 ≤ top_k 件，随任务变）；计数口径同上（逐件声明之和、自家方言、自家分词器）。
+# 2026-11-01 实测 gemma4 3735 / qwen35 3715（core 七件 = config.yaml 当日值，含 run_shell_command；
+# 首审修订后 summary 口径），线取较大者 +2%。
+# 整段前缀（含 DEFAULT_SYSTEM_PROMPT 与包裹，同七件口径）实测 gemma4 5266 / qwen35 5280，见
+# backend/scripts/measure_prefix.py。
+BUDGET_CATALOG = 3810
+
+
+def _catalog_schemas():
+    from framework.core.tool_disclosure import disclose, resolve_tool_routing, split_core
+    from framework.utils.config_loader import load_section
+    schemas = collect_schemas()
+    _, core_cfg = resolve_tool_routing(load_section("agent") or {})
+    core, unknown = split_core(core_cfg, {s["name"] for s in schemas})
+    assert not unknown, f"agent.tool_routing.core 有名字不在确定性工具集: {unknown}"
+    return disclose(schemas, mode="catalog", meta_names=META_NAMES, core=core,
+                    summaries=audit.collect_summaries())
+
+
+@pytest.mark.parametrize("family, fmt, repo", [
+    pytest.param("gemma4", audit.format_function_declaration, GEMMA4_TOKENIZER_REPO, id="gemma4"),
+    pytest.param("qwen35", format_tool_declaration, QWEN35_TOKENIZER_REPO, id="qwen35"),
+])
+def test_catalog_declarations_under_token_budget(family, fmt, repo):
+    """catalog 口径门：元 + core 完整 + 其余目录行，两家族各自方言、自家分词器 ≤ BUDGET_CATALOG。"""
+    decl = _catalog_schemas()
+    assert len(decl) == EXPECTED_DECLS + 1          # 56 件 + get_tool_schema，件数不缩水
+    tok = real_lltokenizer(repo)
+    total = sum(len(tok.tokenize_str(fmt(s))) for s in decl)
+    print(f"[budget] {family} catalog 工具声明 {total}/{BUDGET_CATALOG},余量 {BUDGET_CATALOG - total}")
+    assert total <= BUDGET_CATALOG, (
+        f"{family} catalog 工具声明 {total} tok 越 {BUDGET_CATALOG} 线（超 {total - BUDGET_CATALOG}）。"
+        f"先查是不是 summary 写长了/core 加了件，再议重锚。逐档账：backend/scripts/measure_prefix.py")
 
 
 def test_model_visible_text_snapshot():

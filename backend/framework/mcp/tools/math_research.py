@@ -26,6 +26,7 @@ _CFG = load_section("math_research")
 
 class MathResearchTool(BaseTool):
     name = "math_research"
+    summary = "多步数学题交给求解子模块"
     description = (
         "Delegate a complete math problem to a computation sub-module that solves it in an offline "
         "Python/SymPy sandbox with multiple compute-and-verify rounds, and returns a digest whose "

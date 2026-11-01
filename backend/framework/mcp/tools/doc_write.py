@@ -17,6 +17,7 @@ from ...agents import runtime
 
 class WriteDocumentTool(BaseTool):
     name = "write_document"
+    summary = "生成 Word 文档（docx）交付"
     description = (
         "Create a polished, editable Word document (.docx) from Markdown and give the user a "
         "download link. Use when the user wants a document/report/letter/summary as a FILE "

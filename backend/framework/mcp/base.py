@@ -35,6 +35,11 @@ class BaseTool(ABC):
     name: str = ""
     # 工具描述（告诉 LLM 什么情况下该调用它）
     description: str = ""
+    # 目录行（W-2 / D30）：catalog 模式下非常驻工具在前缀里只剩「名字 — summary」一行，
+    # 模型据此判断该不该 get_tool_schema 取详情。一行中文、≤40 字、写清「什么时候该取它」；
+    # 缺省 = description 首句（硬截 80 字符，见 core/tool_disclosure.tool_summary）。
+    # **不进 get_schema()**：full 模式渲染的声明逐字节不变，目录渲染经 registry.get_summaries() 查。
+    summary: str = ""
     # JSON Schema 格式的参数定义
     parameters: Dict[str, Any] = {}
     # 安全属性：标识执行该工具前是否需要人工/系统审批

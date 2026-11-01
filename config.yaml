@@ -130,11 +130,18 @@ inference:
     # 显式带 0.2 / 0.05，调用方显式值优先，条目温度在聊天轮永不生效，只会在摘要/oneshot 路径冒出来
     # 造成混合口径（reviewer 10-31 Major 1）。CUDA 两条目只填不依赖调用方的键：top_p / top_k（模型卡）
     # 与 repetition_penalty 1.0（vLLM 下 rep 为 HF 语义罚整段 prompt，1.1 不合用；W0 实测采样差在噪声内）。
+    # tool_schema_mode（可选，D29 / W-2 2026-11-01）：条目级工具披露模式，值限 full | catalog，优先于
+    # agent.tool_schema_mode 全局缺省；其他值拒启。prompt 一律在执行端装配、原样上行算力端（D26），
+    # 所以分档只能按模型家族/条目，不按本机/远端：gemma4 两条目 catalog（稠密全注意力，prefill 随前缀
+    # 线性涨，49K 首填 42 s），qwen35 两条目不设 = full（线性注意力占 3/4、49K 无拐点，省不出什么）。
+    # catalog 下前缀 = system + 元工具 + agent.tool_routing.core + 任务期路由选中工具的完整 schema，其余
+    # 工具只留「名字 — summary」目录行，模型用 get_tool_schema 按名取详情。
     - repo: "mlx-community/gemma-4-31b-it-4bit"
       revision: "696d436c404745a59f30e4939a658162b0a9e57f"
       dialect: "gemma4"
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
+      tool_schema_mode: "catalog"   # D29（W-2）：gemma4 家族目录模式；profile 数字是 full 口径，重画像前引用须注明
       profile: { tool_call: 0.96, longchain: 0.83, vision: 0.90, tps: 27.8 }  # tool run 20260817-005105，其余 20260816-025147（M4 Max 口径）
       note: "18.4GB | 本机第二候选（D27 2026-10-31：本机只需能跑；Colab 同款 QAT W4A16 49K 内无拐点）| 静态校验 ✓ | 08-16 画像 ✓ | 稠密，建议 ≥32GB 统一内存"
     # ── Qwen 家族（qwen35 方言）────────────────────────────────────────────
@@ -175,6 +182,7 @@ inference:
       capabilities: ["text", "vision"]
       suppress_ghost_thinking: true
       cuda_deployment: { prequantized: true }
+      tool_schema_mode: "catalog"   # D29（W-2）：gemma4 家族目录模式；10-31 拐点评测是 harness 短前缀口径，与本键无关
       # Gemma 4 模型卡 top_p 0.95 / top_k 64；rep 1.0（vLLM 下 repetition_penalty 为 HF 语义罚整段 prompt，不再用 1.1）；温度见上方说明不设
       sampling: { top_p: 0.95, top_k: 64, repetition_penalty: 1.0 }
       note: "~18GB QAT W4A16 | Colab 第二候选 | 2026-10-31 拐点评测 49K 内无拐点（Pass^2 90/90/70/90/80）| vLLM 图文端到端待 W-3 验收"
@@ -496,8 +504,27 @@ agent:
                               # 生效（进程内后端共享单例不可并发，引擎强制钳制回 1）；
                               # 服务端 gen_sem=cuda.max_concurrency(8) 承载。任务级调度器
                               # 的 worker 数同源取此值（remote 多会话并行准入）。
-  tool_schema_mode: "full"    # full=全部工具 schema 常驻（工具少时更省且缓存更稳）
-                              # catalog=目录常驻 + get_tool_schema 按名取详情（工具规模大后切换）
+  tool_schema_mode: "full"    # 全局缺省；注册表条目级 tool_schema_mode 优先（D29，W-2 2026-11-01）。
+                              # full=全部工具 schema 常驻（56 件 gemma4 口径 13.6K tok，RAG 在线 14.8K）
+                              # catalog=元工具+core+任务期路由工具常驻完整 schema，其余只留目录行
+                              # （名字 — summary），get_tool_schema 按名取详情
+  tool_routing:               # 只在 catalog 模式生效（D31/D32，W-2 2026-11-01）
+    top_k: 6                  # 任务建立时（goal 建后不变，replan 只换步骤，故只算这一次），按词法打分（名字+描述
+                              # +summary，BM25 式、确定性，查询词去英文停用词与 df>N/2 高频词）从非 core 工具里选
+                              # top_k 件以完整 schema 入前缀；任务期内冻结，任务结束后集合保留到下一个任务建立
+                              # （工具声明紧跟 system，换集合=前缀缓存整段失效，进任务一次失配、退出不再失配）；
+                              # 0 = 不路由（core 之外全目录行）。首个任务前的纯聊天轮无路由件。
+                              # embedding 打分归 W-2b（rag_server 融合模式尚无 /embed）。
+    core:                     # 常驻完整 schema 的工具（文件/计划/记忆）；元工具 update_plan / complete_step /
+                              # remember / get_tool_schema 天然常驻不必列。名字不在已注册工具里的：启动告警并跳过
+                              # （rag_admin 等按探活出现，不能拒启）。
+      - memory_write
+      - edit_file
+      - write_file
+      - find_files
+      - list_dir
+      - skill_invoke
+      - run_shell_command   # 描述自称 PRIMARY tool、system 提示词点名；目录行+一次取详情的往返不值 ~460 tok（主会话 11-01）
   react_max_steps: 4          # 单步内自纠预算：一步连续多少次迭代未完成即判定失败并路由
   max_total_iterations: 40    # 一轮任务的总推理次数熔断（只数主循环迭代）
   max_sub_generations: 80     # 子沙箱生成的独立熔断（F6）：web/math/excel 调研在一次性

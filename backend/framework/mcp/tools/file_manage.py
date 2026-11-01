@@ -30,6 +30,7 @@ def _resolve_dest(src: Path, destination: str) -> "tuple[Path, str | None]":
 
 class MoveFileTool(BaseTool):
     name = "move_file"
+    summary = "移动或重命名文件"
     description = (
         "Move or rename a file/folder. If 'destination' is an existing folder the item moves "
         "into it keeping its name; otherwise 'destination' is the new full path (= rename). "
@@ -67,6 +68,7 @@ class MoveFileTool(BaseTool):
 
 class CopyFileTool(BaseTool):
     name = "copy_file"
+    summary = "复制文件或文件夹"
     description = (
         "Copy a file/folder. If 'destination' is an existing folder the copy lands inside it "
         "keeping its name; otherwise 'destination' is the copy's full path. "
@@ -122,6 +124,7 @@ def _trash_native(p: Path) -> "str | None":
 
 class TrashFileTool(BaseTool):
     name = "trash_file"
+    summary = "删除文件（移到废纸篓）"
     description = (
         "Move a file/folder to the macOS Trash (recoverable — this is NOT permanent deletion). "
         "Use this whenever the user asks to delete something."

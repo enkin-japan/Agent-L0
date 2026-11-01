@@ -21,6 +21,7 @@ _FALLBACK_HINT = "可退回环境信息里的时区做粗略推断，或直接�
 
 class GetLocationTool(BaseTool):
     name = "get_location"
+    summary = "获取用户当前位置（天气、附近）"
     description = (
         "Get the user's current physical location (place name + coarse coordinates), measured "
         "by the device the user is chatting from (their Mac or iPhone), NOT the server. Use it "

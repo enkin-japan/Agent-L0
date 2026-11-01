@@ -933,3 +933,270 @@ def test_signal_interrupts_blocked_inference_and_exits(tmp_path, signame):
         if proc.poll() is None:
             proc.kill()          # 只杀本测试自己起的子进程（红测路径）
             proc.wait()
+
+
+# ---- W-2 前缀档（--prefix mock|prod|catalog|routed） ----
+
+from context_knee import prefix as P                                       # noqa: E402
+from framework.core.orchestrator import (COMPLETE_STEP_SCHEMA, GET_TOOL_SCHEMA_SCHEMA,  # noqa: E402
+                                         REMEMBER_SCHEMA, UPDATE_PLAN_SCHEMA)
+from framework.memory.session import DEFAULT_SYSTEM_PROMPT as PROD_SYSTEM  # noqa: E402
+
+FULL_METAS = (UPDATE_PLAN_SCHEMA, COMPLETE_STEP_SCHEMA, REMEMBER_SCHEMA)
+CATALOG_METAS = FULL_METAS + (GET_TOOL_SCHEMA_SCHEMA,)
+
+
+def _lc_item(env="vfs"):
+    return next(it for it in _all_items() if it["task"].get("env") == env)
+
+
+def _is_in(obj, seq):
+    return any(obj is x for x in seq)
+
+
+def test_prefix_mock_is_byte_identical_to_pre_w2():
+    """mock 档 = W-2 前：system 为 executor 极简提示、tools 为题目 mock 工具、整段渲染逐字相同；
+    引擎收到的 tools 未被改写、grammar_tools 不传（None），run_item 不传 system_prompt。"""
+    from benchmarks.model_eval.executor import DEFAULT_SYSTEM_PROMPT as EXEC_SYSTEM
+    counter = K.fake_counter()
+    for item in (_lc_item("vfs"), _lc_item("todo"), _lc_item("office")):
+        for level in (0, 4096):
+            plan = K.plan_run(counter, item, level, 0, 7)
+            explicit = K.plan_run(counter, item, level, 0, 7, prefix=K.item_prefix(item, "mock"))
+            assert plan.tools == explicit.tools == K.item_tools(item)
+            assert plan.system_prompt is None and plan.grammar_tools is None
+            assert plan.prefix_mode == "mock" and plan.mock_tools == plan.tools
+            assert plan.filler.messages == explicit.filler.messages
+            system = {"role": "system", "content": EXEC_SYSTEM}
+            user = {"role": "user", "content": plan.item["task"]["user"]}
+            et = bool((item.get("gen") or {}).get("enable_thinking", True))
+            assert plan.base_tokens == counter.count([system, user], K.item_tools(item), et)
+            pre = counter.render([system, *plan.filler.messages, user], K.item_tools(item), True)
+            got = counter.render([{"role": "system", "content": item["task"].get("system")
+                                   or plan.system_prompt or K.DEFAULT_SYSTEM_PROMPT},
+                                  *explicit.filler.messages, user], explicit.tools, True)
+            assert got == pre
+    item = _vfs_item()
+    plan = K.plan_run(counter, item, 0, 0, 7)
+    inner = _SpyEngine([{"text": "完成。"}])
+    traj = asyncio.run(run_item(K.KneeEngine(inner, plan.filler.messages), plan.item))
+    assert inner.calls[0]["tools"] == K.item_tools(item) and inner.calls[0]["grammar_tools"] is None
+    assert traj["turns"][0]["text"] == "完成。"
+
+
+def test_prefix_prod_full_schemas_equal_grammar_and_all_production_tools():
+    item = _lc_item("vfs")
+    ts = P.production_toolset()
+    a = K.item_prefix(item, "prod")
+    mock = K.item_tools(item)
+    names = [t["name"] for t in a.tools]
+    assert a.system_prompt == PROD_SYSTEM and a.mode == "prod"
+    assert a.tools == a.grammar_tools and len(names) == len(set(names))
+    assert len(ts.physical) >= 40 and not any(s["name"].startswith("rag_admin") for s in ts.physical)
+    assert {s["name"] for s in ts.physical} | {m["name"] for m in FULL_METAS} <= set(names)
+    assert GET_TOOL_SCHEMA_SCHEMA["name"] not in names       # full 档元工具 = 3 件（_meta_schemas）
+    for m in FULL_METAS:
+        assert _is_in(m, a.tools)                             # 与 orchestrator 同一份对象
+    for t in a.tools:                                         # 全部完整 schema
+        assert _is_in(t, ts.physical) or _is_in(t, FULL_METAS) or t in mock   # mock 每次新建，比值
+    assert a.tools[-len(mock):] == mock                       # mock 工具在生产声明之后
+
+
+def test_prefix_mock_tool_wins_name_collision():
+    item = _lc_item("vfs")
+    ts = P.production_toolset()
+    prod_write = next(s for s in ts.physical if s["name"] == "write_file")
+    mock_write = next(t for t in K.item_tools(item) if t["name"] == "write_file")
+    assert prod_write != mock_write                           # 撞名是真的（形状不同）
+    for mode in ("prod", "catalog", "routed"):
+        a = K.item_prefix(item, mode)
+        for side in (a.tools, a.grammar_tools):
+            hits = [t for t in side if t["name"] == "write_file"]
+            assert len(hits) == 1 and hits[0] == mock_write != prod_write, mode
+        assert a.shadowed == ["write_file"]
+        if "write_file" in ts.core_cfg and mode != "prod":
+            assert "write_file" in a.core_skipped and "write_file" not in a.core
+    todo = K.item_prefix(_lc_item("todo"), "prod")
+    assert todo.shadowed == [] and _is_in(prod_write, todo.tools)   # 无撞名则生产件照留
+
+
+def test_prefix_catalog_lines_meta_core_full_grammar_full():
+    item = _lc_item("vfs")
+    ts = P.production_toolset()
+    a = K.item_prefix(item, "catalog")
+    mock = K.item_tools(item)
+    mock_names = {t["name"] for t in mock}
+    meta_names = {m["name"] for m in CATALOG_METAS}
+    assert a.system_prompt == PROD_SYSTEM and a.routed is None
+    assert a.core and set(a.core) <= set(ts.core_cfg) - mock_names
+    physical = [s for s in ts.physical if s["name"] not in mock_names]
+    assert a.grammar_tools == physical + list(CATALOG_METAS) + mock   # 语法面 = 完整全集
+    assert {t["name"] for t in a.tools} == {t["name"] for t in a.grammar_tools}
+    lines = 0
+    for t in a.tools:
+        n = t["name"]
+        if n in meta_names or n in a.core or n in mock_names:
+            assert _is_in(t, a.grammar_tools) and "parameters" in t, n
+        else:
+            assert set(t) == {"name", "description"}, t
+            assert len(t["description"]) <= 80
+            lines += 1
+    assert lines == len(physical) - len(a.core)
+    for m in CATALOG_METAS:
+        assert _is_in(m, a.tools)
+
+
+def test_prefix_routed_full_subset_of_noncore_nonmeta_and_frozen_per_item():
+    item = _lc_item("vfs")
+    ts = P.production_toolset()
+    a = K.item_prefix(item, "routed")
+    cat = K.item_prefix(item, "catalog")
+    mock_names = {t["name"] for t in K.item_tools(item)}
+    meta_names = {m["name"] for m in CATALOG_METAS}
+    assert ts.top_k > 0 and a.routed and len(a.routed) <= ts.top_k
+    assert set(a.routed) <= ({s["name"] for s in ts.physical} - set(a.core) - meta_names
+                             - mock_names)
+    assert a.grammar_tools == cat.grammar_tools and a.core == cat.core
+    by_name = {t["name"]: t for t in a.tools}
+    for n in a.routed:
+        assert _is_in(by_name[n], a.grammar_tools) and "parameters" in by_name[n]
+    full = {t["name"] for t in a.tools if _is_in(t, a.grammar_tools)}
+    assert full == meta_names | set(a.core) | set(a.routed) | mock_names
+    # 路由查询 = 原题面（不含回忆句）：同题重算恒同；不同档 / rep 的计划共用这一份
+    assert K.item_prefix(item, "routed").routed == a.routed
+    counter = K.fake_counter()
+    p0, p1 = (K.plan_run(counter, item, 0, r, 7, prefix=a) for r in (0, 1))
+    assert p0.tools == p1.tools == a.tools and p0.grammar_tools == a.grammar_tools
+
+
+@pytest.mark.parametrize("mode", ["prod", "catalog", "routed"])
+def test_prefix_filler_stream_same_as_mock(mode):
+    """填充按 mock 工具取名：非 mock 档同一 (seed, rep, 题) 的伪轮次是 mock 档的前缀（同源、
+    只因前缀更大而更少）；system 用生产提示。"""
+    item = _lc_item("vfs")
+    counter = K.fake_counter()
+    mock = K.plan_run(counter, item, 24576, 0, 7)
+    other = K.plan_run(counter, item, 24576, 0, 7, prefix=K.item_prefix(item, mode))
+    assert 3 <= len(other.filler.turns) < len(mock.filler.turns)
+    for a, b in zip(other.filler.turns, mock.filler.turns):
+        assert a.messages() == b.messages()
+    assert other.base_tokens > mock.base_tokens + 3000
+    user = {"role": "user", "content": other.item["task"]["user"]}
+    assert other.base_tokens == counter.count(
+        [{"role": "system", "content": PROD_SYSTEM}, user], other.tools, True)
+
+
+@pytest.mark.parametrize("mode", ["prod", "catalog", "routed"])
+def test_prefix_reaches_engine_through_one_run(mode, monkeypatch):
+    """_one_run 把本档 prompt 面声明 / grammar_tools / 生产 system 交给引擎；填充与 mock 档同源；
+    生产工具被调用时走既有未知工具回执（不执行）。"""
+    import tests.fake_engine as fe
+    seen = []
+
+    class _Spy(fe.FakeEngine):
+        async def generate_once(self, session, **kw):
+            seen.append((session.history[0]["content"], kw.get("tools"), kw.get("grammar_tools")))
+            return await super().generate_once(session, **kw)
+    monkeypatch.setattr(fe, "FakeEngine", _Spy)
+    item = _lc_item("vfs")
+    a = K.item_prefix(item, mode)
+    args = type("A", (), {"seed": 7, "backend": "fake", "run_timeout": 0})()
+    meta = {"model": "m", "sampling_overrides": {"sent": {}, "ignored": {}}}
+    rec = asyncio.run(K._one_run(args, None, K.fake_counter(), item, 0, 0, 0, meta, a))
+    assert "error" not in rec, rec.get("traceback")
+    assert seen and all(s == (PROD_SYSTEM, a.tools, a.grammar_tools) for s in seen)
+    # 生产工具不执行：mock env 的未知工具回执
+    from benchmarks.model_eval.executor import feed_for_calls
+    from benchmarks.model_eval.mock_envs import make_env
+    env = make_env(item["task"]["env"], item["task"].get("env_init"))
+    fb = feed_for_calls([{"type": "function", "name": "run_shell_command",
+                          "arguments": {"command": "ls"}}], {}, "", {}, env=env)
+    assert "Unknown tool: run_shell_command" in json.dumps(fb, ensure_ascii=False)
+
+
+def test_prefix_dry_run_records_meta(tmp_path, capsys):
+    out = tmp_path / "r"
+    assert K.main(["--dry-run", "--prefix", "routed", "--levels", "0", "--reps", "1",
+                   "--limit", "2", "--out", str(out)]) == 0
+    recs = [json.loads(ln) for ln in (out / "transcripts.jsonl").read_text().splitlines()]
+    assert len(recs) == 2 and not any("error" in r for r in recs)
+    ids = [r["item_id"] for r in recs]
+    summ = json.loads((out / "summary.json").read_text())
+    assert summ["prefix_mode"] == "routed"
+    for k in K.PER_ITEM_META_KEYS:                                  # 全批字典只在 summary
+        assert set(summ[k]) == set(ids), k
+    for r in recs:
+        it = next(x for x in _all_items() if x["id"] == r["item_id"])
+        a = K.item_prefix(it, "routed")
+        assert r["prefix_mode"] == "routed" and r["prefix_base_tokens"] is None   # 无本地分词器
+        assert r["prefix_routed"] == a.routed and isinstance(r["prefix_routed"], list)
+        assert r["prefix_shadowed"] == a.shadowed and r["prefix_core_skipped"] == a.core_skipped
+        assert r["prefix_n_tools"] == summ["prefix_n_tools"][r["item_id"]]
+        for k in K.PER_ITEM_META_KEYS:                              # 行里只有本题那一项
+            assert r[k] == summ[k][r["item_id"]], k
+        assert r["prefix_top_k"] == P.production_toolset().top_k
+        assert r["fill"]["base_tokens"] > 3000                      # 生产 system + 目录
+    assert capsys.readouterr().out.count("prefix_base_tokens 记 null") == 1
+    mock = tmp_path / "m"
+    assert K.main(["--dry-run", "--levels", "0", "--reps", "1", "--limit", "1",
+                   "--out", str(mock)]) == 0
+    rec = json.loads((mock / "transcripts.jsonl").read_text().splitlines()[0])
+    assert rec["prefix_mode"] == "mock" and rec["prefix_base_tokens"] is None
+    assert "prefix_routed" not in rec and "prefix_shadowed" not in rec
+    assert "prefix_base_tokens 记 null" not in capsys.readouterr().out   # mock + fake 不告警
+
+
+def test_audit_tool_order_matches_production_registry(monkeypatch, tmp_path):
+    """prod/catalog/routed 档的声明顺序 = 生产：audit 的工具名序列 == 真 MCPRegistry 装载循环
+    （sorted 模块 × inspect.getmembers）的注册序。探活一律放行（只比顺序，不比可用性）；
+    rag_admin 不比（audit 刻意排除）；skill_invoke 在 audit 末尾（app.py 经 load_tool 补注册，
+    扫描时剧本表未装配必被跳过）。"""
+    import importlib
+    import pkgutil
+    from unittest import mock
+    import framework.mcp.tools as tools_pkg
+    from framework.mcp.base import BaseTool
+    from framework.mcp.registry import MCPRegistry
+    monkeypatch.setenv("AGENT_DATA_DIR", str(tmp_path))
+    audit_names = [s["name"] for s in P.production_toolset().physical]
+    with mock.patch("requests.get", side_effect=ConnectionError("hermetic")):
+        mods = [importlib.import_module(f"framework.mcp.tools.{i.name}")
+                for i in pkgutil.iter_modules(tools_pkg.__path__)]
+
+        def _walk(c):
+            for sub in c.__subclasses__():
+                yield sub
+                yield from _walk(sub)
+        for cls in set(_walk(BaseTool)):
+            if "is_available" in vars(cls):
+                monkeypatch.setattr(cls, "is_available", lambda self: True)
+        reg = MCPRegistry(tools_dir=Path(tools_pkg.__file__).parent)
+    rag_admin = {getattr(o, "name", None) for m in mods if m.__name__.endswith(".rag_admin")
+                 for o in vars(m).values() if isinstance(o, type) and issubclass(o, BaseTool)
+                 and o.__module__ == m.__name__}
+    reg_names = [s["name"] for s in reg.get_all_schemas() if s["name"] not in rag_admin]
+    assert len(reg_names) >= 40 and len(reg_names) == len(set(reg_names))
+    assert audit_names[-1] == "skill_invoke"
+    assert audit_names[:-1] == [n for n in reg_names if n != "skill_invoke"]
+    assert audit_names[0] == "click_ui_element"          # getmembers 类名序（非 vars 定义序）
+
+
+def test_resume_compat_prefix_mode(tmp_path):
+    """prefix_mode 不同：resume 与单纯 append 都拒；相同放行；旧行缺键按 mock。"""
+    out = tmp_path / "p"
+    base = ["--dry-run", "--levels", "0", "--reps", "1", "--limit", "1", "--out", str(out)]
+    assert K.main(base + ["--prefix", "prod"]) == 0
+    t = out / "transcripts.jsonl"
+    for extra in (["--resume"], ["--append"]):
+        for other in ("mock", "catalog"):
+            with pytest.raises(SystemExit, match=r"前缀档 --prefix 不同（W-2）.*prod ≠ " + other):
+                K.main(base + extra + ["--prefix", other])
+    assert K.main(base + ["--append", "--prefix", "prod"]) == 0           # 同档绿
+    K.check_resume_compat(t, "dry-run/fake", {}, 7, {}, prefix_mode="prod")
+    with pytest.raises(SystemExit, match="前缀档"):
+        K.check_resume_compat(t, "dry-run/fake", {}, 7, {}, prefix_mode="routed", entry_only=True)
+    _rows(t, prefix_mode=None)                                            # W-2 之前的旧目录
+    K.check_resume_compat(t, "dry-run/fake", {}, 7, {})                   # 缺键 = mock
+    K.check_resume_compat(t, "dry-run/fake", {}, 7, {}, prefix_mode="mock", entry_only=True)
+    with pytest.raises(SystemExit, match="mock ≠ prod"):
+        K.check_resume_compat(t, "dry-run/fake", {}, 7, {}, prefix_mode="prod")

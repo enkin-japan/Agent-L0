@@ -219,6 +219,16 @@ tailnet_dns.install([((config.get("inference") or {}).get("remote") or {}).get("
 from framework.utils.model_selection import resolve_selected_model, model_options
 MODEL, MODEL_REVISION, _model_source = resolve_selected_model()
 MODEL_OPTIONS = model_options(MODEL)  # 注册表条目里的模型级行为开关（表外模型为 {}）
+
+
+def _make_orchestrator(engine, mcp_registry):
+    """编排器装配（计算面装配期调用；抽出来是为了让接线可测——test_app_orchestrator_wiring）。
+
+    model_options：工具披露模式跟所选主模型条目走（D29，W-2）——条目 tool_schema_mode >
+    agent.tool_schema_mode > full，非法值在此拒启。读调用时刻的 MODEL_OPTIONS（远端发现
+    采纳后已改写为采纳模型的条目）。"""
+    return Orchestrator(engine, mcp_registry, config.get("agent") or {},
+                        model_options=MODEL_OPTIONS)
 AUDIO_MAX_LENGTH = config["inference"]["audio_max_length"]
 AGENT_HOST = config["inference"]["host"]
 AGENT_PORT = config["inference"]["port"]
@@ -694,7 +704,7 @@ async def lifespan(app: FastAPI):
             )
             resources["engine"] = engine
             model, processor = engine.model, engine.processor
-            orchestrator = Orchestrator(engine, mcp_registry, config.get("agent") or {})
+            orchestrator = _make_orchestrator(engine, mcp_registry)
 
             # 2.1 联网调查沙箱运行时：把引擎与主事件循环登记给 web_research（受限沙箱工具经
             #     run_coroutine_threadsafe 投回本循环复用主模型生成，见 framework/agents）。

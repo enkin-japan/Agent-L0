@@ -103,8 +103,29 @@ def public_turn(response_data: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def _turn_start_snapshot(session) -> Dict[str, Any]:
+    """轮初快照:任务状态 + 会话级路由保留集合(W-2 / D31)。建任务那一轮被回滚时,
+    last_routed_tools 必须一并回到轮初值——否则「首个任务前无路由件」不成立,且回滚后的
+    前缀带着一个从未落地的任务选出的工具。"""
+    routed = getattr(session, "last_routed_tools", None)
+    return {"task": session.task_state.snapshot() if session.task_state else None,
+            "last_routed_tools": None if routed is None else list(routed)}
+
+
+def _restore_routing(session, snapshot) -> None:
+    """只回滚会话级路由保留集合(删未落盘轮等不恢复任务、只清任务的路径用)。"""
+    if isinstance(snapshot, dict) and "last_routed_tools" in snapshot and "task" in snapshot:
+        routed = snapshot["last_routed_tools"]
+        session.last_routed_tools = None if routed is None else list(routed)
+
+
 def _restore_task(session, snapshot):
-    """按轮初快照回滚会话的任务状态(引擎故障/用户取消时与 history 回滚同步)。"""
+    """按轮初快照回滚会话的任务状态与路由保留集合(引擎故障/用户取消时与 history 回滚同步)。
+
+    兼容旧形快照(裸 TaskState 快照或 None):只回滚任务状态。"""
+    if isinstance(snapshot, dict) and "task" in snapshot and "last_routed_tools" in snapshot:
+        _restore_routing(session, snapshot)
+        snapshot = snapshot["task"]
     session.task_state = TaskState.from_snapshot(snapshot) if snapshot else None
 
 
@@ -171,6 +192,9 @@ class TurnRunner:
                 # 存储层撤销 write-ahead 并重建记忆，不截断上一条已完成历史。
                 await asyncio.to_thread(session_manager._discard_unlogged_turn_locked,
                                         session, turn, result)
+                # 撤销的轮次若建过任务,其路由件不能留在会话保留集合里(W-2)
+                _restore_routing(session, turn.get("_task_snapshot"))
+                await asyncio.to_thread(session.save_routing)
                 session.pending_tool_calls = None
                 session.pending_turn = None
                 session.suspended_turn = None
@@ -260,7 +284,7 @@ class TurnRunner:
         # 本轮起点快照:引擎故障/用户取消时,history 与任务状态同步整轮回滚
         session.cancel_requested = False
         rollback_idx = len(session.history)
-        task_snapshot = session.task_state.snapshot() if session.task_state else None
+        task_snapshot = _turn_start_snapshot(session)
         session.add_user_message(prompt, images, audios, extra_text=ingested_text)
         history_start_idx = len(session.history)
         # 轮次预写标记(write-ahead):进程死亡时启动恢复补 fail 轮,用户输入不蒸发。

@@ -62,6 +62,7 @@ _CHART_SCHEMA = {
 
 class DeckInitTool(BaseTool):
     name = "deck_init"
+    summary = "做幻灯片/PPT：先建演示稿"
     description = (
         "Start a presentation deck for this session (one deck per session; the user watches it "
         "build live in the preview panel). Call once, then add slides one at a time with "
@@ -91,6 +92,7 @@ class DeckInitTool(BaseTool):
 
 class DeckSetSlideTool(BaseTool):
     name = "deck_set_slide"
+    summary = "做 PPT：逐页新增或替换幻灯片"
     description = (
         "Add or replace ONE slide of the session deck. position 1..N replaces that slide, "
         "N+1 or omitted appends. Fill only the slots your chosen layout uses: "
@@ -142,6 +144,7 @@ class DeckSetSlideTool(BaseTool):
 
 class DeckRemoveSlideTool(BaseTool):
     name = "deck_remove_slide"
+    summary = "删除演示稿的一页"
     description = "Remove one slide from the session deck by 1-based position."
     requires_approval = False
     is_concurrency_safe = False
@@ -163,6 +166,7 @@ class DeckRemoveSlideTool(BaseTool):
 
 class DeckExportPdfTool(BaseTool):
     name = "deck_export_pdf"
+    summary = "演示稿导出 PDF"
     description = (
         "Export the session deck as a PDF file (one page per slide, exactly as previewed). "
         "Returns a markdown link — include it in your reply so the user can download the file. "
@@ -196,6 +200,7 @@ class DeckExportPdfTool(BaseTool):
 
 class DeckExportPptxTool(BaseTool):
     name = "deck_export_pptx"
+    summary = "演示稿导出可编辑 PPTX"
     description = (
         "Export the session deck as an EDITABLE PowerPoint file (.pptx) the user can open and "
         "modify in PowerPoint/Keynote. Layout is a close approximation of the preview (minor "
@@ -238,6 +243,7 @@ class DeckExportPptxTool(BaseTool):
 
 class DeckCritiqueTool(BaseTool):
     name = "deck_critique"
+    summary = "演示稿做完后检查并修正版面"
     description = (
         "Review the finished deck the way a viewer sees it: screenshot every slide, inspect each "
         "rendered page for VISUAL defects (title/text truncation, overcrowding, poor contrast, "
@@ -289,6 +295,7 @@ class DeckCritiqueTool(BaseTool):
 
 class DeckStatusTool(BaseTool):
     name = "deck_status"
+    summary = "查看演示稿当前大纲"
     description = (
         "Show the session deck's current outline: slide count, per-slide layout/title, pending "
         "visuals, locked slides. Call before editing an existing deck to see what's there."

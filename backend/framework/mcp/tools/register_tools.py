@@ -22,6 +22,7 @@ def _factory():
 
 class RegisterApiToolTool(BaseTool):
     name = "register_api_tool"
+    summary = "新增 HTTP API 工具"
     description = (
         "Draft a new HTTP API tool and submit it for the user's confirmation. "
         # D2-减法(类A):「不立即生效/落待确认区」由 execute 返回文案在使用时刻交付。
@@ -127,6 +128,7 @@ class RegisterApiToolTool(BaseTool):
 
 class RegisterSkillTool(BaseTool):
     name = "register_skill"
+    summary = "新增技能剧本"
     description = (
         "Draft a new skill playbook (markdown workflow) and submit it for the user's "
         # D2-减法(类A):「不立即生效/落待确认区」由 execute 返回文案在使用时刻交付。

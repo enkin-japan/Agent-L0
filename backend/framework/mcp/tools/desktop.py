@@ -64,6 +64,7 @@ def _is_view_safe(target: str) -> bool:
 
 class OpenPathTool(BaseTool):
     name = "open_path"
+    summary = "用默认应用打开文件、文件夹或网址"
     description = (
         "Open a file, folder, or web URL on the user's Mac in its default application "
         "(Finder / browser / Preview…). Use after locating the target with find_files/list_dir. "
@@ -115,6 +116,7 @@ class OpenPathTool(BaseTool):
 
 class ClipboardReadTool(BaseTool):
     name = "clipboard_read"
+    summary = "读取用户刚复制的剪贴板文字"
     description = (
         "Read the current TEXT content of the user's clipboard. Call this only when the user "
         "refers to something they copied ('summarize what I just copied'); never poll it."
@@ -141,6 +143,7 @@ class ClipboardReadTool(BaseTool):
 
 class ClipboardWriteTool(BaseTool):
     name = "clipboard_write"
+    summary = "把文字放进剪贴板"
     description = (
         "Put text onto the user's clipboard (replaces its current content) so they can paste it "
         "anywhere. Use when the user asks to copy something for them."
@@ -167,6 +170,7 @@ class ClipboardWriteTool(BaseTool):
 
 class NotifyUserTool(BaseTool):
     name = "notify_user"
+    summary = "后台任务完成时发系统通知"
     description = (
         "Show a macOS notification banner to the user. Use it to announce that a long background "
         "or a scheduled job has finished — not as a substitute for answering in chat."
@@ -200,6 +204,7 @@ class NotifyUserTool(BaseTool):
 
 class SystemStatusTool(BaseTool):
     name = "system_status"
+    summary = "查电量、磁盘、内存等本机状态"
     description = (
         "Report the Mac's current battery level/charging state, free disk space, memory size "
         "and uptime. Use for questions like 'how much battery/disk do I have left'."

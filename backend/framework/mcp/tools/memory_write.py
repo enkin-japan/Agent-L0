@@ -14,6 +14,7 @@ from ...memory.notes import NOTE_TYPES
 
 class MemoryWriteTool(BaseTool):
     name = "memory_write"
+    summary = "记下长期要记住的用户事实或偏好"
     description = (
         "Save ONE durable fact to your long-term notes, so you still know it in future "
         "conversations. One fact per note; give it a kebab-case name and rewrite the same "

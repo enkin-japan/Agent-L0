@@ -13,6 +13,7 @@ from ...agents import chart_tools
 
 class RenderChartTool(BaseTool):
     name = "render_chart"
+    summary = "按数据画图表（柱状、折线、饼图）"
     description = (
         "Render a data chart (bar / barh / line / pie / scatter) as an image the user will see. "
         "Give it STRUCTURED DATA ONLY — you never write plotting code. For factual/statistical "

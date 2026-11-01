@@ -140,15 +140,36 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 - 顺带查（dialect 层归一）：方言层无字面 `\n` 清洗钩子（qwen35 `_coerce` 只还原 JSON 字面量；gemma4 `_scalar`/`parse_arguments`）。
   两模型各一个习惯（Qwen 把 dict repr 写进 .json、31B 写字面 `\n`）是否值得在 dialect 层归一，留待 W-2/W1 有同口径复测数据再定，本波不做。
 
-### W-2 本机路径静态前缀瘦身（用户 10-31 采纳）【新】
-- 事实：system + 全量工具 schema 稳定前缀 9,424 tok（engine.py:140），30 个工具模块；`tool_schema_mode: full | catalog` 已实现未启用
-  （catalog = 目录常驻 + `get_tool_schema` 按名取详情，约束采样语法仍建在完整 schema 上）。
-- ① 本机 Gemma 路径默认 `catalog`，远端 Qwen 维持 `full`（无拐点，无需省）；量前缀缩到多少【测】。
-- ② 工具路由：每个用户轮用 rag_server 的 embedding 对「用户请求 + 任务目标」选 top-k 相关工具进目录，核心工具（文件 / 计划 / 记忆）常驻，未入选者仍可 `get_tool_schema` 取回。
-- ③ skill 渐进披露：skill 正文不进 system prompt，只留一行索引，加 `load_skill` 工具按需读入。
-- MCP 只是接线协议本身不省 token；省的是「目录常驻、详情按需」的披露策略，MCP 服务器的工具列表走同一路由。
-- 量法：harness 加 `--prefix prod|catalog|routed` 三档，同一历史档位对比。
+### W-2 静态前缀瘦身（用户 10-31 采纳；11-01 按 scout 摸底修订，用户「按这六条开工」）【已落地 11-01】
+- **前提修正（scout 11-01）**：旧数 9,424 已过期——同口径（system + 声明，include_env=False）gemma4 full **13,565** / qwen35 13,708，RAG 在线 +rag_admin 14.8K，
+  system 本身 1.4K。原 ③「skill 按需」已是现状（skill 正文从不进 system prompt，`skill_invoke` 即 load_skill，索引 325 tok），本波无事。
+  原 ①「本机 Gemma catalog / 远端 Qwen full」与 D26/D27 冲突：prompt 一律在执行端装配、原样上行 Colab，只能按模型家族/条目分档。
+  原 ②「每轮 embedding 路由」会击穿前缀缓存（工具声明紧跟 system，换集合 = 指纹失配整段重预填），且融合模式 rag_server 无 /embed、RAG 不保证在线。
+  原 catalog 实现只省 43%（62/64 描述单行，取首行 = 全文，只省掉参数）。
+- **落地（D29–D32）**：
+  - D29 分档：注册表条目 `tool_schema_mode` > `agent.tool_schema_mode` > full，值限 full|catalog 否则拒启；gemma4 两条目 catalog（稠密全注意力，prefill 随前缀线性涨），
+    qwen35 两条目 full；模式跟配置主模型条目，model_router 专科切换不改披露。接线 `app._make_orchestrator`（有钉接线的测试）。
+  - D30 目录行：`BaseTool.summary`（不进 get_schema，full 字节与 W-1 一致）或描述首句，硬截 80 字；60 件工具补 summary。
+  - D31 路由只在 catalog：任务建立时按「goal + 建任务的用户请求」词法选 top_k=6（候选 = 全部 − 元工具 − core 七件 memory_write/edit_file/write_file/find_files/list_dir/skill_invoke/run_shell_command），
+    存 `TaskState.routed_tools` 进快照，任务期冻结（replan 不重算）；任务结束后会话级 `last_routed_tools`（routing.json）保留到下一任务建立，分支继承、轮级/定时轮回滚恢复
+    → 每任务一次前缀失配（建任务处）。首个任务前纯聊天轮无路由件。语法面恒用完整 schema。
+  - D32 词法 BM25（k1 1.2 / b 0.75）确定性：小写 ASCII 词（含下划线切片与整词）+ CJK 双字 bigram；查询词去英文停用词/泛用请求词、df>N/2 高频词（N≥4）、直呼常驻工具名的切片；
+    得分 0 不入、不足不补、同分按名。embedding 打分归 **W-2b**（需 rag_server 融合模式加 /embed）。
+  - 量法：harness `--prefix mock|prod|catalog|routed`（`benchmarks/context_knee/prefix.py` 纯装配，复用 tool_disclosure，生产工具只声明不执行，mock 工具撞名优先；
+    meta 记 prefix_mode / prefix_base_tokens / 按题路由名单，续跑按 prefix_mode 校验；mock 档 16 题字节不变）。
+- **实测（`backend/scripts/measure_prefix.py`，离线真分词器）**：
 
+  | 整段前缀 | gemma4 | +rag | qwen35 | +rag |
+  |---|---|---|---|---|
+  | full | 13,565 | 14,773 | 13,708 | 14,900 |
+  | catalog（元+core） | **5,266** | 5,417 | 5,280 | 5,414 |
+  | catalog + 路由（三例） | 5,771–6,703 | | 5,773–6,782 | |
+
+  逐件声明门：full 12,036 / 12,144 不变（BUDGET 12,300）；catalog 3,735 / 3,713，新门 `BUDGET_CATALOG` 3,810。harness 四档 gemma4：mock 268 / prod 13,582 / catalog 5,281 / routed 6.3–7.6K。
+  原定 catalog ≤ 5,000 因 run_shell_command 入 core（+~460）未达，主会话接受（描述自称 PRIMARY、system 点名，目录行+往返不值）。
+- **残留**：词法路由对英文/口语请求召回有限（W-2b embedding）；`stable_prefix_tokens_est` 不含路由件（+0.5–1.4K，W1 定阈值按真实声明算）；
+  prod/catalog/routed 三档 Colab 复测另排时段（低于前缀 base 的档位 filler 报 error 行是旧行为）；qwen35 固定教学文本 122 tok 与 skill_invoke 325 tok 不动（事故驱动措辞）；
+  catalog 下的 31B 质量（目录行 → get_tool_schema 逃生口是否被用）尚无实机数据，随三档复测看；gemma4 profile 数字仍是 full 口径。
 ### W1 上下文上限护栏【新，守卫型 → 变异证明】
 - 发现上限：远端取 vLLM `/v1/models` 的 `max_model_len`（或配置 65536）；本机从模型 config 读 `max_position_embeddings`，并以 `max_kv_size`（新增配置）封顶。
 - 三档预算随上限派生：soft = 拐点×0.5【测】，hard = 拐点×0.8【测】，ceiling = 上限 − 生成预留（max_tokens 升档最大 12288）。
@@ -223,7 +244,11 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 | D20（新） | 落刀位置 | 轮首 / 步骤边界 / 溢出兜底 | 1.5 |
 | D21（新） | 远端投机解码 | **Colab 部署默认关 MTP**【已落地 W-1，10-31 晚：compute_ctl 所有模型缺省 off】；重开须经同一 harness 复测 | W0 F9 |
 | D23 | 本机/Gemma 侧模型 | **Gemma 4 26B A4B 出阵容**（用户 10-31：上限在那里；实测 8K 拐点）。**Gemma 4 31B 定为 Gemma 侧唯一选项**：Colab 用 `google/gemma-4-31B-it-qat-w4a16-ct`（49K 无拐点、回忆 100%、含 bf16 视觉塔），本机用 `mlx-community/gemma-4-31b-it-4bit` 只需能跑 | 用户决定 + P0.5 |
-| D24（新） | 前缀披露策略 | 本机 catalog + 工具路由 + skill 按需；远端 full | W-2 |
+| D24（改） | 前缀披露策略 | ~~本机 catalog / 远端 full~~ → **按模型家族/条目分档**（prompt 在执行端装配、原样上行，D26）；skill 按需已是现状 | W-2 scout 11-01 |
+| D29（新） | 披露模式解析 | 注册表条目 `tool_schema_mode` > `agent.tool_schema_mode` > full，值限 full\|catalog 否则拒启；gemma4 catalog、qwen35 full；专科切换不改披露【定，用户 11-01】 | W-2 |
+| D30（新） | 目录行文本 | `BaseTool.summary`（不进 full schema）或描述首句，硬截 80 字【定，用户 11-01】 | W-2 |
+| D31（新） | 工具路由时点 | 只在 catalog；任务建立时算一次、任务期冻结、任务结束后保留到下一任务；core 七件常驻；每任务一次前缀失配【定，用户 11-01；退出不失配为主会话修订】 | W-2 |
+| D32（新） | 路由打分器 | 本波纯本地词法 BM25（确定性、离线可用）；embedding 版归 W-2b（rag_server 融合模式需 /embed）【定，用户 11-01】 | W-2 |
 | D22（新） | 采样参数来源 | 按模型注册表条目配（`sampling` 键，W-1；温度/min_p 不入条目，仍是 App 旋钮），缺省沿用现值；CUDA 透传 top_p/top_k/presence/frequency（`89ae1b4`）；MLX 同四键透传（W-1） | W0 F1/F5 |
 | D25（新） | CUDA 精度 | **只用预量化 4 bit**（Qwen INT4、Gemma QAT W4A16），不上 fp8 / NVFP4：A100 1.55 TB/s 单流解码受权重读取限制，INT4 实测 50–55 tok/s 已只有理论值一半，fp8 再腰斩；Ampere 无 FP8 张量核，fp8 实为 W8A16 无 prefill 收益；NVFP4 只在 Blackwell 有硬件收益。质量侧 QAT W4A16 49K 无拐点，无证据需要更高精度。Colab 出 Blackwell 档或 Google 出 QAT-NVFP4 再议 | 用户 10-31 + §1.4 |
 | D26（新） | 部署形态 | **计算端只定 Colab，本机只做执行端**；本机推理栈排 P-last，能跑即可 | 用户 10-31 |
@@ -240,7 +265,7 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
 | 探针填充不像真实历史 → 拐点失真 | 填充取自脱敏真实观察形态；与现网 prompt 分布对照 |
 | 模板对题集过拟合 | 20% 题只做最终验证 |
 | 投机解码 / 量化件在长上下文的隐性退化（W0：MTP 开 16K 起崩） | 部署默认关；任何推理栈变更（vLLM 版本、draft 配置、量化件）都用 context_knee harness 复测 4 档 |
-| 测量形态 ≠ 生产形态：模型与精度已对齐（Colab INT4 / QAT W4A16 即生产），仍差前缀 0.4K vs 9.4K | W-2 的 `--prefix prod|catalog|routed` 三档补测；阈值按生产形态定 |
+| 测量形态 ≠ 生产形态：模型与精度已对齐（Colab INT4 / QAT W4A16 即生产），仍差前缀 0.3K vs 13.6K（full）/ 5.3K（catalog） | harness `--prefix mock\|prod\|catalog\|routed` 四档已落地（W-2）；Colab 复测另排时段；阈值按生产形态定 |
 | 31B QAT 的视觉塔在 vLLM 上未端到端验过 | W-3 验收项：Colab 部署后图文请求通过一次 |
 
 ## 8. 参考（已逐页核实）
@@ -272,3 +297,8 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
   W-1 实测数：gemma4 预算 12,036 / qwen35 12,144（同口径，线 12,300）；qwen35 整块 12,325 含固定教学文本归 W-2。
   残留（不阻断 W-1 收口）：聊天轮温度/min_p 仍是 App 与 Form 缺省 0.2/0.05 的旋钮（改协议归后续）；batch_lane 不透传 top_p/top_k；门面非流式路未接取消入口；
   CUDA 取消异常靶文案匹配而非专用异常类；MLX 预填期不可中断（无等待点）；MLX drafter 是否同 MTP 病归 P-last。提交 `4cb0286`（全量 check 通过）。
+- 11-01 上午（/compact 后开 W-2；用户「按这六条开工」）：scout 摸底推翻三前提（9,424 过期 → 13,565；skill 按需已是现状；本机/远端分档与 D26 冲突；每轮路由击穿缓存且融合模式无 /embed；
+  catalog 只省 43%）→ 主会话提六条修订、用户拍板（D29–D32）→ 主会话亲改 config.yaml（条目级 tool_schema_mode、agent.tool_routing）→ implementer A 后端
+  （tool_disclosure 纯函数模块、编排器接线、60 件 summary、measure_prefix）‖ implementer B harness 四档（prefix.py）→ reviewer 一审 0 Critical / 1 Major（core 件数断言过期）/ 9 Minor，
+  复审 0/0/5 Minor/4 Nit（分支继承路由集合、轮级与定时轮回滚恢复、英文停用词补全、audit 声明顺序对齐生产注册序、transcript 行体积）全部修 → verifier 变异证明 12 个变异体全红、
+  sha256 逐字节还原。实测与残留见 W-2 节。主会话复审读法：tool_disclosure / 编排器·会话·快照·app 接线 / config.yaml / prefix.py / run_knee 增删行 / 路由冻结测试断言逐行，summary 行与文档按摘要。

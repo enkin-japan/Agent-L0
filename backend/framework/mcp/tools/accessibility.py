@@ -260,6 +260,7 @@ _MOD_MASKS = _init_masks()
 class ListApplicationsTool(BaseTool):
     """列出正在运行的 GUI 应用（免 AX 权限）"""
     name = "list_applications"
+    summary = "列出正在运行的应用（操作界面前先看）"
     description = (
         "List the currently running GUI applications (name, pid, and which one is frontmost). "
         "Use it to see what is open before reading a window's UI or driving an app."
@@ -291,6 +292,7 @@ class ListApplicationsTool(BaseTool):
 class ReadUITreeTool(BaseTool):
     """读取应用聚焦窗口的 Accessibility 树（剪枝，可交互元素带编号）"""
     name = "read_ui_tree"
+    summary = "读取应用窗口的界面元素树（点按/填写前先读）"
     description = (
         "Read the Accessibility (UI) tree of an app's focused window as pruned, indented text. "
         "Interactive elements are numbered like [3] — use that number with click_ui_element / "
@@ -365,6 +367,7 @@ def _resolve_element(index: int):
 class ClickUIElementTool(BaseTool):
     """点击 UI 树中按编号指定的元素"""
     name = "click_ui_element"
+    summary = "按编号点击界面元素"
     description = (
         "Click (press) an interactive element by its [n] index from the most recent read_ui_tree "
         "output. After clicking, read the UI tree again to confirm the effect."
@@ -399,6 +402,7 @@ class ClickUIElementTool(BaseTool):
 class SetUIValueTool(BaseTool):
     """给 UI 树中按编号指定的元素设值（文本框等）"""
     name = "set_ui_element_value"
+    summary = "按编号填写界面输入框"
     description = (
         "Set the text value of an editable element (text field / area) by its [n] index from "
         "read_ui_tree. Use this to fill in fields directly; for free-form typing into the focused "
@@ -435,6 +439,7 @@ class SetUIValueTool(BaseTool):
 class TypeTextTool(BaseTool):
     """向当前聚焦元素键入文本（Unicode 键盘合成）"""
     name = "type_text"
+    summary = "向当前焦点键入文字"
     description = (
         "Type a string of text into whatever element currently has keyboard focus, as if typed on "
         "the keyboard. Click or focus the target field first. For keyboard shortcuts (e.g. Cmd+S) "
@@ -472,6 +477,7 @@ class TypeTextTool(BaseTool):
 class PressKeysTool(BaseTool):
     """发送组合键（如 cmd+s、cmd+shift+t）"""
     name = "press_keys"
+    summary = "发送快捷键或按键组合"
     description = (
         "Send a keyboard shortcut / key combination such as 'cmd+s', 'cmd+shift+t', 'return', "
         "'escape', 'cmd+c'. Modifiers: cmd, shift, opt/alt, ctrl, fn. Use this for shortcuts; "

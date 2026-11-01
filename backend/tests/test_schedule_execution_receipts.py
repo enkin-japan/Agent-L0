@@ -111,3 +111,26 @@ def test_new_scheduled_run_preserves_abandoned_paused_facts(make_session, tmp_pa
     assert fresh["execution_receipts"] == {"items": [], "truncated": False}
     assert terminals[1] == {**public_turn(fresh), "turn_index": 1}
     assert len(registry.executed) == 1 and scheduler.snapshot()["tasks"] == []
+
+
+@pytest.mark.parametrize("terminal", ["cancelled", "fail"])
+@pytest.mark.parametrize("before", [None, ["calendar_add"]])
+def test_scheduled_rollback_restores_retained_routing(make_session, terminal, before):
+    """W-2：建任务的定时轮被回滚（取消/引擎故障），会话级路由保留集合回到轮初值——
+    与交互轮（turn_runner._restore_task）同形同语义。"""
+    from .test_tool_routing import _PLAN, _Registry, _TOOLS
+    script = [{"tool_calls": [_PLAN]}] + ([{"cancelled": True}] if terminal == "cancelled" else [])
+    engine = FakeEngine(script)          # fail 档：第二次生成脚本耗尽 → 引擎故障
+    orch = make_orch(engine, _Registry([FakeTool(n) for n in _TOOLS]),
+                     tool_schema_mode="catalog",
+                     tool_routing={"top_k": 2, "core": ["memory_write"]})
+    session = make_session("schedule_routing")
+    session.last_routed_tools = None if before is None else list(before)
+    runner = ScheduleRunner(None, SimpleNamespace(get_or_create=lambda sid: session),
+                            orch, TaskScheduler())
+    record = {"status": "fail"}
+    run(runner._execute_inner({"id": "t", "name": "t", "prompt": "帮我做一份 PPT"}, record))
+    assert record["status"] == terminal
+    assert len(engine.calls) == 2                       # 建任务那次生成确实发生过
+    assert session.task_state is None
+    assert session.last_routed_tools == before

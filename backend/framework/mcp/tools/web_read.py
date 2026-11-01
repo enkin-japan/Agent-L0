@@ -21,6 +21,7 @@ _CFG_READ = load_section("web_read")
 
 class WebReadTool(BaseTool):
     name = "web_read"
+    summary = "读取并摘要给定网页"
     description = (
         "Read the specific web page URL(s) provided and return a faithful digest of their content "
         "with [来源N] citations. Use this ONLY when the task is limited to the given page(s): read, "

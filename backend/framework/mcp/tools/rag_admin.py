@@ -102,6 +102,7 @@ def _format_catalog(categories: dict) -> str:
 class RAGListCategoriesTool(BaseTool):
     """列出知识库全部分类及路由描述"""
     name = "rag_list_categories"
+    summary = "列出知识库分类"
     description = (
         "List all knowledge-base categories in the RAG database together with their routing "
         "descriptions. Use it before inserting documents or managing categories to see what "
@@ -135,6 +136,7 @@ class RAGListCategoriesTool(BaseTool):
 class RAGInsertDocumentTool(BaseTool):
     """向知识库指定分类入库一篇文档（分类必须已存在，工具前置校验 + 服务端硬校验双闸门）"""
     name = "rag_insert_document"
+    summary = "把文档存入知识库"
     description = (
         "Save a document into a SPECIFIC category of the RAG knowledge base (the server chunks "
         "and indexes it in the background). Standard flow — follow it in order: "
@@ -210,6 +212,7 @@ class RAGInsertDocumentTool(BaseTool):
 class RAGUpsertCategoryTool(BaseTool):
     """创建或更新一个分类的路由描述"""
     name = "rag_upsert_category"
+    summary = "新建或修改知识库分类"
     description = (
         "Create a new category or update an existing category's routing description in the RAG "
         "database. Use this BEFORE rag_insert_document when no existing category fits the "
@@ -245,6 +248,7 @@ class RAGUpsertCategoryTool(BaseTool):
 class RAGDeleteCategoryTool(BaseTool):
     """删除一个分类的路由条目（敏感操作，需用户授权）"""
     name = "rag_delete_category"
+    summary = "删除知识库分类"
     description = (
         "Delete a category's routing entry from the RAG database. The vector data inside the "
         "category is kept but will no longer be routed to, and the routing description is lost. "
@@ -275,6 +279,7 @@ class RAGDeleteCategoryTool(BaseTool):
 class RAGDeleteDocumentTool(BaseTool):
     """按 source_path 跨库整篇删除文档（不可逆敏感操作，需用户授权）"""
     name = "rag_delete_document"
+    summary = "从知识库删除文档"
     description = (
         "Delete an entire document from the RAG knowledge base: all its chunks across every "
         "category database are removed from search, and the raw backup file is moved to a "
@@ -305,6 +310,7 @@ class RAGDeleteDocumentTool(BaseTool):
 class RAGMarkStaleTool(BaseTool):
     """给文档打/清过时标记（只写 metadata，不动内容——标记权而非改写权）"""
     name = "rag_mark_stale"
+    summary = "标记知识库文档已过时"
     description = (
         "Mark a document in the RAG knowledge base as OUTDATED without modifying its content, "
         "or clear such a mark. Use this when the user tells you that stored information is "
@@ -341,6 +347,7 @@ class RAGMarkStaleTool(BaseTool):
 class RAGReclassifyTool(BaseTool):
     """触发未分类文档的后台重分拣"""
     name = "rag_reclassify_unclassified"
+    summary = "新建分类后重新归类未分类文档"
     description = (
         "Trigger background re-classification of all documents currently sitting in the "
         "unclassified pool of the RAG database. Use it after creating new categories with "

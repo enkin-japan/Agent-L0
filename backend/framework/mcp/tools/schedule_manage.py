@@ -50,6 +50,7 @@ def _fmt_task(t: dict) -> str:
 
 class ScheduleCreateTool(BaseTool):
     name = "schedule_create"
+    summary = "创建定时或周期任务（每天、每周、明天几点）"
     description = (
         "Create a recurring or one-shot scheduled task: at the scheduled time the agent runs "
         "'prompt' automatically in a dedicated conversation the user can open later. Use when "
@@ -93,6 +94,7 @@ class ScheduleCreateTool(BaseTool):
 
 class ScheduleUpdateTool(BaseTool):
     name = "schedule_update"
+    summary = "修改或暂停定时任务"
     description = (
         "Modify an existing scheduled task: change its name, prompt, schedule spec, or "
         "enable/disable it. Provide only the fields to change. Call schedule_list first if "
@@ -132,6 +134,7 @@ class ScheduleUpdateTool(BaseTool):
 
 class ScheduleDeleteTool(BaseTool):
     name = "schedule_delete"
+    summary = "删除定时任务"
     description = (
         "Permanently delete a scheduled task and its run history (its past conversation is "
         "kept). To pause a task instead of deleting it, use schedule_update with "
@@ -161,6 +164,7 @@ class ScheduleDeleteTool(BaseTool):
 
 class ScheduleListTool(BaseTool):
     name = "schedule_list"
+    summary = "列出定时任务"
     description = (
         "List all scheduled tasks with their ids, schedules, next run times, and prompts. "
         "Call this before schedule_update / schedule_delete, or when the user asks what "

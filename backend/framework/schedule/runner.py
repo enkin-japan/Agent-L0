@@ -193,7 +193,10 @@ class ScheduleRunner:
             session.cancel_requested = False
             session.suspend_requested = False
             rollback_idx = len(session.history)
-            task_snapshot = session.task_state.snapshot() if session.task_state else None
+            # 轮初快照与交互轮同形（turn_runner._turn_start_snapshot）：任务状态 + 会话级路由
+            # 保留集合（W-2）——建任务的定时轮被回滚时，last_routed_tools 也回到轮初值
+            from ..core.turn_runner import _restore_task, _turn_start_snapshot
+            task_snapshot = _turn_start_snapshot(session)
             # preamble 一并进入落盘 prompt（见 _turn_data）：否则冷恢复重放的用户消息比
             # 当时的内存版少了 preamble，上下文不一致且 KV 前缀失配多付一次重预填充
             full_prompt = preamble + task["prompt"]
@@ -260,8 +263,7 @@ class ScheduleRunner:
                 if final_result.get("status") == "cancelled":
                     # 中止：与交互轮同语义——整轮回滚出内存，落盘取消存档
                     session.history = session.history[:rollback_idx]
-                    from ..core.task_state import TaskState
-                    session.task_state = TaskState.from_snapshot(task_snapshot) if task_snapshot else None
+                    _restore_task(session, task_snapshot)
                     run["status"] = "cancelled"
                     response_data = self._turn_data(full_prompt, "cancelled", [
                         {"role": "system", "content": "Scheduled run cancelled by the user."}])
@@ -276,8 +278,7 @@ class ScheduleRunner:
             except Exception as e:
                 import traceback
                 session.history = session.history[:rollback_idx]
-                from ..core.task_state import TaskState
-                session.task_state = TaskState.from_snapshot(task_snapshot) if task_snapshot else None
+                _restore_task(session, task_snapshot)
                 run["status"] = "fail"
                 run["summary"] = f"engine error: {e}"
                 response_data = self._turn_data(full_prompt, "fail", [

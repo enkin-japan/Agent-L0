@@ -72,6 +72,7 @@ def _run(args, cwd: Path, timeout: int) -> subprocess.CompletedProcess:
 
 class CodeExploreTool(BaseTool):
     name = "code_explore"
+    summary = "分析代码仓库：调用关系、改动影响"
     description = (
         "Semantic code intelligence for a LOCAL code repository (codegraph symbol graph): "
         "answers 'how does X work', 'who calls Y', 'what breaks if I change Z' in one call, "

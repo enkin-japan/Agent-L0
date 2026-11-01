@@ -24,6 +24,7 @@ def _osascript_available() -> bool:
 class AppleScriptTool(BaseTool):
     """执行 AppleScript / JXA 脚本，驱动 macOS 应用（应用级操作，恒需用户审批）"""
     name = "run_applescript"
+    summary = "用 AppleScript 操控邮件/备忘录/Finder 等原生应用"
     description = (
         "Run an AppleScript (or JavaScript for Automation) script on macOS to control native "
         "apps — Mail, Calendar, Reminders, Notes, Finder, Safari, Music, System Events, etc. "

@@ -219,6 +219,7 @@ def _atomic_write(path: str, content: str):
 class EditFileTool(BaseTool):
     """精确文本替换（唯一命中才执行）——修改已有文件的首选通道。"""
     name = "edit_file"
+    summary = "按原文片段替换修改已有文本文件"
     description = (
         "Edit an existing text file by exact string replacement: old_string is replaced with "
         "new_string. old_string must match EXACTLY ONE location in the file (copy it verbatim "
@@ -298,6 +299,7 @@ class EditFileTool(BaseTool):
 class WriteFileTool(BaseTool):
     """整文件写入（新建/彻底重写）；覆盖已有文件前自动备份 .bak。"""
     name = "write_file"
+    summary = "新建文本文件或整体重写"
     description = (
         "Create a new text file or completely overwrite an existing one with the given content. "
         "Use this ONLY for new files or full rewrites — to change part of an existing file, use "

@@ -88,6 +88,7 @@ def format_probe(info: Dict[str, Any]) -> str:
 
 class MediaDownloadTool(BaseTool):
     name = "media_download"
+    summary = "从链接下载视频或音频"
     description = (
         "Fetch online video/audio from a URL the user explicitly provided (YouTube, Bilibili, "
         "and 1000+ sites via yt-dlp). mode='probe' returns metadata only (title/duration/size) — "

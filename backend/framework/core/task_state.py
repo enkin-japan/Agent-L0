@@ -49,6 +49,9 @@ class TaskState:
         self.step_tool_calls = 0     # 当前步实际执行过的物理工具数（虚报完成的事实红旗）
         self.step_failures: Dict[str, int] = {}  # step_id(str) -> 累计失败次数
         self.recent_calls: List[str] = []  # 本轮物理工具调用指纹（重复调用拦截）
+        # 任务期路由（W-2 / D31，只在 catalog 模式由编排层写入）：任务建立时按词法打分选出、
+        # 以完整 schema 入前缀的工具名；任务期内冻结。None = 尚未路由（旧快照恢复）。
+        self.routed_tools: Optional[List[str]] = None
         self.created_at = time.time()
         self._next_id = 1
 
@@ -265,6 +268,7 @@ class TaskState:
             "step_failures": dict(self.step_failures),
             "created_at": self.created_at,
             "next_id": self._next_id,
+            "routed_tools": None if self.routed_tools is None else list(self.routed_tools),
         }
 
     @classmethod
@@ -277,6 +281,8 @@ class TaskState:
         task.step_tool_calls = int(data.get("step_tool_calls", 0))  # 旧快照缺省 0
         task.step_failures = {str(k): int(v) for k, v in (data.get("step_failures") or {}).items()}
         task.created_at = float(data.get("created_at", time.time()))
+        routed = data.get("routed_tools")
+        task.routed_tools = ([str(n) for n in routed] if isinstance(routed, list) else None)
         task._next_id = int(data.get("next_id", 1 + max((s.get("id", 0) for s in task.plan), default=0)))
         return task
 

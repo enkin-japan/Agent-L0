@@ -58,6 +58,7 @@ def _osascript(script: str, *argv: str) -> "subprocess.CompletedProcess":
 
 class CalendarAddTool(BaseTool):
     name = "calendar_add"
+    summary = "在日历新建日程"
     description = (
         "Create an event in the user's macOS Calendar (syncs to their devices). Provide the "
         "start time as 'YYYY-MM-DD HH:MM' (24h). Ask the user before guessing missing details "
@@ -119,6 +120,7 @@ class CalendarAddTool(BaseTool):
 
 class CalendarListTool(BaseTool):
     name = "calendar_list"
+    summary = "查看日历日程"
     description = (
         "List the user's macOS Calendar events for a day or the next few days "
         "('what's on my schedule'). Read-only."
@@ -177,6 +179,7 @@ class CalendarListTool(BaseTool):
 
 class ReminderAddTool(BaseTool):
     name = "reminder_add"
+    summary = "在提醒事项新建待办"
     description = (
         "Create a to-do in the user's macOS Reminders (syncs to their devices), optionally with "
         "a due time 'YYYY-MM-DD HH:MM'. Use for 'remind me to …' requests."

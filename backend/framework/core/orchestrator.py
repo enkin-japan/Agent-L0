@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import approval_policy, events
 from .journal import TurnJournal
 from .task_state import TaskState, call_fingerprint
+from . import tool_disclosure
 from ..memory.session import ChatSession
 from ..memory.compactor import compact_tool_observations
 from ..mcp.registry import MCPRegistry
@@ -339,17 +340,17 @@ def _obs_failed(obs: Any) -> bool:
     return _resp_failed(obs.get("response") if isinstance(obs, dict) else obs)
 
 
-def _last_user_text(history: List[Dict[str, Any]]) -> str:
-    """从会话历史中提取最近一条用户文本（作为任务 goal）。"""
+def _last_user_text(history: List[Dict[str, Any]], limit: Optional[int] = 500) -> str:
+    """从会话历史中提取最近一条用户文本（作为任务 goal；limit=None 取原文全文）。"""
     for msg in reversed(history):
         if msg.get("role") == "user":
             content = msg.get("content")
             if isinstance(content, list):
                 for item in content:
                     if item.get("type") == "text":
-                        return str(item.get("text", ""))[:500]
+                        return str(item.get("text", ""))[:limit]
             elif isinstance(content, str):
-                return content[:500]
+                return content[:limit]
     return ""
 
 
@@ -373,7 +374,10 @@ def _observation_target(name: str, args: Any) -> Optional[str]:
 class Orchestrator:
     """读状态 → 模型定下一步 → 执行 → 更新状态 的编排循环，护栏为确定性代码。"""
 
-    def __init__(self, engine, mcp_registry: MCPRegistry, agent_cfg: Optional[Dict[str, Any]] = None):
+    def __init__(self, engine, mcp_registry: MCPRegistry, agent_cfg: Optional[Dict[str, Any]] = None,
+                 *, model_options: Optional[Dict[str, Any]] = None):
+        """model_options：配置选定的主模型注册表条目（app.py 的 MODEL_OPTIONS）；只读其
+        `tool_schema_mode`（D29）。不传 = 只看 agent 段全局缺省。"""
         cfg = agent_cfg or {}
         self.engine = engine
         self.registry = mcp_registry
@@ -406,7 +410,15 @@ class Orchestrator:
             _tts = 180
         self.tool_timeout_seconds = int(_tts)
         self.max_parse_retries = int(cfg.get("max_parse_retries", 3))  # 工具格式解析错误的断环阈值
-        self.tool_schema_mode = str(cfg.get("tool_schema_mode", "full"))   # full | catalog
+        # 工具披露（W-2，D29/D31）：模式 = 注册表条目 > agent 段 > "full"，非法值拒启。
+        # 模式跟**配置选定的主模型条目**走，构造期定案：core/model_router 的专科切换
+        # （同一编排器把某轮派给别的引擎）**不改**披露——工具声明紧跟 system，换披露形态
+        # = 前缀缓存整段失效，前缀稳定优先于专科模型的口味。
+        self.tool_schema_mode = tool_disclosure.resolve_tool_schema_mode(model_options, cfg)
+        # 任务期路由（只在 catalog 模式生效）：top_k 非法拒启；core 名字未注册的告警跳过
+        # （rag_admin 等按探活出现，不能因此拒启），见 refresh_tools_declaration。
+        self.tool_routing_top_k, self._core_cfg = tool_disclosure.resolve_tool_routing(cfg)
+        self._core_warned: set = set()
         # 思考位置策略：把前端二值思考开关翻译成逐迭代策略（_thinking_for_iteration）。
         # dynamic（默认）：关思考→首轮自动思考+后续迭代关闭（思考价值集中在规划轮，
         # 消化轮多为机械转录）；开思考→全程常开。前端开关语义随之重定义（关=动态、
@@ -442,8 +454,12 @@ class Orchestrator:
         # 收尾目标校验开关（DEFERRED §2 完整版）：大计划完成后一次独立审计生成，防虚报完成。
         self.goal_verify = bool(cfg.get("goal_verify", True))
 
-        # 工具声明属于稳定前缀：启动时构建一次（注册表就是单一数据源），
-        # 任务期内绝不变动，保证 KV 缓存的稳定段命中。热重扫补注册工具后经
+        # 工具声明属于稳定前缀（注册表就是单一数据源）。full 模式：启动时构建一次，
+        # 此后恒定。catalog 模式（W-2 / D31）：基座声明（元工具 + core 完整、其余目录行）
+        # 同样启动时构建一次；任务建立时按词法路由选出的 top_k 件另以完整 schema 入前缀，
+        # 该集合**任务期内冻结**（存在 TaskState.routed_tools，同任务后续轮不重算），任务结束
+        # 后仍由会话级 last_routed_tools 保留，只在下一个任务建立时被替换——每个任务至多一次
+        # 前缀失配（发生在建任务处），退出任务不再失配。热重扫补注册工具后经
         # refresh_tools_declaration 重建（稀有事件，接受一次 KV 前缀失配）。
         self._summary_high_base = self.summary_high_threshold
         self._summary_low_base = self.summary_low_threshold
@@ -454,6 +470,21 @@ class Orchestrator:
 
         前缀 token 估算：后端无 tokenizer，用 chars/4（对本声明 JSON 实测 4.02 字/token）；
         catalog 模式下声明变小，估算与阈值随之自动收紧。"""
+        known = {s.get("name") for s in self.registry.get_all_schemas()}
+        self._core_names, unknown = tool_disclosure.split_core(self._core_cfg, known)
+        new_unknown = [n for n in unknown if n not in self._core_warned]
+        if self.tool_schema_mode == "catalog" and new_unknown:
+            self._core_warned.update(new_unknown)
+            events.emit("tool_routing_core_unknown", names=list(new_unknown))
+            print(f"[Orchestrator] ⚠️ agent.tool_routing.core 中 {new_unknown} 未注册"
+                  f"（探活未过或拼写错误），已跳过")
+        get_summaries = getattr(self.registry, "get_summaries", None)
+        summaries = get_summaries() if callable(get_summaries) else {}
+        self._summaries: Dict[str, str] = dict(summaries) if isinstance(summaries, dict) else {}
+        self._routed_decl_cache: Dict[Tuple[str, ...], List[Dict[str, Any]]] = {}
+        # 基座声明（无路由）：prewarm_base_cache、stable_prefix_tokens_est 与首个任务前的轮次共用。
+        # catalog 下路由件会让真实前缀比估算多出 top_k 件完整 schema（约 1–2K tok），摘要阈值
+        # 不为此预留——阈值本是近似量，且路由集合任务期冻结，不会逐轮漂。
         self._tools_decl = self._build_tools_declaration()
         # 约束采样的语法源与 prompt 声明**解耦**：前者恒用完整 schema，后者可瘦身。
         # 二者在 full 模式下逐字相同，只有 catalog 模式才分叉（见 _build_grammar_tools）。
@@ -474,16 +505,62 @@ class Orchestrator:
         metas = [UPDATE_PLAN_SCHEMA, COMPLETE_STEP_SCHEMA, REMEMBER_SCHEMA]
         return (metas + [GET_TOOL_SCHEMA_SCHEMA]) if self.tool_schema_mode == "catalog" else metas
 
-    def _build_tools_declaration(self) -> List[Dict[str, Any]]:
-        """**prompt 面**的工具声明（进稳定前缀、算 token 预算的那一份）。"""
-        if self.tool_schema_mode == "catalog":
-            catalog = [
-                {"name": s.get("name"), "description": str(s.get("description", "")).split("\n")[0]}
-                for s in self.registry.get_all_schemas()
-            ]
-            return catalog + self._meta_schemas()
-        # full 模式：全部工具完整 schema 常驻（当前工具规模下更省 token 且缓存更稳）
-        return list(self.registry.get_all_schemas()) + self._meta_schemas()
+    def _build_tools_declaration(self, routed: Tuple[str, ...] = ()) -> List[Dict[str, Any]]:
+        """**prompt 面**的工具声明（进稳定前缀、算 token 预算的那一份）。
+
+        full：全部工具完整 schema 常驻（与 W-2 前逐字节一致）。catalog：元工具 + core +
+        routed 完整 schema，其余目录行（名字 + summary），装配见 tool_disclosure.disclose。"""
+        metas = self._meta_schemas()
+        return tool_disclosure.disclose(
+            list(self.registry.get_all_schemas()) + metas, mode=self.tool_schema_mode,
+            meta_names=[m["name"] for m in metas], core=self._core_names,
+            routed=routed, summaries=self._summaries)
+
+    def _route_tools(self, query: str) -> List[str]:
+        """D31/D32：任务建立时的一次性词法路由（纯本地、确定性）。full 模式或 top_k=0 → []。"""
+        if self.tool_schema_mode != "catalog" or self.tool_routing_top_k <= 0:
+            return []
+        return tool_disclosure.route_tools(
+            query, self.registry.get_all_schemas(), core=self._core_names,
+            top_k=self.tool_routing_top_k,
+            exclude=[m["name"] for m in self._meta_schemas()], summaries=self._summaries)
+
+    @staticmethod
+    def _routing_query(goal: str, history: List[Dict[str, Any]]) -> str:
+        """路由输入 = 任务 goal + 建立该任务的用户请求原文（goal 本就截自原文时不重复计）。"""
+        goal = (goal or "").strip()
+        request = _last_user_text(history, limit=None).strip()
+        if not goal or request.startswith(goal):
+            return request or goal
+        return f"{goal}\n{request}"
+
+    def _tools_decl_for(self, session: ChatSession) -> List[Dict[str, Any]]:
+        """本次生成的 prompt 面声明。full 模式 = 基座声明。catalog 模式：有任务 = 基座 +
+        该任务冻结的路由件；无任务 = 基座 + 会话级保留集合（上一个任务的路由件，任务结束
+        不撤，免一次前缀失配；首个任务前为空 = 基座）。旧快照恢复的任务没有路由记录
+        （None）时就地补算一次并冻结（此后与新建任务同语义）。"""
+        if self.tool_schema_mode != "catalog":
+            return self._tools_decl
+        task = session.task_state
+        if task is not None:
+            if task.routed_tools is None:
+                task.routed_tools = self._route_tools(
+                    self._routing_query(task.goal, session.history))
+                session.last_routed_tools = list(task.routed_tools)
+            names = task.routed_tools
+        else:
+            names = getattr(session, "last_routed_tools", None) or []
+        known = {s.get("name") for s in self.registry.get_all_schemas()}
+        routed = tuple(n for n in names if n in known)
+        if not routed:
+            return self._tools_decl
+        decl = self._routed_decl_cache.get(routed)
+        if decl is None:
+            decl = self._build_tools_declaration(routed)
+            if len(self._routed_decl_cache) >= 64:     # 长驻进程按任务累积，设上限防无界增长
+                self._routed_decl_cache.clear()
+            self._routed_decl_cache[routed] = decl
+        return decl
 
     def _build_grammar_tools(self) -> List[Dict[str, Any]]:
         """**约束采样面**的语法源：恒为完整 schema，与 prompt 面的瘦身解耦。
@@ -512,7 +589,7 @@ class Orchestrator:
 
     async def prewarm_session_cache(self, session) -> bool:
         """T1：压缩改写上下文后的空闲预热（真实轮次同款工具声明）。"""
-        return await self.engine.prewarm_session_cache(session, self._tools_decl)
+        return await self.engine.prewarm_session_cache(session, self._tools_decl_for(session))
 
     # ---------- 思考位置策略 ----------
     def _thinking_for_iteration(self, requested: bool, iteration: int) -> bool:
@@ -833,7 +910,7 @@ class Orchestrator:
             })
             provisional_generation = retrieval.unresolved
             result = await self.engine.generate_once(
-                session=session, tools=self._tools_decl,
+                session=session, tools=self._tools_decl_for(session),
                 grammar_tools=self._grammar_tools, task_block=task_block,
                 tail_notes=pending_tail_notes or None, **call_kwargs
             )
@@ -1475,6 +1552,13 @@ class Orchestrator:
             task = session.task_state
             if task is None:
                 task = TaskState(goal=_last_user_text(session.history))
+                # D31：任务建立 = 路由一次并冻结（只在 catalog 模式写；full 模式保持 None）。
+                # goal 此后不再变（replace 只换步骤），故 replan 不触发重算。会话级保留集合
+                # 同步替换：任务结束后前缀沿用它，直到下一个任务建立。
+                if self.tool_schema_mode == "catalog":
+                    task.routed_tools = self._route_tools(
+                        self._routing_query(task.goal, session.history))
+                    session.last_routed_tools = list(task.routed_tools)
                 session.task_state = task
             # 重规划预算：推翻已有计划才计数（首次建计划、微调不计）
             if args.get("op") == "replace" and task.plan:

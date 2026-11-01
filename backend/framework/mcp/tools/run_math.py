@@ -13,6 +13,7 @@ from ...agents import math_tools
 
 class RunMathTool(BaseTool):
     name = "run_math"
+    summary = "计算：Python 数学沙箱"
     description = (
         "Execute Python in an offline math sandbox and return its output. SymPy is star-imported "
         "(symbols, solve, integrate, diff, limit, simplify, factor, Matrix, Rational, pi, oo, ...) "

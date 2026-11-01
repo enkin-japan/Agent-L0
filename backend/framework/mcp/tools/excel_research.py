@@ -31,6 +31,7 @@ _CFG = load_section("excel_research")
 
 class ExcelResearchTool(BaseTool):
     name = "excel_research"
+    summary = "创建、修改或分析 Excel 表格"
     description = (
         "Delegate a complete spreadsheet-engineering task to a sandboxed sub-module that edits or "
         "creates .xlsx/.xlsm workbooks with Python, then passes a hard delivery gate (real "

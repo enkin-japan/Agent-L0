@@ -190,6 +190,11 @@ class ChatSession:
         # 多步任务状态（编排循环的状态对象）：任务可跨轮存续（如中途向用户提问），
         # 空闲冻结时随 task.json 落盘、恢复时重建，保证冷启动后任务不丢
         self.task_state: Optional[TaskState] = None
+        # 会话级路由保留集合（W-2 / D31 修订，主会话 2026-11-01）：catalog 模式下最近一个任务
+        # 建立时路由选中的工具名。任务结束（task_state 置 None）后前缀照旧带这些件，直到下一个
+        # 任务建立才被替换——退出任务不再造成一次前缀失配。None = 本会话尚无任务路由过。
+        # 随 routing.json 与 task.json 同时机落盘/恢复。
+        self.last_routed_tools: Optional[List[str]] = None
         # 取消标志：/task/cancel 接口置位，引擎逐 token 段与编排循环迭代边界检查
         self.cancel_requested: bool = False
         # 挂起标志：/task/suspend 接口或自动调度策略经调度器置位，编排循环在迭代边界
@@ -219,6 +224,7 @@ class ChatSession:
         self.history_log = self.session_dir / "history.jsonl"
         self.meta_file = self.session_dir / "meta.json"  # 会话血缘元数据（分支溯源）
         self.task_file = self.session_dir / "task.json"  # 跨轮多步任务的落盘快照
+        self.routing_file = self.session_dir / "routing.json"  # 会话级路由保留集合（W-2）
         self.memory_file = self.session_dir / "memory.json"  # 摘要式压缩旁挂（方案A）
         # T2 冻结落盘：KV 缓存的持久化位置（会话目录内——随会话删除自然清理）
         self.kv_persist_path = self.session_dir / "kv_cache.safetensors"
@@ -493,10 +499,30 @@ class ChatSession:
                 json.dump(self.task_state.snapshot(), f, ensure_ascii=False)
         else:
             self.task_file.unlink(missing_ok=True)
+        self.save_routing()
+
+    def save_routing(self):
+        """会话级路由保留集合落盘（W-2）：有则写 routing.json，无则清除。"""
+        if self.last_routed_tools is not None:
+            with open(self.routing_file, "w", encoding="utf-8") as f:
+                json.dump({"last_routed_tools": list(self.last_routed_tools)}, f,
+                          ensure_ascii=False)
+        else:
+            self.routing_file.unlink(missing_ok=True)
 
     def load_task(self):
-        """从 task.json 恢复跨轮任务；损坏或缺失则视为无任务"""
+        """从 task.json 恢复跨轮任务；损坏或缺失则视为无任务（routing.json 同理）"""
         self.task_state = None
+        self.last_routed_tools = None
+        if self.routing_file.exists():
+            try:
+                with open(self.routing_file, "r", encoding="utf-8") as f:
+                    routed = json.load(f).get("last_routed_tools")
+                if isinstance(routed, list):
+                    self.last_routed_tools = [str(n) for n in routed]
+            except Exception as e:
+                print(f"[Memory] 路由保留集合恢复失败（按无路由处理）: {e}")
+                self.routing_file.unlink(missing_ok=True)
         if self.task_file.exists():
             try:
                 with open(self.task_file, "r", encoding="utf-8") as f:
@@ -1285,6 +1311,12 @@ class SessionManager:
             session.clear_task()
         else:
             (self.sessions_dir / session_id / "task.json").unlink(missing_ok=True)
+        # 3.1 路由保留集合（W-2）：已落盘轮没有轮初快照可回，删到一轮不剩时清空，保住
+        # 「首个任务前无路由件」；还剩轮次则保留（它来自某个仍在历史里的任务，前缀不动）
+        if not lines:
+            if session is not None:
+                session.last_routed_tools = None
+            (self.sessions_dir / session_id / "routing.json").unlink(missing_ok=True)
 
         # 4. 热会话：以截断后的日志为准重建内存（KV Cache 保留，推理时自动对齐）
         if session is not None and not session.is_cold:
@@ -1392,7 +1424,8 @@ class SessionManager:
             return src_path_str
 
     def _materialize_branch(self, parent_id: str, new_id: str,
-                            kept_lines: List[str], branch_point: int) -> None:
+                            kept_lines: List[str], branch_point: int, *,
+                            last_routed_tools: Optional[List[str]] = None) -> None:
         """
         在磁盘上物化分支会话：复制系统提示、写入血缘元数据、截断复制历史日志，
         并将历史节点引用的多模态文件重挂到分支目录，保证分支自包含且可独立冷恢复。
@@ -1437,6 +1470,19 @@ class SessionManager:
                         json.dump(mem, f, ensure_ascii=False)
             except Exception as e:
                 print(f"[Memory] 分支复制摘要旁挂失败（分支将全量重放）: {e}")
+
+        # 1.2 路由保留集合（W-2）：分支克隆的是父会话的 KV，前缀里的工具段是父会话**当前**
+        # 的声明——不带上它，分支首轮工具段必失配、克隆白做。取父会话内存值；未给（冷父会话
+        # 等）则复制父会话的 routing.json（与内存同步落盘）。
+        try:
+            if last_routed_tools is not None:
+                with open(new_dir / "routing.json", "w", encoding="utf-8") as f:
+                    json.dump({"last_routed_tools": list(last_routed_tools)}, f,
+                              ensure_ascii=False)
+            elif (parent_dir / "routing.json").exists():
+                shutil.copy2(parent_dir / "routing.json", new_dir / "routing.json")
+        except Exception as e:
+            print(f"[Memory] 分支复制路由保留集合失败（分支首轮工具段将重填）: {e}")
 
         # 2. 写入血缘元数据（协调改进后的日志结构：记录父会话与分支节点）
         meta = {
@@ -1542,7 +1588,8 @@ class SessionManager:
                 return result
 
             # 5. 磁盘物化：截断复制历史窗口 [0, node_index]
-            self._materialize_branch(parent_session_id, new_session_id, lines[: node_index + 1], node_index)
+            self._materialize_branch(parent_session_id, new_session_id, lines[: node_index + 1], node_index,
+                                     last_routed_tools=parent.last_routed_tools)
 
             # 6. 内存重建分支会话（复用共同的历史文本）
             branch = ChatSession(new_session_id, self.sessions_dir, "",

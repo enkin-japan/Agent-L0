@@ -11,6 +11,7 @@ from ..base import BaseTool
 
 class CurrentTimeTool(BaseTool):
     name = "get_current_time"
+    summary = "需要精确到秒的当前时间时"
     description = (
         "Return the current local date-time precise to the second, with weekday and timezone. "
         "The system prompt already gives you today's date at day granularity, so call this ONLY "

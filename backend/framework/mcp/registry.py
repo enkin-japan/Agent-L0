@@ -144,6 +144,19 @@ class MCPRegistry:
         """供给 LLM 的系统提示词使用的工具描述清单"""
         return self._schemas
 
+    def get_summaries(self) -> Dict[str, str]:
+        """{工具名: 目录行 summary}（W-2 / D30），只含显式声明了 summary 的工具。
+
+        与 get_all_schemas 分开给：summary 不进 schema 字典，full 模式声明逐字节不变。"""
+        # 与 get_all_schemas 同样不取锁（测试与脚本会用 __new__ 造半初始化注册表）；
+        # 先拍快照再遍历，热重扫并发 register 时不撞「字典遍历中被改」
+        out = {}
+        for name, tool in list(self._tools.items()):
+            text = getattr(tool, "summary", "")
+            if isinstance(text, str) and text.strip():
+                out[name] = text.strip()
+        return out
+
     def requires_approval(self, name: str, arguments: Dict[str, Any] = None) -> bool:
         """
         查询某次调用是否需要用户在前端授权（按调用动态判定）。

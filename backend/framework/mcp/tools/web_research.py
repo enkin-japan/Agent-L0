@@ -22,6 +22,7 @@ _CFG = load_section("web_search")
 
 class WebResearchTool(BaseTool):
     name = "web_research"
+    summary = "联网查实时公开信息（天气、新闻、价格）"
     description = (
         "Investigate a question against the live public web and return a cross-verified factual "
         "digest with [来源N] citations. Use this for time-sensitive or factual questions that need "

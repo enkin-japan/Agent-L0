@@ -21,6 +21,7 @@ from ...cloud.degrade import CLOUD_CONSULT_TOOL
 
 class CloudConsultTool(BaseTool):
     name = CLOUD_CONSULT_TOOL      # 编排层识别降级观察的双锚之一（cloud/degrade）
+    summary = "本地能力不足时请云端大模型出主意"
     description = (
         "Consult a powerful cloud model for analysis or a draft when the task exceeds "
         "local capability (deep reasoning, long document drafting, specialized knowledge). "

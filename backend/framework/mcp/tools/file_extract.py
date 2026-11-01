@@ -26,6 +26,7 @@ _PDF_MAX_CHARS = 3400
 
 class FileExtractTool(BaseTool):
     name = "file_extract"
+    summary = "解析本地文件：PDF、音频、Office、文本"
     description = (
         "Parse a file on disk by its path: previously ingested files (find the path in context "
         "provenance markers like '[原文件：/abs/path]' or '[原音频：/abs/path]') AND any readable "

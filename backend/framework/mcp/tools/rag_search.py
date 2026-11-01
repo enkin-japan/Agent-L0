@@ -102,6 +102,7 @@ class RAGSearchTool(BaseTool):
     连接到本地高精度 RAG 向量数据库引擎获取外部上下文。
     """
     name = "rag_search"
+    summary = "检索用户本地知识库、笔记、资料"
     # 2026-08-10 措辞纠错（#83 准则审计）：旧文案的 "questions that require external
     # sources for verification" 把 web_research 的职权划了过来——26B 档会照字面拿
     # 本地知识库去答新闻/时事题。RAG 只管用户自己收进来的资料。
@@ -257,6 +258,7 @@ class RagGetContextTool(BaseTool):
     「先搜索定位，再翻开细读」的第二步——比整篇重读省 token，比只凭单块作答可靠。
     """
     name = "rag_get_context"
+    summary = "读取知识库命中片段的上下文"
     description = (
         "Fetch the chunks surrounding one rag_search result, to read more context around a "
         "hit without re-reading the whole document. Use the exact 'Path' and 'Chunk' values "

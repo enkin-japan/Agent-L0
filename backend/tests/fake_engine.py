@@ -59,6 +59,7 @@ class FakeEngine:
             "tail_notes": list(tail_notes or []),
             "task_block": task_block,
             "n_tools": len(tools or []),
+            "tools": list(tools or []),        # prompt 面声明（W-2 路由/冻结断言用）
             "grammar_tools": grammar_tools,   # 约束语法源（与 prompt 声明解耦，§6.5）
             # 最后一条消息内容（截断）：审计类一次性会话替身的输入可断言（goal_verify 金测试用）
             "last_user": str((session.history[-1] or {}).get("content", ""))[:200]

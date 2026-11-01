@@ -15,6 +15,7 @@
 """
 import contextlib
 import importlib
+import inspect
 import json
 import os
 import pkgutil
@@ -76,8 +77,12 @@ def collect_schemas():
                 mod = importlib.import_module(f"framework.mcp.tools.{info.name}")
             except Exception:
                 continue
-            for obj in vars(mod).values():
-                if (isinstance(obj, type) and issubclass(obj, BaseTool) and obj is not BaseTool
+            # 与 MCPRegistry 装载循环同一取法（registry.py：sorted 模块 × inspect.getmembers，
+            # 即模块内按**类名**字母序）——声明顺序原样进稳定前缀，序不同则 harness / 前缀账
+            # 与生产不逐字一致（11-01 复审：vars() 定义序首件 list_applications ≠ 生产
+            # click_ui_element）
+            for _attr, obj in inspect.getmembers(mod):
+                if (inspect.isclass(obj) and issubclass(obj, BaseTool) and obj is not BaseTool
                         and getattr(obj, "name", "") and obj.name not in seen):
                     try:
                         inst = obj()
@@ -97,6 +102,50 @@ def collect_schemas():
     out = _swap_production_skill_invoke(out)
     return out + [UPDATE_PLAN_SCHEMA, COMPLETE_STEP_SCHEMA, REMEMBER_SCHEMA,
                   GET_TOOL_SCHEMA_SCHEMA]
+
+
+def collect_summaries(include_rag_admin: bool = False) -> dict:
+    """{工具名: 类属性 summary}（W-2 / D30 目录行；只含显式声明者）。读类属性不构造实例。
+
+    include_rag_admin=True 时在打断 requests.get 的密封环境下 import rag_admin（模块体
+    即探活）；缺省与 collect_schemas 同口径排除。"""
+    import framework.mcp.tools as tools_pkg
+    out = {}
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(hermetic_construction())
+        for info in pkgutil.iter_modules(tools_pkg.__path__):
+            if info.name == "rag_admin" and not include_rag_admin:
+                continue
+            try:
+                mod = importlib.import_module(f"framework.mcp.tools.{info.name}")
+            except Exception:
+                continue
+            for obj in vars(mod).values():
+                if (isinstance(obj, type) and issubclass(obj, BaseTool) and obj is not BaseTool
+                        and isinstance(getattr(obj, "name", ""), str) and obj.name):
+                    text = getattr(obj, "summary", "")
+                    if isinstance(text, str) and text.strip():
+                        out.setdefault(obj.name, text.strip())
+    return out
+
+
+def collect_rag_admin_schemas() -> list:
+    """rag_admin 7 件的 schema（密封 import；RAG 在线时才进生产声明，measure_prefix 用）。"""
+    out = []
+    with hermetic_construction():
+        try:
+            mod = importlib.import_module("framework.mcp.tools.rag_admin")
+        except Exception as e:
+            print(f"[audit] rag_admin import 失败: {e}", file=sys.stderr)
+            return out
+        for obj in vars(mod).values():
+            if (isinstance(obj, type) and issubclass(obj, BaseTool) and obj is not BaseTool
+                    and getattr(obj, "name", "") and obj.__module__ == mod.__name__):
+                try:
+                    out.append(obj().get_schema())
+                except Exception:
+                    out.append(obj.__new__(obj).get_schema())
+    return out
 
 
 def _ast_tool_names(module: str) -> set:
@@ -132,7 +181,9 @@ def _swap_production_skill_invoke(schemas):
         runtime.set_skill_registry(reg)
         from framework.mcp.tools.skill_invoke import SkillInvokeTool
         prod = SkillInvokeTool().get_schema()
-        return [prod if sc["name"] == "skill_invoke" else sc for sc in schemas]
+        # 位置也取生产形：目录扫描时剧本表未装配、skill_invoke 探活不过被跳过，app.py 随后
+        # registry.load_tool 补注册 → register 追加在全部扫描件之后
+        return [sc for sc in schemas if sc["name"] != "skill_invoke"] + [prod]
     finally:
         runtime.set_skill_registry(saved_reg)
 
@@ -196,18 +247,21 @@ def main() -> int:
     print("   （est 即生产 stable_prefix_tokens_est 的口径——摘要双阈值锚在它上面;"
           "两栏均不含每工具 <|tool>/<tool|> 包裹标记,~2 token/件,方向一致不影响偏差号）")
 
-    metas = {UPDATE_PLAN_SCHEMA["name"], COMPLETE_STEP_SCHEMA["name"],
-             REMEMBER_SCHEMA["name"], GET_TOOL_SCHEMA_SCHEMA["name"]}
-    catalog_real = sum(
-        # 生产的 catalog 面对元工具保留**完整** schema(orchestrator._build_tools_declaration
-        # 的 _meta_schemas 不瘦身,复审 S6——初版把元工具也瘦了,少算 ~380 token)
-        count(format_function_declaration(s)) if s["name"] in metas
-        else count(format_function_declaration(
-            {"name": s["name"],
-             "description": str(s.get("description", "")).split("\n")[0]}))
-        for s in schemas)
+    metas = [UPDATE_PLAN_SCHEMA["name"], COMPLETE_STEP_SCHEMA["name"],
+             REMEMBER_SCHEMA["name"], GET_TOOL_SCHEMA_SCHEMA["name"]]
+    # 生产的 catalog 面(W-2 / D30-D31):元工具 + agent.tool_routing.core 保留**完整**
+    # schema,其余目录行(名字 + summary);同 orchestrator._build_tools_declaration 一个实现
+    # (tool_disclosure.disclose)。不含任务期路由件——那部分见 measure_prefix.py。
+    from framework.core.tool_disclosure import disclose, resolve_tool_routing, split_core
+    from framework.utils.config_loader import load_section
+    _, core_cfg = resolve_tool_routing(load_section("agent") or {})
+    core, _unknown = split_core(core_cfg, {s["name"] for s in schemas})
+    catalog_decl = disclose(schemas, mode="catalog", meta_names=metas, core=core,
+                            summaries=collect_summaries())
+    catalog_real = sum(count(format_function_declaration(s)) for s in catalog_decl)
     print("\n── ③ catalog 模式总量 ──")
-    print(f"目录常驻 {catalog_real} token（另加 get_tool_schema 按需取详情的交互成本）")
+    print(f"目录常驻 {catalog_real} token（元工具 + core {list(core)} 完整,其余目录行;"
+          f"另加任务期路由件与 get_tool_schema 按需取详情的交互成本）")
     print(f"full → catalog 立省 {total_real - catalog_real} token")
     return 0
 

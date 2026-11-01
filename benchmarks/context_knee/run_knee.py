@@ -39,6 +39,7 @@ from benchmarks.model_eval.itemlib import load_items, task_fingerprint      # no
 from benchmarks.model_eval.mock_envs import make_env                       # noqa: E402
 from benchmarks.model_eval.scorers import get_scorer                       # noqa: E402
 from context_knee.filler import Filler, build_filler, recall_suffix, score_recall  # noqa: E402
+from context_knee import prefix as prefix_mod                               # noqa: E402
 from context_knee.quality import final_text_quality                        # noqa: E402
 
 ITEMS_DIR = BACKEND / "benchmarks" / "model_eval" / "items" / "longchain"
@@ -159,9 +160,14 @@ class RunPlan:
     filler: Filler
     base_tokens: int                # 无填充时首次生成的 prompt token（同一追加后终问）
     prompt_tokens_est: int
-    tools: List[Dict[str, Any]]
+    tools: List[Dict[str, Any]]     # prompt 面声明（mock 档 = 题目 mock 工具）
     min_fill_tokens: int = 0        # 最少 3 个伪轮次的代价（目标再小也得这么多）
     warning: Optional[str] = None
+    # --prefix 档位（W-2）；mock 档下三者为 None，run_item / 引擎走 W-2 前原路径
+    prefix_mode: str = "mock"
+    system_prompt: Optional[str] = None             # run_item(system_prompt=)
+    grammar_tools: Optional[List[Dict[str, Any]]] = None
+    mock_tools: Optional[List[Dict[str, Any]]] = None
 
 
 def item_tools(item: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -170,23 +176,35 @@ def item_tools(item: Dict[str, Any]) -> List[Dict[str, Any]]:
     return (env.tools() if env is not None else None) or task.get("tools") or []
 
 
+def item_prefix(item: Dict[str, Any], mode: str = "mock",
+                toolset: Optional["prefix_mod.ProdToolset"] = None) -> "prefix_mod.PrefixAssembly":
+    """一道题在 --prefix 某档下的装配。routed 档的路由查询 = 原题面 task.user（不含回忆句，
+    跨 level / rep 不变 → 每题一份、题内冻结）。"""
+    return prefix_mod.assemble(mode, item_tools(item), item["task"].get("user", ""), toolset)
+
+
 def plan_run(counter: PromptCounter, item: Dict[str, Any], level: int, rep: int,
-             seed: int, item_idx: int = 0) -> RunPlan:
+             seed: int, item_idx: int = 0,
+             prefix: Optional["prefix_mod.PrefixAssembly"] = None) -> RunPlan:
     run_item_obj = copy.deepcopy(item)
     task = run_item_obj["task"]
     if level > 0:
         task["user"] = task["user"] + recall_suffix(item.get("lang", "en"))
-    tools = item_tools(item)
+    asm = prefix if prefix is not None else item_prefix(item)
+    tools = asm.tools
     et = bool((item.get("gen") or {}).get("enable_thinking", True))
-    system = {"role": "system", "content": task.get("system") or DEFAULT_SYSTEM_PROMPT}
+    system = {"role": "system",
+              "content": task.get("system") or asm.system_prompt or DEFAULT_SYSTEM_PROMPT}
     user = {"role": "user", "content": task["user"]}
     base = counter.count([system, user], tools, et)
 
     def turn_cost(msgs: List[Dict[str, Any]]) -> int:
         return counter.count([system, *msgs, user], tools, et) - base
 
+    # 填充流按题目 mock 工具取名（不随 --prefix 变）：同一 (seed, rep, 题) 各档填充同源，
+    # 高前缀档只是伪轮次更少（level 是 prompt 总量目标）
     filler = build_filler(max(level - base, 1) if level > 0 else 0, seed=seed, rep=rep,
-                          tool_names=[t["name"] for t in tools], turn_cost=turn_cost,
+                          tool_names=[t["name"] for t in asm.mock_tools], turn_cost=turn_cost,
                           task_key=task_fingerprint(item), rotation=(item_idx + rep) % 3)
     est = counter.count([system, *filler.messages, user], tools, et)
     min_fill = sum(filler.turn_costs[:3])
@@ -196,7 +214,9 @@ def plan_run(counter: PromptCounter, item: Dict[str, Any], level: int, rep: int,
                    f"≈{est}，本档对 {item['id']} 不达目标口径")
     return RunPlan(item=run_item_obj, level=level, rep=rep, filler=filler,
                    base_tokens=base, prompt_tokens_est=est, tools=tools,
-                   min_fill_tokens=min_fill, warning=warning)
+                   min_fill_tokens=min_fill, warning=warning, prefix_mode=asm.mode,
+                   system_prompt=asm.system_prompt, grammar_tools=asm.grammar_tools,
+                   mock_tools=asm.mock_tools)
 
 
 # ---------------- 引擎代理 ----------------
@@ -205,11 +225,17 @@ class KneeEngine:
     """包住真引擎（或 FakeEngine）的薄代理：
     ① 首次生成前把填充铺进 session.history（system 之后、题面消息之前）；
     ② 逐次记录 generate_once 的返回仪表与 repetition_guard（executor 不记这个字段）。
+    ③ --prefix 非 mock 档：把 run_item 传来的 tools（题目 mock 工具）换成本档 prompt 面声明，
+       并给 grammar_tools（mock 档 tools=None → 不改写，与 W-2 前一致）。
     其余行为原样透传——run_item 只用 generate_once / backend / dialect。"""
 
     def __init__(self, inner, prefill: List[Dict[str, Any]],
-                 sampling_overrides: Optional[Dict[str, Any]] = None):
+                 sampling_overrides: Optional[Dict[str, Any]] = None, *,
+                 tools: Optional[List[Dict[str, Any]]] = None,
+                 grammar_tools: Optional[List[Dict[str, Any]]] = None):
         self._inner = inner
+        self._tools = tools
+        self._grammar_tools = grammar_tools
         self._gen_overrides = {k: v for k, v in (sampling_overrides or {}).items()
                                if k in _GEN_KWARGS}
         self.backend = inner.backend
@@ -236,6 +262,9 @@ class KneeEngine:
             hist[1:1] = copy.deepcopy(self._prefill)
             self._injected = True
         kwargs.update(self._gen_overrides)
+        if self._tools is not None:
+            kwargs["tools"] = self._tools
+            kwargs["grammar_tools"] = self._grammar_tools
         t0 = time.monotonic()
         r = await self._inner.generate_once(session, **kwargs)
         m = r.get("metrics") or {}
@@ -306,8 +335,9 @@ def build_record(plan: RunPlan, traj: Dict[str, Any], gens: List[Dict[str, Any]]
 
 def dry_script(plan: RunPlan) -> List[Dict[str, Any]]:
     """FakeEngine 脚本：一次只读调用 → 收尾正文（逐字写出卡值；奇数 rep 故意漏 back 卡，
-    让 recall 汇总在干跑里也有非平凡数）。仪表 prompt_tokens 取计划估算值。"""
-    names = {t["name"] for t in plan.tools}
+    让 recall 汇总在干跑里也有非平凡数）。仪表 prompt_tokens 取计划估算值。调用名按题目 mock
+    工具取（生产工具只声明不执行）。"""
+    names = {t["name"] for t in (plan.mock_tools if plan.mock_tools is not None else plan.tools)}
     call = ({"type": "function", "name": "list_files", "arguments": {}} if "list_files" in names
             else {"type": "function", "name": "todo_list", "arguments": {}})
     vals = [c["value"] for c in plan.filler.cards
@@ -381,6 +411,70 @@ def _seed_sampler(backend: str, sampling_seed: int) -> bool:
     return True
 
 
+def _prefix_counter(engine, repo: str, opts: Dict[str, Any]):
+    """prefix_base_tokens 用的 (方言, encode_len)：真后端 = 引擎分词器；fake = backend/models 下
+    离线分词器（只载 tokenizer）。不可得 → (None, None, 原因)。"""
+    if engine is not None:
+        tok = engine.processor.tokenizer
+        return engine.dialect, (lambda s: len(tok.encode(s, add_special_tokens=False))), None
+    tok, enc, why = prefix_mod.local_tokenizer_encode_len(repo)
+    if tok is None:
+        return None, None, why
+    from types import SimpleNamespace
+    from framework.dialects import get_dialect_class
+    o = dict(opts or {})
+    dialect = get_dialect_class(str(o.get("dialect") or "")).create(
+        SimpleNamespace(tokenizer=tok), options=o, env={})
+    return dialect, enc, None
+
+
+def _tool_counts(a: "prefix_mod.PrefixAssembly") -> Dict[str, int]:
+    """prompt 面件数 / 其中完整 schema 件数（与语法面同一对象）/ 语法面件数。"""
+    full_ids = {id(g) for g in a.grammar_tools or []}
+    return {"prompt": len(a.tools), "prompt_full": sum(1 for t in a.tools if id(t) in full_ids),
+            "grammar": len(a.grammar_tools or [])}
+
+
+#: 按题的前缀 meta：全批字典只留在 meta / summary.json，transcript 行只放本题那一项
+PER_ITEM_META_KEYS = ("prefix_shadowed", "prefix_core_skipped", "prefix_n_tools", "prefix_routed")
+
+
+def row_meta(meta: Dict[str, Any], item_id: str) -> Dict[str, Any]:
+    """transcript 行用的 meta：PER_ITEM_META_KEYS 的 {题: 值} 换成本题的值（行体积不随题数涨）。"""
+    out = dict(meta)
+    for k in PER_ITEM_META_KEYS:
+        if isinstance(out.get(k), dict):
+            out[k] = out[k].get(item_id)
+    return out
+
+
+def build_prefixes(mode: str, items: List[Dict[str, Any]], engine, repo: str,
+                   opts: Dict[str, Any]):
+    """每题一份前缀装配（题内冻结）+ meta 字段。prefix_base_tokens = 生产稳定前缀
+    （system + 生产声明，未剔撞名、不含 mock 工具与路由件，include_env=False；mock 档 = 极简
+    system 无工具），真分词器计数；分词器不可得记 None 并告警一次（mock + fake 不载分词器、不告警）。"""
+    toolset = None if mode == "mock" else prefix_mod.production_toolset()
+    prefixes = {it["id"]: item_prefix(it, mode, toolset) for it in items}
+    meta: Dict[str, Any] = {"prefix_mode": mode, "prefix_base_tokens": None}
+    if mode != "mock" or engine is not None:
+        dialect, enc, why = _prefix_counter(engine, repo, opts)
+        if dialect is None:
+            print(f"⚠️ prefix_base_tokens 记 null：{why}")
+        else:
+            system = (prefix_mod.production_system_prompt() if mode != "mock"
+                      else DEFAULT_SYSTEM_PROMPT)
+            meta["prefix_base_tokens"] = prefix_mod.prefix_base_tokens(
+                dialect, enc, system, prefix_mod.production_decl(mode, toolset))
+    if mode != "mock":
+        meta["prefix_top_k"] = toolset.top_k if mode == "routed" else None
+        meta["prefix_shadowed"] = {i: a.shadowed for i, a in prefixes.items()}
+        meta["prefix_core_skipped"] = {i: a.core_skipped for i, a in prefixes.items()}
+        meta["prefix_n_tools"] = {i: _tool_counts(a) for i, a in prefixes.items()}
+        if mode == "routed":
+            meta["prefix_routed"] = {i: a.routed for i, a in prefixes.items()}
+    return prefixes, meta
+
+
 async def amain(args) -> int:
     from framework.utils.model_selection import model_options
     levels = parse_levels(args.levels)
@@ -411,7 +505,7 @@ async def amain(args) -> int:
     entry_sampling = dict(opts.get("sampling") or {})
     if args.append:     # --resume 已隐含 --append
         check_resume_compat(transcripts, repo, sampling["sent"], args.seed, entry_sampling,
-                            entry_only=not args.resume)
+                            entry_only=not args.resume, prefix_mode=args.prefix)
     if transcripts.exists() and not args.append:
         raise SystemExit(f"❌ {transcripts} 已存在：换 --out，或显式 --append 追加"
                          f"（或 --resume 续跑缺的 run）")
@@ -428,12 +522,20 @@ async def amain(args) -> int:
         except BaseException:
             engine.backend.shutdown()
             raise
+    try:
+        prefixes, prefix_meta = build_prefixes(args.prefix, items, engine, repo, opts)
+    except BaseException:
+        if engine is not None:
+            engine.backend.shutdown()
+        raise
     meta = {"model": repo, "revision": opts.get("revision"),
             "dialect": opts.get("dialect") or "gemma4", "backend": args.backend,
             "tasks": args.tasks, "seed": args.seed, "token_counter": counter.mode,
-            "stamp": stamp, "sampling_overrides": sampling, "entry_sampling": entry_sampling}
-    print(f"== 拐点测量 {repo}（{args.backend}，计数 {counter.mode}）：{len(items)} 题 × "
-          f"{len(levels)} 档 {levels} × {args.reps} rep → {outdir}")
+            "stamp": stamp, "sampling_overrides": sampling, "entry_sampling": entry_sampling,
+            **prefix_meta}
+    print(f"== 拐点测量 {repo}（{args.backend}，计数 {counter.mode}，前缀 {args.prefix}"
+          f"{'' if prefix_meta['prefix_base_tokens'] is None else ' ' + str(prefix_meta['prefix_base_tokens']) + ' tok'}"
+          f"）：{len(items)} 题 × {len(levels)} 档 {levels} × {args.reps} rep → {outdir}")
 
     records: List[Dict[str, Any]] = []
     if args.resume:
@@ -448,7 +550,8 @@ async def amain(args) -> int:
                     for rep in range(args.reps):
                         if (level, item["id"], rep) in done:
                             continue
-                        rec = await _one_run(args, engine, counter, item, item_idx, level, rep, meta)
+                        rec = await _one_run(args, engine, counter, item, item_idx, level, rep, meta,
+                                             prefixes[item["id"]])
                         fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
                         fh.flush()
                         records.append(rec)
@@ -610,13 +713,15 @@ async def drain_inference(engine, timeout: float) -> Optional[bool]:
         return True
 
 
-async def _one_run(args, engine, counter, item, item_idx, level, rep, meta) -> Dict[str, Any]:
-    """单 run；任何异常收成一条 {"error": …} 记录，不中止批次。"""
+async def _one_run(args, engine, counter, item, item_idx, level, rep, meta,
+                   prefix: Optional["prefix_mod.PrefixAssembly"] = None) -> Dict[str, Any]:
+    """单 run；任何异常收成一条 {"error": …} 记录，不中止批次。prefix=None = mock 档。"""
+    meta = row_meta(meta, item["id"])
     sampling_seed = args.seed * 1000 + rep
     proxy = None
     t0 = time.monotonic()
     try:
-        plan = plan_run(counter, item, level, rep, args.seed, item_idx)
+        plan = plan_run(counter, item, level, rep, args.seed, item_idx, prefix)
         if plan.warning:
             print(f"⚠️ {plan.warning}")
         applied = _seed_sampler(args.backend, sampling_seed)
@@ -625,11 +730,16 @@ async def _one_run(args, engine, counter, item, item_idx, level, rep, meta) -> D
             inner = FakeEngine(dry_script(plan))
         else:
             inner = engine
+        mock = plan.prefix_mode == "mock"
         proxy = KneeEngine(inner, plan.filler.messages,
-                           (meta.get("sampling_overrides") or {}).get("sent"))
+                           (meta.get("sampling_overrides") or {}).get("sent"),
+                           tools=None if mock else plan.tools,
+                           grammar_tools=None if mock else plan.grammar_tools)
         _INTERRUPT.proxy, _INTERRUPT.inner = proxy, inner
         timeout = getattr(args, "run_timeout", 0) or 0
-        coro = run_item(proxy, plan.item, repeat_idx=rep)
+        # mock 档调用形态与 W-2 前逐字相同（不传 system_prompt）
+        coro = (run_item(proxy, plan.item, repeat_idx=rep) if mock else
+                run_item(proxy, plan.item, repeat_idx=rep, system_prompt=plan.system_prompt))
         try:
             traj = await (asyncio.wait_for(coro, timeout) if timeout > 0 else coro)
         except asyncio.TimeoutError:
@@ -676,20 +786,27 @@ def _sent_of(r: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], seed: int,
-                        entry: Dict[str, Any], *, entry_only: bool = False) -> None:
+                        entry: Dict[str, Any], *, entry_only: bool = False,
+                        prefix_mode: str = "mock") -> None:
     """续跑只能接同口径的批：已有行的 model / 已发送采样 / seed / 注册表条目采样任一不同即拒
     （混进来的 rep 会被 Pass^2 当作同一组）。缺 model/sampling/seed 字段的行（极旧格式）不参与
     这三项比较；缺 entry_sampling 的行（W-1 之前）视为 {}——当时引擎不读条目采样。
-    entry_only（单纯 --append）：只比条目采样——summary 按整个 transcripts 聚合，条目口径
-    一变，新旧行实际发送的采样就不同，却在 sampling_overrides 上看不出来。"""
+    entry_only（单纯 --append）：只比条目采样与前缀档——summary 按整个 transcripts 聚合，条目口径
+    一变，新旧行实际发送的采样就不同，却在 sampling_overrides 上看不出来。
+    前缀档（W-2 --prefix）：缺 prefix_mode 的行（W-2 之前）视为 mock；档不同 resume / append 都拒
+    （system 与工具声明不同 = 不同测量形态，混算即把两条曲线揉成一条）。"""
     if not transcripts.exists():
         return
     bad = set()
     entry_bad = set()
+    prefix_bad = set()
     for ln in transcripts.read_text(encoding="utf-8").splitlines():
         if not ln.strip():
             continue
         r = json.loads(ln)
+        old_prefix = r.get("prefix_mode") or "mock"
+        if old_prefix != prefix_mode:
+            prefix_bad.add(f"{old_prefix} ≠ {prefix_mode}")
         old_entry = r.get("entry_sampling") or {}
         if old_entry != entry:
             entry_bad.add(f"{json.dumps(old_entry, sort_keys=True)} ≠ {json.dumps(entry, sort_keys=True)}")
@@ -704,6 +821,9 @@ def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], see
     if entry_bad:
         bad.add("注册表条目采样口径已变（W-1），不能与旧目录合并；另起目录（entry_sampling "
                 + "；".join(sorted(entry_bad)) + "）")
+    if prefix_bad:
+        bad.add("前缀档 --prefix 不同（W-2），不能与旧目录合并；另起目录（prefix_mode "
+                + "；".join(sorted(prefix_bad)) + "）")
     if bad:
         raise SystemExit("❌ --resume/--append 口径不一致，拒绝合并：" + "；".join(sorted(bad)))
 
@@ -759,6 +879,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="隐含 --append：跳过 --out 里已成功的 (level,题,rep)，error 行重跑")
     ap.add_argument("--append", action="store_true",
                     help="--out 已有 transcripts.jsonl 时追加（缺省拒绝，防两批混算）")
+    ap.add_argument("--prefix", default="mock", choices=list(prefix_mod.PREFIX_MODES),
+                    help="前缀档（W-2）：mock=极简 system + 题目 mock 工具（缺省，W-2 前口径）；"
+                         "prod=生产 system + 生产工具全量完整 schema；catalog=生产 system + 元工具/"
+                         "core 完整、其余目录行；routed=catalog + 按题面路由 top_k 件完整。"
+                         "题目 mock 工具恒完整、同名优先；生产工具只声明不执行")
     return ap
 
 
