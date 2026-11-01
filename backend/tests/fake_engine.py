@@ -20,6 +20,9 @@ class FakeCacheHandle:
 class FakeBackend:
     """InferenceBackend 的缓存面替身(生成面由 FakeEngine.generate_once 顶替)。"""
 
+    # 缓存语义(W2 步骤边界压缩起压档位):缺省不可裁(MLX 语义);测试可置 True 模拟块级前缀缓存(vLLM)
+    block_prefix_cache = False
+
     def new_cache(self):
         return FakeCacheHandle()
 

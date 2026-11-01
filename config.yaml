@@ -563,6 +563,24 @@ agent:
     soft_tokens: 24576
     hard_tokens: 39322
     generation_reserve: 12288 # = 截断升档上限 ESCALATED_MAX_TOKENS；ceiling = 上限 − 本值（65536 → 53248）
+  # 轮内步骤边界压缩（W2 / D37，2026-11-01）：步骤完成（complete_step 落地）时把**本轮已完成步骤段**（到本批 tool 消息之前，
+  # 模型尚未看过的同批观察不碰）的工具观察折成桩（首 digest_chars 字 + 回读句柄），该步 result 已在 TaskState 作步骤摘要，不另调模型；
+  # hard 档首次触发时也对该段压一次（进行中步骤不碰），压后重量、仍 ≥ hard 才发尾注，仍超则 W1 ceiling 应急压缩兜底。
+  # 全部走 W1 的副本 + 原件表路线：只改模型看到的副本，history.jsonl 落盘经 persistable_messages 换回原件，全文永不丢；
+  # 被压观察 > digest_chars 且未截断过的先补写全文 spill，桩里给 file_extract 回读句柄（原 spill 只在观察 > observation_max_chars
+  # 时落全文、句柄指中段）。元工具 get_tool_schema / cloud_consult 的响应与结构提醒（name=system）不压。
+  # 触发按 W1 档位而非「被压 token × 后续迭代 > 一次全量重填」（两边量纲不齐、W0 没有每 token·每迭代的保留代价系数），
+  # 起压档按后端缓存语义分：块级前缀缓存（远端 vLLM、本机 CUDA vLLM；后端属性 block_prefix_cache=True）改历史只重填分叉点之后
+  # ≈ 该步尾段，soft 起每个步骤边界都压；缓存不可裁（MLX：递归/线性状态，改历史 = 整段冷预填）只在 hard 起压，hard 那次本就
+  # 要退全量，之后每个边界再各付一次冷填（full_renders 记账）。最近 keep_recent 条观察（全 history 口径）永不改。
+  # 未知键 / 非法值装配失败（与 context_guard 同）。
+  step_compaction:
+    enabled: true
+    trigger_level: soft              # 块级前缀缓存后端：轮内档位 ≥ 此档起在步骤边界压；值限 soft | hard
+    cold_refill_trigger_level: hard  # 缓存不可裁后端（MLX）：改历史 = 整段冷预填，只在 hard 起压
+    keep_recent: 2                   # 步骤边界时最近几条观察不动（全 history 倒数；轮首压缩的 observation_keep_recent 6 是另一道）
+    digest_chars: 200                # 桩保留的观察首段字数
+    spill_full: true                 # 压前把 > digest_chars 的观察全文补写 spill，桩带 file_extract 回读句柄
   react_max_steps: 4          # 单步内自纠预算：一步连续多少次迭代未完成即判定失败并路由
   max_total_iterations: 40    # 一轮任务的总推理次数熔断（只数主循环迭代）
   max_sub_generations: 80     # 子沙箱生成的独立熔断（F6）：web/math/excel 调研在一次性

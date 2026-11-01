@@ -136,6 +136,10 @@ class RemoteCacheHandle:
 class RemoteBackend:
     """InferenceBackend 的远程实现（HTTP/SSE 客户端）。"""
 
+    # 缓存语义（W2 步骤边界压缩起压档位用，见 core/backend_protocol.py 可选属性 block_prefix_cache）：
+    # 算力端 vLLM 自动前缀缓存按块、改历史只重填分叉点之后，代价远小于不可裁缓存的整段冷预填。
+    block_prefix_cache = True
+
     @classmethod
     async def load(cls, model_path, *, executor=None, **cfg) -> "RemoteBackend":
         """本地只加载分词器；同步磁盘/HTTP IO 不占 HTTP 事件循环。"""

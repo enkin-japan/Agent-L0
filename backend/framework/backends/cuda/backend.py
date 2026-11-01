@@ -240,6 +240,10 @@ def _trim_after_stop(token_ids: List[int], stop_ids: List[int]) -> List[int]:
 class CudaVLLMBackend:
     """InferenceBackend 的 vLLM 进程内实现。"""
 
+    # 缓存语义（W2 步骤边界压缩起压档位用，见 core/backend_protocol.py 可选属性 block_prefix_cache）：
+    # vLLM 自动前缀缓存（APC）按块、改历史只重填分叉点之后。
+    block_prefix_cache = True
+
     @classmethod
     async def load(cls, model_path, *, executor=None, **cfg) -> "CudaVLLMBackend":
         """装配引擎与 processor。executor 参数收下不用：vLLM 自管理其工作线程/进程，

@@ -33,11 +33,13 @@ import json
 import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from . import rag_sink
 from ..core.jsonl import iter_records
 from ..core.spill import _SPILL_CALL_RE, _SPILL_TOTAL_RE  # 句柄正则同源，见该模块
+# 编排层截断中缝的固定开头（spill.truncate_observation 三种中缝共用）：带它的观察内存里不是全文
+_TRUNCATED_SEAM = "...[observation truncated:"
 from .notes import NOTE_TYPES
 
 # 模块级默认（与 config.yaml agent 段默认保持一致；编排层按 config 覆盖，其余调用方用默认）
@@ -86,23 +88,74 @@ def _spill_orig_chars(tr: Dict[str, Any]) -> int:
 def compact_tool_observations(history: List[Dict[str, Any]], *,
                               keep_recent: int = DEFAULT_KEEP_RECENT,
                               digest_chars: int = DEFAULT_DIGEST_CHARS,
-                              budget_chars: Optional[int] = None) -> int:
+                              budget_chars: Optional[int] = None,
+                              start: int = 0,
+                              end: Optional[int] = None,
+                              stub_handle: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
+                              exempt_names: Optional[Set[str]] = None) -> int:
     """
     机械压缩：取代去重（T3-b）+ 预算驱逐（T3-a）。原地修改 history，返回本次新压缩的观察条数。
     确定性、幂等、无模型调用。最近 keep_recent 条为硬保护窗口（永不改动）。
     budget_chars 为 None/0 时跳过预算阶段（仅做取代去重）。
+    start/end、stub_handle、exempt_names（W2）见 compact_tool_observations_detailed。
     """
-    # 按出现顺序收集所有工具观察项
+    return compact_tool_observations_detailed(
+        history, keep_recent=keep_recent, digest_chars=digest_chars, budget_chars=budget_chars,
+        start=start, end=end, stub_handle=stub_handle, exempt_names=exempt_names)["count"]
+
+
+def compact_tool_observations_detailed(
+        history: List[Dict[str, Any]], *,
+        keep_recent: int = DEFAULT_KEEP_RECENT,
+        digest_chars: int = DEFAULT_DIGEST_CHARS,
+        budget_chars: Optional[int] = None,
+        start: int = 0,
+        end: Optional[int] = None,
+        stub_handle: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
+        exempt_names: Optional[Set[str]] = None) -> Dict[str, int]:
+    """compact_tool_observations 的明细版：返回 {"count": 新压条数, "freed_chars": 观察正文净减字符数}。
+
+    范围（W2 步骤边界压缩）：只对 history 下标在 [start, end) 的 tool 消息里的观察**落刀**；
+    end=None 即到末尾。扫描、取代去重的 epoch/屏障、预算总量与**保护窗 keep_recent 仍按全 history
+    的观察倒数**——切片只决定「哪些条目可以被改」，不改变「哪些条目受保护」与「谁取代谁」。
+    start=0、end=None 时与旧行为逐字节一致。
+
+    stub_handle（W2 spill 补写）：只在**预算驱逐**阶段、对每条将被折成桩且内存正文就是全文的观察
+    （没有编排层截断中缝——截断过的内存里只剩头尾，已落盘的另有 _spill_hint）在改写前调用一次；
+    返回非空字符串则在桩末追加一行「全文：<句柄>」。取代阶段不调：较新的同目标读取还在上下文里，
+    补写是白写。
+
+    exempt_names（W2）：tool_responses 的 name 在此集合内的条目一律不落刀（仍计入保护窗与预算
+    总量、仍参与取代 epoch）；None = 不豁免（旧行为）。
+    """
+    # 按出现顺序收集所有工具观察项（连同所在消息下标，供范围判定）
     observations: List[Dict[str, Any]] = []
-    for msg in history:
+    msg_idx: List[int] = []
+    for mi, msg in enumerate(history):
         if msg.get("role") == "tool":
             for tr in msg.get("tool_responses", []) or []:
                 if isinstance(tr, dict):
                     observations.append(tr)
+                    msg_idx.append(mi)
+
+    lo = int(start or 0)
+    hi = len(history) if end is None else int(end)
+
+    exempt = exempt_names or ()
+
+    def _in_range(i: int) -> bool:
+        return lo <= msg_idx[i] < hi and observations[i].get("name") not in exempt
+
+    def _handle_line(tr: Dict[str, Any]) -> str:
+        if stub_handle is None or _TRUNCATED_SEAM in str(tr.get("response", "")):
+            return ""
+        h = stub_handle(tr)
+        return f"\n全文：{h}" if h else ""
 
     n = len(observations)
     cutoff = n - keep_recent if keep_recent > 0 else n  # 索引 < cutoff 可压缩；>= cutoff 受保护
     compacted = 0
+    freed = 0
 
     # --- 阶段一：取代去重（T3-b） ---
     # 顺序扫描，按 epoch 划分「无夹写」的读取区间：同一 (name, target) 在同一 epoch 内重复出现，
@@ -117,8 +170,9 @@ def compact_tool_observations(history: List[Dict[str, Any]], *,
             prev = last_seen.get(key)
             if prev is not None and prev[1] == epoch:
                 pi, po = prev[0], observations[prev[0]]
-                # 较旧那条（pi）在可压缩区且尚未压过 → 削成取代桩（新副本已在后面，内容不丢）
-                if pi < cutoff and not po.get("_compacted"):
+                # 较旧那条（pi）在可压缩区、在落刀范围内且尚未压过 → 削成取代桩（新副本已在后面，内容不丢）
+                if pi < cutoff and _in_range(pi) and not po.get("_compacted"):
+                    before = len(str(po.get("response", "")))
                     orig = _spill_orig_chars(po)
                     po["response"] = (f"[Observation superseded: the result of {po.get('name')} "
                                       f"reading \"{target}\" was superseded by a later read of the "
@@ -126,6 +180,7 @@ def compact_tool_observations(history: List[Dict[str, Any]], *,
                                       + _spill_hint(po) + "]")
                     po["_compacted"] = True
                     compacted += 1
+                    freed += before - len(po["response"])
             last_seen[key] = (i, epoch)
         if not safe:
             epoch += 1  # 写/有副作用观察 = 屏障：其后读取进入新 epoch，不与屏障前的读取互相取代
@@ -135,9 +190,9 @@ def compact_tool_observations(history: List[Dict[str, Any]], *,
     if budget > 0:
         total = sum(len(str(tr.get("response", ""))) for tr in observations)
         if total > budget:
-            # 可压缩候选：可压缩区、未压过、且体量 > digest（压小观察无收益，「小观察即使旧也留」）
+            # 可压缩候选：可压缩区、落刀范围内、未压过、且体量 > digest（压小观察无收益，「小观察即使旧也留」）
             cands = [(i, tr) for i, tr in enumerate(observations)
-                     if i < cutoff and not tr.get("_compacted")
+                     if i < cutoff and _in_range(i) and not tr.get("_compacted")
                      and len(str(tr.get("response", ""))) > digest_chars]
             # 体量大者优先（同体量取更旧）：最少次数打断前缀即回到预算内，「大观察即使较新也先压」
             cands.sort(key=lambda it: (-len(str(it[1].get("response", ""))), it[0]))
@@ -146,12 +201,14 @@ def compact_tool_observations(history: List[Dict[str, Any]], *,
                     break
                 resp = str(tr.get("response", ""))
                 head = resp.strip()[:digest_chars].rstrip()
+                extra = _handle_line(tr)
                 tr["response"] = (head + f" …[Observation compacted; originally "
-                                  f"{_spill_orig_chars(tr)} chars" + _spill_hint(tr) + "]")
+                                  f"{_spill_orig_chars(tr)} chars" + _spill_hint(tr) + "]" + extra)
                 tr["_compacted"] = True
                 compacted += 1
                 total -= (len(resp) - len(tr["response"]))
-    return compacted
+                freed += len(resp) - len(tr["response"])
+    return {"count": compacted, "freed_chars": freed}
 
 
 # 把**转录本**变成笔记的机关，就是摘要器吐出一行字面 `MEMO:`（见下方 `_split_memo`）。

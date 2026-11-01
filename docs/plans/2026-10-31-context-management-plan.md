@@ -196,12 +196,26 @@ longchain hard 10 题 × 2 rep，首次生成 prompt 0 / 4K / 8K / 16K / 32K / 4
   图文轮计数靠 +1,024/图常量；量法在事件循环线程 encode（50K 量级数十毫秒）；算力端过旧未报 max_model_len 时 ceiling 按执行端配置算，`--max-model-len` 改值感知不到（告警已发）；
   Colab 实机 ceiling 终止路径未跑过（FakeEngine 证明），随三档复测看；MLX 本机上限只是预算，KV 实际无界（P-last）。
 
-### W2 轮内步骤边界压缩【改】
-- 在 `complete_step` 落地时（已有 step_completed 事件）对**该步的工具观察**调用 compact_tool_observations（同一预算器，keep_recent 保护窗照旧），
-  被压观察的全文已在 spill，占位桩带 `spill:<stem>` 句柄 → 模型回读有路。该步的 result（已由模型写进 TaskState）就是「步骤摘要」，不另调模型。
-- 预算越过 hard 而无步骤边界时，退化为「按体量驱逐」（现有逻辑）；仍越过 → W1 的强制摘要。
-- KV 代价：按 W0 的 prefill 曲线定「值不值」规则 —— 当被压掉的 token 数 × 后续预计迭代数 > 一次全量重预填充成本时才落刀；否则等到轮首。远端 vLLM 块粒度小，可放宽。
-- 不碰的：审批 / 挂起续跑路径（compact_history=False）继续跳过；最近 keep_recent 条永不改。
+### W2 轮内步骤边界压缩【已落地 11-01；守卫型 → 变异证明】
+scout 11-01 校正前提：① 被压观察未必已 spill——只有 > observation_max_chars（4000）的才落盘，桩无 `spill:<stem>`、有的是只指中段的 file_extract 长路径，
+≤4000 字的被压后模型读不回来；② complete_step 没有单点可挂——它在同批物理调用之前分派，同批观察到 `add_tool_message` 才进 history；③「被压 token × 后续迭代 >
+一次全量重填」两边量纲不齐（token·次 vs 秒），W0 没有每 token·每迭代的保留代价系数；④ 轮内就地改会把桩写进 history.jsonl（当轮切片与暂存轮共享 dict）；
+⑤ TaskState 的步没有 history 下标。
+- **D37 触发按 W1 档位，不按代价公式**：`agent.step_compaction`（enabled / trigger_level soft / cold_refill_trigger_level hard / keep_recent 2 / digest_chars 200 / spill_full，
+  未知键与非法值装配失败）。起压档按后端缓存语义分（后端可选属性 `block_prefix_cache`：远端 vLLM 与本机 CUDA vLLM True，MLX 缺省 False）：块级前缀缓存改历史只重填
+  分叉点之后（≈ 该步尾段）→ soft 起每个步骤边界都压；缓存不可裁（MLX）改历史 = 整段冷预填 → 只在 hard 起压，hard 那次本就退全量、之后每个边界再各付一次冷填（`full_renders` 记账）。
+- **落刀点两处**：步骤边界 = complete_step 成功落地时，范围 [轮起点, 本批 tool 消息)——模型尚未看过的同批观察归下一边界（新锚 `session.turn_step_start_idx` = 本批下标，新用户轮取
+  turn_history_start_idx、每次边界前移、续跑沿用；证据门挡下/失败的 complete_step 不算，step_failed 也不算——模型可能要回看观察重试）；hard 档首次置位处对 [轮起点, 锚) 压一次
+  （进行中步骤不碰），压后重量、仍 ≥ hard 才发尾注。元工具 get_tool_schema / cloud_consult 响应与结构提醒不压。
+  ceiling 仍是 W1 应急压缩（整个本轮段）。范围只对 [turn_start, end) 落刀，最近 keep_recent 条观察按全 history 倒数保护。
+- **落盘保全文**：复用 W1 副本 + 原件表路线（抽共用 helper），history.jsonl 与暂存轮一律原件；桩只在模型视图。
+- **回读有路**：被压观察 > digest_chars 且未截断过的先补写全文 spill（复用 spill_observation：0600、预算、撞名），桩带 `file_extract(path="spill:<stem>")` 短句柄；已截断过的沿用原中缝句柄；
+  写失败只告警、桩无句柄。3,000–4,000 字的全文读回带行号会再截一次，经中缝可续读。
+- 账：事件 `step_compaction{trigger: step|hard, count, freed_chars, level}`；轮统计 `step_compactions` / `compaction_freed_chars` / `full_renders`（全量渲染次数，engine 计）。
+- 不碰：轮首压缩（observation_keep_recent 6）、审批/挂起/定时续跑的 compact_history=False 跳过、轮间摘要（输入读落盘日志且不读 tool 轮，桩进不去）。
+- 门：reviewer 一审 + 主会话二审逐行（范围与保护窗、副本路、两处钩子、spill 补写）+ verifier 变异证明；提交 `__W2_HASH__`。
+- 残留：ceiling 兜底仍是机械压缩（步骤 result 已在 TaskState 作步骤摘要，轮内摘要折叠需子生成，不做）；轮内压小后轮间摘要触发看末次 prompt_tokens 可能推迟；
+  P2 验收「拐点以上题集成功率 / Pass^2 达标、全量重填有账」等 Colab 复测。
 
 ### W3 思考回放策略【已落地 11-01；守卫型 → 变异证明】
 scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解析器产 str），落盘每轮全量；两方言 builder 对每条带 thoughts 的消息都回放、无轮边界概念；
@@ -278,6 +292,7 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
 | D19（新） | 思考回放 | 跨轮丢弃 + 轮内 last_k=2【测，K 初值；落地见 D36】 | 1.3-3 |
 | D36（新） | 思考回放实现 | 投影在引擎层（`core/thinking_replay.py`），view 参与 prompt_stream 指纹与 commit、加 ps.seen 身份校验，方言 builder 不变；条目级 `thinking_replay: all \| tool_turns \| last_k`（缺省 last_k、K=2，非法拒启）；本机 MLX 两条 tool_turns（缓存不可裁）、Colab 两条 last_k；纯思考消息本轮恒留/历史轮占位【定，主会话 11-01】 | W3 |
 | D20（新） | 落刀位置 | 轮首 / 步骤边界 / 溢出兜底 | 1.5 |
+| D37（新） | 步骤边界压缩触发与路线 | 按 W1 档位触发（块级前缀缓存后端 soft 起、缓存不可裁后端 hard 起，后端属性 `block_prefix_cache` 判别），不用「token×迭代 > 秒」公式；落刀点 = complete_step 落地后 + hard 首次（只压已完成段）；副本 + 原件表落盘保全文；被压观察补写全文 spill 带回读句柄；`agent.step_compaction` 非法拒启【定，主会话 11-01】 | W2 |
 | D21（新） | 远端投机解码 | **Colab 部署默认关 MTP**【已落地 W-1，10-31 晚：compute_ctl 所有模型缺省 off】；重开须经同一 harness 复测 | W0 F9 |
 | D23 | 本机/Gemma 侧模型 | **Gemma 4 26B A4B 出阵容**（用户 10-31：上限在那里；实测 8K 拐点）。**Gemma 4 31B 定为 Gemma 侧唯一选项**：Colab 用 `google/gemma-4-31B-it-qat-w4a16-ct`（49K 无拐点、回忆 100%、含 bf16 视觉塔），本机用 `mlx-community/gemma-4-31b-it-4bit` 只需能跑 | 用户决定 + P0.5 |
 | D24（改） | 前缀披露策略 | ~~本机 catalog / 远端 full~~ → **按模型家族/条目分档**（prompt 在执行端装配、原样上行，D26）；skill 按需已是现状 | W-2 scout 11-01 |
@@ -352,3 +367,8 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
   prewarm、轮统计、list 型 thoughts 改 str、gemma4 官方 4bit 模板差分、run_knee 口径开关与续跑校验）→ reviewer 一审 0 Critical / 2 Major（预热按本轮语义投影致前缀必分叉；knee 续跑不拦口径）
   / 5 Minor / 5 Nit → 同一 implementer 修 9 项（Minor 3 表外模型缺省记残留）→ 主会话二审逐行（投影规则/流校验/commit 用 view/预热/续跑校验/差分样本）→ verifier 13 变异体全红、sha256 还原一致。
   新增 73 条测试。提交 `2b12243`（全量 check 经 pre-commit）。下一步 W2 步骤边界压缩。
+- 11-01 晚（W3 推送后用户「直接开 W2」）：scout 校正五前提（被压观察未必已 spill 且桩无句柄；complete_step 无单点；代价公式量纲不齐；轮内就地改污染落盘；步无 history 下标）
+  → 主会话定 D37（按 W1 档位触发、后端缓存语义判别、两处落刀点、副本 + 原件表、补写 spill）、亲改 config.yaml（agent.step_compaction）→ implementer（step_compaction.py、
+  压缩器范围/回调/豁免、_compact_turn_range 共用、步骤边界与 hard 钩子、engine full_renders、spill 补写、66 例测试）→ reviewer 一审 0 Critical / 2 Major（范围压到未看过的同批观察；
+  hard 断言为空）/ 8 Minor / 4 Nit → 同一 implementer 修 13 项（属性改名 block_prefix_cache、键改 cold_refill_trigger_level、hard 压后重量再决定尾注、豁免元工具与提醒）
+  → 主会话二审逐行 → verifier 15 变异体全红、sha256 还原一致。提交 `__W2_HASH__`（全量 check 经 pre-commit）。P1 序列 W1 → W3 → W2 完成，下一步 W4 结构化摘要模板与校准。

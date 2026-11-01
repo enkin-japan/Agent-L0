@@ -576,6 +576,13 @@ class AgentEngine:
             include_env=_include_env,
             env_extra=_env_extra,
         )
+        # [W2] 全量重渲染计数（轮统计 full_renders）：只数带 int 属性的主会话（ChatSession 声明、编排层
+        # 轮首归零）；沙箱/摘要等一次性会话替身没有这个属性，不计。在装配之后、生成之前计：
+        # 随后被取消或抛异常的那次生成也算一次（装配已按全量路做了）
+        if _delta_offset is None:
+            _fr = getattr(session, "turn_full_renders", None)
+            if isinstance(_fr, int) and not isinstance(_fr, bool):
+                session.turn_full_renders = _fr + 1
         # 思考播种用方言的实际 token（而非硬编码字面量）：换模型/token 表时保持一致
         generated_text = self.dialect.thinking_prefill(enable_thinking)
         metrics: Dict[str, Any] = {}

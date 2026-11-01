@@ -116,6 +116,10 @@ class InferenceBackend(Protocol):
       ceiling = context_limit − generation_reserve。mlx = inference.mlx.context_limit
       （编排层预算）；cuda = max_model_len；remote = 算力端 /health 报的 max_model_len
       （缺则回落并告警）。缺失 / 非正整数 = 未知，护栏不绑定并告警。
+    - block_prefix_cache: bool —— 缓存语义（W2 步骤边界压缩）：True = 块级前缀缓存（remote 算力端
+      与本机 cuda 的 vLLM 自动前缀缓存；改历史只重填分叉点之后），步骤边界按
+      agent.step_compaction.trigger_level 起压；缺省 False = 缓存不可裁（mlx：递归/线性状态，改历史
+      = 整段冷预填），按 cold_refill_trigger_level 起压。
     """
 
     @classmethod

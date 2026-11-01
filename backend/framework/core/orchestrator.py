@@ -22,15 +22,19 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import approval_policy, context_guard, events
+from . import approval_policy, context_guard, events, step_compaction
 from .engine import DEFAULT_MAX_TOKENS
 from .journal import TurnJournal
 from .task_state import TaskState, call_fingerprint
 from . import tool_disclosure
 from ..memory.session import ChatSession, DEFAULT_SYSTEM_PROMPT
-from ..memory.compactor import compact_tool_observations
+from ..memory.compactor import compact_tool_observations, compact_tool_observations_detailed
 from ..mcp.registry import MCPRegistry
-from .spill import spill_observation, truncate_observation
+from .spill import spill_handle, spill_observation, truncate_observation
+
+# W2 步骤边界压缩不落刀的观察：工具 schema 详情（模型据此组参，压了就得再取一次）、云端咨询答复
+# （出网换来的、不可廉价重取）、结构提醒（name=system，短且贴着近因）。W1 ceiling 与轮首压缩不豁免。
+STEP_COMPACT_EXEMPT = frozenset({"get_tool_schema", "cloud_consult", "system"})
 from .retrieval_evidence import (RetrievalEvidence, REPAIR_NOTE, DELIVERY_BLOCKED,
                                  is_delivery,
                                  target_key as retrieval_target,
@@ -465,6 +469,8 @@ class Orchestrator:
         self.context_guard = context_guard.resolve_context_guard(cfg)
         self.context_limits: Optional[context_guard.ContextLimits] = None
         self._guard_unbound_warned = False
+        # 轮内步骤边界压缩（W2 / D37，core/step_compaction.py）：配置同样构造期失败关闭。
+        self.step_compaction = step_compaction.resolve_step_compaction(cfg)
 
         # 工具声明属于稳定前缀（注册表就是单一数据源）。full 模式：启动时构建一次，
         # 此后恒定。catalog 模式（W-2 / D31）：基座声明（元工具 + core 完整、其余目录行）
@@ -532,14 +538,35 @@ class Orchestrator:
         前的段）每条工具消息换成拷贝（tool_responses 逐项拷）断开别名，原件登记进
         session.guard_persist_originals，落盘切片经 session.persistable_messages 换回原件。
         本轮之前的消息早已落盘，与轮首机械压缩同样就地改即可。代价：history 指纹变化，前缀
-        缓存整段失配一次（接受：此刻已顶到上限，失配一次远比 overflow 便宜）。"""
+        缓存整段失配一次（接受：此刻已顶到上限，失配一次远比 overflow 便宜）。
+        范围 = 整个 history（含进行中步骤）；副本 + 原件表循环与 W2 共用 _compact_turn_range。"""
+        return self._compact_turn_range(
+            session, 0, None, keep_recent=2, digest_chars=self.observation_compact_chars,
+            label="ceiling")["count"]
+
+    def _compact_turn_range(self, session: ChatSession, start: int, end: Optional[int], *,
+                            keep_recent: int, digest_chars: int, label: str,
+                            stub_handle=None, exempt_names=None) -> Dict[str, int]:
+        """轮内机械压缩的共用实现（W1 ceiling 应急 / W2 步骤边界与 hard 钩子）：只对 history 下标
+        [start, end) 的工具观察落刀（保护窗 keep_recent 仍按全 history 倒数），返回
+        {"count", "freed_chars"}。
+
+        本轮段（turn_history_start_idx 起）内、落刀范围里的工具消息先换成拷贝（tool_responses 逐项拷）、
+        原件登记 session.guard_persist_originals——本轮观察 dict 与暂存轮次共享引用、轮末落盘是
+        history 切片，就地改会把桩写进 history.jsonl（见 _emergency_compact）。本轮之前的消息早已
+        落盘，就地改。拷贝内容不变时指纹不变，不会凭空打断前缀流。budget_chars=1：范围内超出
+        保护窗、体量 > digest 的观察一律驱逐。exempt_names 内的条目不落刀（W2 传，W1 不传）。
+        label 只用于日志。"""
         originals = getattr(session, "guard_persist_originals", None)
         if originals is None:
             originals = session.guard_persist_originals = {}
         hist = session.history
-        start = getattr(session, "turn_history_start_idx", None)
-        start = start if isinstance(start, int) and 0 <= start <= len(hist) else 0
-        for i in range(start, len(hist)):
+        n = len(hist)
+        turn_start = getattr(session, "turn_history_start_idx", None)
+        turn_start = turn_start if isinstance(turn_start, int) and 0 <= turn_start <= n else 0
+        lo = max(0, int(start or 0))
+        hi = n if end is None else max(0, min(int(end), n))
+        for i in range(max(turn_start, lo), hi):
             m = hist[i]
             if m.get("role") != "tool" or not isinstance(m.get("tool_responses"), list):
                 continue
@@ -550,9 +577,65 @@ class Orchestrator:
                                     for tr in m["tool_responses"]]
             originals[id(cp)] = (cp, m)
             hist[i] = cp
-        # budget_chars=1：任何超出保护窗口、体量 > digest 的观察都在驱逐之列（0/None 会跳过预算阶段）
-        return compact_tool_observations(
-            hist, keep_recent=2, digest_chars=self.observation_compact_chars, budget_chars=1)
+        out = compact_tool_observations_detailed(
+            hist, keep_recent=keep_recent, digest_chars=digest_chars, budget_chars=1,
+            start=start, end=end, stub_handle=stub_handle, exempt_names=exempt_names)
+        if out["count"]:
+            # 范围按实际落刀区间打印（起点钳到 ≥0、终点钳到 history 长度）
+            print(f"[Orchestrator] 轮内压缩（{label}）：[{lo}, {hi}) 折叠 {out['count']} 条观察，"
+                  f"释放 {out['freed_chars']:,} 字符")
+        return out
+
+    def _step_stub_handle(self, session: ChatSession):
+        """W2 spill 补写回调（交给压缩器的 stub_handle）：被压观察正文 > digest_chars 且 spill_full
+        → 先把全文落进本会话 spill 目录（复用 spill_observation：0600、撞名 -n、128MB 会话预算、
+        目录创建），返回 file_extract 短句柄调用串；不满足/预算满/写失败 → None（桩不给路径——
+        给一条走不通的路比不给更毒，见 spill.py）。文件名用新的 8 位 hex（过 resolve_spill_ref 的
+        落盘名正则）。不承诺一次读完：file_extract 文本分支回读带行号前缀（每行 "%5d | " + 头行），
+        3,000–4,000 字的全文读回会超过 observation_max_chars、被编排层再截断一次——截断中缝照常
+        给出续读路（剩余行区间），模型按中缝续读即可。截断过的观察压缩器不调本回调（内存里不是全文）。"""
+        cfg = self.step_compaction
+        if not cfg.spill_full or getattr(session, "session_dir", None) is None:
+            return None
+
+        def _cb(tr: Dict[str, Any]) -> Optional[str]:
+            text = str(tr.get("response", ""))
+            if len(text) <= cfg.digest_chars:
+                return None
+            got = spill_observation(session, uuid.uuid4().hex[:8], text)
+            if got is None:
+                print(f"[Orchestrator] ⚠️ 步骤边界压缩：观察 {tr.get('name')} 全文补写 spill 失败，"
+                      "桩不给回读句柄")
+                return None
+            return f'file_extract(path="{spill_handle(got[0])}")'
+        return _cb
+
+    def _step_compact(self, session: ChatSession, start: int, end: int, *, trigger: str,
+                      step_id: Any = None) -> int:
+        """W2 一次压缩（步骤边界 trigger="step" / hard 档首次 trigger="hard"）：[start, end) 是本轮
+        已完成步骤段。count>0 时发 step_compaction 事件并累计轮统计，返回条数。"""
+        cfg = self.step_compaction
+        if end <= start:
+            return 0
+        out = self._compact_turn_range(session, start, end, keep_recent=cfg.keep_recent,
+                                       digest_chars=cfg.digest_chars, label=trigger,
+                                       stub_handle=self._step_stub_handle(session),
+                                       exempt_names=STEP_COMPACT_EXEMPT)
+        if out["count"]:
+            events.emit(step_compaction.EVT_STEP_COMPACT, session=session.session_id,
+                        trigger=trigger, step_id=step_id, count=out["count"],
+                        freed_chars=out["freed_chars"],
+                        level=getattr(session, "turn_context_guard_level", None),
+                        start=start, end=end)
+            session.turn_step_compactions = int(getattr(session, "turn_step_compactions", 0) or 0) + 1
+            session.turn_compaction_freed_chars = (
+                int(getattr(session, "turn_compaction_freed_chars", 0) or 0) + out["freed_chars"])
+        return out["count"]
+
+    def _block_prefix_cache(self) -> bool:
+        """后端缓存语义（W2 起压档位用）：后端类可选属性 block_prefix_cache（remote / cuda 的 vLLM
+        块级前缀缓存 True；缺省 False = 缓存不可裁，如 mlx），见 core/backend_protocol.py。"""
+        return bool(getattr(getattr(self.engine, "backend", None), "block_prefix_cache", False))
 
     # ---------- 工具目录（两级可见性） ----------
     def _meta_schemas(self) -> List[Dict[str, Any]]:
@@ -716,6 +799,11 @@ class Orchestrator:
             session.guard_persist_originals = {}
             session.turn_history_start_idx = len(session.history)
             session.turn_thinking_replay = None   # [W3] 投影统计按轮：不让上一轮的值盖进本轮
+            # [W2 步骤边界压缩] 已完成步骤段的终点锚（本轮起点起算）与轮统计；续跑段沿用不清
+            session.turn_step_start_idx = session.turn_history_start_idx
+            session.turn_step_compactions = 0
+            session.turn_compaction_freed_chars = 0
+            session.turn_full_renders = 0          # engine.generate_once 全量渲染时 +1
         # 无任务态指纹也属于整轮：不能靠暂停/审批重入清掉重复调用屏障。
         no_task_calls: List[str] = list(session.carried_turn_stats.get("no_task_calls") or [])
         turn_start_idx = len(session.history)  # 本轮起点：收尾时扫描本轮工具产出的资产链接
@@ -795,6 +883,13 @@ class Orchestrator:
                 metrics["thinking_replay"] = {k: _replay.get(k) for k in
                                               ("mode", "kept", "dropped", "kept_chars",
                                                "dropped_chars")}
+            # [W2] 步骤边界压缩次数 / 释放字符 / 全量重渲染次数；同样只在非零时出现
+            for _mk, _attr in (("step_compactions", "turn_step_compactions"),
+                               ("compaction_freed_chars", "turn_compaction_freed_chars"),
+                               ("full_renders", "turn_full_renders")):
+                _v = getattr(session, _attr, 0)
+                if isinstance(_v, int) and not isinstance(_v, bool) and _v:
+                    metrics[_mk] = _v
 
         def _carry_turn_state() -> None:
             """审批/挂起共用检查点；先stamp再转存，当前段iterations只计一次。"""
@@ -902,7 +997,21 @@ class Orchestrator:
                 if level == "hard" and not guard_flags["hard"]:
                     guard_flags["hard"] = True
                     events.emit(context_guard.EVT_HARD, session=session.session_id, **_detail(m, level))
-                    # TODO(W2，方案 docs/plans/2026-10-31-context-management-plan.md W2)：步骤边界压缩在此触发
+                    # [W2 hard 钩子] 首次 hard：压本轮已完成步骤段 [轮起点, 步骤锚)——锚 = 最近一次边界批 tool
+                    # 消息的下标，进行中步骤与边界批本身都不碰；块级前缀缓存与不可裁缓存后端一律（门槛就是
+                    # hard），enabled=False 不压。不可裁缓存（MLX）上：hard 那次本就退全量，之后每个边界再各付
+                    # 一次冷填（full_renders 记账）。压了就先重量、按新量值决定：仍 ≥ hard 才发尾注（tokens
+                    # 用压后值），回落到 hard 以下不发尾注（hard 事件与旗标照旧已发/已置）；仍超 ceiling 则
+                    # 下一 pass 由 W1 应急压缩兜底。每次改动 prompt 后都重量，最终发出去的就是最后一次量到的。
+                    if self.step_compaction.enabled:
+                        _t0 = getattr(session, "turn_history_start_idx", None)
+                        _s0 = getattr(session, "turn_step_start_idx", None)
+                        if isinstance(_t0, int) and isinstance(_s0, int) and _s0 > _t0:
+                            if self._step_compact(session, _t0, min(_s0, len(session.history)),
+                                                  trigger="hard"):
+                                m, level = _guard_measure(prompt_args, limits)
+                                if context_guard.level_rank(level) < context_guard.level_rank("hard"):
+                                    continue
                     pending_tail_notes.append(
                         f"上下文已用 {m.tokens:,}/{limits.limit:,} token，接近上限。请收敛：少回灌大段观察，"
                         "尽快给出结论或完成当前步骤。")
@@ -1250,6 +1359,7 @@ class Orchestrator:
                 phys_calls = [c for c in tool_calls if c not in meta_calls]
 
                 responses: List[Dict[str, Any]] = []
+                completed_step_ids: List[Any] = []   # [W2] 本批真落地的 complete_step（步骤边界判据）
                 for call in meta_calls:
                     mname = call.get("name")
                     # Meta calls run before the physical batch. While a retrieval
@@ -1277,6 +1387,8 @@ class Orchestrator:
                     elif mname == "complete_step":
                         session.push_activity("plan", "完成一步")
                         if cur is not None:
+                            # [W2] complete_step 真落地（有当前步可完成；被证据门挡下的已在上面 continue）
+                            completed_step_ids.append(cur.get("id"))
                             journal.emit("step_completed", {
                                 "title": cur.get("title", ""),
                                 "result": str((call.get("arguments") or {}).get("result", "")),
@@ -1415,8 +1527,25 @@ class Orchestrator:
                 reminder = self._structural_reminder(session.task_state, did_complete)
                 if reminder:
                     responses.append({"name": "system", "response": reminder})
+                _batch_idx = len(session.history)   # [W2] 本批 tool 消息将落在的下标
                 if responses:
                     session.add_tool_message(responses)
+                # [W2 步骤边界压缩] 本批有 complete_step 真落地（下一次生成之前）：档位够（块级前缀缓存
+                # trigger_level / 不可裁缓存 cold_refill_trigger_level）就把本轮已完成步骤段 [轮起点, 本批
+                # tool 消息) 的观察折成桩——本批同批的物理观察模型还没看过，不碰，归下一边界再压；无论压没压，
+                # 步骤锚前移到本批 tool 消息下标（hard 钩子范围 [轮起点, 锚) 因此同样不含本批）。被证据门挡下
+                # 的 complete_step 与 step_failed 路由不算边界（模型可能要回看观察重试）。
+                # step_id 取本批最后一个落地的 complete_step。
+                if completed_step_ids:
+                    _sc_end = _batch_idx
+                    if step_compaction.should_compact(
+                            self.step_compaction, self._block_prefix_cache(),
+                            getattr(session, "turn_context_guard_level", None)):
+                        _t0 = getattr(session, "turn_history_start_idx", None)
+                        _t0 = _t0 if isinstance(_t0, int) and 0 <= _t0 <= _sc_end else 0
+                        self._step_compact(session, _t0, _sc_end, trigger="step",
+                                           step_id=completed_step_ids[-1])
+                    session.turn_step_start_idx = _sc_end
 
                 # [断环] 工具格式反复解析失败（同一坏调用重复，或本轮累计过多）→ 优雅终止，
                 # 避免烧光整个迭代预算后输出无关内容（升级纠错已在 _execute_physical 中给过机会）

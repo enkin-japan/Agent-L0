@@ -247,6 +247,12 @@ class ChatSession:
         # 新用户轮在 run_turn 轮首归零；仅内存，经轮统计 metrics 落盘。
         self.turn_peak_prompt_tokens: int = 0
         self.turn_context_guard_level: Optional[str] = None
+        # 轮内步骤边界压缩（W2）：已完成步骤段终点锚（history 下标，None = 本轮未置位）与轮统计
+        # （压缩次数 / 释放字符 / 全量重渲染次数）。新用户轮在 run_turn 轮首置位，续跑段沿用；仅内存。
+        self.turn_step_start_idx: Optional[int] = None
+        self.turn_step_compactions: int = 0
+        self.turn_compaction_freed_chars: int = 0
+        self.turn_full_renders: int = 0
         # 轮内应急压缩的落盘还原表（W1）：id(model-facing 压缩副本) → (副本, 原件)。
         # 应急压缩只改 model-facing 副本，落盘切片经 persistable_messages 换回原件，
         # 持久化日志保留全量。新用户轮在 run_turn 轮首清空。
