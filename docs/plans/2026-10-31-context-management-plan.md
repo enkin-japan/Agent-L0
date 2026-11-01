@@ -218,7 +218,7 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
 - 按部署形态配（config.yaml 四条目）：本机 MLX 两条 `tool_turns`（轮内 ≈ 全留，只在换用户轮时冷填一次；last_k 在 MLX 上每步冷填不可接受），Colab 两条 `last_k`（K=2 待测）。
 - 顺手修：orchestrator 两处合成 `[System upgrade]` 思考是 list（以 Python repr 进 prompt、Swift 端解码 nil）改 str；轮统计加 `thinking_replay`（mode/kept/dropped/dropped_chars），思考占 prompt 的比例首次可见。
 - 不做：非纯思考消息丢思考后不留占位（步骤 result 已在 task_block 逐步渲染，占位是假思考；占位只给历史轮的纯思考消息，免空 assistant 轮）；并入 result（已是现状）；history 落盘不改。
-- 门：reviewer 一审 + 主会话二审逐行（投影规则、流校验、commit 用 view）+ verifier 变异证明；提交 `__W3_HASH__`。
+- 门：reviewer 一审 + 主会话二审逐行（投影规则、流校验、commit 用 view）+ verifier 变异证明；提交 `2b12243`。
 - 残留：K=2 是初值，验收「思考回放不降成功率且峰值 prompt 下降」要等 Colab 三档复测（`--prefix` 一并）；本机 MLX 轮内不省思考（设计取舍，P-last）；
   tool_turns 下仅 content 的生成思考会被丢（官方同形）：verify_nudge / premature_finish 推回后同轮再生成时 ps.seen 身份校验失败退全量，MLX 上即一次整段冷预填；
   注册表外模型（本地路径，options 为 {}）无处配键、走模块缺省 last_k，本机 MLX 跑表外模型每步冷填（主会话裁定不按后端形态分缺省，表外是实验路）；
@@ -347,3 +347,8 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
   （量法改走 _assemble_prompt；compute_lifecycle.refresh_context_limit 探活重绑含回滚；encode 异常退估算；旗标/还原表按轮挂 session；缺键 max_tokens 受钳；复合路径与落盘端到端测试补齐）
   → 主会话二审逐行（护栏段/量法/重绑/钳制/落盘换回）→ verifier 变异证明 14 个变异体全红（边界等号、soft≥hard、hard<ceiling、钳制、终止 return、尾注重量、三遍循环、
   拷贝断别名、persistable_messages、remote 取值、增量路量法、重绑赋值、turn_runner/schedule 落盘切片）、sha256 逐字节还原。backend 3941 passed。提交 `87fd7d3`（全量 check 过，已推送）。残留见 W1 节。
+- 11-01 傍晚（W1 推送后直接开 W3）：scout 推翻前提（只改渲染在增量路无效——prompt_stream 存含思考原始字节、只比 history 指纹；MLX 缓存不可裁；官方两模板口径）→ 主会话定 D36、亲改 config.yaml
+  （四条目 thinking_replay：MLX tool_turns / Colab last_k）→ implementer（core/thinking_replay.py 纯函数、engine 一次投影 + view 走 stream_valid/增量/全量/commit + ps.seen 身份校验、
+  prewarm、轮统计、list 型 thoughts 改 str、gemma4 官方 4bit 模板差分、run_knee 口径开关与续跑校验）→ reviewer 一审 0 Critical / 2 Major（预热按本轮语义投影致前缀必分叉；knee 续跑不拦口径）
+  / 5 Minor / 5 Nit → 同一 implementer 修 9 项（Minor 3 表外模型缺省记残留）→ 主会话二审逐行（投影规则/流校验/commit 用 view/预热/续跑校验/差分样本）→ verifier 13 变异体全红、sha256 还原一致。
+  新增 73 条测试。提交 `2b12243`（全量 check 经 pre-commit）。下一步 W2 步骤边界压缩。
