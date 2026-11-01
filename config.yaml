@@ -203,7 +203,7 @@ inference:
       thinking_replay: "last_k"   # D36（W3）：Colab vLLM 按块前缀缓存，轮内滑窗 K 缺省 2（D19，待测）
       # Gemma 4 模型卡 top_p 0.95 / top_k 64；rep 1.0（vLLM 下 repetition_penalty 为 HF 语义罚整段 prompt，不再用 1.1）；温度见上方说明不设
       sampling: { top_p: 0.95, top_k: 64, repetition_penalty: 1.0 }
-      note: "~18GB QAT W4A16 | Colab 第二候选 | 2026-10-31 拐点评测 49K 内无拐点（Pass^2 90/90/70/90/80）| vLLM 图文端到端待 W-3 验收"
+      note: "~18GB QAT W4A16 | Colab 第二候选 | 2026-10-31 拐点评测 49K 内无拐点（Pass^2 90/90/70/90/80）| vLLM 图文端到端 W-3 验收通过（10-31 Colab 冒烟）"
     # CUDA 原生 MTP 头保存在同一 checkpoint；不加载 MLX drafter 权重。
     - repo: "RedHatAI/Qwen3.8-27B-INT4"
       revision: "91bd022d5b49442a868bc35008f6c21e1860edfa"
@@ -545,7 +545,7 @@ agent:
       - skill_invoke
       - run_shell_command   # 描述自称 PRIMARY tool、system 提示词点名；目录行+一次取详情的往返不值 ~460 tok（主会话 11-01）
   # 上下文上限护栏（W1，D1/D2/D33–D35，2026-11-01）：每次主循环生成前用执行端分词器实测整段 prompt
-  # （dialect.build_prompt 渲染 + tokenizer.encode；无分词器才退 字符/4），与三档比较：
+  # （与生成同一条 _assemble_prompt 装配路 + tokenizer.encode；无分词器才退 ASCII/4 + 非 ASCII 字数，宁高估），与三档比较：
   #   soft  ：只记账（本轮峰值 turn_peak_prompt_tokens、事件 context_soft）；
   #   hard  ：记账 + 事件 context_hard + 尾注提醒模型收敛（W2 步骤边界压缩落地后在此触发压缩）；
   #   ceiling = 上限 − generation_reserve：先做一次轮内应急机械压缩（旧观察折叠为桩，落盘日志不改）

@@ -2,6 +2,7 @@
 import importlib.util
 import io
 import json
+import sys
 from pathlib import Path
 import tarfile
 import tempfile
@@ -9,6 +10,9 @@ import unittest
 from unittest.mock import patch
 from contextlib import ExitStack
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
+from framework.backends.cuda.options import public_options  # noqa: E402  真回执生成器
 
 spec = importlib.util.spec_from_file_location('vm_switch_test', Path(__file__).with_name('compute_vm.py'))
 vm = importlib.util.module_from_spec(spec)
@@ -45,7 +49,8 @@ class VMSwitchTests(unittest.TestCase):
         (self.app/'rag').mkdir(); (self.app/'rag/compute_server.py').write_text('existing rag')
         self.rag = dict(status='healthy',device='cpu',tier='vl-2b',embed_repo='embedding',rerank_repo='rerank')
         self.infer = dict(status='ok',service='macagent-inference',model_repo='test/Qwen',model_revision='b'*40,
-                          inference_options={k:self.options[k] for k in ['speculative_config','attention_backend','kv_cache_dtype']})
+                          inference_options=self.health_options())
+        # 回执经真 public_options 生成：后端回执再加键，这里的 mismatch 用例就会先红（P1 复审 C1）
         self.calls=[]; self.progress=[]
         self.stack.enter_context(patch.object(vm,'progress',side_effect=lambda phase,**kw:self.progress.append((phase,kw))))
         self.stack.enter_context(patch.object(vm,'log_line'))
@@ -62,6 +67,13 @@ class VMSwitchTests(unittest.TestCase):
             for name,value in files.items():
                 data=value.encode(); info=tarfile.TarInfo(name); info.size=len(data)
                 tar.addfile(info,io.BytesIO(data))
+
+    def health_options(self, **override):
+        o = {**self.options, **override}
+        return public_options({'speculative_config': o['speculative_config'],
+                               'attention_config': {'backend': o['attention_backend']},
+                               'kv_cache_dtype': o['kv_cache_dtype']},
+                              max_model_len=o['max_model_len'])
 
     def switch(self):
         vm.switch_main(str(self.options_path),self.job)
@@ -110,6 +122,18 @@ class VMSwitchTests(unittest.TestCase):
         self.infer['inference_options']={**self.infer['inference_options'],'speculative_config':None}
         with self.assertRaisesRegex(RuntimeError,'mismatch'):self.switch()
         self.assertNotIn('ready',[p for p,_ in self.progress])
+
+    def test_max_model_len_mismatch_cannot_report_ready(self):
+        # W1 起回执带 max_model_len；算力端没用请求的上限也算 mismatch（执行端护栏据它定上限）
+        self.infer['inference_options']=self.health_options(max_model_len=self.options['max_model_len']*2)
+        with self.assertRaisesRegex(RuntimeError,'mismatch'):self.switch()
+        self.assertNotIn('ready',[p for p,_ in self.progress])
+
+    def test_verify_inference_accepts_real_backend_receipt(self):
+        # 正向：真 public_options 回执（含 max_model_len）过 verify_inference 不抛——start 路
+        # （bootstrap_main 以租约 network 字典调同一函数）与 switch 路共用；回执生成器再加键必在此先红
+        vm.verify_inference(dict(self.infer), self.options)
+        vm.verify_inference(dict(self.infer, inference_options=self.health_options()), dict(self.options))
 
     def test_remote_lock_excludes_orphaned_switch(self):
         with (self.private/'inference-switch.lock').open('a') as lock:

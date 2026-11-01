@@ -287,3 +287,24 @@ def test_branch_inherits_retained_set(make_session):
     mgr._materialize_branch("rt-parent", "rt-cold-child",
                             [parent.history_log.read_text().splitlines()[0]], 0)
     assert (mgr.sessions_dir / "rt-cold-child" / "routing.json").exists()
+
+
+def test_idle_prewarm_uses_session_routed_declaration(make_session):
+    """阶段复审 m5-N：T1 空闲预热的工具声明与真实轮次同款（_tools_decl_for：catalog 模式 = 基座 +
+    会话保留的路由件），不是基座声明——否则预热字节与下一轮首次全量渲染在声明处就分叉。"""
+    eng = FakeEngine([])
+    seen = []
+
+    async def _prewarm(session, tools):
+        seen.append(tools)
+        return True
+    eng.prewarm_session_cache = _prewarm
+    orch = _orch(eng)
+    s = make_session()
+    s.last_routed_tools = ["calendar_add"]                  # 上一个任务的路由件（任务外保留）
+    assert asyncio.run(orch.prewarm_session_cache(s)) is True
+    assert len(seen) == 1
+    want = orch._tools_decl_for(s)
+    assert want is not orch._tools_decl                     # 前提：两份声明确实不同
+    assert tools_fingerprint(seen[0]) == tools_fingerprint(want)
+    assert "calendar_add" in _full_names(seen[0]) and "calendar_add" not in _full_names(orch._tools_decl)

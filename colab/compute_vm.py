@@ -402,9 +402,14 @@ def apply_model(options, values, env, fetch_script, *, registry=None, **progress
 
 
 def verify_inference(health, options):
+    # 期望回执与 cuda/options.public_options 的键集严格相等（整字典 !=，不比子集：子集会放过
+    # 回执里多出来却与请求不一致的键）。max_model_len 由 W1 加入回执——执行端据它算上下文
+    # 护栏上限，所以「算力端真用了请求的 --max-model-len」本身要核；期望漏了它就是 P1 阶段
+    # 复审 C1：装载 11 分钟后必 mismatch，start 回收 VM 白烧、switch 直接失败。
     expected = {key: options.get(key, default) for key, default in
                 [('speculative_config', None), ('attention_backend', 'auto'),
                  ('kv_cache_dtype', 'auto')]}
+    expected['max_model_len'] = options['max_model_len']
     if (health.get('status') != 'ok' or health.get('service') != common.INFER_SERVICE
             or health.get('model_repo') != options['model']
             or health.get('model_revision') != options['revision']

@@ -73,13 +73,16 @@ W4A16，不开 MTP）。D25：CUDA 条目一律是预量化 4-bit（注册表 `c
 
 # 复用已有 READY VM：后台切换推理，保留 VM、Tailnet 名称和 RAG 服务
 # （switch 不带 --model 时同样切到默认模型）
+# MTP 缺省关（D21：长上下文开 MTP 退化）；--max-model-len 须与执行端 config.yaml 的
+# agent.context_guard 对表：ceiling = max_model_len − reserve 必须大于 hard，否则执行端
+# bind/refresh 抛 ValueError、算力节点被判不可用而 VM 照常计费（缺省 65536 已对表）
 ./colab/deploy.sh switch --model RedHatAI/Qwen3.8-27B-INT4 \
-  --speculative mtp --draft-tokens 3 --gpu-memory 0.85 --max-model-len 32768
+  --gpu-memory 0.85 --max-model-len 65536
 
-# 同一模型关闭 MTP；资源参数每次显式传入
+# 显式开 MTP（仅注册表 supports_mtp 的模型）；资源参数每次显式传入
 ./colab/deploy.sh switch --model RedHatAI/Qwen3.8-27B-INT4 \
-  --speculative off --attention-backend triton --kv-cache-dtype bfloat16 \
-  --gpu-memory 0.85 --max-model-len 32768
+  --speculative mtp --draft-tokens 3 --attention-backend triton --kv-cache-dtype bfloat16 \
+  --gpu-memory 0.85 --max-model-len 65536
 ```
 
 资源缺省（上下文 65536、显存 0.72）的依据：2026-10-24 在 A100 40GB 上以 Qwen3.8-27B INT4 + MTP 3 启动，

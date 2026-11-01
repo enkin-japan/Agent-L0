@@ -51,7 +51,9 @@ W3（D36，2026-11-01）起引擎按注册表条目的 `thinking_replay` 投影�
 ## 输出与口径
 transcripts.jsonl 每 run 一行：
 - `fill`：目标 / 估算 / 实际 token、fill_error、warning、cards、fingerprint；`score`：longchain 原字段 + recall_* + repetition_hits。
-- `gens`：每次生成的 prompt_tokens、reused_prefix、prompt_tps、generation_tps、repetition_guard。
+- `gens`：每次生成的 prompt_tokens、reused_prefix、prompt_tps、generation_tps、repetition_guard；`measure_tokens` / `measure_method`：该次生成前按同一份 prompt 入参调 `engine.measure_prompt` 的量值与量法（W1 护栏量法：`tokenizer` | `chars`），与同行实测 `prompt_tokens` 对照即量法偏差；内层引擎无此方法 = null，量法抛错另记 `measure_error`、不中止 run。旧行缺这两键。
+- `full_renders`：本 run 会话的全量渲染次数（`session.turn_full_renders`，engine 每走一次全量路 +1；harness 不经编排层、无轮首归零，executor 每 run 新建会话 = 整 run 口径）。null = 会话没有该计数；旧行缺键。
+- 上下文上限（meta，每行与 summary.json 都有）：`context_limit` = `engine.context_limit`（W1 护栏同一读法），`context_limit_source` = `health`（算力端 /health 报的 max_model_len）| `config` / `default`（remote 回落执行端配置 / 内置缺省；mlx 为 `inference.mlx.context_limit` 有无）| `fake`（干跑，无真上限，`context_limit` = null）| null（记不到）。旧行缺键。
 - `peak_prompt_tokens`（W1）：本 run 各次生成实测 prompt_tokens 的最大值（gens 空或全缺 = null）；summarize / analyze 汇总为「峰值prompt中位」`peak_prompt_tokens_median`（W1 前的旧行缺键，不进中位数）。harness 不经编排层，W1 护栏动作（钳制/压缩/终止）不在此计数。
 - 其余：`final_text_quality`、`sampling_overrides`、`turns`。
 - 思考回放（meta，每行与 summary.json 都有，W3）：`thinking_replay_mode` / `thinking_replay_k`（实际生效值）、`thinking_replay_source`（`cli` = 命令行覆盖，`entry` = 条目显式键，`default` = 条目没写、模块缺省 last_k/2）；W3 之前的旧行缺键 = 全部回放。

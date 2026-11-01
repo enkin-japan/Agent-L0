@@ -271,6 +271,29 @@ class KneeEngine:
         self.session = None             # run 结束时据此释放后端缓存
         self.gens: List[Dict[str, Any]] = []
 
+    def _measure(self, session, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """生成前按同一份 prompt 入参调 engine.measure_prompt（W1 护栏量法），与该次生成实测
+        prompt_tokens 并记，看量法偏差。内层无此方法（旧替身）= 两键 null；量法抛错只记账，
+        不中止 run（仪表故障不得杀掉可测的 run）。"""
+        fn = getattr(self._inner, "measure_prompt", None)
+        if not callable(fn):
+            return {"measure_tokens": None, "measure_method": None}
+        try:
+            pm = fn(session, tools=kwargs.get("tools"), task_block=kwargs.get("task_block"),
+                    tail_notes=kwargs.get("tail_notes"),
+                    enable_thinking=bool(kwargs.get("enable_thinking", False)))
+            return {"measure_tokens": pm.tokens, "measure_method": pm.method}
+        except Exception as e:      # noqa: BLE001
+            return {"measure_tokens": None, "measure_method": None,
+                    "measure_error": f"{type(e).__name__}: {e}"}
+
+    @property
+    def full_renders(self) -> Optional[int]:
+        """本 run 会话的全量渲染次数（engine.generate_once 在 ChatSession.turn_full_renders 上累加；
+        harness 不经编排层、无轮首归零——executor 每 run 新建会话，即整 run 口径）。"""
+        v = getattr(self.session, "turn_full_renders", None)
+        return v if isinstance(v, int) and not isinstance(v, bool) else None
+
     def release(self) -> None:
         """释放本 run 会话的后端缓存（远端=服务端缓存条目，MLX=KV）；后端无此方法则跳过。"""
         rel = getattr(self.backend, "release_cache", None)
@@ -291,6 +314,7 @@ class KneeEngine:
         if self._tools is not None:
             kwargs["tools"] = self._tools
             kwargs["grammar_tools"] = self._grammar_tools
+        measured = self._measure(session, kwargs)
         t0 = time.monotonic()
         r = await self._inner.generate_once(session, **kwargs)
         m = r.get("metrics") or {}
@@ -299,6 +323,7 @@ class KneeEngine:
             "wall_s": round(time.monotonic() - t0, 3),
             "prompt_tokens": m.get("prompt_tokens"),
             "reused_prefix": m.get("reused_prefix"),
+            **measured,
             "prompt_tps": m.get("prompt_tps"),
             "generation_tps": m.get("generation_tps"),
             "generation_tokens": m.get("generation_tokens"),
@@ -324,7 +349,7 @@ def score_run(plan: RunPlan, traj: Dict[str, Any], gens: List[Dict[str, Any]],
 
 def build_record(plan: RunPlan, traj: Dict[str, Any], gens: List[Dict[str, Any]],
                  score: Dict[str, Any], original_item: Dict[str, Any], meta: Dict[str, Any],
-                 wall_s: float) -> Dict[str, Any]:
+                 wall_s: float, full_renders: Optional[int] = None) -> Dict[str, Any]:
     first = gens[0] if gens else {}
     actual = first.get("prompt_tokens")
     # 峰值 prompt（W1）：本 run 各次生成实测 prompt_tokens 取大；无生成/全缺 = null
@@ -351,6 +376,7 @@ def build_record(plan: RunPlan, traj: Dict[str, Any], gens: List[Dict[str, Any]]
             "task_fp": task_fingerprint(original_item),
             "recall_suffix": plan.item["task"]["user"][len(original_item["task"]["user"]):],
             "fill": fill, "score": score, "gens": gens, "peak_prompt_tokens": peak,
+            "full_renders": full_renders,
             "repetition_events": [{"gen": g["i"], **g["repetition_guard"]}
                                   for g in gens if g.get("repetition_guard")],
             "wall_s": round(wall_s, 2),
@@ -426,8 +452,28 @@ async def make_engine(args, repo: str, opts: Dict[str, Any]):
         from framework.utils.path_resolver import resolve_model_path
         model_path = resolve_model_path(repo, revision=opts.get("revision"))
         kv = inference_cfg
-    return await AgentEngine.create(model_path, kv_config=kv, model_options=opts, env={},
-                                    backend=args.backend)
+    engine = await AgentEngine.create(model_path, kv_config=kv, model_options=opts, env={},
+                                      backend=args.backend)
+    # 上下文上限来源（meta.context_limit_source）：remote 由后端自己记（engine.backend.context_limit_source，
+    # health = 算力端 /health 报的 max_model_len；config / default = 回落），见 context_limit_meta；
+    # mlx 后端不记来源，这里按 config 键在不在判定
+    if args.backend == "mlx":
+        engine.knee_context_limit_source = (
+            "config" if (inference_cfg.get("mlx") or {}).get("context_limit") is not None
+            else "default")
+    return engine
+
+
+def context_limit_meta(engine) -> Dict[str, Any]:
+    """meta：本批引擎的上下文上限与来源。真后端取 engine.context_limit（W1 护栏同一读法）；来源
+    先读后端自记的 context_limit_source（remote），没有再取 make_engine 判定的（mlx），都没有 = null。
+    fake（干跑）没有真上限：上限 null、来源 fake。"""
+    if engine is None:
+        return {"context_limit": None, "context_limit_source": "fake"}
+    src = getattr(getattr(engine, "backend", None), "context_limit_source", None)
+    if src is None:
+        src = getattr(engine, "knee_context_limit_source", None)
+    return {"context_limit": getattr(engine, "context_limit", None), "context_limit_source": src}
 
 
 def _seed_sampler(backend: str, sampling_seed: int) -> bool:
@@ -578,6 +624,7 @@ async def amain(args) -> int:
             "thinking_replay_mode": counter.replay.mode if counter.replay else None,
             "thinking_replay_k": counter.replay.k if counter.replay else None,
             "thinking_replay_source": replay_source,
+            **context_limit_meta(engine),
             **prefix_meta}
     print(f"== 拐点测量 {repo}（{args.backend}，计数 {counter.mode}，前缀 {args.prefix}"
           f"{'' if prefix_meta['prefix_base_tokens'] is None else ' ' + str(prefix_meta['prefix_base_tokens']) + ' tok'}"
@@ -804,11 +851,13 @@ async def _one_run(args, engine, counter, item, item_idx, level, rep, meta,
                     "error": "timeout", "elapsed_s": elapsed, "run_timeout_s": timeout,
                     "drain_timeout": drain_timeout,
                     "drain_s": round(time.monotonic() - t0 - elapsed, 2),
-                    "gens": proxy.gens, "wall_s": round(time.monotonic() - t0, 2)}
+                    "gens": proxy.gens, "full_renders": proxy.full_renders,
+                    "wall_s": round(time.monotonic() - t0, 2)}
         score = score_run(plan, traj, proxy.gens, item)
         return build_record(plan, traj, proxy.gens, score, item,
                             {**meta, "sampling_seed": sampling_seed,
-                             "sampling_seed_applied": applied}, time.monotonic() - t0)
+                             "sampling_seed_applied": applied}, time.monotonic() - t0,
+                            full_renders=proxy.full_renders)
     except Exception as e:      # noqa: BLE001 —— 批次纪律：单 run 失败只记账
         import traceback
         return {**meta, "level": level, "rep": rep, "item_id": item["id"],

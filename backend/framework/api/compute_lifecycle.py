@@ -166,12 +166,12 @@ def refresh_context_limit(orchestrator, health, inference_cfg) -> Optional[int]:
     new, src = resolve_context_limit(health, inference_cfg or {})
     if new == backend.context_limit:
         return None
-    prev = backend.context_limit
-    backend.context_limit = new
+    prev, prev_src = backend.context_limit, getattr(backend, "context_limit_source", None)
+    backend.context_limit, backend.context_limit_source = new, src
     try:
         orchestrator.bind_context_limit()
     except ValueError:
-        backend.context_limit = prev
+        backend.context_limit, backend.context_limit_source = prev, prev_src
         raise
     events.emit("context_limit_rebound", previous=prev, value=new, source=src)
     print(f"[Compute] 算力端上下文上限变化 {prev} → {new}（来源 {src}），上限护栏已重绑")

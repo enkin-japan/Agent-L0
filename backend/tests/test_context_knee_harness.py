@@ -1351,3 +1351,90 @@ def test_thinking_replay_override_on_real_engine_path(tmp_path, monkeypatch, cap
     assert re.search(r"<\|channel>thought\n[^<]", history_part)            # 历史填充思考在
     summ = json.loads((out / "summary.json").read_text())
     assert (summ["thinking_replay_mode"], summ["thinking_replay_source"]) == ("all", "cli")
+
+
+# ---- 阶段复审 M1：量法记录 / 全量渲染次数 / 上下文上限 meta ----
+
+def test_dry_run_records_measure_full_renders_and_context_limit_meta(tmp_path):
+    out = tmp_path / "m"
+    assert K.main(["--dry-run", "--levels", "0,4000", "--reps", "1", "--limit", "1",
+                   "--out", str(out)]) == 0
+    recs = [json.loads(ln) for ln in (out / "transcripts.jsonl").read_text().splitlines()]
+    summ = json.loads((out / "summary.json").read_text())
+    for d in (summ, *recs):
+        assert (d["context_limit"], d["context_limit_source"]) == (None, "fake")
+    for r in recs:
+        assert r["full_renders"] == 0                 # FakeEngine 不走全量路计数；ChatSession 有该属性
+        assert r["gens"]
+        for g in r["gens"]:
+            # 生成前量值与该次实测 prompt_tokens 都在（FakeEngine 的量值取下一步脚本的 prompt_tokens）
+            assert g["measure_method"] == "tokenizer"
+            assert g["measure_tokens"] == g["prompt_tokens"] and g["prompt_tokens"]
+
+
+def test_real_engine_path_measures_same_prompt_and_counts_full_renders(tmp_path, monkeypatch):
+    """真引擎路（make_engine 换成假后端引擎）：measure_prompt 走与 generate_once 同一装配，量值 =
+    同一 prompt 的分词数；首生成全量渲染 → full_renders ≥ 1；meta 记引擎上限与 make_engine 的来源。"""
+    from framework.core.engine import AgentEngine
+    made = []
+
+    async def fake_make_engine(args, repo, opts):
+        be = _KneeBe()
+        be.context_limit, be.context_limit_source = 32768, "health"   # remote 后端自记来源
+        eng = AgentEngine(be, model_options=opts, env={})
+        made.append(eng)
+        return eng
+    monkeypatch.setattr(K, "make_engine", fake_make_engine)
+    out = tmp_path / "real"
+    assert K.main(["--model", "gemma-4-31b-it-4bit", "--backend", "remote", "--levels", "4096",
+                   "--reps", "1", "--limit", "1", "--out", str(out)]) == 0
+    (eng,) = made
+    (rec,) = [json.loads(ln) for ln in (out / "transcripts.jsonl").read_text().splitlines()]
+    assert "error" not in rec, rec.get("traceback")
+    assert (rec["context_limit"], rec["context_limit_source"]) == (32768, "health")
+    g0 = rec["gens"][0]
+    assert g0["measure_method"] == "tokenizer"
+    assert g0["measure_tokens"] == len(_KneeLenTok().encode(eng.backend.prompts[0]))
+    assert "prompt_tokens" in g0
+    assert isinstance(rec["full_renders"], int) and rec["full_renders"] >= 1
+
+
+def test_knee_engine_without_measure_or_failing_measure_records_null():
+    class _NoMeasure(FakeEngine):
+        measure_prompt = None
+
+    class _Boom(FakeEngine):
+        def measure_prompt(self, *a, **k):
+            raise RuntimeError("tokenizer gone")
+    item = _vfs_item()
+    for inner, err in ((_NoMeasure([{"text": "完成"}]), None),
+                       (_Boom([{"text": "完成"}]), "RuntimeError: tokenizer gone")):
+        proxy = K.KneeEngine(inner, [])
+        asyncio.run(run_item(proxy, item))
+        (g,) = proxy.gens
+        assert (g["measure_tokens"], g["measure_method"]) == (None, None)
+        assert g.get("measure_error") == err
+        assert g["prompt_tokens"] == 100                    # 实测照记，run 不中止
+
+
+def test_resume_and_summarize_accept_legacy_rows_without_new_keys(tmp_path, capsys):
+    """旧行（M1 之前）缺 measure_* / full_renders / context_limit*：--resume 续跑与 summarize 都不报错。"""
+    out = tmp_path / "legacy"
+    assert K.main(["--dry-run", "--levels", "4096", "--reps", "2", "--limit", "1",
+                   "--out", str(out)]) == 0
+    path = out / "transcripts.jsonl"
+    recs = [json.loads(ln) for ln in path.read_text().splitlines()]
+    legacy = recs[0]
+    for k in ("full_renders", "context_limit", "context_limit_source"):
+        legacy.pop(k)
+    for g in legacy["gens"]:
+        g.pop("measure_tokens"), g.pop("measure_method")
+    path.write_text(json.dumps(legacy, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert K.main(["--dry-run", "--levels", "4096", "--reps", "2", "--limit", "1",
+                   "--out", str(out), "--resume"]) == 0
+    assert "跳过 1 个已完成 run" in capsys.readouterr().out
+    rows = [json.loads(ln) for ln in path.read_text().splitlines()]
+    assert len(rows) == 2 and "full_renders" not in rows[0] and rows[1]["full_renders"] == 0
+    summ = json.loads((out / "summary.json").read_text())
+    assert summ["complete"] is True and summ["n_runs"] == 2
+    assert S.main([str(out)]) == 0

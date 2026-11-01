@@ -12,7 +12,8 @@
 # 产物：$OUT/run_colab.log（时间线）、$OUT/smoke.log（探针输出）、$OUT/result.json + PNG（探针写）、
 #   $OUT/DONE（最后一行 SMOKE_RC=<rc> / FAIL_START / FAIL_READY / STOP_FAILED）。
 # 退出码 = 探针退出码（0 全过）；3 起机失败；4 超时未 READY；5 停机失败（VM 可能仍在计费，最长到租约到期）。
-# 起机成功后，任何路径（探针失败/崩溃、INT/TERM/HUP、超时）都经 EXIT trap 停机一次。
+# 起机命令发出后（含起机进行中），任何路径（起机失败、探针失败/崩溃、INT/TERM/HUP、超时）都经 EXIT trap 停机一次；
+#   防御性停机失败同样记 STOP_FAILED / rc 5，不被 FAIL_START 吞掉。
 set -u
 ROOT=${0:A:h:h:h}
 cd "$ROOT" || exit 2
@@ -48,14 +49,33 @@ on_exit(){
 trap on_exit EXIT
 trap 'log "interrupted (signal)"; exit 130' INT TERM HUP
 
+# 起机前先看租约：已有别人的未停租约（state 非 stopped）就拒绝起机、也绝不停机——否则下面
+# 起机失败后的防御性 stop 会停掉用户已有的那台 VM；status 本身跑不起来（环境不可用）同样只记
+# FAIL_START，不进 STOP_FAILED 误报（一审 Minor 3/4）。
+# （status 的 stdout 里 colab CLI usage 行先于租约 JSON：子进程直写、python 缓冲——按第一个行首 { 取租约 JSON）
+lease_state=$(./colab/deploy.sh status 2>>"$LOG" | python3 -c '
+import sys, json, re
+s = sys.stdin.read(); m = re.search(r"^\{", s, re.M)
+d, _ = json.JSONDecoder().raw_decode(s[m.start():])
+print(d.get("state") or "none")' 2>>"$LOG") || lease_state=error
+case $lease_state in
+  none|stopped) ;;
+  *) log "refuse to start: existing lease state=$lease_state (not ours; no stop)"; finish FAIL_START; exit 3;;
+esac
+# 起机命令发出前就置 started=1：deploy start 预约租约并派出 worker 后即返回（约 1 秒），这 1 秒里
+# 收到 INT/TERM/HUP 原先 started=0 不停机，已派出的 worker 照常起机，VM 跑到租约到期（P1 阶段复审 m1）。
+# zsh 的 trap 在前台子进程退出后才执行：信号期间仍会停机，只是延后到 start 返回。
+started=1
 log "START deploy $MODEL lease ${MINUTES}min"
 ./colab/deploy.sh start --model "$MODEL" --minutes "$MINUTES" >> "$LOG" 2>&1; start_rc=$?
 if [ $start_rc -ne 0 ]; then
   log "deploy start FAILED rc=$start_rc; defensive stop"
-  started=1; stop_colab || true; stopped=1; started=0
+  if ! stop_colab; then
+    log "STOP FAILED: VM 可能仍在计费（最长到租约到期），需人工 ./colab/deploy.sh status / stop"
+    finish STOP_FAILED; exit 5
+  fi
   finish FAIL_START; exit 3
 fi
-started=1
 
 host=""
 deadline=$(( $(date +%s) + (MINUTES - 10) * 60 ))

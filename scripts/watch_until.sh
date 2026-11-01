@@ -5,7 +5,8 @@
 #
 # 用法：
 #   scripts/watch_until.sh [--interval SEC] [--deadline SEC] [--stall SEC]
-#       [--pid N | --pidfile F]        进程验活（消失 → EXIT_DEAD；pidfile 优先于 --pid）
+#       [--pid N] [--pidfile F]        进程验活（消失 → EXIT_DEAD；可同时给：pidfile 首行为数字时优先，
+#                                     读不到/非数字回落 --pid）
 #       [--log F]                      只读增量行，匹配 --done / --fail
 #       [--cmd 'CMD']                  每轮执行，整段输出匹配 --done / --fail
 #       [--file F]...                  进度承载文件；全部超过 --stall 秒无更新 → EXIT_STALL
@@ -73,7 +74,12 @@ while :; do
   now=$(date +%s)
   read_probe; check_patterns
 
-  p=$pid; [ -n "$pidfile" ] && p=$(cat "$pidfile" 2>/dev/null || true)
+  # pidfile 缺失/为空时回落 --pid，而不是整段关掉存活检查（否则进程已死只能等硬截止）
+  p=$pid
+  if [ -n "$pidfile" ]; then
+    pf=$(head -n1 "$pidfile" 2>/dev/null | tr -d '[:space:]' || true)
+    case $pf in ''|*[!0-9]*) ;; *) p=$pf;; esac
+  fi
   if [ -n "$p" ] && ! alive "$p"; then
     read_probe; check_patterns   # 进程在上一次读取后正常收尾的窗口
     echo "EXIT_DEAD pid=$p gone after $((now - start))s"; exit 2; fi

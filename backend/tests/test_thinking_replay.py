@@ -476,3 +476,24 @@ def test_turn_stats_without_engine_stats_have_no_key(make_session):
     from .test_context_guard import _orch, _run
     r = _run(_orch(FakeEngine([{"text": "完成"}])), make_session())
     assert "thinking_replay" not in r["metrics"]
+
+
+def test_turn_stats_previous_turn_replay_stats_reset_at_turn_start(make_session):
+    """阶段复审 m5-L（2b12243：轮首清统计）：上一轮生成留下的 last_k 投影统计不得盖进下一轮。
+    下一轮在 ceiling 处生成前即终止（零次生成、engine 不再写 turn_thinking_replay）——
+    轮首不清零，终止轮的 metrics 会带上一轮的 thinking_replay。"""
+    from .test_context_guard import _orch, _run
+    eng = _ReplayFakeEngine([{"text": "完成"}, {"text": "不该走到这里"}])
+    eng.replay_stats = {"mode": "last_k", "k": 2, "kept": 1, "dropped": 3, "kept_chars": 7,
+                        "dropped_chars": 42, "placeholders": 1}
+    orch = _orch(eng)
+    session = make_session()
+    eng.measure_script = [100]
+    r1 = _run(orch, session)
+    assert r1["metrics"]["thinking_replay"]["mode"] == "last_k"
+    eng.replay_stats = {"mode": "all", "k": 2, "kept": 0, "dropped": 0, "kept_chars": 0,
+                        "dropped_chars": 0, "placeholders": 0}
+    eng.measure_script = [60000, 60000]
+    r2 = _run(orch, session)
+    assert r2["status"] == "warning" and len(eng.calls) == 1      # 第二轮零次生成
+    assert "thinking_replay" not in r2["metrics"]

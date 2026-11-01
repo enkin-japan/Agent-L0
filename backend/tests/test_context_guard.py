@@ -498,6 +498,7 @@ def test_remote_adopts_health_max_model_len(remote_load):
     be, gets = remote_load({"status": "ok", "inference_options": {"max_model_len": 40960}},
                            cuda={"max_model_len": 32768})
     assert be.context_limit == 40960 and gets == 1           # 复用同一次 /health
+    assert be.context_limit_source == "health"
     assert _events("context_limit_fallback") == []
 
 
@@ -508,6 +509,7 @@ def test_remote_adopts_health_max_model_len(remote_load):
 def test_remote_falls_back_to_executor_cfg_with_event(remote_load, payload, capsys):
     be, _ = remote_load(payload, cuda={"max_model_len": 32000})
     assert be.context_limit == 32000
+    assert be.context_limit_source == "config"
     ev = _events("context_limit_fallback")
     assert len(ev) == 1 and ev[0]["detail"] == {"source": "config", "value": 32000}
     assert "回落" in capsys.readouterr().out
@@ -516,6 +518,7 @@ def test_remote_falls_back_to_executor_cfg_with_event(remote_load, payload, caps
 def test_remote_falls_back_to_default_without_cfg(remote_load):
     be, _ = remote_load({"status": "ok"})
     assert be.context_limit == 65536
+    assert be.context_limit_source == "default"
     assert _events("context_limit_fallback")[0]["detail"] == {"source": "default", "value": 65536}
 
 

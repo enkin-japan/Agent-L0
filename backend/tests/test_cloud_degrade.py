@@ -482,3 +482,36 @@ def test_abandoned_pending_turn_metrics_carry_audit_keys(make_session, chart_cav
     assert r["status"] == "pending_approval"
     assert r["metrics"]["cloud_degraded"] == ["budget_exhausted"]
     assert r["metrics"]["cloud_upgrade"][0]["action"] == "caveat"
+
+
+def test_notice_reads_persisted_originals_after_in_turn_ceiling_fold(make_session):
+    """阶段复审 m5-I（87fd7d3：云降级扫描读原件）：本轮降级观察被 W1 ceiling 应急压缩折成桩、桩头
+    短到连降级前缀都截掉了——model-facing history 里已认不出降级，落盘视图（原件）仍是降级原文。
+    收尾判据须读原件：照样挂「本地作答」、metrics 照记；读 history 会两样都丢。"""
+    big = FakeTool("read_thing", result="Y" * 3000)
+    engine = FakeEngine([
+        {"tool_calls": [call("cloud_consult", question="q")]},
+        {"tool_calls": [call("read_thing", path="a")]},
+        {"tool_calls": [call("read_thing", path="b")]},
+        {"text": "这是我的本地分析。"},
+    ])
+    engine.measure_script = [100, 100, 100, 60000, 30000]   # 第 4 次生成前顶到 ceiling → 折叠一次
+    orch = make_orch(engine, FakeRegistry([_degraded_tool(), big]), goal_verify=False,
+                     observation_compact_chars=12)
+    orch.bind_context_limit()
+    session = make_session()
+    session.add_user_message("请深入分析")
+    begin_turn(session)
+    start = len(session.history) - 1
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
+    assert result["status"] == "success" and engine.script == []
+    stub = [tr["response"] for m in session.history if m.get("role") == "tool"
+            for tr in m["tool_responses"] if tr.get("name") == CLOUD_CONSULT_TOOL][0]
+    # 前提：history 里的桩确实认不出降级（否则本用例分不开两种读法）
+    assert "Observation compacted" in stub and degraded_kind(stub, CLOUD_CONSULT_TOOL) is None
+    orig = [tr["response"] for m in session.persistable_messages(start) if m.get("role") == "tool"
+            for tr in m["tool_responses"] if tr.get("name") == CLOUD_CONSULT_TOOL][0]
+    assert degraded_kind(orig, CLOUD_CONSULT_TOOL) == "budget_exhausted"
+    assert result["metrics"]["cloud_degraded"] == ["budget_exhausted"]
+    assert result["metrics"]["cloud_consult_ok"] is False
+    assert "本回答由本地模型独立完成" in result["response"]

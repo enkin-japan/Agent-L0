@@ -349,3 +349,41 @@ def test_cuda_scope_cancel_unblocks_prefill_and_aborts(monkeypatch):
     finally:
         b._loop.call_soon_threadsafe(b._loop.stop)
         th.join(timeout=2)
+
+
+def test_facade_stream_disconnect_cancels_scope(srv, armed, monkeypatch):
+    """阶段复审 m5-P：OpenAI 门面流式路（/v1/chat/completions stream=true）断连同 /v1/generate——
+    finally 里 scope.cancel() 同步触发后端中止钩子，不等下一个 chunk（解码中途阻塞的后端被立即唤醒）；
+    推理线程随后退出、生成闸与 single_busy 归还。"""
+    be = armed("stream")
+    mk = SimpleNamespace(soc="<|soc|>", eoc="<eoc|>", stc="<|stc|>", etc="<etc|>")
+    monkeypatch.setattr(srv.S, "dialect", SimpleNamespace(
+        markers=mk, build_prompt=lambda messages, tools=None, include_env=False: "P"))
+    monkeypatch.setattr(srv.S, "facade_cache", None)
+    monkeypatch.setattr(srv.S, "facade_stream", None)
+    monkeypatch.setattr(srv.S, "model_name", "m")
+
+    async def run():
+        srv.S.gen_sem = asyncio.Semaphore(1)
+        resp = await srv.oai_chat_completions(_Req({
+            "stream": True, "messages": [{"role": "user", "content": "hi"}]}))
+        parts = []
+
+        async def consume():
+            async for part in resp.body_iterator:
+                parts.append(part)
+
+        task = asyncio.create_task(consume())
+        assert await asyncio.to_thread(be.entered.wait, 5), "假后端没走到阻塞点"
+        task.cancel()                                           # Starlette 断连 = 取消响应体任务
+        await asyncio.sleep(0)
+        assert await asyncio.to_thread(be.aborted.wait, 2), "门面断连没有触发后端中止钩子"
+        assert await asyncio.to_thread(be.closed.wait, 2)
+        assert be.close_thread == be.gen_thread
+        t0 = time.monotonic()
+        while srv.S.gen_sem._value != 1 and time.monotonic() - t0 < 2:
+            await asyncio.sleep(0.01)
+        assert srv.S.gen_sem._value == 1 and srv.S.single_busy == 0
+        assert srv.S.facade_stream is None                      # 中途断连不提交门面流
+
+    asyncio.run(run())

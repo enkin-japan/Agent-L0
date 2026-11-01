@@ -698,3 +698,70 @@ def test_turn_stats_full_renders_stamped_from_session(make_session):
     eng2 = FakeEngine([{"text": "完成"}])
     r2 = _run(_orch(eng2), make_session("s2"))
     assert "full_renders" not in r2["metrics"] and "step_compactions" not in r2["metrics"]
+
+
+# ====================================================================== G 范围下界（阶段复审 m4）
+# 两处钩子的落刀起点都是本轮起点 turn_history_start_idx：上一轮的观察早已落盘、不在副本 + 原件表里，
+# 起点若回落到 0，就会被就地改成桩（model-facing 历史凭空丢上一轮原文）并补写 spill。
+def _plan1(title):
+    return {"tool_calls": [call("update_plan", op="replace", steps=[title])]}
+
+
+def _turn1_then_turn2(eng, orch, session, t2_measure):
+    """第一轮：3 条长观察（ra/rb/rc，> digest_chars）+ complete_step，全程 ok 档不压；
+    第二轮：rd/re → complete_step + rf → 收尾，按 t2_measure 触发压缩。返回 (第一轮观察, 第二轮起点)。"""
+    eng.script = [_plan1("一"), {"tool_calls": [call("ra"), call("rb")]},
+                  {"tool_calls": [call("rc")]},
+                  {"tool_calls": [call("complete_step", result="r1")]}, {"text": "第一轮完成"}]
+    eng.measure_script = [100]
+    r1 = _run(orch, session)
+    assert r1["status"] == "success" and _step_events() == [] and _spill_files(session) == []
+    first = [tr for m in session.history if m.get("role") == "tool"
+             for tr in m["tool_responses"] if tr.get("name") in ("ra", "rb", "rc")]
+    assert [tr["response"] for tr in first] == [BIG["ra"], BIG["rb"], BIG["rc"]]
+    eng.script = [_plan1("二"), {"tool_calls": [call("rd"), call("re")]},
+                  {"tool_calls": [call("complete_step", result="r2"), call("rf")]},
+                  {"text": "第二轮完成"}]
+    eng.measure_script = list(t2_measure)
+    r2 = _run(orch, session)
+    assert r2["status"] == "success" and eng.script == []
+    return first, session.turn_history_start_idx
+
+
+def _assert_previous_turn_untouched(session, first, t0, trigger):
+    now = [tr for m in session.history if m.get("role") == "tool"
+           for tr in m["tool_responses"] if tr.get("name") in ("ra", "rb", "rc")]
+    # 上一轮的观察：原文、未打压缩标记（dict 都是同一批对象——没有被换副本，也没有被就地改）
+    assert [tr["response"] for tr in now] == [BIG["ra"], BIG["rb"], BIG["rc"]]
+    assert all(not tr.get("_compacted") for tr in now)
+    assert [id(tr) for tr in now] == [id(tr) for tr in first]
+    # 没有为上一轮观察补写 spill（本轮被压的 rd/re 才有）
+    texts = {f.read_text(encoding="utf-8") for f in _spill_files(session)}
+    assert not texts & {BIG["ra"], BIG["rb"], BIG["rc"]}
+    assert texts and texts <= {BIG["rd"], BIG["re"]}
+    ev = _step_events()
+    assert ev and all(e["trigger"] == trigger for e in ev)
+    assert all(e["start"] >= t0 for e in ev), (ev, t0)
+    # 正向对照：本轮已完成步骤段确实压了
+    cur = {tr["name"]: tr["response"] for m in session.history[t0:] if m.get("role") == "tool"
+           for tr in m["tool_responses"]}
+    assert _stubbed(cur["rd"])
+
+
+def test_step_boundary_compaction_never_reaches_previous_turn(make_session):
+    """m4 / 变异体 A（步骤边界钩子起点改 0）：块级前缀缓存 soft 起压，第二轮边界只压本轮段。"""
+    eng = SnapEngine([])
+    orch = _orch(eng, bpc=True, observation_budget_chars=10 ** 6)
+    session = make_session()
+    first, t0 = _turn1_then_turn2(eng, orch, session, [30000])
+    _assert_previous_turn_untouched(session, first, t0, "step")
+
+
+def test_hard_hook_compaction_never_reaches_previous_turn(make_session):
+    """m4 / 变异体 A2（hard 钩子起点改 0）：不可裁缓存，第二轮首次 hard 只压本轮已完成步骤段。"""
+    eng = SnapEngine([])
+    orch = _orch(eng, bpc=False, observation_budget_chars=10 ** 6)
+    session = make_session()
+    first, t0 = _turn1_then_turn2(eng, orch, session, [100, 100, 100, 40000])
+    _assert_previous_turn_untouched(session, first, t0, "hard")
+    assert len(_events(cg.EVT_HARD)) == 1

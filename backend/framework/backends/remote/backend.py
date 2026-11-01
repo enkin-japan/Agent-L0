@@ -195,6 +195,7 @@ class RemoteBackend:
                 guard_model_identity(health, expected, backend.base_url)
             # 上下文上限（W1）：复用同一次 /health，不多打一次
             backend.context_limit, _src = resolve_context_limit(health, cfg)
+            backend.context_limit_source = _src
             if _src != "health":
                 print(f"[RemoteBackend] ⚠️ 算力端 /health 未报 inference_options.max_model_len（服务过旧？）："
                       f"上下文上限回落 {_src}={backend.context_limit}；算力端若以别的 --max-model-len "
@@ -214,6 +215,8 @@ class RemoteBackend:
         self.processor = processor
         # 上下文上限（W1）：load 时取自算力端 /health；直接构造（测试/脚本）= 未知
         self.context_limit: Optional[int] = None
+        # 上限来源（health | config | default，见 resolve_context_limit）；直接构造 = 未知
+        self.context_limit_source: Optional[str] = None
         self.base_url = base_url.rstrip("/")
         # 端点名 → 拨号地址（load 时按 config inference.endpoints 追加；直接构造=单端点）
         self._endpoint_urls = {"main": self.base_url}
