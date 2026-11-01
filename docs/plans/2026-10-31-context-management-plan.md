@@ -385,5 +385,5 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
   7 Minor（run_colab.sh 起机期间信号不停机 + 防御性 stop 失败被吞；README switch 示例 32768 低于护栏 hard；watch_until pidfile 缺失关掉存活检查；W2 范围下界无测试钉住；
   四项声明行为无测试能红；remote block_prefix_cache 写死；六处文档口径）。两条 C/M 各派 skeptic 驳斥均失败。处置：C1 主会话亲改（期望补 `max_model_len` 仍严格相等，
   测试改真 `public_options` 造回执 + 不一致必抛用例；变异体「删期望键」→ 两条 ready 用例红）；m1/m2/m3/m7 主会话改；m4/m5/端到端 ceiling 用例/harness 量测记录 → implementer；
-  M1 立 W-K 工作包待拍板；m6 记残留。全量 pytest 两条失败（call_id 含 "1250" 子串偶发、Swift 变异体 nil 解包）在本阶段 diff 之外，见 precommit-under-load 记忆。
+  M1 立 W-K 工作包待拍板；m6 记残留。修补一次提交 `e435f28`（reviewer 一审 0C/0M/6m/4n 全修主要项；pre-commit 全量 check：backend 4091 passed / 3 skipped，colab 135，web 252）。全量 pytest 两条失败（call_id 含 "1250" 子串偶发、Swift 变异体 nil 解包）在本阶段 diff 之外，见 precommit-under-load 记忆。
   已核无问题面：W-3 冒烟数字、measure_prefix 前缀表、P0 拐点 CSV 0 差异、守卫链构造期失败关闭、persistable_messages 三处覆盖、W3 指纹与身份校验、计费出口、密扫 0 命中、旧测试期望零改动。
