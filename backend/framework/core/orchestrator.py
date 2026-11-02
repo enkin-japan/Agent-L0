@@ -17,6 +17,7 @@
   取回的 schema 作为 tool_response 进入追加式 history，对 KV 缓存友好）。
 """
 import asyncio
+import hashlib
 import json
 import re
 import uuid
@@ -31,7 +32,8 @@ from ..memory.session import ChatSession, DEFAULT_SYSTEM_PROMPT
 from ..memory.compactor import (compact_tool_observations, compact_tool_observations_detailed,
                                 resolve_summary_calibration)
 from ..mcp.registry import MCPRegistry
-from .spill import spill_handle, spill_observation, truncate_observation
+from .spill import (SPILL_HANDLE_PREFIX, resolve_spill_ref, spill_handle, spill_observation,
+                    truncate_observation)
 
 # W2 步骤边界压缩不落刀的观察：工具 schema 详情（模型据此组参，压了就得再取一次）、云端咨询答复
 # （出网换来的、不可廉价重取）、结构提醒（name=system，短且贴着近因）。W1 ceiling 与轮首压缩不豁免。
@@ -533,7 +535,7 @@ class Orchestrator:
             return
         self.context_limits = context_guard.derive_limits(self.context_guard, lim)
 
-    def _emergency_compact(self, session: ChatSession) -> int:
+    def _emergency_compact(self, session: ChatSession) -> Tuple[int, int]:
         """轮内应急机械压缩（ceiling 兜底）：model-facing history 里保护窗口（最近 2 条）之外的
         工具观察一律折成桩，返回被压缩条数。摘要折叠只能在轮边界做（rebuild_from_log 会清掉
         进行中的本轮），归 W2。
@@ -544,10 +546,18 @@ class Orchestrator:
         session.guard_persist_originals，落盘切片经 session.persistable_messages 换回原件。
         本轮之前的消息早已落盘，与轮首机械压缩同样就地改即可。代价：history 指纹变化，前缀
         缓存整段失配一次（接受：此刻已顶到上限，失配一次远比 overflow 便宜）。
-        范围 = 整个 history（含进行中步骤）；副本 + 原件表循环与 W2 共用 _compact_turn_range。"""
-        return self._compact_turn_range(
+        范围 = 整个 history（含进行中步骤）；副本 + 原件表循环与 W2 共用 _compact_turn_range。
+
+        W1b 回读句柄：被折的观察全文先补写进本会话 spill 目录、桩末带 file_extract 短句柄（与 W2
+        同一 _spill_stub_handle），**不看** step_compaction.spill_full——ceiling 桩若不给路，内存里
+        的原文对模型就是彻底消失（2026-11-02 57K 臂实测：事实卡召回 91% → 0%）。会话无 session_dir
+        或补写失败 → 桩不给句柄（旧行为）。返回 (压缩条数, 带句柄条数)。"""
+        cb = self._spill_stub_handle(session, digest_chars=self.observation_compact_chars,
+                                     label="ceiling 应急压缩")
+        out = self._compact_turn_range(
             session, 0, None, keep_recent=2, digest_chars=self.observation_compact_chars,
-            label="ceiling")["count"]
+            label="ceiling", stub_handle=cb)
+        return out["count"], (cb.spilled if cb is not None else 0)
 
     def _compact_turn_range(self, session: ChatSession, start: int, end: Optional[int], *,
                             keep_recent: int, digest_chars: int, label: str,
@@ -592,27 +602,58 @@ class Orchestrator:
         return out
 
     def _step_stub_handle(self, session: ChatSession):
-        """W2 spill 补写回调（交给压缩器的 stub_handle）：被压观察正文 > digest_chars 且 spill_full
-        → 先把全文落进本会话 spill 目录（复用 spill_observation：0600、撞名 -n、128MB 会话预算、
-        目录创建），返回 file_extract 短句柄调用串；不满足/预算满/写失败 → None（桩不给路径——
-        给一条走不通的路比不给更毒，见 spill.py）。文件名用新的 8 位 hex（过 resolve_spill_ref 的
-        落盘名正则）。不承诺一次读完：file_extract 文本分支回读带行号前缀（每行 "%5d | " + 头行），
-        3,000–4,000 字的全文读回会超过 observation_max_chars、被编排层再截断一次——截断中缝照常
-        给出续读路（剩余行区间），模型按中缝续读即可。截断过的观察压缩器不调本回调（内存里不是全文）。"""
+        """W2 spill 补写回调（交给压缩器的 stub_handle）：spill_full 关 → None（桩不给句柄）；
+        开 → _spill_stub_handle（digest = step_compaction.digest_chars）。"""
         cfg = self.step_compaction
-        if not cfg.spill_full or getattr(session, "session_dir", None) is None:
+        if not cfg.spill_full:
             return None
+        return self._spill_stub_handle(session, digest_chars=cfg.digest_chars, label="步骤边界压缩")
+
+    def _spill_stub_handle(self, session: ChatSession, *, digest_chars: int, label: str):
+        """spill 补写回调的共用实现（W2 步骤边界 / W1b ceiling 应急）：被压观察正文 > digest_chars
+        → 先把全文落进本会话 spill 目录（复用 spill_observation：0600、撞名 -n、128MB 会话预算、
+        目录创建），返回 file_extract 短句柄调用串；正文 ≤ digest（桩里已是全文）/预算满/写失败 →
+        None（桩不给路径——给一条走不通的路比不给更毒，见 spill.py）。session_dir 为 None → 整个
+        回调为 None。fail-open：补写抛异常与返回 None 同按失败处理，失败告警（含异常文本）每个回调
+        （= 每次压缩）只打一次。回调上挂 .spilled = 给出句柄的条数（含复用已有文件的，ceiling 事件用）。
+        文件名 = 正文 sha256 前 16 hex（过 spill.py 的 call_id / 落盘名正则）：ceiling 应急压缩扫整个
+        history，重建/恢复会话后旧轮观察以全文回到内存，下一次 ceiling 会再压它们——同名文件已在且
+        字节相同（含 spill_observation 撞名后缀 -1..-7）就复用其句柄、不重写，免得同一份正文按新名
+        反复落盘吃 128MB 会话预算；同 hash 异内容照常交给 spill_observation 撞名换 -n。不承诺一次读完：file_extract 文本分支回读带行号前缀
+        （每行 "%5d | " + 头行），3,000–4,000 字的全文读回会超过 observation_max_chars、被编排层
+        再截断一次——截断中缝照常给出续读路（剩余行区间），模型按中缝续读即可。截断过的观察压缩器
+        不调本回调（内存里不是全文）。"""
+        if getattr(session, "session_dir", None) is None:
+            return None
+        warned = [False]
 
         def _cb(tr: Dict[str, Any]) -> Optional[str]:
             text = str(tr.get("response", ""))
-            if len(text) <= cfg.digest_chars:
+            if len(text) <= digest_chars:
                 return None
-            got = spill_observation(session, uuid.uuid4().hex[:8], text)
+            err = ""
+            try:
+                body = text.encode("utf-8", "surrogatepass")
+                call_id = hashlib.sha256(body).hexdigest()[:16]
+                got = None
+                for stem in (call_id, *(f"{call_id}-{k}" for k in range(1, 8))):
+                    f = resolve_spill_ref(session, SPILL_HANDLE_PREFIX + stem)
+                    if f is not None and f.read_bytes() == body:
+                        got = (str(f), len(text))   # 同一份正文已落过盘：复用句柄、不重写
+                        break
+                if got is None:
+                    got = spill_observation(session, call_id, text)
+            except Exception as e:   # fail-open：补写出错只丢句柄，不打断压缩
+                err, got = f"（{e!r}）", None
             if got is None:
-                print(f"[Orchestrator] ⚠️ 步骤边界压缩：观察 {tr.get('name')} 全文补写 spill 失败，"
-                      "桩不给回读句柄")
+                if not warned[0]:
+                    warned[0] = True
+                    print(f"[Orchestrator] ⚠️ {label}：观察 {tr.get('name')} 全文补写 spill 失败{err}，"
+                          "桩不给回读句柄（本次压缩后续失败不再重复告警）")
                 return None
+            _cb.spilled += 1
             return f'file_extract(path="{spill_handle(got[0])}")'
+        _cb.spilled = 0
         return _cb
 
     def _step_compact(self, session: ChatSession, start: int, end: int, *, trigger: str,
@@ -945,6 +986,8 @@ class Orchestrator:
             guard_flags = session.turn_guard_flags = {}
         for _k in ("clamped", "soft", "hard", "compacted"):
             guard_flags.setdefault(_k, False)
+        for _k in ("ceiling_compacted", "ceiling_spilled"):   # 本轮 ceiling 应急压缩计数（终止事件用）
+            guard_flags.setdefault(_k, 0)
 
         def _note_peak(tokens: Any) -> None:
             if isinstance(tokens, int) and not isinstance(tokens, bool) \
@@ -989,12 +1032,14 @@ class Orchestrator:
                 if level == "ceiling" and not guard_flags["compacted"]:
                     guard_flags["compacted"] = True
                     before = m.tokens
-                    n = self._emergency_compact(session)
+                    n, n_spilled = self._emergency_compact(session)
+                    guard_flags["ceiling_compacted"], guard_flags["ceiling_spilled"] = n, n_spilled
                     m, level = _guard_measure(prompt_args, limits)
                     if level != "ceiling":
                         events.emit(context_guard.EVT_FOLD, session=session.session_id,
                                     before=before, after=m.tokens, ceiling=limits.ceiling,
-                                    compacted=n, iteration=session.carried_iterations + iterations + 1)
+                                    compacted=n, spilled=n_spilled,
+                                    iteration=session.carried_iterations + iterations + 1)
                         session.push_activity("note", "上下文接近上限，已折叠旧观察")
                         print(f"[Orchestrator] 上下文上限护栏：应急压缩 {n} 条观察，"
                               f"{before:,} → {m.tokens:,} token（ceiling {limits.ceiling:,}）")
@@ -1031,7 +1076,9 @@ class Orchestrator:
                 session.add_assistant_message(content=msg)
                 session.set_activity("已终止（上下文达模型上限）", phase="done")
                 events.emit("turn_abort", session=session.session_id,
-                            reason=context_guard.ABORT_REASON, **_detail(m, level))
+                            reason=context_guard.ABORT_REASON, **_detail(m, level),
+                            compacted=guard_flags["ceiling_compacted"],
+                            spilled=guard_flags["ceiling_spilled"])
                 print(f"[Orchestrator] 上下文上限护栏：{m.tokens:,} ≥ ceiling {limits.ceiling:,}，终止本轮")
                 _stamp_turn_stats()
                 _exit_audit()

@@ -117,6 +117,26 @@ def test_drop_task_clears_task_before_continuation(tmp_path, summarize_calls):
     assert {r["drop_task"] for r in rows} == {"on"}
 
 
+def test_catalog_prefix_forces_catalog_with_mock_tools_full(tmp_path, summarize_calls, monkeypatch):
+    """--prefix catalog：编排器按目录模式披露（orch_model_options），题目 mock 工具恒完整
+    （keep_mock_tools_full），生产工具只剩目录行——与 run_knee 编排器 catalog 档同一装配。"""
+    seen = []
+    orig = fe.FakeEngine.generate_once
+
+    async def spy(self, session, tools=None, **kw):
+        if tools:
+            seen.append(list(tools))
+        return await orig(self, session, tools=tools, **kw)
+    monkeypatch.setattr(fe.FakeEngine, "generate_once", spy)
+    _out, rows = _run(tmp_path, "--prefix", "catalog")
+    assert [r.get("error") for r in rows] == [None, None]
+    decl = {d["name"]: d for d in seen[0]}
+    assert "get_tool_schema" in decl
+    for name in ("list_files", "read_file", "write_file", "append_file", "delete_file"):
+        assert "parameters" in decl[name], name
+    assert "parameters" not in decl["web_read"] and "parameters" not in decl["rag_search"]
+
+
 def test_existing_transcripts_refused(tmp_path, summarize_calls):
     out, _rows = _run(tmp_path)
     with pytest.raises(SystemExit):

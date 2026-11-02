@@ -141,12 +141,11 @@ def test_orchestrator_only_flags_rejected_in_direct_mode(flag, tmp_path, capsys)
     assert e.value.code == 2 and "只在 --orchestrator 下有效" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("mode", ["catalog", "routed"])
-def test_orchestrator_rejects_handmade_disclosure_prefixes(mode, tmp_path, capsys):
+def test_orchestrator_rejects_handmade_routed_prefix(tmp_path, capsys):
     with pytest.raises(SystemExit) as e:
-        K.main(["--dry-run", "--orchestrator", "--prefix", mode, "--levels", "0",
+        K.main(["--dry-run", "--orchestrator", "--prefix", "routed", "--levels", "0",
                 "--out", str(tmp_path / "d")])
-    assert e.value.code == 2 and "--prefix mock|prod" in capsys.readouterr().err
+    assert e.value.code == 2 and "--prefix mock|prod|catalog" in capsys.readouterr().err
 
 
 def test_direct_mode_rows_record_mode_direct_and_null_switches(tmp_path):
@@ -316,23 +315,270 @@ def test_events_written_only_under_out_dir(tmp_path):
     assert hi - lo == len(evs) and lo == 0
 
 
-# ---- 8. 生产工具桩 ----
+# ---- 8. 生产工具可用桩（W-K2） ----
 
-def test_prod_prefix_stub_returns_unknown_tool_and_counts_env_error(tmp_path, monkeypatch):
+#: 按参数名给的有效实参（其余按类型取缺省）；文件类串成「复制 → 移走 → 扔掉」不碰题目的 a.txt
+_ARG_BY_NAME = {"path": "a.txt", "source": "a.txt", "destination": "b.txt", "command": "ls",
+                "code": "1 + 1", "old_string": "1", "new_string": "2", "query": "a",
+                "category": "default", "optimized_query": "a", "source_path": "p.md",
+                "urls": ["https://example.com"], "when": "2026-01-02 10:00",
+                "spec": {"kind": "daily", "time": "09:00"}, "series": [{"name": "s", "values": [1]}]}
+_ARG_OVERRIDE = {"move_file": {"source": "b.txt", "destination": "c.txt"},
+                 "trash_file": {"path": "c.txt"}}
+_BY_TYPE = {"string": "x", "integer": 1, "number": 1, "boolean": False, "array": ["x"],
+            "object": {}}
+
+
+def _valid_args(schema):
+    params = schema.get("parameters") or {}
+    props = params.get("properties") or {}
+    out = {}
+    for k in params.get("required") or []:
+        spec = props.get(k) or {}
+        out[k] = (_ARG_BY_NAME[k] if k in _ARG_BY_NAME
+                  else (spec.get("enum") or [None])[0] or _BY_TYPE.get(spec.get("type"), "x"))
+    out.update(_ARG_OVERRIDE.get(schema["name"], {}))
+    return out
+
+
+def _feeds(rec):
+    return [f for t in rec["turns"] for f in t.get("feed") or []]
+
+
+def _prod_registry(tmp_path, item=None):
+    from benchmarks.model_eval.mock_envs import make_env
+    item = item or _item()
+    asm = K.item_prefix(item, "prod")
+    env = make_env(item["task"]["env"], item["task"].get("env_init"))
+    spill = OT.SpillReadTool()
+    reg = OT.build_registry(tmp_path / "tools-empty", env, OT.stub_schemas(asm), spill_tool=spill)
+    return reg, env, spill, asm
+
+
+def _x(reg, name, **args):
+    text, _render = reg.execute_tool(name, args)
+    return text
+
+
+def test_prod_prefix_every_stub_is_usable_and_counted(tmp_path, monkeypatch):
     item = _item()
+    item["task"]["max_turns"] = 20
     asm = K.item_prefix(item, "prod")
     stubs = OT.stub_schemas(asm)
     mock = {t["name"] for t in asm.mock_tools}
-    assert stubs and not ({s["name"] for s in stubs} & (mock | OT.META_NAMES))
-    name = stubs[0]["name"]
+    assert len(stubs) >= 40 and not ({s["name"] for s in stubs} & (mock | OT.META_NAMES))
+    # 不经 call()：skill_invoke / register_* / memory_write 的实参里本就有 "name"
+    calls = [{"type": "function", "name": s["name"], "arguments": _valid_args(s)} for s in stubs]
+    script = [{"tool_calls": calls, "metrics": _m(100)}] + [
+        {"text": "a.txt 的内容是 2。", "metrics": _m(100)} for _ in range(3)]
     ctx = _ctx(tmp_path, placement="turn")
-    rec, _ = _run(monkeypatch, ctx, _plan_script(extra_call=call(name, q="x")), level=0,
-                  prefix=asm, item=item)
-    feeds = [f for t in rec["turns"] for f in t.get("feed") or []]
-    stub_feed = [f for f in feeds if f["name"] == name]
-    assert stub_feed and json.loads(stub_feed[0]["content"]) == {"error": f"Unknown tool: {name}"}
-    assert rec["score"]["env_errors"] == 1
+    rec, _ = _run(monkeypatch, ctx, script, level=0, prefix=asm, item=item)
+    feeds = _feeds(rec)
+    assert {f["name"] for f in feeds} == {s["name"] for s in stubs}
+    for f in feeds:
+        assert "Unknown tool" not in f["content"], f
+        assert not f["content"].lstrip().startswith("System Error"), f
+    assert rec["stub_unknown"] == 0 and rec["system_errors"] == 0 and rec["stub_failed"] == 0
+    assert rec["stub_served"] == {s["name"]: 1 for s in stubs}
+    assert sum(rec["stub_served"].values()) == len(calls)
+    # 文件链真落到 vfs：edit_file 把 a.txt 的 1 改成 2，复制件 b.txt 经 move → c.txt → trash 最终不在
+    assert rec["score"]["state_ok"] is True
+    edit = next(f["content"] for f in feeds if f["name"] == "edit_file")
+    assert edit.startswith("OK: replaced 1 occurrence in a.txt")
+    assert next(f["content"] for f in feeds if f["name"] == "trash_file") == \
+        "Moved to Trash (recoverable): c.txt"
     assert set(rec["tool_effects"]) == mock
+
+
+def test_stub_unknown_counts_remaining_unknown_tool_replies():
+    hist = [{"role": "assistant", "content": "", "tool_calls": [call("x"), call("y")]},
+            {"role": "tool", "tool_responses": [
+                {"name": "x", "response": json.dumps({"error": "Unknown tool: x"})},
+                {"name": "y", "response": "No results for 'q' in category 'c': …"}]}]
+    _traj, extra = OT.traj_from_history(hist, 0, item_id="i", rep=0, env=None)
+    assert extra["stub_unknown"] == 1 and extra["stub_served"] == {} and extra["stub_failed"] == 0
+
+
+def test_rag_stubs_classify_as_empty_retrieval(tmp_path):
+    from framework.core import retrieval_evidence as RE
+    reg, _env, _spill, _asm = _prod_registry(tmp_path)
+    args = {"query": "季度营收", "category": "default", "optimized_query": "季度营收"}
+    text = _x(reg, "rag_search", **args)
+    assert text.startswith("No results for '季度营收' in category 'default': ")
+    assert RE.observation("rag_search", args, text, None, False)["kind"] == "empty"
+    ctx_args = {"source_path": "doc.md", "seq": 3}
+    ctx_text = _x(reg, "rag_get_context", **ctx_args)
+    assert RE.observation("rag_get_context", ctx_args, ctx_text, None, False)["kind"] == "empty"
+    from framework.core.orchestrator import _resp_failed       # 编排层失败判据（文本回落层）
+    assert not _resp_failed(text) and not _resp_failed(ctx_text)
+
+
+def test_rag_search_stub_does_not_block_delivery_or_complete_step(tmp_path, monkeypatch):
+    from framework.core import retrieval_evidence as RE
+    item = _item()
+    asm = K.item_prefix(item, "prod")
+    script = [{"tool_calls": [call("update_plan", op="replace", steps=["检索并写入"])], "metrics": _m(100)},
+              {"tool_calls": [call("rag_search", query="a", category="default",
+                                   optimized_query="a")], "metrics": _m(100)},
+              {"tool_calls": [call("write_file", path="out.txt", content="结论")], "metrics": _m(100)},
+              {"tool_calls": [call("read_file", path="out.txt")], "metrics": _m(100)},
+              {"tool_calls": [call("complete_step", result="写入 out.txt")], "metrics": _m(100)},
+              {"text": "已写入 out.txt。", "metrics": _m(100)}]
+    ctx = _ctx(tmp_path, placement="turn")
+    rec, session = _run(monkeypatch, ctx, script, level=0, prefix=asm, item=item)
+    blob = json.dumps(session.history, ensure_ascii=False)
+    assert "delivery blocked" not in blob and "检索未完成" not in blob
+    assert RE.REPAIR_NOTE[:60] not in blob
+    assert rec["system_errors"] == 0 and rec["turn_status"] == "success"
+    assert rec["meta_calls"] == {"update_plan": 1, "complete_step": 1}
+    assert json.loads(next(f["content"] for f in _feeds(rec) if f["name"] == "write_file")) == {
+        "status": "written", "path": "out.txt"}
+    assert rec["stub_served"] == {"rag_search": 1}
+
+
+def test_shell_emulation_over_vfs(tmp_path):
+    item = _item()
+    item["task"]["env_init"]["files"] = {"a.txt": "alpha\nBeta 2\nalpha 3", "d/b.txt": "x"}
+    reg, _env, _spill, _asm = _prod_registry(tmp_path, item)
+    assert _x(reg, "run_shell_command", command="ls") == "exit_code: 0\nstdout:\na.txt\nd"
+    assert _x(reg, "run_shell_command", command="cat a.txt") == \
+        "exit_code: 0\nstdout:\nalpha\nBeta 2\nalpha 3"
+    assert _x(reg, "run_shell_command", command="grep -n alpha a.txt") == \
+        "exit_code: 0\nstdout:\n1:alpha\n3:alpha 3"
+    assert _x(reg, "run_shell_command", command="find . -name '*.txt'") == \
+        "exit_code: 0\nstdout:\na.txt\nd/b.txt"
+    assert _x(reg, "run_shell_command", command="grep zzz a.txt").startswith(
+        "exit_code: 1 (benign: negative result, not an error)")
+    miss = _x(reg, "run_shell_command", command="cat nope.txt")
+    assert miss.startswith("exit_code: 1\n") and "No such file or directory" in miss
+    for cmd in ("python3 run.py", "cat a.txt | wc -l", "echo x > a.txt"):
+        out = _x(reg, "run_shell_command", command=cmd)
+        assert out.startswith("exit_code: 127\nstderr:\n") and "offline sandbox emulates only" in out
+    assert reg.effect_of("run_shell_command", {"command": "ls"}) == "read"
+    assert reg.effect_of("run_shell_command", {"command": "rm a.txt"}) == "write"
+
+
+def test_vfs_bridged_file_tools_reflect_and_change_env_state(tmp_path):
+    reg, env, spill, _asm = _prod_registry(tmp_path)
+    assert spill.bridge is not None and reg._tools["list_dir"]._bridge is spill.bridge
+    _x(reg, "write_file", path="notes/n.md", content="hello world")       # EnvTool 写
+    listing = _x(reg, "list_dir", path="~")
+    assert listing.splitlines()[0] == ".  (2 entries)" and "  [dir]  notes/" in listing
+    assert "a.txt" in listing
+    assert "notes/n.md" in _x(reg, "find_files", query="n.md")
+    assert "notes/n.md" in _x(reg, "find_files", query="world")           # 名字无命中退内容
+    ok = _x(reg, "edit_file", path="notes/n.md", old_string="world", new_string="there")
+    assert ok.startswith("OK: replaced 1 occurrence in notes/n.md")
+    assert env.snapshot()["files"]["notes/n.md"] == "hello there"
+    bad = _x(reg, "edit_file", path="notes/n.md", old_string="nope", new_string="x")
+    assert bad.startswith("System Error: old_string was NOT found in the file.")   # 写类失败 = 生产前缀
+    assert _x(reg, "trash_file", path="nope.txt") == "System Error: path not found: nope.txt"
+    assert _x(reg, "copy_file", source="a.txt", destination="notes/n.md").startswith(
+        "System Error: destination already exists")
+    assert _x(reg, "list_dir", path="nope") == "Error: path not found: nope"       # 读类失败不判失败
+    assert reg._tools["edit_file"].failed == 1 and reg._tools["trash_file"].failed == 1
+    assert _x(reg, "file_extract", path="notes/n.md") == \
+        "[n.md lines 1-1 of 1]\n    1 | hello there"
+    assert _x(reg, "copy_file", source="a.txt", destination="notes/") == "Copied a.txt → notes/a.txt"
+    assert _x(reg, "trash_file", path="notes/a.txt").startswith("Moved to Trash")
+    assert sorted(env.snapshot()["files"]) == ["a.txt", "notes/n.md"]
+    assert spill.served == 1 and spill.readbacks == 0
+
+
+def test_stub_effects_mirror_production_and_no_vfs_falls_to_offline(tmp_path):
+    reg, _env, _spill, _asm = _prod_registry(tmp_path)
+    t = reg._tools
+    assert (t["list_dir"].effect, t["list_dir"].is_concurrency_safe) == ("read", True)
+    assert (t["edit_file"].effect, reg.is_read_only("edit_file", {})) == ("write", False)
+    assert reg.is_read_only("read_ui_tree", {}) and not reg.is_concurrency_safe("read_ui_tree", {})
+    assert t["rag_search"].effect == "read" and t["notify_user"].effect == "write"
+    assert not any(getattr(x, "approval_pinned", False) or x.requires_approval
+                   for x in t.values())
+    todo = {"id": "t", "task": {"user": "u", "env": "todo", "env_init": {}}}
+    reg2, _e2, spill2, _a2 = _prod_registry(tmp_path / "todo", todo)
+    assert spill2.bridge is None and reg2._tools["list_dir"].kind == "offline"
+    for name, args in (("list_dir", {"path": "~"}), ("file_extract", {"path": "a.txt"}),
+                       ("run_shell_command", {"command": "ls"})):
+        out = _x(reg2, name, **args)
+        assert out.startswith(f"{name} is not available in this offline sandbox"), out
+    assert "Use the task's own tools" in _x(reg2, "web_research", query="x")
+
+
+def test_run_math_stub_evaluates_arithmetic(tmp_path):
+    reg, _env, _spill, _asm = _prod_registry(tmp_path)
+    assert _x(reg, "run_math", code="1200 + 830 + 455") == "2485"
+    assert _x(reg, "run_math", code="a = sqrt(16)\nprint(a)\nround(10 / 3, 2)") == "4.0\n3.33"
+    assert _x(reg, "run_math", code="x = 2").startswith("(no output")
+    assert _x(reg, "run_math", code="1/0") == \
+        "Math sandbox error (fix the code and retry):\nZeroDivisionError: division by zero"
+    assert _x(reg, "run_math", code="__import__('os')").startswith("Math sandbox error")
+    for code in ("[0] * 10**9", "10**3000 * 10**3000", "2**20000"):
+        out = _x(reg, "run_math", code=code)
+        assert out.startswith("Math sandbox error") and "OverflowError" in out, code
+    assert _x(reg, "get_current_time") == "2026-01-01 Thursday 09:00:00 JST (UTC+0900)"
+
+
+def test_offline_stub_is_read_only_so_action_claim_is_pushed_back(tmp_path, monkeypatch):
+    from framework.core.orchestrator import _is_local_mutation
+    reg, _env, _spill, _asm = _prod_registry(tmp_path)
+    for name in ("calendar_add", "notify_user", "memory_write", "deck_init"):
+        assert reg._tools[name].kind == "offline" and reg.is_read_only(name, {}), name
+        assert not _is_local_mutation(reg, {"name": name, "arguments": {}}), name
+        assert reg._tools[name].effect == "write"                   # 审批分档口径仍照生产
+    item = _item()
+    script = [{"tool_calls": [call("calendar_add", title="周会", when="2026-01-02 10:00")],
+               "metrics": _m(100)},
+              {"text": "已为你创建日程。", "metrics": _m(100)},
+              {"text": "离线沙箱里日历不可用，日程没有创建。", "metrics": _m(100)}]
+    rec, _ = _run(monkeypatch, _ctx(tmp_path / "r", placement="turn"), script, level=0,
+                  prefix=K.item_prefix(item, "prod"), item=item)
+    assert rec["guard_events"].get("action_claim_nudge") == 1      # D2 零变更守门照常推回
+
+
+def test_bridged_write_failure_is_failed_and_counted_apart_from_system_errors(tmp_path, monkeypatch):
+    item = _item()
+    script = [{"tool_calls": [call("edit_file", path="a.txt", old_string="zzz", new_string="y")],
+               "metrics": _m(100)},
+              {"tool_calls": [call("trash_file")], "metrics": _m(100)},       # 缺必填 path
+              {"text": "改好了。", "metrics": _m(100)},
+              {"text": "edit_file 失败：a.txt 里没有 zzz。", "metrics": _m(100)}]
+    rec, _ = _run(monkeypatch, _ctx(tmp_path, placement="turn"), script, level=0,
+                  prefix=K.item_prefix(item, "prod"), item=item)
+    feeds = _feeds(rec)
+    assert feeds[0]["content"].startswith("System Error: old_string was NOT found")
+    assert feeds[1]["content"].startswith("System Error: Exception occurred while executing "
+                                          "'trash_file': execute() missing required argument(s): 'path'")
+    assert rec["stub_failed"] == 2 and rec["system_errors"] == 0
+    assert rec["guard_events"].get("failure_swallow_nudge") == 1   # 编排层把它判成失败
+
+
+def test_bridged_reads_do_not_consume_env_read_faults(tmp_path):
+    item = _item()
+    item["task"]["env_init"]["faults"] = {"read_file": {"fail_first_n": 1, "error": "EBUSY: retry"}}
+    reg, _env, _spill, _asm = _prod_registry(tmp_path, item)
+    assert _x(reg, "run_shell_command", command="cat a.txt") == "exit_code: 0\nstdout:\n1"
+    assert _x(reg, "file_extract", path="a.txt").endswith("    1 | 1")
+    assert "System Error" not in _x(reg, "copy_file", source="a.txt", destination="b.txt")
+    assert json.loads(_x(reg, "read_file", path="a.txt")) == {"error": "EBUSY: retry"}   # 故障留给模型
+
+
+def test_shell_grep_options_bre_and_tail_from_line(tmp_path):
+    item = _item()
+    item["task"]["env_init"]["files"] = {"a.txt": "foo\nbar\n(x)\nfoo|bar\nend"}
+    reg, _env, _spill, _asm = _prod_registry(tmp_path, item)
+    for cmd in ("grep -A 2 foo a.txt", "grep --color foo a.txt", "grep -C1 foo a.txt"):
+        out = _x(reg, "run_shell_command", command=cmd)
+        assert out.startswith("exit_code: 2\nstderr:\ngrep: unsupported option"), cmd
+    assert _x(reg, "run_shell_command", command="grep 'foo\\|end' a.txt") == \
+        "exit_code: 0\nstdout:\nfoo\nfoo|bar\nend"                      # BRE 交替
+    assert _x(reg, "run_shell_command", command="grep 'foo|bar' a.txt") == \
+        "exit_code: 0\nstdout:\nfoo|bar"                                  # BRE 裸 | 是字面量
+    assert _x(reg, "run_shell_command", command="grep '(x)' a.txt") == "exit_code: 0\nstdout:\n(x)"
+    assert _x(reg, "run_shell_command", command="grep -E 'foo|end' a.txt") == \
+        "exit_code: 0\nstdout:\nfoo\nfoo|bar\nend"
+    assert _x(reg, "run_shell_command", command="tail -n +4 a.txt") == \
+        "exit_code: 0\nstdout:\nfoo|bar\nend"
+    assert _x(reg, "run_shell_command", command="tail -n 1 a.txt") == "exit_code: 0\nstdout:\nend"
 
 
 def test_registry_holds_only_stubs_and_env_tools(tmp_path):
@@ -343,7 +589,7 @@ def test_registry_holds_only_stubs_and_env_tools(tmp_path):
     spill = OT.SpillReadTool()
     reg = OT.build_registry(tmp_path / "tools-empty", env, OT.stub_schemas(asm), spill_tool=spill)
     kinds = {type(t).__name__ for t in reg._tools.values()}
-    assert kinds == {"StubTool", "EnvTool", "SpillReadTool"}
+    assert kinds == {"UsableStub", "EnvTool", "SpillReadTool"}
     assert reg._tools["file_extract"] is spill                    # prod 档的 file_extract 桩被顶替
     prod_fe = next(s for s in OT.stub_schemas(asm) if s["name"] == "file_extract")
     assert reg.get_all_schemas()[[s["name"] for s in reg.get_all_schemas()].index("file_extract")] \
@@ -353,6 +599,46 @@ def test_registry_holds_only_stubs_and_env_tools(tmp_path):
     # mock 档：最小声明、排在 env 工具之后
     reg2 = OT.build_registry(tmp_path / "t2", env, [], spill_tool=OT.SpillReadTool())
     assert [s["name"] for s in reg2.get_all_schemas()][-1] == "file_extract"
+
+
+def test_orchestrator_catalog_prefix_dry_run_and_disclosure(tmp_path, monkeypatch):
+    out = tmp_path / "c"
+    assert K.main(["--dry-run", "--orchestrator", "--prefix", "catalog", "--levels", "0",
+                   "--reps", "1", "--limit", "1", "--out", str(out)]) == 0
+    rec = json.loads((out / "transcripts.jsonl").read_text().splitlines()[0])
+    assert "error" not in rec, rec.get("traceback")
+    assert rec["prefix_mode"] == "catalog" and rec["tool_schema_mode_effective"] == "catalog"
+    assert rec["stub_unknown"] == 0 and isinstance(rec["stub_served"], dict)
+    assert K.orch_model_options({"a": 1}, "prod") == {"a": 1}
+    # 经 _one_run_orch 实发的 prompt 面：mock 工具恒完整（与直调 catalog 档同），生产集只剩目录行，
+    # 生产 core 照旧完整；语法面仍是完整 schema
+    seen = []
+    orig = fe.FakeEngine.generate_once
+
+    async def spy(self, session, tools=None, grammar_tools=None, **kw):
+        seen.append((list(tools or []), list(grammar_tools or [])))
+        return await orig(self, session, tools=tools, grammar_tools=grammar_tools, **kw)
+    monkeypatch.setattr(fe.FakeEngine, "generate_once", spy)
+    item = _item()
+    asm = K.item_prefix(item, "catalog")
+    ctx = _ctx(tmp_path, placement="turn")
+    ctx.model_options = K.orch_model_options({}, "catalog")
+    _run(monkeypatch, ctx, _plan_script(), level=0, prefix=asm, item=item)
+    decl = {d["name"]: d for d in seen[0][0]}
+    assert "get_tool_schema" in decl
+    for t in asm.mock_tools:                                         # 每件 mock 工具完整 schema
+        assert decl[t["name"]]["parameters"] == t["parameters"], t["name"]
+    catalog_only = [n for n, d in decl.items() if "parameters" not in d]
+    assert "web_read" in catalog_only and "rag_search" in catalog_only
+    assert not set(catalog_only) & {t["name"] for t in asm.mock_tools}
+    assert "parameters" in decl["run_shell_command"]                 # 生产 core 仍完整
+    grammar = {g["name"]: g for g in seen[0][1]}
+    assert grammar["web_read"]["parameters"]["required"] == ["urls"]
+    # 只动本 run 的 cfg 副本：prod 档原样
+    base = {"tool_routing": {"top_k": 6, "core": ["edit_file"]}}
+    assert OT.keep_mock_tools_full(base, K.item_prefix(item, "prod")) is base
+    assert OT.keep_mock_tools_full(base, asm)["tool_routing"]["core"][0] == "edit_file"
+    assert base["tool_routing"]["core"] == ["edit_file"]
 
 
 def test_build_registry_rejects_non_empty_tools_dir(tmp_path):
@@ -462,6 +748,25 @@ def test_keep_recent_calls_keeps_preset_anchor_and_fresh_session_defaults(tmp_pa
         assert snap["turn_step_start_idx"] == 4
 
 
+@pytest.mark.parametrize("old", [None, "unknown-tool"])
+def test_resume_refuses_orchestrator_dir_with_other_stub_impl(tmp_path, old):
+    """W-K2 前的编排器目录（行缺 stub_impl = 生产工具回 Unknown tool）或别的桩实现：续跑 / 追加拒。"""
+    base = ["--dry-run", "--orchestrator", "--levels", "0", "--reps", "1", "--limit", "1"]
+    o = tmp_path / "o"
+    assert K.main(base + ["--out", str(o)]) == 0
+    t = o / "transcripts.jsonl"
+    rows = [json.loads(ln) for ln in t.read_text().splitlines()]
+    assert {r["stub_impl"] for r in rows} == {K.STUB_IMPL}
+    for r in rows:
+        if old is None:
+            r.pop("stub_impl")
+        else:
+            r["stub_impl"] = old
+    t.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n")
+    with pytest.raises(SystemExit, match="W-K"):
+        K.main(base[:3] + ["0,4096"] + base[4:] + ["--out", str(o), "--resume"])
+
+
 def test_resume_compat_orchestrator_rows_missing_new_keys_not_compared(tmp_path):
     base = ["--dry-run", "--orchestrator", "--levels", "0", "--reps", "1", "--limit", "1"]
     o = tmp_path / "o"
@@ -521,9 +826,9 @@ def test_spill_handle_readback_returns_original_and_rejects_others(tmp_path, mon
     assert len(feeds) == 3
     spills = {p.read_text(encoding="utf-8") for p in (Path(rec["session_dir"]) / "spill").glob("*.txt")}
     assert feeds[0]["content"] in spills                              # 拿回折叠前原文
-    assert json.loads(feeds[1]["content"]) == {"error": "Unknown tool: file_extract"}
+    assert feeds[1]["content"] == "Error: file not found: /etc/hosts"  # 非 spill = 桩读 vfs
     assert "not found" in json.loads(feeds[2]["content"])["error"]   # 穿越拒
-    assert rec["spill_readbacks"] == 1
+    assert rec["spill_readbacks"] == 1 and rec["stub_served"] == {"file_extract": 1}
 
 
 def test_spill_tool_rejects_traversal_and_foreign_session(tmp_path):
@@ -536,8 +841,9 @@ def test_spill_tool_rejects_traversal_and_foreign_session(tmp_path):
     assert t.execute(path="spill:abcd1234") == "原文" and t.readbacks == 1
     for bad in ("spill:../secret", "spill:..%2Fsecret", "spill:abcd1234/../../secret"):
         assert "not found" in json.loads(t.execute(path=bad))["error"]
-    assert json.loads(t.execute(path=str(s.session_dir / "secret.txt"))) == {
-        "error": "Unknown tool: file_extract"}
+    foreign = t.execute(path=str(s.session_dir / "secret.txt"))     # 无 vfs 桥 = 离线不可用
+    assert foreign.startswith("file_extract is not available in this offline sandbox")
+    assert "原文" not in foreign and t.served == 1
     t.session = None
     assert "not found" in json.loads(t.execute(path="spill:abcd1234"))["error"]
 
@@ -550,6 +856,7 @@ def test_orchestrator_timeout_records_events_and_session(tmp_path, monkeypatch):
               {"gate": asyncio.Event(), "text": "never", "metrics": _m(100)}]
     rec, _ = _run(monkeypatch, ctx, script, level=0, allow_error=True, timeout=0.3)
     assert rec["error"] == "timeout" and rec["mode"] == "orchestrator"
+    assert rec["stub_served"] == {} and rec["stub_unknown"] == 0 and rec["stub_failed"] == 0
     assert rec["guard_events"].get("context_soft") == 1 and rec["guard_events_lines"][1] >= 1
     assert Path(rec["session_dir"]).is_dir() and len(rec["gens"]) == 1
 
@@ -561,6 +868,7 @@ def test_orchestrator_run_exception_settles_event_cursor(tmp_path, monkeypatch):
     del no_env["task"]["env"]
     bad, _ = _run(monkeypatch, ctx, _plan_script(), level=0, item=no_env, allow_error=True)
     assert "编排器模式只支持带 mock env" in bad["error"]
+    assert (bad["stub_served"], bad["stub_unknown"], bad["stub_failed"]) == ({}, 0, 0)
     assert bad["guard_events"] == {} and bad["guard_events_lines"] == [ok["guard_events_lines"][1]] * 2
     nxt, _ = _run(monkeypatch, ctx, _plan_script(), level=0)
     assert nxt["guard_events_lines"][0] == ok["guard_events_lines"][1]   # 游标行号不漂

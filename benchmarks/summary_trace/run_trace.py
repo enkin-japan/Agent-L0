@@ -257,7 +257,7 @@ async def run_pair(args, engine, counter, item: Dict[str, Any], rep: int, meta: 
         inner1 = make_inner(dry_turn1_script(env1))
         proxy1 = K.OrchKneeEngine(inner1)
         proxies.append(proxy1)
-        orch1 = Orchestrator(proxy1, reg1, _cfg(ctx, args.turn1_iterations),
+        orch1 = Orchestrator(proxy1, reg1, OT.keep_mock_tools_full(_cfg(ctx, args.turn1_iterations), asm),
                              model_options=ctx.model_options)
         s1 = ChatSession(f"{tag}-t1", ctx.sessions_dir, system_prompt=system,
                          backend=getattr(inner1, "backend", None))
@@ -266,7 +266,7 @@ async def run_pair(args, engine, counter, item: Dict[str, Any], rep: int, meta: 
         r1, start1, _w1 = await _run_turn(args, orch1, s1, task["user"], item, seed, inner1)
         status1 = str(r1.get("status") or "")
         traj1, extra1 = OT.traj_from_history(s1.history, start1, item_id=item["id"], rep=rep,
-                                             env=env1)
+                                             env=env1, registry=reg1)
         c1 = set(traj_calls(traj1))
         e1 = env1.snapshot()
         record = turn_record(orch1, task["user"], item, status1,
@@ -291,7 +291,8 @@ async def run_pair(args, engine, counter, item: Dict[str, Any], rep: int, meta: 
             inner = make_inner(dry_continue_script(env))
             proxy = K.OrchKneeEngine(inner)
             proxies.append(proxy)
-            orch = Orchestrator(proxy, reg, _cfg(ctx, args.continue_iterations),
+            orch = Orchestrator(proxy, reg,
+                                OT.keep_mock_tools_full(_cfg(ctx, args.continue_iterations), asm),
                                 model_options=ctx.model_options)
             s = fork_session(s1, f"{tag}-{branch}", ctx.sessions_dir, system,
                              getattr(inner, "backend", None))
@@ -325,7 +326,7 @@ async def run_pair(args, engine, counter, item: Dict[str, Any], rep: int, meta: 
             ev = OT.aborted_reason_for(status, aborts, args.continue_iterations)
             cont_traj, extra = OT.traj_from_history(
                 s.history, start, item_id=item["id"], rep=rep, env=env,
-                aborted_reason=ev, wall_s=wall)
+                aborted_reason=ev, wall_s=wall, registry=reg)
             scorer = get_scorer(item["dimension"])
             cont_score = scorer(cont_traj, item)
             full_traj = {**cont_traj, "turns": list(traj1["turns"]) + list(cont_traj["turns"])}
@@ -416,7 +417,8 @@ async def _amain(args, orch_globals) -> int:
         raise SystemExit(f"❌ {transcripts} 已存在：换 --out（成对评估不支持追加混批）")
     outdir.mkdir(parents=True, exist_ok=True)
     ctx = K.OrchContext(out_dir=outdir, agent_base=dict(load_section("agent") or {}),
-                        model_options=dict(opts or {}), fill_placement="history",
+                        model_options=K.orch_model_options(opts, args.prefix),
+                        fill_placement="history",
                         guard=False, step_compaction=False, turn_compaction=True,
                         goal_verify=False)
     orch_globals.install(ctx)                        # 事件流落产物目录、审批进程内全放行

@@ -1,8 +1,8 @@
 """拐点 harness 编排器模式（W-K，`run_knee.py --orchestrator`）的纯装配件。
 
 - 工具：mock env 的每个工具一个 `EnvTool`（schema = env.tools()，执行 = env.handle → JSON）；
-  `--prefix prod` 时生产工具各一个 `StubTool`（schema 取 prefix.py 同一份声明，执行恒回
-  `{"error": "Unknown tool: <名>"}`，与 mock env 未知工具回执同口径——生产工具只声明、不执行）。
+  `--prefix prod|catalog` 时生产工具各一个可用桩 `orch_stubs.UsableStub`（schema 取 prefix.py 同一份
+  声明，执行 = 按工具名的确定性离线行为：vfs 桥接 / 检索恒空 / 计算与常态 / 离线不可用，W-K2）。
   注册表是真 `MCPRegistry`，tools_dir 指向产物目录下的空目录（不扫任何生产工具实现）。
 - agent 段配置：config.yaml 的 agent 段深拷贝后按开关覆盖（不改 config.yaml）。
 - 轨迹映射：run_turn 结束后把本 run 自己追加的 history 段映射成 executor 轨迹形态，交给
@@ -22,6 +22,8 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from context_knee.orch_stubs import (UsableStub, VfsBridge, missing_required, missing_text,
+                                     offline_text)
 from framework.core.orchestrator import META_TOOL_NAMES
 from framework.core.spill import SPILL_HANDLE_PREFIX, resolve_spill_ref
 from framework.mcp.base import BaseTool
@@ -62,20 +64,8 @@ class EnvTool(BaseTool):
         return json.dumps(resp, ensure_ascii=False)
 
 
-class StubTool(BaseTool):
-    """生产工具桩：声明照生产，执行恒回未知工具回执（mock_envs 同款 JSON，评分器计 env_errors）。"""
-
-    effect = "read"
-    is_concurrency_safe = True
-
-    def __init__(self, schema: Dict[str, Any], summary: str = ""):
-        self.name = schema["name"]
-        self.description = schema.get("description") or schema["name"]
-        self.parameters = copy.deepcopy(schema.get("parameters") or {})
-        self.summary = summary or ""
-
-    def execute(self, **arguments) -> str:
-        return json.dumps({"error": f"Unknown tool: {self.name}"}, ensure_ascii=False)
+#: 未知工具回执的 JSON 前缀（mock env 同款；可用桩落地后生产工具名不应再出现，计 stub_unknown）
+UNKNOWN_PREFIX = "Unknown tool:"
 
 
 #: spill 回读工具名：W2 / ceiling / 截断的桩给的回读句柄是 `file_extract(path="spill:<stem>")`
@@ -93,11 +83,12 @@ SPILL_MIN_SCHEMA = {
 
 
 class SpillReadTool(BaseTool):
-    """只读 spill 回读：path 以 `spill:` 开头时按 framework/core/spill.resolve_spill_ref 的规则
-    （落盘名正则 + realpath 必须落在本会话 spill 目录内，穿越 / 符号链接出逃一律拒）读本会话
-    spill 文件、返回原文（可选 1 起的 start/end 行区间）；其他任何 path 回
-    `{"error": "Unknown tool: file_extract"}`——生产 file_extract 不执行。session 由 harness 在
-    会话建好后挂上。readbacks = 成功回读次数。"""
+    """只读 spill 回读 + file_extract 可用桩：path 以 `spill:` 开头时按
+    framework/core/spill.resolve_spill_ref 的规则（落盘名正则 + realpath 必须落在本会话 spill 目录内，
+    穿越 / 符号链接出逃一律拒）读本会话 spill 文件、返回原文（可选 1 起的 start/end 行区间）；其他
+    path 是 file_extract 桩（W-K2）：有 vfs 桥时读 mock env 的文件（生产文本分支同形：行号前缀 +
+    `[名 lines a-b of N]` 头），没有时回离线不可用。session / bridge 由 harness 挂上。
+    readbacks = 成功 spill 回读次数；served = 非 spill 路径的桩调用次数（计 stub_served）。"""
 
     effect = "read"
     is_concurrency_safe = True
@@ -106,6 +97,12 @@ class SpillReadTool(BaseTool):
         self.adopt(schema or SPILL_MIN_SCHEMA, summary)
         self.session = None
         self.readbacks = 0
+        self.served = 0
+        self.failed = 0
+        self.failures: List[str] = []
+        self.bridge: Optional[VfsBridge] = None
+        self.env_tools: Tuple[str, ...] = ()
+        self._count_lock = threading.Lock()
 
     def adopt(self, schema: Dict[str, Any], summary: str = "") -> None:
         """声明取生产 file_extract 的那一份（prod 档）或最小声明（mock 档）。"""
@@ -114,10 +111,25 @@ class SpillReadTool(BaseTool):
         self.parameters = copy.deepcopy(schema.get("parameters") or {})
         self.summary = summary or ""
 
-    def execute(self, path: Any = None, start: Any = None, end: Any = None, **_ignored) -> str:
+    def execute(self, path: Any = None, start: Any = None, end: Any = None,
+                max_chars: Any = None, **_ignored) -> str:
         p = str(path or "").strip()
+        if missing_required(self.parameters, {"path": path}):
+            with self._count_lock:
+                self.served += 1
+                text = missing_text(SPILL_TOOL, ["path"])
+                self.failed += 1
+                self.failures.append(text)
+            return text
         if not p.startswith(SPILL_HANDLE_PREFIX):
-            return json.dumps({"error": f"Unknown tool: {SPILL_TOOL}"}, ensure_ascii=False)
+            with self._count_lock:
+                self.served += 1
+            if self.bridge is None:
+                return offline_text(SPILL_TOOL, self.env_tools)
+            try:
+                return self.bridge.extract(path, start, end, max_chars)
+            except Exception as e:      # noqa: BLE001 —— 桩的意外不冒成 registry 的 System Error
+                return f"Error: file_extract failed in the offline sandbox: {type(e).__name__}: {e}"
         target = resolve_spill_ref(self.session, p)
         if target is None:
             return json.dumps({"error": f"spill handle not found: {p}"}, ensure_ascii=False)
@@ -144,14 +156,22 @@ def stub_schemas(asm) -> List[Dict[str, Any]]:
 def build_registry(tools_dir: Path, env, stubs: Sequence[Dict[str, Any]],
                    summaries: Optional[Dict[str, str]] = None,
                    spill_tool: Optional[SpillReadTool] = None) -> MCPRegistry:
-    """真 MCPRegistry（空 tools_dir，不扫任何生产实现）+ 生产桩（生产声明序）+ env 工具。
-    spill_tool：prod 档在生产 file_extract 的位置顶替其桩（声明取生产那份）；mock 档（桩里没有
-    file_extract）注册在 env 工具之后、用最小声明。注册日志按 run 重复且无信息量，吞掉。"""
+    """真 MCPRegistry（空 tools_dir，不扫任何生产实现）+ 生产可用桩（生产声明序）+ env 工具。
+    env 有 vfs 工具集时建一座 VfsBridge（与 EnvTool 同一把锁），vfs 类桩与 file_extract 经它读写
+    env；没有时这些桩回离线不可用。spill_tool：prod / catalog 档在生产 file_extract 的位置顶替其桩
+    （声明取生产那份）；mock 档（桩里没有 file_extract）注册在 env 工具之后、用最小声明。注册日志
+    按 run 重复且无信息量，吞掉。"""
     tools_dir = Path(tools_dir)
     tools_dir.mkdir(parents=True, exist_ok=True)
     if any(tools_dir.glob("*.py")):
         raise RuntimeError(f"编排器模式的 tools_dir 必须为空目录：{tools_dir}")
     summaries = summaries or {}
+    lock = threading.Lock()
+    env_schemas = list(env.tools()) if env is not None else []
+    env_names = tuple(s["name"] for s in env_schemas)
+    bridge = VfsBridge(env, lock) if VfsBridge.supports(env) else None
+    if spill_tool is not None:
+        spill_tool.bridge, spill_tool.env_tools = bridge, env_names
     with contextlib.redirect_stdout(io.StringIO()):
         reg = MCPRegistry(tools_dir=tools_dir)
         placed = False
@@ -161,9 +181,9 @@ def build_registry(tools_dir: Path, env, stubs: Sequence[Dict[str, Any]],
                 reg.register(spill_tool)
                 placed = True
             else:
-                reg.register(StubTool(s, summaries.get(s["name"], "")))
-        lock = threading.Lock()
-        for s in (env.tools() if env is not None else []):
+                reg.register(UsableStub(s, summaries.get(s["name"], ""), bridge=bridge,
+                                        env_tools=env_names))
+        for s in env_schemas:
             reg.register(EnvTool(env, s, lock))
         if spill_tool is not None and not placed:
             reg.register(spill_tool)
@@ -192,14 +212,75 @@ def agent_cfg(base: Dict[str, Any], *, guard: bool, step: bool, goal_verify: boo
     return cfg, over
 
 
+def keep_mock_tools_full(cfg: Dict[str, Any], asm) -> Dict[str, Any]:
+    """--prefix catalog（编排器）：题目 mock 工具并入本 run 的 agent.tool_routing.core，使编排器的
+    catalog 披露里它们恒为完整 schema、只有生产工具集走目录行——与直调 catalog 档（prefix.assemble
+    「其后 mock 工具完整」）同一对待，两种模式的 catalog 臂才可比。只改本 run 的 cfg 副本，不碰
+    config.yaml / 生产路径；其他档原样返回。"""
+    if getattr(asm, "mode", None) != "catalog":
+        return cfg
+    out = copy.deepcopy(cfg)
+    tr = dict(out.get("tool_routing") or {})
+    core = list(tr.get("core") or [])
+    core += [t["name"] for t in asm.mock_tools if t["name"] not in core]
+    tr["core"] = core
+    out["tool_routing"] = tr
+    return out
+
+
 # ---------------- 轨迹映射 ----------------
 
 def _is_meta(call: Dict[str, Any]) -> bool:
     return call.get("type") != "error" and call.get("name") in META_NAMES
 
 
+def stub_served(registry: Optional[MCPRegistry]) -> Dict[str, int]:
+    """{生产工具名: 本 run 桩执行次数}（UsableStub.served + file_extract 的非 spill 调用；0 不列）。"""
+    out: Dict[str, int] = {}
+    for name, tool in sorted(((getattr(registry, "_tools", None) or {}).items())):
+        n = getattr(tool, "served", 0) if isinstance(tool, (UsableStub, SpillReadTool)) else 0
+        if n:
+            out[name] = int(n)
+    return out
+
+
+def _stub_tools(registry: Optional[MCPRegistry]):
+    return [(n, t) for n, t in sorted(((getattr(registry, "_tools", None) or {}).items()))
+            if isinstance(t, (UsableStub, SpillReadTool))]
+
+
+def stub_failed(registry: Optional[MCPRegistry]) -> int:
+    """本 run 桩发出的 `System Error:` 失败回执数（写类失败 + 缺必填参数）。"""
+    return sum(int(getattr(t, "failed", 0) or 0) for _n, t in _stub_tools(registry))
+
+
+def _feed_texts(history: List[Dict[str, Any]], start: int):
+    for m in history[start:]:
+        if m.get("role") == "tool":
+            for tr in m.get("tool_responses") or []:
+                if isinstance(tr, dict) and tr.get("name") not in META_NAMES:
+                    yield tr.get("name"), str(tr.get("response", ""))
+
+
+def stub_fields(registry: Optional[MCPRegistry], history: Optional[List[Dict[str, Any]]] = None,
+                start: int = 0) -> Dict[str, Any]:
+    """三个桩计数字段（timeout / 异常行也记）：stub_served / stub_unknown（history 给了才数）/ stub_failed。"""
+    unknown = sum(1 for _n, text in _feed_texts(history or [], start or 0) if _is_unknown_tool(text))
+    return {"stub_served": stub_served(registry), "stub_unknown": unknown,
+            "stub_failed": stub_failed(registry)}
+
+
+def _is_unknown_tool(text: str) -> bool:
+    try:
+        obj = json.loads(text)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(obj, dict) and str(obj.get("error", "")).startswith(UNKNOWN_PREFIX)
+
+
 def traj_from_history(history: List[Dict[str, Any]], start: int, *, item_id: str, rep: int,
-                      env, aborted_reason: str = "", wall_s: float = 0.0
+                      env, aborted_reason: str = "", wall_s: float = 0.0,
+                      registry: Optional[MCPRegistry] = None
                       ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """history[start:]（本 run 自己追加的段：run_turn 写的 assistant / tool / 护栏 system）→ executor
     轨迹形态 + 附加计数。
@@ -210,10 +291,18 @@ def traj_from_history(history: List[Dict[str, Any]], start: int, *, item_id: str
       里 JSON 的 "error"）；元工具的回执不进 feed（与 tool_calls 对齐）。"Duplicate call blocked" /
       "System Error" 开头的观察另计 dup_blocked / system_errors，照常进 feed。
     - system 消息（编排层护栏提醒）不成 turn。
+    - 桩计数（W-K2）：stub_served = 本 run 注册表里可用桩的执行次数（registry 给了才有；含 vfs
+      桥接与离线回执，不含 spill 回读），stub_unknown = feed 里 `{"error": "Unknown tool: …"}` 回执数
+      （绊线：应恒为 0），stub_failed = 桩自己发的 `System Error:`（写类失败 / 缺必填参数）——按桩记下
+      的回执原文逐条认领，**不计** system_errors（它仍只表示编排层回执 / 注册表未知名）。
     """
+    claim: Dict[Tuple[Any, str], int] = {}
+    for name, tool in _stub_tools(registry):
+        for text in getattr(tool, "failures", None) or []:
+            claim[(name, text)] = claim.get((name, text), 0) + 1
     turns: List[Dict[str, Any]] = []
     meta_calls: Dict[str, int] = {}
-    dup = syserr = 0
+    dup = syserr = unknown = 0
     for m in history[start:]:
         role = m.get("role")
         if role == "assistant":
@@ -235,7 +324,13 @@ def traj_from_history(history: List[Dict[str, Any]], start: int, *, item_id: str
                 if text.startswith(DUP_PREFIX):
                     dup += 1
                 elif text.startswith(SYSERR_PREFIX):
-                    syserr += 1
+                    key = (tr.get("name"), text)
+                    if claim.get(key):
+                        claim[key] -= 1         # 桩自己的失败回执：计 stub_failed，不计 system_errors
+                    else:
+                        syserr += 1
+                if _is_unknown_tool(text):
+                    unknown += 1
                 feed.append({"name": tr.get("name"), "content": text})
             if turns and feed:
                 turns[-1].setdefault("feed", []).extend(feed)
@@ -243,7 +338,9 @@ def traj_from_history(history: List[Dict[str, Any]], start: int, *, item_id: str
             "aborted_reason": aborted_reason}
     if env is not None:
         traj["env_state"] = env.snapshot()
-    return traj, {"meta_calls": meta_calls, "dup_blocked": dup, "system_errors": syserr}
+    return traj, {"meta_calls": meta_calls, "dup_blocked": dup, "system_errors": syserr,
+                  "stub_served": stub_served(registry), "stub_unknown": unknown,
+                  "stub_failed": stub_failed(registry)}
 
 
 def aborted_reason_for(status: str, abort_reasons: Sequence[str], max_turns: int) -> str:

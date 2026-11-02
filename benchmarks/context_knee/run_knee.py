@@ -752,6 +752,11 @@ async def _amain(args, orch_globals: "_OrchGlobals") -> int:
                      "default")
     # W-K 编排器模式：开关 → 装配上下文（config.yaml agent 段只读）；直调模式 None
     orch_ctx = make_orch_context(args, outdir, opts) if getattr(args, "orchestrator", False) else None
+    if orch_ctx is not None:
+        # 生产工具效果分类的一次性枚举（密封构造会临时打断 requests.get、摘云端钥 env）：批次开头做完，
+        # 不落在任何 run 里
+        from context_knee import orch_stubs
+        orch_stubs.production_traits()
     mode_meta = orch_meta(orch_ctx)
     if args.append:     # --resume 已隐含 --append
         check_resume_compat(transcripts, repo, sampling["sent"], args.seed, entry_sampling,
@@ -1062,14 +1067,30 @@ async def _one_run(args, engine, counter, item, item_idx, level, rep, meta,
 #: 编排器模式专属 CLI 开关（直调模式给了即 argparse error）与缺省值
 ORCH_FLAGS = {"fill_placement": "turn", "guard": "on", "step_compaction": "on",
               "turn_compaction": "on", "goal_verify": "off"}
-#: 编排器模式支持的前缀档：披露（full / catalog + get_tool_schema 路由）由编排器按注册表条目
-#: tool_schema_mode 自己做，--prefix 只决定生产工具桩在不在——catalog / routed 的「目录行 /
-#: 路由件」是直调模式在 harness 里手工装配的披露形态，编排器模式下没有对应物
-ORCH_PREFIX_MODES = ("mock", "prod")
+#: 编排器模式支持的前缀档：披露（full / catalog + get_tool_schema + 任务期路由）由编排器自己做。
+#: mock = 无生产工具桩；prod = 生产可用桩，披露按注册表条目 tool_schema_mode（> agent 段 > full）；
+#: catalog = 注册表同 prod，披露强制 catalog（orch_model_options 把 tool_schema_mode 写进条目层，
+#: 条目层优先）。routed 的「按题面手工选路由件」是直调模式的装配形态，编排器的路由在任务建立时
+#: 自己做，故无对应物
+ORCH_PREFIX_MODES = ("mock", "prod", "catalog")
+
+
+def orch_model_options(opts: Optional[Dict[str, Any]], prefix: str) -> Dict[str, Any]:
+    """编排器模式交给 Orchestrator 的条目选项：--prefix catalog 时条目层 tool_schema_mode 强制
+    catalog（与 tool_disclosure.resolve_tool_schema_mode 的「条目 > agent 段」同一优先级）；其余原样。"""
+    out = dict(opts or {})
+    if prefix == "catalog":
+        out["tool_schema_mode"] = "catalog"
+    return out
 #: meta 里的口径键（续跑校验比这一组）。guard_thresholds / step_compaction_cfg = 覆盖后的生效值
 HARNESS_MODE_KEYS = ("mode", "fill_placement", "guard", "step_compaction", "turn_compaction",
                      "goal_verify", "fill_shape", "guard_thresholds", "step_compaction_cfg",
-                     "tool_schema_mode_effective", "agent_cfg_fingerprint")
+                     "tool_schema_mode_effective", "agent_cfg_fingerprint", "stub_impl")
+#: 编排器模式生产工具桩的实现版本（W-K2）：W-K2 之前的编排器行回的是 Unknown tool，缺键 = 旧实现，
+#: 续跑 / 追加与之不比「缺键不比」规则、恒比（见 harness_mismatch）
+STUB_IMPL = "usable-v1"
+#: 编排器行即便缺键也恒比的口径键
+_ALWAYS_COMPARED = ("mode", "stub_impl")
 #: 直调模式（及缺 mode 的旧行）的口径：只认 mode 与填充形态，其余不比
 _DIRECT_HARNESS = {"mode": "direct", "fill_shape": "turns"}
 
@@ -1081,7 +1102,7 @@ def harness_mismatch(r: Dict[str, Any], new: Tuple[Any, ...]) -> bool:
     if old[0] == "direct" or new[0] == "direct":
         return old != tuple(new)
     return any(o != n for k, o, n in zip(HARNESS_MODE_KEYS, old, new)
-               if k == "mode" or k in r)
+               if k in _ALWAYS_COMPARED or k in r)
 
 
 def agent_cfg_fingerprint(cfg: Dict[str, Any]) -> str:
@@ -1143,7 +1164,8 @@ def orch_meta(ctx: Optional[OrchContext], args=None) -> Dict[str, Any]:
         return {"mode": "direct", "fill_placement": None, "guard": None, "step_compaction": None,
                 "turn_compaction": None, "goal_verify": None, "fill_shape": "turns",
                 "guard_thresholds": None, "step_compaction_cfg": None,
-                "orchestrator_cfg_source": None, "tool_schema_mode_effective": None}
+                "orchestrator_cfg_source": None, "tool_schema_mode_effective": None,
+                "stub_impl": None}
     from framework.core import tool_disclosure
     cfg, over = _orch_tools().agent_cfg(ctx.agent_base, guard=ctx.guard, step=ctx.step_compaction,
                                         goal_verify=ctx.goal_verify)
@@ -1159,7 +1181,8 @@ def orch_meta(ctx: Optional[OrchContext], args=None) -> Dict[str, Any]:
             "agent_cfg_fingerprint": agent_cfg_fingerprint(cfg),
             "orchestrator_cfg_source": {"section": "config.yaml:agent", "overrides": over},
             "tool_schema_mode_effective": tool_disclosure.resolve_tool_schema_mode(
-                ctx.model_options, ctx.agent_base)}
+                ctx.model_options, ctx.agent_base),
+            "stub_impl": STUB_IMPL}
 
 
 def _orch_tools():
@@ -1178,7 +1201,8 @@ def make_orch_context(args, out_dir: Path, opts: Dict[str, Any]) -> OrchContext:
             print("⚠️ --fill-placement turn 下轮首压缩强制 off（续跑语义：run_turn compact_history=False）")
         turn_comp = False
     return OrchContext(out_dir=Path(out_dir), agent_base=dict(load_section("agent") or {}),
-                       model_options=dict(opts or {}), fill_placement=placement,
+                       model_options=orch_model_options(opts, getattr(args, "prefix", "mock")),
+                       fill_placement=placement,
                        guard=on("guard"), step_compaction=on("step_compaction"),
                        turn_compaction=turn_comp, goal_verify=on("goal_verify"))
 
@@ -1210,6 +1234,8 @@ async def _one_run_orch(args, engine, counter, item, item_idx, level, rep, meta,
     proxy = None
     session = None
     sid = None
+    registry = None
+    own_start = 0
     t0 = time.monotonic()
     mark = ctx.cursor.mark()          # 本 run 的事件区间从装配起算（任何出口都结算游标）
     try:
@@ -1225,6 +1251,7 @@ async def _one_run_orch(args, engine, counter, item, item_idx, level, rep, meta,
         max_turns = int(task.get("max_turns") or _default_max_turns(task))
         cfg, _over = OT.agent_cfg(ctx.agent_base, guard=ctx.guard, step=ctx.step_compaction,
                                   goal_verify=ctx.goal_verify, max_total_iterations=max_turns)
+        cfg = OT.keep_mock_tools_full(cfg, asm)     # catalog 档：mock 工具并入本 run 的 core
         if args.backend == "fake":
             # 干跑脚本要按计划估算出（prompt_tokens），计划又要先有编排器的声明：先以空脚本构造，
             # 计划后再填 dry_script（脚本已非空 = 测试替身自带脚本，不覆盖）
@@ -1287,6 +1314,7 @@ async def _one_run_orch(args, engine, counter, item, item_idx, level, rep, meta,
                     "drain_s": round(time.monotonic() - t0 - elapsed, 2),
                     "gens": proxy.gens, "full_renders": proxy.full_renders,
                     "guard_events": ev, "guard_events_lines": lines,
+                    **OT.stub_fields(registry, session.history, own_start),
                     "session_dir": str(session.session_dir),
                     "wall_s": round(time.monotonic() - t0, 2)}
         ev, aborts, lines = ctx.cursor.since(mark, sid)
@@ -1294,7 +1322,7 @@ async def _one_run_orch(args, engine, counter, item, item_idx, level, rep, meta,
         aborted = OT.aborted_reason_for(status, aborts, max_turns)
         traj, extra = OT.traj_from_history(
             session.history, own_start, item_id=item["id"], rep=rep, env=env,
-            aborted_reason=aborted, wall_s=time.monotonic() - t0)
+            aborted_reason=aborted, wall_s=time.monotonic() - t0, registry=registry)
         if aborted == "context_guard" and traj["turns"]:
             traj["turns"][-1]["text"] = ""    # 护栏终止样板不是答案（原文另记 turn_response）
         score = score_run(plan, traj, proxy.gens, item)
@@ -1313,6 +1341,8 @@ async def _one_run_orch(args, engine, counter, item, item_idx, level, rep, meta,
                     "guard_events": ev, "guard_events_lines": lines,
                     "meta_calls": extra["meta_calls"], "dup_blocked": extra["dup_blocked"],
                     "system_errors": extra["system_errors"],
+                    "stub_served": extra["stub_served"], "stub_unknown": extra["stub_unknown"],
+                    "stub_failed": extra["stub_failed"],
                     "session_dir": str(session.session_dir),
                     "max_total_iterations": cfg.get("max_total_iterations"),
                     "context_guard_bound": bound,
@@ -1328,6 +1358,8 @@ async def _one_run_orch(args, engine, counter, item, item_idx, level, rep, meta,
                 "traceback": traceback.format_exc()[-2000:],
                 "gens": proxy.gens if proxy is not None else [],
                 "guard_events": ev, "guard_events_lines": lines,
+                **OT.stub_fields(registry, session.history if session is not None else None,
+                                 own_start),
                 "session_dir": str(session.session_dir) if session is not None else None,
                 "wall_s": round(time.monotonic() - t0, 2)}
     finally:
@@ -1474,7 +1506,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="前缀档（W-2）：mock=极简 system + 题目 mock 工具（缺省，W-2 前口径）；"
                          "prod=生产 system + 生产工具全量完整 schema；catalog=生产 system + 元工具/"
                          "core 完整、其余目录行；routed=catalog + 按题面路由 top_k 件完整。"
-                         "题目 mock 工具恒完整、同名优先；生产工具只声明不执行")
+                         "题目 mock 工具恒完整、同名优先；直调模式生产工具只声明不执行，"
+                         "--orchestrator 下 prod / catalog 注册生产可用桩（orch_stubs.py）")
     ap.add_argument("--thinking-replay", default=None, choices=list(THINKING_REPLAY_MODES),
                     help="思考回放口径覆盖（W3 / D36）：缺省沿用注册表条目策略；all = 全部回放"
                          "（10-30/31 已有结果的口径，同口径对比用）")
@@ -1507,8 +1540,8 @@ def check_mode_args(ap: argparse.ArgumentParser, args) -> None:
         return
     if args.prefix not in ORCH_PREFIX_MODES:
         ap.error(f"--orchestrator 只支持 --prefix {'|'.join(ORCH_PREFIX_MODES)}（得到 {args.prefix}）："
-                 "编排器模式的披露（full / catalog + 路由）由编排器按注册表条目 tool_schema_mode 自己做，"
-                 "--prefix 只决定生产工具桩在不在；catalog / routed 是直调模式的手工披露形态")
+                 "编排器模式的披露（full / catalog + 任务期路由）由编排器自己做（prod 按注册表条目 "
+                 "tool_schema_mode，catalog 强制目录模式）；routed 是直调模式的手工路由形态")
 
 
 def main(argv: Optional[List[str]] = None) -> int:

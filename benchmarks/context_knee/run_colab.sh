@@ -1,44 +1,57 @@
 #!/bin/zsh
-# 拐点 Colab 复测一体化：起 Colab(--retain) → 等 READY → 冒烟 → 顺序跑各臂（边跑边盯挂死）→ 无论结果都 stop。
+# 拐点 Colab 复测一体化：起 Colab(--retain) → 等 READY → 冒烟 → 顺序跑 A 段各步（边跑边盯挂死）→ [有 B 段步：stop → 等租约释放
+#   → 换 MODEL_B 起机 → 冒烟 → 跑 B 段步] → 无论结果都 stop。
 # 付费算力铁则（CLAUDE.md「Long tasks」）：消费动作与租约链在同一个后台脚本里，全程不依赖主会话被唤醒；
 # 密钥只经 `set -a; . .env.local` 注入子进程，不打印。付费算力入口，主会话亲自改（CLAUDE.md「Never delegate」）。
 # 桩自测：benchmarks/context_knee/run_colab_selftest.sh（不碰 Colab；改本脚本后必跑）。
 #
 # 用法（仓库根目录，主会话 Bash run_in_background）：
 #   benchmarks/context_knee/run_colab.sh
-# 环境变量：MODEL（默认 RedHatAI/Qwen3.8-27B-INT4；deploy 缺省 --speculative off，D21）、
+# 环境变量：MODEL（A 段模型，默认 RedHatAI/Qwen3.8-27B-INT4；deploy 缺省 --speculative off，D21）、
+#   MODEL_B（B 段模型，默认 google/gemma-4-31B-it-qat-w4a16-ct；gemma-* 步在 B 段跑：A 段步全部跑完后 stop → 换模型 start
+#       → 冒烟 → 跑 B 段步；同一租约链，整批一次 DONE）、
 #   OUT（结果目录，默认 benchmarks/data/context-knee-<YYYYMMDD>/；同目录重跑：时间线日志追加、arms_status 重写、
-#       已有产物的臂自动 --resume 续跑，冒烟目录带时间戳不复用；目录里已有 DONE（完成过的批次）则拒绝起机，
+#       已有产物的拐点臂自动 --resume 续跑，trace 步不支持续跑（半截目录挪到 <步>.partial-<stamp> 后重跑），
+#       冒烟目录带时间戳不复用；目录里已有 DONE（完成过的批次）则拒绝起机，
 #       要续跑须显式 FORCE_OUT=1——防止默认 OUT 撞上当天已收官的档案目录白起付费机）、
-#   ARMS（逗号分隔的臂名，缺省全部，按下表顺序）、READY_MINUTES（起机到 READY 的等待上限，默认 40）、
-#   RESTARTS_MAX（服务端挂死时 stop+start 重起的次数上限，整批共用，默认 2）、
+#   ARMS（逗号分隔的步名，缺省为下表「第二批」九步；给了别的顺序也按 A 段先 B 段后分段，段内保持给定顺序）、
+#   TRACE_REPS（trace 步每题重复数，默认 3）、READY_MINUTES（起机到 READY 的等待上限，默认 40）、
+#   RESTARTS_MAX（服务端挂死时 stop+start 重起的次数上限，整批共用，默认 2；换模型的那次 stop+start 不计）、
 #   HUNG_RUNS（连环 timeout 判挂死的 run 数，默认 3）、MON_INTERVAL（盯挂死的轮询秒，默认 60）、
-#   SMOKE（1=先各跑一个 run 冒烟，缺省 1；冒烟失败则跳过同模式全部臂，不白烧）。
-#   测试接缝（只为桩自测，缺省即生产路径）：DEPLOY、PY、KNEE、ENV_FILE、POLL（等 READY 轮询秒，默认 30）。
-# 臂（口径见 benchmarks/context_knee/README.md「编排器模式」：各臂固定同一放置只切开关，不跨放置比）：
-#   orch-turn-none   编排器 turn 放置 无管理（guard off / step off）        prod 前缀  0/32K/49K/57K
-#   orch-turn-w1     编排器 turn 放置 +W1（guard on / step off）           prod 前缀  同上
-#   orch-turn-w1w2   编排器 turn 放置 +W1+W2（guard on / step on）         prod 前缀  同上
-#   direct-mock      直调 mock 前缀（W3 条目口径 last_k K=2；对 10-31 qwen-current=all 口径）  0/16K/32K/49K
-#   direct-prod      直调 prod 前缀（W-2 三档复测之一）                              0/16K/32K/49K
-#   orch-history-ref 编排器 history 放置 现状参照（guard on / step on / turn-compaction on） prod 前缀 0/32K/49K/57K
-#   direct-catalog   直调 catalog 前缀（W-2）                                        0/32K/49K
-#   direct-routed    直调 routed 前缀（W-2）                                         0/32K/49K
+#   SMOKE（1=每段起机后先各跑一个 run 冒烟，缺省 1；冒烟失败则跳过本段同模式全部步，不白烧）。
+#   测试接缝（只为桩自测，缺省即生产路径）：DEPLOY、PY、KNEE、TRACE、ENV_FILE、POLL（等 READY 轮询秒，默认 30）。
+# 步（口径见 benchmarks/context_knee/README.md「编排器模式」：各臂固定同一放置只切开关，不跨放置比）：
+#   第二批缺省九步（11-02 拍板，方案 §5「第二批」）——A 段（MODEL）：
+#   orch-turn-none    编排器 turn 放置 无管理（guard off / step off）        prod 前缀     0/32K/49K/57K
+#   orch-turn-w1      编排器 turn 放置 +W1（guard on / step off）           prod 前缀     同上
+#   orch-turn-w1w2    编排器 turn 放置 +W1+W2（guard on / step on）         prod 前缀     同上
+#   orch-turn-catalog 编排器 turn 放置 +W1+W2 catalog 前缀对照（D39c）       catalog 前缀  同上
+#   trace-new-900     summary_trace 成对续跑：新模板 / task_state on / 900 tok（现行生产）     --drop-task on
+#   trace-legacy-640  同上：旧模板 / task_state off / 640 tok（W4 前的生产）
+#   trace-new-640     同上：新模板 / task_state on / 640 tok（把模板与预算拆开看）
+#   B 段（MODEL_B）：
+#   gemma-direct-mock    直调 mock 前缀（W3 条目口径）                                   0/16K/32K/49K
+#   gemma-direct-catalog 直调 catalog 前缀（gemma4 家族生产口径 D29）                     0/32K/49K
+#   仍可用 ARMS 点名的第一批臂（A 段）：direct-mock、direct-prod、direct-catalog、direct-routed、orch-history-ref。
 #   57,344 > ceiling 53,248（65,536 − 12,288）：guard on 的臂在该档走 W1 实机 ceiling 路径。
-# 产物：$OUT/run_colab.log（时间线，追加）、$OUT/<臂>/（transcripts.jsonl + summary.json）、$OUT/<臂>.log（harness 输出）、
-#   $OUT/smoke-{orch,direct}-<stamp>/、$OUT/arms_status.txt（每臂一行：<臂> ok[ errors=N]|fail|skipped）、
+# 产物：$OUT/run_colab.log（时间线，追加）、$OUT/<臂>/（transcripts.jsonl + summary.json；trace 步为 transcripts.jsonl + meta.json）、
+#   $OUT/<步>.log（harness 输出）、
+#   $OUT/smoke-{orch,direct}-<stamp>-<段 A/B>/（每段只冒本段要跑的模式）、$OUT/arms_status.txt（每步一行：<步> ok[ errors=N]|fail|skipped）、
 #   $OUT/DONE（单行，停机之后才写：BATCH_RC=<失败臂数> SKIPPED=<跳过臂数>[ ABORTED=hung] / FAIL_START / FAIL_READY / INTERRUPTED；
 #   停机失败时改写为 STOP_FAILED。看护以 DONE 判完成即可确认 VM 已停或已记停机失败）。
 # 退出码：0 全臂 ok；1 有臂 fail 或 skipped；2 cd 仓库失败；3 起机失败或租约被占拒起（DONE 都是 FAIL_START，看日志区分）；
 #   4 超时未 READY；5 停机失败（VM 可能仍在计费：--retain 下不会自动到期，须人工 stop）；64 参数非法（未起机）；
 #   129/130/143 收到 HUP/INT/TERM（先 TERM 掉 harness 子进程，再停机，再写 DONE）。
-# 挂死判据：臂（含冒烟）在后台跑，每 MON_INTERVAL 秒看 transcripts **本次启动后新追加的**末 HUNG_RUNS 行是否全是 error=timeout
+# 挂死判据：步（含冒烟）在后台跑，每 MON_INTERVAL 秒看 transcripts **本次启动后新追加的**末 HUNG_RUNS 行是否全是 error=timeout
+#   （trace 步的行形如 error="TimeoutError: …"，同判）
 #   （并发 1 的服务端一条生成挂死会连环超时，10-31 实测；只看新行——被 TERM 取消的 run 不写行，--resume 续跑要等第一个 run 跑完
 #   才有新行，旧的 timeout 尾巴不能再算一次，二审 M1）→ TERM 掉 harness（它取消当前 run、写 summary 退出）→ stop+start 新 VM
-#   → 同臂 --resume 续跑；整批最多 RESTARTS_MAX 次，用完即记该臂 fail、余臂 skipped、停机退出（挂死的 VM 上不再跑任何臂）。
+#   → 同臂 --resume 续跑（trace 步无 --resume：半截目录挪成 <步>.partial-<stamp>-rN 后从头重跑；run_trace 无 TERM 处理，被杀即
+#   无 meta.json）；整批最多 RESTARTS_MAX 次，用完即记该步 fail、余步 skipped、停机退出（挂死的 VM 上不再跑任何步）。
 #   最坏发现时间 ≈ HUNG_RUNS × (run-timeout + 排空 ≤60 s) + MON_INTERVAL（缺省约 34 分钟），不是整臂跑完。
-#   已知盲区：末 HUNG_RUNS 个 run 恰好都是正当超时（拐点区大档）也会判挂死并重起一次；重起时旧节点若仍可见，start 会被
-#   compute_ctl 拒绝 → FAIL_READY 停机（安全，但重起不一定起得来）。
+#   已知盲区：末 HUNG_RUNS 个 run 恰好都是正当超时（拐点区大档）也会判挂死并重起一次。stop 后立刻 start（重起、换模型都是）
+#   会撞 compute_ctl 的「旧 VM 仍分配 / 旧节点仍可见」拒起 → 链脚本停机后先等租约 state 回到 stopped（最多 SWITCH_WAIT_POLLS×POLL，
+#   默认 10 min），起机失败再试一次，仍失败才 FAIL_START/FAIL_READY 停机（安全，但 B 段不一定起得来；余步记 skipped）。
 # 起机命令发出后，任何路径（起机失败、臂崩溃、HUP/INT/TERM、超时）都停机一次再写 DONE；EXIT trap 兜底再停一次（stopped 只在
 #   stop 成功后置 1，停机被打断会重试，二审 M2）；停机失败记 STOP_FAILED / rc 5。
 #   zsh 的 trap 在前台子进程退出后才执行：信号最多延后 MON_INTERVAL 秒（盯挂死的 sleep）或一次 status 轮询；进程组整体收到
@@ -47,6 +60,8 @@ set -u
 ROOT=${0:A:h:h:h}
 cd "$ROOT" || exit 2
 MODEL=${MODEL:-RedHatAI/Qwen3.8-27B-INT4}
+MODEL_B=${MODEL_B:-google/gemma-4-31B-it-qat-w4a16-ct}
+TRACE_REPS=${TRACE_REPS:-3}
 OUT=${OUT:-benchmarks/data/context-knee-$(date +%Y%m%d)}
 READY_MINUTES=${READY_MINUTES:-40}
 RESTARTS_MAX=${RESTARTS_MAX:-2}
@@ -57,7 +72,9 @@ SMOKE=${SMOKE:-1}
 DEPLOY=${DEPLOY:-./colab/deploy.sh}
 PY=${PY:-backend/.venv/bin/python}
 KNEE=${KNEE:-benchmarks/context_knee/run_knee.py}
+TRACE=${TRACE:-benchmarks/summary_trace/run_trace.py}
 ENV_FILE=${ENV_FILE:-./.env.local}
+[[ "$TRACE_REPS" == <1-> ]]     || { echo "TRACE_REPS 须为 ≥1 的整数（现 $TRACE_REPS）" >&2; exit 64; }
 [[ "$READY_MINUTES" == <15-> ]] || { echo "READY_MINUTES 须为 ≥15 的整数（现 $READY_MINUTES）" >&2; exit 64; }
 [[ "$RESTARTS_MAX" == <0-> ]]   || { echo "RESTARTS_MAX 须为 ≥0 的整数（现 $RESTARTS_MAX）" >&2; exit 64; }
 [[ "$HUNG_RUNS" == <2-> ]]      || { echo "HUNG_RUNS 须为 ≥2 的整数（现 $HUNG_RUNS）" >&2; exit 64; }
@@ -87,11 +104,35 @@ ARM_ARGS[direct-prod]="--prefix prod --levels $DIRECT_LV"
 ARM_ARGS[orch-history-ref]="--orchestrator --fill-placement history --guard on --step-compaction on --turn-compaction on --prefix prod --levels $ORCH_LV"
 ARM_ARGS[direct-catalog]="--prefix catalog --levels 0,32768,49152"
 ARM_ARGS[direct-routed]="--prefix routed --levels 0,32768,49152"
-DEFAULT_ORDER=(orch-turn-none orch-turn-w1 orch-turn-w1w2 direct-mock direct-prod orch-history-ref direct-catalog direct-routed)
+ARM_ARGS[orch-turn-catalog]="--orchestrator --fill-placement turn --guard on --step-compaction on --prefix catalog --levels $ORCH_LV"
+# trace-* 步：summary_trace 成对续跑（run_trace.py），--drop-task on = 任务完成后被弃、只能靠摘要的目标场景（W4 残留项）；
+#   前缀用 run_trace 缺省 --prefix mock（summary_trace/README 模板口径：量摘要模板，不量工具披露）
+ARM_ARGS[trace-new-900]="--template new --task-state on --summary-max-tokens 900"
+ARM_ARGS[trace-legacy-640]="--template legacy --task-state off --summary-max-tokens 640"
+ARM_ARGS[trace-new-640]="--template new --task-state on --summary-max-tokens 640"
+# gemma-* 步：B 段（MODEL_B）
+ARM_ARGS[gemma-direct-mock]="--levels $DIRECT_LV"
+ARM_ARGS[gemma-direct-catalog]="--prefix catalog --levels 0,32768,49152"
+DEFAULT_ORDER=(orch-turn-none orch-turn-w1 orch-turn-w1w2 orch-turn-catalog trace-new-900 trace-legacy-640 trace-new-640 gemma-direct-mock gemma-direct-catalog)
 if [ -n "${ARMS:-}" ]; then ORDER=(${(s:,:)ARMS}); else ORDER=($DEFAULT_ORDER); fi
-for a in $ORDER; do [ -n "${ARM_ARGS[$a]:-}" ] || { echo "未知臂：$a" >&2; exit 64; }; done
+for a in $ORDER; do [ -n "${ARM_ARGS[$a]:-}" ] || { echo "未知步：$a" >&2; exit 64; }; done
+# 步的段 / 驾驭器 / 模式（按名字前缀）：A 段 = MODEL，B 段 = MODEL_B；trace-* 走 run_trace.py（编排器模式，无 --resume）
+step_phase(){ case $1 in gemma-*) print B;; *) print A;; esac; }
+step_kind(){  case $1 in trace-*) print trace;; *) print knee;; esac; }
+step_mode(){  case $1 in orch-*|trace-*) print orch;; *) print direct;; esac; }   # 冒烟门：orch 冒烟管编排器模式的步
+# 分段排序：A 段步先、B 段步后，段内保持给定顺序（B 段只起一次机）
+ORDER_A=(); ORDER_B=()
+for a in $ORDER; do if [ "$(step_phase $a)" = B ]; then ORDER_B+=($a); else ORDER_A+=($a); fi; done
+ORDER=($ORDER_A $ORDER_B)
 
-RUN=("$PY" "$KNEE" --model "$MODEL" --backend remote --tasks hard --run-timeout 600)
+# 当前步的命令行（--out 与步参数由 run_arm 追加）；--model 取当前段模型 $MODEL
+CMD=()
+step_cmd(){
+  case $(step_kind $1) in
+    trace) CMD=("$PY" "$TRACE" --model "$MODEL" --backend remote --tasks hard --reps "$TRACE_REPS" --run-timeout 600 --drop-task on);;
+    *)     CMD=("$PY" "$KNEE"  --model "$MODEL" --backend remote --tasks hard --run-timeout 600);;
+  esac
+}
 
 started=0; stopped=0; final_rc=""; host=""; restarts=0; hpid=""; hung=0
 stop_colab(){
@@ -183,14 +224,15 @@ start_and_wait(){
   return 0
 }
 
-# 跑一臂 / 冒烟（后台 + 盯挂死）：$1 产物目录 $2 日志 其余 = 额外参数；密钥只在子进程（exec 后 $! 即 python 进程）；
-# 返回 harness rc；挂死被 TERM 时置全局 hung=1。挂死只看本次启动后新追加的行（启动时记下已有行数）。
+# 跑一步 / 冒烟（后台 + 盯挂死）：$1 产物目录 $2 日志 其余 = 额外参数；命令行取全局 CMD（调用前 step_cmd 置好）；
+# 密钥只在子进程（exec 后 $! 即 python 进程）；返回 harness rc；挂死被 TERM 时置全局 hung=1。
+# 挂死只看本次启动后新追加的行（启动时记下已有行数）。
 run_arm(){
   local outdir=$1 logf=$2 rc base=0; shift 2
   hung=0
   [ -f "$outdir/transcripts.jsonl" ] && base=$(wc -l < "$outdir/transcripts.jsonl" | tr -d ' ')
   ( set -a; . "$ENV_FILE"; set +a
-    INFER_REMOTE_HOST="$host" exec "${RUN[@]}" --out "$outdir" "$@" ) >> "$logf" 2>&1 &
+    INFER_REMOTE_HOST="$host" exec "${CMD[@]}" --out "$outdir" "$@" ) >> "$logf" 2>&1 &
   hpid=$!
   while kill -0 $hpid 2>/dev/null; do
     sleep $MON_INTERVAL
@@ -228,8 +270,34 @@ try:
 except (FileNotFoundError, ValueError):
     sys.exit(1)
 tail = rows[-n:]
-sys.exit(0 if len(tail) == n and all(r.get("error") == "timeout" for r in tail) else 1)
+def is_timeout(e):   # 拐点 harness 写 error="timeout"；run_trace 写 error="TimeoutError: run_turn 超时（600s）"；
+    return "timeout" in str(e or "").lower()   # 远端后端读超时（ReadTimeout…）同判（一审 Minor 7）
+sys.exit(0 if len(tail) == n and all(is_timeout(r.get("error")) for r in tail) else 1)
 PY
+}
+# trace 步完成判定：meta.json 存在（run_trace 收尾才写）；stdout 给 " errors=N"（transcripts 里带 error 键的行数，N>0 时）
+trace_complete(){
+  python3 - "$1" <<'PY'
+import json, sys, pathlib
+out = pathlib.Path(sys.argv[1])
+if not (out / "meta.json").is_file(): sys.exit(1)
+try:
+    rows = [json.loads(l) for l in open(out / "transcripts.jsonl") if l.strip()]
+except (FileNotFoundError, ValueError):
+    sys.exit(1)
+n = sum(1 for r in rows if r.get("error"))
+if n: print(f" errors={n}", end="")
+sys.exit(0 if rows and n < len(rows) else 1)   # 全部成对都报错 = 没量到东西，记 fail（一审 Minor 6）
+PY
+}
+# $1 之后的下一步名（没有则空）：重起失败时当前步记 fail、其后全记 skipped
+next_step_after(){
+  local a hit=0
+  for a in $ORDER; do
+    [ $hit -eq 1 ] && { print -r -- "$a"; return 0; }
+    [ "$a" = "$1" ] && hit=1
+  done
+  return 0
 }
 # 臂完成判定：summary.json 存在且 complete 为真；stdout 给 " errors=N"（N>0 时）
 arm_complete(){
@@ -252,56 +320,136 @@ case $ls_state in
   *) log "refuse to start: existing lease state=$ls_state (not ours; no stop)"; finish FAIL_START; exit 3;;
 esac
 
+# 余下的步全记 skipped（$1 起，含 $1）：起机失败退出前写，arms_status 仍是每步一行（一审 Minor 4）
+skip_from(){
+  local a seen=0
+  for a in $ORDER; do
+    [ "$a" = "$1" ] && seen=1
+    [ $seen -eq 1 ] && { arm_status $a skipped; skipped=$((skipped + 1)); }
+  done
+}
+# 起机（含等 READY）失败的统一出口：$1 = start_and_wait 的 rc（3/4），$2 = 当前步（含它起全记 skipped）
+start_fail_exit(){
+  [ -n "${2:-}" ] && skip_from "$2"
+  [ "$1" -eq 3 ] && fail_exit FAIL_START 3
+  fail_exit FAIL_READY 4
+}
+# 换模型 / 重起共用：停机 → 等租约真正 stopped（compute_ctl 对「旧 VM 仍分配 / 旧节点仍可见」拒起，
+# 一审 Major 3）→ 起机；起机失败（3）或未 READY（4）再试一次（4 先防御性停机）。返回 start_and_wait 的 rc。
+SWITCH_WAIT_POLLS=${SWITCH_WAIT_POLLS:-20}
+restart_vm(){
+  local rc i st
+  stop_colab || { finish STOP_FAILED; final_rc=5; exit 5; }
+  for i in $(seq 1 $SWITCH_WAIT_POLLS); do
+    st=$(lease_state)
+    case $st in none|stopped) break;; esac
+    log "wait lease release: state=$st ($i/$SWITCH_WAIT_POLLS)"
+    sleep $POLL
+  done
+  start_and_wait; rc=$?
+  if [ $rc -ne 0 ]; then
+    log "start after stop FAILED rc=$rc（旧节点未释放？）：${POLL}s 后再试一次"
+    [ $rc -eq 4 ] && { stop_colab || { finish STOP_FAILED; final_rc=5; exit 5; }; }
+    sleep $POLL
+    start_and_wait; rc=$?
+  fi
+  return $rc
+}
+
+# 只跑 B 段步时直接起 B 模型，不白起一次 A（一审 Major 1）
+failed=0; skipped=0; aborted=""; phase=A
+[ ${#ORDER_A} -eq 0 ] && { phase=B; MODEL=$MODEL_B; }
 start_and_wait; rc=$?
 if [ $rc -ne 0 ]; then
   # 起机失败 / 未 READY：防御性停机一次（started=1 已置）再写 DONE；停机失败记 STOP_FAILED / 5
-  [ $rc -eq 3 ] && fail_exit FAIL_START 3
-  fail_exit FAIL_READY 4
+  start_fail_exit $rc "${ORDER[1]}"
 fi
 
+# 本段冒烟：只冒本段还要跑的模式（orch / direct），拐点 harness 一个 run；失败则置 0，本段同模式的步全跳过
 orch_ok=1; direct_ok=1
-if [ "$SMOKE" = 1 ]; then
-  log "smoke orch (prod, turn, L0, 1 题 1 rep) → smoke-orch-$STAMP"
-  run_arm "$OUT/smoke-orch-$STAMP" "$OUT/smoke-orch-$STAMP.log" --orchestrator --fill-placement turn --prefix prod --levels 0 --reps 1 --limit 1
-  if smoke_ok "$OUT/smoke-orch-$STAMP"; then log "smoke orch OK"; else orch_ok=0; log "smoke orch FAILED → 跳过全部编排器臂（见 smoke-orch-$STAMP.log）"; fi
-  log "smoke direct (prod, L0, 1 题 1 rep) → smoke-direct-$STAMP"
-  run_arm "$OUT/smoke-direct-$STAMP" "$OUT/smoke-direct-$STAMP.log" --prefix prod --levels 0 --reps 1 --limit 1
-  if smoke_ok "$OUT/smoke-direct-$STAMP"; then log "smoke direct OK"; else direct_ok=0; log "smoke direct FAILED → 跳过全部直调臂（见 smoke-direct-$STAMP.log）"; fi
-fi
+run_smokes(){   # $1 段名 其余 = 本段步名
+  local ph=$1 need_orch=0 need_direct=0 s tag; shift
+  for s in "$@"; do [ "$(step_mode $s)" = orch ] && need_orch=1 || need_direct=1; done
+  orch_ok=1; direct_ok=1
+  [ "$SMOKE" = 1 ] || return 0
+  tag="$STAMP-$ph"
+  step_cmd orch-turn-none
+  if [ $need_orch -eq 1 ]; then
+    log "smoke orch [$ph $MODEL] (prod, turn, L0, 1 题 1 rep) → smoke-orch-$tag"
+    run_arm "$OUT/smoke-orch-$tag" "$OUT/smoke-orch-$tag.log" --orchestrator --fill-placement turn --prefix prod --levels 0 --reps 1 --limit 1
+    if smoke_ok "$OUT/smoke-orch-$tag"; then log "smoke orch OK"; else orch_ok=0; log "smoke orch FAILED → 跳过本段全部编排器模式的步（见 smoke-orch-$tag.log）"; fi
+  fi
+  if [ $need_direct -eq 1 ]; then
+    log "smoke direct [$ph $MODEL] (prod, L0, 1 题 1 rep) → smoke-direct-$tag"
+    run_arm "$OUT/smoke-direct-$tag" "$OUT/smoke-direct-$tag.log" --prefix prod --levels 0 --reps 1 --limit 1
+    if smoke_ok "$OUT/smoke-direct-$tag"; then log "smoke direct OK"; else direct_ok=0; log "smoke direct FAILED → 跳过本段全部直调步（见 smoke-direct-$tag.log）"; fi
+  fi
+}
+if [ $phase = A ]; then run_smokes A $ORDER_A; else run_smokes B $ORDER_B; fi
 
-failed=0; skipped=0; aborted=""
 for arm in $ORDER; do
   if [ -n "$aborted" ]; then arm_status $arm skipped; skipped=$((skipped + 1)); continue; fi
+  # 段切换（A → B）：停机 → 等租约释放 → 换模型起机（失败再试一次）→ 本段冒烟；换模型的 stop+start 不占重起预算
+  if [ "$(step_phase $arm)" != "$phase" ]; then
+    phase=$(step_phase $arm); MODEL=$MODEL_B
+    log "PHASE $phase: 换模型 $MODEL（stop → start）"
+    restart_vm; rc2=$?
+    [ $rc2 -ne 0 ] && start_fail_exit $rc2 "$arm"
+    run_smokes $phase $ORDER_B
+  fi
   extra=(${=ARM_ARGS[$arm]})
-  case $arm in
-    orch-*)   [ $orch_ok -eq 1 ]   || { arm_status $arm skipped; skipped=$((skipped + 1)); continue; };;
-    direct-*) [ $direct_ok -eq 1 ] || { arm_status $arm skipped; skipped=$((skipped + 1)); continue; };;
+  case $(step_mode $arm) in
+    orch)   [ $orch_ok -eq 1 ]   || { arm_status $arm skipped; skipped=$((skipped + 1)); continue; };;
+    direct) [ $direct_ok -eq 1 ] || { arm_status $arm skipped; skipped=$((skipped + 1)); continue; };;
   esac
+  kind=$(step_kind $arm)
+  step_cmd $arm
   resume=()
-  [ -f "$OUT/$arm/transcripts.jsonl" ] && { resume=(--resume); log "ARM $arm: 产物已存在，--resume 续跑"; }
-  log "ARM $arm start: ${extra[*]} ${resume[*]}"
+  if [ -f "$OUT/$arm/transcripts.jsonl" ]; then
+    if [ "$kind" = trace ]; then
+      # 已完成的 trace 步（meta.json 在）不重跑（一审 Major 2：FORCE_OUT 续跑别把完成的步当半截再付一次）
+      if errs=$(trace_complete "$OUT/$arm"); then
+        log "ARM $arm: 已完成（meta.json 在），不重跑"; arm_status $arm "ok$errs"; continue
+      fi
+      mv "$OUT/$arm" "$OUT/$arm.partial-$STAMP" || log "⚠️ mv $arm 失败（rc=$?），run_trace 会拒跑该目录"
+      log "ARM $arm: trace 不支持续跑，半截产物挪到 $arm.partial-$STAMP 后重跑"
+    else
+      resume=(--resume); log "ARM $arm: 产物已存在，--resume 续跑"
+    fi
+  fi
+  log "ARM $arm [$phase $MODEL] start: ${extra[*]} ${resume[*]}"
   while :; do
     run_arm "$OUT/$arm" "$OUT/$arm.log" "${extra[@]}" "${resume[@]}"; rc=$?
     log "ARM $arm harness rc=$rc hung=$hung"
     if [ $hung -eq 1 ]; then
       if [ $restarts -lt $RESTARTS_MAX ]; then
         restarts=$((restarts + 1))
-        log "ARM $arm: stop+start 重起（$restarts/$RESTARTS_MAX）后 --resume"
-        stop_colab || { finish STOP_FAILED; final_rc=5; exit 5; }
-        start_and_wait; rc2=$?
+        log "ARM $arm: stop+start 重起（$restarts/$RESTARTS_MAX）后续跑"
+        restart_vm; rc2=$?
         if [ $rc2 -ne 0 ]; then
-          [ $rc2 -eq 3 ] && fail_exit FAIL_START 3
-          fail_exit FAIL_READY 4
+          arm_status $arm fail; failed=$((failed + 1))
+          start_fail_exit $rc2 "$(next_step_after $arm)"
         fi
-        resume=(--resume)
+        if [ "$kind" = trace ]; then
+          if [ -d "$OUT/$arm" ]; then
+            mv "$OUT/$arm" "$OUT/$arm.partial-$STAMP-r$restarts" || log "⚠️ mv $arm 失败（rc=$?）"
+          fi
+          log "ARM $arm: trace 半截产物挪到 $arm.partial-$STAMP-r$restarts，从头重跑"
+        else
+          resume=(--resume)
+        fi
         continue
       fi
-      log "ARM $arm: 连环 timeout 且重起次数已用完（$RESTARTS_MAX）：记 fail，余臂 skipped，停机退出"
+      log "ARM $arm: 连环 timeout 且重起次数已用完（$RESTARTS_MAX）：记 fail，余步 skipped，停机退出"
       arm_status $arm fail; failed=$((failed + 1)); aborted=hung
       break
     fi
     errs=""
-    if [ $rc -eq 0 ] && errs=$(arm_complete "$OUT/$arm"); then arm_status $arm "ok$errs"; else arm_status $arm fail; failed=$((failed + 1)); fi
+    if [ "$kind" = trace ]; then
+      if [ $rc -eq 0 ] && errs=$(trace_complete "$OUT/$arm"); then arm_status $arm "ok$errs"; else arm_status $arm fail; failed=$((failed + 1)); fi
+    else
+      if [ $rc -eq 0 ] && errs=$(arm_complete "$OUT/$arm"); then arm_status $arm "ok$errs"; else arm_status $arm fail; failed=$((failed + 1)); fi
+    fi
     break
   done
 done

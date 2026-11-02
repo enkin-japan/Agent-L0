@@ -5,6 +5,7 @@ A 配置解析与纯函数；B 编排层四档处置（经 Orchestrator.run_turn
 """
 import asyncio
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,7 @@ from framework.core import context_guard as cg
 from framework.core.journal import new_turn_id
 from framework.core.orchestrator import Orchestrator
 from framework.core.scheduler import ClassPolicy, TaskScheduler
+from framework.core.spill import resolve_spill_ref
 from framework.core.turn_runner import TurnRunner
 from framework.core import events
 
@@ -233,6 +235,7 @@ def test_ceiling_after_compaction_aborts_without_generation(make_session):
     aborts = _events("turn_abort")
     assert len(aborts) == 1 and aborts[0]["detail"]["reason"] == "context_guard"
     assert aborts[0]["detail"]["ceiling"] == 53248 and aborts[0]["detail"]["limit"] == 65536
+    assert (aborts[0]["detail"]["compacted"], aborts[0]["detail"]["spilled"]) == (0, 0)
     assert session.activity["phase"] == "done"
     assert _events(cg.EVT_FOLD) == []
 
@@ -247,6 +250,153 @@ def test_second_ceiling_in_turn_aborts_without_another_compaction(make_session):
     assert len(eng.measure_calls) == 3                        # 第二次 ceiling 不再压缩、不再重量
     assert _events("turn_abort")[0]["detail"]["reason"] == "context_guard"
     assert "上下文已达模型上限" in session.history[-1]["content"]
+
+
+# ---- W1b：ceiling 应急压缩的桩带回读句柄（不看 step_compaction.spill_full） ----
+_CEIL_HANDLE_RE = re.compile(r'\n全文：file_extract\(path="(spill:[0-9a-f]+(?:-[0-9]+)?)"\)$')
+
+
+def _spill_files(session):
+    d = session.session_dir / "spill"
+    return sorted(d.iterdir()) if d.exists() else []
+
+
+def _tool_obs(session):
+    return [(tr["name"], tr["response"]) for m in session.history if m.get("role") == "tool"
+            for tr in m["tool_responses"]]
+
+
+def test_ceiling_compaction_stubs_carry_spill_handles(make_session):
+    # 每条 ~600 字：> observation_compact_chars(200)、< observation_max_chars(4000)，入口不落盘
+    texts = {p: "\n".join(f"{p}-fact-{i:03d} " + p * 30 for i in range(15)) for p in "abcd"}
+    tools = [FakeTool(f"read_{p}", result=t) for p, t in texts.items()]
+    eng = FakeEngine([{"tool_calls": [call(f"read_{p}", path=p)]} for p in "abcd"]
+                     + [{"text": "完成"}])
+    eng.measure_script = [100, 100, 100, 100, 60000, 30000]
+    orch = _orch(eng, tools=tools, react_max_steps=8, step_compaction={"spill_full": False})
+    session = make_session()
+    r = _run(orch, session)
+    assert r["status"] == "success" and len(eng.calls) == 5
+    obs = _tool_obs(session)
+    folded = [(n, o) for n, o in obs if "Observation compacted" in o]
+    assert [n for n, _ in folded] == ["read_a", "read_b"]        # 保护窗最近 2 条不压
+    for name, stub in folded:
+        m = _CEIL_HANDLE_RE.search(stub)
+        assert m, stub
+        f = resolve_spill_ref(session, m.group(1))
+        assert f is not None and f.read_text(encoding="utf-8") == texts[name[-1]]
+    assert [o for n, o in obs[2:]] == [texts["c"], texts["d"]]
+    assert len(_spill_files(session)) == 2
+    fold = _events(cg.EVT_FOLD)
+    assert len(fold) == 1 and fold[0]["detail"]["compacted"] == 2
+    assert fold[0]["detail"]["spilled"] == 2
+
+
+def _four_reads_ceiling(eng_measure, tools, make_session, session_id="t-session"):
+    eng = FakeEngine([{"tool_calls": [call(f"read_{p}", path=p)]} for p in "abcd"]
+                     + [{"text": "完成"}])
+    eng.measure_script = list(eng_measure)
+    session = make_session(session_id)
+    r = _run(_orch(eng, tools=tools, react_max_steps=8), session)
+    return r, session
+
+
+def test_ceiling_compaction_reuses_spill_file_for_same_text(make_session):
+    # 两个会话对象共用同一会话目录（≈ 重建/恢复后旧轮全文回到内存再被 ceiling 压一次）
+    texts = {p: "\n".join(f"{p}-fact-{i:03d} " + p * 30 for i in range(15)) for p in "abcd"}
+    tools = [FakeTool(f"read_{p}", result=t) for p, t in texts.items()]
+    handles = []
+    for _ in range(2):
+        r, session = _four_reads_ceiling([100, 100, 100, 100, 60000, 30000], tools, make_session)
+        assert r["status"] == "success"
+        stub = next(o for n, o in _tool_obs(session) if n == "read_a")
+        handles.append(_CEIL_HANDLE_RE.search(stub).group(1))
+    assert handles[0] == handles[1]
+    assert len(_spill_files(session)) == 2                     # a、b 各一份，第二次不重写
+    f = resolve_spill_ref(session, handles[0])
+    assert f is not None and f.read_text(encoding="utf-8") == texts["a"]
+    assert [e["detail"]["spilled"] for e in _events(cg.EVT_FOLD)] == [2, 2]
+
+
+def test_spill_callback_same_hash_different_content_gets_fresh_file(make_session):
+    import hashlib
+    orch, session = _orch(FakeEngine([])), make_session()
+    text = "t" * 500
+    h = hashlib.sha256(text.encode()).hexdigest()[:16]
+    d = session.session_dir / "spill"
+    d.mkdir(parents=True)
+    (d / f"{h}.txt").write_text("别的内容", encoding="utf-8")   # 同名异内容：不得复用
+    cb = orch._spill_stub_handle(session, digest_chars=200, label="t")
+    assert cb({"name": "x", "response": text}) == f'file_extract(path="spill:{h}-1")'
+    assert (d / f"{h}-1.txt").read_text(encoding="utf-8") == text
+    assert (d / f"{h}.txt").read_text(encoding="utf-8") == "别的内容"
+    assert cb({"name": "x", "response": text}) == f'file_extract(path="spill:{h}-1")'
+    assert len(_spill_files(session)) == 2 and cb.spilled == 2
+
+
+def test_ceiling_abort_after_compaction_reports_counts(make_session):
+    tools = [FakeTool(f"read_{p}", result=BIG) for p in "abcd"]
+    r, session = _four_reads_ceiling([100, 100, 100, 100, 60000, 60000], tools, make_session)
+    assert r["status"] == "warning"
+    aborts = _events("turn_abort")
+    assert len(aborts) == 1 and aborts[0]["detail"]["reason"] == "context_guard"
+    assert (aborts[0]["detail"]["compacted"], aborts[0]["detail"]["spilled"]) == (2, 2)
+    assert len(_spill_files(session)) == 1                     # 两条同文 BIG：同一份文件
+    assert _events(cg.EVT_FOLD) == []
+
+
+def test_ceiling_compaction_short_observation_has_no_handle(make_session):
+    short = "s" * 150                                   # ≤ digest：桩里已是全文，不写盘不给句柄
+    eng = FakeEngine(_three_reads_then([{"text": "完成"}]))
+    eng.measure_script = [100, 100, 100, 60000, 30000]
+    orch = _orch(eng, tools=[FakeTool("read_thing", result=short)])
+    session = make_session()
+    r = _run(orch, session)
+    assert r["status"] == "success"
+    assert [o for _, o in _tool_obs(session)] == [short] * 3
+    assert _spill_files(session) == []
+    d = _events(cg.EVT_FOLD)[0]["detail"]
+    assert d["compacted"] == 0 and d["spilled"] == 0
+    # ceiling 用的回调本身：正文恰为 digest 长不给句柄，多一字才写
+    cb = orch._spill_stub_handle(session, digest_chars=orch.observation_compact_chars, label="t")
+    assert cb({"name": "x", "response": "s" * 200}) is None and cb.spilled == 0
+    assert _spill_files(session) == []
+    h = cb({"name": "x", "response": "s" * 201})
+    assert h and h.startswith('file_extract(path="spill:') and cb.spilled == 1
+
+
+def test_ceiling_compaction_without_session_dir_unchanged(make_session):
+    eng = FakeEngine(_three_reads_then([{"text": "完成"}]))
+    eng.measure_script = [100, 100, 100, 60000, 30000]
+    orch = _orch(eng, tools=[BIG_TOOL])
+    session = make_session()
+    session.session_dir = None
+    assert orch._spill_stub_handle(session, digest_chars=200, label="t") is None
+    r = _run(orch, session)
+    assert r["status"] == "success" and len(eng.calls) == 4
+    first = _tool_obs(session)[0][1]
+    assert first == BIG[:200] + " …[Observation compacted; originally 1000 chars]"
+    d = _events(cg.EVT_FOLD)[0]["detail"]
+    assert d["compacted"] == 1 and d["spilled"] == 0
+
+
+def test_ceiling_compaction_spill_failure_falls_back_to_plain_stub(make_session, monkeypatch, capsys):
+    import framework.core.orchestrator as om
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(om, "spill_observation", boom)
+    eng = FakeEngine([{"tool_calls": [call("read_thing", path=p)]} for p in "abcd"]
+                     + [{"text": "完成"}])
+    eng.measure_script = [100, 100, 100, 100, 60000, 30000]
+    session = make_session()
+    r = _run(_orch(eng, tools=[BIG_TOOL], react_max_steps=8), session)
+    assert r["status"] == "success"
+    folded = [o for _, o in _tool_obs(session) if "Observation compacted" in o]
+    assert len(folded) == 2 and not any("全文：" in o for o in folded)
+    d = _events(cg.EVT_FOLD)[0]["detail"]
+    assert d["compacted"] == 2 and d["spilled"] == 0
+    assert capsys.readouterr().out.count("补写 spill 失败") == 1          # 告警一次
 
 
 def test_max_tokens_clamped_to_reserve_once(make_session):
