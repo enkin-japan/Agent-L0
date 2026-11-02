@@ -1,0 +1,57 @@
+2026-11-02 13:36:20 START deploy RedHatAI/Qwen3.8-27B-INT4 --retain
+2026-11-02 13:36:20 后台部署进程已启动（尚未 READY） {"pid": 3929, "logs": "./colab/deploy.sh logs -f", "stop": "./colab/deploy.sh stop"}
+2026-11-02 13:36:22 wait READY: state=allocating phase=
+2026-11-02 13:36:53 wait READY: state=booting phase=installing-dependencies
+2026-11-02 13:37:25 wait READY: state=booting phase=installing-dependencies
+2026-11-02 13:37:57 wait READY: state=booting phase=installing-dependencies
+2026-11-02 13:38:28 wait READY: state=booting phase=installing-dependencies
+2026-11-02 13:38:59 wait READY: state=booting phase=installing-dependencies
+2026-11-02 13:39:30 wait READY: state=booting phase=downloading-model
+2026-11-02 13:40:01 wait READY: state=booting phase=downloading-model
+2026-11-02 13:40:32 wait READY: state=booting phase=downloading-model
+2026-11-02 13:41:03 wait READY: state=booting phase=downloading-model
+2026-11-02 13:41:35 wait READY: state=booting phase=loading-models
+2026-11-02 13:42:06 wait READY: state=booting phase=loading-models
+2026-11-02 13:42:37 wait READY: state=booting phase=loading-models
+2026-11-02 13:43:08 wait READY: state=booting phase=loading-models
+2026-11-02 13:43:39 wait READY: state=booting phase=loading-models
+2026-11-02 13:44:11 wait READY: state=booting phase=loading-models
+2026-11-02 13:44:42 wait READY: state=booting phase=loading-models
+2026-11-02 13:45:13 wait READY: state=booting phase=loading-models
+2026-11-02 13:45:45 wait READY: state=booting phase=loading-models
+2026-11-02 13:46:16 wait READY: state=booting phase=loading-models
+2026-11-02 13:46:47 wait READY: state=booting phase=loading-models
+2026-11-02 13:47:18 wait READY: state=booting phase=loading-models
+2026-11-02 13:47:49 wait READY: state=booting phase=loading-models
+2026-11-02 13:48:20 wait READY: state=booting phase=loading-models
+2026-11-02 13:48:51 wait READY: state=booting phase=loading-models
+2026-11-02 13:49:22 wait READY: state=booting phase=loading-models
+2026-11-02 13:49:53 wait READY: state=booting phase=loading-models
+2026-11-02 13:50:25 wait READY: state=ready phase=ready
+2026-11-02 13:50:25 READY host=agent-compute.tail8d18fd.ts.net
+2026-11-02 13:50:25 smoke orch [A RedHatAI/Qwen3.8-27B-INT4] (prod, turn, L0, 1 题 1 rep) → smoke-orch-20261102-133619-A
+2026-11-02 13:51:25 smoke orch OK
+2026-11-02 13:51:25 ARM orch-turn-none [A RedHatAI/Qwen3.8-27B-INT4] start: --orchestrator --fill-placement turn --guard off --step-compaction off --prefix prod --levels 0,32768,49152,57344 
+2026-11-02 15:20:30 ARM orch-turn-none harness rc=0 hung=0
+2026-11-02 15:20:30 arm orch-turn-none: ok
+2026-11-02 15:20:30 ARM orch-turn-w1 [A RedHatAI/Qwen3.8-27B-INT4] start: --orchestrator --fill-placement turn --guard on --step-compaction off --prefix prod --levels 0,32768,49152,57344 
+2026-11-02 16:51:35 ARM orch-turn-w1 harness rc=0 hung=0
+2026-11-02 16:51:35 arm orch-turn-w1: ok
+2026-11-02 16:51:35 ARM orch-turn-w1w2 [A RedHatAI/Qwen3.8-27B-INT4] start: --orchestrator --fill-placement turn --guard on --step-compaction on --prefix prod --levels 0,32768,49152,57344 
+2026-11-02 18:22:41 ARM orch-turn-w1w2 harness rc=0 hung=0
+2026-11-02 18:22:41 arm orch-turn-w1w2: ok
+2026-11-02 18:22:41 ARM orch-turn-catalog [A RedHatAI/Qwen3.8-27B-INT4] start: --orchestrator --fill-placement turn --guard on --step-compaction on --prefix catalog --levels 0,32768,49152,57344 
+2026-11-02 20:04:47 ARM orch-turn-catalog harness rc=0 hung=0
+2026-11-02 20:04:47 arm orch-turn-catalog: ok
+2026-11-02 20:04:47 ARM trace-new-900 [A RedHatAI/Qwen3.8-27B-INT4] start: --template new --task-state on --summary-max-tokens 900 
+2026-11-02 20:05:47 interrupted (SIGTERM)
+2026-11-02 20:05:52 STOP colab
+2026-11-02 20:05:52 等待正在进行的 VM 分配结束（如有），然后回收
+2026-11-02 20:05:52 正在核对并回收 VM {"session": "agent-compute-892514491b28"}
+2026-11-02 20:05:52 正在注销 Tailscale 临时节点
+2026-11-02 20:05:53 正在请求 Colab 释放 VM
+[colab] Stopping session 'agent-compute-892514491b28'...
+[colab] Session terminated.
+2026-11-02 20:05:55 已确认 VM 从 Colab 服务端移除 {"session": "agent-compute-892514491b28", "tailnet_cleanup": "ephemeral-logout-confirmed"}
+2026-11-02 20:05:55 stop rc=0
+2026-11-02 20:05:55 DONE INTERRUPTED

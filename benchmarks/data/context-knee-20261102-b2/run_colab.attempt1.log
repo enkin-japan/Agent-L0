@@ -1,0 +1,22 @@
+2026-11-02 13:33:21 START deploy RedHatAI/Qwen3.8-27B-INT4 --retain
+2026-11-02 13:33:21 后台部署进程已启动（尚未 READY） {"pid": 3463, "logs": "./colab/deploy.sh logs -f", "stop": "./colab/deploy.sh stop"}
+2026-11-02 13:33:24 wait READY: state=allocating phase=
+2026-11-02 13:33:55 wait READY: state=allocating phase=
+2026-11-02 13:34:27 wait READY: state=allocating phase=
+2026-11-02 13:34:58 wait READY: state=stopped phase=
+2026-11-02 13:34:58 deploy state=stopped before READY
+2026-11-02 13:34:58 arm orch-turn-none: skipped
+2026-11-02 13:34:58 arm orch-turn-w1: skipped
+2026-11-02 13:34:58 arm orch-turn-w1w2: skipped
+2026-11-02 13:34:58 arm orch-turn-catalog: skipped
+2026-11-02 13:34:58 arm trace-new-900: skipped
+2026-11-02 13:34:58 arm trace-legacy-640: skipped
+2026-11-02 13:34:58 arm trace-new-640: skipped
+2026-11-02 13:34:58 arm gemma-direct-mock: skipped
+2026-11-02 13:34:58 arm gemma-direct-catalog: skipped
+2026-11-02 13:34:58 STOP colab
+2026-11-02 13:34:58 等待正在进行的 VM 分配结束（如有），然后回收
+2026-11-02 13:34:58 正在核对并回收 VM {"session": "agent-compute-37891716142b"}
+2026-11-02 13:34:58 已确认 VM 从 Colab 服务端移除 {"session": "agent-compute-37891716142b", "tailnet_cleanup": "logout-unconfirmed"}
+2026-11-02 13:34:58 stop rc=0
+2026-11-02 13:34:58 DONE FAIL_READY

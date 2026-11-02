@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Locate the policy/ directory and list its files
+  ○ [2] Replace '90 days' → '30 days' in each policy file (stop on the read-only one)
+  ○ [3] Write policy/pending-changes.md naming the file that still needs manual update
+  ○ [4] Verify edits and compose final answer with the three verbatim values

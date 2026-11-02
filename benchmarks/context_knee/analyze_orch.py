@@ -49,7 +49,9 @@ PAIRS_TAIL = ["direct-mock:direct-prod", "direct-prod:direct-catalog",
               "direct-prod:direct-routed", "orch-turn-none:orch-turn-w1", "orch-turn-none:orch-turn-w1w2",
               "orch-turn-w1:orch-turn-w1w2"]
 STUB_MARK = "Unknown tool"
+EXTRA_ORCH: List[str] = []   # 第二批（b2）：turn 三臂之外并入编排器表的臂（orch-turn-catalog）；11-02 批为空 → 输出不变
 GUARD_TYPES_SHOWN = None   # None = 出现过的全部类型
+RAG_NOTE = "rag_search 在 harness 里是桩、恒回 Unknown tool"   # 第二批（W-K2 可用桩）main_b2 改写
 
 
 # ---------------------------------------------------------------- 小件
@@ -155,7 +157,7 @@ def arm_elapsed(log: Path) -> Dict[str, str]:
     start: Dict[str, str] = {}
     from datetime import datetime
     for ln in log.read_text(encoding="utf-8").splitlines():
-        m = re.match(r"(\S+ \S+) ARM (\S+) (start|harness rc=\d+)", ln)
+        m = re.match(r"(\S+ \S+) ARM (\S+)(?: \[[^\]]*\])? (start|harness rc=\d+)", ln)
         if not m:
             continue
         ts, arm, what = m.groups()
@@ -252,7 +254,8 @@ def _abort_kinds(rs) -> str:
 
 
 def sec_i(G, aggs, raws, evs, args) -> List[str]:
-    L = ["### I. P2 出口：turn 放置三臂（无管理 → +W1 → +W1+W2；prefix prod）\n"]
+    L = ["### I. P2 出口：turn 放置三臂（无管理 → +W1 → +W1+W2；prefix prod）"
+         + (f"；首表与事件表并入 {'、'.join(EXTRA_ORCH)}（比值表只比 prod 三臂）" if EXTRA_ORCH else "") + "\n"]
     k = A.knee(aggs[TURN[0]], args.metric, args.baseline_levels, args.drop, args.recover)
     kb = A.knee(aggs[TURN[0]], "success_rate", args.baseline_levels, args.drop, args.recover)
     L.append(f"{TURN[0]} 拐点（analyze.py 默认规则 metric={args.metric} drop={args.drop}）：**{k['verdict']}**，基线 {k.get('base_level')} 档 {pc(k.get('base'))}；"
@@ -260,7 +263,7 @@ def sec_i(G, aggs, raws, evs, args) -> List[str]:
              f"基线 Pass^2 {pc(k.get('base'))} 时「降 {int(args.drop * 100)} 点」意味着降到 {pc(max(0.0, (k.get('base') or 0) - args.drop))}——规则在地板附近几乎不可触发。\n")
     L.append("| 组 | level | n(缺测) | 成功率 | Pass^2 | 峰值字段中位 | 实发峰值中位 / 最大 | 首prompt中位 | 生成次数中位 | full_renders 总/中位/÷生成 | update_plan/complete_step/remember | aborted 原因 | warning 状态 | Σwall s | wall中位 | system_errors | dup_blocked |")
     L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
-    for name in TURN:
+    for name in TURN + EXTRA_ORCH:
         recs = by_level(G[name]["records"])
         rawlv = by_level(dedup_rows(raws[name]))
         for lv, a in aggs[name].items():
@@ -279,11 +282,11 @@ def sec_i(G, aggs, raws, evs, args) -> List[str]:
                      f"{sum(1 for r in rs if r.get('turn_status') == 'warning')} | {sum(r.get('wall_s') or 0 for r in rawlv.get(lv, [])):,.0f} | "
                      f"{A.num(a['wall_median'])} | {sum(r.get('system_errors') or 0 for r in rs)} | {sum(r.get('dup_blocked') or 0 for r in rs)} |")
     L.append("")
-    types = sorted({e["type"] for n in TURN for e in (evs.get(n) or [])})
+    types = sorted({e["type"] for n in TURN + EXTRA_ORCH for e in (evs.get(n) or [])})
     L.append("护栏 / 编排层事件（本臂 run 的 guard_events_lines 切片计数）：\n")
     L.append("| 组 | level | " + " | ".join(types) + " |")
     L.append("|---|---|" + "---|" * len(types))
-    for name in TURN:
+    for name in TURN + EXTRA_ORCH:
         for lv, rs in by_level(G[name]["records"]).items():
             c = Counter(e["type"] for r in rs for e in seg(r, evs.get(name)))
             L.append(f"| {name} | {lv} | " + " | ".join(str(c.get(t, 0)) for t in types) + " |")
@@ -335,7 +338,7 @@ def sec_j(G, aggs, raws, evs, levels=(49152, 57344)) -> List[str]:
     L = ["### J. W1 天花板路径（ceiling = context_limit − reserve，行内字段现算）\n"]
     L.append("| 组 | level | runs | soft/hard/ceiling | ceiling_fold（第 1 次生成前 / 之后） | fold before 区间 | fold after 区间 | fold 压缩条数中位 | context_hard（第 1 次 / 之后） | context_guard 终止 | 峰值字段 > 实发峰值 的 run | 实发 ≥ ceiling 的生成 | 实发最大 | recall |")
     L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
-    for name in TURN:
+    for name in TURN + EXTRA_ORCH:
         recs = by_level(G[name]["records"])
         ev = evs.get(name)
         for lv in levels:
@@ -366,11 +369,11 @@ def sec_j(G, aggs, raws, evs, levels=(49152, 57344)) -> List[str]:
                      f"{sum(1 for r in rs if r.get('aborted_reason') == 'context_guard')} | {pre} | {over} | "
                      f"{n0(max([sent_peak(r) or 0 for r in rs]))} | {pc(rec)} |")
     L.append("")
-    L.append("fold 之后模型做了什么（按 run 计；rag_search / file_extract 是生产工具名：rag_search 在 harness 里是桩、恒回 Unknown tool；"
+    L.append(f"fold 之后模型做了什么（按 run 计；rag_search / file_extract 是生产工具名：{RAG_NOTE}；"
              "file_extract 只回读 `spill:` 句柄；System Error = 编排层拦截回执）：\n")
     L.append("| 组 | level | runs | 调 rag_search 的 run | 收到 System Error 的 run（其中 aborted） | System Error 回执合计 | 调 file_extract 的 run | spill_readbacks 合计 | aborted 合计 |")
     L.append("|---|---|---|---|---|---|---|---|---|")
-    for name in TURN:
+    for name in TURN + EXTRA_ORCH:
         recs = by_level(G[name]["records"])
         for lv in levels:
             rs = recs.get(lv, [])
@@ -386,14 +389,14 @@ def sec_j(G, aggs, raws, evs, levels=(49152, 57344)) -> List[str]:
                      f"{sum(1 for r in rs if (r.get('score') or {}).get('aborted'))} |")
     L.append("")
     # 量测 vs 引擎计数
-    for name in TURN + [HIST]:
+    for name in TURN + EXTRA_ORCH + ([HIST] if HIST in G else []):
         gs = [g for r in G[name]["records"] for g in r.get("gens") or []]
         dd = [g["prompt_tokens"] - g["measure_tokens"] for g in gs
               if g.get("prompt_tokens") is not None and g.get("measure_tokens") is not None]
         src = Counter(str(g.get("measure_source")) for g in gs)
         L.append(f"- {name}：gens {len(gs)} 次，有量值 {len(dd)} 次，引擎 prompt_tokens − 量值 ≠ 0 的 {sum(1 for d in dd if d)} 次"
                  f"（最大 |差| {max([abs(d) for d in dd] or [0])}）；measure_source {dict(sorted(src.items()))}")
-    for name in TURN:
+    for name in TURN + EXTRA_ORCH:
         errs = [r for r in raws[name] if "error" in r]
         for r in errs:
             L.append(f"- {name} error 行：{r['level']} {r['item_id']} r{r['rep']}，wall {r.get('wall_s')} s，出错前已成功生成 {len(r.get('gens') or [])} 次、"
@@ -404,10 +407,10 @@ def sec_j(G, aggs, raws, evs, levels=(49152, 57344)) -> List[str]:
 
 # ---------------------------------------------------------------- K：W2 有效性
 def sec_k(G, evs) -> List[str]:
-    L = ["### K. W2 有效性（orch-turn-w1 对 orch-turn-w1w2）\n"]
+    L = ["### K. W2 有效性（orch-turn-w1 对 orch-turn-w1w2" + "".join(f" / {x}" for x in EXTRA_ORCH) + "）\n"]
     L.append("| 组 | level | complete_step 次数 | 有 ≥1 次 complete_step 的 run | update_plan 次数 | step_compaction 事件（按档位） | freed_chars 合计 | turn_metrics.step_compactions 合计 | spill_readbacks 合计 |")
     L.append("|---|---|---|---|---|---|---|---|---|")
-    for name in TURN[1:]:
+    for name in TURN[1:] + EXTRA_ORCH:
         for lv, rs in by_level(G[name]["records"]).items():
             sc = [(e.get("detail") or {}) for r in rs for e in seg(r, evs.get(name)) if e["type"] == "step_compaction"]
             byl = Counter(str(d.get("level")) for d in sc)
@@ -460,7 +463,7 @@ def sec_m(G, aggs, raws) -> List[str]:
 
 
 # ---------------------------------------------------------------- N：口径核对
-def sec_n(G, raws, evs, data: Path) -> List[str]:
+def sec_n(G, raws, evs, data: Path, logs=("run_colab.log",)) -> List[str]:
     L = ["### N. 口径与记账核对（自动检查；非零 = 值得看）\n"]
     L.append("| 组 | 峰值字段≠实发峰值 | full_renders 非 int | full_renders≠turn_metrics | full_renders>生成次数 | Σfull_renders÷Σ生成 | 事件计数≠切片 | 切片 session 不符 | 事件行未被任何 run 覆盖 | fill.prompt_tokens_actual≠首生成 | prefix_base 取值 |")
     L.append("|---|---|---|---|---|---|---|---|---|---|---|")
@@ -494,17 +497,381 @@ def sec_n(G, raws, evs, data: Path) -> List[str]:
                  f"{'—' if ev is None else cnt_bad} | {'—' if ev is None else sess_bad} | {'—' if unc is None else unc} | {fa} | {pb} |")
     L.append("")
     # fold 后 fill.prompt_tokens_actual 被首生成（压缩后）回填
-    for name in TURN[1:]:
+    for name in TURN[1:] + EXTRA_ORCH:
         rs = [r for r in G[name]["records"] if any(e["type"] == "context_guard_fold" and (e.get("detail") or {}).get("iteration") == 1
                                                      for e in seg(r, evs.get(name)))]
         if rs:
             L.append(f"- {name}：第 1 次生成前 fold 的 {len(rs)} 个 run，fill.prompt_tokens_est 中位 {n0(med(r['fill'].get('prompt_tokens_est') for r in rs))}，"
                      f"fill.prompt_tokens_actual 中位 {n0(med(r['fill'].get('prompt_tokens_actual') for r in rs))}（= 压缩后首生成，不是填充实际量）")
-    el = arm_elapsed(data / "run_colab.log")
-    if el:
-        L.append("- run_colab.log 臂起止：" + "；".join(f"{k} {v}" for k, v in el.items()))
+    for lg in logs:
+        el = arm_elapsed(data / lg)
+        if el:
+            L.append(f"- {lg} 臂起止：" + "；".join(f"{k} {v}" for k, v in el.items()))
     L.append("")
     return L
+
+
+# ---------------------------------------------------------------- 第二批（b2）：O–T 节
+# 只在 --data 是第二批布局（有 orch-turn-catalog、无 direct-mock）时渲染；11-02 批不走这里。
+GEMMA = ["gemma-direct-mock", "gemma-direct-catalog"]
+B2_ORCH = ["orch-turn-none", "orch-turn-w1", "orch-turn-w1w2", "orch-turn-catalog"]
+TRACE_DIRS = ["trace-new-900", "trace-legacy-640", "trace-new-640"]
+PREV_TAG = "@am"            # --prev 批（11-02 上午）的组名后缀，避免与本批同名臂撞名
+DELIVERY_MARK = "delivery blocked"
+B2_EXTRA_COLS = ["stub_served_total", "stub_unknown_total", "feed_unknown_tool", "stub_failed_total",
+                 "tool_calls_total", "system_errors_total", "delivery_blocked", "retrieval_incomplete_runs",
+                 "iter_exhausted_runs", "context_guard_aborts", "ceiling_folds", "ceiling_compacted",
+                 "ceiling_spilled", "sent_over_ceiling_gens", "spill_files", "spill_readbacks"]
+
+
+def b2_layout(data: Path) -> bool:
+    return (data / "orch-turn-catalog").is_dir() and not (data / "direct-mock").is_dir()
+
+
+def stub_row(r) -> Dict[str, Any]:
+    """行级 W-K2 桩计数（stub_served {名: 次}、stub_unknown、stub_failed；旧行缺键 = None）
+    + 独立复数：feed 里 `Unknown tool` 回执数（与 stub_unknown 同源规则，不同实现）。"""
+    tot, unk = stub_calls(r)
+    ss = r.get("stub_served")
+    return {"has": isinstance(ss, dict), "served": dict(ss or {}), "served_n": sum((ss or {}).values()),
+            "unknown": r.get("stub_unknown"), "failed": r.get("stub_failed"),
+            "calls": tot, "feed_unknown": unk}
+
+
+def pushback_row(r) -> Dict[str, int]:
+    """检索推回链：feed 里 `delivery blocked` 回执数、turn_metrics.retrieval_incomplete；回合上限耗尽；context_guard 中止。"""
+    db = sum(str(f.get("content", "")).count(DELIVERY_MARK) for t in r.get("turns") or [] for f in t.get("feed") or [])
+    ar = r.get("aborted_reason") or ""
+    return {"delivery_blocked": db,
+            "retrieval_incomplete": 1 if (r.get("turn_metrics") or {}).get("retrieval_incomplete") else 0,
+            "iter_exhausted": 1 if "回合上限" in ar else 0,
+            "context_guard": 1 if ar == "context_guard" else 0}
+
+
+def spill_files(r) -> Optional[int]:
+    """会话目录 sessions/<session>/spill/ 下的文件数（session_dir 是 Colab 上的绝对路径，按末段名在本地 --data 里找）。"""
+    d = r.get("_local_session")
+    if d is None:
+        return None
+    sp = Path(d) / "spill"
+    return sum(1 for x in sp.iterdir() if x.is_file()) if sp.is_dir() else 0
+
+
+def w1b_row(r, ev) -> Dict[str, Any]:
+    folds = [(e.get("detail") or {}) for e in seg(r, ev) if e["type"] == "context_guard_fold"]
+    aborts = [(e.get("detail") or {}) for e in seg(r, ev)
+              if e["type"] == "turn_abort" and (e.get("detail") or {}).get("reason") == "context_guard"]
+    ce = ceiling_of(r)
+    lim = r.get("context_limit")
+    pts = [g.get("prompt_tokens") for g in r.get("gens") or [] if g.get("prompt_tokens") is not None]
+    flags = r.get("turn_guard_flags")
+    return {"folds": len(folds), "fold_spilled_runs": 1 if any((f.get("spilled") or 0) > 0 for f in folds) else 0,
+            "compacted": sum(f.get("compacted") or 0 for f in folds), "spilled": sum(f.get("spilled") or 0 for f in folds),
+            "aborts": len(aborts), "abort_compacted": sum(a.get("compacted") or 0 for a in aborts),
+            "abort_spilled": sum(a.get("spilled") or 0 for a in aborts),
+            "abort_pt": [a.get("prompt_tokens") for a in aborts],
+            "over_ceiling": sum(1 for x in pts if ce and x >= ce), "over_limit": sum(1 for x in pts if lim and x > lim),
+            "hard": sum(1 for e in seg(r, ev) if e["type"] == "context_hard"),
+            "flags": flags if isinstance(flags, dict) else None, "has_flags_key": "turn_guard_flags" in r,
+            "sent_max": max(pts) if pts else None}
+
+
+def _attach_sessions(G, data: Path, names) -> None:
+    for n in names:
+        for r in G[n]["records"]:
+            sd = data / n / "sessions" / sess_name(r)
+            r["_local_session"] = sd if sd.is_dir() else None
+
+
+def sec_o(G, aggs, names) -> List[str]:
+    L = ["### O. W-K2 可用桩与推回链（编排器臂 × level；`@am` = 11-02 上午批同名臂，无桩字段记 —）\n",
+         "口径：桩调用 = 行字段 `stub_served` 各名求和；`stub_unknown` = 行字段（绊线，应恒 0）；feed Unknown = 本脚本按 turns[*].feed "
+         "逐位重数回执含 `Unknown tool` 的调用（独立复核绊线）；delivery blocked = feed 回执含该串的次数；检索未完成 = "
+         "`turn_metrics.retrieval_incomplete` 为真的 run；迭代耗尽 = aborted_reason 含「回合上限」；超限中止 = aborted_reason == context_guard。\n",
+         "| 组 | level | n | 成功率 | 工具调用 | 桩调用 | stub_unknown | feed Unknown | stub_failed | system_errors | delivery blocked | 检索未完成 run | 迭代耗尽 run | 超限中止 run |",
+         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for name in names:
+        for lv, rs in by_level(G[name]["records"]).items():
+            st = [stub_row(r) for r in rs]
+            pb = [pushback_row(r) for r in rs]
+            has = all(x["has"] for x in st)
+            L.append(f"| {name} | {lv} | {len(rs)} | {pc(aggs[name][lv]['success_rate'])} | {sum(x['calls'] for x in st)} | "
+                     f"{sum(x['served_n'] for x in st) if has else '—'} | {sum(x['unknown'] or 0 for x in st) if has else '—'} | "
+                     f"{sum(x['feed_unknown'] for x in st)} | {sum(x['failed'] or 0 for x in st) if has else '—'} | "
+                     f"{sum(r.get('system_errors') or 0 for r in rs)} | {sum(x['delivery_blocked'] for x in pb)} | "
+                     f"{sum(x['retrieval_incomplete'] for x in pb)} | {sum(x['iter_exhausted'] for x in pb)} | {sum(x['context_guard'] for x in pb)} |")
+    L.append("")
+    L.append("桩按工具名（全档合计，降序；括号 = 占该臂工具调用的比例）：\n")
+    for name in names:
+        rs = G[name]["records"]
+        st = [stub_row(r) for r in rs]
+        if not all(x["has"] for x in st):
+            continue
+        c = Counter()
+        for x in st:
+            c.update(x["served"])
+        tot = sum(x["calls"] for x in st)
+        L.append(f"- {name}：桩 {sum(c.values())}/{tot} 调用（{pc(ratio(sum(c.values()), tot))}）："
+                 + "、".join(f"{k} {v}" for k, v in c.most_common()) +
+                 f"；stub_unknown 合计 {sum(x['unknown'] or 0 for x in st)}（非 0 行 {sum(1 for x in st if x['unknown'])}）；"
+                 f"stub_failed 合计 {sum(x['failed'] or 0 for x in st)}（非 0 行 {sum(1 for x in st if x['failed'])}）")
+    L.append("")
+    base = names[0]
+    fails = [r for r in G[base]["records"] if int(r["level"]) == 0 and not (r.get("score") or {}).get("pass")]
+    L.append(f"{base} L0 失败 run 明细（{len(fails)}/{sum(1 for r in G[base]['records'] if int(r['level']) == 0)}；why = 评分器原文，"
+             "步数 = score.steps，元工具 = meta_calls 合计，桩 = stub_served 合计）：\n")
+    for r in sorted(fails, key=lambda x: (x["item_id"], int(x["rep"]))):
+        sc = r.get("score") or {}
+        L.append(f"- {r['item_id']} r{r['rep']}：{'；'.join(str(w) for w in sc.get('why') or []) or '—'}（步数 {sc.get('steps')}，"
+                 f"max_total_iterations {r.get('max_total_iterations')}，元工具 {sum((r.get('meta_calls') or {}).values())}，"
+                 f"桩 {stub_row(r)['served_n']}，aborted_reason「{r.get('aborted_reason') or ''}」）")
+    L.append("")
+    return L
+
+
+def sec_p(G, aggs, evs, names, prev_names) -> List[str]:
+    L = ["### P. W1b：ceiling 压缩带回读句柄（事件 = guard_events_lines 切片；spill 文件 = 本地 sessions/<session>/spill/ 计数）\n",
+         "spill 文件含 W2 步骤边界压缩（spill_full）落的盘，不只 ceiling；事件里的 spilled 才是 ceiling 压缩给出句柄的条数。\n",
+         "| 组 | level | n | ceiling_fold 事件 | Σcompacted | Σspilled | fold 带 spill 的 run | context_hard 事件 | 超限中止（turn_abort context_guard）| 中止时量值 | spill 文件 | spill_readbacks（run 数） | 实发 > ceiling 的生成 | 实发 > context_limit 的生成 | 实发最大 | recall (分母) |",
+         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    flag_rows = flag_key = 0
+    for name in names:
+        ev = evs.get(name)
+        for lv, rs in by_level(G[name]["records"]).items():
+            w = [w1b_row(r, ev) for r in rs]
+            flag_key += sum(1 for x in w if x["has_flags_key"])
+            flag_rows += len(w)
+            sf = [spill_files(r) for r in rs]
+            rb = [r.get("spill_readbacks") or 0 for r in rs]
+            apt = [x for y in w for x in y["abort_pt"]]
+            a = aggs[name][lv]
+            L.append(f"| {name} | {lv} | {len(rs)} | {sum(x['folds'] for x in w)} | {sum(x['compacted'] for x in w)} | "
+                     f"{sum(x['spilled'] for x in w)} | {sum(x['fold_spilled_runs'] for x in w)} | {sum(x['hard'] for x in w)} | "
+                     f"{sum(x['aborts'] for x in w)}（compacted {sum(x['abort_compacted'] for x in w)} / spilled {sum(x['abort_spilled'] for x in w)}） | "
+                     f"{','.join(map(str, apt)) or '—'} | {'—' if any(x is None for x in sf) else sum(sf)} | "
+                     f"{sum(rb)}（{sum(1 for x in rb if x)}） | {sum(x['over_ceiling'] for x in w)} | {sum(x['over_limit'] for x in w)} | "
+                     f"{n0(max([x['sent_max'] or 0 for x in w]))} | {pc(a['recall_rate'])} ({a['recall_n']}) |")
+    L.append("")
+    L.append(f"- 行级 `turn_guard_flags` 键：{flag_key}/{flag_rows} 行带（不带时 ceiling_compacted / ceiling_spilled 只能从事件读，即上表）。")
+    for name in prev_names:
+        if name in aggs and 57344 in aggs[name]:
+            a = aggs[name][57344]
+            L.append(f"- 对照 {name} L57344：recall {pc(a['recall_rate'])} ({a['recall_n']})，成功率 {pc(a['success_rate'])}")
+    L.append("")
+    return L
+
+
+def _tool_shape(rs) -> Tuple[Counter, List[int]]:
+    c = Counter()
+    per = []
+    for r in rs:
+        n = 0
+        for t in r.get("turns") or []:
+            for x in t.get("tool_calls") or []:
+                c[str(x.get("name"))] += 1
+                n += 1
+        per.append(n)
+    return c, per
+
+
+def sec_q(G, aggs, evs, a_name="orch-turn-w1w2", b_name="orch-turn-catalog") -> List[str]:
+    L = [f"### Q. catalog 对照臂：{b_name}（catalog 前缀）对 {a_name}（prod 前缀）——两臂管理开关相同（guard on + step_compaction on），只差前缀档\n",
+         "| 组 | level | 成功率 | Pass^2 | prefix_base | 首prompt中位 | 实发峰值中位 | 生成次数中位 | 每 run 工具调用 中位/均 | 桩调用 | stub_failed | tool_error 事件 | update_plan/complete_step | 迭代耗尽 | wall中位 |",
+         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for name in (a_name, b_name):
+        for lv, rs in by_level(G[name]["records"]).items():
+            a = aggs[name][lv]
+            _c, per = _tool_shape(rs)
+            st = [stub_row(r) for r in rs]
+            mc = Counter()
+            for r in rs:
+                mc.update(r.get("meta_calls") or {})
+            te = sum(1 for r in rs for e in seg(r, evs.get(name)) if e["type"] == "tool_error")
+            L.append(f"| {name} | {lv} | {pc(a['success_rate'])} | {pc(a['pass_hat_2'])} | "
+                     f"{','.join(map(str, sorted({r.get('prefix_base_tokens') for r in rs})))} | {n0(a['prompt_tokens_median'])} | "
+                     f"{n0(med(sent_peak(r) for r in rs))} | {n0(a['n_gens_median'])} | {n0(med(per))}/{A.num(sum(per) / len(per) if per else None, 1)} | "
+                     f"{sum(x['served_n'] for x in st)} | {sum(x['failed'] or 0 for x in st)} | {te} | "
+                     f"{mc.get('update_plan', 0)}/{mc.get('complete_step', 0)} | {sum(pushback_row(r)['iter_exhausted'] for r in rs)} | {A.num(a['wall_median'])} |")
+    L.append("")
+    common = sorted(set(aggs[a_name]) & set(aggs[b_name]))
+    ps = A.pooled(aggs[a_name], aggs[b_name], common, common, "success_rate")
+    pp = A.pooled(aggs[a_name], aggs[b_name], common, common, "pass_hat_2")
+    L.append(f"- {b_name} − {a_name}（{len(common)} 档合并按题聚类）：成功率 {A.fmt_pair(ps)}（升/降 {ps['up']}/{ps['down']} p={A.num(ps['p'], 2)}），"
+             f"Pass^2 {A.fmt_pair(pp)}（升/降 {pp['up']}/{pp['down']} p={A.num(pp['p'], 2)}）")
+    for name in (a_name, b_name):
+        c, per = _tool_shape(G[name]["records"])
+        tot = sum(c.values())
+        L.append(f"- {name} 工具调用形态（全档 {tot} 次，前 10）：" + "、".join(f"{k} {v}（{pc(v / tot)}）" for k, v in c.most_common(10)))
+    for name in (a_name, b_name):
+        se = Counter()
+        for r in G[name]["records"]:
+            for t in r.get("turns") or []:
+                for x, f in zip(t.get("tool_calls") or [], t.get("feed") or []):
+                    s_ = str(f.get("content", ""))
+                    if s_.startswith("System Error"):
+                        se[(str(x.get("name")), "缺必填参数" if "missing required argument" in s_ else "其他")] += 1
+        L.append(f"- {name} `System Error` 回执（工具, 类）合计 {sum(se.values())}：" + "、".join(f"{k[0]}/{k[1]} {v}" for k, v in se.most_common()))
+    L.append("")
+    return L
+
+
+def sec_r(G, aggs, names, pairs) -> List[str]:
+    L = ["### R. Gemma 4 31B 直调两臂与参照（各组模型 / 采样 / 回放口径见 A 节；成功率单位 run，Pass^2 单位 题）\n",
+         "| 组 | 模型 | 采样 | 回放 | level | n | 成功率 | Pass^2 | recall | aborted | env错均 | 复读命中 | 连贯 | 首prompt中位 | 实发峰值中位 | 轮内增长中位 | prefill秒中位 | wall中位 | 未知工具调用/总调用 |",
+         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for name in names:
+        if name not in G:
+            continue
+        g = G[name]
+        recs = by_level(g["records"])
+        rp = sorted({f"{r.get('thinking_replay_mode') or 'all(缺键)'}" + (f"/{r.get('thinking_replay_k')}" if r.get('thinking_replay_k') else "")
+                     for r in g["records"]})
+        for lv, a in aggs[name].items():
+            rs = recs.get(lv, [])
+            tot = sum(stub_calls(r)[0] for r in rs)
+            unk = sum(stub_calls(r)[1] for r in rs)
+            L.append(f"| {name} | {A.short_model(g)} | {A.sampling_label(g)} | {','.join(rp)} | {lv} | {a['n']} | {pc(a['success_rate'])} | "
+                     f"{pc(a['pass_hat_2'])} | {pc(a['recall_rate'])} | {a['aborted']} | {A.num(a['env_errors_mean'], 2)} | "
+                     f"{a['repetition_hits']} | {pc(a['coherent_rate'])} | {n0(a['prompt_tokens_median'])} | {n0(med(sent_peak(r) for r in rs))} | "
+                     f"{n0(med((sent_peak(r) or 0) - (first_pt(r) or 0) for r in rs))} | {A.num(a['prefill_s_median'], 2)} | {A.num(a['wall_median'])} | "
+                     f"{unk}/{tot} ({pc(ratio(unk, tot))}) |")
+    L.append("")
+    L.append("合并对照（b − a，共同档、按题聚类 bootstrap；正 = b 更好）：\n")
+    for a_name, b_name in pairs:
+        if a_name not in aggs or b_name not in aggs:
+            continue
+        common = sorted(set(aggs[a_name]) & set(aggs[b_name]))
+        ps = A.pooled(aggs[a_name], aggs[b_name], common, common, "success_rate")
+        pp = A.pooled(aggs[a_name], aggs[b_name], common, common, "pass_hat_2")
+        L.append(f"- {b_name} − {a_name}（共同档 {common}）：成功率 {A.fmt_pair(ps)}（升/降 {ps['up']}/{ps['down']} p={A.num(ps['p'], 2)}），"
+                 f"Pass^2 {A.fmt_pair(pp)}（升/降 {pp['up']}/{pp['down']} p={A.num(pp['p'], 2)}），{ps['n_items']} 题；"
+                 f"回忆 {pc(A._pool_recall(aggs[a_name], common))} → {pc(A._pool_recall(aggs[b_name], common))}")
+    L.append("")
+    return L
+
+
+def _trace_rows(d: Path) -> List[Dict[str, Any]]:
+    return [json.loads(x) for x in (d / "transcripts.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+
+
+def sec_t(data: Path) -> List[str]:
+    from summary_trace import fold_forensics as FF
+    from summary_trace import summarize_trace as ST
+    dirs = [data / n for n in TRACE_DIRS if (data / n / "transcripts.jsonl").is_file()]
+    if not dirs:
+        return []
+    L = ["### T. 成对续跑（summary_trace，D4：模板 new / legacy × 摘要上限 900 / 640；`*.partial-*` 半截目录不计）\n"]
+    L.append("| 目录 | template / task_state / max_tokens / drop_task | 对 ok / error | 支 | pass | cont_status 分布 | repeated 均 | blocked 均（dup_blocked / system_errors） | cont_redundant_calls 均 | env_errors 均 | cont_gens 中位 | 首 prompt 中位 | 摘要字符中位 | 摘要 token 中位 | pair_wall_s 中位 |")
+    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    ok_keys: Dict[str, set] = {}
+    for d in dirs:
+        rows = _trace_rows(d)
+        meta = json.loads((d / "meta.json").read_text(encoding="utf-8")) if (d / "meta.json").is_file() else {}
+        err = [r for r in rows if "error" in r]
+        good = [r for r in rows if "error" not in r]
+        ok_keys[d.name] = {(r["item"], int(r["rep"])) for r in good}
+        cfg = f"{meta.get('template')} / {meta.get('task_state')} / {meta.get('summary_max_tokens')} / {meta.get('drop_task')}"
+        for br in ("pre", "post"):
+            rs = [r for r in good if r.get("branch") == br]
+            if not rs:
+                continue
+            cs = Counter(str(r.get("cont_status")) for r in rs)
+
+            def mean(k):
+                xs = [r.get(k) for r in rs if isinstance(r.get(k), (int, float))]
+                return sum(xs) / len(xs) if xs else None
+            L.append(f"| {d.name} | {cfg} | {len(ok_keys[d.name])} / {len(err)} | {br} | {sum(1 for r in rs if r.get('score'))}/{len(rs)} | "
+                     + "、".join(f"{k} {v}" for k, v in sorted(cs.items())) + f" | {A.num(mean('repeated'), 2)} | "
+                     f"{A.num(mean('blocked'), 2)}（{sum(r.get('dup_blocked') or 0 for r in rs)} / {sum(r.get('system_errors') or 0 for r in rs)}） | "
+                     f"{A.num(mean('cont_redundant_calls'), 2)} | {A.num(mean('env_errors'), 2)} | {n0(med(r.get('cont_gens') for r in rs))} | "
+                     f"{n0(med(r.get('first_prompt_tokens') for r in rs))} | {n0(med(r.get('summary_chars') for r in rs)) if br == 'post' else '—'} | "
+                     f"{n0(med(r.get('summary_tokens_est') for r in rs)) if br == 'post' else '—'} | {A.num(med(r.get('pair_wall_s') for r in rs))} |")
+    L.append("")
+    if "trace-legacy-640" in ok_keys:
+        keep = ok_keys["trace-legacy-640"]
+        L.append(f"限 trace-legacy-640 成功的 {len(keep)} 对 (题, rep) 的同口径子集（new 两步同题同 rep；题与 rep 同 seed 但 turn 1 是否逐字相同未核）：\n")
+        L.append("| 目录 | 对 | pass PRE / POST | repeated 均 PRE / POST | blocked 均 PRE / POST | cont_status POST |")
+        L.append("|---|---|---|---|---|---|")
+        for d in dirs:
+            rows = [r for r in _trace_rows(d) if "error" not in r and (r["item"], int(r["rep"])) in keep]
+            pre = [r for r in rows if r["branch"] == "pre"]
+            post = [r for r in rows if r["branch"] == "post"]
+
+            def mean2(rs, k):
+                return A.num(sum(r.get(k) or 0 for r in rs) / len(rs), 2) if rs else "—"
+            L.append(f"| {d.name} | {len(post)} | {sum(1 for r in pre if r.get('score'))} / {sum(1 for r in post if r.get('score'))} | "
+                     f"{mean2(pre, 'repeated')} / {mean2(post, 'repeated')} | {mean2(pre, 'blocked')} / {mean2(post, 'blocked')} | "
+                     + "、".join(f"{k} {v}" for k, v in sorted(Counter(str(r.get('cont_status')) for r in post).items())) + " |")
+        L.append("")
+    L.append("按题（成功对数 / 3 rep；error = POST 折叠失败）：\n")
+    items = sorted({r["item"] for d in dirs for r in _trace_rows(d)})
+    L.append("| 目录 | " + " | ".join(i[3:] for i in items) + " |")
+    L.append("|---|" + "---|" * len(items))
+    for d in dirs:
+        rows = _trace_rows(d)
+        cells = []
+        for it in items:
+            ok = len({int(r["rep"]) for r in rows if r["item"] == it and "error" not in r})
+            er = sum(1 for r in rows if r["item"] == it and "error" in r)
+            cells.append(f"{ok}" + (f"（err {er}）" if er else ""))
+        L.append(f"| {d.name} | " + " | ".join(cells) + " |")
+    L.append("")
+    L.append("summarize_trace.report（原样，seed 0；重复功 = repeated + blocked）：\n")
+    L.append(ST.report(dirs))
+    L.append("")
+    L.append("POST 折叠失败取证（`benchmarks/summary_trace/fold_forensics.py`；摘要器原始输出不落盘，下表是间接证据）：\n")
+    L.append(FF.render(dirs))
+    return L
+
+
+def write_csv_b2(path: Path, groups, aggs, extra: Dict[Tuple[str, int], Dict[str, Any]]) -> None:
+    import csv
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=A.CSV_COLS + B2_EXTRA_COLS)
+        w.writeheader()
+        for g in groups:
+            for lv, a in aggs[g["name"]].items():
+                row = {k: a.get(k) for k in A.CSV_COLS if k in a}
+                row.update({"group": g["name"], "model": A.short_model(g), "sampling": A.sampling_label(g),
+                            "mtp_by_dirname": g["mtp"], "level": lv,
+                            "fail_primary": json.dumps(a["fail_primary"], ensure_ascii=False, sort_keys=True),
+                            "incoherent": json.dumps(a["incoherent"], ensure_ascii=False, sort_keys=True)})
+                row.update(extra.get((g["name"], lv), {}))
+                for k, v in row.items():
+                    if isinstance(v, float):
+                        row[k] = round(v, 4)
+                w.writerow(row)
+
+
+def b2_csv_extra(G, evs, names) -> Dict[Tuple[str, int], Dict[str, Any]]:
+    out: Dict[Tuple[str, int], Dict[str, Any]] = {}
+    for name in names:
+        ev = evs.get(name)
+        for lv, rs in by_level(G[name]["records"]).items():
+            st = [stub_row(r) for r in rs]
+            pb = [pushback_row(r) for r in rs]
+            w = [w1b_row(r, ev) for r in rs] if ev is not None else []
+            has = bool(st) and all(x["has"] for x in st)
+            sf = [spill_files(r) for r in rs]
+            out[(name, lv)] = {
+                "stub_served_total": sum(x["served_n"] for x in st) if has else None,
+                "stub_unknown_total": sum(x["unknown"] or 0 for x in st) if has else None,
+                "feed_unknown_tool": sum(x["feed_unknown"] for x in st),
+                "stub_failed_total": sum(x["failed"] or 0 for x in st) if has else None,
+                "tool_calls_total": sum(x["calls"] for x in st),
+                "system_errors_total": sum(r.get("system_errors") or 0 for r in rs),
+                "delivery_blocked": sum(x["delivery_blocked"] for x in pb),
+                "retrieval_incomplete_runs": sum(x["retrieval_incomplete"] for x in pb),
+                "iter_exhausted_runs": sum(x["iter_exhausted"] for x in pb),
+                "context_guard_aborts": sum(x["context_guard"] for x in pb),
+                "ceiling_folds": sum(x["folds"] for x in w) if w else None,
+                "ceiling_compacted": sum(x["compacted"] for x in w) if w else None,
+                "ceiling_spilled": sum(x["spilled"] for x in w) if w else None,
+                "sent_over_ceiling_gens": sum(x["over_ceiling"] for x in w) if w else None,
+                "spill_files": None if (not sf or any(x is None for x in sf)) else sum(sf),
+                "spill_readbacks": sum(r.get("spill_readbacks") or 0 for r in rs) if ev is not None else None,
+            }
+    return out
 
 
 # ---------------------------------------------------------------- main
@@ -515,8 +882,14 @@ def main(argv=None) -> int:
     ap.add_argument("--out-md", default=None)
     ap.add_argument("--out-csv", default=None)
     ap.add_argument("--thinking-k", type=int, default=2)
+    ap.add_argument("--prev", default=None,
+                    help="第二批布局专用：上一批（11-02 上午）目录，其编排器三臂与直调 mock/catalog 以 @am 后缀并入对照")
+    ap.add_argument("--extra-ref", action="append", default=[],
+                    help="第二批布局专用：附加参照组目录（可重复，如 10-31 的 gemma-current / gemma31b-w4a16-card）")
     a = ap.parse_args(argv)
     data, ref = Path(a.data), Path(a.ref)
+    if b2_layout(data):
+        return main_b2(a, data, ref)
     ref_key = os.path.basename(os.path.normpath(a.ref))
     if ref_key in ARMS:
         raise SystemExit(f"❌ --ref 目录名「{ref_key}」与 --data 下的臂名冲突（{ARMS}），"
@@ -576,6 +949,108 @@ def main(argv=None) -> int:
     else:
         print(auto)
     return 0
+
+
+def main_b2(a, data: Path, ref: Path) -> int:
+    """第二批布局：编排器四臂（none / w1 / w1w2 / catalog）+ Gemma 直调两臂 + trace 三步；
+    A–F 原样 analyze.render（自动对照关掉、只用下面 pair 指定的），然后 I / J / K / M / N（与 11-02 批同一套，
+    编排器表并入 catalog 臂）与 O–T（本批新增）。"""
+    global REF, ARMS, EXTRA_ORCH
+    ref_key = os.path.basename(os.path.normpath(a.ref))
+    arms = [n for n in B2_ORCH + GEMMA if (data / n / "transcripts.jsonl").is_file()]
+    missing = [n for n in B2_ORCH + GEMMA if n not in arms]
+    if missing:
+        raise SystemExit(f"❌ 第二批布局缺臂：{missing}")
+    prev = Path(a.prev) if a.prev else None
+    prev_arm_names = TURN + ["direct-mock", "direct-catalog"]
+    prev_arms = [n for n in prev_arm_names if prev and (prev / n / "transcripts.jsonl").is_file()]
+    if a.prev and not prev_arms:
+        print(f"❌ --prev {a.prev} 下没找到任何预期臂目录（{prev_arm_names}）；路径不存在或没有 transcripts.jsonl",
+              file=sys.stderr)
+        raise SystemExit(2)
+    extra = [Path(x) for x in a.extra_ref]
+    names_taken = set(arms) | {n + PREV_TAG for n in prev_arms}
+    for k in [ref_key] + [x.name for x in extra]:
+        if k in names_taken:
+            print(f"❌ 参照目录名「{k}」与臂名/已检查过的参照目录名冲突", file=sys.stderr)
+            raise SystemExit(2)
+        names_taken.add(k)
+    global RAG_NOTE
+    saved = (REF, ARMS, EXTRA_ORCH, A.comparisons, RAG_NOTE)
+    REF, ARMS, EXTRA_ORCH = ref_key, arms, ["orch-turn-catalog"]
+    RAG_NOTE = "rag_search 在本批是 W-K2 可用桩（回生产空结果形态）"
+    try:
+        args = Namespace(metric="pass_hat_2", drop=0.20, recover=0.10, baseline_levels=[0, 4096], high_from=16384,
+                         max_model_len=65536, gen_reserve=12288, prod_prefix=None, pair=[])
+        A.KEEP = "latest"
+        A.th_global = dict(COHERENT_THRESHOLDS)
+        A.wall_global = {x for x in A.DEFAULT_WALL_INVALID.split(",") if x}
+        A.comparisons = lambda groups: []      # 本批组多、跨模型自动配对会爆表：只用 pair 指定的
+        dirs = [ref] + [data / n for n in arms]
+        groups = [A.load_group(d) for d in dirs]
+        for d in extra:
+            groups.append(A.load_group(d))
+        for n in prev_arms:
+            g = A.load_group(prev / n)
+            g["name"] = n + PREV_TAG
+            groups.append(g)
+        G = {g["name"]: g for g in groups}
+        raws = {d.name: raw_rows(d) for d in dirs}
+        raws.update({n + PREV_TAG: raw_rows(prev / n) for n in prev_arms})
+        evs = {d.name: load_events(d) for d in dirs}
+        evs.update({n + PREV_TAG: load_events(prev / n) for n in prev_arms})
+        _attach_sessions(G, data, B2_ORCH)
+        pb = sorted({r.get("prefix_base_tokens") for r in G["orch-turn-none"]["records"]} - {None})
+        args.prod_prefix = max(pb) if pb else None
+        warn = None if len(pb) == 1 else f"orch-turn-none 的 prefix_base_tokens 不唯一：{pb or '全缺'}，取较大值"
+        P = PREV_TAG
+        args.pair = [f"orch-turn-none{P}:orch-turn-none", f"orch-turn-w1{P}:orch-turn-w1", f"orch-turn-w1w2{P}:orch-turn-w1w2",
+                     "orch-turn-none:orch-turn-w1", "orch-turn-none:orch-turn-w1w2", "orch-turn-w1:orch-turn-w1w2",
+                     "orch-turn-w1w2:orch-turn-catalog", f"direct-mock{P}:gemma-direct-mock",
+                     f"direct-catalog{P}:gemma-direct-catalog", "gemma-direct-mock:gemma-direct-catalog"]
+        args.pair += [f"{x.name}:gemma-direct-mock" for x in extra]
+        aggs = {g["name"]: A.aggregate(g, A.th_global, A.wall_global) for g in groups}
+        parts = [A.render(groups, aggs, args), ""]
+        parts += sec_i(G, aggs, raws, evs, args)
+        parts += sec_j(G, aggs, raws, evs)
+        parts += sec_k(G, evs)
+        parts += sec_m(G, aggs, raws)
+        parts += sec_n(G, raws, evs, data, logs=("run_colab.lease1.log", "run_colab.log"))
+        orch_all = B2_ORCH + [n + P for n in TURN if n + P in G]
+        parts += sec_o(G, aggs, orch_all)
+        parts += sec_p(G, aggs, evs, B2_ORCH, [n + P for n in TURN if n + P in G])
+        parts += sec_q(G, aggs, evs)
+        gem_names = GEMMA + [f"direct-mock{P}", f"direct-catalog{P}"] + [x.name for x in extra] + [REF]
+        gem_pairs = [(x.name, "gemma-direct-mock") for x in extra] + [
+            (f"direct-mock{P}", "gemma-direct-mock"), (f"direct-catalog{P}", "gemma-direct-catalog"),
+            ("gemma-direct-mock", "gemma-direct-catalog")]
+        parts += sec_r(G, aggs, gem_names, gem_pairs)
+        parts += sec_t(data)
+        auto = "\n".join(parts).rstrip() + "\n"
+        header_marker = "_自动生成：`benchmarks/context_knee/analyze.py`；"
+        if header_marker not in auto:
+            raise SystemExit(f"❌ analyze.render 输出里找不到预期的『{header_marker}』")
+        auto = auto.replace(header_marker,
+                            "_自动生成：`benchmarks/context_knee/analyze_orch.py` 第二批布局（A–F 节 = analyze.render 原样，"
+                            "自动对照关闭、E 节只列指定对；F 节生产前缀取 orch-turn-none 行内 prefix_base_tokens "
+                            f"{args.prod_prefix}" + (f"；⚠️ {warn}" if warn else "") + f"；`{P}` = --prev 批同名臂）；", 1)
+        engine_note = "（engine.py:140 注释的 M5 实测）"
+        if engine_note in auto:
+            auto = auto.replace(engine_note, "（取 orch-turn-none 行内字段 prefix_base_tokens，见上）", 1)
+        rerun = ("_复跑：`PYTHONDONTWRITEBYTECODE=1 backend/.venv/bin/python benchmarks/context_knee/analyze_orch.py "
+                 f"--data {a.data} --ref {a.ref}" + (f" --prev {a.prev}" if a.prev else "")
+                 + "".join(f" --extra-ref {x}" for x in a.extra_ref)
+                 + (f" --out-md {a.out_md}" if a.out_md else "") + (f" --out-csv {a.out_csv}" if a.out_csv else "") + "`_\n\n")
+        auto = rerun + auto
+        if a.out_csv:
+            write_csv_b2(Path(a.out_csv), groups, aggs, b2_csv_extra(G, evs, orch_all))
+        if a.out_md:
+            A.write_md(Path(a.out_md), auto)
+        else:
+            print(auto)
+        return 0
+    finally:
+        REF, ARMS, EXTRA_ORCH, A.comparisons, RAG_NOTE = saved
 
 
 if __name__ == "__main__":

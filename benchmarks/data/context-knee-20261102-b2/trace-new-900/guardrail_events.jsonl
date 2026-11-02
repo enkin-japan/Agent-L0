@@ -1,0 +1,139 @@
+{"ts": 1793618551.491, "time": "2026-11-02 20:22:31", "type": "no_plan_nudge", "session": "lc-hard-001-r0-42c765-t1", "detail": {"iterations": 3}}
+{"ts": 1793618551.491, "time": "2026-11-02 20:22:31", "type": "turn_abort", "session": "lc-hard-001-r0-42c765-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618560.182, "time": "2026-11-02 20:22:40", "type": "action_claim_nudge", "session": "lc-hard-001-r0-42c765-pre"}
+{"ts": 1793618578.789, "time": "2026-11-02 20:22:58", "type": "no_plan_nudge", "session": "lc-hard-001-r0-42c765-post", "detail": {"iterations": 3}}
+{"ts": 1793618599.994, "time": "2026-11-02 20:23:19", "type": "no_plan_nudge", "session": "lc-hard-001-r1-8c69e3-t1", "detail": {"iterations": 3}}
+{"ts": 1793618599.994, "time": "2026-11-02 20:23:19", "type": "turn_abort", "session": "lc-hard-001-r1-8c69e3-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618647.413, "time": "2026-11-02 20:24:07", "type": "no_plan_nudge", "session": "lc-hard-001-r2-3a07b2-t1", "detail": {"iterations": 3}}
+{"ts": 1793618647.413, "time": "2026-11-02 20:24:07", "type": "turn_abort", "session": "lc-hard-001-r2-3a07b2-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618677.214, "time": "2026-11-02 20:24:37", "type": "no_plan_nudge", "session": "lc-hard-002-r0-c92c8a-t1", "detail": {"iterations": 3}}
+{"ts": 1793618677.214, "time": "2026-11-02 20:24:37", "type": "turn_abort", "session": "lc-hard-002-r0-c92c8a-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618695.618, "time": "2026-11-02 20:24:55", "type": "no_plan_nudge", "session": "lc-hard-002-r0-c92c8a-post", "detail": {"iterations": 3}}
+{"ts": 1793618706.406, "time": "2026-11-02 20:25:06", "type": "no_plan_nudge", "session": "lc-hard-002-r1-a53c23-t1", "detail": {"iterations": 3}}
+{"ts": 1793618706.406, "time": "2026-11-02 20:25:06", "type": "turn_abort", "session": "lc-hard-002-r1-a53c23-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618726.231, "time": "2026-11-02 20:25:26", "type": "no_plan_nudge", "session": "lc-hard-002-r1-a53c23-post", "detail": {"iterations": 3}}
+{"ts": 1793618738.029, "time": "2026-11-02 20:25:38", "type": "no_plan_nudge", "session": "lc-hard-002-r2-a72a62-t1", "detail": {"iterations": 3}}
+{"ts": 1793618738.029, "time": "2026-11-02 20:25:38", "type": "turn_abort", "session": "lc-hard-002-r2-a72a62-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618754.745, "time": "2026-11-02 20:25:54", "type": "no_plan_nudge", "session": "lc-hard-002-r2-a72a62-post", "detail": {"iterations": 3}}
+{"ts": 1793618767.546, "time": "2026-11-02 20:26:07", "type": "no_plan_nudge", "session": "lc-hard-003-r0-5a9141-t1", "detail": {"iterations": 3}}
+{"ts": 1793618767.547, "time": "2026-11-02 20:26:07", "type": "turn_abort", "session": "lc-hard-003-r0-5a9141-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618770.885, "time": "2026-11-02 20:26:10", "type": "verify_nudge", "session": "lc-hard-003-r0-5a9141-pre"}
+{"ts": 1793618772.103, "time": "2026-11-02 20:26:12", "type": "no_plan_nudge", "session": "lc-hard-003-r0-5a9141-pre", "detail": {"iterations": 3}}
+{"ts": 1793618784.219, "time": "2026-11-02 20:26:24", "type": "no_plan_nudge", "session": "lc-hard-003-r0-5a9141-post", "detail": {"iterations": 3}}
+{"ts": 1793618786.542, "time": "2026-11-02 20:26:26", "type": "verify_nudge", "session": "lc-hard-003-r0-5a9141-post"}
+{"ts": 1793618788.289, "time": "2026-11-02 20:26:28", "type": "turn_abort", "session": "lc-hard-003-r0-5a9141-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618795.565, "time": "2026-11-02 20:26:35", "type": "no_plan_nudge", "session": "lc-hard-003-r1-8db5fb-t1", "detail": {"iterations": 3}}
+{"ts": 1793618795.565, "time": "2026-11-02 20:26:35", "type": "turn_abort", "session": "lc-hard-003-r1-8db5fb-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618798.626, "time": "2026-11-02 20:26:38", "type": "verify_nudge", "session": "lc-hard-003-r1-8db5fb-pre"}
+{"ts": 1793618799.828, "time": "2026-11-02 20:26:39", "type": "no_plan_nudge", "session": "lc-hard-003-r1-8db5fb-pre", "detail": {"iterations": 3}}
+{"ts": 1793618812.319, "time": "2026-11-02 20:26:52", "type": "no_plan_nudge", "session": "lc-hard-003-r1-8db5fb-post", "detail": {"iterations": 3}}
+{"ts": 1793618815.079, "time": "2026-11-02 20:26:55", "type": "verify_nudge", "session": "lc-hard-003-r1-8db5fb-post"}
+{"ts": 1793618816.86, "time": "2026-11-02 20:26:56", "type": "turn_abort", "session": "lc-hard-003-r1-8db5fb-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618823.286, "time": "2026-11-02 20:27:03", "type": "no_plan_nudge", "session": "lc-hard-003-r2-0211e2-t1", "detail": {"iterations": 3}}
+{"ts": 1793618823.286, "time": "2026-11-02 20:27:03", "type": "turn_abort", "session": "lc-hard-003-r2-0211e2-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618826.361, "time": "2026-11-02 20:27:06", "type": "verify_nudge", "session": "lc-hard-003-r2-0211e2-pre"}
+{"ts": 1793618827.611, "time": "2026-11-02 20:27:07", "type": "no_plan_nudge", "session": "lc-hard-003-r2-0211e2-pre", "detail": {"iterations": 3}}
+{"ts": 1793618841.519, "time": "2026-11-02 20:27:21", "type": "no_plan_nudge", "session": "lc-hard-003-r2-0211e2-post", "detail": {"iterations": 3}}
+{"ts": 1793618844.028, "time": "2026-11-02 20:27:24", "type": "verify_nudge", "session": "lc-hard-003-r2-0211e2-post"}
+{"ts": 1793618845.749, "time": "2026-11-02 20:27:25", "type": "turn_abort", "session": "lc-hard-003-r2-0211e2-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618854.003, "time": "2026-11-02 20:27:34", "type": "no_plan_nudge", "session": "lc-hard-004-r0-4468e1-t1", "detail": {"iterations": 3}}
+{"ts": 1793618854.004, "time": "2026-11-02 20:27:34", "type": "turn_abort", "session": "lc-hard-004-r0-4468e1-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618860.236, "time": "2026-11-02 20:27:40", "type": "verify_nudge", "session": "lc-hard-004-r0-4468e1-pre"}
+{"ts": 1793618862.961, "time": "2026-11-02 20:27:42", "type": "no_plan_nudge", "session": "lc-hard-004-r0-4468e1-pre", "detail": {"iterations": 3}}
+{"ts": 1793618880.516, "time": "2026-11-02 20:28:00", "type": "no_plan_nudge", "session": "lc-hard-004-r0-4468e1-post", "detail": {"iterations": 3}}
+{"ts": 1793618888.456, "time": "2026-11-02 20:28:08", "type": "verify_nudge", "session": "lc-hard-004-r0-4468e1-post"}
+{"ts": 1793618888.457, "time": "2026-11-02 20:28:08", "type": "turn_abort", "session": "lc-hard-004-r0-4468e1-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618896.468, "time": "2026-11-02 20:28:16", "type": "no_plan_nudge", "session": "lc-hard-004-r1-489ea6-t1", "detail": {"iterations": 3}}
+{"ts": 1793618896.469, "time": "2026-11-02 20:28:16", "type": "turn_abort", "session": "lc-hard-004-r1-489ea6-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618902.092, "time": "2026-11-02 20:28:22", "type": "verify_nudge", "session": "lc-hard-004-r1-489ea6-pre"}
+{"ts": 1793618904.823, "time": "2026-11-02 20:28:24", "type": "no_plan_nudge", "session": "lc-hard-004-r1-489ea6-pre", "detail": {"iterations": 3}}
+{"ts": 1793618924.101, "time": "2026-11-02 20:28:44", "type": "no_plan_nudge", "session": "lc-hard-004-r1-489ea6-post", "detail": {"iterations": 3}}
+{"ts": 1793618934.333, "time": "2026-11-02 20:28:54", "type": "verify_nudge", "session": "lc-hard-004-r1-489ea6-post"}
+{"ts": 1793618934.334, "time": "2026-11-02 20:28:54", "type": "turn_abort", "session": "lc-hard-004-r1-489ea6-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618942.627, "time": "2026-11-02 20:29:02", "type": "no_plan_nudge", "session": "lc-hard-004-r2-7eddbf-t1", "detail": {"iterations": 3}}
+{"ts": 1793618942.628, "time": "2026-11-02 20:29:02", "type": "turn_abort", "session": "lc-hard-004-r2-7eddbf-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618948.502, "time": "2026-11-02 20:29:08", "type": "verify_nudge", "session": "lc-hard-004-r2-7eddbf-pre"}
+{"ts": 1793618951.304, "time": "2026-11-02 20:29:11", "type": "no_plan_nudge", "session": "lc-hard-004-r2-7eddbf-pre", "detail": {"iterations": 3}}
+{"ts": 1793618972.809, "time": "2026-11-02 20:29:32", "type": "no_plan_nudge", "session": "lc-hard-004-r2-7eddbf-post", "detail": {"iterations": 3}}
+{"ts": 1793618977.827, "time": "2026-11-02 20:29:37", "type": "verify_nudge", "session": "lc-hard-004-r2-7eddbf-post"}
+{"ts": 1793618981.009, "time": "2026-11-02 20:29:41", "type": "turn_abort", "session": "lc-hard-004-r2-7eddbf-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618989.514, "time": "2026-11-02 20:29:49", "type": "no_plan_nudge", "session": "lc-hard-005-r0-aa1e32-t1", "detail": {"iterations": 3}}
+{"ts": 1793618989.515, "time": "2026-11-02 20:29:49", "type": "turn_abort", "session": "lc-hard-005-r0-aa1e32-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793618993.922, "time": "2026-11-02 20:29:53", "type": "action_claim_nudge", "session": "lc-hard-005-r0-aa1e32-pre"}
+{"ts": 1793618996.392, "time": "2026-11-02 20:29:56", "type": "no_plan_nudge", "session": "lc-hard-005-r0-aa1e32-pre", "detail": {"iterations": 3}}
+{"ts": 1793619019.54, "time": "2026-11-02 20:30:19", "type": "no_plan_nudge", "session": "lc-hard-005-r1-02c300-t1", "detail": {"iterations": 3}}
+{"ts": 1793619019.54, "time": "2026-11-02 20:30:19", "type": "turn_abort", "session": "lc-hard-005-r1-02c300-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619023.526, "time": "2026-11-02 20:30:23", "type": "action_claim_nudge", "session": "lc-hard-005-r1-02c300-pre"}
+{"ts": 1793619026.251, "time": "2026-11-02 20:30:26", "type": "no_plan_nudge", "session": "lc-hard-005-r1-02c300-pre", "detail": {"iterations": 3}}
+{"ts": 1793619052.705, "time": "2026-11-02 20:30:52", "type": "no_plan_nudge", "session": "lc-hard-005-r2-38f5e6-t1", "detail": {"iterations": 3}}
+{"ts": 1793619052.705, "time": "2026-11-02 20:30:52", "type": "turn_abort", "session": "lc-hard-005-r2-38f5e6-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619056.65, "time": "2026-11-02 20:30:56", "type": "action_claim_nudge", "session": "lc-hard-005-r2-38f5e6-pre"}
+{"ts": 1793619081.883, "time": "2026-11-02 20:31:21", "type": "no_plan_nudge", "session": "lc-hard-006-r0-927a6e-t1", "detail": {"iterations": 3}}
+{"ts": 1793619081.884, "time": "2026-11-02 20:31:21", "type": "turn_abort", "session": "lc-hard-006-r0-927a6e-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619087.363, "time": "2026-11-02 20:31:27", "type": "action_claim_nudge", "session": "lc-hard-006-r0-927a6e-pre"}
+{"ts": 1793619101.061, "time": "2026-11-02 20:31:41", "type": "no_plan_nudge", "session": "lc-hard-006-r0-927a6e-post", "detail": {"iterations": 3}}
+{"ts": 1793619112.373, "time": "2026-11-02 20:31:52", "type": "no_plan_nudge", "session": "lc-hard-006-r1-a3c374-t1", "detail": {"iterations": 3}}
+{"ts": 1793619112.373, "time": "2026-11-02 20:31:52", "type": "turn_abort", "session": "lc-hard-006-r1-a3c374-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619135.242, "time": "2026-11-02 20:32:15", "type": "no_plan_nudge", "session": "lc-hard-006-r2-4fe135-t1", "detail": {"iterations": 3}}
+{"ts": 1793619135.243, "time": "2026-11-02 20:32:15", "type": "turn_abort", "session": "lc-hard-006-r2-4fe135-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619140.912, "time": "2026-11-02 20:32:20", "type": "action_claim_nudge", "session": "lc-hard-006-r2-4fe135-pre"}
+{"ts": 1793619143.785, "time": "2026-11-02 20:32:23", "type": "duplicate_call", "session": "lc-hard-006-r2-4fe135-pre", "detail": {"tool": "read_file"}}
+{"ts": 1793619143.786, "time": "2026-11-02 20:32:23", "type": "duplicate_call", "session": "lc-hard-006-r2-4fe135-pre", "detail": {"tool": "read_file"}}
+{"ts": 1793619143.788, "time": "2026-11-02 20:32:23", "type": "no_plan_nudge", "session": "lc-hard-006-r2-4fe135-pre", "detail": {"iterations": 3}}
+{"ts": 1793619165.309, "time": "2026-11-02 20:32:45", "type": "no_plan_nudge", "session": "lc-hard-007-r0-8c6207-t1", "detail": {"iterations": 3}}
+{"ts": 1793619165.31, "time": "2026-11-02 20:32:45", "type": "turn_abort", "session": "lc-hard-007-r0-8c6207-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619186.449, "time": "2026-11-02 20:33:06", "type": "no_plan_nudge", "session": "lc-hard-007-r0-8c6207-post", "detail": {"iterations": 3}}
+{"ts": 1793619191.882, "time": "2026-11-02 20:33:11", "type": "verify_nudge", "session": "lc-hard-007-r0-8c6207-post"}
+{"ts": 1793619196.351, "time": "2026-11-02 20:33:16", "type": "turn_abort", "session": "lc-hard-007-r0-8c6207-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619203.394, "time": "2026-11-02 20:33:23", "type": "no_plan_nudge", "session": "lc-hard-007-r1-ccf301-t1", "detail": {"iterations": 3}}
+{"ts": 1793619203.394, "time": "2026-11-02 20:33:23", "type": "turn_abort", "session": "lc-hard-007-r1-ccf301-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619223.848, "time": "2026-11-02 20:33:43", "type": "no_plan_nudge", "session": "lc-hard-007-r1-ccf301-post", "detail": {"iterations": 3}}
+{"ts": 1793619228.92, "time": "2026-11-02 20:33:48", "type": "verify_nudge", "session": "lc-hard-007-r1-ccf301-post"}
+{"ts": 1793619228.921, "time": "2026-11-02 20:33:48", "type": "turn_abort", "session": "lc-hard-007-r1-ccf301-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619235.845, "time": "2026-11-02 20:33:55", "type": "no_plan_nudge", "session": "lc-hard-007-r2-66cae8-t1", "detail": {"iterations": 3}}
+{"ts": 1793619235.845, "time": "2026-11-02 20:33:55", "type": "turn_abort", "session": "lc-hard-007-r2-66cae8-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619259.181, "time": "2026-11-02 20:34:19", "type": "no_plan_nudge", "session": "lc-hard-007-r2-66cae8-post", "detail": {"iterations": 3}}
+{"ts": 1793619264.965, "time": "2026-11-02 20:34:24", "type": "verify_nudge", "session": "lc-hard-007-r2-66cae8-post"}
+{"ts": 1793619269.782, "time": "2026-11-02 20:34:29", "type": "turn_abort", "session": "lc-hard-007-r2-66cae8-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619278.708, "time": "2026-11-02 20:34:38", "type": "no_plan_nudge", "session": "lc-hard-008-r0-a88dd5-t1", "detail": {"iterations": 3}}
+{"ts": 1793619278.709, "time": "2026-11-02 20:34:38", "type": "turn_abort", "session": "lc-hard-008-r0-a88dd5-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619284.701, "time": "2026-11-02 20:34:44", "type": "verify_nudge", "session": "lc-hard-008-r0-a88dd5-pre"}
+{"ts": 1793619287.397, "time": "2026-11-02 20:34:47", "type": "no_plan_nudge", "session": "lc-hard-008-r0-a88dd5-pre", "detail": {"iterations": 3}}
+{"ts": 1793619302.731, "time": "2026-11-02 20:35:02", "type": "no_plan_nudge", "session": "lc-hard-008-r0-a88dd5-post", "detail": {"iterations": 3}}
+{"ts": 1793619306.69, "time": "2026-11-02 20:35:06", "type": "verify_nudge", "session": "lc-hard-008-r0-a88dd5-post"}
+{"ts": 1793619308.689, "time": "2026-11-02 20:35:08", "type": "turn_abort", "session": "lc-hard-008-r0-a88dd5-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619318.37, "time": "2026-11-02 20:35:18", "type": "no_plan_nudge", "session": "lc-hard-008-r1-1c4cfd-t1", "detail": {"iterations": 3}}
+{"ts": 1793619318.371, "time": "2026-11-02 20:35:18", "type": "turn_abort", "session": "lc-hard-008-r1-1c4cfd-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619323.406, "time": "2026-11-02 20:35:23", "type": "verify_nudge", "session": "lc-hard-008-r1-1c4cfd-pre"}
+{"ts": 1793619326.247, "time": "2026-11-02 20:35:26", "type": "no_plan_nudge", "session": "lc-hard-008-r1-1c4cfd-pre", "detail": {"iterations": 3}}
+{"ts": 1793619346.813, "time": "2026-11-02 20:35:46", "type": "no_plan_nudge", "session": "lc-hard-008-r1-1c4cfd-post", "detail": {"iterations": 3}}
+{"ts": 1793619350.393, "time": "2026-11-02 20:35:50", "type": "verify_nudge", "session": "lc-hard-008-r1-1c4cfd-post"}
+{"ts": 1793619353.714, "time": "2026-11-02 20:35:53", "type": "turn_abort", "session": "lc-hard-008-r1-1c4cfd-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619361.984, "time": "2026-11-02 20:36:01", "type": "no_plan_nudge", "session": "lc-hard-008-r2-f57454-t1", "detail": {"iterations": 3}}
+{"ts": 1793619361.984, "time": "2026-11-02 20:36:01", "type": "turn_abort", "session": "lc-hard-008-r2-f57454-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619367.826, "time": "2026-11-02 20:36:07", "type": "verify_nudge", "session": "lc-hard-008-r2-f57454-pre"}
+{"ts": 1793619370.508, "time": "2026-11-02 20:36:10", "type": "no_plan_nudge", "session": "lc-hard-008-r2-f57454-pre", "detail": {"iterations": 3}}
+{"ts": 1793619387.552, "time": "2026-11-02 20:36:27", "type": "no_plan_nudge", "session": "lc-hard-008-r2-f57454-post", "detail": {"iterations": 3}}
+{"ts": 1793619391.339, "time": "2026-11-02 20:36:31", "type": "verify_nudge", "session": "lc-hard-008-r2-f57454-post"}
+{"ts": 1793619394.83, "time": "2026-11-02 20:36:34", "type": "turn_abort", "session": "lc-hard-008-r2-f57454-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619404.065, "time": "2026-11-02 20:36:44", "type": "no_plan_nudge", "session": "lc-hard-009-r0-6e5aee-t1", "detail": {"iterations": 3}}
+{"ts": 1793619404.065, "time": "2026-11-02 20:36:44", "type": "turn_abort", "session": "lc-hard-009-r0-6e5aee-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619420.959, "time": "2026-11-02 20:37:00", "type": "no_plan_nudge", "session": "lc-hard-009-r0-6e5aee-post", "detail": {"iterations": 3}}
+{"ts": 1793619433.172, "time": "2026-11-02 20:37:13", "type": "verify_nudge", "session": "lc-hard-009-r0-6e5aee-post"}
+{"ts": 1793619433.173, "time": "2026-11-02 20:37:13", "type": "turn_abort", "session": "lc-hard-009-r0-6e5aee-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619442.665, "time": "2026-11-02 20:37:22", "type": "no_plan_nudge", "session": "lc-hard-009-r1-464b63-t1", "detail": {"iterations": 3}}
+{"ts": 1793619442.666, "time": "2026-11-02 20:37:22", "type": "turn_abort", "session": "lc-hard-009-r1-464b63-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619461.345, "time": "2026-11-02 20:37:41", "type": "no_plan_nudge", "session": "lc-hard-009-r1-464b63-post", "detail": {"iterations": 3}}
+{"ts": 1793619478.159, "time": "2026-11-02 20:37:58", "type": "no_plan_nudge", "session": "lc-hard-009-r2-941fcc-t1", "detail": {"iterations": 3}}
+{"ts": 1793619478.159, "time": "2026-11-02 20:37:58", "type": "turn_abort", "session": "lc-hard-009-r2-941fcc-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619502.273, "time": "2026-11-02 20:38:22", "type": "no_plan_nudge", "session": "lc-hard-009-r2-941fcc-post", "detail": {"iterations": 3}}
+{"ts": 1793619510.369, "time": "2026-11-02 20:38:30", "type": "verify_nudge", "session": "lc-hard-009-r2-941fcc-post"}
+{"ts": 1793619512.812, "time": "2026-11-02 20:38:32", "type": "turn_abort", "session": "lc-hard-009-r2-941fcc-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619519.819, "time": "2026-11-02 20:38:39", "type": "no_plan_nudge", "session": "lc-hard-010-r0-bed05e-t1", "detail": {"iterations": 3}}
+{"ts": 1793619519.819, "time": "2026-11-02 20:38:39", "type": "turn_abort", "session": "lc-hard-010-r0-bed05e-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619534.121, "time": "2026-11-02 20:38:54", "type": "action_claim_nudge", "session": "lc-hard-010-r0-bed05e-post"}
+{"ts": 1793619547.979, "time": "2026-11-02 20:39:07", "type": "no_plan_nudge", "session": "lc-hard-010-r1-b5d014-t1", "detail": {"iterations": 3}}
+{"ts": 1793619547.979, "time": "2026-11-02 20:39:07", "type": "turn_abort", "session": "lc-hard-010-r1-b5d014-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793619552.378, "time": "2026-11-02 20:39:12", "type": "action_claim_nudge", "session": "lc-hard-010-r1-b5d014-pre"}
+{"ts": 1793619573.614, "time": "2026-11-02 20:39:33", "type": "no_plan_nudge", "session": "lc-hard-010-r2-d46781-t1", "detail": {"iterations": 3}}
+{"ts": 1793619573.615, "time": "2026-11-02 20:39:33", "type": "turn_abort", "session": "lc-hard-010-r2-d46781-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}

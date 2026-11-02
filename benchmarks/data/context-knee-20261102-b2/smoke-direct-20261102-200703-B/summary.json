@@ -1,0 +1,97 @@
+{
+  "model": "google/gemma-4-31B-it-qat-w4a16-ct",
+  "revision": "52f3f65bc7a02d555763bc923bd1d9094898219d",
+  "dialect": "gemma4",
+  "backend": "remote",
+  "tasks": "hard",
+  "seed": 7,
+  "token_counter": "engine",
+  "stamp": "20261102-213114",
+  "sampling_overrides": {
+    "sent": {},
+    "ignored": {}
+  },
+  "entry_sampling": {
+    "top_p": 0.95,
+    "top_k": 64,
+    "repetition_penalty": 1.0
+  },
+  "thinking_replay_mode": "last_k",
+  "thinking_replay_k": 2,
+  "thinking_replay_source": "entry",
+  "context_limit": 65536,
+  "context_limit_source": "health",
+  "prefix_mode": "prod",
+  "prefix_base_tokens": 13565,
+  "prefix_top_k": null,
+  "prefix_shadowed": {
+    "lc-hard-001": [
+      "write_file"
+    ]
+  },
+  "prefix_core_skipped": {
+    "lc-hard-001": []
+  },
+  "prefix_n_tools": {
+    "lc-hard-001": {
+      "prompt": 60,
+      "prompt_full": 60,
+      "grammar": 60
+    }
+  },
+  "mode": "direct",
+  "fill_placement": null,
+  "guard": null,
+  "step_compaction": null,
+  "turn_compaction": null,
+  "goal_verify": null,
+  "fill_shape": "turns",
+  "guard_thresholds": null,
+  "step_compaction_cfg": null,
+  "orchestrator_cfg_source": null,
+  "tool_schema_mode_effective": null,
+  "stub_impl": null,
+  "levels": [
+    0
+  ],
+  "reps": 1,
+  "items": [
+    "lc-hard-001"
+  ],
+  "n_rows": 1,
+  "n_runs": 1,
+  "n_errors": 0,
+  "complete": true,
+  "by_level": {
+    "0": {
+      "n": 1,
+      "errors": 0,
+      "success_rate": 0.0,
+      "pass_hat_2": null,
+      "pass_at_2": null,
+      "n_tasks2": 0,
+      "recall_rate": null,
+      "recall_n": 0,
+      "recall_front": null,
+      "recall_mid": null,
+      "recall_back": null,
+      "redundant_calls_mean": 8.0,
+      "env_errors_mean": 12.0,
+      "repetition_hits": 0,
+      "aborted": 1,
+      "prompt_tokens_median": 13690,
+      "peak_prompt_tokens_median": 14703,
+      "fill_error_median": null,
+      "reused_prefix_median": 13664,
+      "prefill_s_median": 9.059625438422342,
+      "first_prompt_tps_median": 1511.1,
+      "later_prompt_tps_median": 141450.4,
+      "coherent_rate": null,
+      "coherent_n": 0,
+      "wall_s_mean": 31.65,
+      "step_compactions_median": null,
+      "full_renders_median": null,
+      "ceiling_aborts": null
+    }
+  }
+}

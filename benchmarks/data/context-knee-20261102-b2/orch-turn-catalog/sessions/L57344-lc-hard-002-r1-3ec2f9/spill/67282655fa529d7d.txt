@@ -1,0 +1,1 @@
+No files matched 'report' by file name or content. Note: results are limited to folders this app may access — files on external volumes or protected folders stay invisible unless the app is granted Full Disk Access (System Settings → Privacy & Security). Try different keywords or list_dir a likely folder.

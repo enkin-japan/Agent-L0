@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/search-api/log/search-api-11.log", "content": "2026-09-01T20:56:15Z DEBUG [search-api-4] cache miss ratio 0.784 over last 775s\n2026-09-01T20:30:24Z INFO  [search-api-7] rotated segment seg-9016.dat size_mb=705\n2026-09-01T21:10:06Z ERROR [search-api-3] slow query 632ms table=events_3318 plan=index_scan"}

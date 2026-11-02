@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Append '2026-08-24 OK' to build/test/deploy logs
+  ○ [2] Write count of logs containing today's line to logs/count.txt
+  ○ [3] Verify all four files
+  ○ [4] Answer with the three requested values (or state what is actually in the tool outputs)

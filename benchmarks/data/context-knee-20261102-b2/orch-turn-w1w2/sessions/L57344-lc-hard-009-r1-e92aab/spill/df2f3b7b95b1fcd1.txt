@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Read the 5 metrics files
+  ○ [2] Compute each average
+  ○ [3] Write metrics/summary.json
+  ○ [4] Search workspace for halyard / OPS- / queue_depth_alert_threshold values
+  ○ [5] Answer with summary + honest statement of the three values

@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/scheduler/deploy/values.yaml", "content": "  flush_interval_s: false\n    pool_size: 1941\nshard_count: ap-east-2\n  flush_interval_s: false\nmax_batch: warn\n    region: warn\nflush_interval_s: warn\nflush_interval_s: info\n  replicas: ap-east-2\nread_only: warn\n    pool_size: 2085\n    region: ap-east-2"}

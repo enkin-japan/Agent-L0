@@ -1,0 +1,4 @@
+Plan replaced.
+  ○ [1] Identify DRAFT vs final reports in reports/
+  ○ [2] Delete DRAFT files, rename finals with -final
+  ○ [3] Recover the three earlier tool-output values (halyard config path, OPS- ticket, queue_depth_alert_threshold) from compacted context

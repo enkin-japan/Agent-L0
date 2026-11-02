@@ -1,0 +1,1 @@
+{"summary": "- 用户偏好：待办事项文本中不应包含 `[x]` 或 `[ ]` 等方括号状态标记，仅保留纯文本内容。\n- 已完成任务：读取 `notes/todo-notes.txt`，解析并添加所有事项至待办清单，将标记为 `[x]` 的事项标记为完成，并将剩余未完成任务写入 `remaining.txt`（一行一件）。\n- 系统约束：执行多步工具调用任务时，若步骤较多需先创建显式计划（update_plan）再执行，否则直接回答。", "summarized_turns": 1, "sedimented_turns": 0, "summary_folds": 1, "updated_at": 1793620003.599103}

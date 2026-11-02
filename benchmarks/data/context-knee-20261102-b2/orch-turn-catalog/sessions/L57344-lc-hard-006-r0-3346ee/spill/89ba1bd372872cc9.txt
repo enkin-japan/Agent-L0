@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/quota-svc/log/quota-svc-06.log", "content": "2026-09-23T13:22:41Z WARN  [quota-svc-7] retrying upstream call attempt=712 backoff_ms=3198\n2026-09-23T12:59:07Z INFO  [quota-svc-8] gc pause 449ms heap_mb=2023\n2026-09-23T13:33:55Z DEBUG [quota-svc-7] worker heartbeat ok queue=1923 inflight=761"}

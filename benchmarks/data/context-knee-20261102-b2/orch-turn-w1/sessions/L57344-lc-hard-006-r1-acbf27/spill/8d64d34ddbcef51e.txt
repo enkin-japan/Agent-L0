@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/ledger/log/ledger-21.log", "content": "2026-09-12T02:33:22Z WARN  [ledger-5] cache miss ratio 0.871 over last 752s\n2026-09-12T02:27:41Z WARN  [ledger-3] slow query 512ms table=events_3592 plan=index_scan\n2026-09-12T02:44:45Z DEBUG [ledger-2] rotated segment seg-8661.dat size_mb=641\n2026-09-12T02:19:04Z INFO  [ledger-3] gc pause 432ms heap_mb=2971"}

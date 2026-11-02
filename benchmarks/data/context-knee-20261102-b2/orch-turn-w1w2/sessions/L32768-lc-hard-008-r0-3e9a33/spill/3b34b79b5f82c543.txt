@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Read existing logs/build.log and logs/test.log (deploy.log missing)
+  ○ [2] Append '2026-08-24 OK' to all three log files
+  ○ [3] Write count of files containing the line to logs/count.txt
+  ○ [4] Verify all four files
+  ○ [5] Answer with the three verbatim values

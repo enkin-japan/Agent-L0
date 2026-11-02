@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Identify DRAFT files in ~/reports
+  ○ [2] Delete DRAFT files (alpha.md, gamma.md)
+  ○ [3] Copy beta.md to beta-final.md and delete original
+  ○ [4] Verify final state of reports folder

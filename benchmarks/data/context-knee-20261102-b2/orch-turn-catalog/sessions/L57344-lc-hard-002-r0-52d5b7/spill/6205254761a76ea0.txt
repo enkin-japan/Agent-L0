@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Locate the reports folder and list its files
+  ○ [2] Identify files containing DRAFT (delete) vs final (rename with -final)
+  ○ [3] Execute deletions and copy+delete renames
+  ○ [4] Verify final state of reports folder
+  ○ [5] Answer the three verbatim values from earlier tool outputs

@@ -1,0 +1,4 @@
+Plan replaced.
+  ○ [1] Replace '90 days' → '30 days' in the three policy/ files
+  ○ [2] Handle the read-only file: write policy/pending-changes.md naming it
+  ○ [3] Final reply with the three verbatim values

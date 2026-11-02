@@ -1,0 +1,24 @@
+[RemoteBackend] 模型身份核对通过：google/gemma-4-31B-it-qat-w4a16-ct（revision=52f3f65bc7a02d555763bc923bd1d9094898219d，capabilities=['text', 'vision']）
+[RemoteBackend] 已连接 inference-server: http://agent-compute.tail8d18fd.ts.net:14161
+[MCP-rag_search] ⚠️ RAG 服务器 (127.0.0.1:14160) 探活失败: hermetic construction
+[Skill] ✅ 成功加载剧本: briefing
+[Skill] ✅ 成功加载剧本: chart-report
+[Skill] ✅ 成功加载剧本: deck
+[Skill] ✅ 成功加载剧本: ingest
+[Skill] ✅ 成功加载剧本: research
+== 拐点测量 google/gemma-4-31B-it-qat-w4a16-ct（remote，计数 engine，前缀 prod 13565 tok）：1 题 × 1 档 [0] × 1 rep → benchmarks/data/context-knee-20261102-b2/smoke-direct-20261102-200703-B
+[Engine] 约束采样引擎就绪（llguidance）
+[Engine] 前缀命中 13664/13690 tokens，gen 41.6 tps
+[Engine] 前缀命中 13792/13799 tokens，gen 41.6 tps
+[Engine] 前缀命中 13888/13891 tokens，gen 42.5 tps
+[Engine] 前缀命中 13952/13975 tokens，gen 42.6 tps
+[Engine] 前缀命中 14048/14066 tokens，gen 42.0 tps
+[Engine] 前缀命中 14144/14157 tokens，gen 41.3 tps
+[Engine] 前缀命中 14240/14248 tokens，gen 40.9 tps
+[Engine] 前缀命中 14336/14339 tokens，gen 42.5 tps
+[Engine] 前缀命中 14400/14430 tokens，gen 42.7 tps
+[Engine] 前缀命中 14496/14521 tokens，gen 42.0 tps
+[Engine] 前缀命中 14592/14612 tokens，gen 41.4 tps
+[Engine] 前缀命中 14688/14703 tokens，gen 40.9 tps
+❌ L0 lc-hard-001 r0 prompt=13690 (est 13690, err None) recall - rep_guard 0 (31.65s)  | files/summary.txt: exists 期望 True，实际 False; 步数超限: 12 > 10; 回合上限 12 耗尽仍在发调用; 无收尾答复
+== 产物: benchmarks/data/context-knee-20261102-b2/smoke-direct-20261102-200703-B（表格：summarize.py benchmarks/data/context-knee-20261102-b2/smoke-direct-20261102-200703-B）

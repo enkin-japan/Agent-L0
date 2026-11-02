@@ -1,0 +1,4 @@
+Plan replaced.
+  ○ [1] Compute per-file averages and write metrics/summary.json
+  ○ [2] Locate the three earlier tool-output values (halyard config path, OPS- ticket, queue_depth_alert_threshold)
+  ○ [3] Report summary.json result and the three verbatim values

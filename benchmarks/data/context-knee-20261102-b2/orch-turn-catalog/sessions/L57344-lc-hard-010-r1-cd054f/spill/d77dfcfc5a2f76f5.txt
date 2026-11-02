@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/ingest/log/ingest-22.log", "content": "2026-09-28T07:04:06Z INFO  [ingest-1] schema check passed version=8984\n2026-09-28T07:45:35Z WARN  [ingest-6] worker heartbeat ok queue=29 inflight=718\n2026-09-28T07:12:14Z WARN  [ingest-8] cache miss ratio 0.761 over last 895s\n2026-09-28T07:17:32Z INFO  [ingest-8] batch 8085 committed rows=115 lag_ms=621"}

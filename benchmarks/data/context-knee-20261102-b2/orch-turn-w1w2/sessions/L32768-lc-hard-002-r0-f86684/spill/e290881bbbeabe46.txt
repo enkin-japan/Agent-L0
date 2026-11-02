@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Read all files in ~/reports and identify DRAFT ones
+  ○ [2] Delete DRAFT files
+  ○ [3] Rename final reports with -final suffix (copy then delete original)
+  ○ [4] Verify final state of reports folder
+  ○ [5] Answer with the three verbatim values

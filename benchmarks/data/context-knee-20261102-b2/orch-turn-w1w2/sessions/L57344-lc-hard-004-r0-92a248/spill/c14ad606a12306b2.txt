@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Replace '90 days' → '30 days' in the three policy/ files (skip any read-only one)
+  ○ [2] If a write is refused, create policy/pending-changes.md naming that file
+  ○ [3] Locate the three requested values (halyard config path, OPS- ticket, queue_depth_alert_threshold) in the available files
+  ○ [4] Report results with the three values verbatim

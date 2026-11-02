@@ -1,0 +1,10 @@
+exit_code: 0
+stdout:
+archive:
+total 2
+-rw-r--r--  1 user  staff      36 Jan  1 09:00 old-2023.txt
+-rw-r--r--  1 user  staff      71 Jan  1 09:00 old-2024.txt
+
+config:
+total 1
+-rw-r--r--  1 user  staff      38 Jan  1 09:00 settings.txt

@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/gateway/deploy/values.yaml", "content": "  flush_interval_s: info\n  read_only: true\ntimeout_ms: warn\nmax_batch: 893\n    warmup_s: info\n  cpu_limit: false\nshard_count: 1228\n    cpu_limit: ap-east-2\nflush_interval_s: ap-east-2\nregion: 2955\n  flush_interval_s: true\nread_only: info\n    flush_interval_s: 529"}

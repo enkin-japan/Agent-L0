@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/billing-sync/log/billing-sync-03.log", "content": "2026-09-28T04:45:32Z WARN  [billing-sync-2] rotated segment seg-6395.dat size_mb=74\n2026-09-28T04:49:23Z INFO  [billing-sync-4] retrying upstream call attempt=498 backoff_ms=4492\n2026-09-28T05:07:30Z ERROR [billing-sync-5] dropped 898 malformed records from partition 7843"}

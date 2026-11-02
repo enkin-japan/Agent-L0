@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/audit-trail/deploy/values.yaml", "content": "  replicas: false\n  max_batch: false\n  region: false\n    flush_interval_s: true\n    warmup_s: info\n    max_batch: true\n    timeout_ms: true\n    read_only: 335\n    retry_limit: true\n  log_level: false\n  timeout_ms: warn\n    read_only: ap-east-2\n    max_batch: warn"}

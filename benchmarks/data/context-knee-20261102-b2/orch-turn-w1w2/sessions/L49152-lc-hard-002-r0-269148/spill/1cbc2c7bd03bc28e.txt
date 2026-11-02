@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/feed-merge/log/feed-merge-20.log", "content": "2026-09-11T20:42:32Z INFO  [feed-merge-3] dropped 480 malformed records from partition 6348\n2026-09-11T20:20:13Z DEBUG [feed-merge-1] cache miss ratio 0.779 over last 266s\n2026-09-11T20:47:16Z INFO  [feed-merge-6] retrying upstream call attempt=723 backoff_ms=3299"}

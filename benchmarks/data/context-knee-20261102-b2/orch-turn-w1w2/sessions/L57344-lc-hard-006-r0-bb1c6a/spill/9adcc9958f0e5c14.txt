@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/report-gen/deploy/values.yaml", "content": "pool_size: 3291\n  timeout_ms: warn\n    shard_count: 2567\n  shard_count: true\nmax_batch: true\n  retry_limit: true\ntimeout_ms: ap-east-2\n    timeout_ms: false\ntimeout_ms: 2659\nflush_interval_s: 2668\n  max_batch: ap-east-2\n    pool_size: 3584"}

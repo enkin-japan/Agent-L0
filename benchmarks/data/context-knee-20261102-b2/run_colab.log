@@ -1,0 +1,114 @@
+2026-11-02 20:07:04 START deploy RedHatAI/Qwen3.8-27B-INT4 --retain
+2026-11-02 20:07:04 后台部署进程已启动（尚未 READY） {"pid": 20284, "logs": "./colab/deploy.sh logs -f", "stop": "./colab/deploy.sh stop"}
+2026-11-02 20:07:06 wait READY: state=allocating phase=
+2026-11-02 20:07:38 wait READY: state=booting phase=installing-dependencies
+2026-11-02 20:08:09 wait READY: state=booting phase=checking-cuda-runtime
+2026-11-02 20:08:40 wait READY: state=booting phase=downloading-model
+2026-11-02 20:09:12 wait READY: state=booting phase=downloading-model
+2026-11-02 20:09:43 wait READY: state=booting phase=downloading-model
+2026-11-02 20:10:16 wait READY: state=booting phase=downloading-model
+2026-11-02 20:10:47 wait READY: state=booting phase=downloading-model
+2026-11-02 20:11:19 wait READY: state=booting phase=downloading-model
+2026-11-02 20:11:50 wait READY: state=booting phase=downloading-model
+2026-11-02 20:12:21 wait READY: state=booting phase=loading-models
+2026-11-02 20:12:52 wait READY: state=booting phase=loading-models
+2026-11-02 20:13:24 wait READY: state=booting phase=loading-models
+2026-11-02 20:13:55 wait READY: state=booting phase=loading-models
+2026-11-02 20:14:27 wait READY: state=booting phase=loading-models
+2026-11-02 20:14:59 wait READY: state=booting phase=loading-models
+2026-11-02 20:15:30 wait READY: state=booting phase=loading-models
+2026-11-02 20:16:02 wait READY: state=booting phase=loading-models
+2026-11-02 20:16:33 wait READY: state=booting phase=loading-models
+2026-11-02 20:17:05 wait READY: state=booting phase=loading-models
+2026-11-02 20:17:36 wait READY: state=booting phase=loading-models
+2026-11-02 20:18:07 wait READY: state=booting phase=loading-models
+2026-11-02 20:18:38 wait READY: state=booting phase=loading-models
+2026-11-02 20:19:09 wait READY: state=booting phase=loading-models
+2026-11-02 20:19:40 wait READY: state=booting phase=loading-models
+2026-11-02 20:20:12 wait READY: state=booting phase=loading-models
+2026-11-02 20:20:43 wait READY: state=booting phase=loading-models
+2026-11-02 20:21:14 wait READY: state=ready phase=ready
+2026-11-02 20:21:14 READY host=agent-compute.tail8d18fd.ts.net
+2026-11-02 20:21:14 smoke orch [A RedHatAI/Qwen3.8-27B-INT4] (prod, turn, L0, 1 题 1 rep) → smoke-orch-20261102-200703-A
+2026-11-02 20:22:14 smoke orch OK
+2026-11-02 20:22:14 ARM trace-new-900: trace 不支持续跑，半截产物挪到 trace-new-900.partial-20261102-200703 后重跑
+2026-11-02 20:22:14 ARM trace-new-900 [A RedHatAI/Qwen3.8-27B-INT4] start: --template new --task-state on --summary-max-tokens 900 
+2026-11-02 20:40:15 ARM trace-new-900 harness rc=0 hung=0
+2026-11-02 20:40:15 arm trace-new-900: ok
+2026-11-02 20:40:15 ARM trace-legacy-640 [A RedHatAI/Qwen3.8-27B-INT4] start: --template legacy --task-state off --summary-max-tokens 640 
+2026-11-02 20:56:16 ARM trace-legacy-640 harness rc=0 hung=0
+2026-11-02 20:56:16 arm trace-legacy-640: ok errors=13
+2026-11-02 20:56:16 ARM trace-new-640 [A RedHatAI/Qwen3.8-27B-INT4] start: --template new --task-state on --summary-max-tokens 640 
+2026-11-02 21:15:17 ARM trace-new-640 harness rc=0 hung=0
+2026-11-02 21:15:17 arm trace-new-640: ok
+2026-11-02 21:15:17 PHASE B: 换模型 google/gemma-4-31B-it-qat-w4a16-ct（stop → start）
+2026-11-02 21:15:17 STOP colab
+2026-11-02 21:15:17 等待正在进行的 VM 分配结束（如有），然后回收
+2026-11-02 21:15:17 正在核对并回收 VM {"session": "agent-compute-8e04aaec81d8"}
+2026-11-02 21:15:17 正在注销 Tailscale 临时节点
+2026-11-02 21:15:18 正在请求 Colab 释放 VM
+[colab] Stopping session 'agent-compute-8e04aaec81d8'...
+[colab] Session terminated.
+2026-11-02 21:15:21 已确认 VM 从 Colab 服务端移除 {"session": "agent-compute-8e04aaec81d8", "tailnet_cleanup": "ephemeral-logout-confirmed"}
+2026-11-02 21:15:21 stop rc=0
+2026-11-02 21:15:23 START deploy google/gemma-4-31B-it-qat-w4a16-ct --retain
+2026-11-02 21:15:23 后台部署进程已启动（尚未 READY） {"pid": 26015, "logs": "./colab/deploy.sh logs -f", "stop": "./colab/deploy.sh stop"}
+2026-11-02 21:15:26 wait READY: state=preparing phase=
+2026-11-02 21:15:58 wait READY: state=allocating phase=
+2026-11-02 21:16:29 wait READY: state=allocating phase=
+2026-11-02 21:17:01 wait READY: state=allocating phase=
+2026-11-02 21:17:33 wait READY: state=allocating phase=
+2026-11-02 21:18:04 wait READY: state=stopped phase=
+2026-11-02 21:18:04 deploy state=stopped before READY
+2026-11-02 21:18:04 start after stop FAILED rc=4（旧节点未释放？）：30s 后再试一次
+2026-11-02 21:18:04 STOP colab
+2026-11-02 21:18:04 等待正在进行的 VM 分配结束（如有），然后回收
+2026-11-02 21:18:04 正在核对并回收 VM {"session": "agent-compute-ff434716f7ee"}
+2026-11-02 21:18:05 已确认 VM 从 Colab 服务端移除 {"session": "agent-compute-ff434716f7ee", "tailnet_cleanup": "logout-unconfirmed"}
+2026-11-02 21:18:05 stop rc=0
+2026-11-02 21:18:35 START deploy google/gemma-4-31B-it-qat-w4a16-ct --retain
+2026-11-02 21:18:35 后台部署进程已启动（尚未 READY） {"pid": 26366, "logs": "./colab/deploy.sh logs -f", "stop": "./colab/deploy.sh stop"}
+2026-11-02 21:18:38 wait READY: state=allocating phase=
+2026-11-02 21:19:09 wait READY: state=booting phase=installing-python
+2026-11-02 21:19:40 wait READY: state=booting phase=installing-dependencies
+2026-11-02 21:20:12 wait READY: state=booting phase=joining-tailnet
+2026-11-02 21:20:43 wait READY: state=booting phase=downloading-model
+2026-11-02 21:21:14 wait READY: state=booting phase=downloading-model
+2026-11-02 21:21:46 wait READY: state=booting phase=downloading-model
+2026-11-02 21:22:17 wait READY: state=booting phase=downloading-model
+2026-11-02 21:22:48 wait READY: state=booting phase=downloading-model
+2026-11-02 21:23:20 wait READY: state=booting phase=downloading-model
+2026-11-02 21:23:52 wait READY: state=booting phase=downloading-model
+2026-11-02 21:24:23 wait READY: state=booting phase=downloading-model
+2026-11-02 21:24:54 wait READY: state=booting phase=downloading-model
+2026-11-02 21:25:25 wait READY: state=booting phase=downloading-model
+2026-11-02 21:25:57 wait READY: state=booting phase=downloading-model
+2026-11-02 21:26:28 wait READY: state=booting phase=downloading-model
+2026-11-02 21:27:00 wait READY: state=booting phase=loading-models
+2026-11-02 21:27:31 wait READY: state=booting phase=loading-models
+2026-11-02 21:28:02 wait READY: state=booting phase=loading-models
+2026-11-02 21:28:33 wait READY: state=booting phase=loading-models
+2026-11-02 21:29:05 wait READY: state=booting phase=loading-models
+2026-11-02 21:29:36 wait READY: state=booting phase=loading-models
+2026-11-02 21:30:07 wait READY: state=booting phase=loading-models
+2026-11-02 21:30:39 wait READY: state=booting phase=loading-models
+2026-11-02 21:31:11 wait READY: state=ready phase=ready
+2026-11-02 21:31:11 READY host=agent-compute.tail8d18fd.ts.net
+2026-11-02 21:31:11 smoke direct [B google/gemma-4-31B-it-qat-w4a16-ct] (prod, L0, 1 题 1 rep) → smoke-direct-20261102-200703-B
+2026-11-02 21:32:11 smoke direct OK
+2026-11-02 21:32:11 ARM gemma-direct-mock [B google/gemma-4-31B-it-qat-w4a16-ct] start: --levels 0,16384,32768,49152 
+2026-11-02 22:08:12 ARM gemma-direct-mock harness rc=0 hung=0
+2026-11-02 22:08:12 arm gemma-direct-mock: ok
+2026-11-02 22:08:12 ARM gemma-direct-catalog [B google/gemma-4-31B-it-qat-w4a16-ct] start: --prefix catalog --levels 0,32768,49152 
+2026-11-02 22:49:15 ARM gemma-direct-catalog harness rc=0 hung=0
+2026-11-02 22:49:15 arm gemma-direct-catalog: ok
+2026-11-02 22:49:15 STOP colab
+2026-11-02 22:49:15 等待正在进行的 VM 分配结束（如有），然后回收
+2026-11-02 22:49:15 正在核对并回收 VM {"session": "agent-compute-01302cc56789"}
+2026-11-02 22:49:16 正在注销 Tailscale 临时节点
+2026-11-02 22:49:17 正在请求 Colab 释放 VM
+[colab] Stopping session 'agent-compute-01302cc56789'...
+[colab] Session terminated.
+2026-11-02 22:49:20 已确认 VM 从 Colab 服务端移除 {"session": "agent-compute-01302cc56789", "tailnet_cleanup": "ephemeral-logout-confirmed"}
+2026-11-02 22:49:20 stop rc=0
+2026-11-02 22:49:20 DONE BATCH_RC=0 SKIPPED=0
