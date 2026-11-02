@@ -286,7 +286,10 @@ def test_ceiling_aborts_with_complete_record(tmp_path, monkeypatch):
     assert rec["turns"][-1]["text"] == ""                         # 护栏样板不是答案
     assert "上下文已达模型上限" in rec["turn_response"]
     assert rec["score"]["final_text_ok"] is False
-    assert rec["peak_prompt_tokens"] == 60000 and rec["fill"]["target_tokens"] == 4096
+    # 终止前没有一次生成实际发出（gens == []）：实发峰值 = null；护栏量到的 60000 只进
+    # peak_prompt_measured（那份是「量到的」，不是「发出去的」）。
+    assert rec["peak_prompt_tokens"] is None and rec["peak_prompt_measured"] == 60000
+    assert rec["fill"]["target_tokens"] == 4096
 
 
 # ---- 7. 事件文件只落产物目录 ----

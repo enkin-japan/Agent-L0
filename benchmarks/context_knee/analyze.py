@@ -396,6 +396,9 @@ def knee(agg: Dict[int, Dict[str, Any]], metric: str, base_levels: List[int], dr
         if base_lv is None:
             return {"verdict": f"无基线档 {base_mode}", "knee": None, "top": top}
     base = agg[base_lv][metric]
+    if base <= drop:
+        return {"verdict": f"基线 {base:.0%} ≤ drop {drop:.0%}：基线在地板，规则空判（到 {top} 未判）",
+                "knee": None, "base_level": base_lv, "base": base, "top": top, "floor": True}
     diffs = {}
     for lv in measured:
         if lv > 0 and lv != base_lv:

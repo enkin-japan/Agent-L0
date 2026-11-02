@@ -30,6 +30,7 @@ finish(){ print -r -- "$1" > "$OUT/DONE"; }
 
 started=0; stopped=0; final_rc=""
 stop_colab(){
+  local rc   # 不能覆盖全局 rc：文末先存了探针 rc，停机后还要读它写 SMOKE_RC（拐点链一审 M4）
   [ $stopped -eq 1 ] && return 0
   stopped=1
   log "STOP colab"

@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Locate the inbox directory and its two report files
+  ○ [2] Read both reports to confirm 2025 occurrences
+  ○ [3] Change 2025→2026 in both reports (nothing else)
+  ○ [4] Write one line to inbox/changelog.txt naming the two files
+  ○ [5] Answer with the three verbatim values

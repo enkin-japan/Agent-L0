@@ -98,6 +98,14 @@ def test_knee_uses_common_item_set():
     assert A.common_diff(agg[0]["_items"], agg[16384]["_items"], "pass_hat_2") == (0.0, 8)
 
 
+def test_knee_floor_baseline_short_circuits_before_drop_rule():
+    """基线本身 ≤ drop：「≤ 基线 − drop」规则永远不会命中，不得静默读成「未见拐点」。"""
+    agg = _agg({0: [TT, TT] + [TF] * 8, 16384: [TT] * 10})     # 基线 pass_hat_2 = 2/10 = 0.20
+    k = A.knee(agg, "pass_hat_2", [0], 0.20, 0.10)
+    assert k["floor"] is True and k["knee"] is None and "基线在地板" in k["verdict"]
+    assert k["base_level"] == 0 and k["base"] == pytest.approx(0.20)
+
+
 # ---- write_md ----
 
 def test_write_md_only_rewrites_between_markers(tmp_path):

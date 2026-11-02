@@ -1,0 +1,67 @@
+2026-11-02 00:09:05 START deploy RedHatAI/Qwen3.8-27B-INT4 --retain
+2026-11-02 00:09:05 后台部署进程已启动（尚未 READY） {"pid": 42246, "logs": "./colab/deploy.sh logs -f", "stop": "./colab/deploy.sh stop"}
+2026-11-02 00:09:08 wait READY: state=preparing phase=
+2026-11-02 00:09:39 wait READY: state=booting phase=installing-dependencies
+2026-11-02 00:10:10 wait READY: state=booting phase=installing-dependencies
+2026-11-02 00:10:41 wait READY: state=booting phase=downloading-model
+2026-11-02 00:11:13 wait READY: state=booting phase=downloading-model
+2026-11-02 00:11:44 wait READY: state=booting phase=downloading-model
+2026-11-02 00:12:17 wait READY: state=booting phase=downloading-model
+2026-11-02 00:12:49 wait READY: state=booting phase=loading-models
+2026-11-02 00:13:20 wait READY: state=booting phase=loading-models
+2026-11-02 00:13:51 wait READY: state=booting phase=loading-models
+2026-11-02 00:14:23 wait READY: state=booting phase=loading-models
+2026-11-02 00:14:55 wait READY: state=booting phase=loading-models
+2026-11-02 00:15:28 wait READY: state=booting phase=loading-models
+2026-11-02 00:15:59 wait READY: state=booting phase=loading-models
+2026-11-02 00:16:30 wait READY: state=booting phase=loading-models
+2026-11-02 00:17:02 wait READY: state=booting phase=loading-models
+2026-11-02 00:17:33 wait READY: state=booting phase=loading-models
+2026-11-02 00:18:05 wait READY: state=booting phase=loading-models
+2026-11-02 00:18:36 wait READY: state=booting phase=loading-models
+2026-11-02 00:19:08 wait READY: state=booting phase=loading-models
+2026-11-02 00:19:39 wait READY: state=booting phase=loading-models
+2026-11-02 00:20:10 wait READY: state=booting phase=loading-models
+2026-11-02 00:20:42 wait READY: state=booting phase=loading-models
+2026-11-02 00:21:13 wait READY: state=booting phase=loading-models
+2026-11-02 00:21:44 wait READY: state=booting phase=loading-models
+2026-11-02 00:22:15 wait READY: state=ready phase=ready
+2026-11-02 00:22:15 READY host=agent-compute.tail8d18fd.ts.net
+2026-11-02 00:22:15 smoke orch (prod, turn, L0, 1 题 1 rep)
+2026-11-02 00:23:06 smoke orch OK
+2026-11-02 00:23:06 smoke direct (prod, L0, 1 题 1 rep)
+2026-11-02 00:23:43 smoke direct OK
+2026-11-02 00:23:43 ARM orch-turn-none start: --orchestrator --fill-placement turn --guard off --step-compaction off --prefix prod --levels 0,32768,49152,57344
+2026-11-02 02:01:46 ARM orch-turn-none harness rc=0
+2026-11-02 02:01:46 arm orch-turn-none: ok
+2026-11-02 02:01:46 ARM orch-turn-w1 start: --orchestrator --fill-placement turn --guard on --step-compaction off --prefix prod --levels 0,32768,49152,57344
+2026-11-02 03:40:26 ARM orch-turn-w1 harness rc=0
+2026-11-02 03:40:26 arm orch-turn-w1: ok
+2026-11-02 03:40:26 ARM orch-turn-w1w2 start: --orchestrator --fill-placement turn --guard on --step-compaction on --prefix prod --levels 0,32768,49152,57344
+2026-11-02 05:31:48 ARM orch-turn-w1w2 harness rc=0
+2026-11-02 05:31:48 arm orch-turn-w1w2: ok
+2026-11-02 05:31:48 ARM direct-mock start: --levels 0,16384,32768,49152
+2026-11-02 06:19:13 ARM direct-mock harness rc=0
+2026-11-02 06:19:13 arm direct-mock: ok
+2026-11-02 06:19:13 ARM direct-prod start: --prefix prod --levels 0,16384,32768,49152
+2026-11-02 07:18:45 ARM direct-prod harness rc=0
+2026-11-02 07:18:45 arm direct-prod: ok
+2026-11-02 07:18:45 ARM orch-history-ref start: --orchestrator --fill-placement history --guard on --step-compaction on --turn-compaction on --prefix prod --levels 0,32768,49152,57344
+2026-11-02 08:54:36 ARM orch-history-ref harness rc=0
+2026-11-02 08:54:36 arm orch-history-ref: ok
+2026-11-02 08:54:36 ARM direct-catalog start: --prefix catalog --levels 0,32768,49152
+2026-11-02 09:37:33 ARM direct-catalog harness rc=0
+2026-11-02 09:37:33 arm direct-catalog: ok
+2026-11-02 09:37:33 ARM direct-routed start: --prefix routed --levels 0,32768,49152
+2026-11-02 10:21:16 ARM direct-routed harness rc=0
+2026-11-02 10:21:16 arm direct-routed: ok
+2026-11-02 10:21:16 STOP colab
+2026-11-02 10:21:16 等待正在进行的 VM 分配结束（如有），然后回收
+2026-11-02 10:21:16 正在核对并回收 VM {"session": "agent-compute-3337559e1ca2"}
+2026-11-02 10:21:17 正在注销 Tailscale 临时节点
+2026-11-02 10:21:18 正在请求 Colab 释放 VM
+[colab] Stopping session 'agent-compute-3337559e1ca2'...
+[colab] Session terminated.
+2026-11-02 10:21:20 已确认 VM 从 Colab 服务端移除 {"session": "agent-compute-3337559e1ca2", "tailnet_cleanup": "ephemeral-logout-confirmed"}
+2026-11-02 10:21:20 stop rc=0
+2026-11-02 10:21:20 DONE BATCH_RC=0

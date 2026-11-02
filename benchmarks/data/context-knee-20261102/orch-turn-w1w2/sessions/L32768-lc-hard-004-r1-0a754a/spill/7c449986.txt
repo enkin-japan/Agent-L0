@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/thumbnailer/log/thumbnailer-04.log", "content": "2026-09-14T07:26:54Z INFO  [thumbnailer-2] gc pause 503ms heap_mb=781\n2026-09-14T07:28:06Z INFO  [thumbnailer-6] dropped 371 malformed records from partition 5217\n2026-09-14T07:31:36Z WARN  [thumbnailer-3] connection pool resized from 80 to 4814"}

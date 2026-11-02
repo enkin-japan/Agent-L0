@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Read all four notes files (day1-day4)
+  ○ [2] Count lines containing 阻塞 in each file and total
+  ○ [3] Identify the file with the most 阻塞 lines
+  ○ [4] Write total count and top filename into blockers.txt
+  ○ [5] Compose final answer with the three required values verbatim

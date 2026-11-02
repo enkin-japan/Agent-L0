@@ -1,0 +1,7 @@
+Plan replaced.
+  ○ [1] Edit inbox/report-a.txt: 2025→2026 only
+  ○ [2] Edit inbox/report-b.txt: 2025→2026 only
+  ○ [3] Verify archive/ and config/ are untouched
+  ○ [4] Write inbox/changelog.txt naming the two changed files
+  ○ [5] Verify final state of all files
+  ○ [6] Answer with the three verbatim values (halyard path, OPS- ticket, queue_depth_alert_threshold)

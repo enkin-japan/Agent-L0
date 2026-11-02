@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Identify DRAFT vs final reports in reports/
+  ○ [2] Delete DRAFT files (alpha.md, gamma.md)
+  ○ [3] Rename beta.md → beta-final.md (copy content, delete original)
+  ○ [4] Verify final state of reports/

@@ -1,0 +1,3 @@
+Saved to scratchpad.
+  - Monthly totals: Jan 2485, Feb 2975, Mar 3030, Apr 3540, May 3300 (to verify with run_math).
+  - 三项引用值（来自此前工具输出）：① /opt/halyard/conf/halyard-f333fa.toml（audit-trail-26.log）② OPS-4821（search-api-24.log）③ queue_depth_alert_threshold: 2400（gateway values.yaml）。

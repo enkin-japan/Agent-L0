@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Read inbox/report-a.txt and inbox/report-b.txt
+  ○ [2] Change 2025→2026 in both reports (nothing else)
+  ○ [3] Write inbox/changelog.txt naming the two changed files
+  ○ [4] Compose final answer with the 3 verbatim values

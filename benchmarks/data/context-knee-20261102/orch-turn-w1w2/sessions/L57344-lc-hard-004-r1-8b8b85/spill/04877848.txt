@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Read all files under policy/
+  ○ [2] Replace '90 days' with '30 days' in each file
+  ○ [3] Handle read-only refusal: write policy/pending-changes.md naming the untouched file
+  ○ [4] Verify final state of all policy files
+  ○ [5] Answer with the three requested values (or state honestly if not found)

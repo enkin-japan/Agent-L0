@@ -283,6 +283,31 @@ def test_repetition_guard_recorded_and_filler_injected_before_task():
     assert rec["recall_suffix"].strip().startswith("另外")
 
 
+def test_peak_prompt_measured_kept_separate_from_sent_peak():
+    """编排器量到的峰值（可能含护栏 fold 前的量值）不得混进实发峰值 peak_prompt_tokens：
+    build_record 的峰值只看 gens 实测 prompt_tokens（30000），编排器量到的 58000 另记
+    peak_prompt_measured（_one_run_orch 里用 K._peak_prompt_measured 校验后赋值）。"""
+    item = _vfs_item()
+    plan = K.plan_run(K.fake_counter(), item, 4000, 0, seed=7)
+    gens = [{"i": 0, "prompt_tokens": 20000}, {"i": 1, "prompt_tokens": 30000}]
+    rec = K.build_record(plan, {"turns": []}, gens, {"recall_hits": 0}, item, {}, 0.0)
+    assert rec["peak_prompt_tokens"] == 30000
+    assert K._peak_prompt_measured(58000) == 58000
+    assert K._peak_prompt_measured(0) is None and K._peak_prompt_measured(None) is None
+    assert K._peak_prompt_measured(True) is None       # bool 是 int 子类，须显式排除
+
+
+def test_fill_prompt_tokens_measured_records_pre_fold_measurement():
+    """fold run 里首次生成的 prompt_tokens 是折后值，真实量值（fold 前）另记
+    fill.prompt_tokens_measured；两者不同就说明首生成前折过。"""
+    item = _vfs_item()
+    plan = K.plan_run(K.fake_counter(), item, 4000, 0, seed=7)
+    gens = [{"i": 0, "prompt_tokens": 29297, "measure_tokens": 58249}]
+    rec = K.build_record(plan, {"turns": []}, gens, {"recall_hits": 0}, item, {}, 0.0)
+    assert rec["fill"]["prompt_tokens_measured"] == 58249
+    assert rec["fill"]["prompt_tokens_actual"] == 29297
+
+
 # ---- ⑥ 端到端干跑 + summarize ----
 
 def test_dry_run_end_to_end_and_summarize(tmp_path, capsys):

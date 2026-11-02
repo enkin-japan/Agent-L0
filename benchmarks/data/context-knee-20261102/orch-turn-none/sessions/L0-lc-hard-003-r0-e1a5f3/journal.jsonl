@@ -1,0 +1,25 @@
+{"kind": "journal_header", "v": 1}
+{"seq": 1, "turn_id": "t_605026c42e1e", "ts": 1793546771.087, "type": "turn_queued", "data": {"prompt": "team 目录下每个人的文件里写着他本周的值日日子。把四个人和各自的值日日子汇总成一份 duty-summary.txt，一人一行。", "attachments": [], "gen": {}, "origin": "chat"}}
+{"seq": 2, "turn_id": "t_605026c42e1e", "ts": 1793546771.087, "type": "turn_started", "data": {}}
+{"seq": 45, "turn_id": "t_605026c42e1e", "ts": 1793546773.957, "type": "tool_started", "data": {"call_id": "26d59245", "name": "run_shell_command", "args": {"command": "find ~ -type d -name \"team\" 2>/dev/null | head -5"}}}
+{"seq": 46, "turn_id": "t_605026c42e1e", "ts": 1793546773.959, "type": "tool_result", "data": {"call_id": "26d59245", "name": "run_shell_command", "response": "{\"error\": \"Unknown tool: run_shell_command\"}", "status": "ok"}}
+{"seq": 89, "turn_id": "t_605026c42e1e", "ts": 1793546776.717, "type": "tool_started", "data": {"call_id": "37bcdc09", "name": "list_dir", "args": {"path": "~/team"}}}
+{"seq": 90, "turn_id": "t_605026c42e1e", "ts": 1793546776.718, "type": "tool_result", "data": {"call_id": "37bcdc09", "name": "list_dir", "response": "{\"error\": \"Unknown tool: list_dir\"}", "status": "ok"}}
+{"seq": 116, "turn_id": "t_605026c42e1e", "ts": 1793546779.605, "type": "tool_started", "data": {"call_id": "c2497c34", "name": "run_shell_command", "args": {"command": "find ~ -maxdepth 3 -type d -name \"team\" 2>/dev/null"}}}
+{"seq": 117, "turn_id": "t_605026c42e1e", "ts": 1793546779.606, "type": "tool_result", "data": {"call_id": "c2497c34", "name": "run_shell_command", "response": "{\"error\": \"Unknown tool: run_shell_command\"}", "status": "ok"}}
+{"seq": 256, "turn_id": "t_605026c42e1e", "ts": 1793546791.816, "type": "tool_started", "data": {"call_id": "b5377c5e", "name": "find_files", "args": {"query": "team"}}}
+{"seq": 257, "turn_id": "t_605026c42e1e", "ts": 1793546791.818, "type": "tool_result", "data": {"call_id": "b5377c5e", "name": "find_files", "response": "{\"error\": \"Unknown tool: find_files\"}", "status": "ok"}}
+{"seq": 462, "turn_id": "t_605026c42e1e", "ts": 1793546796.84, "type": "tool_started", "data": {"call_id": "ef993822", "name": "run_shell_command", "args": {"command": "ls -la ~"}}}
+{"seq": 463, "turn_id": "t_605026c42e1e", "ts": 1793546796.841, "type": "tool_result", "data": {"call_id": "ef993822", "name": "run_shell_command", "response": "{\"error\": \"Unknown tool: run_shell_command\"}", "status": "ok"}}
+{"seq": 937, "turn_id": "t_605026c42e1e", "ts": 1793546806.412, "type": "tool_started", "data": {"call_id": "06015ff7", "name": "list_files", "args": {}}}
+{"seq": 938, "turn_id": "t_605026c42e1e", "ts": 1793546806.413, "type": "tool_result", "data": {"call_id": "06015ff7", "name": "list_files", "response": "{\"files\": [\"team/lina.txt\", \"team/wangfang.txt\", \"team/zhangwei.txt\", \"team/zhaomin.txt\"]}", "status": "ok"}}
+{"seq": 1014, "turn_id": "t_605026c42e1e", "ts": 1793546811.102, "type": "tool_started", "data": {"call_id": "892275ff", "name": "read_file", "args": {"path": "team/lina.txt"}}}
+{"seq": 1015, "turn_id": "t_605026c42e1e", "ts": 1793546811.103, "type": "tool_started", "data": {"call_id": "9c26a79c", "name": "read_file", "args": {"path": "team/wangfang.txt"}}}
+{"seq": 1016, "turn_id": "t_605026c42e1e", "ts": 1793546811.104, "type": "tool_started", "data": {"call_id": "942ee089", "name": "read_file", "args": {"path": "team/zhangwei.txt"}}}
+{"seq": 1017, "turn_id": "t_605026c42e1e", "ts": 1793546811.105, "type": "tool_started", "data": {"call_id": "0f65fbac", "name": "read_file", "args": {"path": "team/zhaomin.txt"}}}
+{"seq": 1018, "turn_id": "t_605026c42e1e", "ts": 1793546811.105, "type": "tool_result", "data": {"call_id": "892275ff", "name": "read_file", "response": "{\"path\": \"team/lina.txt\", \"content\": \"李娜 本周值日：周三\"}", "status": "ok"}}
+{"seq": 1019, "turn_id": "t_605026c42e1e", "ts": 1793546811.105, "type": "tool_result", "data": {"call_id": "9c26a79c", "name": "read_file", "response": "{\"path\": \"team/wangfang.txt\", \"content\": \"王芳 本周值日：周四\"}", "status": "ok"}}
+{"seq": 1020, "turn_id": "t_605026c42e1e", "ts": 1793546811.106, "type": "tool_result", "data": {"call_id": "942ee089", "name": "read_file", "response": "{\"path\": \"team/zhangwei.txt\", \"content\": \"张伟 本周值日：周一\"}", "status": "ok"}}
+{"seq": 1021, "turn_id": "t_605026c42e1e", "ts": 1793546811.106, "type": "tool_result", "data": {"call_id": "0f65fbac", "name": "read_file", "response": "{\"path\": \"team/zhaomin.txt\", \"content\": \"赵敏 本周值日：周五\"}", "status": "ok"}}
+{"seq": 2047, "turn_id": "t_605026c42e1e", "ts": 1793546830.854, "type": "tool_started", "data": {"call_id": "125bb11f", "name": "write_file", "args": {"path": "team/duty-summary.txt", "content": "张伟 周一\n李娜 周三\n王芳 周四\n赵敏 周五\n"}}}
+{"seq": 2048, "turn_id": "t_605026c42e1e", "ts": 1793546830.855, "type": "tool_result", "data": {"call_id": "125bb11f", "name": "write_file", "response": "{\"error\": \"EBUSY: resource temporarily busy, retry\"}", "status": "ok"}}

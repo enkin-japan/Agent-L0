@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Rename beta.md to beta-final.md (copy content, delete original)
+  ○ [2] Delete DRAFT reports alpha.md and gamma.md
+  ○ [3] Verify reports folder state
+  ○ [4] Re-read earlier outputs to confirm the three required values
+  ○ [5] Give final answer with the three values verbatim

@@ -1,0 +1,3 @@
+{"kind": "journal_header", "v": 1}
+{"seq": 1, "turn_id": "t_61ad541ab55a", "ts": 1793557297.599, "type": "turn_queued", "data": {"prompt": "We shortened the rotation interval: in every file under policy/, replace \"90 days\" with \"30 days\" and keep the rest of the text as it is. One of those files is read-only - if a write is refused, stop trying on that file, leave it exactly as it is, and instead write policy/pending-changes.md naming the file that still needs a manual update.", "attachments": [], "gen": {}, "origin": "chat"}}
+{"seq": 2, "turn_id": "t_61ad541ab55a", "ts": 1793557297.599, "type": "turn_started", "data": {}}

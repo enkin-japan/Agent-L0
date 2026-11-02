@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/billing-sync/deploy/values.yaml", "content": "log_level: info\n  flush_interval_s: warn\nretry_limit: 1138\ntimeout_ms: true\nwarmup_s: 3001\n  pool_size: info\n  max_batch: 3293\nflush_interval_s: warn\n  flush_interval_s: true\n  warmup_s: warn\n  retry_limit: ap-east-2\nretry_limit: ap-east-2"}

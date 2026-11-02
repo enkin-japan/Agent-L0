@@ -1,0 +1,4 @@
+Plan replaced.
+  ○ [1] Identify DRAFT files in reports/ and delete them
+  ○ [2] Rename final reports with -final suffix (copy then delete original)
+  ○ [3] Verify final state and report the three requested values

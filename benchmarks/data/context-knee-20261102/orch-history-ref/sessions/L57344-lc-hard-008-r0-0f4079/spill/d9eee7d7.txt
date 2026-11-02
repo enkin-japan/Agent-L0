@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Append '2026-08-24 OK' to build.log and test.log; create deploy.log with the line
+  ○ [2] Write count of log files containing the line into logs/count.txt
+  ○ [3] Verify all four files
+  ○ [4] Answer with the three verbatim values

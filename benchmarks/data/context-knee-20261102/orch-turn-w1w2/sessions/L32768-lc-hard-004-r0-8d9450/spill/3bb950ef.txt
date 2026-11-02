@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Locate all files under policy/ in the workspace
+  ○ [2] Replace '90 days' with '30 days' in each policy file (keep rest intact)
+  ○ [3] Handle the read-only file: stop on refusal, leave it unchanged
+  ○ [4] Write policy/pending-changes.md naming the file needing manual update
+  ○ [5] Report the three verbatim values (halyard config path, OPS ticket, queue_depth_alert_threshold)

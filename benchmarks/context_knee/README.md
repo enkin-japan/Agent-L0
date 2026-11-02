@@ -74,11 +74,12 @@ W3（D36，2026-11-01）起引擎按注册表条目的 `thinking_replay` 投影�
 
 ## 输出与口径
 transcripts.jsonl 每 run 一行：
-- `fill`：目标 / 估算 / 实际 token、fill_error、warning、cards、fingerprint；`score`：longchain 原字段 + recall_* + repetition_hits。
+- `fill`：目标 / 估算 / 实际 token、fill_error、warning、cards、fingerprint；`score`：longchain 原字段 + recall_* + repetition_hits。`fill.prompt_tokens_measured`：首次生成前量法值（护栏 fold 前）；与 prompt_tokens_actual 不同时说明首生成前折过。
 - `gens`：每次生成的 prompt_tokens、reused_prefix、prompt_tps、generation_tps、repetition_guard；`measure_tokens` / `measure_method`：该次生成前按同一份 prompt 入参调 `engine.measure_prompt` 的量值与量法（W1 护栏量法：`tokenizer` | `chars`），与同行实测 `prompt_tokens` 对照即量法偏差；内层引擎无此方法 = null，量法抛错另记 `measure_error`、不中止 run。旧行缺这两键。
 - `full_renders`：本 run 会话的全量渲染次数（`session.turn_full_renders`，engine 每走一次全量路 +1；直调模式不经编排层、无轮首归零，executor 每 run 新建会话 = 整 run 口径；编排器模式同为整 run，每 run 新会话）。null = 会话没有该计数；旧行缺键。
 - 上下文上限（meta，每行与 summary.json 都有）：`context_limit` = `engine.context_limit`（W1 护栏同一读法），`context_limit_source` = `health`（算力端 /health 报的 max_model_len）| `config` / `default`（remote 回落执行端配置 / 内置缺省；mlx 为 `inference.mlx.context_limit` 有无）| `fake`（干跑，无真上限，`context_limit` = null）| null（记不到）。旧行缺键。
-- `peak_prompt_tokens`（W1）：本 run 各次生成实测 prompt_tokens 的最大值（gens 空或全缺 = null）；summarize / analyze 汇总为「峰值prompt中位」`peak_prompt_tokens_median`（W1 前的旧行缺键，不进中位数）。直调模式不经编排层，W1 护栏动作（钳制/压缩/终止）不在此计数；编排器模式取 `turn_metrics.peak_prompt_tokens`（护栏量值与实测取大）与 gens 实测的较大者。
+- `peak_prompt_tokens`（W1）：本 run 各次生成实测 prompt_tokens 的最大值（gens 空或全缺 = null）；summarize / analyze 汇总为「峰值prompt中位」`peak_prompt_tokens_median`（W1 前的旧行缺键，不进中位数）。直调模式不经编排层，W1 护栏动作（钳制/压缩/终止）不在此计数；编排器模式也只取 gens 实测 prompt_tokens 的最大值，即实发峰值。
+- `peak_prompt_measured`：编排器量到的峰值，含护栏 fold 前的量值；实发峰值看 peak_prompt_tokens。直调模式无此键。
 - 其余：`final_text_quality`、`sampling_overrides`、`turns`。
 - harness 口径（meta，每行与 summary.json 都有，W-K）：`mode`（`direct` | `orchestrator`；旧行缺键 = direct）、`fill_placement`、`guard`、`step_compaction`、`turn_compaction`（实际生效值）、`goal_verify`、`fill_shape`（`turns` | `in_turn`；直调 = turns）、`guard_thresholds`、`step_compaction_cfg`、`agent_cfg_fingerprint`、`orchestrator_cfg_source`（`config.yaml:agent` + 覆盖项）、`tool_schema_mode_effective`；直调模式除 mode / fill_shape 外全为 null。
 - 编排器模式行另有：`turn_status`（run_turn 的 status）、`turn_metrics`（run_turn 返回的 metrics 整个 dict：generations / peak_prompt_tokens / context_guard_level / step_compactions / compaction_freed_chars / full_renders / thinking_replay 等，后几项「非零 / 有值才出现」）、`guard_events` / `guard_events_lines`、`meta_calls`、`dup_blocked`、`system_errors`、`session_dir`、`turn_response`、`audit_generations` / `audit_gens`、`spill_readbacks`、`fill.fill_est_delta`（turn 放置）、`max_total_iterations`、`context_guard_bound`（引擎报得出上限才绑）、`tool_effects`（mock 工具的 read/write 分类）；`gens[*].measure_source`。summarize / analyze（表 B）末尾三列：W2 压缩次数中位、全量渲染次数中位（均取 `turn_metrics`，缺键按 0）、ceiling 终止计数（`aborted_reason == context_guard`）；没有编排器行的档显示 —。analyze 的 CSV 列不变。

@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Found in tool outputs: (2) escalation ticket ID = OPS-60117 (from /srv/legacy-2025q3/feed-merge/deploy/values.yaml: "escalation: incident tracked as ticket OPS-60117"). NOT found in any tool output: h

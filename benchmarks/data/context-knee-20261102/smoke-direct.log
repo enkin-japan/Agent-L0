@@ -1,0 +1,20 @@
+[RemoteBackend] 模型身份核对通过：RedHatAI/Qwen3.8-27B-INT4（revision=91bd022d5b49442a868bc35008f6c21e1860edfa，capabilities=['text', 'vision']）
+[RemoteBackend] 已连接 inference-server: http://agent-compute.tail8d18fd.ts.net:14161
+[MCP-rag_search] ⚠️ RAG 服务器 (127.0.0.1:14160) 探活失败: hermetic construction
+[Skill] ✅ 成功加载剧本: briefing
+[Skill] ✅ 成功加载剧本: chart-report
+[Skill] ✅ 成功加载剧本: deck
+[Skill] ✅ 成功加载剧本: ingest
+[Skill] ✅ 成功加载剧本: research
+== 拐点测量 RedHatAI/Qwen3.8-27B-INT4（remote，计数 engine，前缀 prod 13708 tok）：1 题 × 1 档 [0] × 1 rep → benchmarks/data/context-knee-20261102/smoke-direct
+[Engine] 约束采样引擎就绪（llguidance）
+[Engine] 约束采样构建失败，永久禁用（纠错闭环兜底）: NotImplementedError: qwen35 方言使用原生 XML 调用体（<function=…><parameter=…>），按设计不启用 约束采样——engine 将 fail-open 到自由采样 + 解析纠错闭环。
+[Engine] 前缀命中 12544/13851 tokens，gen 43.0 tps
+[Engine] 前缀命中 12544/13969 tokens，gen 42.3 tps
+[Engine] 前缀命中 14112/14089 tokens，gen 54.0 tps
+[Engine] 前缀命中 14112/14218 tokens，gen 57.5 tps
+[Engine] 前缀命中 14112/14821 tokens，gen 55.8 tps
+[Engine] 前缀命中 14112/15150 tokens，gen 52.5 tps
+[Engine] 前缀命中 14112/15370 tokens，gen 49.0 tps
+✅ L0 lc-hard-001 r0 prompt=13851 (est 13851, err None) recall - rep_guard 0 (30.5s)
+== 产物: benchmarks/data/context-knee-20261102/smoke-direct（表格：summarize.py benchmarks/data/context-knee-20261102/smoke-direct）

@@ -1,0 +1,4 @@
+Plan replaced.
+  ○ [1] Rewrite the three policy files with '30 days'
+  ○ [2] Handle the read-only refusal: write policy/pending-changes.md naming the file
+  ○ [3] Verify final contents and answer with the three required values

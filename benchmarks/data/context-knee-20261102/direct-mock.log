@@ -1,0 +1,449 @@
+[RemoteBackend] 模型身份核对通过：RedHatAI/Qwen3.8-27B-INT4（revision=91bd022d5b49442a868bc35008f6c21e1860edfa，capabilities=['text', 'vision']）
+[RemoteBackend] 已连接 inference-server: http://agent-compute.tail8d18fd.ts.net:14161
+== 拐点测量 RedHatAI/Qwen3.8-27B-INT4（remote，计数 engine，前缀 mock 45 tok）：10 题 × 4 档 [0, 16384, 32768, 49152] × 2 rep → benchmarks/data/context-knee-20261102/direct-mock
+[Engine] 约束采样引擎就绪（llguidance）
+[Engine] 约束采样构建失败，永久禁用（纠错闭环兜底）: NotImplementedError: qwen35 方言使用原生 XML 调用体（<function=…><parameter=…>），按设计不启用 约束采样——engine 将 fail-open 到自由采样 + 解析纠错闭环。
+[Engine] 前缀命中 0/524 tokens，gen 44.7 tps
+[Engine] 前缀命中 0/645 tokens，gen 57.4 tps
+[Engine] 前缀命中 0/1302 tokens，gen 57.1 tps
+[Engine] 前缀命中 1568/1707 tokens，gen 59.3 tps
+✅ L0 lc-hard-001 r0 prompt=524 (est 524, err None) recall - rep_guard 0 (16.62s)
+[Engine] 前缀命中 0/524 tokens，gen 46.8 tps
+[Engine] 前缀命中 0/649 tokens，gen 57.4 tps
+[Engine] 前缀命中 1568/1306 tokens，gen 60.5 tps
+[Engine] 前缀命中 1568/1903 tokens，gen 59.0 tps
+✅ L0 lc-hard-001 r1 prompt=524 (est 524, err None) recall - rep_guard 0 (19.05s)
+[Engine] 前缀命中 0/528 tokens，gen 44.1 tps
+[Engine] 前缀命中 0/604 tokens，gen 55.4 tps
+[Engine] 前缀命中 0/858 tokens，gen 53.6 tps
+[Engine] 前缀命中 0/1004 tokens，gen 52.7 tps
+[Engine] 前缀命中 0/1199 tokens，gen 53.7 tps
+✅ L0 lc-hard-002 r0 prompt=528 (est 528, err None) recall - rep_guard 0 (12.2s)
+[Engine] 前缀命中 0/528 tokens，gen 46.7 tps
+[Engine] 前缀命中 0/611 tokens，gen 55.1 tps
+[Engine] 前缀命中 0/861 tokens，gen 54.5 tps
+[Engine] 前缀命中 0/1020 tokens，gen 52.7 tps
+[Engine] 前缀命中 0/1220 tokens，gen 34.4 tps
+[Engine] 前缀命中 0/1212 tokens，gen 57.2 tps
+✅ L0 lc-hard-002 r1 prompt=528 (est 528, err None) recall - rep_guard 0 (17.5s)
+[Engine] 前缀命中 0/496 tokens，gen 47.1 tps
+[Engine] 前缀命中 0/588 tokens，gen 56.5 tps
+[Engine] 前缀命中 0/889 tokens，gen 53.3 tps
+[Engine] 前缀命中 0/1024 tokens，gen 49.0 tps
+[Engine] 前缀命中 0/1124 tokens，gen 46.6 tps
+✅ L0 lc-hard-003 r0 prompt=496 (est 496, err None) recall - rep_guard 0 (10.51s)
+[Engine] 前缀命中 0/496 tokens，gen 46.8 tps
+[Engine] 前缀命中 0/587 tokens，gen 56.5 tps
+[Engine] 前缀命中 0/888 tokens，gen 53.3 tps
+[Engine] 前缀命中 0/1024 tokens，gen 49.0 tps
+[Engine] 前缀命中 0/1123 tokens，gen 46.8 tps
+✅ L0 lc-hard-003 r1 prompt=496 (est 496, err None) recall - rep_guard 0 (10.49s)
+[Engine] 前缀命中 0/547 tokens，gen 47.3 tps
+[Engine] 前缀命中 0/631 tokens，gen 55.0 tps
+[Engine] 前缀命中 0/898 tokens，gen 57.1 tps
+[Engine] 前缀命中 0/1210 tokens，gen 52.6 tps
+[Engine] 前缀命中 0/1366 tokens，gen 54.0 tps
+✅ L0 lc-hard-004 r0 prompt=547 (est 547, err None) recall - rep_guard 0 (15.34s)
+[Engine] 前缀命中 0/547 tokens，gen 46.3 tps
+[Engine] 前缀命中 0/628 tokens，gen 55.0 tps
+[Engine] 前缀命中 0/895 tokens，gen 56.8 tps
+[Engine] 前缀命中 0/1195 tokens，gen 52.9 tps
+[Engine] 前缀命中 0/1357 tokens，gen 52.9 tps
+✅ L0 lc-hard-004 r1 prompt=547 (est 547, err None) recall - rep_guard 0 (14.61s)
+[Engine] 前缀命中 0/665 tokens，gen 47.8 tps
+[Engine] 前缀命中 0/787 tokens，gen 57.6 tps
+[Engine] 前缀命中 0/1208 tokens，gen 52.3 tps
+[Engine] 前缀命中 0/1422 tokens，gen 48.6 tps
+✅ L0 lc-hard-005 r0 prompt=665 (est 665, err None) recall - rep_guard 0 (12.12s)
+[Engine] 前缀命中 0/665 tokens，gen 48.7 tps
+[Engine] 前缀命中 0/791 tokens，gen 57.6 tps
+[Engine] 前缀命中 0/1209 tokens，gen 47.0 tps
+[Engine] 前缀命中 0/1331 tokens，gen 47.8 tps
+[Engine] 前缀命中 0/1338 tokens，gen 53.7 tps
+✅ L0 lc-hard-005 r1 prompt=665 (est 665, err None) recall - rep_guard 0 (15.05s)
+[Engine] 前缀命中 0/511 tokens，gen 45.9 tps
+[Engine] 前缀命中 0/588 tokens，gen 54.6 tps
+[Engine] 前缀命中 0/807 tokens，gen 55.7 tps
+[Engine] 前缀命中 0/1020 tokens，gen 51.8 tps
+✅ L0 lc-hard-006 r0 prompt=511 (est 511, err None) recall - rep_guard 0 (8.93s)
+[Engine] 前缀命中 0/511 tokens，gen 45.9 tps
+[Engine] 前缀命中 0/588 tokens，gen 54.5 tps
+[Engine] 前缀命中 0/807 tokens，gen 56.1 tps
+[Engine] 前缀命中 0/1035 tokens，gen 54.6 tps
+✅ L0 lc-hard-006 r1 prompt=511 (est 511, err None) recall - rep_guard 0 (10.3s)
+[Engine] 前缀命中 0/525 tokens，gen 48.2 tps
+[Engine] 前缀命中 0/634 tokens，gen 52.5 tps
+[Engine] 前缀命中 0/817 tokens，gen 58.3 tps
+[Engine] 前缀命中 0/1244 tokens，gen 55.5 tps
+✅ L0 lc-hard-007 r0 prompt=525 (est 525, err None) recall - rep_guard 0 (14.18s)
+[Engine] 前缀命中 0/525 tokens，gen 48.2 tps
+[Engine] 前缀命中 0/634 tokens，gen 52.5 tps
+[Engine] 前缀命中 0/817 tokens，gen 58.3 tps
+[Engine] 前缀命中 0/1239 tokens，gen 55.4 tps
+✅ L0 lc-hard-007 r1 prompt=525 (est 525, err None) recall - rep_guard 0 (14.05s)
+[Engine] 前缀命中 0/532 tokens，gen 57.6 tps
+[Engine] 前缀命中 0/772 tokens，gen 52.2 tps
+[Engine] 前缀命中 0/967 tokens，gen 57.8 tps
+[Engine] 前缀命中 0/1245 tokens，gen 50.0 tps
+[Engine] 前缀命中 1568/1358 tokens，gen 60.6 tps
+✅ L0 lc-hard-008 r0 prompt=532 (est 532, err None) recall - rep_guard 0 (24.8s)
+[Engine] 前缀命中 0/532 tokens，gen 57.3 tps
+[Engine] 前缀命中 0/754 tokens，gen 53.3 tps
+[Engine] 前缀命中 0/962 tokens，gen 57.6 tps
+[Engine] 前缀命中 0/1219 tokens，gen 49.4 tps
+[Engine] 前缀命中 0/1310 tokens，gen 56.6 tps
+✅ L0 lc-hard-008 r1 prompt=532 (est 532, err None) recall - rep_guard 0 (20.81s)
+[Engine] 前缀命中 0/534 tokens，gen 47.0 tps
+[Engine] 前缀命中 0/628 tokens，gen 56.8 tps
+[Engine] 前缀命中 0/996 tokens，gen 58.3 tps
+[Engine] 前缀命中 0/1424 tokens，gen 45.8 tps
+❌ L0 lc-hard-009 r0 prompt=534 (est 534, err None) recall - rep_guard 0 (14.03s)  | files/metrics/summary.json: regex 失败: '(?s)\\{\\s*"cpu"\\s*:\\s*21(?:\\.0+)?\\s*,\\s*"mem"\\s*:\\s*4
+[Engine] 前缀命中 0/534 tokens，gen 46.6 tps
+[Engine] 前缀命中 0/627 tokens，gen 56.8 tps
+[Engine] 前缀命中 0/996 tokens，gen 58.3 tps
+[Engine] 前缀命中 0/1426 tokens，gen 45.8 tps
+❌ L0 lc-hard-009 r1 prompt=534 (est 534, err None) recall - rep_guard 0 (14.04s)  | files/metrics/summary.json: regex 失败: '(?s)\\{\\s*"cpu"\\s*:\\s*21(?:\\.0+)?\\s*,\\s*"mem"\\s*:\\s*4
+[Engine] 前缀命中 0/509 tokens，gen 55.3 tps
+[Engine] 前缀命中 0/667 tokens，gen 55.9 tps
+[Engine] 前缀命中 0/1017 tokens，gen 58.2 tps
+[Engine] 前缀命中 0/1401 tokens，gen 53.9 tps
+✅ L0 lc-hard-010 r0 prompt=509 (est 509, err None) recall - rep_guard 0 (17.33s)
+[Engine] 前缀命中 0/509 tokens，gen 55.1 tps
+[Engine] 前缀命中 0/663 tokens，gen 55.9 tps
+[Engine] 前缀命中 0/1013 tokens，gen 58.3 tps
+[Engine] 前缀命中 0/1411 tokens，gen 53.4 tps
+✅ L0 lc-hard-010 r1 prompt=509 (est 509, err None) recall - rep_guard 0 (17.2s)
+[Engine] 前缀命中 15680/16731 tokens，gen 53.7 tps
+[Engine] 前缀命中 15680/17136 tokens，gen 50.2 tps
+[Engine] 前缀命中 17248/17808 tokens，gen 56.1 tps
+[Engine] 前缀命中 17248/17948 tokens，gen 56.1 tps
+✅ L16384 lc-hard-001 r0 prompt=16731 (est 16731, err 347) recall 3/3 rep_guard 0 (32.79s)
+[Engine] 前缀命中 15680/16282 tokens，gen 55.3 tps
+[Engine] 前缀命中 15680/16668 tokens，gen 52.7 tps
+[Engine] 前缀命中 17248/17331 tokens，gen 57.7 tps
+[Engine] 前缀命中 17248/17506 tokens，gen 57.6 tps
+✅ L16384 lc-hard-001 r1 prompt=16282 (est 16282, err -102) recall 3/3 rep_guard 0 (31.3s)
+[Engine] 前缀命中 15680/16709 tokens，gen 33.3 tps
+[Engine] 前缀命中 15680/16790 tokens，gen 46.9 tps
+[Engine] 前缀命中 15680/17033 tokens，gen 51.6 tps
+[Engine] 前缀命中 17248/17348 tokens，gen 53.3 tps
+[Engine] 前缀命中 17248/17427 tokens，gen 57.8 tps
+✅ L16384 lc-hard-002 r0 prompt=16709 (est 16709, err 325) recall 3/3 rep_guard 0 (26.88s)
+[Engine] 前缀命中 15680/16806 tokens，gen 31.1 tps
+[Engine] 前缀命中 15680/16885 tokens，gen 45.7 tps
+[Engine] 前缀命中 15680/17125 tokens，gen 49.8 tps
+[Engine] 前缀命中 17248/17402 tokens，gen 51.5 tps
+[Engine] 前缀命中 17248/17471 tokens，gen 48.8 tps
+[Engine] 前缀命中 17248/17471 tokens，gen 57.4 tps
+✅ L16384 lc-hard-002 r1 prompt=16806 (est 16806, err 422) recall 3/3 rep_guard 0 (26.21s)
+[Engine] 前缀命中 15680/16539 tokens，gen 35.8 tps
+[Engine] 前缀命中 15680/16630 tokens，gen 50.4 tps
+[Engine] 前缀命中 15680/16925 tokens，gen 42.2 tps
+[Engine] 前缀命中 15680/17022 tokens，gen 40.9 tps
+[Engine] 前缀命中 15680/17124 tokens，gen 50.6 tps
+✅ L16384 lc-hard-003 r0 prompt=16539 (est 16539, err 155) recall 3/3 rep_guard 0 (21.45s)
+[Engine] 前缀命中 15680/16292 tokens，gen 55.3 tps
+[Engine] 前缀命中 15680/16646 tokens，gen 50.5 tps
+[Engine] 前缀命中 15680/16948 tokens，gen 52.8 tps
+[Engine] 前缀命中 15680/16994 tokens，gen 41.7 tps
+[Engine] 前缀命中 17248/17093 tokens，gen 58.1 tps
+✅ L16384 lc-hard-003 r1 prompt=16292 (est 16292, err -92) recall 3/3 rep_guard 0 (30.77s)
+[Engine] 前缀命中 15680/16282 tokens，gen 40.6 tps
+[Engine] 前缀命中 15680/16363 tokens，gen 50.3 tps
+[Engine] 前缀命中 15680/16623 tokens，gen 53.1 tps
+[Engine] 前缀命中 15680/16906 tokens，gen 52.5 tps
+[Engine] 前缀命中 17248/17190 tokens，gen 58.4 tps
+✅ L16384 lc-hard-004 r0 prompt=16282 (est 16282, err -102) recall 3/3 rep_guard 0 (28.7s)
+[Engine] 前缀命中 15680/17211 tokens，gen 27.4 tps
+[Engine] 前缀命中 17248/17290 tokens，gen 56.1 tps
+[Engine] 前缀命中 17248/17550 tokens，gen 56.6 tps
+[Engine] 前缀命中 17248/17834 tokens，gen 54.7 tps
+[Engine] 前缀命中 17248/18077 tokens，gen 55.7 tps
+✅ L16384 lc-hard-004 r1 prompt=17211 (est 17211, err 827) recall 3/3 rep_guard 0 (28.48s)
+[Engine] 前缀命中 15680/16622 tokens，gen 37.9 tps
+[Engine] 前缀命中 15680/16739 tokens，gen 54.9 tps
+[Engine] 前缀命中 17248/17303 tokens，gen 56.6 tps
+[Engine] 前缀命中 17248/17515 tokens，gen 56.8 tps
+✅ L16384 lc-hard-005 r0 prompt=16622 (est 16622, err 238) recall 3/3 rep_guard 0 (24.17s)
+[Engine] 前缀命中 15680/16862 tokens，gen 35.6 tps
+[Engine] 前缀命中 15680/16981 tokens，gen 51.3 tps
+[Engine] 前缀命中 17248/17355 tokens，gen 56.5 tps
+[Engine] 前缀命中 17248/17561 tokens，gen 56.7 tps
+✅ L16384 lc-hard-005 r1 prompt=16862 (est 16862, err 478) recall 3/3 rep_guard 0 (21.3s)
+[Engine] 前缀命中 15680/16673 tokens，gen 53.3 tps
+[Engine] 前缀命中 15680/16989 tokens，gen 44.2 tps
+[Engine] 前缀命中 17248/17209 tokens，gen 57.6 tps
+[Engine] 前缀命中 17248/17241 tokens，gen 58.1 tps
+❌ L16384 lc-hard-006 r0 prompt=16673 (est 16673, err 289) recall 3/3 rep_guard 0 (29.14s)  | files/merged.txt: exists 期望 True，实际 False; files/count.txt: exists 期望 True，实际 False
+[Engine] 前缀命中 15680/16495 tokens，gen 55.3 tps
+[Engine] 前缀命中 15680/16934 tokens，gen 46.2 tps
+[Engine] 前缀命中 17248/17172 tokens，gen 58.0 tps
+[Engine] 前缀命中 17248/17160 tokens，gen 58.5 tps
+✅ L16384 lc-hard-006 r1 prompt=16495 (est 16495, err 111) recall 3/3 rep_guard 0 (50.99s)
+[Engine] 前缀命中 15680/16219 tokens，gen 57.0 tps
+[Engine] 前缀命中 17248/17101 tokens，gen 57.7 tps
+[Engine] 前缀命中 17248/17430 tokens，gen 57.9 tps
+[Engine] 前缀命中 17248/17257 tokens，gen 58.3 tps
+✅ L16384 lc-hard-007 r0 prompt=16219 (est 16219, err -165) recall 3/3 rep_guard 0 (42.89s)
+[Engine] 前缀命中 15680/16537 tokens，gen 39.6 tps
+[Engine] 前缀命中 15680/16651 tokens，gen 44.6 tps
+[Engine] 前缀命中 15680/16831 tokens，gen 52.8 tps
+[Engine] 前缀命中 15680/17132 tokens，gen 42.0 tps
+[Engine] 前缀命中 17248/17243 tokens，gen 58.3 tps
+✅ L16384 lc-hard-007 r1 prompt=16537 (est 16537, err 153) recall 3/3 rep_guard 0 (27.18s)
+[Engine] 前缀命中 15680/16443 tokens，gen 55.8 tps
+[Engine] 前缀命中 15680/16935 tokens，gen 45.5 tps
+[Engine] 前缀命中 15680/17148 tokens，gen 51.6 tps
+[Engine] 前缀命中 15680/17055 tokens，gen 49.1 tps
+[Engine] 前缀命中 17248/17216 tokens，gen 58.3 tps
+✅ L16384 lc-hard-008 r0 prompt=16443 (est 16443, err 59) recall 3/3 rep_guard 0 (42.99s)
+[Engine] 前缀命中 15680/15996 tokens，gen 56.9 tps
+[Engine] 前缀命中 15680/16485 tokens，gen 56.2 tps
+[Engine] 前缀命中 15680/17057 tokens，gen 41.3 tps
+[Engine] 前缀命中 15680/16907 tokens，gen 53.6 tps
+✅ L16384 lc-hard-008 r1 prompt=15996 (est 15996, err -388) recall 3/3 rep_guard 0 (31.32s)
+[Engine] 前缀命中 15680/16741 tokens，gen 51.0 tps
+[Engine] 前缀命中 15680/16984 tokens，gen 49.0 tps
+[Engine] 前缀命中 17248/17351 tokens，gen 58.3 tps
+[Engine] 前缀命中 17248/17639 tokens，gen 56.9 tps
+❌ L16384 lc-hard-009 r0 prompt=16741 (est 16741, err 357) recall 3/3 rep_guard 0 (29.23s)  | files/metrics/summary.json: regex 失败: '(?s)\\{\\s*"cpu"\\s*:\\s*21(?:\\.0+)?\\s*,\\s*"mem"\\s*:\\s*4
+[Engine] 前缀命中 15680/16309 tokens，gen 39.0 tps
+[Engine] 前缀命中 15680/16400 tokens，gen 52.8 tps
+[Engine] 前缀命中 15680/16764 tokens，gen 53.0 tps
+[Engine] 前缀命中 17248/17044 tokens，gen 58.7 tps
+❌ L16384 lc-hard-009 r1 prompt=16309 (est 16309, err -75) recall 3/3 rep_guard 0 (27.7s)  | files/metrics/summary.json: regex 失败: '(?s)\\{\\s*"cpu"\\s*:\\s*21(?:\\.0+)?\\s*,\\s*"mem"\\s*:\\s*4
+[Engine] 前缀命中 15680/16651 tokens，gen 34.9 tps
+[Engine] 前缀命中 15680/16740 tokens，gen 49.9 tps
+[Engine] 前缀命中 17248/17093 tokens，gen 58.1 tps
+[Engine] 前缀命中 17248/17432 tokens，gen 57.5 tps
+✅ L16384 lc-hard-010 r0 prompt=16651 (est 16651, err 267) recall 3/3 rep_guard 0 (23.9s)
+[Engine] 前缀命中 15680/16546 tokens，gen 54.3 tps
+[Engine] 前缀命中 15680/16891 tokens，gen 48.2 tps
+[Engine] 前缀命中 17248/17241 tokens，gen 58.2 tps
+[Engine] 前缀命中 17248/17536 tokens，gen 57.3 tps
+✅ L16384 lc-hard-010 r1 prompt=16546 (est 16546, err 162) recall 3/3 rep_guard 0 (32.48s)
+[Engine] 前缀命中 32928/32736 tokens，gen 57.0 tps
+[Engine] 前缀命中 32928/33141 tokens，gen 55.9 tps
+[Engine] 前缀命中 32928/33808 tokens，gen 53.2 tps
+[Engine] 前缀命中 32928/33948 tokens，gen 53.9 tps
+✅ L32768 lc-hard-001 r0 prompt=32736 (est 32736, err -32) recall 3/3 rep_guard 0 (43.68s)
+[Engine] 前缀命中 32928/32972 tokens，gen 56.2 tps
+[Engine] 前缀命中 32928/33318 tokens，gen 54.1 tps
+[Engine] 前缀命中 32928/33982 tokens，gen 51.4 tps
+[Engine] 前缀命中 32928/34089 tokens，gen 53.7 tps
+✅ L32768 lc-hard-001 r1 prompt=32972 (est 32972, err 204) recall 3/3 rep_guard 0 (42.61s)
+[Engine] 前缀命中 32928/33097 tokens，gen 51.5 tps
+[Engine] 前缀命中 32928/33190 tokens，gen 53.7 tps
+[Engine] 前缀命中 32928/33435 tokens，gen 53.5 tps
+[Engine] 前缀命中 32928/33732 tokens，gen 46.6 tps
+[Engine] 前缀命中 32928/33926 tokens，gen 26.4 tps
+[Engine] 前缀命中 32928/33839 tokens，gen 52.9 tps
+✅ L32768 lc-hard-002 r0 prompt=33097 (est 33097, err 329) recall 3/3 rep_guard 0 (36.48s)
+[Engine] 前缀命中 31360/32801 tokens，gen 28.3 tps
+[Engine] 前缀命中 31360/32891 tokens，gen 40.4 tps
+[Engine] 前缀命中 32928/33137 tokens，gen 55.7 tps
+[Engine] 前缀命中 32928/33490 tokens，gen 42.8 tps
+[Engine] 前缀命中 32928/33566 tokens，gen 52.6 tps
+✅ L32768 lc-hard-002 r1 prompt=32801 (est 32801, err 33) recall 3/3 rep_guard 0 (33.83s)
+[Engine] 前缀命中 32928/32897 tokens，gen 56.3 tps
+[Engine] 前缀命中 32928/33365 tokens，gen 52.2 tps
+[Engine] 前缀命中 32928/33664 tokens，gen 51.8 tps
+[Engine] 前缀命中 32928/33540 tokens，gen 46.1 tps
+[Engine] 前缀命中 32928/33642 tokens，gen 53.2 tps
+✅ L32768 lc-hard-003 r0 prompt=32897 (est 32897, err 129) recall 3/3 rep_guard 0 (41.13s)
+[Engine] 前缀命中 31360/32361 tokens，gen 51.2 tps
+[Engine] 前缀命中 31360/32708 tokens，gen 44.3 tps
+[Engine] 前缀命中 32928/33007 tokens，gen 55.8 tps
+[Engine] 前缀命中 32928/32953 tokens，gen 54.0 tps
+[Engine] 前缀命中 32928/33052 tokens，gen 56.0 tps
+✅ L32768 lc-hard-003 r1 prompt=32361 (est 32361, err -407) recall 3/3 rep_guard 0 (36.13s)
+[Engine] 前缀命中 31360/32445 tokens，gen 29.1 tps
+[Engine] 前缀命中 31360/32524 tokens，gen 43.4 tps
+[Engine] 前缀命中 31360/32784 tokens，gen 49.2 tps
+[Engine] 前缀命中 32928/33112 tokens，gen 54.9 tps
+[Engine] 前缀命中 32928/33268 tokens，gen 55.3 tps
+✅ L32768 lc-hard-004 r0 prompt=32445 (est 32445, err -323) recall 3/3 rep_guard 0 (36.01s)
+[Engine] 前缀命中 31360/32685 tokens，gen 25.6 tps
+[Engine] 前缀命中 31360/32764 tokens，gen 41.0 tps
+[Engine] 前缀命中 32928/33024 tokens，gen 56.4 tps
+[Engine] 前缀命中 32928/33308 tokens，gen 54.2 tps
+[Engine] 前缀命中 32928/33552 tokens，gen 54.2 tps
+✅ L32768 lc-hard-004 r1 prompt=32685 (est 32685, err -83) recall 3/3 rep_guard 0 (38.12s)
+[Engine] 前缀命中 31360/31910 tokens，gen 42.9 tps
+[Engine] 前缀命中 31360/32031 tokens，gen 54.3 tps
+[Engine] 前缀命中 31360/32600 tokens，gen 45.0 tps
+[Engine] 前缀命中 31360/32813 tokens，gen 48.6 tps
+✅ L32768 lc-hard-005 r0 prompt=31910 (est 31910, err -858) recall 3/3 rep_guard 0 (33.2s)
+[Engine] 前缀命中 31360/32728 tokens，gen 30.2 tps
+[Engine] 前缀命中 31360/32849 tokens，gen 47.3 tps
+[Engine] 前缀命中 32928/33205 tokens，gen 53.3 tps
+[Engine] 前缀命中 32928/33411 tokens，gen 54.1 tps
+✅ L32768 lc-hard-005 r1 prompt=32728 (est 32728, err -40) recall 3/3 rep_guard 0 (29.64s)
+[Engine] 前缀命中 32928/33197 tokens，gen 55.0 tps
+[Engine] 前缀命中 32928/33675 tokens，gen 46.2 tps
+[Engine] 前缀命中 32928/33899 tokens，gen 50.9 tps
+[Engine] 前缀命中 32928/33779 tokens，gen 54.3 tps
+✅ L32768 lc-hard-006 r0 prompt=33197 (est 33197, err 429) recall 3/3 rep_guard 0 (43.09s)
+[Engine] 前缀命中 31360/32587 tokens，gen 47.9 tps
+[Engine] 前缀命中 31360/32829 tokens，gen 39.7 tps
+[Engine] 前缀命中 32928/33049 tokens，gen 56.0 tps
+[Engine] 前缀命中 32928/33289 tokens，gen 55.1 tps
+❌ L32768 lc-hard-006 r1 prompt=32587 (est 32587, err -181) recall 3/3 rep_guard 0 (37.9s)  | files/merged.txt: exists 期望 True，实际 False; files/count.txt: exists 期望 True，实际 False
+[Engine] 前缀命中 32928/32696 tokens，gen 57.0 tps
+[Engine] 前缀命中 32928/33085 tokens，gen 54.3 tps
+[Engine] 前缀命中 32928/33298 tokens，gen 55.0 tps
+[Engine] 前缀命中 32928/33354 tokens，gen 54.8 tps
+[Engine] 前缀命中 32928/33853 tokens，gen 54.1 tps
+[Engine] 前缀命中 34496/34453 tokens，gen 56.4 tps
+❌ L32768 lc-hard-007 r0 prompt=32696 (est 32696, err -72) recall 3/3 rep_guard 0 (61.76s)  | 步数超限: 11 > 9
+[Engine] 前缀命中 32928/32642 tokens，gen 56.8 tps
+[Engine] 前缀命中 32928/33769 tokens，gen 49.6 tps
+[Engine] 前缀命中 32928/34044 tokens，gen 51.9 tps
+[Engine] 前缀命中 32928/33434 tokens，gen 51.3 tps
+[Engine] 前缀命中 32928/33501 tokens，gen 55.6 tps
+✅ L32768 lc-hard-007 r1 prompt=32642 (est 32642, err -126) recall 3/3 rep_guard 0 (68.91s)
+[Engine] 前缀命中 31360/32239 tokens，gen 52.6 tps
+[Engine] 前缀命中 32928/32668 tokens，gen 57.0 tps
+[Engine] 前缀命中 32928/33640 tokens，gen 49.6 tps
+[Engine] 前缀命中 32928/33770 tokens，gen 45.5 tps
+[Engine] 前缀命中 32928/33211 tokens，gen 55.4 tps
+✅ L32768 lc-hard-008 r0 prompt=32239 (est 32239, err -529) recall 3/3 rep_guard 0 (50.9s)
+[Engine] 前缀命中 32928/32851 tokens，gen 56.9 tps
+[Engine] 前缀命中 32928/33382 tokens，gen 54.8 tps
+[Engine] 前缀命中 32928/33832 tokens，gen 46.0 tps
+[Engine] 前缀命中 32928/33688 tokens，gen 53.0 tps
+✅ L32768 lc-hard-008 r1 prompt=32851 (est 32851, err 83) recall 3/3 rep_guard 0 (38.92s)
+[Engine] 前缀命中 31360/32545 tokens，gen 28.4 tps
+[Engine] 前缀命中 31360/32638 tokens，gen 46.1 tps
+[Engine] 前缀命中 32928/33002 tokens，gen 56.3 tps
+[Engine] 前缀命中 32928/33280 tokens，gen 55.7 tps
+❌ L32768 lc-hard-009 r0 prompt=32545 (est 32545, err -223) recall 3/3 rep_guard 0 (37.63s)  | files/metrics/summary.json: regex 失败: '(?s)\\{\\s*"cpu"\\s*:\\s*21(?:\\.0+)?\\s*,\\s*"mem"\\s*:\\s*4
+[Engine] 前缀命中 32928/33278 tokens，gen 53.4 tps
+[Engine] 前缀命中 32928/33514 tokens，gen 51.5 tps
+[Engine] 前缀命中 32928/33879 tokens，gen 51.5 tps
+[Engine] 前缀命中 32928/34010 tokens，gen 53.6 tps
+❌ L32768 lc-hard-009 r1 prompt=33278 (est 33278, err 510) recall 3/3 rep_guard 0 (38.35s)  | files/metrics/summary.json: regex 失败: '(?s)\\{\\s*"cpu"\\s*:\\s*21(?:\\.0+)?\\s*,\\s*"mem"\\s*:\\s*4
+[Engine] 前缀命中 31360/32835 tokens，gen 25.3 tps
+[Engine] 前缀命中 32928/32924 tokens，gen 55.9 tps
+[Engine] 前缀命中 32928/33291 tokens，gen 54.8 tps
+[Engine] 前缀命中 32928/33737 tokens，gen 54.2 tps
+✅ L32768 lc-hard-010 r0 prompt=32835 (est 32835, err 67) recall 3/3 rep_guard 0 (37.68s)
+[Engine] 前缀命中 31360/32529 tokens，gen 45.7 tps
+[Engine] 前缀命中 31360/32728 tokens，gen 44.1 tps
+[Engine] 前缀命中 32928/33078 tokens，gen 55.8 tps
+[Engine] 前缀命中 32928/33476 tokens，gen 55.3 tps
+✅ L32768 lc-hard-010 r1 prompt=32529 (est 32529, err -239) recall 3/3 rep_guard 0 (43.96s)
+[Engine] 前缀命中 50176/50202 tokens，gen 54.2 tps
+[Engine] 前缀命中 50176/50627 tokens，gen 51.9 tps
+[Engine] 前缀命中 50176/51294 tokens，gen 49.9 tps
+[Engine] 前缀命中 50176/51401 tokens，gen 51.9 tps
+✅ L49152 lc-hard-001 r0 prompt=50202 (est 50202, err 1050) recall 3/3 rep_guard 0 (58.09s)
+[Engine] 前缀命中 48608/49152 tokens，gen 51.5 tps
+[Engine] 前缀命中 48608/49562 tokens，gen 47.9 tps
+[Engine] 前缀命中 50176/50225 tokens，gen 54.4 tps
+[Engine] 前缀命中 50176/50346 tokens，gen 55.2 tps
+✅ L49152 lc-hard-001 r1 prompt=49152 (est 49152, err 0) recall 3/3 rep_guard 0 (49.89s)
+[Engine] 前缀命中 48608/49392 tokens，gen 33.6 tps
+[Engine] 前缀命中 48608/49485 tokens，gen 43.0 tps
+[Engine] 前缀命中 48608/49730 tokens，gen 48.7 tps
+[Engine] 前缀命中 48608/50076 tokens，gen 28.6 tps
+[Engine] 前缀命中 48608/50153 tokens，gen 19.7 tps
+[Engine] 前缀命中 50176/50143 tokens，gen 55.4 tps
+✅ L49152 lc-hard-002 r0 prompt=49392 (est 49392, err 240) recall 3/3 rep_guard 0 (50.42s)
+[Engine] 前缀命中 48608/48534 tokens，gen 54.9 tps
+[Engine] 前缀命中 48608/49641 tokens，gen 45.4 tps
+[Engine] 前缀命中 50176/49928 tokens，gen 55.8 tps
+[Engine] 前缀命中 48608/49408 tokens，gen 45.8 tps
+[Engine] 前缀命中 48608/49610 tokens，gen 30.6 tps
+[Engine] 前缀命中 48608/49357 tokens，gen 52.0 tps
+✅ L49152 lc-hard-002 r1 prompt=48534 (est 48534, err -618) recall 3/3 rep_guard 0 (73.52s)
+[Engine] 前缀命中 48608/49276 tokens，gen 51.8 tps
+[Engine] 前缀命中 48608/49721 tokens，gen 43.9 tps
+[Engine] 前缀命中 48608/50016 tokens，gen 41.7 tps
+[Engine] 前缀命中 48608/49840 tokens，gen 35.1 tps
+[Engine] 前缀命中 48608/49943 tokens，gen 48.6 tps
+✅ L49152 lc-hard-003 r0 prompt=49276 (est 49276, err 124) recall 3/3 rep_guard 0 (51.74s)
+[Engine] 前缀命中 48608/49171 tokens，gen 50.7 tps
+[Engine] 前缀命中 48608/49492 tokens，gen 45.4 tps
+[Engine] 前缀命中 48608/49791 tokens，gen 45.5 tps
+[Engine] 前缀命中 48608/49775 tokens，gen 36.7 tps
+[Engine] 前缀命中 48608/49874 tokens，gen 45.4 tps
+✅ L49152 lc-hard-003 r1 prompt=49171 (est 49171, err 19) recall 3/3 rep_guard 0 (47.22s)
+[Engine] 前缀命中 48608/49234 tokens，gen 32.7 tps
+[Engine] 前缀命中 48608/49315 tokens，gen 44.1 tps
+[Engine] 前缀命中 48608/49575 tokens，gen 49.6 tps
+[Engine] 前缀命中 48608/49909 tokens，gen 48.4 tps
+[Engine] 前缀命中 50176/50245 tokens，gen 54.7 tps
+✅ L49152 lc-hard-004 r0 prompt=49234 (est 49234, err 82) recall 3/3 rep_guard 0 (57.69s)
+[Engine] 前缀命中 48608/49176 tokens，gen 50.8 tps
+[Engine] 前缀命中 48608/49495 tokens，gen 44.8 tps
+[Engine] 前缀命中 48608/49778 tokens，gen 49.1 tps
+[Engine] 前缀命中 48608/49931 tokens，gen 47.3 tps
+[Engine] 前缀命中 50176/50194 tokens，gen 54.9 tps
+✅ L49152 lc-hard-004 r1 prompt=49176 (est 49176, err 24) recall 3/3 rep_guard 0 (57.23s)
+[Engine] 前缀命中 48608/48709 tokens，gen 50.9 tps
+[Engine] 前缀命中 48608/48830 tokens，gen 53.5 tps
+[Engine] 前缀命中 48608/49249 tokens，gen 47.0 tps
+[Engine] 前缀命中 48608/49467 tokens，gen 51.1 tps
+✅ L49152 lc-hard-005 r0 prompt=48709 (est 48709, err -443) recall 3/3 rep_guard 0 (41.06s)
+[Engine] 前缀命中 48608/49102 tokens，gen 41.8 tps
+[Engine] 前缀命中 48608/49228 tokens，gen 51.1 tps
+[Engine] 前缀命中 48608/49659 tokens，gen 38.8 tps
+[Engine] 前缀命中 48608/49783 tokens，gen 38.6 tps
+[Engine] 前缀命中 48608/49777 tokens，gen 50.9 tps
+✅ L49152 lc-hard-005 r1 prompt=49102 (est 49102, err -50) recall 3/3 rep_guard 0 (48.36s)
+[Engine] 前缀命中 48608/49258 tokens，gen 51.9 tps
+[Engine] 前缀命中 48608/49698 tokens，gen 40.7 tps
+[Engine] 前缀命中 48608/49918 tokens，gen 45.8 tps
+[Engine] 前缀命中 50176/49823 tokens，gen 55.9 tps
+❌ L49152 lc-hard-006 r0 prompt=49258 (est 49258, err 106) recall 3/3 rep_guard 0 (50.88s)  | files/merged.txt: exists 期望 True，实际 False; files/count.txt: exists 期望 True，实际 False
+[Engine] 前缀命中 48608/49188 tokens，gen 51.3 tps
+[Engine] 前缀命中 48608/49541 tokens，gen 41.8 tps
+[Engine] 前缀命中 48608/49761 tokens，gen 48.4 tps
+[Engine] 前缀命中 48608/49825 tokens，gen 49.8 tps
+❌ L49152 lc-hard-006 r1 prompt=49188 (est 49188, err 36) recall 3/3 rep_guard 0 (48.99s)  | files/merged.txt: exists 期望 True，实际 False; files/count.txt: exists 期望 True，实际 False
+[Engine] 前缀命中 48608/49619 tokens，gen 50.7 tps
+[Engine] 前缀命中 50176/50129 tokens，gen 55.1 tps
+[Engine] 前缀命中 50176/50345 tokens，gen 54.6 tps
+[Engine] 前缀命中 50176/50275 tokens，gen 54.6 tps
+✅ L49152 lc-hard-007 r0 prompt=49619 (est 49619, err 467) recall 3/3 rep_guard 0 (51.75s)
+[Engine] 前缀命中 50176/49861 tokens，gen 55.8 tps
+[Engine] 前缀命中 50176/50404 tokens，gen 51.9 tps
+[Engine] 前缀命中 50176/50616 tokens，gen 52.7 tps
+[Engine] 前缀命中 50176/50570 tokens，gen 48.7 tps
+[Engine] 前缀命中 50176/50679 tokens，gen 52.3 tps
+✅ L49152 lc-hard-007 r1 prompt=49861 (est 49861, err 709) recall 3/3 rep_guard 0 (54.61s)
+[Engine] 前缀命中 48608/49050 tokens，gen 53.8 tps
+[Engine] 前缀命中 48608/49921 tokens，gen 48.9 tps
+[Engine] 前缀命中 50176/50360 tokens，gen 51.3 tps
+[Engine] 前缀命中 48608/49831 tokens，gen 49.4 tps
+✅ L49152 lc-hard-008 r0 prompt=49050 (est 49050, err -102) recall 3/3 rep_guard 0 (55.86s)
+[Engine] 前缀命中 48608/49378 tokens，gen 52.4 tps
+[Engine] 前缀命中 50176/50043 tokens，gen 55.5 tps
+[Engine] 前缀命中 50176/50439 tokens，gen 50.2 tps
+[Engine] 前缀命中 50176/50141 tokens，gen 55.5 tps
+✅ L49152 lc-hard-008 r1 prompt=49378 (est 49378, err 226) recall 3/3 rep_guard 0 (50.95s)
+[Engine] 前缀命中 48608/49283 tokens，gen 31.3 tps
+[Engine] 前缀命中 48608/49377 tokens，gen 47.2 tps
+[Engine] 前缀命中 48608/49741 tokens，gen 48.0 tps
+[Engine] 前缀命中 50176/50024 tokens，gen 55.7 tps
+[Engine] 前缀命中 50176/50708 tokens，gen 53.1 tps
+❌ L49152 lc-hard-009 r0 prompt=49283 (est 49283, err 131) recall 3/3 rep_guard 0 (59.51s)  | files/metrics/summary.json: regex 失败: '(?s)\\{\\s*"cpu"\\s*:\\s*21(?:\\.0+)?\\s*,\\s*"mem"\\s*:\\s*4
+[Engine] 前缀命中 48608/49097 tokens，gen 49.1 tps
+[Engine] 前缀命中 48608/49334 tokens，gen 47.5 tps
+[Engine] 前缀命中 48608/49699 tokens，gen 47.8 tps
+[Engine] 前缀命中 50176/49827 tokens，gen 56.0 tps
+[Engine] 前缀命中 50176/50459 tokens，gen 53.6 tps
+❌ L49152 lc-hard-009 r1 prompt=49097 (est 49097, err -55) recall 3/3 rep_guard 0 (61.28s)  | files/metrics/summary.json: regex 失败: '(?s)\\{\\s*"cpu"\\s*:\\s*21(?:\\.0+)?\\s*,\\s*"mem"\\s*:\\s*4
+[Engine] 前缀命中 48608/49155 tokens，gen 51.4 tps
+[Engine] 前缀命中 48608/49526 tokens，gen 45.2 tps
+[Engine] 前缀命中 50176/49876 tokens，gen 55.9 tps
+[Engine] 前缀命中 50176/50114 tokens，gen 55.5 tps
+✅ L49152 lc-hard-010 r0 prompt=49155 (est 49155, err 3) recall 3/3 rep_guard 0 (50.3s)
+[Engine] 前缀命中 48608/49540 tokens，gen 45.4 tps
+[Engine] 前缀命中 48608/49738 tokens，gen 44.0 tps
+[Engine] 前缀命中 50176/50096 tokens，gen 54.9 tps
+[Engine] 前缀命中 50176/50555 tokens，gen 52.3 tps
+[Engine] 前缀命中 50176/50917 tokens，gen 52.9 tps
+✅ L49152 lc-hard-010 r1 prompt=49540 (est 49540, err 388) recall 3/3 rep_guard 0 (63.8s)
+== 产物: benchmarks/data/context-knee-20261102/direct-mock（表格：summarize.py benchmarks/data/context-knee-20261102/direct-mock）

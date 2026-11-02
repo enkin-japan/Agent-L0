@@ -1,0 +1,279 @@
+{
+  "model": "RedHatAI/Qwen3.8-27B-INT4",
+  "revision": "91bd022d5b49442a868bc35008f6c21e1860edfa",
+  "dialect": "qwen35",
+  "backend": "remote",
+  "tasks": "hard",
+  "seed": 7,
+  "token_counter": "engine",
+  "stamp": "20261102-061915",
+  "sampling_overrides": {
+    "sent": {},
+    "ignored": {}
+  },
+  "entry_sampling": {
+    "top_p": 0.95,
+    "top_k": 20,
+    "repetition_penalty": 1.0
+  },
+  "thinking_replay_mode": "last_k",
+  "thinking_replay_k": 2,
+  "thinking_replay_source": "entry",
+  "context_limit": 65536,
+  "context_limit_source": "health",
+  "prefix_mode": "prod",
+  "prefix_base_tokens": 13708,
+  "prefix_top_k": null,
+  "prefix_shadowed": {
+    "lc-hard-001": [
+      "write_file"
+    ],
+    "lc-hard-002": [
+      "write_file"
+    ],
+    "lc-hard-003": [
+      "write_file"
+    ],
+    "lc-hard-004": [
+      "write_file"
+    ],
+    "lc-hard-005": [
+      "write_file"
+    ],
+    "lc-hard-006": [
+      "write_file"
+    ],
+    "lc-hard-007": [
+      "write_file"
+    ],
+    "lc-hard-008": [
+      "write_file"
+    ],
+    "lc-hard-009": [
+      "write_file"
+    ],
+    "lc-hard-010": [
+      "write_file"
+    ]
+  },
+  "prefix_core_skipped": {
+    "lc-hard-001": [],
+    "lc-hard-002": [],
+    "lc-hard-003": [],
+    "lc-hard-004": [],
+    "lc-hard-005": [],
+    "lc-hard-006": [],
+    "lc-hard-007": [],
+    "lc-hard-008": [],
+    "lc-hard-009": [],
+    "lc-hard-010": []
+  },
+  "prefix_n_tools": {
+    "lc-hard-001": {
+      "prompt": 60,
+      "prompt_full": 60,
+      "grammar": 60
+    },
+    "lc-hard-002": {
+      "prompt": 60,
+      "prompt_full": 60,
+      "grammar": 60
+    },
+    "lc-hard-003": {
+      "prompt": 60,
+      "prompt_full": 60,
+      "grammar": 60
+    },
+    "lc-hard-004": {
+      "prompt": 60,
+      "prompt_full": 60,
+      "grammar": 60
+    },
+    "lc-hard-005": {
+      "prompt": 63,
+      "prompt_full": 63,
+      "grammar": 63
+    },
+    "lc-hard-006": {
+      "prompt": 60,
+      "prompt_full": 60,
+      "grammar": 60
+    },
+    "lc-hard-007": {
+      "prompt": 60,
+      "prompt_full": 60,
+      "grammar": 60
+    },
+    "lc-hard-008": {
+      "prompt": 60,
+      "prompt_full": 60,
+      "grammar": 60
+    },
+    "lc-hard-009": {
+      "prompt": 60,
+      "prompt_full": 60,
+      "grammar": 60
+    },
+    "lc-hard-010": {
+      "prompt": 60,
+      "prompt_full": 60,
+      "grammar": 60
+    }
+  },
+  "mode": "direct",
+  "fill_placement": null,
+  "guard": null,
+  "step_compaction": null,
+  "turn_compaction": null,
+  "goal_verify": null,
+  "fill_shape": "turns",
+  "guard_thresholds": null,
+  "step_compaction_cfg": null,
+  "orchestrator_cfg_source": null,
+  "tool_schema_mode_effective": null,
+  "levels": [
+    0,
+    16384,
+    32768,
+    49152
+  ],
+  "reps": 2,
+  "items": [
+    "lc-hard-001",
+    "lc-hard-002",
+    "lc-hard-003",
+    "lc-hard-004",
+    "lc-hard-005",
+    "lc-hard-006",
+    "lc-hard-007",
+    "lc-hard-008",
+    "lc-hard-009",
+    "lc-hard-010"
+  ],
+  "n_rows": 80,
+  "n_runs": 80,
+  "n_errors": 3,
+  "complete": false,
+  "by_level": {
+    "0": {
+      "n": 20,
+      "errors": 0,
+      "success_rate": 0.6,
+      "pass_hat_2": 0.5,
+      "pass_at_2": 0.7,
+      "n_tasks2": 10,
+      "recall_rate": null,
+      "recall_n": 0,
+      "recall_front": null,
+      "recall_mid": null,
+      "recall_back": null,
+      "redundant_calls_mean": 0.9,
+      "env_errors_mean": 3.25,
+      "repetition_hits": 0,
+      "aborted": 1,
+      "prompt_tokens_median": 13853.5,
+      "peak_prompt_tokens_median": 14795.5,
+      "fill_error_median": null,
+      "reused_prefix_median": 12544.0,
+      "prefill_s_median": 0.5291977085960538,
+      "first_prompt_tps_median": 26180.6,
+      "later_prompt_tps_median": 21284.6,
+      "coherent_rate": 0.9473684210526315,
+      "coherent_n": 19,
+      "wall_s_mean": 26.977999999999998,
+      "step_compactions_median": null,
+      "full_renders_median": null,
+      "ceiling_aborts": null
+    },
+    "16384": {
+      "n": 17,
+      "errors": 3,
+      "success_rate": 0.47058823529411764,
+      "pass_hat_2": 0.14285714285714285,
+      "pass_at_2": 0.7142857142857143,
+      "n_tasks2": 7,
+      "recall_rate": 1.0,
+      "recall_n": 15,
+      "recall_front": 1.0,
+      "recall_mid": 1.0,
+      "recall_back": 1.0,
+      "redundant_calls_mean": 1.0588235294117647,
+      "env_errors_mean": 3.8823529411764706,
+      "repetition_hits": 0,
+      "aborted": 2,
+      "prompt_tokens_median": 16673,
+      "peak_prompt_tokens_median": 17825,
+      "fill_error_median": 289,
+      "reused_prefix_median": 15680,
+      "prefill_s_median": 1.616932551035252,
+      "first_prompt_tps_median": 10311.5,
+      "later_prompt_tps_median": 26676.65,
+      "coherent_rate": 0.9333333333333333,
+      "coherent_n": 15,
+      "wall_s_mean": 55.17176470588235,
+      "step_compactions_median": null,
+      "full_renders_median": null,
+      "ceiling_aborts": null
+    },
+    "32768": {
+      "n": 20,
+      "errors": 0,
+      "success_rate": 0.7,
+      "pass_hat_2": 0.6,
+      "pass_at_2": 0.8,
+      "n_tasks2": 10,
+      "recall_rate": 1.0,
+      "recall_n": 20,
+      "recall_front": 1.0,
+      "recall_mid": 1.0,
+      "recall_back": 1.0,
+      "redundant_calls_mean": 0.65,
+      "env_errors_mean": 1.9,
+      "repetition_hits": 0,
+      "aborted": 0,
+      "prompt_tokens_median": 32961.0,
+      "peak_prompt_tokens_median": 33956.0,
+      "fill_error_median": 193.0,
+      "reused_prefix_median": 32928.0,
+      "prefill_s_median": 8.965808734801298,
+      "first_prompt_tps_median": 3677.45,
+      "later_prompt_tps_median": 55940.0,
+      "coherent_rate": 1.0,
+      "coherent_n": 20,
+      "wall_s_mean": 44.663,
+      "step_compactions_median": null,
+      "full_renders_median": null,
+      "ceiling_aborts": null
+    },
+    "49152": {
+      "n": 20,
+      "errors": 0,
+      "success_rate": 0.7,
+      "pass_hat_2": 0.7,
+      "pass_at_2": 0.7,
+      "n_tasks2": 10,
+      "recall_rate": 1.0,
+      "recall_n": 20,
+      "recall_front": 1.0,
+      "recall_mid": 1.0,
+      "recall_back": 1.0,
+      "redundant_calls_mean": 0.3,
+      "env_errors_mean": 1.5,
+      "repetition_hits": 0,
+      "aborted": 0,
+      "prompt_tokens_median": 49239.5,
+      "peak_prompt_tokens_median": 50233.5,
+      "fill_error_median": 87.5,
+      "reused_prefix_median": 48608.0,
+      "prefill_s_median": 17.98047397351559,
+      "first_prompt_tps_median": 2738.5,
+      "later_prompt_tps_median": 53025.1,
+      "coherent_rate": 0.95,
+      "coherent_n": 20,
+      "wall_s_mean": 58.8995,
+      "step_compactions_median": null,
+      "full_renders_median": null,
+      "ceiling_aborts": null
+    }
+  }
+}

@@ -1,0 +1,96 @@
+{
+  "model": "RedHatAI/Qwen3.8-27B-INT4",
+  "revision": "91bd022d5b49442a868bc35008f6c21e1860edfa",
+  "dialect": "qwen35",
+  "backend": "remote",
+  "tasks": "hard",
+  "seed": 7,
+  "token_counter": "engine",
+  "stamp": "20261102-002308",
+  "sampling_overrides": {
+    "sent": {},
+    "ignored": {}
+  },
+  "entry_sampling": {
+    "top_p": 0.95,
+    "top_k": 20,
+    "repetition_penalty": 1.0
+  },
+  "thinking_replay_mode": "last_k",
+  "thinking_replay_k": 2,
+  "thinking_replay_source": "entry",
+  "context_limit": 65536,
+  "context_limit_source": "health",
+  "prefix_mode": "prod",
+  "prefix_base_tokens": 13708,
+  "prefix_top_k": null,
+  "prefix_shadowed": {
+    "lc-hard-001": [
+      "write_file"
+    ]
+  },
+  "prefix_core_skipped": {
+    "lc-hard-001": []
+  },
+  "prefix_n_tools": {
+    "lc-hard-001": {
+      "prompt": 60,
+      "prompt_full": 60,
+      "grammar": 60
+    }
+  },
+  "mode": "direct",
+  "fill_placement": null,
+  "guard": null,
+  "step_compaction": null,
+  "turn_compaction": null,
+  "goal_verify": null,
+  "fill_shape": "turns",
+  "guard_thresholds": null,
+  "step_compaction_cfg": null,
+  "orchestrator_cfg_source": null,
+  "tool_schema_mode_effective": null,
+  "levels": [
+    0
+  ],
+  "reps": 1,
+  "items": [
+    "lc-hard-001"
+  ],
+  "n_rows": 1,
+  "n_runs": 1,
+  "n_errors": 0,
+  "complete": true,
+  "by_level": {
+    "0": {
+      "n": 1,
+      "errors": 0,
+      "success_rate": 1.0,
+      "pass_hat_2": null,
+      "pass_at_2": null,
+      "n_tasks2": 0,
+      "recall_rate": null,
+      "recall_n": 0,
+      "recall_front": null,
+      "recall_mid": null,
+      "recall_back": null,
+      "redundant_calls_mean": 0.0,
+      "env_errors_mean": 3.0,
+      "repetition_hits": 0,
+      "aborted": 0,
+      "prompt_tokens_median": 13851,
+      "peak_prompt_tokens_median": 15370,
+      "fill_error_median": null,
+      "reused_prefix_median": 12544,
+      "prefill_s_median": 0.545832857159746,
+      "first_prompt_tps_median": 25375.9,
+      "later_prompt_tps_median": 18746.75,
+      "coherent_rate": 1.0,
+      "coherent_n": 1,
+      "wall_s_mean": 30.5,
+      "step_compactions_median": null,
+      "full_renders_median": null,
+      "ceiling_aborts": null
+    }
+  }
+}

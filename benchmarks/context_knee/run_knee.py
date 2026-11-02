@@ -462,6 +462,13 @@ def score_run(plan: RunPlan, traj: Dict[str, Any], gens: List[Dict[str, Any]],
     return score
 
 
+def _peak_prompt_measured(tm_peak: Any) -> Optional[int]:
+    """编排器自己量到的峰值（`turn_metrics["peak_prompt_tokens"]`）校验为正整数后原样返回，
+    否则 null。只作为 `peak_prompt_measured` 另记——它可能含 W1 护栏 fold 前的量值（量了
+    58249、折到 29297 才发），不得混进 `build_record` 已算的实发峰值 `peak_prompt_tokens`。"""
+    return tm_peak if isinstance(tm_peak, int) and not isinstance(tm_peak, bool) and tm_peak > 0 else None
+
+
 def build_record(plan: RunPlan, traj: Dict[str, Any], gens: List[Dict[str, Any]],
                  score: Dict[str, Any], original_item: Dict[str, Any], meta: Dict[str, Any],
                  wall_s: float, full_renders: Optional[int] = None) -> Dict[str, Any]:
@@ -476,6 +483,7 @@ def build_record(plan: RunPlan, traj: Dict[str, Any], gens: List[Dict[str, Any]]
         "filler_tokens_est": plan.filler.est_tokens,
         "prompt_tokens_est": plan.prompt_tokens_est,
         "prompt_tokens_actual": actual,
+        "prompt_tokens_measured": first.get("measure_tokens"),
         "fill_error": (actual - plan.level) if (plan.level > 0 and actual) else None,
         "est_error": (actual - plan.prompt_tokens_est) if actual else None,
         "min_fill_tokens": plan.min_fill_tokens,
@@ -1295,10 +1303,9 @@ async def _one_run_orch(args, engine, counter, item, item_idx, level, rep, meta,
                             "sampling_seed_applied": applied}, time.monotonic() - t0,
                            full_renders=proxy.full_renders)
         tm = dict(result.get("metrics") or {})
-        peaks = [p for p in (rec.get("peak_prompt_tokens"), tm.get("peak_prompt_tokens"))
-                 if isinstance(p, int) and not isinstance(p, bool) and p > 0]
+        peak_prompt_measured = _peak_prompt_measured(tm.get("peak_prompt_tokens"))
         rec["fill"]["fill_est_delta"] = plan.fill_est_delta
-        rec.update({"peak_prompt_tokens": max(peaks) if peaks else None,
+        rec.update({"peak_prompt_measured": peak_prompt_measured,
                     "turn_status": status, "turn_metrics": tm,
                     "turn_response": result.get("response"),
                     "audit_generations": len(proxy.audit_gens), "audit_gens": proxy.audit_gens,

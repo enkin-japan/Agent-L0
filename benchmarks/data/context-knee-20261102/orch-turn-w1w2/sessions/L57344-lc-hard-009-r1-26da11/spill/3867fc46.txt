@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Read the five metrics/*.txt sample files
+  ○ [2] Compute each file's average
+  ○ [3] Write metrics/summary.json with the exact key order
+  ○ [4] Verify the three requested values (halyard config path, OPS- ticket, queue_depth_alert_threshold) against tool outputs

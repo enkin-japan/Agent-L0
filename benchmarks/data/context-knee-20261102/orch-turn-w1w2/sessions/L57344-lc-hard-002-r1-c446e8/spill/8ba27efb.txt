@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Identify DRAFT vs final reports in reports/
+  ○ [2] Delete DRAFT files, rename final reports with -final
+  ○ [3] Locate the three requested values in earlier tool outputs
+  ○ [4] Report results with verbatim values

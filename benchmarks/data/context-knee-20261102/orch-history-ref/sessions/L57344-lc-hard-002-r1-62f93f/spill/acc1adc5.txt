@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Verified from earlier tool outputs: escalation ticket = OPS-84203 (quota-svc-20.log); queue_depth_alert_threshold = 7573 (billing-sync-14.log); NO halyard config path ever appeared in any tool output 

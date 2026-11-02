@@ -1,0 +1,13 @@
+{"kind": "journal_header", "v": 1}
+{"seq": 1, "turn_id": "t_3adb33019864", "ts": 1793571681.081, "type": "turn_queued", "data": {"prompt": "team 目录下每个人的文件里写着他本周的值日日子。把四个人和各自的值日日子汇总成一份 duty-summary.txt，一人一行。", "attachments": [], "gen": {}, "origin": "chat"}}
+{"seq": 2, "turn_id": "t_3adb33019864", "ts": 1793571681.081, "type": "turn_started", "data": {}}
+{"seq": 52, "turn_id": "t_3adb33019864", "ts": 1793571684.09, "type": "tool_started", "data": {"call_id": "343ba306", "name": "run_shell_command", "args": {"command": "find ~ -type d -name \"team\" 2>/dev/null | head -10"}}}
+{"seq": 53, "turn_id": "t_3adb33019864", "ts": 1793571684.091, "type": "tool_result", "data": {"call_id": "343ba306", "name": "run_shell_command", "response": "{\"error\": \"Unknown tool: run_shell_command\"}", "status": "ok"}}
+{"seq": 72, "turn_id": "t_3adb33019864", "ts": 1793571686.44, "type": "tool_started", "data": {"call_id": "7b7139ab", "name": "list_dir", "args": {"path": "~/team"}}}
+{"seq": 73, "turn_id": "t_3adb33019864", "ts": 1793571686.44, "type": "tool_result", "data": {"call_id": "7b7139ab", "name": "list_dir", "response": "{\"error\": \"Unknown tool: list_dir\"}", "status": "ok"}}
+{"seq": 119, "turn_id": "t_3adb33019864", "ts": 1793571691.942, "type": "tool_started", "data": {"call_id": "500b041b", "name": "run_shell_command", "args": {"command": "ls -la ~/team 2>/dev/null; echo \"---\"; find ~ -maxdepth 3 -type d -name \"team\" 2>/dev/null"}}}
+{"seq": 120, "turn_id": "t_3adb33019864", "ts": 1793571691.943, "type": "tool_result", "data": {"call_id": "500b041b", "name": "run_shell_command", "response": "{\"error\": \"Unknown tool: run_shell_command\"}", "status": "ok"}}
+{"seq": 234, "turn_id": "t_3adb33019864", "ts": 1793571697.431, "type": "tool_started", "data": {"call_id": "97c73db8", "name": "find_files", "args": {"query": "team"}}}
+{"seq": 235, "turn_id": "t_3adb33019864", "ts": 1793571697.432, "type": "tool_result", "data": {"call_id": "97c73db8", "name": "find_files", "response": "{\"error\": \"Unknown tool: find_files\"}", "status": "ok"}}
+{"seq": 287, "turn_id": "t_3adb33019864", "ts": 1793571700.295, "type": "tool_started", "data": {"call_id": "125cebf3", "name": "run_shell_command", "args": {"command": "ls -la ~/team"}}}
+{"seq": 288, "turn_id": "t_3adb33019864", "ts": 1793571700.296, "type": "tool_result", "data": {"call_id": "125cebf3", "name": "run_shell_command", "response": "{\"error\": \"Unknown tool: run_shell_command\"}", "status": "ok"}}
