@@ -268,6 +268,18 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
 - 替代：`backend/benchmarks/attention/driver.py` 经 HTTP 打 /turns 走编排层，但要起栈、题短难到 soft，不如 W-K 可控。
 - **11-02 Colab 实机带出**（`benchmarks/data/context-knee-20261102/ANALYSIS.md` §1.4、§2）：prod 前缀下 harness 桩工具吃掉 21% 调用（162/771 次 `Unknown tool`，System Error 计回合），编排器路径 L0 基线 35%、4–5/20 run 回合耗尽，P2 规则空判（D39）；三臂 L0 处理相同却差 15 点，是本批噪声量级。口径修补（同日提交）：`peak_prompt_tokens` 只取实发、编排器量到的峰值另记 `peak_prompt_measured`、`fill.prompt_tokens_measured` 记首生成前量法值、`analyze.py` 基线 ≤ drop 报「基线在地板，规则空判」。复算脚本 `analyze_orch.py`（A–F 复用 analyze.py，G–N 新增；reviewer 一审 0C/0M/10m 全修）。
   链脚本 `run_colab.sh` 一审 1C/4M/7m 全修：臂后台跑、每 60 s 查末 3 run 连环 timeout 即 TERM harness（最坏 31 min 发现，原先整臂跑完才判、最坏 14.7 h 计费）、重起用完即停机跳余臂、`start_and_wait; rc=$?`（`if !` 后 `$?` 恒 0 的 bug）、全跳过记 rc 1、信号先杀子进程再写 INTERRUPTED、冒烟目录带时间戳、产物存在自动 --resume、ok 需 `complete` 且记 errors；模板 w3 脚本同修 `local rc`。二审 2M 再修（续跑期间旧 timeout 行再判挂死 → 只看启动后新行；stopped 先于停机成功置位 → 只在 stop rc 0 后置；DONE 只在停机后写；OUT 已有 DONE 拒起）。桩自测 `run_colab_selftest.sh` 14 场景 55 断言；verifier 变异体 9 红 1 桩下等价（stopped 提前置位）——V1「删 started=1」在中间版等价存活，暴露 fail_exit 未按 started 把关（起机前收信号会 stop 别人的 VM），补门 + 「起机前 TERM」场景后变红。
+### W-K2 harness 可用桩（D39a；P2 复测前置）【新，11-02 拍板】
+- 问题：knee harness 编排器模式下 prod 前缀声明生产全套工具，但 orch_tools.py 只给文件 / plan / complete_step 沙箱实现，其余回执 `Unknown tool` → System Error 并计入回合；11-02 实测 162/771 次调用（21%）白费，L0 基线 35%（`benchmarks/data/context-knee-20261102/ANALYSIS.md` §1.4、§2）。
+- 做法：为 prod 披露集里每个无实现的工具接确定性「可用桩」——与真实工具同 schema、返回形态合理的结果（rag_search 返回空命中 + 说明、run_math 真算、网络类返回「离线不可用」的正常工具结果而非错误），不触发「检索未完成」拦截；桩调用另计 `stub_calls`，入 transcripts；README「编排器模式」节记桩语义与生产的差异。
+- 验收：FakeEngine 干跑 prod 前缀下 Unknown tool = 0；mock / prod / catalog 三档 L0 直调成功率不变（桩不影响直调）；Colab 第二批无管理臂 L0 成功率回到直调 mock 的量级（≥ 70%）才算基线抬离地板，否则再查元工具计熔断（D39b）。
+- 守卫型部分（拦截不再触发）走变异证明；实现 implementer，一审 reviewer，二审主会话逐行 orch_tools。
+
+### W1b 当前轮超限溢出外置（D40）【新，11-02 拍板】
+- 问题：W1 ceiling 路径把当前 user 轮整体折进摘要，细节静默丢失（57K 回忆 91% → 0%，模型随后主动找检索）。生产对应用户一条消息贴了超限材料。
+- 做法：护栏在首次生成前判当前 user 轮单独超限（或折历史后仍超 ceiling）时，把超出部分按 spill 机制落盘为会话内文件，prompt 保留头部原文 + 结构化摘要 + 回读句柄（SpillReadTool 已有），guard_events 记 `context_spill_turn`；外置后仍装不下（头部 + 摘要 + 工具声明 > ceiling）才 context_guard 中止并以用户可读的话说明「这条消息过长，请拆分」。历史轮折叠逻辑不变。
+- 验收：FakeEngine 用例 soft→hard→ceiling→spill→refuse 五段全绿；变异证明（去掉 spill 分支 → 回退为整轮折叠的用例变红；去掉兜底拒绝 → 超限实发用例变红）；Colab 第二批 57K 管理臂回忆相对 11-02 的 0% 显著回升、无超限实发；MLX 路径（本机）不受影响（spill 文件落执行端）。
+- 顺序：先 W-K2（复测前置），W1b 随后；两项都在第二批起机**之前**落地，否则 57K 档的管理臂回忆仍是 0。
+
 
 
 ### W4 结构化摘要模板与校准【已落地 11-02；D4 / D5 初值进生产，K 与 900 待 TRACE 评估】
@@ -312,6 +324,7 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
 | P0.5 ✅ 2026-10-31 | Gemma 4 31B QAT-W4A16 Colab 拐点补测（用户讨论后加测） | 49K 无拐点、回忆 100%、比 26B +30 点（§1.4、ANALYSIS.md §6）；31B 定为 Gemma 侧唯一选项（D23）；本机复核取消（方向修正） |
 | P1 ✅ 代码 / ✅ Colab 出口 11-02 | **W-3 阵容收束** → **W-1 远端配置修复（MTP 默认关 + 采样可配）** → W-2 前缀瘦身 → W1 上限护栏 → W3 思考回放（含变异证明、差分测试更新）→ W2 提前并入；11-01 阶段复审 1C/1M/7m 已处置 | 注册表 4 条 ✅、check 全过 ✅、31B 图文联调过 ✅；护栏用例全红 → 全绿 ✅；**待 Colab 复测**：MTP 关后同一 harness 复测 4 档回到 W0 水平；思考回放不降成功率且峰值 prompt 下降（W3 在 harness 路径上，可测）；**11-02 Colab 复测**：direct-mock 对 W0 成功率 −4 点 [−16,+5]、Pass^2 −5 点 [−22,+10]，回忆 100%，回到 W0 水平 ✅；W3 不降成功率 ✅、峰值降幅在 hard 题上量不出（预期约 55 tok）；W-2 catalog / routed 比 prod 省 61% / 53% 前缀、成功率持平 ✅（`benchmarks/data/context-knee-20261102/ANALYSIS.md` §1.1–1.3） |
 | P2 ⏳ 11-02 复测不可判 | W-K harness 编排器模式 ✅ 11-01（前置）+ W5 小修（W2 已在 P1 落地） | 拐点以上题集成功率 / Pass^2 达 §2 目标；全量重预填充次数有账——两条都只能经 W-K 的编排器路径量到。**11-02 Colab 复测**：全量重填有账 ✅（每 run `full_renders` + 逐轮 `turn_metrics`）；成功率 / Pass^2 **不可判**——编排器路径 L0 基线 35%（Pass^2 20%）在地板（harness 桩工具失败调用 + 元工具 + 推回同计回合熔断，L0 就有 4–5/20 run 耗尽），拐点规则空判；57K 读作拐点以上则 +W1 实发峰值 0.56×level、Σwall +3% 达标，成功率比 0.57、Pass^2 0/11、回忆 91%→0% 不达标，+W1+W2 更差（0.19、+23%）。须先抬基线再复测（D39 待拍板；`benchmarks/data/context-knee-20261102/ANALYSIS.md` §1.4、§3） |
+| P2 复测「第二批」（11-02 拍板，不省算力） | 前置 W-K2 + W1b 落地 → 一次租约打包：编排器三臂（无管理 / +W1 / +W1+W2，prod，0/32K/49K/57K）+ 编排器 catalog 对照臂 + Gemma 4 31B 直调两臂（mock + catalog）+ summary_trace 真模型（新 / 旧模板，900 vs 640）；链脚本 run_colab.sh 加臂 + Gemma 模型切换 + trace 步 | 编排器无管理臂 L0 ≥ 70%（基线抬离地板）→ 按 §2 判 P2 三项；57K 管理臂回忆 > 0 且无超限实发（W1b）；Gemma P1 出口同口径；D4 模板 / 900 定。预估约 8–9 h / 约 100 单位，起机一次 |
 | P3 ✅代码 11-02 / ⏳评估 | W4 结构化摘要 + 校准 + 成对续跑评估驾驭器 | 模板在成对续跑上优于现模板（`benchmarks/summary_trace` 真模型待 Colab）；K 值定（需多轮回放，驾驭器量不到） |
 | P4（可选） | W7、模板自动优化（ACON/TRACE 思路，用失败案例让云端模型改模板，仅合成数据） | 视 P3 结果 |
 | P-last | 本机执行端推理栈：两条 MLX 4bit 条目装载 + 一次 longchain 冒烟 | 能跑即过，不计速度（用户 10-31） |
@@ -351,8 +364,8 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
 | D26（新） | 部署形态 | **计算端只定 Colab，本机只做执行端**；本机推理栈排 P-last，能跑即可 | 用户 10-31 |
 | D27（新） | 模型阵容 | 注册表收束到 4 条（W-3）；本机缺省 `mlx-community/Qwen3.8-27B-4bit`，compute_vm 缺省 `RedHatAI/Qwen3.8-27B-INT4`，Qwen 8bit MLX 删【定，用户 10-31】 | 用户 10-31 |
 | D28（新） | 可见文本预算线口径 | **两家族共用一条 12,300 线、同口径**（用户 10-31）：各按自家方言逐件渲染声明、自家分词器计数，不含包裹与固定教学文本；实测 gemma4 12,036 / qwen35 12,144，门已生效 | W-3 带出 / W-1 |
-| D39（新，待拍板） | P2 基线抬离地板后复测 | 11-02 复测编排器路径 L0 基线 35%，拐点规则空判。候选：(a) harness 给 prod 声明的工具接可用实现（返回合理结果而非 System Error）；(b) 元工具 / 护栏推回不计 max_total_iterations（生产编排器行为，不只 harness）；(c) 编排器臂改 catalog / routed 前缀。建议 a + c，b 单独讨论；复测三臂约 5.5 h / 约 65 单位，需用户授权 | 用户后置（11-02） |
-| D40（新，待拍板） | W1 fold 对当前 user 轮内容的策略 | 现状：超限时整轮折进摘要，轮内事实卡丢光（57K 回忆 0%）。候选：保留 user 轮尾部 N tok 原文 / 只折历史、当前轮超限改 context_guard 拒绝 / 现状。生产对应「用户一次贴了超限的材料」 | 用户后置（11-02） |
+| D39（新） | P2 基线抬离地板后复测 | 11-02 复测编排器路径 L0 基线 35%，拐点规则空判。**定：a + c**——(a) harness 给 prod 声明的工具接「可用桩」（确定性合理结果，不再 System Error；W-K2）；(c) 编排器加一臂 catalog 前缀作对照（Qwen 生产形态仍是 full，c 不替代 a）。(b) 元工具 / 护栏推回不计 max_total_iterations 是生产编排器行为，**另开议题**，不绑进复测。复测三臂 × 4 档约 5.5 h / 约 65 单位，与 Gemma 两臂、summary_trace 同一租约（§5「第二批」） | 用户 11-02「按你的建议没有问题，不用省算力」 |
+| D40（新） | W1 fold 对当前 user 轮内容的策略 | 现状：超限时整轮折进摘要，轮内事实卡丢光（57K 回忆 0%；history 放置的轮首压缩同样 62% → 13% → 0%）。**定：溢出外置为主、明确拒绝兜底**——当前 user 轮超限时把超出部分落盘（复用 spill / SpillReadTool），prompt 留摘要 + 句柄由模型按需回读；连外置都装不下才走 context_guard 中止并告知用户拆分。不采「保留尾部 N tok」（事实分布在全文时只保部分）。归 W1b | 用户 11-02 |
 | D41（新） | Colab 批次链脚本纪律 | 臂在后台跑并由链脚本盯挂死（不等整臂）；挂死重起预算整批共用，用完即停机、余臂 skipped；全跳过不算全过；信号先杀 harness 再停机；改脚本必跑桩自测 | 主会话 11-02（一审 C1/M1/M3） |
 
 ## 7. 风险
@@ -436,3 +449,4 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
   → verifier 11 变异体 10 红 1 等价存活（max_tokens 的 bool 判断）。提交 `5e2626e`（全量 check：backend 4180 passed / 3 skipped，colab 135，web 252；首轮被 test_native_task_control Swift nil 解包偶发拦下，单跑通过后重跑全过）。
 - 11-02 上午（批次收官 + W4 已落地）：Colab 八臂批次 00:09–10:21 全 ok、0 超时、`DONE BATCH_RC=0`、VM 已停（约 10 h / 约 120 单位；首次起机 FAIL_READY 未产生数据）。analyst 用 `benchmarks/context_knee/analyze_orch.py` 复算 → `benchmarks/data/context-knee-20261102/ANALYSIS.md`（结论 §1–§3 主会话手写；reviewer 一审 0C/0M/10m，抽查 6 组数字全同，全修）。结论：P1 出口 a ✅（−4 点 [−16,+5]）、W3 不降 ✅ 峰值量不出、W-2 省 53–61% 持平 ✅、W1 57K 20/20 首生成前 fold 无超限实发（代价回忆 0%）、W2 触发 12/11/17 次持平、P2 因基线在地板不可判（D39/D40 待拍板）。
   链脚本 `run_colab.sh` reviewer 一审 1C/4M/7m → 主会话亲修（红线路径）→ 二审 2M（旧 timeout 行再判挂死、stopped 提前置位）再修 → 桩自测 14 场景 55 断言 → verifier 变异体 9 红 1 等价（started=1 / hung_tail 判据 / 不跳过旧行 / aborted=hung / `$?` 取反 / kill_harness / fail_exit 的 started 门 / arm_complete / skipped 计数；stopped 提前置位桩下等价）。harness 口径三修（chore-worker；主会话逐行：峰值拆键、量法值另记、knee 地板短路、旧断言改对）。提交 `f1a16cc`（全量 check：backend 4183 passed / 3 skipped，colab 135，web 252；含 11-02 数据档案 21 MB）。
+- 11-02 午后（用户拍板，原话「按你的建议没有问题，不用省算力。确定方案，落实文档后，等我 /compact」）：D39 定 a + c（可用桩 + catalog 对照臂；元工具计熔断另议）、D40 定溢出外置兜底拒绝；W3 接受「方向对、量不出」；Gemma 31B 两臂与 summary_trace 真模型搭第二批同一租约。新增工作包 W-K2、W1b（§3），§5 加「第二批」行。只落文档不动代码；下一步 /compact 后按 W-K2 → W1b → 链脚本加臂 → 第二批起机的顺序开工。

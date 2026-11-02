@@ -50,7 +50,7 @@
 - prod 前缀的桩工具把编排器基线压到地板（1.3 / 1.4）：harness 里 prod 声明的工具只有桩，真调用返回 System Error 并计入回合。→ 待定（§3）。
 - `reused_prefix` 出现大于 prompt_tokens 的值（58,016 > 57,917）：vLLM num_cached_tokens 上报不可信，10-31 已知，照列不用。
 
-## 3. 待拍板（后置，用户 11-02「实在需要我拍板定夺的地方可以后置」）
+## 3. 待拍板 → 已拍板（用户 11-02 午后「按你的建议没有问题，不用省算力」；决策记录见方案 §6 D39 / D40，工作包 W-K2 / W1b，第二批见 §5）
 1. **P2 基线抬离地板后复测**（需再租 Colab，编排器三臂约 5.5 h / 约 65 单位）。可选路径：(a) harness 给 prod 声明的工具接真实现或「可用桩」（返回合理结果而非 System Error）；(b) 元工具与护栏推回不计 max_total_iterations（这是生产编排器行为，不只是 harness）；(c) 编排器臂改用 catalog/routed 前缀（少声明桩工具）。建议 a + c，b 单独讨论。
 2. **W1 fold 对当前 user 轮内容的策略**：现在超限时整轮折进摘要，事实卡丢光（回忆 0%）。候选：保留 user 轮尾部 N tok 原文 / 只折历史不折当前轮并改为拒绝（context_guard）/ 现状。生产里对应「用户一次贴了超限的材料」。
 3. W3 收益量化是否值得单独设计长轮题（≥10 次生成），还是接受「方向对、量不出」。
@@ -704,3 +704,5 @@ fold 之后模型做了什么（按 run 计；rag_search / file_extract 是生�
 - run_colab.log 臂起止：orch-turn-none 00:23→02:01（98 min，harness rc=0）；orch-turn-w1 02:01→03:40（98 min，harness rc=0）；orch-turn-w1w2 03:40→05:31（111 min，harness rc=0）；direct-mock 05:31→06:19（47 min，harness rc=0）；direct-prod 06:19→07:18（59 min，harness rc=0）；orch-history-ref 07:18→08:54（95 min，harness rc=0）；direct-catalog 08:54→09:37（42 min，harness rc=0）；direct-routed 09:37→10:21（43 min，harness rc=0）
 
 <!-- END AUTO -->
+
+**拍板结果**：1 → a + c（harness 可用桩 W-K2 + 编排器 catalog 对照臂；元工具计熔断 b 另议）；2 → 溢出外置为主（spill 落盘 + 摘要 + 回读，W1b）、明确拒绝兜底；3 → 接受「方向对、量不出」，等 Gemma 侧再看；4 → Gemma 31B 直调两臂（mock + catalog）搭第二批同一租约；summary_trace 真模型评估同批。第二批前置 W-K2、W1b 落地，预估约 8–9 h / 约 100 单位。
