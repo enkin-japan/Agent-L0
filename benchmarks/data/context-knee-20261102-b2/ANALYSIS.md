@@ -8,30 +8,32 @@
 > §1–§3 由主会话手写；§4 为逐题数据回答（引用自动节字母），凡标「推断」的不是测出来的。
 
 ## 1. 结论
-1. **W-K2 可用桩生效，编排器基线离开地板但未到 70%。** 四臂 320 行 `stub_unknown` = 0、`Unknown tool` 回执 0（上午每档 38–68 次）、delivery blocked 0（上午 2–25）、L0 迭代耗尽 1/20（上午 5/20）。无管理臂 L0 60%（上午 35%，按题配对 +25 [+0,+50]），Pass^2 50%。差 70% 门槛 2 个 run：剩余 8 个 L0 失败里 6 个是评分器「步数超限」（模型调 12–16 次 > 题目 max_steps 10–11），2 个是 lc-hard-009（直调也 0/8，题目本身问题）。桩的目标（去掉假失败、不吃回合）已达；剩下的是评分口径问题，见 §2。
+1. **W-K2 可用桩生效，编排器基线离开地板但未到 70%。** 四臂 320 行 `stub_unknown` = 0、`Unknown tool` 回执 0（上午每档 38–68 次）、delivery blocked 0（上午 2–25）、L0 迭代耗尽 1/20（上午 5/20）。无管理臂 L0 60%（上午 35%，按题配对 +25 [+0,+50]），Pass^2 50%，验收「≥ 70%」**未达**。剩余 8 个 L0 失败的归因（阶段复审 M2 纠正）：2 个是 lc-hard-009，**不是题目问题而是生产缺陷**——qwen35 方言 `_coerce`（`backend/framework/dialects/qwen35/response_parser.py:55–58`）不看 schema，把 `{` / `[` 开头或 `true`/`null`/数字形态的字符串参数 json.loads 成 Python 对象，`file_edit.py:333` 再 `str(content)` 落盘成 repr（单引号），评分正则要双引号 JSON；13 个 Qwen 臂该题 0 通过，Gemma 两组 18/18（content 是字符串）。另 6 个「步数超限」只有一部分是评分口径：只计非桩调用救回 2 个（L0 → 70%），max_steps 按桩占比重标救回 3 个（→ 75%），004 r0 兼「无收尾答复」任何口径都救不回。所以可比基线在 60–75% 之间，桩的目标（去掉假失败、不吃回合）已达，但「抬离地板」要先修 `_coerce`（D46）再定评分口径。
 2. **编排器路径的拐点第一次量出来：32K，四臂一致**（none 32K 档 Pass^2 −30 [−70,+10]、高段合并成功率 −38 [−65,−12]，0/7 题，p=0.02）。直调同模型 49K 内无拐点（10-31 W0），所以这不是模型记忆退化，是编排层在长历史上的形态：≥32K 各臂迭代耗尽 6–14/20 run，成功率全部 ≤30%，+W2 的迭代耗尽反而最多（12/9/13）。
-3. **P2 判法（§5 行）：成本项达标，成功率项「不劣化、不提升」，提升项不达。** 拐点以上（≥32K）管理臂对无管理：w1 −5 [−18,+8]、w1w2 −7 [−20,+7]（成功率，高段合并），Pass^2 同向；§2 的「≥ 无管理 90%」按点估计不达（0.77 / 0.69），按区间分不开。成本：57K 实发峰值 0.58 / 0.57 × level（≥17/20 run ≤ 0.7×level），Σwall −4%…+15%，超上限实发 0。上午的「不可判」变成了「可判但不达」；再复测分不出更多，下一步应转向拐点成因（迭代预算 / 推回链），见 §3 D42。
-4. **W1b 机制成立，回忆没有回来。** 57K 档管理三臂 20/20 run 在首次生成前 ceiling fold，桩全部带句柄（Σspilled 1,027 / 1,027 / 1,209），有回读（43 / 107 / 75 次，各 6 run），超 ceiling 实发 0、超 context_limit 0，3 次 context_guard 中止都是量了没发。但 57K 回忆率 w1 0%（0/11）、w1w2 20%（1/5）、catalog 0%（0/5）；验收「> 0」只有 w1w2 形式上过，「显著回升」没有。句柄在、模型不知道该读哪个：摘要桩只有 digest 头，不含可检索线索。见 §3 D43。
+3. **P2 按 §2 预注册三项判（阶段复审 M1 纠正；§5 行与 D42 同步改）：门槛未过（L0 60% < 70%），成本项 ✗，成功率项不可判，耗时项 ✅。** §2 原文「拐点以上任务集成功率与 Pass^2 不低于无管理的 90%；峰值 prompt 不超过拐点的 70%；总耗时增量 ≤ 25%」。拐点 32K → 峰值上限 22,938 tok，而 W1 的 ceiling 固定 53,248：w1 / w1w2 在 ≥32K 三档 0/60 run 达标（本文自动节 I 的「0.7×level」是 harness 代用口径，方案与 README 都没有它的依据，57K 档 0.58×level 不能当成本达标读）。成功率：≥32K 高段合并 w1 −5 [−18,+8]、w1w2 −7 [−20,+7]，点估计比 0.77 / 0.69、区间下沿约 0.17 / 0.08——「区间含 0」只说明没测出差异，证不了「不低于 90%」的非劣效；Pass^2 比 0.50 / 0.75。Σwall −4%…+15% ≤ 25% ✅。另：按「只计非桩调用」口径重评分，L0 过门到 70%，但 ≥32K 比值反降到 0.64 / 0.55。结论：W1 把 57K 发出量压到 ≤0.6×level、超限实发 0，这是护栏的功能验证，不是 §2 的成本达标；要让成本项可达，ceiling 得压到 ≤ 22.9K（即按编排器拐点回填 D1/D2）。再复测分不出更多，下一步转向拐点成因（迭代耗尽 / 推回链），见 §3 D42。
+4. **W1b 机制成立，回忆没有回来。** 57K 档管理三臂 20/20 run 在首次生成前 ceiling fold，驱逐桩全部带句柄（Σspilled 1,027 / 1,027 / 1,209；Σcompacted 多出的 20 / 20 / 24 条是取代桩，设计上不带），有回读（43 / 107 / 75 次，各 6 run），超 ceiling 实发 0、超 context_limit 0，3 次 context_guard 中止都是量了没发。但 57K 回忆率 w1 0%（0/11）、w1w2 20%（1/5）、catalog 0%（0/5）；验收「> 0」只有 w1w2 形式上过，「显著回升」没有。句柄在、模型不知道该读哪个：摘要桩只有 digest 头，不含可检索线索。见 §3 D43。
 5. **catalog 前缀对 prod：首 prompt −61%（5,426 对 13,854），成功率 −4 [−10,+2]、Pass^2 −8 [−15,+0]**。代价集中在「缺必填参数」System Error 16 次（run_math 9、rag_search 6、copy_file 1）：catalog 只给工具名，模型没拿 schema 就调；rag_search 缺参致 4 run 以「检索未完成」收尾（prod 三臂 0）。catalog 要当缺省前缀，得先补 schema 按需获取，见 §3 D44。
 6. **Gemma 4 31B：P1 出口按数字达成。** mock 臂 90 / 90 / 80 / 75%（0/16K/32K/49K），Pass^2 90/90/70/70%，回忆 100%，复读 0；对 10-31 同模型 W0（卡采样）成功率 −4 [−22,+12]，峰值 prompt 降 676–1,040 tok（轮内增长 478 对 1,066–1,293，即 W3 last_k=2 回放在起作用）。保留：W0 只有卡采样一组、level 不全重合。规则判的「拐点 32K」是 2 题 2/2→1/2 的抖动（p=0.50），不采信。gemma-direct-catalog 10/25/15% **不可解读**：直调模式没有 W-K2 桩，Unknown tool 占调用 59–89%（run_shell_command 406 次全 Unknown），是 harness 形态，不是前缀代价。
 7. **D4（摘要模板 / 上限）：new + 900 胜出，但「摘要续跑」本身大幅劣于「原文续跑」。** POST pass new-900 10/30、new-640 5/30、legacy-640 5/17（另 13 对 legacy 指令下 Qwen 返回空摘要，判定 (A) 模型产物：12/13 对摘要器输入与 new 模板同题同 rep 逐字相同而 new 24/24 非空）。三步 POST 都比 PRE 差：pass 降 6–14 对、重复调用 +2.7…+3.4 次/对 [1.6, 4.3]。两个前提没成立：task_state 在 0/90 对里起作用（turn 1 三次迭代内从未建 plan），摘要器输入没有工具结果也没有助手正文（生产 `_turn_to_text` 设计），摘要只剩用户原话 + 推回句 + 工具名，legacy 指令再删「procedural detail」就空了。所以 D4 实测只比了指令文本；摘要续跑丢进度的根因在摘要输入，见 §3 D45。
-8. **场务。** 两次租约约 49 单位（第一租约 13:36–20:05 四臂，trace 首步起步时按 12 h 上限预案 TERM 切断；第二租约 20:07–22:49 续跑五步）；trace 步实测 16–19 min/步（§5 事前估 3 h/步偏高 10×）；换 Gemma 时 compute_ctl「旧节点未释放」拒起一次，链脚本重试即过（11-02 下午 reviewer 修法首次实战兜住）。九步 harness rc 全 0、hung 0。
+8. **场务。** 两次租约合计 9.2 h、余额 860.5 → 811.4 即约 49 单位（运行中 status 显示 6.73 u/h；此前方案里的「约 100 单位」「上午批约 120 单位」按约 12 u/h 估，上午批实耗未留余额记录、无法回核）。第一租约 13:36–20:05 四臂，trace 首步起步时按 12 h 上限预案 TERM 切断；第二租约 20:07–22:49 续跑五步。trace 步实测 16–19 min/步（主会话事前按 3 h/步估，偏高 10×，不是方案文字）。换 Gemma 时起机失败一次（21:15–21:18 preparing → allocating → stopped，形态同 13:33 首次 FAIL_READY；脚本打印的「旧节点未释放？」只是猜测，原因未证实），链脚本重试即过。九步 harness rc 全 0、hung 0。
 
 ## 2. 口径缺陷与 harness 待修
-- **评分器 max_steps 与可用桩的互动**：桩把以前立即失败的调用变成有结果的调用，模型因此多走几步，6/8 的 L0 失败落在「步数超限」。要么按桩调用占比（28–33%）重标 max_steps，要么只计非桩调用；定之前 L0 的 60% 读作下界。lc-hard-009 的 JSON 正则直调也 0/8，题目待修或剔除。
-- **直调臂没有 W-K2 桩**（run_knee 直调路径走 mock_envs，桩只注册在编排器 registry）：direct-prod / direct-catalog / gemma-direct-catalog 这类臂的 Unknown tool 60–90%，结论不可用。要么给直调路径接同一套 `UsableStub`，要么停跑直调 prod/catalog 臂（只留 mock）。
+- **评分器 max_steps 与可用桩的互动**：桩把以前立即失败的调用变成有结果的调用，模型因此多走几步，6/8 的 L0 失败落在「步数超限」，但只计非桩调用只救回 2 个、按桩占比（28–33%）重标 max_steps 救回 3 个（阶段复审 steps.txt / 反驳者 steps_rescore.txt）。定口径前 L0 读作 60–75% 区间。**lc-hard-009 不得剔除**：它是唯一暴露 qwen35 `_coerce` 写坏 JSON 文件这一生产缺陷的题（§1.1、D46）。
+- **生产缺陷（阶段复审 M2，反驳者 CPU 复现 coerce_repro.txt）**：qwen35 方言把字符串参数按形态 json.loads（对象 / 数组 / `true` `false` `null` / 数字 `1e3`→`1000.0`、`12.50`→`12.5`），registry 原样下传，`file_edit.py:333` 与 edit_file `new_string`（:258）都 `str()` 落盘成 Python repr；`qwen35/prompt_builder.py:155` 回放时再 json.dumps，模型在历史里看不出写坏，只有 read_file 才暴露。`backend/tests/test_qwen35_dialect.py:124` 把「不看 schema 转 dict」固定成了预期。config.yaml 两个 Qwen 条目都走 qwen35。严重度 Major（静默写坏数据）。
+- **直调臂没有 W-K2 桩**（run_knee 直调路径走 mock_envs，桩只注册在编排器 registry）：直调 prod / catalog 臂的 Unknown tool 占调用：Qwen direct-prod@am 21%（162/771）、direct-catalog@am 20%（110/555），gemma-direct-catalog 71%（553/781），这类臂的结论不可用。要么给直调路径接同一套 `UsableStub`，要么停跑直调 prod/catalog 臂（只留 mock）。
 - **行级 `turn_guard_flags` 0/320 行落地**：ceiling_compacted / ceiling_spilled 只能从 guardrail_events 读（P 节即事件口径）；harness 行记录应抄一份，或方案 W1b 验收改按事件口径。
 - **spill 文件计数混了 W2 与 ceiling**（w1w2 / catalog 在 32K 已有 234 / 317 个文件）：按 label 分计，或只用事件里的 spilled。
 - **拐点规则在 2 题抖动上也判**（gemma-mock p=0.50）：加最小证据门（如 ≥3 题同向或 p < 0.2）再判「拐点」，否则标「疑似」。
 - **summary_trace**：(a) turn 1 三次迭代内从不建 plan → task_state 维度空测，需提高 turn-1 迭代上限或在题目里种 plan；(b) 摘要器原始输出与生成 token 数没落盘，空摘要的具体形态（空白 / EOS vs 只有 MEMO 块）分不开，run_trace 应记下再按 `--ids lc-hard-001,002,003,008,009,010` 补跑 legacy 一步；(c) legacy 模板在 Qwen 上 13/30 空摘要，对 Qwen 退役。
 - **参照命名**：`20261031/gemma-current` 是 Gemma 4 26B-A4B，不是 31B；31B 同模型参照是 `gemma31b-w4a16-card`（卡采样）。委托与文档引用时写全名。
-- **链脚本**（红线路径，主会话亲改 + selftest）：首次起机失败自动再试一次（本批 13:33 FAIL_READY 靠人工重起）；`MAX_VM_HOURS` 到点主动 restart_vm（非订阅 VM 12 h 上限，本批靠外挂哨位 TERM）；§5 时长估算改按实测（编排器臂 90–110 min、trace 16–19 min、Gemma 直调 36–41 min）。
+- **链脚本**（红线路径，主会话亲改 + selftest）：首次起机失败自动再试一次（本批 13:33 FAIL_READY 靠人工重起）；`MAX_VM_HOURS` 到点主动 restart_vm（非订阅 VM 12 h 上限，本批靠外挂哨位 TERM）；桩自测补 FAIL_READY（rc 4，booting → stopped）场景覆盖 restart_vm 的 `[ $rc -eq 4 ] && stop_colab` 分支（13:33 与 21:18 两次实战都走过、尚无桩场景与变异证明）；§5 时长估算改按实测（编排器臂 90–110 min、trace 16–19 min、Gemma 直调 36–41 min）。
 
 ## 3. 待拍板
-- **D42 P2 判法与下一步**：按 §1.3 判「成本 ✅、不劣化 ✅（区间含 0）、提升 ✗」并关闭 P2 复测；编排器路径 32K 拐点的成因（≥32K 迭代耗尽 6–14/20、+W2 更多）另立工作项（迭代预算按历史长度放宽 / 推回链在长历史下的计数口径），不再为 P2 本身起租约。备选：先修 max_steps 口径再复测一次（约 7 h / 45 单位，预计只抬 L0）。
+- **D42 P2 判法与下一步**：按 §1.3 记「门槛未过；成本 ✗（峰值上限 = 拐点 × 0.7 = 22.9K，≥32K 档 0/60）；成功率不可判（点估计 0.77 / 0.69，区间不支持非劣效）；Σwall ✅」。选项 (a) 关闭 P2 复测，拐点成因（≥32K 迭代耗尽 6–14/20、+W2 更多）另立工作项（迭代预算按历史长度放宽 / 推回链在长历史下的计数口径）；(b) 先修 `_coerce`（D46）与评分口径再复测一次（约 7 h / 45 单位，L0 预计 70–80%，≥32K 预计仍在地板）。**另一问**：D1/D2 的 soft 24,576 / hard 39,322 按直调「49K 内无拐点」取，生产走编排器路径，按 32K 回填是 16,384 / 26,214（F 节）——但 §1.2 论证 32K 悬崖来自迭代耗尽而非上下文退化，压 ceiling 到 22.9K 未必抬成功率；是否回填待拍板。建议 (a) + D1/D2 暂不回填、等成因项结果。
 - **D43 W1b 回忆**：句柄在、回忆 0–20%。选项 (a) 摘要桩带一行可检索线索（观察首 N 字 + 命中的路径/ID 词）；(b) ceiling 前先对工具观察做 rag_search 可达的索引；(c) 接受：生产 ceiling 路径只压工具观察，用户贴的材料在 user 轮不受影响（D40b 另议）。建议 (a)，改动小、可在 harness 上量。
 - **D44 catalog 前缀**：补「schema 按需」（缺参 System Error 时自动回灌该工具 schema 再试一次，或加 `tool_schema` 元工具）后再决定是否作缺省；现状 −4 点 / 首 prompt −61%。
 - **D45 摘要续跑丢进度**：POST 对 PRE pass 减半、重复调用 +3。根因在摘要输入（无工具结果、无助手正文）而非模板。选项 (a) `_turn_to_text` 加入助手正文与工具结果 digest（生产改动，走 W2 同一压缩预算）；(b) 摘要前先把 task_state 落实（turn 1 建 plan）；(c) 两者都做后再跑 trace 三步（约 1 h / 7 单位）。模板本身定 new + 900。
+- **D46（新，阶段复审 M2）qwen35 `_coerce` 写坏 JSON 文件**：建议下一工作项首位修——按工具 schema 只对 object / array / number / boolean 型参数还原，string 型原样保留（或退一步：file_edit / edit_file 对非 str 的 content / new_string 做 json.dumps(ensure_ascii=False)）；改 `test_qwen35_dialect.py:124` 的预期并加「string 型参数保留 JSON 文本」用例；守卫型 → 变异证明。修完 lc-hard-009 在 Qwen 上应从 0/16 翻正。
 - **D40b**（延续）：user 轮本身超限是否外置，仍待拍板。
 - **Gemma P1 出口**：建议按 §1.6 判 ✅ 并记保留项，不再补卡采样对照。
 
@@ -39,7 +41,7 @@
 
 ### 4.1 基线是否抬离地板；W-K2 桩（B、C、O 节）
 - orch-turn-none L0 成功率 **60%**（12/20，Wilson [39,78]），Pass^2 50%（5/10）；上午 35%（7/20）。按题配对 +25 点 [+0,+50]（4/0 题，E 节）。方案 W-K2 验收「L0 ≥ 70%」：**未达**（差 10 点，即 2 个 run）。
-- L0 的 8 个失败 run（O 节末明细）：6 个是评分器「步数超限」（function 调用总数 12–16 > 题目 max_steps 10–11；其中 1 个同时回合上限耗尽），2 个是 lc-hard-009 的 JSON 正则不匹配（该题直调 qwen-current 也 0/8，题目本身问题）。元工具调用 0–5、桩调用 1–4 次/run。L0 迭代耗尽只剩 1/20（上午 5/20），env错均 0.25（上午 2.65）。
+- L0 的 8 个失败 run（O 节末明细）：6 个是评分器「步数超限」（function 调用总数 12–16 > 题目 max_steps 10–11；其中 1 个同时回合上限耗尽），2 个是 lc-hard-009 的 JSON 正则不匹配（该题直调 qwen-current 也 0/8；阶段复审 M2：根因是 qwen35 `_coerce` 把 content 转成 dict、落盘成 repr，Gemma 18/18 过，见 §1.1 / §2 / D46，不是题目问题）。元工具调用 0–5、桩调用 1–4 次/run。L0 迭代耗尽只剩 1/20（上午 5/20），env错均 0.25（上午 2.65）。
 - 绊线：四臂 320 行 `stub_unknown` 合计 0，独立按 feed 重数 `Unknown tool` 回执也 0（上午三臂每档 38–68 次）。桩调用占工具调用 28–33%：run_shell_command 211 / 196 / 191 / 214（none / w1 / w1w2 / catalog），其次 list_dir 61 / 40 / 47 / 51、edit_file 27 / 21 / 28 / 25、run_math 9–20。`stub_failed` 5 / 5 / 7 / 23。
 
 ### 4.2 四臂分档与拐点（B、C、E、I、O 节）
@@ -981,7 +983,7 @@ orch-turn-none L0 失败 run 明细（8/20；why = 评分器原文，步数 = sc
 
 spill 文件含 W2 步骤边界压缩（spill_full）落的盘，不只 ceiling；事件里的 spilled 才是 ceiling 压缩给出句柄的条数。
 
-| 组 | level | n | ceiling_fold 事件 | Σcompacted | Σspilled | fold 带 spill 的 run | context_hard 事件 | 超限中止（turn_abort context_guard）| 中止时量值 | spill 文件 | spill_readbacks（run 数） | 实发 > ceiling 的生成 | 实发 > context_limit 的生成 | 实发最大 | recall (分母) |
+| 组 | level | n | ceiling_fold 事件 | Σcompacted | Σspilled | fold 带 spill 的 run | context_hard 事件 | 超限中止（turn_abort context_guard）| 中止时量值 | spill 文件 | spill_readbacks（run 数） | 实发 ≥ ceiling 的生成 | 实发 > context_limit 的生成 | 实发最大 | recall (分母) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | orch-turn-none | 0 | 20 | 0 | 0 | 0 | 0 | 0 | 0（compacted 0 / spilled 0） | — | 0 | 0（0） | 0 | 0 | 16,389 | — (0) |
 | orch-turn-none | 32768 | 20 | 0 | 0 | 0 | 0 | 0 | 0（compacted 0 / spilled 0） | — | 0 | 0（0） | 0 | 0 | 36,104 | 85% (13) |

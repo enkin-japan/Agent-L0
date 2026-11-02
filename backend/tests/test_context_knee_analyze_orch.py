@@ -12,6 +12,7 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO / "benchmarks") not in sys.path:
     sys.path.append(str(REPO / "benchmarks"))
 
+from context_knee import analyze as A              # noqa: E402
 from context_knee import analyze_orch as O         # noqa: E402
 from summary_trace import fold_forensics as FF     # noqa: E402
 
@@ -84,6 +85,32 @@ def _sess(root: Path, name: str, created: float, turn=None, memory=None):
         (d / "history.jsonl").write_text(json.dumps(turn) + "\n")
     if memory is not None:
         (d / "memory.json").write_text(json.dumps(memory))
+
+
+def test_sec_q_system_error_missing_required_argument_counted_separately(tmp_path):
+    """Q 节按 `missing required argument` 判别串把 System Error 回执分成「缺必填参数」/「其他」两类；
+    改掉判别串（如拼错、换成别的子串）必须让此用例变红——这是唯一守住它的用例。"""
+    def _min_row(item, rep, extra=None):
+        return {"level": 0, "item_id": item, "rep": rep, "stamp": "s1", "model": "m/x",
+                "score": {"pass": True}, "gens": [], **(extra or {})}
+
+    a_name, b_name = "orch-turn-w1w2", "orch-turn-catalog"
+    rows_a = [_min_row("x", 0, {"turns": [{"tool_calls": [{"name": "t1"}, {"name": "t2"}],
+                                            "feed": [{"content": "System Error: missing required argument 'q'"},
+                                                     {"content": "System Error: delivery blocked because ..."}]}]}),
+              _min_row("x", 1)]
+    rows_b = [_min_row("x", 0), _min_row("x", 1)]
+    for name, rows in ((a_name, rows_a), (b_name, rows_b)):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "transcripts.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    G = {name: A.load_group(tmp_path / name) for name in (a_name, b_name)}
+    aggs = {name: A.aggregate(G[name], A.th_global, set()) for name in (a_name, b_name)}
+    out = O.sec_q(G, aggs, {}, a_name=a_name, b_name=b_name)
+    line = next(ln for ln in out if ln.startswith(f"- {a_name} `System Error`"))
+    assert "合计 2" in line
+    assert "/缺必填参数 1" in line
+    assert "/其他 1" in line
 
 
 def test_fold_forensics_error_vs_ok_pair(tmp_path):

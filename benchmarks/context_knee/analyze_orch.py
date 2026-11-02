@@ -632,7 +632,7 @@ def sec_o(G, aggs, names) -> List[str]:
 def sec_p(G, aggs, evs, names, prev_names) -> List[str]:
     L = ["### P. W1b：ceiling 压缩带回读句柄（事件 = guard_events_lines 切片；spill 文件 = 本地 sessions/<session>/spill/ 计数）\n",
          "spill 文件含 W2 步骤边界压缩（spill_full）落的盘，不只 ceiling；事件里的 spilled 才是 ceiling 压缩给出句柄的条数。\n",
-         "| 组 | level | n | ceiling_fold 事件 | Σcompacted | Σspilled | fold 带 spill 的 run | context_hard 事件 | 超限中止（turn_abort context_guard）| 中止时量值 | spill 文件 | spill_readbacks（run 数） | 实发 > ceiling 的生成 | 实发 > context_limit 的生成 | 实发最大 | recall (分母) |",
+         "| 组 | level | n | ceiling_fold 事件 | Σcompacted | Σspilled | fold 带 spill 的 run | context_hard 事件 | 超限中止（turn_abort context_guard）| 中止时量值 | spill 文件 | spill_readbacks（run 数） | 实发 ≥ ceiling 的生成 | 实发 > context_limit 的生成 | 实发最大 | recall (分母) |",
          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     flag_rows = flag_key = 0
     for name in names:
