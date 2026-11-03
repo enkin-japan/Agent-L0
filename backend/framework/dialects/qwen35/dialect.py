@@ -77,8 +77,10 @@ class Qwen35Dialect:
         return self._builder.tail_state(task_block=task_block,
                                         include_env=include_env, env_extra=env_extra)
 
-    def parse_response(self, raw: str) -> Dict[str, Any]:
-        return self._parser.parse(raw)
+    def parse_response(self, raw: str,
+                       tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        # D46：XML 调用体不带类型，参数类型按 schema 还原（无 schema = 原文）
+        return self._parser.parse(raw, tools=tools)
 
     def thinking_prefill(self, enable_thinking: bool) -> str:
         # 开思考：prompt 尾在已打开的 <think> 内，生成种子与之字节一致。

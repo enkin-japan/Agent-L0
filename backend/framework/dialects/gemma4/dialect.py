@@ -82,7 +82,9 @@ class Gemma4Dialect:
         return self._builder.tail_state(task_block=task_block,
                                         include_env=include_env, env_extra=env_extra)
 
-    def parse_response(self, raw: str) -> Dict[str, Any]:
+    def parse_response(self, raw: str,
+                       tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        # tools 不用：gemma4 调用体 DSL 由语法自定类型（字符串有定界符），无需按 schema 还原
         return self._parser.parse(raw)
 
     def thinking_prefill(self, enable_thinking: bool) -> str:

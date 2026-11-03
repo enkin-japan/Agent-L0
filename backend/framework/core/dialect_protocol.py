@@ -16,8 +16,9 @@ R0 = 把 P0 对算力做过的那台协议手术，对方言再做一遍。
 - markers 是**方言事实**：引擎用它做思考播种、流过滤器切段、约束采样锚点、token
   去向仪表的正则。此前这些一律读 `ResponseParser` 的属性——**它事实上兼任了方言
   标记登记处**；R0 只是把这个隐式职责显式化，取值来源与结果完全不变。
-- `build_prompt` / `parse_response` 的签名与原 `PromptBuilder.build` /
-  `ResponseParser.parse` **逐字对齐**——R0 是搬运，不是重写。
+- `build_prompt` 的签名与原 `PromptBuilder.build` **逐字对齐**——R0 是搬运，不是
+  重写；`parse_response` 对应原 `ResponseParser.parse`，多了一个可选 `tools`
+  参数（D46：调用方传本轮工具 schema，方言据此还原参数类型；见下方 docstring）。
 - `tool_call_grammar` 归方言：它锚定的是本方言**回放给模型看的调用体格式**（原
   `constrained.build_tool_call_schema` 的 docstring 自陈此事）。而
   `core/constrained.py` 的状态机本身框架无关、方言无关（起止标记夹一段调用体，
@@ -135,8 +136,13 @@ class ModelDialect(Protocol):
         prev_tail 一致：{"env": 环境锚点块内容, "task": 任务状态块内容}。"""
         ...
 
-    def parse_response(self, raw: str) -> Dict[str, Any]:
+    def parse_response(self, raw: str,
+                       tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """把原始生成文本反序列化为 {thoughts, text, tool_calls}。
+
+        tools：本轮完整工具 schema（扁平列表，engine 传 grammar_tools 优先）。调用体
+        不自带类型的方言（qwen35 XML）据此还原参数类型，无 schema 时参数保持原文
+        （D46）；调用体语法自定类型的方言（gemma4 DSL）忽略它。None = 无 schema。
 
         **铁律级不变量**（backend/tests/test_response_parser.py 12 项守着）：
         标记残缺的任何事故形态都**不得把垃圾漏进正文**——有头无尾/有尾无头的工具

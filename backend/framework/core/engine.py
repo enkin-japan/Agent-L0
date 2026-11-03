@@ -803,7 +803,9 @@ class AgentEngine:
             enable_thinking=enable_thinking,
         )
 
-        parsed = self.dialect.parse_response(generated_text)
+        # D46：参数类型按本轮完整 schema 还原（与约束采样同一语法源，catalog 模式下
+        # tools 是瘦目录、不带 properties）
+        parsed = self.dialect.parse_response(generated_text, tools=gtools)
 
         # 上位解流提交：成功生成后记录「实际喂入 prompt + 实际生成原始字节」。
         # 两种「完成但不提交」情形（详见 prompt_stream.commit docstring）：带一次性
