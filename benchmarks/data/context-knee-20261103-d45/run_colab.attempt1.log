@@ -1,0 +1,16 @@
+2026-11-03 15:30:41 START deploy RedHatAI/Qwen3.8-27B-INT4 --retain
+2026-11-03 15:30:41 后台部署进程已启动（尚未 READY） {"pid": 55207, "logs": "./colab/deploy.sh logs -f", "stop": "./colab/deploy.sh stop"}
+2026-11-03 15:30:43 wait READY: state=allocating phase=
+2026-11-03 15:31:14 wait READY: state=allocating phase=
+2026-11-03 15:31:45 wait READY: state=allocating phase=
+2026-11-03 15:32:16 wait READY: state=stopped phase=
+2026-11-03 15:32:16 deploy state=stopped before READY
+2026-11-03 15:32:16 arm trace-d45-digest: skipped
+2026-11-03 15:32:16 arm trace-d45-both: skipped
+2026-11-03 15:32:16 arm trace-d45-plan: skipped
+2026-11-03 15:32:16 STOP colab
+2026-11-03 15:32:16 等待正在进行的 VM 分配结束（如有），然后回收
+2026-11-03 15:32:16 正在核对并回收 VM {"session": "agent-compute-f90d97f90926"}
+2026-11-03 15:32:17 已确认 VM 从 Colab 服务端移除 {"session": "agent-compute-f90d97f90926", "tailnet_cleanup": "logout-unconfirmed"}
+2026-11-03 15:32:17 stop rc=0
+2026-11-03 15:32:17 DONE FAIL_READY

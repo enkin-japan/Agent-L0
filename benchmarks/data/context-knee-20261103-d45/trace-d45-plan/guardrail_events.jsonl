@@ -1,0 +1,97 @@
+{"ts": 1793691235.863, "time": "2026-11-03 16:33:55", "type": "no_plan_nudge", "session": "lc-hard-001-r0-8094fc-t1", "detail": {"iterations": 3}}
+{"ts": 1793691240.758, "time": "2026-11-03 16:34:00", "type": "verify_nudge", "session": "lc-hard-001-r0-8094fc-t1"}
+{"ts": 1793691290.278, "time": "2026-11-03 16:34:50", "type": "no_plan_nudge", "session": "lc-hard-001-r1-5bb6f1-t1", "detail": {"iterations": 3}}
+{"ts": 1793691294.745, "time": "2026-11-03 16:34:54", "type": "verify_nudge", "session": "lc-hard-001-r1-5bb6f1-t1"}
+{"ts": 1793691321.609, "time": "2026-11-03 16:35:21", "type": "no_plan_nudge", "session": "lc-hard-001-r1-5bb6f1-post", "detail": {"iterations": 3}}
+{"ts": 1793691329.174, "time": "2026-11-03 16:35:29", "type": "action_claim_nudge", "session": "lc-hard-001-r1-5bb6f1-post"}
+{"ts": 1793691346.104, "time": "2026-11-03 16:35:46", "type": "no_plan_nudge", "session": "lc-hard-001-r2-5f4add-t1", "detail": {"iterations": 3}}
+{"ts": 1793691350.887, "time": "2026-11-03 16:35:50", "type": "verify_nudge", "session": "lc-hard-001-r2-5f4add-t1"}
+{"ts": 1793691404.871, "time": "2026-11-03 16:36:44", "type": "no_plan_nudge", "session": "lc-hard-002-r0-57da1c-t1", "detail": {"iterations": 3}}
+{"ts": 1793691435.678, "time": "2026-11-03 16:37:15", "type": "no_plan_nudge", "session": "lc-hard-002-r1-5414ec-t1", "detail": {"iterations": 3}}
+{"ts": 1793691463.78, "time": "2026-11-03 16:37:43", "type": "no_plan_nudge", "session": "lc-hard-002-r2-77044b-t1", "detail": {"iterations": 3}}
+{"ts": 1793691492.871, "time": "2026-11-03 16:38:12", "type": "no_plan_nudge", "session": "lc-hard-003-r0-8d97ef-t1", "detail": {"iterations": 3}}
+{"ts": 1793691494.979, "time": "2026-11-03 16:38:14", "type": "duplicate_call", "session": "lc-hard-003-r0-8d97ef-t1", "detail": {"tool": "write_file"}}
+{"ts": 1793691500.267, "time": "2026-11-03 16:38:20", "type": "duplicate_call", "session": "lc-hard-003-r0-8d97ef-t1", "detail": {"tool": "write_file"}}
+{"ts": 1793691500.268, "time": "2026-11-03 16:38:20", "type": "turn_abort", "session": "lc-hard-003-r0-8d97ef-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793691517.211, "time": "2026-11-03 16:38:37", "type": "no_plan_nudge", "session": "lc-hard-003-r0-8d97ef-post", "detail": {"iterations": 3}}
+{"ts": 1793691519.445, "time": "2026-11-03 16:38:39", "type": "verify_nudge", "session": "lc-hard-003-r0-8d97ef-post"}
+{"ts": 1793691521.234, "time": "2026-11-03 16:38:41", "type": "turn_abort", "session": "lc-hard-003-r0-8d97ef-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793691527.527, "time": "2026-11-03 16:38:47", "type": "no_plan_nudge", "session": "lc-hard-003-r1-053f6d-t1", "detail": {"iterations": 3}}
+{"ts": 1793691529.634, "time": "2026-11-03 16:38:49", "type": "duplicate_call", "session": "lc-hard-003-r1-053f6d-t1", "detail": {"tool": "write_file"}}
+{"ts": 1793691535.393, "time": "2026-11-03 16:38:55", "type": "turn_abort", "session": "lc-hard-003-r1-053f6d-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793691555.363, "time": "2026-11-03 16:39:15", "type": "no_plan_nudge", "session": "lc-hard-003-r2-5ef959-t1", "detail": {"iterations": 3}}
+{"ts": 1793691557.467, "time": "2026-11-03 16:39:17", "type": "duplicate_call", "session": "lc-hard-003-r2-5ef959-t1", "detail": {"tool": "write_file"}}
+{"ts": 1793691563.183, "time": "2026-11-03 16:39:23", "type": "duplicate_call", "session": "lc-hard-003-r2-5ef959-t1", "detail": {"tool": "write_file"}}
+{"ts": 1793691563.184, "time": "2026-11-03 16:39:23", "type": "turn_abort", "session": "lc-hard-003-r2-5ef959-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793691584.546, "time": "2026-11-03 16:39:44", "type": "no_plan_nudge", "session": "lc-hard-003-r2-5ef959-post", "detail": {"iterations": 3}}
+{"ts": 1793691587.521, "time": "2026-11-03 16:39:47", "type": "verify_nudge", "session": "lc-hard-003-r2-5ef959-post"}
+{"ts": 1793691589.685, "time": "2026-11-03 16:39:49", "type": "turn_abort", "session": "lc-hard-003-r2-5ef959-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793691598.27, "time": "2026-11-03 16:39:58", "type": "no_plan_nudge", "session": "lc-hard-004-r0-21fd2d-t1", "detail": {"iterations": 3}}
+{"ts": 1793691604.842, "time": "2026-11-03 16:40:04", "type": "verify_nudge", "session": "lc-hard-004-r0-21fd2d-t1"}
+{"ts": 1793691608.403, "time": "2026-11-03 16:40:08", "type": "turn_abort", "session": "lc-hard-004-r0-21fd2d-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793691640.021, "time": "2026-11-03 16:40:40", "type": "no_plan_nudge", "session": "lc-hard-004-r1-51ad97-t1", "detail": {"iterations": 3}}
+{"ts": 1793691645.581, "time": "2026-11-03 16:40:45", "type": "verify_nudge", "session": "lc-hard-004-r1-51ad97-t1"}
+{"ts": 1793691648.427, "time": "2026-11-03 16:40:48", "type": "turn_abort", "session": "lc-hard-004-r1-51ad97-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793691667.849, "time": "2026-11-03 16:41:07", "type": "no_plan_nudge", "session": "lc-hard-004-r1-51ad97-post", "detail": {"iterations": 3}}
+{"ts": 1793691674.859, "time": "2026-11-03 16:41:14", "type": "verify_nudge", "session": "lc-hard-004-r1-51ad97-post"}
+{"ts": 1793691679.284, "time": "2026-11-03 16:41:19", "type": "turn_abort", "session": "lc-hard-004-r1-51ad97-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793691687.458, "time": "2026-11-03 16:41:27", "type": "no_plan_nudge", "session": "lc-hard-004-r2-4ef1f6-t1", "detail": {"iterations": 3}}
+{"ts": 1793691693.212, "time": "2026-11-03 16:41:33", "type": "verify_nudge", "session": "lc-hard-004-r2-4ef1f6-t1"}
+{"ts": 1793691696.219, "time": "2026-11-03 16:41:36", "type": "turn_abort", "session": "lc-hard-004-r2-4ef1f6-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793691713.923, "time": "2026-11-03 16:41:53", "type": "no_plan_nudge", "session": "lc-hard-004-r2-4ef1f6-post", "detail": {"iterations": 3}}
+{"ts": 1793691733.521, "time": "2026-11-03 16:42:13", "type": "no_plan_nudge", "session": "lc-hard-005-r0-d090f2-t1", "detail": {"iterations": 3}}
+{"ts": 1793691736.294, "time": "2026-11-03 16:42:16", "type": "verify_nudge", "session": "lc-hard-005-r0-d090f2-t1"}
+{"ts": 1793691770.505, "time": "2026-11-03 16:42:50", "type": "no_plan_nudge", "session": "lc-hard-005-r1-12b6e2-t1", "detail": {"iterations": 3}}
+{"ts": 1793691773.023, "time": "2026-11-03 16:42:53", "type": "verify_nudge", "session": "lc-hard-005-r1-12b6e2-t1"}
+{"ts": 1793691782.399, "time": "2026-11-03 16:43:02", "type": "action_claim_nudge", "session": "lc-hard-005-r1-12b6e2-pre"}
+{"ts": 1793691800.037, "time": "2026-11-03 16:43:20", "type": "action_claim_nudge", "session": "lc-hard-005-r1-12b6e2-post"}
+{"ts": 1793691815.625, "time": "2026-11-03 16:43:35", "type": "no_plan_nudge", "session": "lc-hard-005-r2-8524f3-t1", "detail": {"iterations": 3}}
+{"ts": 1793691818.333, "time": "2026-11-03 16:43:38", "type": "verify_nudge", "session": "lc-hard-005-r2-8524f3-t1"}
+{"ts": 1793691852.84, "time": "2026-11-03 16:44:12", "type": "no_plan_nudge", "session": "lc-hard-006-r0-bc326c-t1", "detail": {"iterations": 3}}
+{"ts": 1793691856.243, "time": "2026-11-03 16:44:16", "type": "verify_nudge", "session": "lc-hard-006-r0-bc326c-t1"}
+{"ts": 1793691878.349, "time": "2026-11-03 16:44:38", "type": "no_plan_nudge", "session": "lc-hard-006-r0-bc326c-post", "detail": {"iterations": 3}}
+{"ts": 1793691891.349, "time": "2026-11-03 16:44:51", "type": "no_plan_nudge", "session": "lc-hard-006-r1-a556f6-t1", "detail": {"iterations": 3}}
+{"ts": 1793691894.219, "time": "2026-11-03 16:44:54", "type": "verify_nudge", "session": "lc-hard-006-r1-a556f6-t1"}
+{"ts": 1793691901.618, "time": "2026-11-03 16:45:01", "type": "action_claim_nudge", "session": "lc-hard-006-r1-a556f6-pre"}
+{"ts": 1793691923.271, "time": "2026-11-03 16:45:23", "type": "no_plan_nudge", "session": "lc-hard-006-r2-7e33b3-t1", "detail": {"iterations": 3}}
+{"ts": 1793691926.127, "time": "2026-11-03 16:45:26", "type": "verify_nudge", "session": "lc-hard-006-r2-7e33b3-t1"}
+{"ts": 1793691952.992, "time": "2026-11-03 16:45:52", "type": "no_plan_nudge", "session": "lc-hard-007-r0-8705e2-t1", "detail": {"iterations": 3}}
+{"ts": 1793691959.209, "time": "2026-11-03 16:45:59", "type": "verify_nudge", "session": "lc-hard-007-r0-8705e2-t1"}
+{"ts": 1793691964.92, "time": "2026-11-03 16:46:04", "type": "turn_abort", "session": "lc-hard-007-r0-8705e2-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793691972.96, "time": "2026-11-03 16:46:12", "type": "action_claim_nudge", "session": "lc-hard-007-r0-8705e2-pre"}
+{"ts": 1793692000.151, "time": "2026-11-03 16:46:40", "type": "no_plan_nudge", "session": "lc-hard-007-r0-8705e2-post", "detail": {"iterations": 3}}
+{"ts": 1793692007.094, "time": "2026-11-03 16:46:47", "type": "action_claim_nudge", "session": "lc-hard-007-r0-8705e2-post"}
+{"ts": 1793692021.647, "time": "2026-11-03 16:47:01", "type": "no_plan_nudge", "session": "lc-hard-007-r1-c9498c-t1", "detail": {"iterations": 3}}
+{"ts": 1793692026.683, "time": "2026-11-03 16:47:06", "type": "verify_nudge", "session": "lc-hard-007-r1-c9498c-t1"}
+{"ts": 1793692030.434, "time": "2026-11-03 16:47:10", "type": "turn_abort", "session": "lc-hard-007-r1-c9498c-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793692036.556, "time": "2026-11-03 16:47:16", "type": "action_claim_nudge", "session": "lc-hard-007-r1-c9498c-pre"}
+{"ts": 1793692057.45, "time": "2026-11-03 16:47:37", "type": "action_claim_nudge", "session": "lc-hard-007-r1-c9498c-post"}
+{"ts": 1793692070.767, "time": "2026-11-03 16:47:50", "type": "no_plan_nudge", "session": "lc-hard-007-r2-f39544-t1", "detail": {"iterations": 3}}
+{"ts": 1793692075.798, "time": "2026-11-03 16:47:55", "type": "verify_nudge", "session": "lc-hard-007-r2-f39544-t1"}
+{"ts": 1793692079.568, "time": "2026-11-03 16:47:59", "type": "turn_abort", "session": "lc-hard-007-r2-f39544-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793692087.455, "time": "2026-11-03 16:48:07", "type": "action_claim_nudge", "session": "lc-hard-007-r2-f39544-pre"}
+{"ts": 1793692107.918, "time": "2026-11-03 16:48:27", "type": "no_plan_nudge", "session": "lc-hard-007-r2-f39544-post", "detail": {"iterations": 3}}
+{"ts": 1793692115.807, "time": "2026-11-03 16:48:35", "type": "action_claim_nudge", "session": "lc-hard-007-r2-f39544-post"}
+{"ts": 1793692134.637, "time": "2026-11-03 16:48:54", "type": "no_plan_nudge", "session": "lc-hard-008-r0-07c385-t1", "detail": {"iterations": 3}}
+{"ts": 1793692142.618, "time": "2026-11-03 16:49:02", "type": "verify_nudge", "session": "lc-hard-008-r0-07c385-t1"}
+{"ts": 1793692146.122, "time": "2026-11-03 16:49:06", "type": "turn_abort", "session": "lc-hard-008-r0-07c385-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793692174.283, "time": "2026-11-03 16:49:34", "type": "no_plan_nudge", "session": "lc-hard-008-r1-031df7-t1", "detail": {"iterations": 3}}
+{"ts": 1793692181.53, "time": "2026-11-03 16:49:41", "type": "verify_nudge", "session": "lc-hard-008-r1-031df7-t1"}
+{"ts": 1793692184.379, "time": "2026-11-03 16:49:44", "type": "turn_abort", "session": "lc-hard-008-r1-031df7-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793692214.85, "time": "2026-11-03 16:50:14", "type": "no_plan_nudge", "session": "lc-hard-008-r2-c5be09-t1", "detail": {"iterations": 3}}
+{"ts": 1793692224.631, "time": "2026-11-03 16:50:24", "type": "verify_nudge", "session": "lc-hard-008-r2-c5be09-t1"}
+{"ts": 1793692227.558, "time": "2026-11-03 16:50:27", "type": "turn_abort", "session": "lc-hard-008-r2-c5be09-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793692268.002, "time": "2026-11-03 16:51:08", "type": "no_plan_nudge", "session": "lc-hard-009-r0-5b4637-t1", "detail": {"iterations": 3}}
+{"ts": 1793692272.513, "time": "2026-11-03 16:51:12", "type": "verify_nudge", "session": "lc-hard-009-r0-5b4637-t1"}
+{"ts": 1793692313.66, "time": "2026-11-03 16:51:53", "type": "no_plan_nudge", "session": "lc-hard-009-r1-7ba995-t1", "detail": {"iterations": 3}}
+{"ts": 1793692318.398, "time": "2026-11-03 16:51:58", "type": "verify_nudge", "session": "lc-hard-009-r1-7ba995-t1"}
+{"ts": 1793692363.106, "time": "2026-11-03 16:52:43", "type": "no_plan_nudge", "session": "lc-hard-009-r2-2faa2f-t1", "detail": {"iterations": 3}}
+{"ts": 1793692366.884, "time": "2026-11-03 16:52:46", "type": "verify_nudge", "session": "lc-hard-009-r2-2faa2f-t1"}
+{"ts": 1793692393.486, "time": "2026-11-03 16:53:13", "type": "no_plan_nudge", "session": "lc-hard-010-r0-ffa930-t1", "detail": {"iterations": 3}}
+{"ts": 1793692396.255, "time": "2026-11-03 16:53:16", "type": "verify_nudge", "session": "lc-hard-010-r0-ffa930-t1"}
+{"ts": 1793692430.828, "time": "2026-11-03 16:53:50", "type": "no_plan_nudge", "session": "lc-hard-010-r1-b07b80-t1", "detail": {"iterations": 3}}
+{"ts": 1793692433.044, "time": "2026-11-03 16:53:53", "type": "verify_nudge", "session": "lc-hard-010-r1-b07b80-t1"}
+{"ts": 1793692452.386, "time": "2026-11-03 16:54:12", "type": "action_claim_nudge", "session": "lc-hard-010-r1-b07b80-post"}
+{"ts": 1793692458.308, "time": "2026-11-03 16:54:18", "type": "no_plan_nudge", "session": "lc-hard-010-r1-b07b80-post", "detail": {"iterations": 3}}
+{"ts": 1793692474.606, "time": "2026-11-03 16:54:34", "type": "no_plan_nudge", "session": "lc-hard-010-r2-6fd0df-t1", "detail": {"iterations": 3}}
+{"ts": 1793692477.123, "time": "2026-11-03 16:54:37", "type": "verify_nudge", "session": "lc-hard-010-r2-6fd0df-t1"}

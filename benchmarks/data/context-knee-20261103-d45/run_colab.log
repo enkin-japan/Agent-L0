@@ -1,0 +1,77 @@
+2026-11-03 15:30:41 START deploy RedHatAI/Qwen3.8-27B-INT4 --retain
+2026-11-03 15:30:41 后台部署进程已启动（尚未 READY） {"pid": 55207, "logs": "./colab/deploy.sh logs -f", "stop": "./colab/deploy.sh stop"}
+2026-11-03 15:30:43 wait READY: state=allocating phase=
+2026-11-03 15:31:14 wait READY: state=allocating phase=
+2026-11-03 15:31:45 wait READY: state=allocating phase=
+2026-11-03 15:32:16 wait READY: state=stopped phase=
+2026-11-03 15:32:16 deploy state=stopped before READY
+2026-11-03 15:32:16 arm trace-d45-digest: skipped
+2026-11-03 15:32:16 arm trace-d45-both: skipped
+2026-11-03 15:32:16 arm trace-d45-plan: skipped
+2026-11-03 15:32:16 STOP colab
+2026-11-03 15:32:16 等待正在进行的 VM 分配结束（如有），然后回收
+2026-11-03 15:32:16 正在核对并回收 VM {"session": "agent-compute-f90d97f90926"}
+2026-11-03 15:32:17 已确认 VM 从 Colab 服务端移除 {"session": "agent-compute-f90d97f90926", "tailnet_cleanup": "logout-unconfirmed"}
+2026-11-03 15:32:17 stop rc=0
+2026-11-03 15:32:17 DONE FAIL_READY
+2026-11-03 15:33:51 START deploy RedHatAI/Qwen3.8-27B-INT4 --retain
+2026-11-03 15:33:51 后台部署进程已启动（尚未 READY） {"pid": 58867, "logs": "./colab/deploy.sh logs -f", "stop": "./colab/deploy.sh stop"}
+2026-11-03 15:33:53 wait READY: state=allocating phase=
+2026-11-03 15:34:24 wait READY: state=booting phase=installing-python
+2026-11-03 15:34:56 wait READY: state=booting phase=installing-dependencies
+2026-11-03 15:35:28 wait READY: state=booting phase=installing-dependencies
+2026-11-03 15:35:59 wait READY: state=booting phase=installing-dependencies
+2026-11-03 15:36:30 wait READY: state=booting phase=installing-dependencies
+2026-11-03 15:37:01 wait READY: state=booting phase=installing-dependencies
+2026-11-03 15:37:32 wait READY: state=booting phase=installing-dependencies
+2026-11-03 15:38:03 wait READY: state=booting phase=installing-dependencies
+2026-11-03 15:38:34 wait READY: state=booting phase=installing-dependencies
+2026-11-03 15:39:05 wait READY: state=booting phase=installing-dependencies
+2026-11-03 15:39:36 wait READY: state=booting phase=installing-dependencies
+2026-11-03 15:40:07 wait READY: state=booting phase=installing-dependencies
+2026-11-03 15:40:38 wait READY: state=booting phase=installing-dependencies
+2026-11-03 15:41:09 wait READY: state=booting phase=downloading-model
+2026-11-03 15:41:40 wait READY: state=booting phase=downloading-model
+2026-11-03 15:42:11 wait READY: state=booting phase=downloading-model
+2026-11-03 15:42:44 wait READY: state=booting phase=downloading-model
+2026-11-03 15:43:15 wait READY: state=booting phase=loading-models
+2026-11-03 15:43:47 wait READY: state=booting phase=loading-models
+2026-11-03 15:44:18 wait READY: state=booting phase=loading-models
+2026-11-03 15:44:49 wait READY: state=booting phase=loading-models
+2026-11-03 15:45:20 wait READY: state=booting phase=loading-models
+2026-11-03 15:45:51 wait READY: state=booting phase=loading-models
+2026-11-03 15:46:22 wait READY: state=booting phase=loading-models
+2026-11-03 15:46:53 wait READY: state=booting phase=loading-models
+2026-11-03 15:47:25 wait READY: state=booting phase=loading-models
+2026-11-03 15:47:56 wait READY: state=booting phase=loading-models
+2026-11-03 15:48:27 wait READY: state=booting phase=loading-models
+2026-11-03 15:48:58 wait READY: state=booting phase=loading-models
+2026-11-03 15:49:29 wait READY: state=booting phase=loading-models
+2026-11-03 15:50:00 wait READY: state=booting phase=loading-models
+2026-11-03 15:50:31 wait READY: state=booting phase=loading-models
+2026-11-03 15:51:03 wait READY: state=booting phase=loading-models
+2026-11-03 15:51:34 wait READY: state=booting phase=loading-models
+2026-11-03 15:52:05 wait READY: state=booting phase=loading-models
+2026-11-03 15:52:37 wait READY: state=ready phase=ready
+2026-11-03 15:52:37 READY host=agent-compute.tail8d18fd.ts.net
+2026-11-03 15:52:37 smoke orch [A RedHatAI/Qwen3.8-27B-INT4] (prod, turn, L0, 1 题 1 rep) → smoke-orch-20261103-153350-A
+2026-11-03 15:53:37 smoke orch OK
+2026-11-03 15:53:37 ARM trace-d45-digest [A RedHatAI/Qwen3.8-27B-INT4] start: --template new --task-state on --summary-max-tokens 900 --tool-digest-chars 200 --turn1-iterations 3 
+2026-11-03 16:11:38 ARM trace-d45-digest harness rc=0 hung=0
+2026-11-03 16:11:38 arm trace-d45-digest: ok
+2026-11-03 16:11:38 ARM trace-d45-both [A RedHatAI/Qwen3.8-27B-INT4] start: --template new --task-state on --summary-max-tokens 900 --tool-digest-chars 200 --turn1-iterations 6 
+2026-11-03 16:33:39 ARM trace-d45-both harness rc=0 hung=0
+2026-11-03 16:33:39 arm trace-d45-both: ok
+2026-11-03 16:33:39 ARM trace-d45-plan [A RedHatAI/Qwen3.8-27B-INT4] start: --template new --task-state on --summary-max-tokens 900 --tool-digest-chars 0 --turn1-iterations 6 
+2026-11-03 16:55:40 ARM trace-d45-plan harness rc=0 hung=0
+2026-11-03 16:55:40 arm trace-d45-plan: ok
+2026-11-03 16:55:40 STOP colab
+2026-11-03 16:55:40 等待正在进行的 VM 分配结束（如有），然后回收
+2026-11-03 16:55:40 正在核对并回收 VM {"session": "agent-compute-a99689a6bfbd"}
+2026-11-03 16:55:41 正在注销 Tailscale 临时节点
+2026-11-03 16:55:42 正在请求 Colab 释放 VM
+[colab] Stopping session 'agent-compute-a99689a6bfbd'...
+[colab] Session terminated.
+2026-11-03 16:55:44 已确认 VM 从 Colab 服务端移除 {"session": "agent-compute-a99689a6bfbd", "tailnet_cleanup": "ephemeral-logout-confirmed"}
+2026-11-03 16:55:44 stop rc=0
+2026-11-03 16:55:44 DONE BATCH_RC=0 SKIPPED=0
