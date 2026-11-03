@@ -387,7 +387,7 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
 | D44（新） | catalog 前缀是否作缺省 | 先补「schema 按需」（缺参 System Error 自动回灌 schema 再试 / `tool_schema` 元工具）再定；现状 −4 点 [−10,+2]、首 prompt −61%、缺参 16 次。**用户 11-03 拍板：先补 schema 按需，缺省值补完再定** | ANALYSIS §1.5 |
 | D46（新） | qwen35 `_coerce` 写坏 JSON 文件（生产缺陷，阶段复审 M2） | 建议下一工作项首位：按 schema 只对 object / array / number / boolean 型参数还原，string 原样；改 `test_qwen35_dialect.py:124` 预期、加保留用例；变异证明。退路：file_edit / edit_file 对非 str 内容 json.dumps。**用户 11-03 拍板：首位开工** | 13 个 Qwen 臂 lc-hard-009 0 过、Gemma 18/18；反驳者 CPU 复现（数组 / true / null / 1e3 同样写坏） |
 | D45（新） | 摘要续跑丢进度 | 候选：(a) `_turn_to_text` 加助手正文与工具结果 digest（走 W2 压缩预算）；(b) turn 1 先落实 task_state；(c) 两者后再跑 trace 三步（约 1 h / 7 单位）。模板定 new + 900。**用户 11-03 拍板：(a)+(b) 都做，(c) 作验收** | ANALYSIS §1.7；POST 对 PRE pass 减半 **11-03 落地**：(a) 已落地（提交 38411d7）；(b) 走 harness 迭代 6 实测无效 → D47；(c) 验收已跑（ANALYSIS d45）。 |
-| D47（新） | turn 1 从不建 plan，task_state 进不了摘要 | harness 加迭代（3→6）无效：模型宁可直接做完也不调 update_plan。候选：(a) 生产侧 no_plan_nudge 提前到第 1–2 次物理调用后 / 改措辞为强制；(b) 轮首自动种 TaskState（goal=user 原话，plan 空）并让 `render_for_summary` 在无 plan 时也输出 [Goal]+[Scratchpad]（remember 不再被拒）；(c) 接受：摘要靠工具段，不靠 task_state。**建议 (b)**：不改模型行为，摘要与便签立即可用；(a) 会给所有短任务加一次 plan 开销 | ANALYSIS d45 §1；D45 (b) 的实测否定 |
+| D47（新） | turn 1 从不建 plan，task_state 进不了摘要 | harness 加迭代（3→6）无效：模型宁可直接做完也不调 update_plan。候选：(a) 生产侧 no_plan_nudge 提前到第 1–2 次物理调用后 / 改措辞为强制；(b) 轮首自动种 TaskState（goal=user 原话，plan 空）并让 `render_for_summary` 在无 plan 时也输出 [Goal]+[Scratchpad]（remember 不再被拒）；(c) 接受：摘要靠工具段，不靠 task_state。**建议 (b)**：不改模型行为，摘要与便签立即可用；(a) 会给所有短任务加一次 plan 开销 。**用户 11-03 拍板：(b)**（原话「先进度落盘，等我 /compact 之后再按建议开工」）；/compact 后开工，顺序 D47 → D43 (a) → D44 schema 按需 → 阶段复审（覆盖 d60bd50..，含 D46/D45/D47）| ANALYSIS d45 §1；D45 (b) 的实测否定 |
 
 ## 7. 风险
 | 风险 | 应对 |
@@ -479,3 +479,4 @@ scout 11-01 校正前提：history 里思考只有 `thoughts` 一个字段（解
   - 待办：编排层回执带 call 下标（D45 m1）：拒发 / DELIVERY_BLOCKED 回执先于物理回执 append，同名多次调用时摘要器工具段按名先进先出会张冠李戴。
   - 待办：W2 / W1b 压缩桩的 `_spill_hint` 同样追加长句柄原文（D45 M1 同源，既有问题，只在内存副本、不进滚动摘要）：改为短句柄固定格式。
   - 待办：摘要器输入无 token 上限（既有）：D45 加了批次字符预算 24k 作为上界之一；摘要失败水位线不推进、batch 变大的既有行为未改。
+- 11-03 傍晚（D45 收官，提交 798d140 / 3606c8a，完工推送 17:42）：用户拍板 D47 (b)，指示先落盘、/compact 后开工。开工清单：D47 (b) 轮首自动种 TaskState（`orchestrator.py` 创建点 :1937 只在 update_plan 时触发 → 轮首种 goal=user 原话、plan 空；`task_state.py render_for_summary` 无 plan 也输出 [Goal]/[Scratchpad]；`remember` 无 plan 不再拒；注入 prompt 的 `task.render` 仍只在有 plan 时）→ trace 验收复用 trace-d45-both 口径一步（约 25 min / 3 单位）；然后 D43 (a)、D44；最后 stage-reviewer 覆盖 d60bd50..HEAD。链脚本待办：首起 FAIL_READY 自动重试一次（三见）、MAX_VM_HOURS、桩自测 FAIL_READY 场景。
