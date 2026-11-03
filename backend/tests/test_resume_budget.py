@@ -165,6 +165,9 @@ def test_sub_generation_fuse_survives_suspension(make_session):
 
 @pytest.mark.parametrize("with_task", [False, True])
 def test_manual_resume_keeps_duplicate_fingerprints(make_session, with_task):
+    # D47：新鲜轮轮首恒种任务，所以 with_task=False 档的第一轮实际也会走 task.recent_calls
+    # （session.task_state 在 submit 内被种上）；no_task_calls 的携带路径现在只剩「续跑且
+    # task 为 None」一种可达形态。两档断言不变——这里只是记录口径变化，不缩小覆盖。
     engine = PausingEngine([{"tool_calls": [call("probe", i=1)]},
                             {"tool_calls": [call("probe", i=1)]}, {"text": "答案"},
                             {"tool_calls": [call("probe", i=1)]}, {"text": "新轮"}])

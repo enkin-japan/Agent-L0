@@ -131,16 +131,68 @@ def test_catalog_task_routes_once_and_freezes_across_turns(make_session):
     assert s.last_routed_tools == ["calendar_add"] and s.task_state is None
 
 
+class _Probe(FakeEngine):
+    """每次生成记 (session.task_state, 当时的 routed_tools 副本)。"""
+
+    def __init__(self, script):
+        super().__init__(script)
+        self.seen = []
+
+    async def generate_once(self, session, *args, **kwargs):
+        t = session.task_state
+        self.seen.append((t, None if t is None or t.routed_tools is None else list(t.routed_tools)))
+        return await super().generate_once(session, *args, **kwargs)
+
+
 def test_catalog_chat_before_first_task_is_not_routed(make_session):
-    """首个任务建立前（会话级保留集合为空）：只有元工具 + core 完整。"""
-    engine = FakeEngine([])
+    """T6（D47 改写）：新鲜轮轮首种的任务（plan 空）不路由——首个任务建成 plan 前声明 = 基座
+    （只有元工具 + core 完整），routed_tools 留 None，会话级保留集合不动；已有保留集合时沿用它。"""
+    engine = _Probe([])
     orch = _orch(engine)
     s = make_session()
     _, calls = _turn(orch, engine, s, "PPT 和 PDF 是什么意思？", [{"text": "解释如下。"}])
+    seeded, routed_then = engine.seen[0]
+    assert seeded is not None and seeded.goal == "PPT 和 PDF 是什么意思？" and not seeded.plan
+    assert routed_then is None and seeded.routed_tools is None
     assert s.task_state is None and s.last_routed_tools is None
     assert calls[0]["tools"] == orch._tools_decl                # 基座声明
     assert _full_names(calls[0]["tools"]) == {"update_plan", "complete_step", "remember",
                                                "get_tool_schema", "memory_write"}
+
+    # 有保留集合（上一个任务的路由件）：种任务照样不路由，前缀沿用保留集合、集合不被覆盖
+    s.last_routed_tools = ["calendar_add"]
+    n0 = len(engine.seen)
+    _, calls2 = _turn(orch, engine, s, "帮我做一份 PPT", [{"text": "好的。"}])
+    assert engine.seen[n0][1] is None
+    assert "calendar_add" in _full_names(calls2[0]["tools"])
+    assert "deck_init" not in _full_names(calls2[0]["tools"])
+    assert s.last_routed_tools == ["calendar_add"]
+
+
+def test_catalog_routes_when_plan_built_not_on_invalid_op(make_session):
+    """T6：路由时机 = update_plan 首次建成 plan（apply_op 成功且 plan 非空）。非法 op 失败不路由、
+    保留集合不动；建成后 routed_tools 冻结并替换会话级保留集合。"""
+    engine = _Probe([])
+    orch = _orch(engine)
+    s = make_session()
+    s.last_routed_tools = ["calendar_add"]
+    script = ([{"tool_calls": [call("update_plan", op="bogus")]}, {"tool_calls": [_PLAN]}]
+              + _STALL)
+    _, calls = _turn(orch, engine, s, "帮我做一份 PPT，最后导出 PDF", script)
+    seeded = engine.seen[0][0]
+    plan_acks = [tr["response"] for m in s.history if m["role"] == "tool"
+                 for tr in m.get("tool_responses", []) if tr.get("name") == "update_plan"]
+    assert plan_acks[0].startswith("Invalid op:")                 # 第一次确是 apply_op 失败
+    # 非法 op 之后的生成：同一种任务、仍未路由、前缀仍是保留集合
+    assert engine.seen[1] == (seeded, None)
+    assert tools_fingerprint(calls[1]["tools"]) == tools_fingerprint(calls[0]["tools"])
+    assert "calendar_add" in _full_names(calls[1]["tools"])
+    # 建成 plan 后：路由一次并冻结，保留集合被替换
+    assert s.task_state is seeded and seeded.plan
+    assert seeded.routed_tools == ["deck_export_pdf", "deck_init"] == s.last_routed_tools
+    assert engine.seen[2] == (seeded, ["deck_export_pdf", "deck_init"])
+    assert {"deck_init", "deck_export_pdf"} <= _full_names(calls[2]["tools"])
+    assert "calendar_add" not in _full_names(calls[2]["tools"])
 
 
 def test_restored_task_without_routing_record_routes_once(make_session):

@@ -365,8 +365,9 @@ def test_remember_carries_value_into_later_step(make_session):
     assert any("API endpoint = https://api.example.com/v2" in s.get("notes", []) for s in snaps)
 
 
-def test_remember_without_plan_redirects(make_session):
-    """无活跃计划时 remember 被重定向,不创建任务、不污染单步问答。"""
+def test_remember_without_plan_is_kept_by_seeded_task(make_session):
+    """T7（D47 改写）：新鲜轮轮首已种任务，无 plan 的 remember 照收——不拒、不造计划、不注入
+    task_block；便签随弃前渲染进轮记录（摘要器视图）。"""
     engine = FakeEngine([
         {"tool_calls": [call("remember", note="something")]},
         {"text": "好的。"},
@@ -379,10 +380,209 @@ def test_remember_without_plan_redirects(make_session):
     result = run(orch.run_turn(session, journal=session.journal, **GEN))
 
     assert result["status"] == "success"
-    assert session.task_state is None                    # 未因 remember 造出空任务
+    acks = [tr for m in session.history if m["role"] == "tool"
+            for tr in m.get("tool_responses", []) if tr.get("name") == "remember"]
+    assert acks and acks[0]["response"].startswith("Saved to scratchpad.")
+    assert "No active" not in acks[0]["response"]
+    assert engine.calls[1]["task_block"] is None          # plan 空 → 提示词不注入任务块
+    assert session.task_state is None                      # 无 plan 的任务收尾即弃
+    assert session.last_task_state_render == "[Goal] 随口记一下\n[Scratchpad]\n- something"
+
+
+def test_remember_without_task_state_redirects_on_resume(make_session):
+    """T7 拒绝分支：续跑形态（keep_recent_calls，不种任务）且 task_state 为 None——remember
+    被拒（文案 "No active task state"），也不因此造出任务。"""
+    engine = FakeEngine([
+        {"tool_calls": [call("remember", note="something")]},
+        {"text": "好的。"},
+    ])
+    orch = make_orch(engine, FakeRegistry([]))
+    session = make_session()
+    session.add_user_message("随口记一下")
+    begin_turn(session)
+    assert session.task_state is None
+
+    result = run(orch.run_turn(session, journal=session.journal, keep_recent_calls=True,
+                               compact_history=False, **GEN))
+
+    assert result["status"] == "success"
+    assert session.task_state is None
     redirects = [tr for m in session.history if m["role"] == "tool"
                  for tr in m.get("tool_responses", []) if tr.get("name") == "remember"]
-    assert redirects and "No active plan" in redirects[0]["response"]
+    assert redirects and redirects[0]["response"] == "No active task state — just answer the user."
+
+
+# ---------- D47：轮首种任务 ----------
+
+class _TaskProbe(FakeEngine):
+    """每次生成时记下 session.task_state（对象本身，断言同一性用）。"""
+
+    def __init__(self, script):
+        super().__init__(script)
+        self.seen = []
+
+    async def generate_once(self, session, *args, **kwargs):
+        self.seen.append(session.task_state)
+        return await super().generate_once(session, *args, **kwargs)
+
+
+def _runner(engine, registry=None, **cfg_over):
+    from framework.core.scheduler import ClassPolicy, TaskScheduler
+    from framework.core.turn_runner import TurnRunner
+    return TurnRunner(make_orch(engine, registry or FakeRegistry([]), **cfg_over),
+                      TaskScheduler(policy=ClassPolicy()))
+
+
+def _submit(runner, session, prompt):
+    async def go():
+        ctx = await runner.accept_turn(session, session.session_id, prompt=prompt, images=[],
+                                       audios=[], ingested_text="", attachments=[], gen=dict(GEN))
+        return await runner.run_accepted(session, session.session_id, ctx)
+    return run(go())
+
+
+def _records(session):
+    import json
+    return [json.loads(ln) for ln in session.history_log.read_text(encoding="utf-8").splitlines()
+            if ln.strip()]
+
+
+def test_fresh_turn_seeds_task_state_with_user_goal(make_session):
+    """T1：纯文本作答的新鲜轮——生成时 task_state 已是种下的任务（goal = 用户文本、plan 空、
+    不注入任务块）；收尾即弃；轮记录带 task_state 键且含 [Goal]。"""
+    engine = _TaskProbe([{"text": "晴。"}])
+    session = make_session()
+
+    rd = _submit(_runner(engine), session, "今天天气如何")
+
+    assert rd["status"] == "success"
+    seeded = engine.seen[0]
+    assert seeded is not None and seeded.goal == "今天天气如何" and seeded.plan == []
+    assert engine.calls[0]["task_block"] is None
+    assert session.task_state is None
+    assert _records(session)[-1]["task_state"] == "[Goal] 今天天气如何"
+
+
+def test_remember_without_plan_reaches_record_and_summarizer(make_session):
+    """T2：无 plan 的 remember 被收 → 轮记录 task_state 有 [Scratchpad] 与该值 → 下一次折叠的
+    摘要器输入里有该值。"""
+    from framework.memory.compactor import maybe_summarize_context
+    engine = FakeEngine([{"tool_calls": [call("remember", note="X=42")]}, {"text": "记下了。"}])
+    session = make_session()
+
+    rd = _submit(_runner(engine), session, "记一下 X 的值")
+
+    assert rd["status"] == "success"
+    acks = [tr["response"] for m in session.history if m["role"] == "tool"
+            for tr in m.get("tool_responses", []) if tr.get("name") == "remember"]
+    assert acks and acks[0].startswith("Saved to scratchpad.")
+    ts = _records(session)[-1]["task_state"]
+    assert "[Scratchpad]" in ts and "- X=42" in ts and ts.startswith("[Goal] 记一下 X 的值")
+
+    class _Cap:
+        def __init__(self):
+            self.contents = []
+
+        async def summarize(self, content, prior_summary="", **kwargs):
+            self.contents.append(content)
+            return "- 摘要"
+
+    cap = _Cap()
+    folded = run(maybe_summarize_context(session, cap, threshold_tokens=1, keep_tail_turns=0,
+                                         last_prompt_tokens=10_000, sediment=False))
+    assert folded == 1 and len(cap.contents) == 1
+    assert "[Task state at end of turn]" in cap.contents[0] and "X=42" in cap.contents[0]
+
+
+_STALL = [{"text": "先做到这里。"}] * 4     # 计划未完成即收尾：提前收尾推回后放行，任务保留
+
+
+def _orch_turn(orch, engine, session, prompt, script, **kw):
+    engine.script = list(script)
+    session.add_user_message(prompt)
+    begin_turn(session, prompt)
+    res = run(orch.run_turn(session, journal=session.journal, **kw, **GEN))
+    engine.script = []
+    return res
+
+
+def test_unfinished_plan_task_survives_next_fresh_turn(make_session):
+    """T3：带未完成 plan 的任务跨新鲜轮原样沿用（同一对象、plan 与 goal 都不换）。"""
+    engine = _TaskProbe([])
+    orch = make_orch(engine, FakeRegistry([]), goal_verify=False)
+    session = make_session()
+
+    _orch_turn(orch, engine, session, "做个两步任务",
+               [{"tool_calls": [call("update_plan", op="replace", steps=["甲", "乙"])]}] + _STALL)
+    t1 = session.task_state
+    assert t1 is not None and [st["title"] for st in t1.plan] == ["甲", "乙"]
+
+    n0 = len(engine.seen)
+    _orch_turn(orch, engine, session, "继续", _STALL)
+
+    assert engine.seen[n0] is t1
+    assert session.task_state is t1
+    assert t1.goal == "做个两步任务" and [st["title"] for st in t1.plan] == ["甲", "乙"]
+
+
+def _abort_turn1(make_session):
+    """轮 1 以总迭代熔断出口结束：不弃任务 → 留下 plan 空的种任务。"""
+    engine = _TaskProbe([])
+    registry = FakeRegistry([FakeTool("read_thing", result="r")])
+    orch = make_orch(engine, registry, max_total_iterations=2)
+    session = make_session()
+    res = _orch_turn(orch, engine, session, "第一轮",
+                     [{"tool_calls": [call("read_thing", i=1)]},
+                      {"tool_calls": [call("read_thing", i=2)]}])
+    assert res["status"] == "warning"
+    t1 = session.task_state
+    assert t1 is not None and t1.goal == "第一轮" and not t1.plan
+    return engine, orch, session, t1
+
+
+def test_planless_leftover_task_replaced_on_fresh_turn(make_session):
+    """T4：无 plan 的残留任务在下一个新鲜轮轮首被换成本轮新 goal。"""
+    engine, orch, session, t1 = _abort_turn1(make_session)
+    n0 = len(engine.seen)
+
+    _orch_turn(orch, engine, session, "第二轮", [{"text": "好。"}])
+
+    seeded = engine.seen[n0]
+    assert seeded is not t1 and seeded.goal == "第二轮" and seeded.plan == []
+
+
+def test_resume_does_not_reseed_planless_task(make_session):
+    """T5a：续跑（keep_recent_calls / compact_history=False）不重种——plan 空的任务也原样沿用。"""
+    engine, orch, session, t1 = _abort_turn1(make_session)
+    n0 = len(engine.seen)
+    engine.script = [{"text": "续上了。"}]
+
+    run(orch.run_turn(session, journal=session.journal, keep_recent_calls=True,
+                      compact_history=False, **GEN))
+
+    assert engine.seen[n0] is t1 and t1.goal == "第一轮"
+
+
+def test_approval_resume_keeps_seeded_task(make_session):
+    """T5b：审批挂起 → 批准续跑：续跑生成看到的仍是轮首种下的同一个任务。"""
+    engine = _TaskProbe([{"tool_calls": [call("danger_op", target="prod")]},
+                         {"text": "已执行完毕。"}])
+    registry = FakeRegistry([FakeTool("danger_op", result="done", approval=True,
+                                      read_only=False, concurrency_safe=False)])
+    orch = make_orch(engine, registry)
+    session = make_session()
+    session.add_user_message("执行危险操作")
+    begin_turn(session)
+
+    assert run(orch.run_turn(session, journal=session.journal, **GEN))["status"] == "pending_approval"
+    seeded = session.task_state
+    assert seeded is not None and seeded.goal == "执行危险操作"
+
+    resumed = run(orch.resume_after_approval(session, approved=True, journal=session.journal, **GEN))
+
+    assert resumed["status"] == "success"
+    assert engine.seen == [seeded, seeded]
+    assert session.task_state is None                     # 收尾照常弃
 
 
 def test_completion_reminder_references_goal(make_session):

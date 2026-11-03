@@ -74,6 +74,15 @@ def test_two_branches_post_folded_and_repeated_counted(tmp_path, summarize_calls
     assert c["mode"] == "merge" and c["max_tokens"] == 900        # 缺省 = config.yaml 值
     assert "[Task state at end of turn]" in c["content"]
     assert _t1_record(rows[0]).get("task_state")
+    # D47 三字段：干跑 turn 1 发了一次 remember → 计 1、落盘记录带便签段、长度 = 记录串长度
+    rec_ts = _t1_record(rows[0])["task_state"]
+    for r in rows:
+        assert r["turn1_remember_calls"] == 1
+        assert r["turn1_task_state_has_scratchpad"] is True
+        assert r["turn1_task_state_chars"] == len(rec_ts) > 0
+    assert "[Scratchpad]" in c["content"] and "dry-run key = 42" in c["content"]
+    g = S.aggregate(S.load_rows([out]))["groups"][0]
+    assert g["turn1_remember_calls_total"] == 1 and g["turn1_scratchpad_pairs"] == 1
     # 两支会话目录独立（不共享 memory.json）；只有 POST 有摘要旁挂
     pre_dir, post_dir = Path(by["pre"]["session_dir"]), Path(by["post"]["session_dir"])
     assert pre_dir != post_dir
@@ -83,6 +92,8 @@ def test_two_branches_post_folded_and_repeated_counted(tmp_path, summarize_calls
     assert ev.exists() and ev.stat().st_size > 0
     assert any(json.loads(l)["type"] == "turn_abort" for l in ev.read_text(encoding="utf-8").splitlines())
     assert _stat(root_events) == before
+    # D47：cont_live_task 口径改成「带 plan 的任务」（turn 1 的 dry_turn1_script 先 update_plan
+    # 建两步计划再 remember，plan 非空）——此用例下仍是 True，与旧断言同值，新口径下确认成立
     assert by["pre"]["cont_live_task"] is True and by["post"]["cont_live_task"] is True
     # 报表能出
     rep = S.report([out])
@@ -108,6 +119,10 @@ def test_task_state_off_record_has_no_task_state(tmp_path, summarize_calls):
     assert "task_state" not in _t1_record(rows[0])
     assert rows[0]["turn1_record_has_task_state"] is False
     assert "[Task state at end of turn]" not in summarize_calls[0]["content"]
+    # D47：off 支记录无该键 → 无便签、长度 0；remember 调用照计（与记录无关）
+    assert {r["turn1_task_state_has_scratchpad"] for r in rows} == {False}
+    assert {r["turn1_task_state_chars"] for r in rows} == {0}
+    assert {r["turn1_remember_calls"] for r in rows} == {1}
 
 
 def test_drop_task_clears_task_before_continuation(tmp_path, summarize_calls):
@@ -115,6 +130,26 @@ def test_drop_task_clears_task_before_continuation(tmp_path, summarize_calls):
     assert all(r.get("error") is None for r in rows)
     assert {r["cont_live_task"] for r in rows} == {False}
     assert {r["drop_task"] for r in rows} == {"on"}
+
+
+def test_planless_seeded_task_is_not_live_task(tmp_path, summarize_calls, monkeypatch):
+    """F1 守卫：轮首种的无 plan 任务不算「活任务」。turn 1 只发 remember、从不 update_plan，
+    且三次迭代都不收尾（打到 --turn1-iterations 缺省 3 的熔断）——与现有默认用例同一熔断机制，
+    唯一区别是没建 plan，所以任务熔断后留着（不被当场弃），task_state 非 None 但 plan 空。
+    两支 cont_live_task 都应是 False：钉住 cont_live_task 用 bool(task_state.plan) 判断；
+    若回退成 `task_state is not None`，这条会变红（task_state 非空、旧写法判成 True）。"""
+    def _no_plan_script(env):
+        def note(n):
+            return {"tool_calls": [{"type": "function", "name": "remember",
+                                    "arguments": {"note": n}}], "metrics": T._m(600)}
+        return [note("dry-run key = 42"), note("dry-run key = 43"), note("dry-run key = 44")]
+    monkeypatch.setattr(T, "dry_turn1_script", _no_plan_script)
+    _out, rows = _run(tmp_path)
+    assert all(r.get("error") is None for r in rows)
+    by = {r["branch"]: r for r in rows}
+    assert by["pre"]["cont_live_task"] is False and by["post"]["cont_live_task"] is False
+    assert rows[0]["turn1_record_has_task_state"] is True
+    assert rows[0]["turn1_plan_built"] is False
 
 
 def test_catalog_prefix_forces_catalog_with_mock_tools_full(tmp_path, summarize_calls, monkeypatch):
@@ -190,6 +225,20 @@ def _pair(**kw):
     base = {"item": "a", "rep": 0, "template": "new", "task_state": "on", "drop_task": "off",
             "model": "m", "summary_max_tokens": 900, "repeated": 0, "blocked": 0, "score": True}
     return [{**base, **kw, "branch": "pre"}, {**base, **kw, "branch": "post"}]
+
+
+def test_old_batch_missing_remember_fields_aggregates_to_none(tmp_path):
+    """D47 F4：老批次的行没有 turn1_remember_calls / turn1_task_state_has_scratchpad 键
+    （加这两个字段之前跑的）→ 聚合两项为 None，报表那两列显示 "—"，不要跟真的 0 混在一起。"""
+    _write(tmp_path / "old", _pair())     # _pair() 的 base 里本就没有这两个键
+    agg = S.aggregate(S.load_rows([tmp_path / "old"]))
+    g = agg["groups"][0]
+    assert g["turn1_remember_calls_total"] is None
+    assert g["turn1_scratchpad_pairs"] is None
+    rep = S.report([tmp_path / "old"])
+    row = [ln for ln in rep.splitlines() if ln.startswith("| m |")][0]
+    assert row.rstrip("|").rsplit("|", 2)[-2].strip() == "—"
+    assert row.rstrip("|").rsplit("|", 1)[-1].strip() == "—"
 
 
 def test_merge_dirs_keeps_batches_apart_and_collision_errors(tmp_path):

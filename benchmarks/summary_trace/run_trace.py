@@ -78,6 +78,13 @@ def traj_calls(traj: Dict[str, Any]) -> List[Tuple[str, str]]:
     return [call_key(c) for t in traj.get("turns") or [] for c in function_calls(t)]
 
 
+def turn1_remember_calls(history: List[Dict[str, Any]], start: int) -> int:
+    """history[start:] 里 assistant 消息 tool_calls 中 name == "remember" 的次数（D47 计数）。"""
+    return sum(1 for m in history[start:] if m.get("role") == "assistant"
+               for c in (m.get("tool_calls") or [])
+               if isinstance(c, dict) and c.get("name") == "remember")
+
+
 def count_repeated(history: List[Dict[str, Any]], start: int,
                    c1: Set[Tuple[str, str]]) -> int:
     """续跑轮（history[start:]）里 (name, args) ∈ turn 1 调用集、且**真执行了**的调用数。
@@ -313,12 +320,18 @@ async def run_pair(args, engine, counter, item: Dict[str, Any], rep: int, meta: 
         record = turn_record(orch1, task["user"], item, status1,
                              s1.persistable_messages(start1), r1.get("metrics"))
         land_turn1(s1, record, args.task_state == "on")
+        turn1_ts = str(record.get("task_state") or "")     # 落盘记录的摘要器视图（off 支无该键）
         turn1_meta = {"turn1_status": status1, "turn1_calls": len(traj_calls(traj1)),
                       "turn1_distinct_calls": len(c1), "turn1_env_state": e1,
                       "turn1_record_has_task_state": "task_state" in record,
                       # turn 1 结束时有没有建成计划：缺省 --turn1-iterations 3 = NO_PLAN_NUDGE_ITERATIONS，
                       # nudge 到第 3 次无计划迭代才贴、而熔断恰在第 3 次，模型没有迭代去响应它
                       "turn1_plan_built": s1.task_state is not None and bool(s1.task_state.plan),
+                      # D47：turn 1 的 remember 调用数（history[start1:] 的 assistant tool_calls，与
+                      # turn1_calls 同一数据源）、落盘记录 task_state 是否带便签段、该串长度（无键 0）
+                      "turn1_remember_calls": turn1_remember_calls(s1.history, start1),
+                      "turn1_task_state_has_scratchpad": "[Scratchpad]" in turn1_ts,
+                      "turn1_task_state_chars": len(turn1_ts),
                       "turn1_dup_blocked": extra1["dup_blocked"],
                       "turn1_gens": len(proxy1.gens),
                       "turn1_session_dir": str(s1.session_dir)}
@@ -343,7 +356,7 @@ async def run_pair(args, engine, counter, item: Dict[str, Any], rep: int, meta: 
             if args.drop_task == "on":
                 # 模拟「任务完成后被弃」：续跑只能靠 history（PRE 原文 / POST 摘要）找回进度
                 s.task_state = None
-            cont_live_task = s.task_state is not None
+            cont_live_task = s.task_state is not None and bool(s.task_state.plan)
             proxy.session = s
             spill.session = s
             summary = ""

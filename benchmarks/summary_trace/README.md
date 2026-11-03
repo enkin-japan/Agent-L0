@@ -32,7 +32,9 @@
    - 任务状态的两种口径（`--drop-task`，行里记 `cont_live_task`）：
      - `off`（缺省）：两支都**保留 turn 1 遗留的未完成任务状态**（与生产一致：折叠只改 history，task.json
        照旧，所以续跑时 prompt 尾部仍带任务块）。量的是「摘要 + 任务块」相对「原文 + 任务块」的差，即任务
-       进行中被折叠时摘要还会不会让模型重做。
+       进行中被折叠时摘要还会不会让模型重做。D47 后轮首必种无 plan 任务、turn 1 熔断出口不弃它，但续跑轮首
+       会换掉它——所以这里的「活任务」口径是带 plan 的任务（`cont_live_task = task_state is not None and
+       bool(task_state.plan)`），与 D45 批一致。
      - `on`：两支续跑前都把任务状态置空，模拟任务完成后被弃、进度只能从 history 找回（PRE 靠原文，POST
        只靠摘要）。这是 W4 的目标场景，`--task-state on|off` 的差在这一口径下最能体现出来。
      `--task-state` 只改变摘要器的输入（turn 1 记录里带不带 `task_state`）。
@@ -51,6 +53,9 @@
 | `summary_input` | POST 支**实际送进** `engine.summarize` 的输入原文（`maybe_summarize_context` 拼好的 batch_text，不含 engine 加的 `[Existing summary]` / `[New conversation]` 外壳）；PRE 为 null。POST 支失败的 error 行只要摘要器已被调用，也带 `summary_input` / `summary_input_chars`（否则为 null） |
 | `summary_input_chars` / `summary_input_tool_lines` | 上者的字符数、工具段调用行数（工具段头行之后连续的 `- ` 行；task_state 便签行不算） |
 | `turn1_plan_built` | turn 1 结束时 `s1.task_state is not None and bool(s1.task_state.plan)`，与 `turn1_record_has_task_state` 并列 |
+| `turn1_remember_calls` | turn 1 里 `remember` 的调用次数：`s1.history[start1:]` 中 assistant 消息 `tool_calls` 里 `name == "remember"` 的条数（与 turn 1 调用数同一数据源；D47 起无 plan 的 `remember` 也被收）。老批次（加这个字段之前跑的）PRE 行没有这个键：报表「turn1 remember」列聚合成 None，显示 `—` |
+| `turn1_task_state_has_scratchpad` | turn 1 落盘记录的 `task_state` 串含 `[Scratchpad]`；`--task-state off` 恒 False。老批次缺这个键：报表「有便签对数」列聚合成 None，显示 `—` |
+| `turn1_task_state_chars` | 该串长度，记录无该键为 0。D47 起轮首自动种任务（goal = 用户文本），on 支至少有 `[Goal]` 段 |
 
 每行还有 `item, rep, template, task_state, branch, turn1_status, cont_status, cont_aborted_reason, wall_s,
 turn1_session_dir, session_dir`，以及 turn 1 的调用数和 env 快照；meta.json 的字段（含 `tool_digest_chars`、
@@ -77,7 +82,8 @@ turn1_session_dir, session_dir`，以及 turn 1 的调用数和 env 快照；met
 
 `run_trace.py --report --out <dir>`，或 `summarize_trace.py <dir> [<dir> ...]`（可以合并多批，比如 legacy / new、
 640 / 900 各跑一批）。按 `(model, summary_max_tokens, template, task_state, drop_task, tool_digest_chars,
-turn1_iterations)` 分组输出（后两键 D45 加；老批次的行没有这两键，归 `None` 组，数值不变）；配对键还要加上源目录和
+turn1_iterations)` 分组输出（后两键 D45 加；老批次的行没有这两键，归 `None` 组，数值不变）；每组末两列
+（D47）是 turn 1 `remember` 调用总数与 turn 1 记录带便签的对数（按对计一次；组内全无该键的老批次显示「—」，组内个别行缺键按 0 计）；配对键还要加上源目录和
 (题, rep)，所以各批各自配对。同一配对键的同一支出现两次（同一目录传了两遍、transcripts 被拼接过）时直接报错退出，
 不会静默覆盖。同组多目录相当于更多 rep：
 

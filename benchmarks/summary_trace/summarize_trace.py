@@ -10,6 +10,9 @@
   bootstrap（有放回重抽题，B 次，取各次「题均差的均值」的 2.5 / 97.5 分位）。n 很小时 CI 很宽，
   如实给出，不做显著性判词。
 - pass 率 PRE / POST、续跑首次生成 prompt token 中位 PRE / POST、POST 摘要字符中位。
+- D47：turn 1 remember 调用总数、turn 1 记录带便签（[Scratchpad]）的 pair 数——两支共用同一个 turn 1，
+  按对计一次（取 PRE 行）。某组 PRE 行里一行都没带这个键（老批次）时两项聚合为 None，报表显示 "—"；
+  组内有行带键时按现逻辑算（该组里缺键的行视 0 / False）。
 error 行与缺一支的 (题, rep) 不进配对，计入 n_unpaired。
 """
 from __future__ import annotations
@@ -123,6 +126,14 @@ def aggregate(rows: List[Dict[str, Any]], *, n_boot: int = DEFAULT_BOOT, seed: i
             "first_pt_median_pre": _median([r.get("first_prompt_tokens") for r in pre]),
             "first_pt_median_post": _median([r.get("first_prompt_tokens") for r in post]),
             "summary_chars_median": _median([r.get("summary_chars") for r in post]),
+            # 老批次（D47 之前跑的）PRE 行没有这两个键：缺键时聚合给 None，报表显示 "—"，
+            # 不要跟真实的 0 混在一起。
+            "turn1_remember_calls_total": (
+                sum(int(r.get("turn1_remember_calls") or 0) for r in pre)
+                if any("turn1_remember_calls" in r for r in pre) else None),
+            "turn1_scratchpad_pairs": (
+                sum(1 for r in pre if r.get("turn1_task_state_has_scratchpad"))
+                if any("turn1_task_state_has_scratchpad" in r for r in pre) else None),
         })
     return out
 
@@ -139,8 +150,9 @@ def report(out_dirs: Iterable[Path], *, seed: int = 0, n_boot: int = DEFAULT_BOO
     agg = aggregate(load_rows(out_dirs), n_boot=n_boot, seed=seed)
     head = ("| model | max_tokens | template | task_state | drop_task | tool_digest | turn1_iter | 对数 | 题数 | "
             "重复功 PRE | 重复功 POST | Δ(POST−PRE) | 95% CI | "
-            "pass PRE | pass POST | 首 prompt 中位 PRE | 首 prompt 中位 POST | 摘要字符中位 |")
-    lines = [head, "|" + "---|" * 18]
+            "pass PRE | pass POST | 首 prompt 中位 PRE | 首 prompt 中位 POST | 摘要字符中位 | "
+            "turn1 remember | 有便签对数 |")
+    lines = [head, "|" + "---|" * 20]
     for g in agg["groups"]:
         lo, hi = g["delta_cost_ci95"]
         ci = "—" if lo is None else f"[{lo:.2f}, {hi:.2f}]"
@@ -150,7 +162,8 @@ def report(out_dirs: Iterable[Path], *, seed: int = 0, n_boot: int = DEFAULT_BOO
             f"{g['n_pairs']} | {g['n_items']} | "
             f"{_f(g['cost_pre_mean'])} | {_f(g['cost_post_mean'])} | {_f(g['delta_cost_mean'])} | {ci} | "
             f"{_f(g['pass_pre'])} | {_f(g['pass_post'])} | {_f(g['first_pt_median_pre'], 0)} | "
-            f"{_f(g['first_pt_median_post'], 0)} | {_f(g['summary_chars_median'], 0)} |")
+            f"{_f(g['first_pt_median_post'], 0)} | {_f(g['summary_chars_median'], 0)} | "
+            f"{_f(g['turn1_remember_calls_total'], 0)} | {_f(g['turn1_scratchpad_pairs'], 0)} |")
     lines.append(f"（重复功 = repeated + blocked；不成对 / error：{agg['n_unpaired']}；"
                  f"CI = 题级 bootstrap {n_boot} 次，<2 题不给）")
     return "\n".join(lines)

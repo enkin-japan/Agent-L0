@@ -250,11 +250,12 @@ GET_TOOL_SCHEMA_SCHEMA = {
 REMEMBER_SCHEMA = {
     "name": "remember",
     "description": (
-        "Save one short note to your scratchpad — a concrete value/fact you will need in a LATER "
-        "step (a url, an id, a file path, a number, a name). The scratchpad stays visible in every "
-        "following step, so you never have to re-derive or re-fetch what you already found. Write "
-        "down key intermediate results the moment you obtain them, instead of trusting they will "
-        "stay in view. Only meaningful during a multi-step task (create a plan first)."
+        "Save one short note to your scratchpad — a concrete value/fact you will need LATER "
+        "(a url, an id, a file path, a number, a name). During a planned multi-step task the "
+        "scratchpad stays visible in every following step, so you never have to re-derive or "
+        "re-fetch what you already found. Notes also survive context folding: when older turns "
+        "are summarized, your scratchpad is carried into the summary. Write down key intermediate "
+        "results the moment you obtain them, instead of trusting they will stay in view."
     ),
     "parameters": {
         "properties": {
@@ -724,14 +725,15 @@ class Orchestrator:
         return f"{goal}\n{request}"
 
     def _tools_decl_for(self, session: ChatSession) -> List[Dict[str, Any]]:
-        """本次生成的 prompt 面声明。full 模式 = 基座声明。catalog 模式：有任务 = 基座 +
-        该任务冻结的路由件；无任务 = 基座 + 会话级保留集合（上一个任务的路由件，任务结束
-        不撤，免一次前缀失配；首个任务前为空 = 基座）。旧快照恢复的任务没有路由记录
-        （None）时就地补算一次并冻结（此后与新建任务同语义）。"""
+        """本次生成的 prompt 面声明。full 模式 = 基座声明。catalog 模式：有带 plan 的任务 =
+        基座 + 该任务冻结的路由件；否则（无任务，或 D47 轮首种下、尚无 plan 的任务）= 基座 +
+        会话级保留集合（上一个任务的路由件，任务结束不撤，免一次前缀失配；首个任务前为空 =
+        基座）。旧快照恢复的带 plan 任务没有路由记录（None）时就地补算一次并冻结（此后与
+        新建任务同语义）。"""
         if self.tool_schema_mode != "catalog":
             return self._tools_decl
         task = session.task_state
-        if task is not None:
+        if task is not None and task.plan:
             if task.routed_tools is None:
                 task.routed_tools = self._route_tools(
                     self._routing_query(task.goal, session.history))
@@ -1126,6 +1128,13 @@ class Orchestrator:
         if _fresh_turn:
             session.carried_upgrade = []
             session._tool_hint_replayed = False
+            # D47：轮首种任务（goal = 本轮用户文本，plan 空）——轮末摘要器视图（[Goal]/[Scratchpad]）
+            # 与无计划的 remember 都靠它；不路由（catalog 路由只在首次建成 plan 时做，见
+            # _tools_decl_for）、不注入 task_block（plan 非空才注入）。上一轮带着未完成 plan 留下的
+            # 任务原样沿用；无 plan 的残留（中止出口不弃任务）换成本轮新 goal。
+            _seed = session.task_state
+            if _seed is None or not _seed.plan:
+                session.task_state = TaskState(goal=_last_user_text(session.history))
         upgrade_decisions: List[Any] = list(getattr(session, "carried_upgrade", None) or [])
         session.carried_upgrade = upgrade_decisions
 
@@ -1935,14 +1944,8 @@ class Orchestrator:
         if name == "update_plan":
             task = session.task_state
             if task is None:
+                # 兜底：D47 起新鲜轮轮首已种任务，这里只剩续跑 / 旧会话无任务的情形；只建不路由
                 task = TaskState(goal=_last_user_text(session.history))
-                # D31：任务建立 = 路由一次并冻结（只在 catalog 模式写；full 模式保持 None）。
-                # goal 此后不再变（replace 只换步骤），故 replan 不触发重算。会话级保留集合
-                # 同步替换：任务结束后前缀沿用它，直到下一个任务建立。
-                if self.tool_schema_mode == "catalog":
-                    task.routed_tools = self._route_tools(
-                        self._routing_query(task.goal, session.history))
-                    session.last_routed_tools = list(task.routed_tools)
                 session.task_state = task
             # 重规划预算：推翻已有计划才计数（首次建计划、微调不计）
             if args.get("op") == "replace" and task.plan:
@@ -1956,6 +1959,9 @@ class Orchestrator:
             if not ok:
                 events.emit("invalid_plan_op", session=session.session_id,
                             op=args.get("op"), msg=msg)
+            # D31（D47 改写）：任务路由在首次建成 plan 后的下一次生成前算一次并冻结
+            # （`_tools_decl_for`，只在 catalog 模式写；full 模式保持 None）；goal 不变故
+            # replan 不重算；apply_op 失败 plan 仍空 → 不路由。
             return msg
 
         if name == "complete_step":
@@ -1967,9 +1973,9 @@ class Orchestrator:
 
         if name == "remember":
             task = session.task_state
-            if task is None or not task.plan:
-                return ("No active plan — the scratchpad carries values across the steps of a "
-                        "multi-step task. Create a plan with update_plan first, or just answer.")
+            # D47：新鲜轮轮首恒有任务（无 plan 也收）；只剩续跑 / 旧会话无任务时拒
+            if task is None:
+                return "No active task state — just answer the user."
             ok, msg = task.remember(str(args.get("note", "")))
             return msg
 
