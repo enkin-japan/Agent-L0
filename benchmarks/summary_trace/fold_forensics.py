@@ -4,6 +4,9 @@
 
 run_trace.py 的 POST 支在 `maybe_summarize_context` 返回 0 或 `s.rolling_summary` 为空时抛
 「POST 折叠失败（摘要为空或无可折叠轮次）」。摘要器原始输出不落盘，这里从会话目录间接取证：
+- 摘要器输入的口径（D45）：优先取 post 行（或 POST 支 error 行）的 `summary_input`——harness 捕获的
+  实际输入原文；老批次没有该字段时，按该 trace 目录 `meta.json` 的 `tool_digest_chars`（缺键按 0 =
+  D45 之前的旧格式）用 `_collect_turn_texts(..., tool_digest_chars=…)` 重算。`input_source` 记是哪一种。
 - 「无可折叠轮次」路径能否排除：post 会话的 history.jsonl 行数、轮次 status（fail/cancelled 会被
   `_collect_turn_texts` 剔除）、`_turn_to_text` 是否非空（= 摘要器输入）。
 - 摘要器是否被调用、跑了多久：
@@ -54,6 +57,7 @@ def _sessions(d: Path) -> Dict[tuple, Dict[str, Path]]:
 
 def pair_rows(d: Path) -> List[Dict[str, Any]]:
     rows = [json.loads(x) for x in (d / "transcripts.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+    digest_chars = int((_json(d / "meta.json") or {}).get("tool_digest_chars") or 0)
     by: Dict[tuple, Dict[str, Any]] = {}
     for r in rows:
         k = (str(r["item"]), int(r["rep"]))
@@ -77,11 +81,15 @@ def pair_rows(d: Path) -> List[Dict[str, Any]]:
         mpost_json = _json(post_dir / "meta.json")
         mt1_json = _json(sess["t1"] / "meta.json") if "t1" in sess else None
         mpost, mt1 = mpost_json or {}, mt1_json or {}
-        # 摘要器输入：与 maybe_summarize_context 同一取法（fold 前 summarized_turns=0、keep_tail_turns=0），
-        # 与生产同一拼接口径（compactor._compact_session 的 "\n\n---\n\n".join(_collect_turn_texts(...))）。
+        # 摘要器输入：行里有 summary_input 就用它（实际输入）；否则与 maybe_summarize_context 同一取法重算
+        # （fold 前 summarized_turns=0、keep_tail_turns=0，tool_digest_chars 取该批 meta.json），与生产同一
+        # 拼接口径（maybe_summarize_context 的 "\n\n---\n\n".join(_collect_turn_texts(...))）。
         first = turns[0] if turns else {}
-        inp = _collect_turn_texts(lines)
-        text = "\n\n---\n\n".join(inp)
+        inp = _collect_turn_texts(lines, tool_digest_chars=digest_chars)
+        captured = (slot.get("post") or {}).get("summary_input")
+        if captured is None:
+            captured = (err or {}).get("summary_input")
+        text = captured if captured is not None else "\n\n---\n\n".join(inp)
         asst = sum(len(str(m.get("content") or "")) for m in first.get("response") or []
                    if isinstance(m, dict) and m.get("role") == "assistant")
         ntc = sum(len(m.get("tool_calls") or []) for m in first.get("response") or []
@@ -99,6 +107,7 @@ def pair_rows(d: Path) -> List[Dict[str, Any]]:
         rec.update({
             "hist_lines": len(lines), "turn_status": [t.get("status") for t in turns],
             "foldable_blocks": len(inp), "input_chars": len(text),
+            "input_source": "summary_input" if captured is not None else f"recomputed(tool_digest_chars={digest_chars})",
             "input_has_task_state": "[Task state at end of turn]" in text,
             "record_has_task_state": "task_state" in first,
             "assistant_text_chars": asst, "turn1_tool_calls": ntc,

@@ -29,6 +29,9 @@
 #   trace-new-900     summary_trace 成对续跑：新模板 / task_state on / 900 tok（现行生产）     --drop-task on
 #   trace-legacy-640  同上：旧模板 / task_state off / 640 tok（W4 前的生产）
 #   trace-new-640     同上：新模板 / task_state on / 640 tok（把模板与预算拆开看）
+#   trace-d45-digest  D45 验收：新模板 / 900 tok / 工具 digest 200 字 / turn-1 迭代 3（只变 digest，对照 trace-new-900）
+#   trace-d45-both    同上，digest 200 + turn-1 迭代 6（nudge 阈值 3 之后仍有迭代可建 plan）
+#   trace-d45-plan    同上，digest 0 + turn-1 迭代 6（只变 task_state 一侧）
 #   B 段（MODEL_B）：
 #   gemma-direct-mock    直调 mock 前缀（W3 条目口径）                                   0/16K/32K/49K
 #   gemma-direct-catalog 直调 catalog 前缀（gemma4 家族生产口径 D29）                     0/32K/49K
@@ -110,6 +113,10 @@ ARM_ARGS[orch-turn-catalog]="--orchestrator --fill-placement turn --guard on --s
 ARM_ARGS[trace-new-900]="--template new --task-state on --summary-max-tokens 900"
 ARM_ARGS[trace-legacy-640]="--template legacy --task-state off --summary-max-tokens 640"
 ARM_ARGS[trace-new-640]="--template new --task-state on --summary-max-tokens 640"
+# D45 验收三步（11-03）：digest / turn-1 迭代上限两因素各单独一步 + 合并一步；对照组是上一批的 trace-new-900（digest 0 / 迭代 3）
+ARM_ARGS[trace-d45-digest]="--template new --task-state on --summary-max-tokens 900 --tool-digest-chars 200 --turn1-iterations 3"
+ARM_ARGS[trace-d45-both]="--template new --task-state on --summary-max-tokens 900 --tool-digest-chars 200 --turn1-iterations 6"
+ARM_ARGS[trace-d45-plan]="--template new --task-state on --summary-max-tokens 900 --tool-digest-chars 0 --turn1-iterations 6"
 # gemma-* 步：B 段（MODEL_B）
 ARM_ARGS[gemma-direct-mock]="--levels $DIRECT_LV"
 ARM_ARGS[gemma-direct-catalog]="--prefix catalog --levels 0,32768,49152"

@@ -11,7 +11,8 @@
            files / todos，不足以还原）；两支各自独立的会话目录。
   PRE      history = turn 1 全文 → 续跑 user 消息 → run_turn（--continue-iterations）。
   POST     先 maybe_summarize_context 折叠整个 turn 1（history 重建为 system + 摘要块；--template
-           决定摘要指令）→ 同一句续跑 user 消息 → run_turn。
+           决定摘要指令，--tool-digest-chars 决定摘要器输入带不带工具段）→ 同一句续跑 user 消息 → run_turn。
+           实际送进 engine.summarize 的输入原文落在行字段 summary_input。
 指标与报表见 README.md；产物：<out>/transcripts.jsonl（每支一行）、<out>/sessions/、事件流。
 """
 from __future__ import annotations
@@ -40,7 +41,10 @@ from benchmarks.model_eval.executor import DEFAULT_SYSTEM_PROMPT, function_calls
 from benchmarks.model_eval.scorers import get_scorer                        # noqa: E402
 from context_knee import orch_tools as OT                                   # noqa: E402
 from context_knee import run_knee as K                                      # noqa: E402
+from framework.core.orchestrator import NO_PLAN_NUDGE_ITERATIONS            # noqa: E402
 from framework.core.thinking_replay import THINKING_REPLAY_MODES            # noqa: E402
+from framework.memory.compactor import (SUMMARY_TOOL_DIGEST_CHARS,          # noqa: E402
+                                        _TOOL_SECTION_HEADER)
 
 CONTINUE_PROMPT = {
     "en": "Continue the task from where it stopped and finish the remaining steps.",
@@ -102,6 +106,42 @@ def count_repeated(history: List[Dict[str, Any]], start: int,
             if call_key(c) in c1 and not resp.startswith(OT.DUP_PREFIX):
                 n += 1
     return n
+
+
+def count_tool_lines(text: str) -> int:
+    """摘要器输入里工具段的调用行数：工具段头行之后、连续以 `- ` 开头的行（task_state 的便签
+    行同样以 `- ` 开头，故只数头行之后那一段）。"""
+    n, inside = 0, False
+    for ln in (text or "").splitlines():
+        if ln == _TOOL_SECTION_HEADER:
+            inside = True
+        elif inside and ln.startswith("- "):
+            n += 1
+        else:
+            inside = False
+    return n
+
+
+class SummarizeCapture:
+    """POST 支摘要器输入捕获：maybe_summarize_context 只用 engine.summarize 这一个面，传它一个
+    转发壳，记下**实际送入**的 content（= 生产拼好的 batch_text，不含 engine 自己加的
+    [Existing summary] / [New conversation] 外壳）。选它而不是在 harness 里用 _collect_turn_texts
+    重算一遍：重算要复刻水位线切片与 join 口径，生产一改就静默漂移；转发壳只依赖 summarize 的签名。
+    也不改共享引擎对象（真后端各题共用同一个 engine）。"""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.contents: List[str] = []
+
+    def __getattr__(self, name):
+        # 其余属性一律转发到被包的引擎（生产以后若在 summarize 之外多读一个属性，不至于 AttributeError）
+        if name == "inner":
+            raise AttributeError(name)
+        return getattr(self.inner, name)
+
+    async def summarize(self, content, *args, **kwargs):
+        self.contents.append(content)
+        return await self.inner.summarize(content, *args, **kwargs)
 
 
 # ---------------- 干跑脚本（FakeEngine） ----------------
@@ -238,6 +278,7 @@ async def run_pair(args, engine, counter, item: Dict[str, Any], rep: int, meta: 
             "template": args.template, "task_state": args.task_state,
             "drop_task": args.drop_task}
     proxies: List[Any] = []
+    cap: Optional[SummarizeCapture] = None   # POST 支的摘要器捕获；失败支也要落盘它看到的输入
     try:
         if not task.get("env"):
             raise ValueError(f"[{item['id']}] 只支持带 mock env 的题（task.env）")
@@ -275,6 +316,9 @@ async def run_pair(args, engine, counter, item: Dict[str, Any], rep: int, meta: 
         turn1_meta = {"turn1_status": status1, "turn1_calls": len(traj_calls(traj1)),
                       "turn1_distinct_calls": len(c1), "turn1_env_state": e1,
                       "turn1_record_has_task_state": "task_state" in record,
+                      # turn 1 结束时有没有建成计划：缺省 --turn1-iterations 3 = NO_PLAN_NUDGE_ITERATIONS，
+                      # nudge 到第 3 次无计划迭代才贴、而熔断恰在第 3 次，模型没有迭代去响应它
+                      "turn1_plan_built": s1.task_state is not None and bool(s1.task_state.plan),
                       "turn1_dup_blocked": extra1["dup_blocked"],
                       "turn1_gens": len(proxy1.gens),
                       "turn1_session_dir": str(s1.session_dir)}
@@ -303,14 +347,17 @@ async def run_pair(args, engine, counter, item: Dict[str, Any], rep: int, meta: 
             proxy.session = s
             spill.session = s
             summary = ""
+            summary_input: Optional[str] = None
             folded = 0
             if branch == "post":
+                cap = SummarizeCapture(inner)
                 folded = await maybe_summarize_context(
-                    s, inner, threshold_tokens=1, keep_tail_turns=0,
+                    s, cap, threshold_tokens=1, keep_tail_turns=0,
                     last_prompt_tokens=10 ** 9, sediment=False,
                     max_tokens=args.summary_max_tokens, rewrite_every=0,
-                    instruction=instruction)
+                    instruction=instruction, tool_digest_chars=args.tool_digest_chars)
                 summary = s.rolling_summary
+                summary_input = cap.contents[-1] if cap.contents else None
                 if not folded or not summary.strip():
                     raise RuntimeError("POST 折叠失败（摘要为空或无可折叠轮次）")
             prompt = continue_prompt(item)
@@ -350,6 +397,10 @@ async def run_pair(args, engine, counter, item: Dict[str, Any], rep: int, meta: 
                 "summary_chars": len(summary) if branch == "post" else None,
                 "summary_tokens_est": _est_tokens(counter, summary) if branch == "post" else None,
                 "summary": summary if branch == "post" else None,
+                "summary_input": summary_input,
+                "summary_input_chars": len(summary_input) if summary_input is not None else None,
+                "summary_input_tool_lines": (count_tool_lines(summary_input)
+                                             if summary_input is not None else None),
                 "history_head": (s.history[1].get("content") if len(s.history) > 1 else None)
                 if branch == "post" else None,
                 "cont_status": status, "cont_aborted_reason": ev, "guard_events": guard_ev,
@@ -365,8 +416,11 @@ async def run_pair(args, engine, counter, item: Dict[str, Any], rep: int, meta: 
         return rows
     except Exception as e:      # noqa: BLE001 —— 批次纪律：单题失败只记账
         import traceback
+        failed_input = cap.contents[-1] if cap is not None and cap.contents else None
         return [{**base, "branch": None, "error": f"{type(e).__name__}: {e}",
                  "traceback": traceback.format_exc()[-2000:],
+                 "summary_input": failed_input,
+                 "summary_input_chars": len(failed_input) if failed_input is not None else None,
                  "wall_s": round(time.monotonic() - t0, 2)}]
     finally:
         for p in proxies:
@@ -446,6 +500,10 @@ async def _amain(args, orch_globals) -> int:
     meta = {"model": repo, "revision": opts.get("revision"), "backend": args.backend,
             "tasks": args.tasks, "seed": args.seed, "prefix_mode": args.prefix,
             "turn1_iterations": args.turn1_iterations,
+            # 无计划提醒阈值（orchestrator.NO_PLAN_NUDGE_ITERATIONS）：turn1_iterations ≤ 它时，
+            # 提醒最多贴在熔断那一次迭代上，模型没有机会响应（建计划 → task_state 才有 plan）
+            "no_plan_nudge_iterations": NO_PLAN_NUDGE_ITERATIONS,
+            "tool_digest_chars": args.tool_digest_chars,
             "continue_iterations": args.continue_iterations,
             "summary_max_tokens": args.summary_max_tokens, "drop_task": args.drop_task,
             "token_counter": counter.mode,
@@ -505,9 +563,14 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--task-state", default="on", choices=["on", "off"],
                     help="turn 1 落盘记录带不带 task_state（off = 模拟 W4 前的摘要器输入）")
     ap.add_argument("--turn1-iterations", type=int, default=3,
-                    help="turn 1 的 max_total_iterations（截断点）")
+                    help="turn 1 的 max_total_iterations（截断点）。缺省 3 = 无计划提醒阈值"
+                         "（NO_PLAN_NUDGE_ITERATIONS）：提醒贴在熔断那一次，模型来不及响应；要看提醒"
+                         "起作用（建计划 → task_state 带 plan）用 6")
     ap.add_argument("--continue-iterations", type=int, default=5,
                     help="续跑轮的 max_total_iterations")
+    ap.add_argument("--tool-digest-chars", type=int, default=SUMMARY_TOOL_DIGEST_CHARS,
+                    help="POST 摘要器输入里每条工具结果 digest 的上限（缺省 = 生产 "
+                         "compactor.SUMMARY_TOOL_DIGEST_CHARS；0 = 关，只列工具名的旧格式）")
     ap.add_argument("--summary-max-tokens", type=int, default=900,
                     help="POST 摘要生成 max_tokens（缺省 900 = config.yaml agent.summary_max_tokens）")
     ap.add_argument("--drop-task", default="off", choices=["on", "off"],
@@ -535,6 +598,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     for k in ("turn1_iterations", "continue_iterations"):
         if getattr(args, k) < 1:
             ap.error(f"--{k.replace('_', '-')} 须 ≥ 1")
+    if args.tool_digest_chars < 0:
+        ap.error("--tool-digest-chars 须 ≥ 0（0 = 关）")
     if not 128 <= args.summary_max_tokens <= 4096:
         ap.error("--summary-max-tokens 须在 128..4096（与 agent.summary_max_tokens 同界）")
     return asyncio.run(amain(args))

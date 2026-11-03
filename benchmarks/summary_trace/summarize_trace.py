@@ -2,8 +2,9 @@
 
   backend/.venv/bin/python benchmarks/summary_trace/summarize_trace.py <out> [<out> ...]
 
-按 (model, summary_max_tokens, template, task_state, drop_task) 分组；配对键另加源目录与
-(题, rep)——合并多批（640 vs 900、legacy vs new 分目录）时各批各自配对。同一配对键同一支出现
+按 (model, summary_max_tokens, template, task_state, drop_task, tool_digest_chars, turn1_iterations)
+分组（后两键 D45 加；老行缺键归 "None" 组，老报表数值不变）；配对键另加源目录与
+(题, rep)——合并多批（640 vs 900、legacy vs new、digest 200 vs 0 分目录）时各批各自配对。同一配对键同一支出现
 两次（同一目录传了两遍、transcripts 被拼接过）直接报错退出，绝不静默覆盖。
 - Δ(repeated+blocked) = POST − PRE，先在 (题, rep) 上配对求差，再按题平均；95% CI = 题级
   bootstrap（有放回重抽题，B 次，取各次「题均差的均值」的 2.5 / 97.5 分位）。n 很小时 CI 很宽，
@@ -38,7 +39,8 @@ def load_rows(out_dirs: Iterable[Path]) -> List[Dict[str, Any]]:
     return rows
 
 
-GROUP_KEYS = ("model", "summary_max_tokens", "template", "task_state", "drop_task")
+GROUP_KEYS = ("model", "summary_max_tokens", "template", "task_state", "drop_task",
+              "tool_digest_chars", "turn1_iterations")
 
 
 def group_key(r: Dict[str, Any]) -> Tuple[str, ...]:
@@ -135,15 +137,17 @@ def _f(x: Any, nd: int = 2) -> str:
 
 def report(out_dirs: Iterable[Path], *, seed: int = 0, n_boot: int = DEFAULT_BOOT) -> str:
     agg = aggregate(load_rows(out_dirs), n_boot=n_boot, seed=seed)
-    head = ("| model | max_tokens | template | task_state | drop_task | 对数 | 题数 | 重复功 PRE | 重复功 POST | Δ(POST−PRE) | 95% CI | "
+    head = ("| model | max_tokens | template | task_state | drop_task | tool_digest | turn1_iter | 对数 | 题数 | "
+            "重复功 PRE | 重复功 POST | Δ(POST−PRE) | 95% CI | "
             "pass PRE | pass POST | 首 prompt 中位 PRE | 首 prompt 中位 POST | 摘要字符中位 |")
-    lines = [head, "|" + "---|" * 16]
+    lines = [head, "|" + "---|" * 18]
     for g in agg["groups"]:
         lo, hi = g["delta_cost_ci95"]
         ci = "—" if lo is None else f"[{lo:.2f}, {hi:.2f}]"
         lines.append(
             f"| {g['model']} | {g['summary_max_tokens']} | {g['template']} | {g['task_state']} | "
-            f"{g['drop_task']} | {g['n_pairs']} | {g['n_items']} | "
+            f"{g['drop_task']} | {g['tool_digest_chars']} | {g['turn1_iterations']} | "
+            f"{g['n_pairs']} | {g['n_items']} | "
             f"{_f(g['cost_pre_mean'])} | {_f(g['cost_post_mean'])} | {_f(g['delta_cost_mean'])} | {ci} | "
             f"{_f(g['pass_pre'])} | {_f(g['pass_post'])} | {_f(g['first_pt_median_pre'], 0)} | "
             f"{_f(g['first_pt_median_post'], 0)} | {_f(g['summary_chars_median'], 0)} |")
