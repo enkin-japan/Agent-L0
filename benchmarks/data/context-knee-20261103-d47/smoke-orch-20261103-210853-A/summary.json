@@ -1,0 +1,115 @@
+{
+  "model": "RedHatAI/Qwen3.8-27B-INT4",
+  "revision": "91bd022d5b49442a868bc35008f6c21e1860edfa",
+  "dialect": "qwen35",
+  "backend": "remote",
+  "tasks": "hard",
+  "seed": 7,
+  "token_counter": "engine",
+  "stamp": "20261103-212344",
+  "sampling_overrides": {
+    "sent": {},
+    "ignored": {}
+  },
+  "entry_sampling": {
+    "top_p": 0.95,
+    "top_k": 20,
+    "repetition_penalty": 1.0
+  },
+  "thinking_replay_mode": "last_k",
+  "thinking_replay_k": 2,
+  "thinking_replay_source": "entry",
+  "context_limit": 65536,
+  "context_limit_source": "health",
+  "prefix_mode": "prod",
+  "prefix_base_tokens": 13718,
+  "prefix_top_k": null,
+  "prefix_shadowed": {
+    "lc-hard-001": [
+      "write_file"
+    ]
+  },
+  "prefix_core_skipped": {
+    "lc-hard-001": []
+  },
+  "prefix_n_tools": {
+    "lc-hard-001": {
+      "prompt": 60,
+      "prompt_full": 60,
+      "grammar": 60
+    }
+  },
+  "mode": "orchestrator",
+  "fill_placement": "turn",
+  "guard": "on",
+  "step_compaction": "on",
+  "turn_compaction": "off",
+  "goal_verify": "off",
+  "fill_shape": "in_turn",
+  "guard_thresholds": {
+    "soft": 24576,
+    "hard": 39322,
+    "reserve": 12288
+  },
+  "step_compaction_cfg": {
+    "trigger_level": "soft",
+    "cold_refill_trigger_level": "hard",
+    "keep_recent": 2,
+    "digest_chars": 200
+  },
+  "agent_cfg_fingerprint": "210c14259ddc00f6",
+  "orchestrator_cfg_source": {
+    "section": "config.yaml:agent",
+    "overrides": {
+      "context_guard.enabled": true,
+      "step_compaction.enabled": true,
+      "goal_verify": false,
+      "max_total_iterations": "per item: task.max_turns 或 executor 缺省（记入行 max_total_iterations）"
+    }
+  },
+  "tool_schema_mode_effective": "full",
+  "stub_impl": "usable-v1",
+  "levels": [
+    0
+  ],
+  "reps": 1,
+  "items": [
+    "lc-hard-001"
+  ],
+  "n_rows": 1,
+  "n_runs": 1,
+  "n_errors": 0,
+  "complete": true,
+  "by_level": {
+    "0": {
+      "n": 1,
+      "errors": 0,
+      "success_rate": 1.0,
+      "pass_hat_2": null,
+      "pass_at_2": null,
+      "n_tasks2": 0,
+      "recall_rate": null,
+      "recall_n": 0,
+      "recall_front": null,
+      "recall_mid": null,
+      "recall_back": null,
+      "redundant_calls_mean": 0.0,
+      "env_errors_mean": 0.0,
+      "repetition_hits": 0,
+      "aborted": 0,
+      "prompt_tokens_median": 13861,
+      "peak_prompt_tokens_median": 15477,
+      "fill_error_median": null,
+      "reused_prefix_median": 12544,
+      "prefill_s_median": 6.615281821218918,
+      "first_prompt_tps_median": 2095.3,
+      "later_prompt_tps_median": 19376.5,
+      "coherent_rate": 1.0,
+      "coherent_n": 1,
+      "wall_s_mean": 37.46,
+      "step_compactions_median": 0,
+      "full_renders_median": 6,
+      "ceiling_aborts": 0
+    }
+  }
+}

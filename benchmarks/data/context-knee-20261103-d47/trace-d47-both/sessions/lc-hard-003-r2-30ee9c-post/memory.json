@@ -1,0 +1,1 @@
+{"summary": "[State] duty-summary.txt 尚未成功写入；write_file 首次返回 EBUSY，重试被去重拦截，append_file 因文件不存在失败。\n[Issues] duty-summary.txt 创建失败，需再次尝试 write_file。\n[Next] 重新调用 write_file 写入 duty-summary.txt，内容为四行值日信息。", "summarized_turns": 1, "sedimented_turns": 0, "summary_folds": 1, "updated_at": 1793709052.520243}

@@ -1,0 +1,104 @@
+{"ts": 1793708699.244, "time": "2026-11-03 21:24:59", "type": "no_plan_nudge", "session": "lc-hard-001-r0-51ae28-t1", "detail": {"iterations": 3}}
+{"ts": 1793708704.307, "time": "2026-11-03 21:25:04", "type": "verify_nudge", "session": "lc-hard-001-r0-51ae28-t1"}
+{"ts": 1793708751.569, "time": "2026-11-03 21:25:51", "type": "no_plan_nudge", "session": "lc-hard-001-r1-1149d2-t1", "detail": {"iterations": 3}}
+{"ts": 1793708756.954, "time": "2026-11-03 21:25:56", "type": "verify_nudge", "session": "lc-hard-001-r1-1149d2-t1"}
+{"ts": 1793708812.522, "time": "2026-11-03 21:26:52", "type": "no_plan_nudge", "session": "lc-hard-001-r2-26cf1a-t1", "detail": {"iterations": 3}}
+{"ts": 1793708818.073, "time": "2026-11-03 21:26:58", "type": "verify_nudge", "session": "lc-hard-001-r2-26cf1a-t1"}
+{"ts": 1793708881.453, "time": "2026-11-03 21:28:01", "type": "no_plan_nudge", "session": "lc-hard-002-r0-8193bd-t1", "detail": {"iterations": 3}}
+{"ts": 1793708908.837, "time": "2026-11-03 21:28:28", "type": "no_plan_nudge", "session": "lc-hard-002-r1-9a2e93-t1", "detail": {"iterations": 3}}
+{"ts": 1793708935.914, "time": "2026-11-03 21:28:55", "type": "no_plan_nudge", "session": "lc-hard-002-r2-966341-t1", "detail": {"iterations": 3}}
+{"ts": 1793708966.084, "time": "2026-11-03 21:29:26", "type": "no_plan_nudge", "session": "lc-hard-003-r0-37efea-t1", "detail": {"iterations": 3}}
+{"ts": 1793708968.294, "time": "2026-11-03 21:29:28", "type": "duplicate_call", "session": "lc-hard-003-r0-37efea-t1", "detail": {"tool": "write_file"}}
+{"ts": 1793708976.051, "time": "2026-11-03 21:29:36", "type": "verify_nudge", "session": "lc-hard-003-r0-37efea-t1"}
+{"ts": 1793708976.052, "time": "2026-11-03 21:29:36", "type": "turn_abort", "session": "lc-hard-003-r0-37efea-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793709000.356, "time": "2026-11-03 21:30:00", "type": "no_plan_nudge", "session": "lc-hard-003-r1-2211c0-t1", "detail": {"iterations": 3}}
+{"ts": 1793709002.563, "time": "2026-11-03 21:30:02", "type": "duplicate_call", "session": "lc-hard-003-r1-2211c0-t1", "detail": {"tool": "write_file"}}
+{"ts": 1793709007.307, "time": "2026-11-03 21:30:07", "type": "turn_abort", "session": "lc-hard-003-r1-2211c0-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793709011.402, "time": "2026-11-03 21:30:11", "type": "verify_nudge", "session": "lc-hard-003-r1-2211c0-pre"}
+{"ts": 1793709013.16, "time": "2026-11-03 21:30:13", "type": "no_plan_nudge", "session": "lc-hard-003-r1-2211c0-pre", "detail": {"iterations": 3}}
+{"ts": 1793709026.053, "time": "2026-11-03 21:30:26", "type": "no_plan_nudge", "session": "lc-hard-003-r1-2211c0-post", "detail": {"iterations": 3}}
+{"ts": 1793709035.286, "time": "2026-11-03 21:30:35", "type": "no_plan_nudge", "session": "lc-hard-003-r2-30ee9c-t1", "detail": {"iterations": 3}}
+{"ts": 1793709037.478, "time": "2026-11-03 21:30:37", "type": "duplicate_call", "session": "lc-hard-003-r2-30ee9c-t1", "detail": {"tool": "write_file"}}
+{"ts": 1793709043.866, "time": "2026-11-03 21:30:43", "type": "duplicate_call", "session": "lc-hard-003-r2-30ee9c-t1", "detail": {"tool": "write_file"}}
+{"ts": 1793709043.867, "time": "2026-11-03 21:30:43", "type": "turn_abort", "session": "lc-hard-003-r2-30ee9c-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793709061.67, "time": "2026-11-03 21:31:01", "type": "no_plan_nudge", "session": "lc-hard-003-r2-30ee9c-post", "detail": {"iterations": 3}}
+{"ts": 1793709064.237, "time": "2026-11-03 21:31:04", "type": "verify_nudge", "session": "lc-hard-003-r2-30ee9c-post"}
+{"ts": 1793709066.116, "time": "2026-11-03 21:31:06", "type": "turn_abort", "session": "lc-hard-003-r2-30ee9c-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793709075.049, "time": "2026-11-03 21:31:15", "type": "no_plan_nudge", "session": "lc-hard-004-r0-80b35c-t1", "detail": {"iterations": 3}}
+{"ts": 1793709081.918, "time": "2026-11-03 21:31:21", "type": "verify_nudge", "session": "lc-hard-004-r0-80b35c-t1"}
+{"ts": 1793709085.592, "time": "2026-11-03 21:31:25", "type": "turn_abort", "session": "lc-hard-004-r0-80b35c-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793709106.667, "time": "2026-11-03 21:31:46", "type": "no_plan_nudge", "session": "lc-hard-004-r0-80b35c-post", "detail": {"iterations": 3}}
+{"ts": 1793709113.61, "time": "2026-11-03 21:31:53", "type": "verify_nudge", "session": "lc-hard-004-r0-80b35c-post"}
+{"ts": 1793709117.709, "time": "2026-11-03 21:31:57", "type": "turn_abort", "session": "lc-hard-004-r0-80b35c-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793709126.908, "time": "2026-11-03 21:32:06", "type": "no_plan_nudge", "session": "lc-hard-004-r1-50fcd8-t1", "detail": {"iterations": 3}}
+{"ts": 1793709133.671, "time": "2026-11-03 21:32:13", "type": "verify_nudge", "session": "lc-hard-004-r1-50fcd8-t1"}
+{"ts": 1793709136.748, "time": "2026-11-03 21:32:16", "type": "turn_abort", "session": "lc-hard-004-r1-50fcd8-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793709162.696, "time": "2026-11-03 21:32:42", "type": "no_plan_nudge", "session": "lc-hard-004-r1-50fcd8-post", "detail": {"iterations": 3}}
+{"ts": 1793709168.513, "time": "2026-11-03 21:32:48", "type": "verify_nudge", "session": "lc-hard-004-r1-50fcd8-post"}
+{"ts": 1793709172.541, "time": "2026-11-03 21:32:52", "type": "turn_abort", "session": "lc-hard-004-r1-50fcd8-post", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793709181.686, "time": "2026-11-03 21:33:01", "type": "no_plan_nudge", "session": "lc-hard-004-r2-2e79ff-t1", "detail": {"iterations": 3}}
+{"ts": 1793709188.397, "time": "2026-11-03 21:33:08", "type": "verify_nudge", "session": "lc-hard-004-r2-2e79ff-t1"}
+{"ts": 1793709191.604, "time": "2026-11-03 21:33:11", "type": "turn_abort", "session": "lc-hard-004-r2-2e79ff-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793709211.35, "time": "2026-11-03 21:33:31", "type": "no_plan_nudge", "session": "lc-hard-004-r2-2e79ff-post", "detail": {"iterations": 3}}
+{"ts": 1793709227.175, "time": "2026-11-03 21:33:47", "type": "no_plan_nudge", "session": "lc-hard-005-r0-47f95d-t1", "detail": {"iterations": 3}}
+{"ts": 1793709229.987, "time": "2026-11-03 21:33:49", "type": "verify_nudge", "session": "lc-hard-005-r0-47f95d-t1"}
+{"ts": 1793709244.076, "time": "2026-11-03 21:34:04", "type": "action_claim_nudge", "session": "lc-hard-005-r0-47f95d-pre"}
+{"ts": 1793709270.901, "time": "2026-11-03 21:34:30", "type": "no_plan_nudge", "session": "lc-hard-005-r1-4ebe35-t1", "detail": {"iterations": 3}}
+{"ts": 1793709274.992, "time": "2026-11-03 21:34:34", "type": "verify_nudge", "session": "lc-hard-005-r1-4ebe35-t1"}
+{"ts": 1793709276.865, "time": "2026-11-03 21:34:36", "type": "turn_abort", "session": "lc-hard-005-r1-4ebe35-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793709279.995, "time": "2026-11-03 21:34:39", "type": "action_claim_nudge", "session": "lc-hard-005-r1-4ebe35-pre"}
+{"ts": 1793709296.176, "time": "2026-11-03 21:34:56", "type": "action_claim_nudge", "session": "lc-hard-005-r1-4ebe35-post"}
+{"ts": 1793709310.99, "time": "2026-11-03 21:35:10", "type": "no_plan_nudge", "session": "lc-hard-005-r2-e0796f-t1", "detail": {"iterations": 3}}
+{"ts": 1793709314.293, "time": "2026-11-03 21:35:14", "type": "verify_nudge", "session": "lc-hard-005-r2-e0796f-t1"}
+{"ts": 1793709323.837, "time": "2026-11-03 21:35:23", "type": "action_claim_nudge", "session": "lc-hard-005-r2-e0796f-pre"}
+{"ts": 1793709348.168, "time": "2026-11-03 21:35:48", "type": "no_plan_nudge", "session": "lc-hard-006-r0-d054bf-t1", "detail": {"iterations": 3}}
+{"ts": 1793709351.116, "time": "2026-11-03 21:35:51", "type": "verify_nudge", "session": "lc-hard-006-r0-d054bf-t1"}
+{"ts": 1793709359.824, "time": "2026-11-03 21:35:59", "type": "action_claim_nudge", "session": "lc-hard-006-r0-d054bf-pre"}
+{"ts": 1793709376.976, "time": "2026-11-03 21:36:16", "type": "no_plan_nudge", "session": "lc-hard-006-r0-d054bf-post", "detail": {"iterations": 3}}
+{"ts": 1793709390.343, "time": "2026-11-03 21:36:30", "type": "no_plan_nudge", "session": "lc-hard-006-r1-918e8e-t1", "detail": {"iterations": 3}}
+{"ts": 1793709393.361, "time": "2026-11-03 21:36:33", "type": "verify_nudge", "session": "lc-hard-006-r1-918e8e-t1"}
+{"ts": 1793709401.323, "time": "2026-11-03 21:36:41", "type": "action_claim_nudge", "session": "lc-hard-006-r1-918e8e-pre"}
+{"ts": 1793709418.455, "time": "2026-11-03 21:36:58", "type": "no_plan_nudge", "session": "lc-hard-006-r1-918e8e-post", "detail": {"iterations": 3}}
+{"ts": 1793709430.255, "time": "2026-11-03 21:37:10", "type": "no_plan_nudge", "session": "lc-hard-006-r2-e1ab7d-t1", "detail": {"iterations": 3}}
+{"ts": 1793709433.269, "time": "2026-11-03 21:37:13", "type": "verify_nudge", "session": "lc-hard-006-r2-e1ab7d-t1"}
+{"ts": 1793709441.383, "time": "2026-11-03 21:37:21", "type": "action_claim_nudge", "session": "lc-hard-006-r2-e1ab7d-pre"}
+{"ts": 1793709458.541, "time": "2026-11-03 21:37:38", "type": "no_plan_nudge", "session": "lc-hard-006-r2-e1ab7d-post", "detail": {"iterations": 3}}
+{"ts": 1793709470.403, "time": "2026-11-03 21:37:50", "type": "no_plan_nudge", "session": "lc-hard-007-r0-421be5-t1", "detail": {"iterations": 3}}
+{"ts": 1793709475.629, "time": "2026-11-03 21:37:55", "type": "verify_nudge", "session": "lc-hard-007-r0-421be5-t1"}
+{"ts": 1793709480.166, "time": "2026-11-03 21:38:00", "type": "turn_abort", "session": "lc-hard-007-r0-421be5-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793709489.348, "time": "2026-11-03 21:38:09", "type": "action_claim_nudge", "session": "lc-hard-007-r0-421be5-pre"}
+{"ts": 1793709511.507, "time": "2026-11-03 21:38:31", "type": "action_claim_nudge", "session": "lc-hard-007-r0-421be5-post"}
+{"ts": 1793709527.436, "time": "2026-11-03 21:38:47", "type": "no_plan_nudge", "session": "lc-hard-007-r1-d0fe1c-t1", "detail": {"iterations": 3}}
+{"ts": 1793709530.213, "time": "2026-11-03 21:38:50", "type": "verify_nudge", "session": "lc-hard-007-r1-d0fe1c-t1"}
+{"ts": 1793709547.227, "time": "2026-11-03 21:39:07", "type": "action_claim_nudge", "session": "lc-hard-007-r1-d0fe1c-pre"}
+{"ts": 1793709579.776, "time": "2026-11-03 21:39:39", "type": "action_claim_nudge", "session": "lc-hard-007-r1-d0fe1c-post"}
+{"ts": 1793709595.663, "time": "2026-11-03 21:39:55", "type": "no_plan_nudge", "session": "lc-hard-007-r2-16ac6b-t1", "detail": {"iterations": 3}}
+{"ts": 1793709600.866, "time": "2026-11-03 21:40:00", "type": "verify_nudge", "session": "lc-hard-007-r2-16ac6b-t1"}
+{"ts": 1793709604.755, "time": "2026-11-03 21:40:04", "type": "turn_abort", "session": "lc-hard-007-r2-16ac6b-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793709612.533, "time": "2026-11-03 21:40:12", "type": "action_claim_nudge", "session": "lc-hard-007-r2-16ac6b-pre"}
+{"ts": 1793709638.93, "time": "2026-11-03 21:40:38", "type": "no_plan_nudge", "session": "lc-hard-007-r2-16ac6b-post", "detail": {"iterations": 3}}
+{"ts": 1793709646.569, "time": "2026-11-03 21:40:46", "type": "action_claim_nudge", "session": "lc-hard-007-r2-16ac6b-post"}
+{"ts": 1793709664.751, "time": "2026-11-03 21:41:04", "type": "no_plan_nudge", "session": "lc-hard-008-r0-2064e6-t1", "detail": {"iterations": 3}}
+{"ts": 1793709672.83, "time": "2026-11-03 21:41:12", "type": "verify_nudge", "session": "lc-hard-008-r0-2064e6-t1"}
+{"ts": 1793709676.261, "time": "2026-11-03 21:41:16", "type": "turn_abort", "session": "lc-hard-008-r0-2064e6-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793709706.143, "time": "2026-11-03 21:41:46", "type": "no_plan_nudge", "session": "lc-hard-008-r1-c13d1a-t1", "detail": {"iterations": 3}}
+{"ts": 1793709712.229, "time": "2026-11-03 21:41:52", "type": "verify_nudge", "session": "lc-hard-008-r1-c13d1a-t1"}
+{"ts": 1793709715.122, "time": "2026-11-03 21:41:55", "type": "turn_abort", "session": "lc-hard-008-r1-c13d1a-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793709742.391, "time": "2026-11-03 21:42:22", "type": "no_plan_nudge", "session": "lc-hard-008-r2-df2162-t1", "detail": {"iterations": 3}}
+{"ts": 1793709749.099, "time": "2026-11-03 21:42:29", "type": "verify_nudge", "session": "lc-hard-008-r2-df2162-t1"}
+{"ts": 1793709751.943, "time": "2026-11-03 21:42:31", "type": "turn_abort", "session": "lc-hard-008-r2-df2162-t1", "detail": {"reason": "max_iterations", "sub_generations": 0}}
+{"ts": 1793709784.513, "time": "2026-11-03 21:43:04", "type": "no_plan_nudge", "session": "lc-hard-009-r0-692886-t1", "detail": {"iterations": 3}}
+{"ts": 1793709789.336, "time": "2026-11-03 21:43:09", "type": "verify_nudge", "session": "lc-hard-009-r0-692886-t1"}
+{"ts": 1793709836.004, "time": "2026-11-03 21:43:56", "type": "no_plan_nudge", "session": "lc-hard-009-r1-67b05f-t1", "detail": {"iterations": 3}}
+{"ts": 1793709840.731, "time": "2026-11-03 21:44:00", "type": "verify_nudge", "session": "lc-hard-009-r1-67b05f-t1"}
+{"ts": 1793709874.341, "time": "2026-11-03 21:44:34", "type": "no_plan_nudge", "session": "lc-hard-009-r2-36c4d1-t1", "detail": {"iterations": 3}}
+{"ts": 1793709878.949, "time": "2026-11-03 21:44:38", "type": "verify_nudge", "session": "lc-hard-009-r2-36c4d1-t1"}
+{"ts": 1793709919.954, "time": "2026-11-03 21:45:19", "type": "no_plan_nudge", "session": "lc-hard-010-r0-88b0b3-t1", "detail": {"iterations": 3}}
+{"ts": 1793709922.968, "time": "2026-11-03 21:45:22", "type": "verify_nudge", "session": "lc-hard-010-r0-88b0b3-t1"}
+{"ts": 1793709952.009, "time": "2026-11-03 21:45:52", "type": "action_claim_nudge", "session": "lc-hard-010-r0-88b0b3-post"}
+{"ts": 1793709967.536, "time": "2026-11-03 21:46:07", "type": "no_plan_nudge", "session": "lc-hard-010-r1-b961d7-t1", "detail": {"iterations": 3}}
+{"ts": 1793709970.208, "time": "2026-11-03 21:46:10", "type": "verify_nudge", "session": "lc-hard-010-r1-b961d7-t1"}
+{"ts": 1793709978.528, "time": "2026-11-03 21:46:18", "type": "action_claim_nudge", "session": "lc-hard-010-r1-b961d7-pre"}
+{"ts": 1793710003.307, "time": "2026-11-03 21:46:43", "type": "no_plan_nudge", "session": "lc-hard-010-r2-dff1bc-t1", "detail": {"iterations": 3}}
+{"ts": 1793710005.372, "time": "2026-11-03 21:46:45", "type": "verify_nudge", "session": "lc-hard-010-r2-dff1bc-t1"}
+{"ts": 1793710014.486, "time": "2026-11-03 21:46:54", "type": "action_claim_nudge", "session": "lc-hard-010-r2-dff1bc-pre"}
