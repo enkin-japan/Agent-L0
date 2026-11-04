@@ -1,0 +1,43 @@
+2026-11-04 10:54:09 START deploy RedHatAI/Qwen3.8-27B-INT4 --retain
+2026-11-04 10:54:09 后台部署进程已启动（尚未 READY） {"pid": 89103, "logs": "./colab/deploy.sh logs -f", "stop": "./colab/deploy.sh stop"}
+2026-11-04 10:54:11 wait READY: state=allocating phase=
+2026-11-04 10:54:43 wait READY: state=booting phase=installing-dependencies
+2026-11-04 10:55:14 wait READY: state=booting phase=checking-cuda-runtime
+2026-11-04 10:55:45 wait READY: state=booting phase=downloading-model
+2026-11-04 10:56:16 wait READY: state=booting phase=downloading-model
+2026-11-04 10:56:47 wait READY: state=booting phase=downloading-model
+2026-11-04 10:57:18 wait READY: state=booting phase=downloading-model
+2026-11-04 10:57:49 wait READY: state=booting phase=downloading-model
+2026-11-04 10:58:20 wait READY: state=booting phase=loading-models
+2026-11-04 10:58:52 wait READY: state=booting phase=loading-models
+2026-11-04 10:59:23 wait READY: state=booting phase=loading-models
+2026-11-04 10:59:54 wait READY: state=booting phase=loading-models
+2026-11-04 11:00:25 wait READY: state=booting phase=loading-models
+2026-11-04 11:00:56 wait READY: state=booting phase=loading-models
+2026-11-04 11:01:27 wait READY: state=booting phase=loading-models
+2026-11-04 11:01:58 wait READY: state=booting phase=loading-models
+2026-11-04 11:02:29 wait READY: state=booting phase=loading-models
+2026-11-04 11:03:01 wait READY: state=booting phase=loading-models
+2026-11-04 11:03:32 wait READY: state=booting phase=loading-models
+2026-11-04 11:04:03 wait READY: state=booting phase=loading-models
+2026-11-04 11:04:35 wait READY: state=booting phase=loading-models
+2026-11-04 11:05:06 wait READY: state=booting phase=loading-models
+2026-11-04 11:05:37 wait READY: state=booting phase=loading-models
+2026-11-04 11:06:08 wait READY: state=booting phase=loading-models
+2026-11-04 11:06:39 wait READY: state=ready phase=ready
+2026-11-04 11:06:39 READY host=agent-compute.tail8d18fd.ts.net
+2026-11-04 11:06:39 smoke orch [A RedHatAI/Qwen3.8-27B-INT4] (prod, turn, L0, 1 题 1 rep) → smoke-orch-20261104-105408-A
+2026-11-04 11:07:39 smoke orch OK
+2026-11-04 11:07:39 ARM trace-d47b-both [A RedHatAI/Qwen3.8-27B-INT4] start: --template new --task-state on --summary-max-tokens 900 --tool-digest-chars 200 --turn1-iterations 6 
+2026-11-04 11:28:40 ARM trace-d47b-both harness rc=0 hung=0
+2026-11-04 11:28:40 arm trace-d47b-both: ok
+2026-11-04 11:28:40 STOP colab
+2026-11-04 11:28:40 等待正在进行的 VM 分配结束（如有），然后回收
+2026-11-04 11:28:40 正在核对并回收 VM {"session": "agent-compute-81c6362c21ab"}
+2026-11-04 11:28:41 正在注销 Tailscale 临时节点
+2026-11-04 11:28:42 正在请求 Colab 释放 VM
+[colab] Stopping session 'agent-compute-81c6362c21ab'...
+[colab] Session terminated.
+2026-11-04 11:28:44 已确认 VM 从 Colab 服务端移除 {"session": "agent-compute-81c6362c21ab", "tailnet_cleanup": "ephemeral-logout-confirmed"}
+2026-11-04 11:28:44 stop rc=0
+2026-11-04 11:28:44 DONE BATCH_RC=0 SKIPPED=0

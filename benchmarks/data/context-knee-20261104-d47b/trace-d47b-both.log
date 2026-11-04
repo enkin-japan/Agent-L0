@@ -1,0 +1,821 @@
+[RemoteBackend] 模型身份核对通过：RedHatAI/Qwen3.8-27B-INT4（revision=91bd022d5b49442a868bc35008f6c21e1860edfa，capabilities=['text', 'vision']）
+[RemoteBackend] 已连接 inference-server: http://agent-compute.tail8d18fd.ts.net:14161
+== 成对续跑评估 RedHatAI/Qwen3.8-27B-INT4（remote，模板 new，task_state on）：10 题 × 3 rep → benchmarks/data/context-knee-20261104-d47b/trace-d47b-both
+[Engine] 约束采样引擎就绪（llguidance）
+[Engine] 约束采样构建失败，永久禁用（纠错闭环兜底）: NotImplementedError: qwen35 方言使用原生 XML 调用体（<function=…><parameter=…>），按设计不启用 约束采样——engine 将 fail-open 到自由采样 + 解析纠错闭环。
+[Engine] 前缀命中 0/1304 tokens，gen 32.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1423 tokens，gen 53.9 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2089 tokens，gen 58.8 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2503 tokens，gen 56.3 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2828 tokens，gen 50.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2972 tokens，gen 55.1 tps
+[Engine] 前缀命中 3136/3175 tokens，gen 59.4 tps
+[Engine] 前缀命中 1568/1652 tokens，gen 59.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/2084 tokens，gen 59.0 tps
+   lc-hard-001 r0 pre: repeated=0 blocked=0 pass=True first_pt=3175
+   lc-hard-001 r0 post: repeated=2 blocked=0 pass=False first_pt=1652
+[Engine] 前缀命中 0/1304 tokens，gen 33.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1425 tokens，gen 54.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2096 tokens，gen 58.7 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2521 tokens，gen 57.2 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2905 tokens，gen 51.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2972 tokens，gen 52.8 tps
+[Engine] 前缀命中 3136/3051 tokens，gen 59.9 tps
+[Engine] 前缀命中 1568/1596 tokens，gen 59.2 tps
+[Orchestrator] 执行工具: list_files
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1984 tokens，gen 59.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2739 tokens，gen 58.2 tps
+   lc-hard-001 r1 pre: repeated=0 blocked=0 pass=True first_pt=3051
+   lc-hard-001 r1 post: repeated=7 blocked=0 pass=False first_pt=1596
+[Engine] 前缀命中 0/1304 tokens，gen 32.5 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1423 tokens，gen 53.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2090 tokens，gen 58.7 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2497 tokens，gen 56.4 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2824 tokens，gen 39.2 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2713 tokens，gen 53.2 tps
+[Engine] 前缀命中 1568/2831 tokens，gen 57.0 tps
+[Engine] 前缀命中 1568/1749 tokens，gen 58.7 tps
+[Orchestrator] 执行工具: list_files
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2142 tokens，gen 58.3 tps
+   lc-hard-001 r2 pre: repeated=0 blocked=0 pass=True first_pt=2831
+   lc-hard-001 r2 post: repeated=2 blocked=0 pass=True first_pt=1749
+[Engine] 前缀命中 0/1308 tokens，gen 34.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1389 tokens，gen 48.5 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1630 tokens，gen 58.7 tps
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1945 tokens，gen 52.4 tps
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 1568/2024 tokens，gen 45.9 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/2049 tokens，gen 54.9 tps
+[Engine] 前缀命中 1568/2103 tokens，gen 57.2 tps
+[Engine] 前缀命中 1568/1457 tokens，gen 59.4 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/1727 tokens，gen 56.1 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1865 tokens，gen 59.4 tps
+   lc-hard-002 r0 pre: repeated=0 blocked=0 pass=True first_pt=2103
+   lc-hard-002 r0 post: repeated=1 blocked=0 pass=True first_pt=1457
+[Engine] 前缀命中 0/1308 tokens，gen 34.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1389 tokens，gen 48.9 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1635 tokens，gen 58.9 tps
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1953 tokens，gen 53.7 tps
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 1568/2040 tokens，gen 54.6 tps
+[Engine] 前缀命中 1568/2050 tokens，gen 49.7 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/2133 tokens，gen 57.4 tps
+[Engine] 前缀命中 0/1497 tokens，gen 35.2 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/1573 tokens，gen 58.0 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1757 tokens，gen 59.4 tps
+   lc-hard-002 r1 pre: repeated=1 blocked=0 pass=True first_pt=2050
+   lc-hard-002 r1 post: repeated=1 blocked=0 pass=True first_pt=1497
+[Engine] 前缀命中 0/1308 tokens，gen 34.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1389 tokens，gen 48.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1632 tokens，gen 58.8 tps
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1947 tokens，gen 52.4 tps
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 1568/2024 tokens，gen 46.2 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/2050 tokens，gen 54.5 tps
+[Engine] 前缀命中 1568/2101 tokens，gen 56.2 tps
+[Engine] 前缀命中 0/1488 tokens，gen 35.2 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/1564 tokens，gen 58.6 tps
+   lc-hard-002 r2 pre: repeated=0 blocked=0 pass=True first_pt=2101
+   lc-hard-002 r2 post: repeated=1 blocked=0 pass=True first_pt=1488
+[Engine] 前缀命中 0/1276 tokens，gen 34.3 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1365 tokens，gen 51.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1662 tokens，gen 57.2 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1844 tokens，gen 56.2 tps
+[Engine] 前缀命中 1568/1962 tokens，gen 56.7 tps
+[Orchestrator] 执行工具: append_file
+[Engine] 前缀命中 1568/2093 tokens，gen 55.8 tps
+[Engine] 前缀命中 1568/2144 tokens，gen 55.4 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2311 tokens，gen 46.1 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2421 tokens，gen 47.8 tps
+[Engine] 前缀命中 0/1483 tokens，gen 45.7 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1606 tokens，gen 52.8 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1711 tokens，gen 55.5 tps
+   lc-hard-003 r0 pre: repeated=1 blocked=0 pass=True first_pt=2144
+   lc-hard-003 r0 post: repeated=1 blocked=0 pass=True first_pt=1483
+[Engine] 前缀命中 0/1276 tokens，gen 34.3 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1365 tokens，gen 51.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1668 tokens，gen 57.8 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1868 tokens，gen 56.0 tps
+[Engine] 前缀命中 1568/1980 tokens，gen 56.9 tps
+[Orchestrator] 执行工具: append_file
+[Engine] 前缀命中 1568/2103 tokens，gen 55.5 tps
+[Engine] 前缀命中 1568/2144 tokens，gen 54.8 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2297 tokens，gen 53.6 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2447 tokens，gen 43.6 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2530 tokens，gen 47.9 tps
+[Engine] 前缀命中 0/1480 tokens，gen 47.7 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1620 tokens，gen 53.9 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1732 tokens，gen 56.4 tps
+   lc-hard-003 r1 pre: repeated=0 blocked=0 pass=False first_pt=2144
+   lc-hard-003 r1 post: repeated=1 blocked=0 pass=True first_pt=1480
+[Engine] 前缀命中 0/1276 tokens，gen 34.3 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1365 tokens，gen 51.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1657 tokens，gen 55.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1817 tokens，gen 56.1 tps
+[Engine] 前缀命中 1568/1940 tokens，gen 56.6 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2075 tokens，gen 53.7 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2093 tokens，gen 53.3 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2231 tokens，gen 52.7 tps
+[Engine] 前缀命中 1568/1539 tokens，gen 56.5 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1685 tokens，gen 57.8 tps
+   lc-hard-003 r2 pre: repeated=0 blocked=0 pass=True first_pt=2093
+   lc-hard-003 r2 post: repeated=0 blocked=0 pass=True first_pt=1539
+[Engine] 前缀命中 0/1327 tokens，gen 32.2 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1402 tokens，gen 48.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1658 tokens，gen 59.4 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2029 tokens，gen 57.2 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2203 tokens，gen 55.8 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2419 tokens，gen 54.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2625 tokens，gen 56.3 tps
+[Engine] 前缀命中 1568/1639 tokens，gen 59.8 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/2121 tokens，gen 56.5 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2518 tokens，gen 58.9 tps
+   lc-hard-004 r0 pre: repeated=0 blocked=0 pass=False first_pt=2625
+   lc-hard-004 r0 post: repeated=5 blocked=0 pass=False first_pt=1639
+[Engine] 前缀命中 0/1327 tokens，gen 32.2 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1402 tokens，gen 48.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1658 tokens，gen 59.3 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2021 tokens，gen 57.2 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2195 tokens，gen 55.9 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2419 tokens，gen 54.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2625 tokens，gen 56.1 tps
+[Engine] 前缀命中 1568/1590 tokens，gen 51.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/1682 tokens，gen 56.4 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1931 tokens，gen 57.4 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2115 tokens，gen 57.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2375 tokens，gen 56.0 tps
+   lc-hard-004 r1 pre: repeated=0 blocked=0 pass=False first_pt=2625
+   lc-hard-004 r1 post: repeated=6 blocked=0 pass=False first_pt=1590
+[Engine] 前缀命中 0/1327 tokens，gen 32.2 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1402 tokens，gen 48.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1658 tokens，gen 59.3 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2032 tokens，gen 57.2 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2206 tokens，gen 55.6 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2416 tokens，gen 54.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2622 tokens，gen 56.5 tps
+[Engine] 前缀命中 1568/1677 tokens，gen 59.7 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/2066 tokens，gen 56.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2456 tokens，gen 58.9 tps
+   lc-hard-004 r2 pre: repeated=0 blocked=0 pass=False first_pt=2622
+   lc-hard-004 r2 post: repeated=5 blocked=0 pass=False first_pt=1677
+[Engine] 前缀命中 0/1445 tokens，gen 37.2 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1563 tokens，gen 59.6 tps
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Engine] 前缀命中 1568/1983 tokens，gen 57.2 tps
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2263 tokens，gen 55.3 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2408 tokens，gen 49.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: todo_list
+[Engine] 前缀命中 1568/2455 tokens，gen 52.7 tps
+[Engine] 前缀命中 1568/2497 tokens，gen 56.5 tps
+[Orchestrator] 执行工具: todo_list
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2965 tokens，gen 54.4 tps
+[Orchestrator] transition → action_claim_nudge
+[Engine] 前缀命中 3136/3285 tokens，gen 59.5 tps
+[Engine] 前缀命中 1568/1662 tokens，gen 59.2 tps
+[Orchestrator] 执行工具: todo_list
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2005 tokens，gen 58.3 tps
+   lc-hard-005 r0 pre: repeated=3 blocked=0 pass=True first_pt=2497
+   lc-hard-005 r0 post: repeated=2 blocked=0 pass=True first_pt=1662
+[Engine] 前缀命中 0/1445 tokens，gen 36.6 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1561 tokens，gen 59.6 tps
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Engine] 前缀命中 1568/1983 tokens，gen 57.0 tps
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2255 tokens，gen 55.0 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2391 tokens，gen 48.4 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: todo_list
+[Engine] 前缀命中 1568/2442 tokens，gen 55.1 tps
+[Engine] 前缀命中 1568/2515 tokens，gen 56.7 tps
+[Orchestrator] transition → action_claim_nudge
+[Engine] 前缀命中 1568/2868 tokens，gen 51.0 tps
+[Orchestrator] 执行工具: todo_list
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/3053 tokens，gen 51.7 tps
+[Engine] 前缀命中 1568/1684 tokens，gen 59.1 tps
+[Orchestrator] 执行工具: todo_list
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2012 tokens，gen 58.8 tps
+   lc-hard-005 r1 pre: repeated=2 blocked=0 pass=True first_pt=2515
+   lc-hard-005 r1 post: repeated=2 blocked=0 pass=True first_pt=1684
+[Engine] 前缀命中 0/1445 tokens，gen 37.2 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1563 tokens，gen 59.5 tps
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Engine] 前缀命中 1568/1952 tokens，gen 57.1 tps
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2220 tokens，gen 54.3 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2364 tokens，gen 49.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: todo_list
+[Engine] 前缀命中 1568/2421 tokens，gen 54.6 tps
+[Engine] 前缀命中 1568/2514 tokens，gen 56.6 tps
+[Orchestrator] 执行工具: todo_list
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 3136/2998 tokens，gen 59.8 tps
+[Orchestrator] transition → action_claim_nudge
+[Engine] 前缀命中 3136/3432 tokens，gen 59.0 tps
+[Engine] 前缀命中 1568/1590 tokens，gen 58.6 tps
+[Orchestrator] 执行工具: todo_list
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1883 tokens，gen 58.6 tps
+   lc-hard-005 r2 pre: repeated=3 blocked=0 pass=True first_pt=2514
+   lc-hard-005 r2 post: repeated=2 blocked=0 pass=True first_pt=1590
+[Engine] 前缀命中 0/1291 tokens，gen 33.7 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1367 tokens，gen 49.5 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1600 tokens，gen 58.8 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1882 tokens，gen 56.7 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2083 tokens，gen 52.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2036 tokens，gen 53.5 tps
+[Engine] 前缀命中 1568/2074 tokens，gen 57.8 tps
+[Orchestrator] transition → action_claim_nudge
+[Engine] 前缀命中 1568/2356 tokens，gen 56.2 tps
+[Engine] 前缀命中 1568/1435 tokens，gen 59.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1820 tokens，gen 59.2 tps
+   lc-hard-006 r0 pre: repeated=0 blocked=0 pass=True first_pt=2074
+   lc-hard-006 r0 post: repeated=2 blocked=0 pass=False first_pt=1435
+[Engine] 前缀命中 0/1291 tokens，gen 33.7 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1367 tokens，gen 48.9 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1594 tokens，gen 58.9 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1885 tokens，gen 58.3 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2147 tokens，gen 53.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2106 tokens，gen 54.2 tps
+[Engine] 前缀命中 1568/2132 tokens，gen 56.6 tps
+[Orchestrator] transition → action_claim_nudge
+[Engine] 前缀命中 1568/2376 tokens，gen 54.9 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2536 tokens，gen 50.5 tps
+[Engine] 前缀命中 1568/1535 tokens，gen 58.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1759 tokens，gen 58.8 tps
+   lc-hard-006 r1 pre: repeated=2 blocked=0 pass=False first_pt=2132
+   lc-hard-006 r1 post: repeated=2 blocked=0 pass=False first_pt=1535
+[Engine] 前缀命中 0/1291 tokens，gen 34.2 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1368 tokens，gen 48.9 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1595 tokens，gen 58.5 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1870 tokens，gen 56.9 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2082 tokens，gen 53.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2054 tokens，gen 53.3 tps
+[Engine] 前缀命中 1568/2076 tokens，gen 57.5 tps
+[Orchestrator] transition → action_claim_nudge
+[Engine] 前缀命中 1568/2346 tokens，gen 55.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2527 tokens，gen 51.8 tps
+[Engine] 前缀命中 0/1422 tokens，gen 49.4 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/1593 tokens，gen 56.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1763 tokens，gen 59.2 tps
+   lc-hard-006 r2 pre: repeated=2 blocked=0 pass=False first_pt=2076
+   lc-hard-006 r2 post: repeated=3 blocked=0 pass=False first_pt=1422
+[Engine] 前缀命中 0/1305 tokens，gen 33.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1405 tokens，gen 43.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1579 tokens，gen 58.5 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1847 tokens，gen 56.7 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1968 tokens，gen 56.6 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2179 tokens，gen 57.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2545 tokens，gen 58.2 tps
+[Orchestrator] transition → action_claim_nudge
+[Engine] 前缀命中 3136/3112 tokens，gen 59.8 tps
+[Engine] 前缀命中 1568/1597 tokens，gen 58.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/1828 tokens，gen 57.5 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2112 tokens，gen 56.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2354 tokens，gen 58.0 tps
+[Orchestrator] transition → action_claim_nudge
+[Engine] 前缀命中 1568/2716 tokens，gen 57.3 tps
+   lc-hard-007 r0 pre: repeated=0 blocked=0 pass=False first_pt=2545
+   lc-hard-007 r0 post: repeated=7 blocked=0 pass=False first_pt=1597
+[Engine] 前缀命中 0/1305 tokens，gen 34.1 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1406 tokens，gen 44.5 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1585 tokens，gen 58.8 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1867 tokens，gen 56.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1991 tokens，gen 56.5 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2186 tokens，gen 57.5 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2545 tokens，gen 57.4 tps
+[Orchestrator] transition → action_claim_nudge
+[Engine] 前缀命中 3136/2957 tokens，gen 59.9 tps
+[Engine] 前缀命中 1568/1593 tokens，gen 58.8 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/1846 tokens，gen 57.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2141 tokens，gen 58.7 tps
+[Orchestrator] transition → action_claim_nudge
+[Engine] 前缀命中 1568/2378 tokens，gen 58.0 tps
+   lc-hard-007 r1 pre: repeated=0 blocked=0 pass=False first_pt=2545
+   lc-hard-007 r1 post: repeated=4 blocked=0 pass=False first_pt=1593
+[Engine] 前缀命中 0/1305 tokens，gen 33.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1405 tokens，gen 44.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1581 tokens，gen 58.8 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1860 tokens，gen 56.8 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1979 tokens，gen 56.5 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2179 tokens，gen 54.4 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2294 tokens，gen 58.1 tps
+[Engine] 前缀命中 1568/1568 tokens，gen 58.3 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/1787 tokens，gen 57.5 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2065 tokens，gen 58.9 tps
+[Orchestrator] transition → action_claim_nudge
+[Engine] 前缀命中 1568/2299 tokens，gen 58.5 tps
+   lc-hard-007 r2 pre: repeated=0 blocked=0 pass=True first_pt=2294
+   lc-hard-007 r2 post: repeated=4 blocked=0 pass=False first_pt=1568
+[Engine] 前缀命中 0/1312 tokens，gen 55.1 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/1603 tokens，gen 59.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1912 tokens，gen 59.2 tps
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2127 tokens，gen 53.2 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2100 tokens，gen 57.4 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2271 tokens，gen 55.1 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2404 tokens，gen 57.5 tps
+[Engine] 前缀命中 1568/1540 tokens，gen 58.8 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/1763 tokens，gen 58.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2105 tokens，gen 58.8 tps
+   lc-hard-008 r0 pre: repeated=0 blocked=0 pass=False first_pt=2404
+   lc-hard-008 r0 post: repeated=5 blocked=0 pass=False first_pt=1540
+[Engine] 前缀命中 0/1312 tokens，gen 54.3 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/1568 tokens，gen 57.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1770 tokens，gen 59.4 tps
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1957 tokens，gen 55.6 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2049 tokens，gen 57.7 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2277 tokens，gen 55.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2423 tokens，gen 57.4 tps
+[Engine] 前缀命中 1568/1514 tokens，gen 57.0 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/1662 tokens，gen 58.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2009 tokens，gen 59.2 tps
+   lc-hard-008 r1 pre: repeated=0 blocked=0 pass=False first_pt=2423
+   lc-hard-008 r1 post: repeated=5 blocked=0 pass=False first_pt=1514
+[Engine] 前缀命中 0/1312 tokens，gen 34.1 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1384 tokens，gen 52.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1647 tokens，gen 59.5 tps
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2027 tokens，gen 54.2 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2044 tokens，gen 58.2 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2310 tokens，gen 54.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2423 tokens，gen 57.5 tps
+[Engine] 前缀命中 1568/1514 tokens，gen 58.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1898 tokens，gen 59.3 tps
+   lc-hard-008 r2 pre: repeated=0 blocked=0 pass=False first_pt=2423
+   lc-hard-008 r2 post: repeated=4 blocked=0 pass=False first_pt=1514
+[Engine] 前缀命中 0/1314 tokens，gen 34.4 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1405 tokens，gen 52.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1777 tokens，gen 58.1 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1997 tokens，gen 59.3 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2492 tokens，gen 44.2 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2437 tokens，gen 50.4 tps
+[Engine] 前缀命中 1568/2308 tokens，gen 57.8 tps
+[Engine] 前缀命中 1568/1542 tokens，gen 57.7 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1745 tokens，gen 59.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2219 tokens，gen 59.1 tps
+   lc-hard-009 r0 pre: repeated=0 blocked=0 pass=True first_pt=2308
+   lc-hard-009 r0 post: repeated=6 blocked=0 pass=False first_pt=1542
+[Engine] 前缀命中 0/1314 tokens，gen 34.4 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1405 tokens，gen 52.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1769 tokens，gen 59.3 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2085 tokens，gen 58.1 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2406 tokens，gen 47.0 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2265 tokens，gen 54.3 tps
+[Engine] 前缀命中 1568/2327 tokens，gen 57.7 tps
+[Engine] 前缀命中 1568/1500 tokens，gen 58.7 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1755 tokens，gen 57.9 tps
+   lc-hard-009 r1 pre: repeated=0 blocked=0 pass=True first_pt=2327
+   lc-hard-009 r1 post: repeated=1 blocked=0 pass=True first_pt=1500
+[Engine] 前缀命中 0/1314 tokens，gen 34.4 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1405 tokens，gen 52.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1777 tokens，gen 59.2 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/2089 tokens，gen 58.1 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2402 tokens，gen 48.0 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2271 tokens，gen 54.2 tps
+[Engine] 前缀命中 1568/2327 tokens，gen 57.7 tps
+[Engine] 前缀命中 1568/1532 tokens，gen 59.9 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 1568/1904 tokens，gen 58.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2380 tokens，gen 58.9 tps
+   lc-hard-009 r2 pre: repeated=0 blocked=0 pass=True first_pt=2327
+   lc-hard-009 r2 post: repeated=7 blocked=0 pass=False first_pt=1532
+[Engine] 前缀命中 0/1289 tokens，gen 32.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1372 tokens，gen 50.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1713 tokens，gen 57.4 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1915 tokens，gen 57.3 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2153 tokens，gen 48.2 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2051 tokens，gen 56.1 tps
+[Engine] 前缀命中 1568/2131 tokens，gen 57.8 tps
+[Engine] 前缀命中 1568/1439 tokens，gen 59.7 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1769 tokens，gen 58.7 tps
+   lc-hard-010 r0 pre: repeated=0 blocked=0 pass=True first_pt=2131
+   lc-hard-010 r0 post: repeated=1 blocked=0 pass=True first_pt=1439
+[Engine] 前缀命中 0/1289 tokens，gen 32.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1372 tokens，gen 51.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1729 tokens，gen 57.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1940 tokens，gen 57.6 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2183 tokens，gen 47.2 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2086 tokens，gen 56.0 tps
+[Engine] 前缀命中 1568/2164 tokens，gen 57.8 tps
+[Engine] 前缀命中 1568/1474 tokens，gen 59.8 tps
+[Orchestrator] 执行工具: list_files
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1878 tokens，gen 58.9 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2322 tokens，gen 57.9 tps
+[Orchestrator] transition → action_claim_nudge
+[Engine] 前缀命中 1568/2472 tokens，gen 57.6 tps
+   lc-hard-010 r1 pre: repeated=0 blocked=0 pass=True first_pt=2164
+   lc-hard-010 r1 post: repeated=6 blocked=0 pass=False first_pt=1474
+[Engine] 前缀命中 0/1289 tokens，gen 34.2 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 0/1375 tokens，gen 50.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1716 tokens，gen 58.1 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 1568/1935 tokens，gen 57.5 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 1568/2183 tokens，gen 48.0 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/2078 tokens，gen 54.8 tps
+[Engine] 前缀命中 1568/2136 tokens，gen 57.2 tps
+[Engine] 前缀命中 1568/1479 tokens，gen 60.0 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 1568/1902 tokens，gen 58.7 tps
+[Orchestrator] transition → action_claim_nudge
+[Engine] 前缀命中 1568/2184 tokens，gen 58.6 tps
+   lc-hard-010 r2 pre: repeated=0 blocked=0 pass=True first_pt=2136
+   lc-hard-010 r2 post: repeated=1 blocked=0 pass=True first_pt=1479
+| model | max_tokens | template | task_state | drop_task | tool_digest | turn1_iter | 对数 | 题数 | 重复功 PRE | 重复功 POST | Δ(POST−PRE) | 95% CI | pass PRE | pass POST | 首 prompt 中位 PRE | 首 prompt 中位 POST | 摘要字符中位 | turn1 remember | 有便签对数 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| RedHatAI/Qwen3.8-27B-INT4 | 900 | new | on | on | 200 | 6 | 30 | 10 | 0.47 | 3.20 | 2.73 | [1.33, 3.97] | 0.63 | 0.43 | 2327 | 1537 | 604 | 0 | 0 |
+（重复功 = repeated + blocked；不成对 / error：0；CI = 题级 bootstrap 1000 次，<2 题不给）
+== 产物: benchmarks/data/context-knee-20261104-d47b/trace-d47b-both（0 个 error）
