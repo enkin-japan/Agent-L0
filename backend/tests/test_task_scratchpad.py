@@ -79,3 +79,19 @@ def test_step_tool_calls_counter_snapshot_and_reset():
     ok, msg = t.complete_current("步骤b结果")
     assert ok and "[tool calls: 0]" in t.plan[1]["note"]
     assert "ZERO tools" in msg                           # 零执行 → 自查提醒
+
+
+def test_is_bare_goal_truth_table():
+    """T_b1（D47-next (b)，杀 is_bare_goal 的 and/or 互换、漏判 plan 或漏判 notes 变异）。"""
+    goal_only = TaskState(goal="g")
+    assert goal_only.is_bare_goal()
+    notes_only = TaskState(goal="g")
+    notes_only.remember("k=v")
+    assert not notes_only.is_bare_goal()
+    plan_only = TaskState(goal="g")
+    plan_only.plan = list(DOING_STEP)
+    assert not plan_only.is_bare_goal()
+    both = TaskState(goal="g")
+    both.remember("k=v")
+    both.plan = list(DOING_STEP)
+    assert not both.is_bare_goal()

@@ -73,6 +73,12 @@ class TaskState:
     def all_done(self) -> bool:
         return bool(self.plan) and not self.has_open_steps()
 
+    def is_bare_goal(self) -> bool:
+        """只有 goal、没有 plan 也没有便签：渲染出来只剩 [Goal] 一段（轮首种下的用户原文，
+        或 plan 被 clear 后残留的旧 goal），不值得盖进轮记录（D47-next (b)）。step note 只
+        存在于 plan 步里，所以「有内容」= 有 plan 或有便签。"""
+        return not self.plan and not self.notes
+
     # ---------- 结构化操作（模型经 update_plan 元工具进入） ----------
     def _new_step(self, title: str) -> Dict[str, Any]:
         step = {"id": self._next_id, "title": title, "status": STEP_PENDING, "note": ""}

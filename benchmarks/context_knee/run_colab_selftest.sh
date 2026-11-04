@@ -170,12 +170,13 @@ if has phases; then
   check phases '[ "$(args_model phases trace-new-900)" = stub/model ]' "切换前最后一步 trace 须仍是 A 模型：$(args_model phases trace-new-900)"
 fi
 if has d45_steps; then
-  # D45 验收三步 + D47 一步只是 trace 步的参数变体：A 段跑、kind=trace、参数逐字到位、不碰 B 段
-  run_chain d45_steps ARMS=trace-d45-digest,trace-d45-both,trace-d45-plan,trace-d47-both
+  # D45 验收三步 + D47 一步 + D47b 一步只是 trace 步的参数变体：A 段跑、kind=trace、参数逐字到位、不碰 B 段
+  run_chain d45_steps ARMS=trace-d45-digest,trace-d45-both,trace-d45-plan,trace-d47-both,trace-d47b-both
   check d45_steps '[ "$(rc_of d45_steps)" = 0 ] && [ "$(done_of d45_steps)" = "BATCH_RC=0 SKIPPED=0" ]' "rc=$(rc_of d45_steps) DONE=$(done_of d45_steps)"
-  check d45_steps '[ "$(status_of d45_steps)" = "trace-d45-digest ok;trace-d45-both ok;trace-d45-plan ok;trace-d47-both ok;" ]' "status=$(status_of d45_steps)"
-  check d45_steps 'grep -q -- "--tool-digest-chars 200 --turn1-iterations 3" "$T/d45_steps/trace-d45-digest/stub.args" && grep -q -- "--tool-digest-chars 200 --turn1-iterations 6" "$T/d45_steps/trace-d45-both/stub.args" && grep -q -- "--tool-digest-chars 0 --turn1-iterations 6" "$T/d45_steps/trace-d45-plan/stub.args" && grep -q -- "--tool-digest-chars 200 --turn1-iterations 6" "$T/d45_steps/trace-d47-both/stub.args"' "D45/D47 步参数：both=$(cat "$T/d45_steps/trace-d45-both/stub.args" 2>/dev/null) d47=$(cat "$T/d45_steps/trace-d47-both/stub.args" 2>/dev/null)"
-  check d45_steps 'grep -q -- "--drop-task on" "$T/d45_steps/trace-d45-plan/stub.args" && [ "$(calls d45_steps start)" = 1 ] && [ "$(start_models d45_steps)" = "stub/model;" ]' "四步都在 A 段：start=$(calls d45_steps start) models=$(start_models d45_steps)"
+  check d45_steps '[ "$(status_of d45_steps)" = "trace-d45-digest ok;trace-d45-both ok;trace-d45-plan ok;trace-d47-both ok;trace-d47b-both ok;" ]' "status=$(status_of d45_steps)"
+  check d45_steps 'grep -q -- "--tool-digest-chars 200 --turn1-iterations 3" "$T/d45_steps/trace-d45-digest/stub.args" && grep -q -- "--tool-digest-chars 200 --turn1-iterations 6" "$T/d45_steps/trace-d45-both/stub.args" && grep -q -- "--tool-digest-chars 0 --turn1-iterations 6" "$T/d45_steps/trace-d45-plan/stub.args" && grep -q -- "--tool-digest-chars 200 --turn1-iterations 6" "$T/d45_steps/trace-d47-both/stub.args" && grep -q -- "--tool-digest-chars 200 --turn1-iterations 6" "$T/d45_steps/trace-d47b-both/stub.args"' "D45/D47 步参数：both=$(cat "$T/d45_steps/trace-d45-both/stub.args" 2>/dev/null) d47=$(cat "$T/d45_steps/trace-d47-both/stub.args" 2>/dev/null) d47b=$(cat "$T/d45_steps/trace-d47b-both/stub.args" 2>/dev/null)"
+  check d45_steps '[ -s "$T/d45_steps/trace-d47b-both/stub.args" ] && [ "$(sed -E "s# --out [^ ]+##" "$T/d45_steps/trace-d47b-both/stub.args")" = "$(sed -E "s# --out [^ ]+##" "$T/d45_steps/trace-d47-both/stub.args")" ]' "d47b 步参数（除 --out）须与 d47 步逐字相同：d47b=$(cat "$T/d45_steps/trace-d47b-both/stub.args" 2>/dev/null)"
+  check d45_steps 'grep -q -- "--drop-task on" "$T/d45_steps/trace-d45-plan/stub.args" && [ "$(calls d45_steps start)" = 1 ] && [ "$(start_models d45_steps)" = "stub/model;" ]' "五步都在 A 段：start=$(calls d45_steps start) models=$(start_models d45_steps)"
 fi
 if has trace_hang; then
   # trace 步挂死：TimeoutError 行同判挂死 → 重起 → 半截目录挪成 .partial-* → 从头重跑（不得 --resume）

@@ -251,11 +251,13 @@ REMEMBER_SCHEMA = {
     "name": "remember",
     "description": (
         "Save one short note to your scratchpad — a concrete value/fact you will need LATER "
-        "(a url, an id, a file path, a number, a name). During a planned multi-step task the "
-        "scratchpad stays visible in every following step, so you never have to re-derive or "
-        "re-fetch what you already found. Notes also survive context folding: when older turns "
-        "are summarized, your scratchpad is carried into the summary. Write down key intermediate "
-        "results the moment you obtain them, instead of trusting they will stay in view."
+        "(a url, an id, a file path, a number, a name). You do not need a plan to use it: in "
+        "ordinary conversation too, when a tool result gives you a value you may need again, "
+        "call remember with it — raw tool results are shortened or dropped as the conversation "
+        "grows, while your scratchpad is carried into the summary when older turns are folded. "
+        "During a planned multi-step task the scratchpad also stays visible in every following "
+        "step, so you never have to re-derive or re-fetch what you already found. Write down key "
+        "intermediate results the moment you obtain them, instead of trusting they will stay in view."
     ),
     "parameters": {
         "properties": {
@@ -1642,7 +1644,8 @@ class Orchestrator:
                         "content": ("[System guardrail] You have made several tool calls without a plan "
                                     "or a conclusion. If this task needs more steps, create an explicit "
                                     "plan with update_plan NOW and follow it; otherwise answer the user "
-                                    "directly."),
+                                    "directly. Either way, first save with remember any value from "
+                                    "these results that you will need later."),
                     })
                 # ⑤′-3 失败触发：本地连续失败达阈 → 建议/代发起云端咨询（一轮一次，云端不可用不打扰）。
                 # 放在本分支末尾：验证门控状态、结构性提醒、观察落历史、解析断环都已照常走完
@@ -1805,7 +1808,9 @@ class Orchestrator:
                 session.add_assistant_message(content=text, thoughts=thoughts)
                 if task is not None and (task.all_done() or not task.plan):
                     # W4：弃之前留一份摘要器视图，随本轮记录落盘（摘要器的关键值逐字来源）
-                    session.last_task_state_render = task.render_for_summary()
+                    # D47-next (b)：纯 [Goal]（无 plan 无便签）不留，记录不盖 task_state
+                    session.last_task_state_render = ("" if task.is_bare_goal()
+                                                      else task.render_for_summary())
                     # 任务完成即弃：工作过程已沉淀在本轮消息流（blackboard=消息流本身）
                     session.task_state = None
                 # [D2 谎报围堵] 推回后仍坚持吞错/零证据声明 → 放行但状态降级 warning

@@ -693,15 +693,18 @@ class ChatSession:
         （TaskState.render_for_summary），供摘要器逐字取关键值。
 
         取值优先级：仍在的 session.task_state 现渲染 > 编排层在「任务完成即弃」前留下的
-        last_task_state_render。**无任务时不写该键**（不写空串），老记录同样无该键，读侧一律
-        `turn.get("task_state")`。作废轮次（fail / cancelled）不写：任务状态已随回滚复原、
+        last_task_state_render。**纯 [Goal] 不盖章**（D47-next (b)）：既无 plan 也无便签的
+        任务（is_bare_goal）只会渲染出用户原文的复述——D47 验收 30/30 轮都只有 [Goal]，摘要器
+        从用户轮本就拿得到，盖进去只是给每次折叠输入白添一段；这种活任务按「无活任务」处理，
+        落到 last_task_state_render 兜底（通常为空 → 不写）。**无任务时不写该键**（不写空串），
+        老记录同样无该键，读侧一律 `turn.get("task_state")`。作废轮次（fail / cancelled）不写：任务状态已随回滚复原、
         这些轮次本就不进摘要/沉淀。无论写没写，last_task_state_render 都在这里清空——
         它只属于紧随其后的这一条记录。落盘漏斗唯一，故审批续跑、挂起放弃、冻结作废、
         定时轮等所有路径一并覆盖。
         """
         render = ""
         if response_data.get("status") not in ("fail", "cancelled"):
-            if self.task_state is not None:
+            if self.task_state is not None and not self.task_state.is_bare_goal():
                 try:
                     render = self.task_state.render_for_summary()
                 except Exception as e:  # 渲染失败不得拖垮落盘

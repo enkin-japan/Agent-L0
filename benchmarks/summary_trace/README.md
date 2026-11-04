@@ -55,7 +55,11 @@
 | `turn1_plan_built` | turn 1 结束时 `s1.task_state is not None and bool(s1.task_state.plan)`，与 `turn1_record_has_task_state` 并列 |
 | `turn1_remember_calls` | turn 1 里 `remember` 的调用次数：`s1.history[start1:]` 中 assistant 消息 `tool_calls` 里 `name == "remember"` 的条数（与 turn 1 调用数同一数据源；D47 起无 plan 的 `remember` 也被收）。老批次（加这个字段之前跑的）PRE 行没有这个键：报表「turn1 remember」列聚合成 None，显示 `—` |
 | `turn1_task_state_has_scratchpad` | turn 1 落盘记录的 `task_state` 串含 `[Scratchpad]`；`--task-state off` 恒 False。老批次缺这个键：报表「有便签对数」列聚合成 None，显示 `—` |
-| `turn1_task_state_chars` | 该串长度，记录无该键为 0。D47 起轮首自动种任务（goal = 用户文本），on 支至少有 `[Goal]` 段 |
+| `turn1_task_state_chars` | 该串长度，记录无该键为 0。D47 起轮首自动种任务（goal = 用户文本），on 支至少有 `[Goal]` 段（仅限 D47-next (b) 之前，见表下） |
+
+D47-next (b) 起，`--task-state on` 支的 `turn1_record_has_task_state` 只在 turn 1 的任务有 plan 或有便签时为真（off 支恒 False）：
+纯 `[Goal]` 不再盖进记录，所以这个字段（以及 `turn1_task_state_chars`）与 20261103-d47 批次不可比——那一批按构造就是 30/30；
+`analyze_d47.py` 里按段取 task_state 字符数、比对 [Goal] 与用户文本的两处，用在 (b) 之后的批次上会读到空段 / 缺段，复用前先改。
 
 每行还有 `item, rep, template, task_state, branch, turn1_status, cont_status, cont_aborted_reason, wall_s,
 turn1_session_dir, session_dir`，以及 turn 1 的调用数和 env 快照；meta.json 的字段（含 `tool_digest_chars`、

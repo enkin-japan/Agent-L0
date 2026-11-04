@@ -134,8 +134,9 @@ def test_task_completion_path_records_before_drop(make_session):
 
 
 def test_turn_runner_abandoned_suspended_turn_carries_task_state(make_session):
-    """挂起轮被新消息放弃：warning 记录带被放弃任务的状态；新一轮只带自己轮首种下的任务
-    （D47：goal = 新用户文本，plan 空），不带被放弃任务的任何段。"""
+    """挂起轮被新消息放弃：warning 记录带被放弃任务的状态；新一轮只有自己轮首种下的任务
+    （D47：goal = 新用户文本，plan 空）——纯 [Goal] 不盖章（D47-next (b)），故新一轮记录无
+    task_state 键，更不带被放弃任务的任何段。"""
     engine = FakeEngine([
         {"tool_calls": [call("update_plan", op="replace", steps=["读", "写"])]},
         {"tool_calls": [call("read_thing")]},
@@ -167,7 +168,7 @@ def test_turn_runner_abandoned_suspended_turn_carries_task_state(make_session):
     assert [r["status"] for r in recs] == ["warning", "success"]
     assert recs[0]["task_state"].startswith("[Goal] 长任务")
     assert "1. [doing] 读" in recs[0]["task_state"]
-    assert recs[1]["task_state"] == "[Goal] 换个话题"
+    assert "task_state" not in recs[1]
 
 
 def test_turn_to_text_with_and_without_task_state():

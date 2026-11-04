@@ -7,7 +7,7 @@
 import asyncio
 
 from framework.core.journal import new_turn_id
-from framework.core.orchestrator import Orchestrator
+from framework.core.orchestrator import REMEMBER_SCHEMA, Orchestrator
 from framework.core.task_state import TaskState
 
 from .fake_engine import FakeEngine, FakeRegistry, FakeTool, bad_call, call
@@ -449,7 +449,8 @@ def _records(session):
 
 def test_fresh_turn_seeds_task_state_with_user_goal(make_session):
     """T1：纯文本作答的新鲜轮——生成时 task_state 已是种下的任务（goal = 用户文本、plan 空、
-    不注入任务块）；收尾即弃；轮记录带 task_state 键且含 [Goal]。"""
+    不注入任务块）；收尾即弃；纯 [Goal] 不盖章（D47-next (b)）→ 轮记录无 task_state 键。
+    种任务的证据来自生成期探针（engine.seen），删掉轮首种任务即红。"""
     engine = _TaskProbe([{"text": "晴。"}])
     session = make_session()
 
@@ -460,7 +461,25 @@ def test_fresh_turn_seeds_task_state_with_user_goal(make_session):
     assert seeded is not None and seeded.goal == "今天天气如何" and seeded.plan == []
     assert engine.calls[0]["task_block"] is None
     assert session.task_state is None
-    assert _records(session)[-1]["task_state"] == "[Goal] 今天天气如何"
+    assert "task_state" not in _records(session)[-1]
+
+
+def test_bare_goal_discard_leaves_no_render(make_session):
+    """T_b3（D47-next (b)，杀「编排层弃前照旧渲染纯 [Goal]」变异）：新鲜轮、无工具调用、正常收尾
+    ——弃前不留摘要器视图（last_task_state_render 为空串）。带便签的对照见
+    test_remember_without_plan_is_kept_by_seeded_task（弃前渲染 [Goal]+[Scratchpad]）。"""
+    engine = _TaskProbe([{"text": "晴。"}])
+    orch = make_orch(engine, FakeRegistry([]))
+    session = make_session()
+    session.add_user_message("今天天气如何")
+    begin_turn(session)
+
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
+
+    assert result["status"] == "success"
+    assert engine.seen[0] is not None and engine.seen[0].goal == "今天天气如何"
+    assert session.task_state is None
+    assert session.last_task_state_render == ""
 
 
 def test_remember_without_plan_reaches_record_and_summarizer(make_session):
@@ -538,6 +557,34 @@ def _abort_turn1(make_session):
     t1 = session.task_state
     assert t1 is not None and t1.goal == "第一轮" and not t1.plan
     return engine, orch, session, t1
+
+
+def _breaker_turn_via_runner(make_session, remember_note):
+    """轮以总迭代熔断出口结束（经 TurnRunner 落盘）：不弃任务 → 记录时 session.task_state
+    仍是 plan 空的种任务，走 _stamp_task_state 的活任务分支（不经编排层弃前渲染）。"""
+    first = ({"tool_calls": [call("remember", note=remember_note)]} if remember_note
+             else {"tool_calls": [call("read_thing", i=0)]})
+    engine = FakeEngine([first, {"tool_calls": [call("read_thing", i=1)]}])
+    registry = FakeRegistry([FakeTool("read_thing", result="r")])
+    session = make_session()
+    rd = _submit(_runner(engine, registry, max_total_iterations=2), session, "熔断轮")
+    assert rd["status"] == "warning"
+    assert session.task_state is not None and not session.task_state.plan
+    return session
+
+
+def test_live_planless_task_with_note_stamped_bare_goal_not(make_session):
+    """T_b2（D47-next (b)，杀 session._stamp_task_state 活任务分支的两向变异：去掉 is_bare_goal
+    闸 → 第二段红；闸写反/总不渲染 → 第一段红）：熔断出口留下的无 plan 活任务——有一条便签 →
+    记录盖 [Scratchpad]；无便签（纯 [Goal]）→ 记录无 task_state 键。"""
+    s1 = _breaker_turn_via_runner(make_session, "K=7")
+    assert s1.task_state.notes == ["K=7"]
+    ts = _records(s1)[-1]["task_state"]
+    assert ts == "[Goal] 熔断轮\n[Scratchpad]\n- K=7"
+
+    s2 = _breaker_turn_via_runner(make_session, None)
+    assert s2.task_state.is_bare_goal()
+    assert "task_state" not in _records(s2)[-1]
 
 
 def test_planless_leftover_task_replaced_on_fresh_turn(make_session):
@@ -684,6 +731,33 @@ def test_no_plan_nudge_absent_for_short_tool_runs(make_session):
     assert result["status"] == "success"
     assert not [m for m in session.history
                 if m.get("role") == "system" and "without a plan" in str(m.get("content"))]
+
+
+def test_no_plan_nudge_mentions_remember(make_session):
+    """T_a2（D47-next (a)，杀「提醒文案丢了 remember 那句」变异）：无计划收敛提醒除了
+    update_plan NOW，还要点名先用 remember 存下后面要用的值。"""
+    engine = FakeEngine([
+        {"tool_calls": [call("probe", i=1)]},
+        {"tool_calls": [call("probe", i=2)]},
+        {"tool_calls": [call("probe", i=3)]},
+        {"text": "查完了。"},
+    ])
+    orch = make_orch(engine, FakeRegistry([FakeTool("probe")]))
+    session = make_session()
+    session.add_user_message("多查几处再说")
+    begin_turn(session)
+
+    run(orch.run_turn(session, journal=session.journal, **GEN))
+
+    nudges = [str(m.get("content")) for m in session.history
+              if m.get("role") == "system" and "without a plan" in str(m.get("content"))]
+    assert len(nudges) == 1
+    assert "update_plan NOW" in nudges[0] and "remember" in nudges[0]
+
+
+def test_remember_schema_says_no_plan_needed():
+    """T_a1（D47-next (a)，杀「remember 描述丢了无 plan 可用那句」变异）：直接读声明本体。"""
+    assert "You do not need a plan to use it" in REMEMBER_SCHEMA["description"]
 
 
 # ---------- 全思考空产出推回(T1-5) ----------
