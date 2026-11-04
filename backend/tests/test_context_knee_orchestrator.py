@@ -536,20 +536,52 @@ def test_offline_stub_is_read_only_so_action_claim_is_pushed_back(tmp_path, monk
 
 
 def test_bridged_write_failure_is_failed_and_counted_apart_from_system_errors(tmp_path, monkeypatch):
+    """D44 起缺必填参数在编排层预检就被打回（注册表通用声明核对）：桩不执行、回执是预检文本、
+    记 system_errors（编排层回执）而不是 stub_failed；预检打回的调用不进物理批，写后没有复查，
+    「改好了」先吃一次 verify_nudge（脚本因此多一步）。桩自己的写失败口径不变。"""
     item = _item()
     script = [{"tool_calls": [call("edit_file", path="a.txt", old_string="zzz", new_string="y")],
                "metrics": _m(100)},
               {"tool_calls": [call("trash_file")], "metrics": _m(100)},       # 缺必填 path
+              {"text": "改好了。", "metrics": _m(100)},
               {"text": "改好了。", "metrics": _m(100)},
               {"text": "edit_file 失败：a.txt 里没有 zzz。", "metrics": _m(100)}]
     rec, _ = _run(monkeypatch, _ctx(tmp_path, placement="turn"), script, level=0,
                   prefix=K.item_prefix(item, "prod"), item=item)
     feeds = _feeds(rec)
     assert feeds[0]["content"].startswith("System Error: old_string was NOT found")
-    assert feeds[1]["content"].startswith("System Error: Exception occurred while executing "
-                                          "'trash_file': execute() missing required argument(s): 'path'")
-    assert rec["stub_failed"] == 2 and rec["system_errors"] == 0
-    assert rec["guard_events"].get("failure_swallow_nudge") == 1   # 编排层把它判成失败
+    assert feeds[1]["content"] == ("System Error: 'trash_file' was not executed: missing required "
+                                   "argument(s): 'path'.\nCheck the tool's declaration and call it again.")
+    assert not rec["stub_served"].get("trash_file")                # 桩的 execute 没被调用
+    assert rec["stub_failed"] == 1 and rec["system_errors"] == 1
+    assert rec["guard_events"].get("tool_error") == 2              # edit_file 失败 + trash_file 预检
+    assert rec["guard_events"].get("failure_swallow_nudge") == 1   # 编排层把写失败判成失败
+
+
+def test_catalog_prefix_precheck_feeds_declaration_and_stub_not_invoked(tmp_path, monkeypatch):
+    """D44 经 harness 编排器模式（catalog 前缀）：run_math 发错参数名 → 注册表预检打回、回执附 run_math 的
+    完整声明、桩没执行；按声明改正后桩照常执行。tool_error 事件（guardrail_events.jsonl）带 schema_fed。"""
+    item = _item()
+    asm = K.item_prefix(item, "catalog")
+    ctx = _ctx(tmp_path, placement="turn")
+    ctx.model_options = K.orch_model_options({}, "catalog")
+    script = [{"tool_calls": [call("run_math", expression="1200 + 830")], "metrics": _m(100)},
+              {"tool_calls": [call("run_math", code="1200 + 830")], "metrics": _m(100)},
+              {"text": "2030", "metrics": _m(100)}]
+    rec, _ = _run(monkeypatch, ctx, script, level=0, prefix=asm, item=item)
+    feeds = [f for f in _feeds(rec) if f["name"] == "run_math"]
+    assert feeds[0]["content"].startswith(
+        "System Error: 'run_math' was not executed: missing required argument(s): 'code'; "
+        "unknown argument(s): 'expression' (accepted: ")
+    assert "\nFull declaration of 'run_math':\n" in feeds[0]["content"]
+    assert feeds[1]["content"] == "2030"
+    assert rec["stub_served"].get("run_math") == 1                  # 只有改正后那次进了桩
+    assert rec["system_errors"] == 1 and rec["stub_failed"] == 0
+    evs = [json.loads(x) for x in ctx.events_path.read_text().splitlines() if x.strip()]
+    te = [e["detail"] for e in evs[rec["guard_events_lines"][0]:rec["guard_events_lines"][1]]
+          if e["type"] == "tool_error"]
+    assert len(te) == 1 and te[0]["kind"] == "precheck" and te[0]["schema_fed"] is True
+    assert te[0]["missing"] == "code" and te[0]["unknown"] == "expression"
 
 
 def test_bridged_reads_do_not_consume_env_read_faults(tmp_path):

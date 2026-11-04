@@ -399,10 +399,41 @@ def _history_key_counts(history: List[Dict[str, Any]]) -> Counter:
             for i, tr in enumerate(msg.get("tool_responses", []) or []):
                 if not isinstance(tr, dict):
                     continue
-                if _is_spill_readback(tr, calls[i] if i < len(calls) else None):
+                if _is_spill_readback(tr, _paired_call(tr, i, calls)):
                     continue
                 texts.append(_visible_obs_text(str(tr.get("response", ""))))
     return assign_key_counts(texts)
+
+
+_CALL_ID_KEYS = ("call_id", "id", "tool_call_id")
+
+
+def _call_id(d: Any) -> Any:
+    if not isinstance(d, dict):
+        return None
+    for k in _CALL_ID_KEYS:
+        v = d.get(k)
+        if isinstance(v, str) and v:
+            return v
+    return None
+
+
+def _paired_call(tr: Dict[str, Any], i: int, calls: List[Any]) -> Any:
+    """冷恢复回落层（`_target` 已剥）给第 i 条观察找它的那次调用。回执是「元工具在前、物理调用在后」
+    排的（见下方 compact_tool_observations 的取代说明），按下标配对会错位，所以：
+    ① 观察与调用都带 id（call_id / id / tool_call_id）→ 按 id 配——这是给将来的解析器留的路：
+    现有解析器的调用与编排层的观察都**不带** id，今天恒走 ②③；② 否则观察是 file_extract 且这条
+    assistant 消息里恰好一次 file_extract 调用 → 就是它；③ 再否则退回按下标。"""
+    rid = _call_id(tr)
+    if rid is not None:
+        for c in calls:
+            if _call_id(c) == rid:
+                return c
+    if tr.get("name") == "file_extract":
+        fx = [c for c in calls if _call_name(c) == "file_extract"]
+        if len(fx) == 1:
+            return fx[0]
+    return calls[i] if i < len(calls) else None
 
 
 def compact_tool_observations(history: List[Dict[str, Any]], *,
@@ -412,16 +443,19 @@ def compact_tool_observations(history: List[Dict[str, Any]], *,
                               start: int = 0,
                               end: Optional[int] = None,
                               stub_handle: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
-                              exempt_names: Optional[Set[str]] = None) -> int:
+                              exempt_names: Optional[Set[str]] = None,
+                              exempt_spill_readbacks: bool = False) -> int:
     """
     机械压缩：取代去重（T3-b）+ 预算驱逐（T3-a）。原地修改 history，返回本次新压缩的观察条数。
     确定性、幂等、无模型调用。最近 keep_recent 条为硬保护窗口（永不改动）。
     budget_chars 为 None/0 时跳过预算阶段（仅做取代去重）。
-    start/end、stub_handle、exempt_names（W2）见 compact_tool_observations_detailed。
+    start/end、stub_handle、exempt_names / exempt_spill_readbacks（W2）见
+    compact_tool_observations_detailed。
     """
     return compact_tool_observations_detailed(
         history, keep_recent=keep_recent, digest_chars=digest_chars, budget_chars=budget_chars,
-        start=start, end=end, stub_handle=stub_handle, exempt_names=exempt_names)["count"]
+        start=start, end=end, stub_handle=stub_handle, exempt_names=exempt_names,
+        exempt_spill_readbacks=exempt_spill_readbacks)["count"]
 
 
 def compact_tool_observations_detailed(
@@ -432,8 +466,11 @@ def compact_tool_observations_detailed(
         start: int = 0,
         end: Optional[int] = None,
         stub_handle: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
-        exempt_names: Optional[Set[str]] = None) -> Dict[str, int]:
-    """compact_tool_observations 的明细版：返回 {"count": 新压条数, "freed_chars": 观察正文净减字符数}。
+        exempt_names: Optional[Set[str]] = None,
+        exempt_spill_readbacks: bool = False) -> Dict[str, int]:
+    """compact_tool_observations 的明细版：返回 {"count": 新压条数, "freed_chars": 观察正文净减字符数,
+    "readback_exempt": 因 exempt_spill_readbacks **首次**跳过的驱逐候选数（被跳过的观察挂内存键
+    `_rb_exempt`，之后的边界再跳过不重复计）}。
 
     范围（W2 步骤边界压缩）：只对 history 下标在 [start, end) 的 tool 消息里的观察**落刀**；
     end=None 即到末尾。扫描、取代去重的 epoch/屏障、预算总量与**保护窗 keep_recent 仍按全 history
@@ -447,6 +484,14 @@ def compact_tool_observations_detailed(
 
     exempt_names（W2）：tool_responses 的 name 在此集合内的条目一律不落刀（仍计入保护窗与预算
     总量、仍参与取代 epoch）；None = 不豁免（旧行为）。
+
+    exempt_spill_readbacks（W2，D43b）：True 时 spill 回读（`file_extract(path="spill:…")` 的结果，
+    按观察自己的 `_target` 认——轮内编排层挂着、未被剥）**不进预算驱逐候选**：模型刚为这次回读付过
+    一次迭代，步骤边界又把它折回同一句柄的桩 = 白读。只管驱逐阶段；取代阶段照旧（同一句柄更早的那次
+    回读是重复副本，被较新那次取代不丢信息——有意的裁定）。W1 ceiling 与轮首压缩不传（False = 旧
+    行为），顶到上限时回读照样可压。已知局限：只认 `spill:` 前缀；file_extract 也接受 spill 文件的
+    绝对路径（file_extract.py 的解析），那种回读不豁免——桩里的句柄行恒为 `spill:` 形，正常回读不受影响。
+    首次被跳过的条数在返回值的 readback_exempt（同一条回读跨多个边界只计一次）。
     """
     # 按出现顺序收集所有工具观察项（连同所在消息下标，供范围判定）
     observations: List[Dict[str, Any]] = []
@@ -476,6 +521,7 @@ def compact_tool_observations_detailed(
     cutoff = n - keep_recent if keep_recent > 0 else n  # 索引 < cutoff 可压缩；>= cutoff 受保护
     compacted = 0
     freed = 0
+    readback_exempt = 0
 
     # --- 阶段一：取代去重（T3-b） ---
     # 顺序扫描，按 epoch 划分「无夹写」的读取区间：同一 (name, target) 在同一 epoch 内重复出现，
@@ -514,6 +560,17 @@ def compact_tool_observations_detailed(
             cands = [(i, tr) for i, tr in enumerate(observations)
                      if i < cutoff and _in_range(i) and not tr.get("_compacted")
                      and len(str(tr.get("response", ""))) > digest_chars]
+            if exempt_spill_readbacks:
+                kept = []
+                for it in cands:
+                    if not _is_spill_readback(it[1], None):
+                        kept.append(it)
+                    elif not it[1].get("_rb_exempt"):
+                        # 首次免压才计数：同一条回读在本轮后续边界上再被跳过不重复计（`_` 键 = 内存态，
+                        # 与 _compacted 同规矩，落盘剥离）
+                        it[1]["_rb_exempt"] = True
+                        readback_exempt += 1
+                cands = kept
             # 体量大者优先（同体量取更旧）：最少次数打断前缀即回到预算内，「大观察即使较新也先压」
             cands.sort(key=lambda it: (-len(str(it[1].get("response", ""))), it[0]))
             # D43 (a) 单例规则的键计数：整段 history 当前可见文本，每次调用建一次，O(总字符)
@@ -540,7 +597,7 @@ def compact_tool_observations_detailed(
                 compacted += 1
                 total -= (len(resp) - len(tr["response"]))
                 freed += len(resp) - len(tr["response"])
-    return {"count": compacted, "freed_chars": freed}
+    return {"count": compacted, "freed_chars": freed, "readback_exempt": readback_exempt}
 
 
 # 把**转录本**变成笔记的机关，就是摘要器吐出一行字面 `MEMO:`（见下方 `_split_memo`）。

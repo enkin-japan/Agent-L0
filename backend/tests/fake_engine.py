@@ -136,8 +136,10 @@ class FakeTool:
                  approval: bool = False, read_only: bool = True,
                  concurrency_safe: bool = True, timeout: Optional[int] = None,
                  raises: Optional[Exception] = None, validate=None, render=None,
-                 effect: Optional[str] = None):
+                 effect: Optional[str] = None, parameters: Optional[Dict[str, Any]] = None):
         self.name = name
+        # 声明的 JSON schema（D44 通用实参预检读它）；缺省 {} = 无 required / 无 properties → 预检不查
+        self.parameters = dict(parameters or {})
         # 审批策略分类（Contract P）：未显式给出时跟随 read_only（只读替身 = read）
         self.effect = effect if effect is not None else ("read" if read_only else "write")
         self.result = result
@@ -148,6 +150,11 @@ class FakeTool:
         self.raises = raises
         self.validate = validate  # 可选参数预检: (args)->Optional[str]，对齐 validate_arguments
         self.render = render      # 渲染格(R3): {hint,payload} 字面量或 (result)->dict
+
+    @property
+    def validate_arguments(self):
+        """MCPRegistry.validate_call 的可选钩子：validate 为 None 时不可调用 = 不查。"""
+        return self.validate
 
     def effect_for(self, arguments=None):
         return self.effect
@@ -167,7 +174,8 @@ class FakeRegistry:
 
     def get_all_schemas(self):
         return [{"name": t.name, "description": f"fake tool {t.name}",
-                 "parameters": {"type": "object", "properties": {}, "required": []}}
+                 "parameters": {"type": "object", "properties": t.parameters.get("properties", {}),
+                                "required": t.parameters.get("required", [])}}
                 for t in self._tools.values()]
 
     def requires_approval(self, name, arguments=None):
@@ -191,16 +199,15 @@ class FakeRegistry:
         t = self._tools.get(name)
         return t.timeout if t else None
 
-    def validate_call(self, name, arguments=None):
-        t = self._tools.get(name)
-        if t is None or t.validate is None:
-            return None
-        err = t.validate(arguments or {})
-        return str(err) if err else None
+    # 参数预检同样借生产实现（D44 通用声明核对 + 工具自带 validate_arguments，经 FakeTool.parameters /
+    # FakeTool.validate）：编排层金测试跑的是生产预检，不是替身副本
+    argument_problems = MCPRegistry.argument_problems
+    validate_call = MCPRegistry.validate_call
 
     def list_tools(self):
         return [{"name": t.name, "description": f"fake tool {t.name}",
-                 "parameters": {"properties": {}, "required": []},
+                 "parameters": {"properties": t.parameters.get("properties", {}),
+                                "required": t.parameters.get("required", [])},
                  "requires_approval": t.approval, "effect": t.effect}
                 for t in self._tools.values()]
 

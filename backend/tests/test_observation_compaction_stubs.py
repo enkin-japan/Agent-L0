@@ -346,6 +346,33 @@ def test_a_spill_readback_copy_does_not_count_against_the_original():
     assert "queue_depth_alert_threshold" not in stub
 
 
+def test_cold_restore_readback_pairing_survives_meta_response_ahead():
+    """冷恢复（`_target` 已剥）退回同位调用认回读——但回执是元工具在前排的：调用序 [file_extract, update_plan]、
+    回执序 [update_plan, file_extract] 时按下标配对会把回读配到 update_plan 上、认不出，副本又被计数。
+    这条 assistant 消息里恰好一次 file_extract 调用 → 就配它。"""
+    card = "A" * 40 + "\nqueue_depth_alert_threshold = 4630" + _PAD
+    fx = {"type": "function", "name": "file_extract", "arguments": {"path": "spill:0123456789abcdef"}}
+    plan = {"type": "function", "name": "update_plan", "arguments": {"op": "replace", "steps": ["a"]}}
+    after = [{"role": "assistant", "tool_calls": [fx, plan]},
+             {"role": "tool", "tool_responses": [{"name": "update_plan", "response": "ok"},
+                                                 {"name": "file_extract", "response": card}]}]
+    _, (stub,) = _evict(card, after=after)
+    assert "; mentions: queue_depth_alert_threshold = 4630]" in stub
+
+
+def test_cold_restore_readback_pairing_by_call_id():
+    """两次 file_extract（一次 spill 回读、一次普通读）且回执倒序：带 id 时按 id 配，回读仍被认出、普通读照常计数。"""
+    card = "A" * 40 + "\nqueue_depth_alert_threshold = 4630" + _PAD
+    fx_spill = {"type": "function", "name": "file_extract", "id": "c1",
+                "arguments": {"path": "spill:0123456789abcdef"}}
+    fx_plain = {"type": "function", "name": "file_extract", "id": "c2", "arguments": {"path": "notes.txt"}}
+    after = [{"role": "assistant", "tool_calls": [fx_spill, fx_plain]},
+             {"role": "tool", "tool_responses": [{"name": "file_extract", "call_id": "c2", "response": "x"},
+                                                 {"name": "file_extract", "call_id": "c1", "response": card}]}]
+    _, (stub,) = _evict(card, after=after)
+    assert "; mentions: queue_depth_alert_threshold = 4630]" in stub
+
+
 def test_seam_text_does_not_enter_the_key_counts():
     """中缝里的 `start=… end=… max_chars=…` 是编排层样板：别的观察里真单例的 `start = 7` 不能被它顶掉。"""
     seam = truncate_observation("a\nb\nc\n" * 300, 120, ("/s/spill/x.txt", 1800))

@@ -765,3 +765,98 @@ def test_hard_hook_compaction_never_reaches_previous_turn(make_session):
     first, t0 = _turn1_then_turn2(eng, orch, session, [100, 100, 100, 40000])
     _assert_previous_turn_untouched(session, first, t0, "hard")
     assert len(_events(cg.EVT_HARD)) == 1
+
+
+# ====================================================================== G D43b：W2 不驱逐 spill 回读
+def _d43b_history(*, second_readback=None):
+    """0 user、1-2 spill 回读（file_extract(path="spill:…")，`_target` 在 = 轮内）、（可选：紧跟着同一
+    句柄的第二次回读——中间不能夹非只读观察，那是取代屏障）、大观察 ra、末两条小观察 x / y
+    （keep_recent=2 的保护窗）。"""
+    from .test_observation_compaction_stubs import _readback_pair
+    a, t = _readback_pair("R" * 3000, via_target=True)
+    t["tool_responses"][0]["_safe"] = True          # 编排层给只读观察挂 _safe + _target
+    h = [{"role": "user", "content": "u"}, a, t]
+    if second_readback is not None:
+        a2, t2 = _readback_pair(second_readback, via_target=True)
+        t2["tool_responses"][0]["_safe"] = True
+        h += [a2, t2]
+    return h + [{"role": "tool", "tool_responses": [{"name": "ra", "response": BIG["ra"]}]},
+                _tool("x"), _tool("y")]
+
+
+def _readbacks(hist):
+    return [tr["response"] for m in hist if m.get("role") == "tool"
+            for tr in m["tool_responses"] if tr["name"] == "file_extract"]
+
+
+def test_compactor_exempt_spill_readbacks_skips_eviction_and_counts():
+    h = _d43b_history()
+    d = compact_tool_observations_detailed(h, keep_recent=2, digest_chars=50, budget_chars=1,
+                                           exempt_spill_readbacks=True)
+    assert (d["count"], d["readback_exempt"]) == (1, 1)
+    assert _readbacks(h) == ["R" * 3000]
+    h2 = _d43b_history()
+    d2 = compact_tool_observations_detailed(h2, keep_recent=2, digest_chars=50, budget_chars=1)
+    assert (d2["count"], d2["readback_exempt"]) == (2, 0)          # 缺省 False = 旧行为
+    assert _stubbed(_readbacks(h2)[0])
+
+
+def test_exempt_readbacks_still_superseded_by_newer_readback_of_same_handle():
+    """取代阶段不受 D43b 影响：同一句柄较早那次回读是重复副本，被较新的取代；较新的不被驱逐。"""
+    h = _d43b_history(second_readback="Q" * 3000)
+    d = compact_tool_observations_detailed(h, keep_recent=2, digest_chars=50, budget_chars=1,
+                                           exempt_spill_readbacks=True)
+    old, new = _readbacks(h)
+    assert "superseded" in old and new == "Q" * 3000
+    assert (d["count"], d["readback_exempt"]) == (2, 1)            # 取代 1 + ra 驱逐 1；新回读免压
+
+
+def _rb_events():
+    return [e["detail"] for e in _events(sc.EVT_STEP_READBACK_EXEMPT)]
+
+
+def test_w2_step_compact_keeps_readback_and_reports_exempt(make_session):
+    orch = _orch(FakeEngine([]))
+    session = make_session()
+    session.history = _d43b_history()
+    n = orch._step_compact(session, 0, len(session.history), trigger="step", step_id="s1")
+    assert n == 1
+    assert _readbacks(session.history) == ["R" * 3000]
+    ev = _step_events()
+    assert len(ev) == 1 and ev[0]["count"] == 1 and "readback_exempt" not in ev[0]   # 原事件不变
+    rb = _rb_events()
+    assert len(rb) == 1 and (rb[0]["count"], rb[0]["step_id"]) == (1, "s1")
+    assert (rb[0]["start"], rb[0]["end"]) == (0, len(session.history))
+
+
+def test_w2_same_readback_across_two_boundaries_counted_once(make_session):
+    orch = _orch(FakeEngine([]))
+    session = make_session()
+    session.history = _d43b_history()
+    orch._step_compact(session, 0, len(session.history), trigger="step", step_id="s1")
+    session.history += [_tool("z" * 500), _tool("v"), _tool("w")]   # 下一步：又来一条大观察
+    orch._step_compact(session, 0, len(session.history), trigger="step", step_id="s2")
+    assert _readbacks(session.history) == ["R" * 3000]
+    assert [e["count"] for e in _rb_events()] == [1]         # 第二个边界同一条回读不再计
+    assert [e["step_id"] for e in _step_events()] == ["s1", "s2"]
+
+
+def test_w2_all_exempt_boundary_still_emits_readback_event(make_session):
+    """边界上唯一的驱逐候选就是回读：count = 0、不发 step_compaction，免压仍有事件。"""
+    from .test_observation_compaction_stubs import _readback_pair
+    a, t = _readback_pair("R" * 3000, via_target=True)
+    orch = _orch(FakeEngine([]))
+    session = make_session()
+    session.history = [{"role": "user", "content": "u"}, a, t, _tool("x"), _tool("y")]
+    assert orch._step_compact(session, 0, len(session.history), trigger="step", step_id="s1") == 0
+    assert _step_events() == []
+    assert [e["count"] for e in _rb_events()] == [1]
+
+
+def test_w1_ceiling_still_compacts_readback(make_session):
+    orch = _orch(FakeEngine([]))
+    session = make_session()
+    session.history = _d43b_history()
+    count, _spilled = orch._emergency_compact(session)
+    assert count == 2
+    assert _stubbed(_readbacks(session.history)[0])

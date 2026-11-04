@@ -245,10 +245,10 @@ class EditFileTool(BaseTool):
             },
             "new_string": {
                 "type": "string",
-                "description": "The replacement text (empty string deletes old_string)."
+                "description": "The replacement text. Empty or omitted deletes old_string."
             },
         },
-        "required": ["path", "old_string", "new_string"]
+        "required": ["path", "old_string"]
     }
 
     def execute(self, path: str, old_string: str, new_string: str = "") -> str:
@@ -320,10 +320,11 @@ class WriteFileTool(BaseTool):
             },
             "content": {
                 "type": "string",
-                "description": "The complete file content to write (UTF-8 text)."
+                "description": ("The complete file content to write (UTF-8 text). Omitted means an "
+                                "empty file.")
             },
         },
-        "required": ["path", "content"]
+        "required": ["path"]
     }
 
     def execute(self, path: str, content: str = "") -> str:

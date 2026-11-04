@@ -409,8 +409,8 @@ def sec_j(G, aggs, raws, evs, levels=(49152, 57344)) -> List[str]:
 # ---------------------------------------------------------------- K：W2 有效性
 def sec_k(G, evs) -> List[str]:
     L = ["### K. W2 有效性（orch-turn-w1 对 orch-turn-w1w2" + "".join(f" / {x}" for x in EXTRA_ORCH) + "）\n"]
-    L.append("| 组 | level | complete_step 次数 | 有 ≥1 次 complete_step 的 run | update_plan 次数 | step_compaction 事件（按档位） | freed_chars 合计 | turn_metrics.step_compactions 合计 | spill_readbacks 合计 |")
-    L.append("|---|---|---|---|---|---|---|---|---|")
+    L.append("| 组 | level | complete_step 次数 | 有 ≥1 次 complete_step 的 run | update_plan 次数 | step_compaction 事件（按档位） | freed_chars 合计 | turn_metrics.step_compactions 合计 | W2免压回读 | spill_readbacks 合计 |")
+    L.append("|---|---|---|---|---|---|---|---|---|---|")
     for name in TURN[1:] + EXTRA_ORCH:
         for lv, rs in by_level(G[name]["records"]).items():
             sc = [(e.get("detail") or {}) for r in rs for e in seg(r, evs.get(name)) if e["type"] == "step_compaction"]
@@ -421,6 +421,7 @@ def sec_k(G, evs) -> List[str]:
                      f"{len(sc)}（{'、'.join(f'{k} {v}' for k, v in sorted(byl.items())) or '—'}） | "
                      f"{sum(d.get('freed_chars') or 0 for d in sc):,} | "
                      f"{sum(int((r.get('turn_metrics') or {}).get('step_compactions') or 0) for r in rs)} | "
+                     f"{n0(_sum_or_none(w2_readback_exempt(r, evs.get(name)) for r in rs))} | "
                      f"{sum(r.get('spill_readbacks') or 0 for r in rs)} |")
     L.append("")
     return L
@@ -522,7 +523,8 @@ DELIVERY_MARK = "delivery blocked"
 B2_EXTRA_COLS = ["stub_served_total", "stub_unknown_total", "feed_unknown_tool", "stub_failed_total",
                  "tool_calls_total", "system_errors_total", "delivery_blocked", "retrieval_incomplete_runs",
                  "iter_exhausted_runs", "context_guard_aborts", "ceiling_folds", "ceiling_compacted",
-                 "ceiling_spilled", "sent_over_ceiling_gens", "spill_files", "spill_readbacks"]
+                 "ceiling_spilled", "sent_over_ceiling_gens", "spill_files", "spill_readbacks",
+                 "missing_arg_recovered", "schema_fed", "w2_readback_exempt"]
 
 
 def b2_layout(data: Path) -> bool:
@@ -675,6 +677,91 @@ def _tool_shape(rs) -> Tuple[Counter, List[int]]:
     return c, per
 
 
+# ---------------------------------------------------------------- D44 / D43b 行级计数
+#: 参数类 System Error 的判别串（D44 预检回执 `… missing required argument(s): …` / `… unknown
+#: argument(s): …`；harness 桩直调模式的 `execute() missing required argument(s)` 同样命中第一条）
+_ARG_CLASSES = (("missing required argument", "缺必填参数"), ("unknown argument(s)", "未知参数"))
+
+
+def syserr_class(text: str) -> str:
+    for pat, label in _ARG_CLASSES:
+        if pat in text:
+            return label
+    return "其他"
+
+
+def feed_pairs(r) -> List[Tuple[str, str]]:
+    """本 run 全部 feed 回执按序展开成 (工具名, 回执文本)。工具名优先取 feed 自己的 name（编排器模式
+    traj_from_history 写的，元工具在前的回执序也不会错位）；旧行没有就按位取同 turn 的 tool_calls。"""
+    out: List[Tuple[str, str]] = []
+    for t in r.get("turns") or []:
+        calls = t.get("tool_calls") or []
+        for i, f in enumerate(t.get("feed") or []):
+            nm = f.get("name") if isinstance(f, dict) else None
+            if nm is None and i < len(calls):
+                nm = calls[i].get("name")
+            out.append((str(nm), str((f or {}).get("content", "")) if isinstance(f, dict) else ""))
+    return out
+
+
+#: 编排层 `_FAILED_RESP_RE`（backend/framework/core/orchestrator.py）的副本——分析器只用标准库、不 import
+#: 编排层；两边逐字一致由 test_context_knee_analyze_orch 钉住
+_FAILED_RESP_RE = re.compile(r"^System Error:|^exit_code: (?!0\b)\d+\b(?! \(benign\b)")
+#: 没真执行的拦截回执（不算重发成功）
+_NOT_RUN_PREFIXES = ("Duplicate call blocked", "Denied-call blocked")
+
+
+def feed_failed(text: str) -> bool:
+    """harness 口径的「这条回执是失败」：编排层失败正则（System Error / 非良性非零退出码）、桩 / env 的
+    `{"error": …}` JSON 回执、去重 / 拒批拦截回执。"""
+    if _FAILED_RESP_RE.search(text) or text.startswith(_NOT_RUN_PREFIXES):
+        return True
+    if text.lstrip().startswith("{"):
+        try:
+            obj = json.loads(text)
+        except ValueError:
+            return False
+        return isinstance(obj, dict) and "error" in obj
+    return False
+
+
+def missing_arg_recovered(r) -> int:
+    """D44：本 run 里参数类（缺必填 / 未知参数）System Error 回执中，被**之后**同一工具的一次成功回执
+    （`feed_failed` 判否）收回的条数。按序配对、一次成功只收回一条更早的打回（先进先出）。"""
+    pending: Dict[str, int] = {}
+    n = 0
+    for tool, text in feed_pairs(r):
+        if text.startswith("System Error") and syserr_class(text) != "其他":
+            pending[tool] = pending.get(tool, 0) + 1
+        elif not feed_failed(text) and pending.get(tool):
+            pending[tool] -= 1
+            n += 1
+    return n
+
+
+def schema_fed(r, ev) -> Optional[int]:
+    """D44：本 run 预检回执附了完整声明的次数 = 本 run 切片里 tool_error 事件 detail.schema_fed 为真的条数。
+    只认事件流：臂没有 guardrail_events.jsonl（ev 为 None）→ None（与 w2_readback_exempt 同一契约）。"""
+    if ev is None:
+        return None
+    return sum(1 for e in seg(r, ev)
+               if e["type"] == "tool_error" and (e.get("detail") or {}).get("schema_fed") is True)
+
+
+def w2_readback_exempt(r, ev) -> Optional[int]:
+    """D43b：本 run 切片里 step_readback_exempt 事件的 count 之和（W2 边界上**首次**免压的 spill 回读条数；
+    同一条回读跨边界只计一次，全免的边界也有事件）。旧批没有这个事件 = 0；无事件流 → None。"""
+    if ev is None:
+        return None
+    return sum(int((e.get("detail") or {}).get("count") or 0)
+               for e in seg(r, ev) if e["type"] == "step_readback_exempt")
+
+
+def _sum_or_none(xs) -> Optional[int]:
+    xs = list(xs)
+    return None if any(x is None for x in xs) else sum(xs)
+
+
 def sec_q(G, aggs, evs, a_name="orch-turn-w1w2", b_name="orch-turn-catalog") -> List[str]:
     L = [f"### Q. catalog 对照臂：{b_name}（catalog 前缀）对 {a_name}（prod 前缀）——两臂管理开关相同（guard on + step_compaction on），只差前缀档\n",
          "| 组 | level | 成功率 | Pass^2 | prefix_base | 首prompt中位 | 实发峰值中位 | 生成次数中位 | 每 run 工具调用 中位/均 | 桩调用 | stub_failed | tool_error 事件 | update_plan/complete_step | 迭代耗尽 | wall中位 |",
@@ -705,13 +792,15 @@ def sec_q(G, aggs, evs, a_name="orch-turn-w1w2", b_name="orch-turn-catalog") -> 
         L.append(f"- {name} 工具调用形态（全档 {tot} 次，前 10）：" + "、".join(f"{k} {v}（{pc(v / tot)}）" for k, v in c.most_common(10)))
     for name in (a_name, b_name):
         se = Counter()
+        rec_n = 0
         for r in G[name]["records"]:
-            for t in r.get("turns") or []:
-                for x, f in zip(t.get("tool_calls") or [], t.get("feed") or []):
-                    s_ = str(f.get("content", ""))
-                    if s_.startswith("System Error"):
-                        se[(str(x.get("name")), "缺必填参数" if "missing required argument" in s_ else "其他")] += 1
-        L.append(f"- {name} `System Error` 回执（工具, 类）合计 {sum(se.values())}：" + "、".join(f"{k[0]}/{k[1]} {v}" for k, v in se.most_common()))
+            for tool, s_ in feed_pairs(r):
+                if s_.startswith("System Error"):
+                    se[(tool, syserr_class(s_))] += 1
+            rec_n += missing_arg_recovered(r)
+        fed_n = _sum_or_none(schema_fed(r, evs.get(name)) for r in G[name]["records"])
+        L.append(f"- {name} `System Error` 回执（工具, 类）合计 {sum(se.values())}"
+                 f"（其中随后同工具成功 {rec_n}；schema_fed {'—' if fed_n is None else fed_n}）：" + "、".join(f"{k[0]}/{k[1]} {v}" for k, v in se.most_common()))
     L.append("")
     return L
 
@@ -871,6 +960,9 @@ def b2_csv_extra(G, evs, names) -> Dict[Tuple[str, int], Dict[str, Any]]:
                 "sent_over_ceiling_gens": sum(x["over_ceiling"] for x in w) if w else None,
                 "spill_files": None if (not sf or any(x is None for x in sf)) else sum(sf),
                 "spill_readbacks": sum(r.get("spill_readbacks") or 0 for r in rs) if ev is not None else None,
+                "missing_arg_recovered": sum(missing_arg_recovered(r) for r in rs),
+                "schema_fed": _sum_or_none(schema_fed(r, ev) for r in rs),
+                "w2_readback_exempt": _sum_or_none(w2_readback_exempt(r, ev) for r in rs),
             }
     return out
 

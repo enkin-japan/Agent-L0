@@ -220,6 +220,20 @@ def test_recall_source_readback_seen_only_in_the_journal(tmp_path):
     assert A.load_group(g)["records"][0]["recall_source"] == {"threshold": "readback"}
 
 
+def test_recall_source_pairs_readback_by_feed_name_not_position(tmp_path):
+    """编排器 feed 的序是「预检打回在前、执行结果在后」：调用序 [file_extract 回读, run_math 缺参]、feed 序
+    [run_math 打回, file_extract 结果]。按位置配会把回读配到打回回执上（F10）。"""
+    spill = {_H_READ: _filler_obs("queue_depth_alert_threshold = 4630")}
+    calls = [{"name": "file_extract", "arguments": {"path": f"spill:{_H_READ}"}},
+             {"name": "run_math", "arguments": {"expression": "1"}}]
+    feed = [{"name": "run_math",
+             "content": "System Error: 'run_math' was not executed: missing required argument(s): 'code'."},
+            {"name": "file_extract", "content": spill[_H_READ]}]
+    g = _knee_run(tmp_path, spill=spill, calls=calls, feed=feed, final="阈值 4630")
+    r = A.load_group(g)["records"][0]
+    assert r["recall_source"] == {"threshold": "readback"} and r["readback_calls"] == 1
+
+
 def test_recall_source_clue_counts_as_stub_only_for_rows_with_stub_clue(tmp_path):
     """★ 值在首部之外、只能经线索看见：D43 (a) 之后的行（stub_clue）记 stub；之前的批桩里没有
     线索，同样的数据只能记 unknown——不然 b2 这种旧批会被追认成「桩上看得见」。"""

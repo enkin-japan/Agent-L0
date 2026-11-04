@@ -248,8 +248,13 @@ class RAGSearchTool(BaseTool):
                 return f"System Error: RAG 服务暂不可用——{detail}"
             return f"System Error: RAG request failed: {e}"
         except Exception as e:
-            import traceback
-            return f"System Error: Tool execution exception occurred: {str(e)}\n{traceback.format_exc()}"
+            # 模型面不带 traceback（D44 文本卫生，与 registry.execute_tool 同口径）：全栈进日志。
+            # logging 就地 import：test_rag_query_timeout 剥掉顶层 import 后 exec 本模块源码
+            import logging
+            logging.getLogger("framework.mcp.tools.rag_search").warning("rag_search 执行异常",
+                                                                        exc_info=True)
+            return ("System Error: Tool execution exception occurred: "
+                    + f"{type(e).__name__}: {e}"[:500])
 
 
 class RagGetContextTool(BaseTool):

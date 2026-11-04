@@ -1048,8 +1048,10 @@ def missing_required(parameters: Dict[str, Any], arguments: Dict[str, Any]) -> L
 
 
 def missing_text(name: str, missing: Sequence[str]) -> str:
-    """缺必填参数：生产没有统一预检，真工具是 execute() 抛 TypeError、registry 回
-    `System Error: Exception occurred while executing '<名>': …`——同一前缀与措辞（不带 traceback）。"""
+    """缺必填参数（桩自己的回执）。D44 起编排器模式下生产注册表的通用声明核对（validate_call）先拦、
+    桩的 execute 根本不会被调，这句只剩绕过预检直接 execute_tool 的路径（如单测直调注册表）会出现；措辞保留 D44 之前
+    `System Error: Exception occurred while executing '<名>': …` 的形状。判空口径（null 也算缺）与
+    MCPRegistry.argument_problems 一致。"""
     return (f"{WERR}Exception occurred while executing '{name}': execute() missing required "
             f"argument(s): {', '.join(repr(m) for m in missing)}")
 

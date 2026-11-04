@@ -185,3 +185,16 @@ def test_twenty_second_query_survives_real_orchestrator_with_global_fifteen_seco
     assert virtual.elapsed == 20 and observed == [128]
     assert not result["_failed"] and "Celadon=12" in result["response"]
     assert result["render"]["hint"] == "citations"
+
+
+def test_unexpected_exception_reports_type_and_text_without_traceback():
+    """D44 F5：兜底 except 不再把 traceback 喂给模型（全栈进日志），只给「类型: 文本」前 500 字。"""
+    h = harness()
+
+    def boom(*_a, **_k):
+        raise RuntimeError("synthetic failure " + "z" * 900)
+    h.requests.post = boom
+    result = str(h.tool.execute(**arguments()))
+    assert result.startswith("System Error: Tool execution exception occurred: RuntimeError: synthetic failure")
+    assert "Traceback" not in result and 'File "' not in result
+    assert len(result) == len("System Error: Tool execution exception occurred: ") + 500

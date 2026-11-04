@@ -278,11 +278,29 @@ def recall_source(r: Dict[str, Any], sessions_root: Optional[Path]) -> Dict[str,
     readback_calls = transcript 里 `file_extract` 以 `spill:` 开头的调用次数（含失败的）。
     """
     turns = r.get("turns") or []
-    rb_calls = []                       # [(调用, 同位 feed 项或 None)]
+    rb_calls = []                       # [(调用, 配对的 feed 项或 None)]
     for t in turns:
         feed = t.get("feed") or []
+        named = any(isinstance(f, dict) and f.get("name") is not None for f in feed)
+        by_name: Dict[str, List[Dict[str, Any]]] = {}
+        for f in feed:
+            if isinstance(f, dict):
+                by_name.setdefault(str(f.get("name")), []).append(f)
+        seen: Dict[str, int] = {}
         for i, c in enumerate(t.get("tool_calls") or []):
-            if isinstance(c, dict) and _is_spill_read(c.get("name"), c.get("arguments")):
+            if not isinstance(c, dict):
+                continue
+            nm = str(c.get("name"))
+            k = seen.get(nm, 0)
+            seen[nm] = k + 1
+            if not _is_spill_read(c.get("name"), c.get("arguments")):
+                continue
+            if named:
+                # 编排器行的 feed 带 name：同名第 k 次调用配同名第 k 条回执——回执序是预检打回 / 元工具
+                # 在前、执行结果在后，按位置配会错位（D44 预检打回的调用排在回读前面时即错）
+                same = by_name.get(nm) or []
+                rb_calls.append((c, same[k] if k < len(same) else None))
+            else:
                 rb_calls.append((c, feed[i] if i < len(feed) and isinstance(feed[i], dict) else None))
     out: Dict[str, Any] = {"by_kind": {}, "readback_calls": len(rb_calls)}
     cards = (r.get("fill") or {}).get("cards") or []

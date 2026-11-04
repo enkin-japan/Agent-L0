@@ -113,6 +113,100 @@ def test_sec_q_system_error_missing_required_argument_counted_separately(tmp_pat
     assert "/其他 1" in line
 
 
+def test_sec_q_three_classes_recovered_and_schema_fed(tmp_path):
+    """D44：Q 节分三类（缺必填参数 / 未知参数 / 其他）；「随后同工具成功」只数参数类回执、且要求之后同一工具
+    有不以 System Error 开头的回执；schema_fed 只认事件流（tool_error 事件 detail.schema_fed），无事件流为 —（F15）。"""
+    def _min_row(item, rep, extra=None):
+        return {"level": 0, "item_id": item, "rep": rep, "stamp": "s1", "model": "m/x",
+                "score": {"pass": True}, "gens": [], **(extra or {})}
+
+    miss = ("System Error: 'run_math' was not executed: missing required argument(s): 'code'."
+            "\nFull declaration of 'run_math':\ndeclaration:run_math{}")
+    unk = "System Error: 'rag_search' was not executed: unknown argument(s): 'q' (accepted: query)."
+    turns = [{"tool_calls": [{"name": "run_math"}, {"name": "rag_search"}],
+              "feed": [{"name": "run_math", "content": miss}, {"name": "rag_search", "content": unk}]},
+             {"tool_calls": [{"name": "run_math"}, {"name": "edit_file"}],
+              "feed": [{"name": "run_math", "content": "2030"},
+                       {"name": "edit_file", "content": "System Error: old_string was NOT found"}]}]
+    a_name, b_name = "orch-turn-w1w2", "orch-turn-catalog"
+    row = _min_row("x", 0, {"turns": turns, "guard_events_lines": [0, 2]})
+    for name, rows in ((a_name, [_min_row("x", 0), _min_row("x", 1)]), (b_name, [row, _min_row("x", 1)])):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "transcripts.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    G = {name: A.load_group(tmp_path / name) for name in (a_name, b_name)}
+    aggs = {name: A.aggregate(G[name], A.th_global, set()) for name in (a_name, b_name)}
+    ev = [{"type": "tool_error", "detail": {"kind": "precheck", "schema_fed": True}},
+          {"type": "tool_error", "detail": {"kind": "precheck", "schema_fed": False}}]
+    out = O.sec_q(G, aggs, {b_name: ev}, a_name=a_name, b_name=b_name)
+    line = next(ln for ln in out if ln.startswith(f"- {b_name} `System Error`"))
+    assert "合计 3（其中随后同工具成功 1；schema_fed 1）" in line
+    assert "run_math/缺必填参数 1" in line and "rag_search/未知参数 1" in line and "edit_file/其他 1" in line
+    r = G[b_name]["records"][0] if G[b_name]["records"][0].get("turns") else G[b_name]["records"][1]
+    assert O.missing_arg_recovered(r) == 1          # rag_search 之后没再成功过，edit_file 不是参数类
+    assert O.schema_fed(r, None) is None            # 只认事件流：无事件 = 未知，不数回执文本
+    assert O.schema_fed(r, ev) == 1
+    assert O.syserr_class(miss) == "缺必填参数" and O.syserr_class(unk) == "未知参数"
+
+
+def test_w2_readback_exempt_sums_step_compaction_events_and_lands_in_k_and_csv():
+    ev = [{"type": "step_readback_exempt", "detail": {"count": 2, "level": "soft"}},
+          {"type": "step_compaction", "detail": {"count": 1, "level": "soft"}},      # 不是免压事件
+          {"type": "step_readback_exempt", "detail": {"count": 1, "level": "hard"}},
+          {"type": "step_readback_exempt", "detail": {"count": 50}}]                 # 切片外
+    row = _orch_row(guard_events_lines=[0, 3], meta_calls={"complete_step": 1})
+    assert O.w2_readback_exempt(row, ev) == 3
+    names = O.TURN[1:] + O.EXTRA_ORCH
+    name = names[0]
+    G = {n: {"records": [row]} for n in names}
+    k = O.sec_k(G, {n: ev for n in names})
+    hdr = next(ln for ln in k if ln.startswith("| 组 |"))
+    cols = [c.strip() for c in hdr.strip("|").split("|")]
+    assert cols.index("W2免压回读") == cols.index("turn_metrics.step_compactions 合计") + 1
+    data = next(ln for ln in k if ln.startswith(f"| {name} |"))
+    assert [c.strip() for c in data.strip("|").split("|")][cols.index("W2免压回读")] == "3"
+    cell = O.b2_csv_extra(G, {name: ev}, [name])[(name, 57344)]
+    assert cell["w2_readback_exempt"] == 3 and "w2_readback_exempt" in O.B2_EXTRA_COLS
+    assert {"missing_arg_recovered", "schema_fed"} <= set(O.B2_EXTRA_COLS)
+    assert O.w2_readback_exempt(row, None) is None and O.schema_fed(row, None) is None
+    nocell = O.b2_csv_extra(G, {n: None for n in names}, [name])[(name, 57344)]
+    assert nocell["w2_readback_exempt"] is None and nocell["schema_fed"] is None
+
+
+def test_missing_arg_recovered_needs_real_success_and_consumes_one_per_success():
+    """F3：之后同工具的回执若本身是失败（System Error / 非零退出 / {"error"} / 去重拦截）不算收回；
+    一次成功只收回一条更早的打回。"""
+    rej = "System Error: 'run_math' was not executed: missing required argument(s): 'code'."
+    def _r(*contents):
+        return {"turns": [{"tool_calls": [{"name": "run_math"}] * len(contents),
+                           "feed": [{"name": "run_math", "content": c} for c in contents]}]}
+    assert O.missing_arg_recovered(_r(rej, rej, "2030")) == 1          # 两次打回、一次成功 → 1
+    assert O.missing_arg_recovered(_r(rej, rej, "2030", "7")) == 2
+    assert O.missing_arg_recovered(_r(rej, "2030", "7")) == 1          # 一条打回只被收回一次
+    for bad in ("Duplicate call blocked: you already executed this exact tool call in this turn.",
+                "Denied-call blocked: the user ALREADY denied this exact call this turn.",
+                '{"error": "Unknown tool: run_math"}', "exit_code: 2\nstderr:\nboom",
+                "System Error: Exception occurred while executing 'run_math': ValueError: x"):
+        assert O.missing_arg_recovered(_r(rej, bad)) == 0, bad
+    assert O.missing_arg_recovered(_r(rej, "exit_code: 1 (benign: no match)\n")) == 1
+    assert O.missing_arg_recovered(_r("2030", rej)) == 0               # 成功在打回之前不算
+
+
+def test_missing_arg_recovered_requires_success_of_the_same_tool():
+    """收回只认同一工具：A 被打回、之后只有 B 成功 → 0；A 之后真成功一次 → 1。"""
+    rej = "System Error: 'run_math' was not executed: missing required argument(s): 'code'."
+    def _r(*pairs):
+        return {"turns": [{"tool_calls": [{"name": t} for t, _ in pairs],
+                           "feed": [{"name": t, "content": c} for t, c in pairs]}]}
+    assert O.missing_arg_recovered(_r(("run_math", rej), ("read_file", "ok"))) == 0
+    assert O.missing_arg_recovered(_r(("run_math", rej), ("read_file", "ok"), ("run_math", "2030"))) == 1
+
+
+def test_feed_failure_regex_mirrors_orchestrator():
+    from framework.core.orchestrator import _FAILED_RESP_RE      # backend 在 conftest 的 sys.path 上
+    assert O._FAILED_RESP_RE.pattern == _FAILED_RESP_RE.pattern
+
+
 def test_fold_forensics_error_vs_ok_pair(tmp_path):
     turn_a = {"timestamp": 1793619600.0, "status": "warning", "prompt": "任务 A", "response": [
         {"role": "assistant", "content": None, "tool_calls": [{"name": "list_files"}]}]}

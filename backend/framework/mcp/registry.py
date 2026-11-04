@@ -1,9 +1,27 @@
 from pathlib import Path
 import importlib
 import inspect
+import logging
 from threading import RLock
-from typing import Dict, List, Any
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from .base import BaseTool
+
+_log = logging.getLogger(__name__)
+
+#: 实参预检（D44）tool_error 事件里 missing / unknown 名单的上限（回执文本不截）
+PRECHECK_LIST_MAX = 8
+#: 全量披露（full 模式）下预检回执的尾句：声明已在前缀里，只提示回去对照
+PRECHECK_FULL_MODE_HINT = "\nCheck the tool's declaration and call it again."
+
+def _accepted_keys(params: Dict[str, Any]) -> List[str]:
+    """声明接受的实参名：properties 的键（声明序）+ required 里没进 properties 的键。"""
+    props = params.get("properties") if isinstance(params, dict) else None
+    out = [str(k) for k in props] if isinstance(props, dict) else []
+    req = params.get("required") if isinstance(params, dict) else None
+    if isinstance(req, (list, tuple)):
+        out += [k for k in req if isinstance(k, str) and k not in out]
+    return out
+
 
 class MCPRegistry:
     """
@@ -215,16 +233,80 @@ class MCPRegistry:
             return self.requires_approval(name, arguments)
         return True
 
-    def validate_call(self, name: str, arguments: Dict[str, Any] = None) -> "str | None":
+    def argument_problems(self, name: str, arguments: Any = None) -> Tuple[List[str], List[str]]:
+        """按工具**声明的** parameters（JSON schema）做确定性实参核对（D44），返回 (missing, unknown)：
+
+        - missing = `required` 里实参缺席**或值为 None** 的键（模型常发 null；与 harness 桩
+          orch_stubs.missing_required 同口径，两侧必须一致）；
+        - unknown = 实参里既不在 `properties`、也不在 `required` 的键（接受集 = 二者之并：声明里只写进
+          required 没写进 properties 的键也是工具要的，不能报成未知）——仅当 `properties` 是 dict 且
+          `additionalProperties` 既不是 True 也不是 schema dict 时才查；工具没声明 properties
+          （含空 dict——api_tool_factory 把省略的 params 规整成 `properties: {}`，其 execute(**kwargs)
+          照单转发任意实参）就整个不查（无从判定）。
+        未知工具、实参不是 dict、声明形态异常 → ([], [])（fail-open：交给执行路径暴露真实错误）。"""
+        tool = self._tools.get(name)
+        if tool is None or not (arguments is None or isinstance(arguments, dict)):
+            return [], []
+        args = arguments or {}
+        try:
+            params = getattr(tool, "parameters", None)
+            if not isinstance(params, dict):
+                return [], []
+            req = params.get("required") or []
+            missing = ([str(k) for k in req if isinstance(k, str) and args.get(k) is None]
+                       if isinstance(req, (list, tuple)) else [])
+            props = params.get("properties")
+            extra = params.get("additionalProperties")
+            unknown: List[str] = []
+            if isinstance(props, dict) and props and extra is not True and not isinstance(extra, dict):
+                accepted = set(_accepted_keys(params))
+                unknown = [str(k) for k in args if k not in accepted]
+            return missing, unknown
+        except Exception as e:
+            print(f"[MCP] ⚠️ 工具 {name} 声明核对异常，放行走执行路径: {e}")
+            return [], []
+
+    def validate_call(self, name: str, arguments: Dict[str, Any] = None, *,
+                      schema_feedback: Optional[Callable[[str], str]] = None) -> "str | None":
         """
-        审批/执行前的参数预检（工具可选实现 validate_arguments(arguments) -> Optional[str]）。
-        返回错误文本 = 该调用注定失败，编排层就地打回模型重发（不执行、不进审批——
-        绝不拿一条必败调用去打扰用户）；返回 None = 放行。只做确定性静态检查；
+        审批/执行前的参数预检。返回错误文本 = 该调用注定失败，编排层就地打回模型重发（不执行、
+        不进审批——绝不拿一条必败调用去打扰用户）；返回 None = 放行。只做确定性静态检查；
         预检自身异常 fail-open 放行，走正常执行路径暴露真实错误。
+
+        两层，按序：
+        1. 通用声明核对（D44，argument_problems）：缺必填 / 未知键 → 回执
+           `System Error: '<名>' was not executed: missing required argument(s): 'a'; unknown
+           argument(s): 'c' (accepted: x, y).`（空的那一句省略；不带 traceback）。
+           schema_feedback（catalog 模式由编排层传入 = get_tool_schema 同一渲染）给了就在回执后
+           追加 `Full declaration of '<名>':` + 完整声明——目录里只有名字和一句摘要，重发不该再靠猜；
+           没给（full 模式，声明已在前缀里）追加一句「回去对照声明」。核对不过时**不再调**第 2 层。
+        2. 工具可选实现的 validate_arguments(arguments) -> Optional[str]（只对过了第 1 层的调用）。
         """
         tool = self._tools.get(name)
+        if tool is None:
+            return None
+        missing, unknown = self.argument_problems(name, arguments)
+        if missing or unknown:
+            clauses = []
+            if missing:
+                clauses.append("missing required argument(s): " + ", ".join(repr(k) for k in missing))
+            if unknown:
+                accepted = ", ".join(_accepted_keys(tool.parameters))
+                clauses.append("unknown argument(s): " + ", ".join(repr(k) for k in unknown)
+                               + f" (accepted: {accepted})")
+            text = f"System Error: '{name}' was not executed: " + "; ".join(clauses) + "."
+            fed = None
+            if schema_feedback is not None:
+                try:
+                    fed = schema_feedback(name)
+                except Exception as e:   # 渲染坏了也不能吞掉预检回执本身：退回 full 模式尾句
+                    print(f"[MCP] ⚠️ 工具 {name} 预检附声明失败，退回提示句: {e}")
+                    fed = None
+            if fed:
+                return text + f"\nFull declaration of '{name}':\n" + str(fed)
+            return text + PRECHECK_FULL_MODE_HINT
         checker = getattr(tool, "validate_arguments", None)
-        if tool is None or not callable(checker):
+        if not callable(checker):
             return None
         try:
             err = checker(arguments or {})
@@ -331,7 +413,8 @@ class MCPRegistry:
             render = {"hint": str(hint), "payload": payload} if (hint and payload is not None) else None
             return (text, render)
         except Exception as e:
-            import traceback
-            # 返回明确的 Traceback 帮助大模型理解工具为什么崩溃
-            return (f"System Error: Exception occurred while executing '{name}': {str(e)}\n{traceback.format_exc()}",
-                    None)
+            # 模型面只给「异常类型: 异常文本」（前 500 字符）：traceback 是实现细节、对重发参数没有
+            # 信息量，还会把源码路径和内部变量名喂进上下文（D44 文本卫生）。全栈留在日志里。
+            _log.warning("工具 %s 执行异常", name, exc_info=True)
+            return (f"System Error: Exception occurred while executing '{name}': "
+                    + f"{type(e).__name__}: {e}"[:500], None)

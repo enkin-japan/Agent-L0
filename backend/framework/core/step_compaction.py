@@ -28,6 +28,8 @@ TRIGGER_LEVELS = ("soft", "hard")
 
 # 护栏事件名（guardrail_events.jsonl）；detail.trigger = "step"（步骤边界）| "hard"（hard 档首次）
 EVT_STEP_COMPACT = "step_compaction"
+#: D43b：W2 边界上首次免压的 spill 回读条数（> 0 即发，与 step_compaction 事件独立——全免的边界也留痕）
+EVT_STEP_READBACK_EXEMPT = "step_readback_exempt"
 
 
 @dataclass(frozen=True)

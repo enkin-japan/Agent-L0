@@ -31,13 +31,18 @@ from . import tool_disclosure
 from ..memory.session import ChatSession, DEFAULT_SYSTEM_PROMPT
 from ..memory.compactor import (compact_tool_observations, compact_tool_observations_detailed,
                                 resolve_summary_calibration)
-from ..mcp.registry import MCPRegistry
+from ..mcp.registry import PRECHECK_LIST_MAX, MCPRegistry
 from .spill import (SPILL_HANDLE_PREFIX, resolve_spill_ref, spill_handle, spill_observation,
                     truncate_observation)
 
 # W2 步骤边界压缩不落刀的观察：工具 schema 详情（模型据此组参，压了就得再取一次）、云端咨询答复
 # （出网换来的、不可廉价重取）、结构提醒（name=system，短且贴着近因）。W1 ceiling 与轮首压缩不豁免。
 STEP_COMPACT_EXEMPT = frozenset({"get_tool_schema", "cloud_consult", "system"})
+
+# 同名同参重发的拦截回执（_execute_physical 去重；D44 预检打回的调用原样重发同样用它）
+DUPLICATE_CALL_BLOCKED = ("Duplicate call blocked: you already executed this exact tool call "
+                          "in this turn. Reuse the earlier result, change the arguments, "
+                          "or take a different approach.")
 from .retrieval_evidence import (RetrievalEvidence, REPAIR_NOTE, DELIVERY_BLOCKED,
                                  is_delivery,
                                  target_key as retrieval_target,
@@ -564,17 +569,18 @@ class Orchestrator:
 
     def _compact_turn_range(self, session: ChatSession, start: int, end: Optional[int], *,
                             keep_recent: int, digest_chars: int, label: str,
-                            stub_handle=None, exempt_names=None) -> Dict[str, int]:
+                            stub_handle=None, exempt_names=None,
+                            exempt_spill_readbacks: bool = False) -> Dict[str, int]:
         """轮内机械压缩的共用实现（W1 ceiling 应急 / W2 步骤边界与 hard 钩子）：只对 history 下标
         [start, end) 的工具观察落刀（保护窗 keep_recent 仍按全 history 倒数），返回
-        {"count", "freed_chars"}。
+        {"count", "freed_chars", "readback_exempt"}。
 
         本轮段（turn_history_start_idx 起）内、落刀范围里的工具消息先换成拷贝（tool_responses 逐项拷）、
         原件登记 session.guard_persist_originals——本轮观察 dict 与暂存轮次共享引用、轮末落盘是
         history 切片，就地改会把桩写进 history.jsonl（见 _emergency_compact）。本轮之前的消息早已
         落盘，就地改。拷贝内容不变时指纹不变，不会凭空打断前缀流。budget_chars=1：范围内超出
-        保护窗、体量 > digest 的观察一律驱逐。exempt_names 内的条目不落刀（W2 传，W1 不传）。
-        label 只用于日志。"""
+        保护窗、体量 > digest 的观察一律驱逐。exempt_names 内的条目不落刀、exempt_spill_readbacks
+        为真时 spill 回读不进驱逐候选（D43b；二者都是 W2 传，W1 不传）。label 只用于日志。"""
         originals = getattr(session, "guard_persist_originals", None)
         if originals is None:
             originals = session.guard_persist_originals = {}
@@ -597,7 +603,8 @@ class Orchestrator:
             hist[i] = cp
         out = compact_tool_observations_detailed(
             hist, keep_recent=keep_recent, digest_chars=digest_chars, budget_chars=1,
-            start=start, end=end, stub_handle=stub_handle, exempt_names=exempt_names)
+            start=start, end=end, stub_handle=stub_handle, exempt_names=exempt_names,
+            exempt_spill_readbacks=exempt_spill_readbacks)
         if out["count"]:
             # 范围按实际落刀区间打印（起点钳到 ≥0、终点钳到 history 长度）
             print(f"[Orchestrator] 轮内压缩（{label}）：[{lo}, {hi}) 折叠 {out['count']} 条观察，"
@@ -662,14 +669,19 @@ class Orchestrator:
     def _step_compact(self, session: ChatSession, start: int, end: int, *, trigger: str,
                       step_id: Any = None) -> int:
         """W2 一次压缩（步骤边界 trigger="step" / hard 档首次 trigger="hard"）：[start, end) 是本轮
-        已完成步骤段。count>0 时发 step_compaction 事件并累计轮统计，返回条数。"""
+        已完成步骤段。count>0 时发 step_compaction 事件并累计轮统计，返回条数。
+
+        D43b：spill 回读（模型刚花一次迭代读回的全文）不进驱逐候选——再压就是同一句柄的桩、白读。
+        本次**首次**免压的回读条数 > 0 时另发 step_readback_exempt 事件（与 count 无关：全免的边界也
+        留痕；同一条回读跨边界只计一次）；step_compaction 事件本身不变。"""
         cfg = self.step_compaction
         if end <= start:
             return 0
         out = self._compact_turn_range(session, start, end, keep_recent=cfg.keep_recent,
                                        digest_chars=cfg.digest_chars, label=trigger,
                                        stub_handle=self._step_stub_handle(session),
-                                       exempt_names=STEP_COMPACT_EXEMPT)
+                                       exempt_names=STEP_COMPACT_EXEMPT,
+                                       exempt_spill_readbacks=True)
         if out["count"]:
             events.emit(step_compaction.EVT_STEP_COMPACT, session=session.session_id,
                         trigger=trigger, step_id=step_id, count=out["count"],
@@ -679,6 +691,11 @@ class Orchestrator:
             session.turn_step_compactions = int(getattr(session, "turn_step_compactions", 0) or 0) + 1
             session.turn_compaction_freed_chars = (
                 int(getattr(session, "turn_compaction_freed_chars", 0) or 0) + out["freed_chars"])
+        if out.get("readback_exempt"):
+            events.emit(step_compaction.EVT_STEP_READBACK_EXEMPT, session=session.session_id,
+                        step_id=step_id, count=int(out["readback_exempt"]),
+                        level=getattr(session, "turn_context_guard_level", None),
+                        start=start, end=end)
         return out["count"]
 
     def _block_prefix_cache(self) -> bool:
@@ -1464,15 +1481,43 @@ class Orchestrator:
                 # 注定失败的调用（如引号不配对的 shell 命令）就地打回让模型重发——绝不拿
                 # 一条必败命令去打扰用户审批（实测事故 d618f0d6：mkdir …') 带语法伤过审、
                 # 执行必败 zsh unmatched '、修正后再骗一次审批点击）。
+                # D44：注册表先按工具声明核对实参（缺必填 / 未知键）；catalog 模式下回执附该工具完整
+                # 声明（前缀里只有名字 + 一句摘要），重发只需再一次迭代、不必再取 schema 或靠猜。
+                # 该工具的完整声明本就在本次前缀里（core / 路由件）→ 不重复附，给 full 模式尾句。
+                _schema_fb = (self._precheck_schema_feedback(session)
+                              if self.tool_schema_mode == "catalog" else None)
+                # 打回的调用照样是**失败的调用**（F1）：进下方失败扫描（unresolved_failure / 批次失败 →
+                # failure_swallow_nudge、⑤′-3 升级计数），并登记去重指纹——原样重发直接按重复调用拦。
+                # 没执行任何东西 → `_safe`：压缩器不把它当写屏障。
+                tracker = task.recent_calls if task is not None else no_task_calls
+                _decl_order = list(phys_calls)
+                _rejected: Dict[int, Dict[str, Any]] = {}
                 validated: List[Dict[str, Any]] = []
                 for c in phys_calls:
-                    verr = (self.registry.validate_call(c.get("name"), c.get("arguments", {}))
+                    verr = (self.registry.validate_call(c.get("name"), c.get("arguments", {}),
+                                                        schema_feedback=_schema_fb)
                             if c.get("type") != "error" else None)
                     if verr:
-                        events.emit("tool_error", session=session.session_id,
-                                    tool=c.get("name"), timeout=False,
-                                    msg=str(verr)[:160], kind="precheck")
-                        responses.append({"name": c.get("name"), "response": verr})
+                        _cname, _cargs = c.get("name"), c.get("arguments", {})
+                        _fp = (("r:" if self.registry.is_read_only(_cname, _cargs) else "w:")
+                               + call_fingerprint(_cname, _cargs))
+                        if _fp in tracker:
+                            events.emit("duplicate_call", session=session.session_id, tool=_cname)
+                            _r = {"name": _cname, "response": DUPLICATE_CALL_BLOCKED,
+                                  "_failed": True, "_safe": True}
+                        else:
+                            tracker.append(_fp)
+                            _probs = getattr(self.registry, "argument_problems", None)
+                            _miss, _unk = (_probs(_cname, _cargs) if callable(_probs) else ([], []))
+                            events.emit("tool_error", session=session.session_id,
+                                        tool=_cname, timeout=False,
+                                        msg=str(verr)[:160], kind="precheck",
+                                        schema_fed="\nFull declaration of '" in str(verr),
+                                        missing=",".join(list(_miss)[:PRECHECK_LIST_MAX]),
+                                        unknown=",".join(list(_unk)[:PRECHECK_LIST_MAX]))
+                            _r = {"name": _cname, "response": verr, "_failed": True, "_safe": True}
+                        _rejected[id(c)] = _r
+                        responses.append(_r)
                     else:
                         validated.append(c)
                 phys_calls = validated
@@ -1532,14 +1577,17 @@ class Orchestrator:
                 if approval_needed:
                     return _suspend_for_approval(phys_calls, responses, approval_needed)
 
-                tracker = task.recent_calls if task is not None else no_task_calls
                 phys_responses = await self._execute_physical(session, phys_calls, tracker,
                                                               parse_errors, journal=journal,
                                                               retrieval=retrieval)
                 # [D2 谎报围堵] 按声明序扫描本批结果：失败置位、其后任何成功清位；
                 # 成功的变更类调用记账（收尾时"零变更却声称已做"的判据）。
                 _batch_failed = _batch_ok = False
-                for c, r in zip(phys_calls, phys_responses):
+                # 声明序扫：执行了的调用 + 预检打回的调用（失败，见上）；证据门 / 拒批拦下的照旧不扫
+                _executed = {id(c): r for c, r in zip(phys_calls, phys_responses)}
+                _scan = [(c, _rejected[id(c)] if id(c) in _rejected else _executed[id(c)])
+                         for c in _decl_order if id(c) in _rejected or id(c) in _executed]
+                for c, r in _scan:
                     if c.get("type") == "error":
                         continue
                     rtext = str(r.get("response") or "")
@@ -1991,35 +2039,57 @@ class Orchestrator:
             by_name = {s.get("name"): s for s in self.registry.get_all_schemas()}
             found = [by_name[n] for n in names if n in by_name]
             missing = [n for n in names if n not in by_name]
-            # D0①:详情按**方言声明格式**回喂——回裸 JSON 是教模型一种它在稳定前缀里
-            # 没见过的形状,再要求它按第三种形状(调用 DSL)发实参。方言未实现渲染器时
-            # 回退 JSON(fail-open,功能可用只是次优)。
-            render = getattr(getattr(self.engine, "dialect", None),
-                             "render_tool_declaration", None)
-            parts = []
-            if found:
-                rendered = None
-                if callable(render):
-                    try:
-                        # 先整体渲染进局部列表再并入(复审 Critical):对着 parts 直接
-                        # extend 生成器,第 N 件渲染炸掉时前 N-1 件已经进了 parts,
-                        # 再补整段 JSON 就是「半 DSL 半 JSON 还重复」的观察
-                        rendered = [str(render(t)) for t in found]
-                    except Exception as e:
-                        # fail-open 也要留痕(复审):方言渲染器永久坏掉的话,每次取
-                        # 详情都在静默降级,无痕则永远查不到
-                        events.emit("tool_schema_render_fallback",
-                                    error=f"{type(e).__name__}: {e}")
-                        print(f"[Orchestrator] ⚠️ get_tool_schema 方言渲染失败,"
-                              f"回退 JSON: {e}")
-                        rendered = None
-                parts.extend(rendered if rendered is not None
-                             else [json.dumps(found, ensure_ascii=False)])
+            parts = self._render_tool_declarations(found) if found else []
             if missing:
                 parts.append(f"Unknown tools (check the catalog for exact names): {missing}")
             return "\n".join(parts)
 
         return f"Unknown meta tool: {name}"
+
+    def _render_tool_declarations(self, found: List[Dict[str, Any]], *,
+                                  source: str = "get_tool_schema") -> List[str]:
+        """工具声明的模型面渲染（get_tool_schema 与 D44 预检附声明共用一条路）。
+
+        D0①:详情按**方言声明格式**回喂——回裸 JSON 是教模型一种它在稳定前缀里没见过的形状,
+        再要求它按第三种形状(调用 DSL)发实参。方言未实现渲染器时回退 JSON(fail-open,功能
+        可用只是次优;整批一段 json.dumps(found))。"""
+        render = getattr(getattr(self.engine, "dialect", None), "render_tool_declaration", None)
+        rendered = None
+        if callable(render):
+            try:
+                # 先整体渲染进局部列表再并入(复审 Critical):对着 parts 直接 extend 生成器,
+                # 第 N 件渲染炸掉时前 N-1 件已经进了 parts,再补整段 JSON 就是「半 DSL 半 JSON
+                # 还重复」的观察
+                rendered = [str(render(t)) for t in found]
+            except Exception as e:
+                # fail-open 也要留痕(复审):方言渲染器永久坏掉的话,每次取详情都在静默降级,
+                # 无痕则永远查不到
+                events.emit("tool_schema_render_fallback", error=f"{type(e).__name__}: {e}",
+                            source=source)
+                print(f"[Orchestrator] ⚠️ {source} 方言渲染失败,回退 JSON: {e}")
+                rendered = None
+        return rendered if rendered is not None else [json.dumps(found, ensure_ascii=False)]
+
+    def _tool_declaration_text(self, name: str) -> str:
+        """单个工具的完整声明（D44 catalog 模式预检回执附带；与 get_tool_schema 同一渲染）。
+        注册表声明里找不到该名 → 空串（validate_call 退回 full 模式尾句）。"""
+        by_name = {s.get("name"): s for s in self.registry.get_all_schemas()}
+        if name not in by_name:
+            return ""
+        return "\n".join(self._render_tool_declarations([by_name[name]], source="precheck"))
+
+    def _precheck_schema_feedback(self, session: ChatSession):
+        """catalog 模式预检的 schema_feedback 回调：该工具的完整声明已在本次前缀里（core / 路由件，
+        `_tools_decl_for` 里带 parameters 的条目）→ 空串（= full 模式尾句，不重复喂同一份声明）；
+        否则 = _tool_declaration_text。前缀集合按需（首次打回时）取一次。"""
+        full: List[set] = []
+
+        def _fb(name: str) -> str:
+            if not full:
+                full.append({d.get("name") for d in self._tools_decl_for(session)
+                             if isinstance(d, dict) and "parameters" in d})
+            return "" if name in full[0] else self._tool_declaration_text(name)
+        return _fb
 
     # ---------- 收尾目标校验（想法3 完整版：任务级独立审计，串行、每轮最多一次） ----------
     async def _goal_alignment_check(self, goal: str, answer: str,
@@ -2184,12 +2254,7 @@ class Orchestrator:
             fingerprint = ("r:" if read_only else "w:") + call_fingerprint(name, args)
             if fingerprint in tracker:
                 events.emit("duplicate_call", session=session.session_id, tool=name)
-                by_idx[idx] = {
-                    "name": name,
-                    "response": ("Duplicate call blocked: you already executed this exact tool call "
-                                 "in this turn. Reuse the earlier result, change the arguments, "
-                                 "or take a different approach."),
-                }
+                by_idx[idx] = {"name": name, "response": DUPLICATE_CALL_BLOCKED}
                 continue
             tracker.append(fingerprint)
 
