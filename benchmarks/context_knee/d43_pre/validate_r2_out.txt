@@ -1,0 +1,16 @@
+orch-turn-w1 {'obs': 504, 'nonempty': 194, 'card_obs': 28, 'in_clue': 25, 'in_head': 3, 'in_clue_or_head': 28}
+  ('OK', 'threshold', '; mentions: queue_depth_alert_threshold = 1634')
+  ('OK', 'config_path', '; mentions: /opt/halyard/conf/halyard-6f4f16.toml')
+  ('OK', 'ticket', '')
+  ('OK', 'config_path', '; mentions: /opt/halyard/conf/halyard-f333fa.toml, halyard = loaded')
+  ('OK', 'ticket', '; mentions: OPS-84203')
+  ('OK', 'threshold', '; mentions: queue_depth_alert_threshold = 7573')
+orch-turn-catalog {'obs': 603, 'nonempty': 220, 'card_obs': 30, 'in_clue': 24, 'in_head': 6, 'in_clue_or_head': 30}
+  ('OK', 'config_path', '; mentions: /opt/halyard/conf/halyard-6f4f16.toml')
+  ('OK', 'threshold', '; mentions: queue_depth_alert_threshold = 1634')
+  ('OK', 'ticket', '; mentions: OPS-60117')
+  ('OK', 'config_path', '')
+  ('OK', 'ticket', '; mentions: OPS-84203')
+  ('OK', 'threshold', '')
+COST orch-turn-w1 57K: clue chars per run (after guard) min/median/max = 1599/2437/3605 over 20 runs; clues dropped by guard = 4
+COST orch-turn-catalog 57K: clue chars per run (after guard) min/median/max = 2027/2870/3975 over 20 runs; clues dropped by guard = 4

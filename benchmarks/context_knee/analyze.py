@@ -19,6 +19,9 @@
 - wall：一组已知因并发不可用的 (目录, level)（--wall-invalid），再加自动检测：同一 level 出现多个 stamp
   的重复行 → 视为两客户端并发写入，该档 wall 标不可用。不可用的 wall 照算中位但标 *。
 - MTP 状态 transcripts 里没有记录，只能从目录名推断（名字含 "mtp" → MTP 开，否则关）。
+- 回忆来源（D43 (a)，表 B「recall_src 桩/回读/原文」「回读调用」两列，全部 run 合计、含 aborted）：
+  每张出现在末轮正文里的卡按 recall_source 归因，读 `<组目录>/sessions/<session_dir 末段>/` 下的
+  spill/ 与 journal.jsonl（只取 session_dir 的末段名，不打开它记录的原路径）。
 
 拐点规则（全部可调）：
   metric（默认 pass_hat_2）；基线 = baseline-levels（默认 0,4096）里 metric 点估计最高者；
@@ -36,6 +39,7 @@ import csv
 import json
 import math
 import random
+import re
 import statistics
 import sys
 from pathlib import Path
@@ -47,6 +51,7 @@ for _p in (_HERE.parents[1] / "backend", _HERE.parent):
         sys.path.append(str(_p))
 from context_knee.quality import COHERENT_THRESHOLDS, final_text_quality, is_coherent  # noqa: E402
 from context_knee.summarize import orch_stats  # noqa: E402  (W-K 三列：与 summarize 同一口径)
+from context_knee.filler import normalize_answer, value_pattern  # noqa: E402  (与 score_recall 同一判命中)
 
 BEGIN, END = "<!-- BEGIN AUTO -->", "<!-- END AUTO -->"
 DEFAULT_WALL_INVALID = "qwen-card:57344,qwen-current:0"
@@ -123,6 +128,10 @@ def load_group(d: Path) -> Dict[str, Any]:
             best[key] = cand
     recs = [v[2] for v in best.values()]
     ok = [r for r in recs if "error" not in r]
+    sessions_root = d / "sessions"
+    for r in ok:
+        rs = recall_source(r, sessions_root if sessions_root.is_dir() else None)
+        r["recall_source"], r["readback_calls"] = rs["by_kind"], rs["readback_calls"]
     missing = sorted(((int(r["level"]), r["item_id"], int(r["rep"]), str(r["error"])[:80])
                       for r in recs if "error" in r))
     models = sorted({str(r.get("model", "?")) for r in raw})
@@ -196,6 +205,130 @@ def fail_labels(s: Dict[str, Any]) -> List[str]:
     if s.get("state_ok") is False:
         labs.append("终态断言")
     return labs or ["其他"]
+
+
+# ---------------------------------------------------------------- 回忆来源（D43 (a)）
+#: 压缩桩补写的 spill 文件名（sha256[:16]，撞名加 -n）；编排层截断落盘的是 8 位 call_id，不算
+_STUB_SPILL_RE = re.compile(r"[0-9a-f]{16}(?:-\d+)?")
+STUB_DIGEST_CHARS = 200        # W1 observation_compact_chars / W2 digest_chars 缺省（桩首部字数）
+RECALL_SOURCES = ("stub", "readback", "original", "unknown")
+
+
+def _is_spill_read(name: Any, args: Any) -> bool:
+    return name == "file_extract" and isinstance(args, dict) \
+        and str(args.get("path", "")).startswith("spill:")
+
+
+def _journal_readback_texts(sd: Path, spill: Dict[str, str]) -> List[str]:
+    """journal.jsonl 里 spill 回读的结果正文。journal 落盘时 response 截到 2000 字（打 truncated）；
+    截过的那条另补上句柄指向的 spill 原文（harness 的 SpillReadTool 原样回全文）。"""
+    jp = sd / "journal.jsonl"
+    if not jp.is_file():
+        return []
+    started: Dict[str, Any] = {}
+    out: List[str] = []
+    for ln in jp.read_text(encoding="utf-8").splitlines():
+        try:
+            ev = json.loads(ln)
+        except ValueError:
+            continue
+        data = ev.get("data")
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except ValueError:
+                continue
+        if not isinstance(data, dict):
+            continue
+        if ev.get("type") == "tool_started":
+            started[str(data.get("call_id"))] = data.get("args")
+        elif ev.get("type") == "tool_result":
+            args = started.get(str(data.get("call_id")))
+            if not _is_spill_read(data.get("name"), args):
+                continue
+            out.append(str(data.get("response", "")))
+            if data.get("truncated") and str(data.get("status", "ok")) == "ok":
+                stem = str(args.get("path", ""))[len("spill:"):].removesuffix(".txt")
+                out.append(spill.get(stem, ""))
+    return out
+
+
+def recall_source(r: Dict[str, Any], sessions_root: Optional[Path]) -> Dict[str, Any]:
+    """一个 run 的回忆来源归因：{"by_kind": {卡种: 来源}, "readback_calls": n}。
+
+    只看出现在末轮正文里的卡（与 score_recall 同一判命中：NFKC 归一 + 值整体出现；正文取
+    turns[-1].text，与评分同源）。来源按序判定：
+    - original：卡所在观察没有被压成桩（会话 spill/ 里没有含该值的 16 位 hex 桩补写文件）——
+      原文仍在上下文里；
+    - readback：卡观察已压成桩，且某次 `file_extract(path="spill:…")` 的结果里有这个值（结果取
+      transcript feed ∪ journal；feed 会被事后原地压缩改写、journal 截 2000 字，两者取并）；
+    - stub：已压成桩、没回读到，但值在桩上看得见：首部 STUB_DIGEST_CHARS 字，或（行带 `stub_clue`
+      = D43 (a) 之后的 harness）按 compactor.observation_clue 重建的线索；
+    - unknown：以上都不是（或编排器行的会话目录没归档，查不了）。
+    回读优先于桩：值在桩上、模型仍去回读了，记 readback（与 d43_pre/a3_sources.py 同口径）。
+    线索是重建的：键计数取本 run 全部桩补写文件的全文；运行时取的是那次压缩时整段 history 的当前
+    可见文本（已压的桩只剩首部 + 线索），通常比这里薄，所以重建会**少算**单例 assign。三张卡的值靠
+    ID / 路径 / 只出现在卡里的键抽出，不受这个差别影响。
+    已知盲区：
+    - 没补写 spill 的压缩（fresh-turn 压缩、补写失败）看起来像 original；
+    - 先被编排层截断（中缝）再被压的观察不补写 16 位 hex spill（`_handle_line` 跳过中缝观察），里面的
+      卡同样记 original（b2 的卡观察 ≤ 3K 字，没碰到）；
+    - journal 截到 2000 字的回读整份 spill 记为读到：对 harness 的 SpillReadTool（忽略 max_chars、
+      原样回全文）是对的，换成生产 file_extract（observation_max_chars 4000 再截）会多记。
+    readback_calls = transcript 里 `file_extract` 以 `spill:` 开头的调用次数（含失败的）。
+    """
+    turns = r.get("turns") or []
+    rb_calls = []                       # [(调用, 同位 feed 项或 None)]
+    for t in turns:
+        feed = t.get("feed") or []
+        for i, c in enumerate(t.get("tool_calls") or []):
+            if isinstance(c, dict) and _is_spill_read(c.get("name"), c.get("arguments")):
+                rb_calls.append((c, feed[i] if i < len(feed) and isinstance(feed[i], dict) else None))
+    out: Dict[str, Any] = {"by_kind": {}, "readback_calls": len(rb_calls)}
+    cards = (r.get("fill") or {}).get("cards") or []
+    if not cards:
+        out["by_kind"] = None
+        return out
+    final = normalize_answer((turns[-1].get("text") if turns else "") or "")
+    present = [c for c in cards if value_pattern(c["value"]).search(final)]
+    if not present:
+        return out
+    sd = None
+    if sessions_root is not None and r.get("session_dir"):
+        cand = sessions_root / Path(str(r["session_dir"])).name
+        sd = cand if cand.is_dir() else None
+    orch = r.get("mode") == "orchestrator"
+    if sd is None:
+        for c in present:
+            out["by_kind"][c.get("kind") or c.get("slot")] = "unknown" if orch else "original"
+        return out
+    spill_dir = sd / "spill"
+    spill = {f.stem: f.read_text(encoding="utf-8") for f in sorted(spill_dir.glob("*.txt"))} \
+        if spill_dir.is_dir() else {}
+    stub_src = {s: t for s, t in spill.items()
+                if _STUB_SPILL_RE.fullmatch(s) and not t.startswith("[Observation")}
+    reads = [str((f or {}).get("content", "")) for _, f in rb_calls] + _journal_readback_texts(sd, spill)
+    key_counts = None
+    for c in present:
+        v = str(c["value"])
+        hosts = [t for t in stub_src.values() if v in t]
+        if not hosts:
+            src = "original"
+        elif any(v in t for t in reads):
+            src = "readback"
+        else:
+            visible = []
+            for t in hosts:
+                head = t.strip()[:STUB_DIGEST_CHARS].rstrip()
+                visible.append(head)
+                if r.get("stub_clue"):
+                    from framework.memory.compactor import assign_key_counts, observation_clue
+                    if key_counts is None:
+                        key_counts = assign_key_counts(stub_src.values())
+                    visible.append(observation_clue(t, head=head, key_counts=key_counts))
+            src = "stub" if any(v in x for x in visible) else "unknown"
+        out["by_kind"][c.get("kind") or c.get("slot")] = src
+    return out
 
 
 def first_gen(r):
@@ -273,6 +406,10 @@ def aggregate(g: Dict[str, Any], th: Dict[str, float], wall_invalid: set) -> Dic
                                        and s.get("final_text_ok") is False),
             "recall_front": slots["front"], "recall_mid": slots["mid"],
             "recall_back": slots["back"],
+            **{f"recall_src_{k}": sum(1 for r in rs for v in (r.get("recall_source") or {}).values()
+                                      if v == k) for k in RECALL_SOURCES},
+            "readback_calls": sum(r.get("readback_calls") or 0 for r in rs),
+            "readback_runs": sum(1 for r in rs if r.get("readback_calls")),
             "redundant_mean": mean(s.get("redundant_calls") for s in sc),
             "env_errors_mean": mean(s.get("env_errors") for s in sc),
             "repetition_hits": sum(s.get("repetition_hits") or 0 for s in sc),
@@ -445,6 +582,11 @@ def classify_items(agg, base_levels, high_from, th_hi=0.75, th_lo=0.25):
 
 
 # ---------------------------------------------------------------- 渲染
+def recall_src_cell(a) -> str:
+    cell = f"{a['recall_src_stub']}/{a['recall_src_readback']}/{a['recall_src_original']}"
+    return cell + (f" ?{a['recall_src_unknown']}" if a["recall_src_unknown"] else "")
+
+
 def pct(v, d=0):
     return "—" if v is None else f"{v * 100:.{d}f}%"
 
@@ -513,14 +655,14 @@ def render(groups, aggs, args) -> str:
     L.append("")
 
     L.append("### B. 每档汇总（成功率单位 run，Pass^2 单位 题；区间 Wilson 95%）\n")
-    L.append("| 组 | level | n | 缺测 | 成功率 [CI] | Pass^2 [CI] (题数) | Pass@2 | recall (分母) | 前/中/后 | recall漏：部分/零命中且无收尾 | 冗余均 | env错均 | 复读命中(run) | aborted | 连贯 (分母) | 首prompt中位 | 峰值prompt中位 | prefill秒中位 | wall中位 | W2压缩中位 | 全量渲染中位 | ceiling终止 |")
-    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    L.append("| 组 | level | n | 缺测 | 成功率 [CI] | Pass^2 [CI] (题数) | Pass@2 | recall (分母) | recall_src 桩/回读/原文 | 回读调用(run) | 前/中/后 | recall漏：部分/零命中且无收尾 | 冗余均 | env错均 | 复读命中(run) | aborted | 连贯 (分母) | 首prompt中位 | 峰值prompt中位 | prefill秒中位 | wall中位 | W2压缩中位 | 全量渲染中位 | ceiling终止 |")
+    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for g in groups:
         for lv, a in aggs[g["name"]].items():
             L.append(
                 f"| {g['name']} | {lv} | {a['n']} | {a['missing']} | {pct(a['success_rate'])} {ci(a['success_lo'], a['success_hi'])} | "
                 f"{pct(a['pass_hat_2'])} {ci(a['pass_hat_2_lo'], a['pass_hat_2_hi'])} ({a['n_items2']}) | {pct(a['pass_at_2'])} | "
-                f"{pct(a['recall_rate'])} ({a['recall_n']}) | {pct(a['recall_front'])}/{pct(a['recall_mid'])}/{pct(a['recall_back'])} | {a['recall_partial']}/{a['recall_zero_nofinal']} | "
+                f"{pct(a['recall_rate'])} ({a['recall_n']}) | {recall_src_cell(a)} | {a['readback_calls']}({a['readback_runs']}) | {pct(a['recall_front'])}/{pct(a['recall_mid'])}/{pct(a['recall_back'])} | {a['recall_partial']}/{a['recall_zero_nofinal']} | "
                 f"{num(a['redundant_mean'], 2)} | {num(a['env_errors_mean'], 2)} | {a['repetition_hits']}({a['repetition_runs']}) | {a['aborted']} | "
                 f"{pct(a['coherent_rate'])} ({a['coherent_n']}) | {num(a['prompt_tokens_median'], 0)} | "
                 f"{num(a['peak_prompt_tokens_median'], 0)} | {num(a['prefill_s_median'])} | "
@@ -528,6 +670,10 @@ def render(groups, aggs, args) -> str:
                 f"{num(a['step_compactions_median'])} | {num(a['full_renders_median'])} | "
                 f"{'—' if a['ceiling_aborts'] is None else a['ceiling_aborts']} |")
     L.append("\n`*` = wall 因并发不可用（已知清单或同档多 stamp 重复行自动检测）。\n")
+    L.append("recall_src = 末轮正文里出现的卡值按来源计数（单位 = 卡值，不是 run；只命中一两张卡的 run 也计；"
+             "全部 run 合计、含 aborted；`?n` = 来源不明），"
+             "回读调用 = `file_extract(path=\"spill:…\")` 次数（有回读的 run 数）；口径见 analyze.recall_source。"
+             "D43 (a) 之后桩上的线索可以直接带出卡值，recall 升高要连同这两列读。\n")
     L.append("不连贯 run 的归因（判据触发项:题 ×次；不判语义）：\n")
     for g in groups:
         parts = [f"{lv}: " + "、".join(f"{k}×{v}" for k, v in sorted(a["incoherent"].items()))

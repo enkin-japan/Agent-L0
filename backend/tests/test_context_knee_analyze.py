@@ -146,3 +146,103 @@ def test_aggregate_peak_prompt_median_and_csv_tail_column(tmp_path):
     assert A.CSV_COLS[-1] == "peak_prompt_tokens_median"
     g2 = A.load_group(_write(tmp_path / "g2", [_row(0, "a", 0, True)]))
     assert A.aggregate(g2, A.th_global, set())[0]["peak_prompt_tokens_median"] is None
+
+
+# ---- D43 (a) 回忆来源归因 ----
+
+_H_STUB, _H_READ, _H_CLUE = "aaaaaaaaaaaaaaa1", "bbbbbbbbbbbbbbb2", "ccccccccccccccc3"
+_CARDS = [{"slot": "front", "kind": "config_path", "value": "/opt/halyard/conf/halyard-a1b2c3.toml"},
+          {"slot": "mid", "kind": "ticket", "value": "OPS-73519"},
+          {"slot": "back", "kind": "threshold", "value": "4630"}]
+
+
+def _knee_run(tmp_path, *, final, spill, calls=(), feed=(), journal=None, stub_clue=None,
+              name="L57344-x-r0-abc123"):
+    """一个最小编排器 run：组目录 g/、会话 g/sessions/<name>/spill/*.txt；session_dir 记的是
+    别处的原路径（只取末段名）。"""
+    g = tmp_path / "g"
+    sd = g / "sessions" / name
+    (sd / "spill").mkdir(parents=True)
+    for stem, text in spill.items():
+        (sd / "spill" / f"{stem}.txt").write_text(text, encoding="utf-8")
+    if journal is not None:
+        (sd / "journal.jsonl").write_text("\n".join(json.dumps(e) for e in journal) + "\n")
+    row = _row(57344, "x", 0, False, mode="orchestrator", session_dir=f"/content/elsewhere/{name}",
+               fill={"cards": _CARDS},
+               turns=[{"tool_calls": list(calls), "feed": list(feed), "text": ""},
+                      {"tool_calls": [], "text": final}])
+    if stub_clue:
+        row["stub_clue"] = stub_clue
+    _write(g, [row])
+    return g
+
+
+def _filler_obs(card_text, pad=260):
+    return json.dumps({"path": "/srv/legacy-2025q3/a.log",
+                       "content": "p" * pad + "\n" + card_text}, ensure_ascii=False)
+
+
+def test_recall_source_three_cards_stub_readback_original(tmp_path):
+    """★ 三张卡三种来源：ticket 在桩首部 200 字里（stub）；config_path 在首部之外、被回读到
+    （readback）；threshold 的观察没被压（spill 里没有它 → original）。"""
+    spill = {_H_STUB: json.dumps({"path": "/srv/legacy-2025q3/b.md",
+                                  "content": "- escalation: incident tracked as ticket OPS-73519\n" + "q" * 300}),
+             _H_READ: _filler_obs("halyard: loaded config from /opt/halyard/conf/halyard-a1b2c3.toml")}
+    call = {"name": "file_extract", "arguments": {"path": f"spill:{_H_READ}"}}
+    g = _knee_run(tmp_path, spill=spill, calls=[call], feed=[{"content": spill[_H_READ]}],
+                  final="路径 /opt/halyard/conf/halyard-a1b2c3.toml，工单 OPS-73519，阈值 4630")
+    grp = A.load_group(g)
+    r = grp["records"][0]
+    assert r["recall_source"] == {"config_path": "readback", "ticket": "stub", "threshold": "original"}
+    assert r["readback_calls"] == 1
+    a = A.aggregate(grp, A.th_global, set())[57344]
+    assert (a["recall_src_stub"], a["recall_src_readback"], a["recall_src_original"],
+            a["recall_src_unknown"]) == (1, 1, 1, 0)
+    assert a["readback_calls"] == 1 and a["readback_runs"] == 1
+    assert A.recall_src_cell(a) == "1/1/1"
+
+
+def test_recall_source_only_counts_cards_in_the_final_reply(tmp_path):
+    g = _knee_run(tmp_path, spill={}, final="只记得 OPS-73519")
+    assert A.load_group(g)["records"][0]["recall_source"] == {"ticket": "original"}
+
+
+def test_recall_source_readback_seen_only_in_the_journal(tmp_path):
+    """feed 会被事后原地压成桩（b2 实测）；journal 里的回读结果也算。"""
+    spill = {_H_READ: _filler_obs("queue_depth_alert_threshold = 4630")}
+    call = {"name": "file_extract", "arguments": {"path": f"spill:{_H_READ}"}}
+    journal = [{"type": "tool_started", "data": {"call_id": "c1", "name": "file_extract",
+                                                 "args": {"path": f"spill:{_H_READ}"}}},
+               {"type": "tool_result", "data": {"call_id": "c1", "name": "file_extract",
+                                                "response": spill[_H_READ], "status": "ok"}}]
+    g = _knee_run(tmp_path, spill=spill, calls=[call], feed=[{"content": "{…[Observation compacted]"}],
+                  journal=journal, final="阈值 4630")
+    assert A.load_group(g)["records"][0]["recall_source"] == {"threshold": "readback"}
+
+
+def test_recall_source_clue_counts_as_stub_only_for_rows_with_stub_clue(tmp_path):
+    """★ 值在首部之外、只能经线索看见：D43 (a) 之后的行（stub_clue）记 stub；之前的批桩里没有
+    线索，同样的数据只能记 unknown——不然 b2 这种旧批会被追认成「桩上看得见」。"""
+    spill = {_H_CLUE: _filler_obs("queue_depth_alert_threshold = 4630")}
+    new = _knee_run(tmp_path / "new", spill=spill, final="阈值 4630", stub_clue="R2")
+    old = _knee_run(tmp_path / "old", spill=spill, final="阈值 4630")
+    assert A.load_group(new)["records"][0]["recall_source"] == {"threshold": "stub"}
+    assert A.load_group(old)["records"][0]["recall_source"] == {"threshold": "unknown"}
+
+
+def test_recall_source_without_archived_session_is_unknown_for_orchestrator_rows(tmp_path):
+    g = _write(tmp_path / "g", [_row(57344, "x", 0, False, mode="orchestrator",
+                                     session_dir="/content/gone/s1", fill={"cards": _CARDS},
+                                     turns=[{"tool_calls": [], "text": "OPS-73519"}])])
+    assert A.load_group(g)["records"][0]["recall_source"] == {"ticket": "unknown"}
+
+
+def test_render_shows_recall_src_columns(tmp_path):
+    g = _knee_run(tmp_path, spill={}, final="OPS-73519 4630")
+    grp = A.load_group(g)
+    aggs = {grp["name"]: A.aggregate(grp, A.th_global, set())}
+    args = A.argparse.Namespace(baseline_levels=[0, 4096], metric="pass_hat_2", drop=0.2,
+                                recover=0.1, high_from=16384, max_model_len=65536,
+                                gen_reserve=12288, prod_prefix=9424, pair=[])
+    out = A.render([grp], aggs, args)
+    assert "recall_src 桩/回读/原文" in out and "| 0/0/2 | 0(0) |" in out

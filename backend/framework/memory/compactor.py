@@ -17,6 +17,16 @@ Claude Code 的 microcompaction）——从「保最近 N 条、更早一律砍�
   即使旧也留、大观察即使较新也先压。未越预算则旧观察保持原文（比旧策略更少误伤、更高保真）。
 - 最近 keep_recent 条为硬保护窗口，永不改动（保任务内 KV 前缀复用与续跑连续性）；由此每次落刀
   都只动旧前缀区，KV 代价与旧策略一致。
+- 驱逐桩带一行检索线索（D43 (a)，见 observation_clue）：桩只有首部 200 字时，长历史里四五十个
+  句柄长得一模一样，模型只能挨个猜着回读（b2 批 57K 档：挑句柄靠猜 → 迭代耗尽，回读 18 run 里
+  14 个 aborted；回读本身一次就能读全）。故在桩的括号里补「; mentions: …」——本观察里首部没露出的
+  ID、路径、全段唯一的 key = value（规则 R2），让模型按内容挑句柄。取代桩不带（内容已被后来者取代）。
+  「全段唯一」按整段 history 的**当前可见**文本计（原文 + 已压桩的首部与线索；spill 回读结果不计），
+  所以第一次 W2 步骤边界时计数偏薄、单例偏多——留作残项，下一批 Colab 用 recall_source 量。
+  fresh-turn 压缩的桩没有句柄也带线索：有意为之，模型至少知道那件事出现过、由哪个工具产出。
+  带线索的桩不比原文短时不带（最坏与旧格式逐字节相同）。
+  代价：每次预算驱逐对整段 history 的观察扫一遍正则（O(总字符)，即使这一轮只压一条）；桩每条至多
+  多 ~250 字；b2 57K 档按全 run 计数重放，每 run 线索合计中位 2.4K（w1）/ 2.9K（catalog）字。
 - 只作用于内存中的 model-facing history；持久化日志（history.jsonl）保留全量，
   前端展示与审计不受影响。冷恢复后首次推理仍会经 run_turn 顶部再压一次，恢复上下文同样有界。
 - 幂等：压过的观察打 _compacted 标记（仅存内存，永不落盘），重复调用不再处理。
@@ -32,9 +42,10 @@ import asyncio
 import json
 import re
 import time
+from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from . import rag_sink
 from ..core.jsonl import iter_records
@@ -42,6 +53,9 @@ from ..core.spill import (  # 句柄正则同源，见该模块
     _SPILL_CALL_RE, _SPILL_STEM_RE, _SPILL_TOTAL_RE, SPILL_HANDLE_PREFIX)
 # 编排层截断中缝的固定开头（spill.truncate_observation 三种中缝共用）：带它的观察内存里不是全文
 _TRUNCATED_SEAM = "...[observation truncated:"
+# 中缝整段（到收尾的 `]...`）：线索只抽观察正文，不抽编排层自己写的中缝（单行载荷的中缝里有落盘
+# 绝对路径，但那条按行取不回来——C1 刻意不给句柄，线索也不能把它当路径递出去）
+_TRUNCATED_SEAM_SPAN_RE = re.compile(re.escape(_TRUNCATED_SEAM) + r".*?\]\.\.\.", re.S)
 from .notes import NOTE_TYPES
 
 # 模块级默认（与 config.yaml agent 段默认保持一致；编排层按 config 覆盖，其余调用方用默认）
@@ -147,6 +161,248 @@ def _spill_orig_chars(tr: Dict[str, Any]) -> int:
     的那 4000 多字，紧挨着一条指向十万字文件的路径，两个数会互相打脸。"""
     _, total = _spill_meta(tr)
     return int(total) if total else len(str(tr.get("response", "")))
+
+
+# ---- D43 (a) 驱逐桩的检索线索（规则 R2） ----
+# 依据：b2 批（benchmarks/data/context-knee-20261102-b2）真实 spill 上的前置复算
+# （benchmarks/context_knee/d43_pre/c_clue_noise.py）：R2 让三张卡在 w1 28/28、catalog 30/30
+# 落进「线索或首部」，同时把非空线索从 R1 的 319/504 条观察压到 149/504。一审修补（JSON 键与
+# 行首才认冒号、密钥 / URL 排除、首部按词界）后同法重放：三卡覆盖仍 28/28、30/30；非空线索
+# 194/504（catalog 220/603）——多出的几乎全是填充里 JSON 指标行的单例键（`"cpu_pct_7": 223.04`）。
+# 只要三类：ID、路径、单例 key = value；URL / 长 hex 在 b2 上 0 命中，不加（URL 的主机 / 路径不算
+# 路径，userinfo 里的东西一概不取）。
+# 线性时间：路径与 `=` 赋值的起点带「前一个字符不在同类字符串里」的反向断言（ID 用 \b，ID 体里
+# 没有 `.`/`/`，不会被一长串字符反复起跑）；扩展名用 Python 判，不用会回溯的正则。否则一长串
+# [\w.-] 会让每个起点都吞到串尾再回溯（O(n²)），观察体量没有硬上限时这是真风险。
+_CLUE_ESC_RE = re.compile(r'\\(?:u([0-9a-fA-F]{4})|(["\\/nt]))')
+_CLUE_ESC = {"n": "\n", "t": "\t", '"': '"', "/": "/", "\\": "\\"}
+_CLUE_ID_RE = re.compile(r"\b[A-Z][A-Z0-9]{1,}-\d{3,}(?:-\d+)*\b", re.ASCII)
+# 版本号 / 标准号长得像 ID（SHA-256、ISO-8601、RFC-9110）：前缀去掉尾部数字后在此表内的不收
+_CLUE_ID_DENY = frozenset({"SHA", "ISO", "RFC", "UTF", "MD", "AES", "RSA", "TLS", "HTTP"})
+_CLUE_PATH_RE = re.compile(r"(?<![\w.:/@-])(?:[\w.-]+)?(?:/[\w.-]+)+", re.ASCII)
+# URL 的 userinfo（`scheme://user:pw@`）：切词前整段换成 `@`——既不出赋值也不出值，`@` 又挡住
+# 其后的主机被当成相对路径的起点
+_CLUE_USERINFO_RE = re.compile(r"(?<=://)[^\s/@\"'<>]*@")
+# 赋值三种写法：JSON 的 `"key": v`；行首的 `key: v` / `key = v`；行中只认 `key = v`——行中冒号
+# 多半是散文（`escalation: incident …`、`Note: done`），当赋值只会把噪声写进线索。
+# 值：整段 ≤ 64 字（更长的不截半个值进来）、后面不紧跟 `:`（`url = https://…` 不出 `https`）、
+# 不以 `//` 开头（URL 的 scheme 之后）
+_CLUE_ASSIGN_RE = re.compile(
+    r'(?:"(?P<qk>[A-Za-z_][\w.]{2,})"[ \t]*:'
+    r'|(?:^|(?<=\n))(?P<lk>[A-Za-z_][\w.]{2,})[ \t]*[=:]'
+    r'|(?<![\w.])(?P<ek>[A-Za-z_][\w.]{2,})[ \t]*=)'
+    r'[ \t]*"?(?!//)(?P<v>[\w./-]{1,64})(?![\w./:-])"?',
+    re.ASCII)
+# 像密钥的键（大小写不敏感的子串）一律不进线索：桩会回到远端 prompt 里，原文过了首部本该消失
+_CLUE_SECRET_KEY_RE = re.compile(
+    r"passw|secret|token|api_?key|auth|cookie|credential|bearer|private_key|access_key|session_id",
+    re.I)
+# 线索规则版本号：context_knee harness 记进每行 meta（`stub_clue`），analyze 的 recall_source
+# 据此判断那批 run 的桩里有没有线索（缺键 = D43 之前，桩只有首部）。改规则时改这个串。
+CLUE_RULE = "R2"
+CLUE_MAX_TOKENS = 8
+CLUE_MAX_CHARS = 240
+_CLUE_PREFIX = "; mentions: "
+_CLUE_SEP = ", "
+
+
+def _clue_decode(text: str) -> str:
+    """JSON 串转义只为切词解码（\\n → 换行 …）；单趟替换，`\\\\n` 解成反斜杠 + n 而不是换行。
+    不解码时 `"...\\nqueue_depth = 1"` 会被切成 `nqueue_depth`（b2 上 14/28 张卡的名次因此不同）。
+    随后把 URL userinfo 遮成 `@`（只为切词）。"""
+    if "\\" in text:
+        text = _CLUE_ESC_RE.sub(
+            lambda m: chr(int(m.group(1), 16)) if m.group(1) else _CLUE_ESC[m.group(2)], text)
+    if "://" in text:
+        text = _CLUE_USERINFO_RE.sub(lambda m: "@" * len(m.group(0)), text)
+    return text
+
+
+def _clue_assigns(decoded: str) -> List[Tuple[str, str, str]]:
+    """[(key, value, 源文本)]，值尾的句点（句末标点）去掉，去完为空的丢。"""
+    out = []
+    for m in _CLUE_ASSIGN_RE.finditer(decoded):
+        val = m.group("v").rstrip(".")
+        if val:
+            out.append((m.group("qk") or m.group("lk") or m.group("ek"), val, m.group(0)))
+    return out
+
+
+def _clue_paths(decoded: str) -> List[str]:
+    out = []
+    for m in _CLUE_PATH_RE.finditer(decoded):
+        tok = m.group(0).rstrip(".")
+        if "/" not in tok:
+            continue
+        last = tok.rsplit("/", 1)[1]
+        # 末段要有「点 + 含字母的扩展名」：conf/app.yaml 算，3/4.5 这类比值不算
+        if "." in last and any(c.isalpha() for c in last.rsplit(".", 1)[1]):
+            out.append(tok)
+    return out
+
+
+def _clue_ids(decoded: str) -> List[str]:
+    return [m.group(0) for m in _CLUE_ID_RE.finditer(decoded)
+            if m.group(0).split("-", 1)[0].rstrip("0123456789") not in _CLUE_ID_DENY]
+
+
+def _tok_char(c: str) -> bool:
+    return c.isascii() and (c.isalnum() or c in "_./-")
+
+
+def _visible_in(tok: str, hay: str) -> bool:
+    """tok 在 hay 里作为**完整一词**出现（两侧不紧贴词字符；右侧的 `.` 只有后面跟词字符才算紧贴，
+    句末句点不算）。`OPS-1234` 不因首部里有 `OPS-12345` 就算「已见」。"""
+    i = hay.find(tok)
+    while i >= 0:
+        j = i + len(tok)
+        before_ok = i == 0 or not _tok_char(hay[i - 1])
+        after = hay[j] if j < len(hay) else ""
+        after_ok = (not after or not _tok_char(after)
+                    or (after == "." and (j + 1 >= len(hay) or not _tok_char(hay[j + 1]))))
+        if before_ok and after_ok:
+            return True
+        i = hay.find(tok, i + 1)
+    return False
+
+
+def assign_key_counts(texts: Iterable[str]) -> Counter:
+    """observation_clue 单例规则要的键计数：每条文本（解码后）里 ASSIGN 键的出现次数之和。"""
+    counts: Counter = Counter()
+    for t in texts:
+        counts.update(k for k, _, _ in _clue_assigns(_clue_decode(str(t))))
+    return counts
+
+
+def observation_clue(text: str, *, head: str, key_counts: Mapping[str, int],
+                     max_tokens: int = CLUE_MAX_TOKENS, max_chars: int = CLUE_MAX_CHARS) -> str:
+    """驱逐桩的一行检索线索（D43 (a)，规则 R2）：返回 `"; mentions: t1, t2, …"` 或 ``""``。
+
+    纯函数、无 I/O、确定性。规则：
+    1. JSON 串转义先解码（只为切词，不改原文）；URL userinfo 遮掉；
+    2. 三类词：ID（`OPS-48213`、`SKU-120`、`CVE-2024-1234`；SHA-256 / ISO-8601 这类不算）、路径
+       （≥1 个斜杠、末段带含字母的扩展名；URL 的主机 / 路径不算）、`key = value`（JSON 键、行首的
+       `key:` / `key =`、行中的 `key =`；值本身就是已抽到的 ID / 路径的不重复列；像密钥的键、
+       ≥ 20 字且不含 `.`/`/`/`-` 的不透明值不收）；
+    3. 在 `head`（桩里看得见的那部分文本）里作为完整一词出现过的丢掉；去重保留首次出现；
+    4. `key = value` 只留单例：键在本观察里只出现一次、且 `key_counts[key] == 1`（调用方用
+       assign_key_counts 建；压缩层取整段 history 当前可见文本，见 _history_key_counts）——反复出现
+       的键是模板噪声，不能帮模型挑句柄；
+    5. 排序 ID → 路径 → key = value，同类按首次出现；至多 max_tokens 个、拼起来（", " 分隔，不含
+       前缀）至多 max_chars 字：下一个放不下就停，单个就超 max_chars 的跳过。
+    """
+    dec = _clue_decode(str(text))
+    seen_head = _clue_decode(str(head))
+    ids = _clue_ids(dec)
+    paths = _clue_paths(dec)
+    assigns = _clue_assigns(dec)
+    captured = set(ids) | set(paths)
+    local = Counter(k for k, _, _ in assigns)
+    ranked: List[str] = []
+    seen: Set[str] = set()
+
+    def _add(tok: str, *alts: str) -> None:
+        if tok in seen or any(_visible_in(a, seen_head) for a in (tok,) + alts):
+            return
+        seen.add(tok)
+        ranked.append(tok)
+
+    for t in ids:
+        _add(t)
+    for t in paths:
+        _add(t)
+    for key, val, src in assigns:
+        if val in captured or local[key] != 1 or key_counts.get(key, 0) != 1:
+            continue
+        if _CLUE_SECRET_KEY_RE.search(key):
+            continue
+        if len(val) >= 20 and not any(c in val for c in "./-"):
+            continue
+        _add(f"{key} = {val}", src)
+
+    kept: List[str] = []
+    used = 0
+    for tok in ranked:
+        if len(tok) > max_chars:
+            continue
+        if len(kept) >= max_tokens:
+            break
+        add = len(tok) + (len(_CLUE_SEP) if kept else 0)
+        if used + add > max_chars:
+            break
+        kept.append(tok)
+        used += add
+    return (_CLUE_PREFIX + _CLUE_SEP.join(kept)) if kept else ""
+
+
+# 驱逐桩的尾巴：首部之后的 ` …[Observation compacted; originally N chars<hint><clue>]` 与可选句柄行
+_STUB_TAIL_RE = re.compile(
+    r" …\[Observation compacted; originally \d+ chars(.*?)\](?:\n全文：[^\n]*)?$", re.S)
+
+
+def _visible_obs_text(resp: str) -> str:
+    """一条观察在**当前**上下文里对键计数有贡献的文本：原文去掉编排层中缝；驱逐桩只剩首部 + 线索
+    （hint / 句柄行是固定样板，不算）；取代桩没有内容。"""
+    if resp.startswith("[Observation superseded:"):
+        return ""
+    m = _STUB_TAIL_RE.search(resp)
+    if m:
+        inside = m.group(1)
+        k = inside.find(_CLUE_PREFIX)
+        return resp[:m.start()] + "\n" + (inside[k + len(_CLUE_PREFIX):] if k >= 0 else "")
+    return _TRUNCATED_SEAM_SPAN_RE.sub("\n", resp)
+
+
+def _call_args(call: Any) -> Any:
+    if not isinstance(call, dict):
+        return None
+    args = call.get("arguments", (call.get("function") or {}).get("arguments")
+                    if isinstance(call.get("function"), dict) else None)
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except ValueError:
+            return None
+    return args
+
+
+def _call_name(call: Any) -> Any:
+    if not isinstance(call, dict):
+        return None
+    fn = call.get("function")
+    return call.get("name") or (fn.get("name") if isinstance(fn, dict) else None)
+
+
+def _is_spill_readback(tr: Dict[str, Any], call: Any) -> bool:
+    """这条观察是不是 `file_extract(path="spill:…")` 的回读结果。先看观察自己的 `_target`
+    （编排层挂的取代键 = 调用的 path 参数）；冷恢复后 `_` 键被剥，退回同位的那次调用。"""
+    if tr.get("name") != "file_extract":
+        return False
+    t = tr.get("_target")
+    if isinstance(t, str):
+        return t.strip().startswith(SPILL_HANDLE_PREFIX)
+    args = _call_args(call) if _call_name(call) == "file_extract" else None
+    return isinstance(args, dict) and str(args.get("path", "")).strip().startswith(SPILL_HANDLE_PREFIX)
+
+
+def _history_key_counts(history: List[Dict[str, Any]]) -> Counter:
+    """单例规则的键计数：整段 history 里**每一条**工具观察的当前可见文本（原文、已压的桩、保护窗、
+    落刀范围外的都算），只排除 spill 回读的结果——回读是同一份原文的副本，算进去每个键都成 2，
+    原观察和回读两边的线索一起被抹掉。"""
+    texts: List[str] = []
+    calls: List[Any] = []
+    for msg in history:
+        role = msg.get("role")
+        if role == "assistant":
+            calls = list(msg.get("tool_calls") or [])
+        elif role == "tool":
+            for i, tr in enumerate(msg.get("tool_responses", []) or []):
+                if not isinstance(tr, dict):
+                    continue
+                if _is_spill_readback(tr, calls[i] if i < len(calls) else None):
+                    continue
+                texts.append(_visible_obs_text(str(tr.get("response", ""))))
+    return assign_key_counts(texts)
 
 
 def compact_tool_observations(history: List[Dict[str, Any]], *,
@@ -260,14 +516,26 @@ def compact_tool_observations_detailed(
                      and len(str(tr.get("response", ""))) > digest_chars]
             # 体量大者优先（同体量取更旧）：最少次数打断前缀即回到预算内，「大观察即使较新也先压」
             cands.sort(key=lambda it: (-len(str(it[1].get("response", ""))), it[0]))
+            # D43 (a) 单例规则的键计数：整段 history 当前可见文本，每次调用建一次，O(总字符)
+            key_counts = _history_key_counts(history) if cands else Counter()
             for _, tr in cands:
                 if total <= budget:
                     break
                 resp = str(tr.get("response", ""))
                 head = resp.strip()[:digest_chars].rstrip()
                 extra = _handle_line(tr)
-                tr["response"] = (head + f" …[Observation compacted; originally "
-                                  f"{_spill_orig_chars(tr)} chars" + _spill_hint(tr) + "]" + extra)
+                hint = _spill_hint(tr)
+                plain = (head + f" …[Observation compacted; originally "
+                         f"{_spill_orig_chars(tr)} chars" + hint)
+                # 线索放在括号里、hint 之后：「全文：」句柄行仍是最后一行。线索只抽正文（去掉编排层
+                # 中缝）；「看得见」= 首部 + hint。带线索的桩不比原文短就不带（最坏情形与旧格式
+                # 逐字节相同）；线索为空时同样逐字节同旧格式
+                clue = observation_clue(_TRUNCATED_SEAM_SPAN_RE.sub("\n", resp),
+                                        head=head + hint, key_counts=key_counts)
+                stub = plain + clue + "]" + extra
+                if clue and len(stub) >= len(resp):
+                    stub = plain + "]" + extra
+                tr["response"] = stub
                 tr["_compacted"] = True
                 compacted += 1
                 total -= (len(resp) - len(tr["response"]))

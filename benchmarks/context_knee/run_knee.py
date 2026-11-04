@@ -1085,12 +1085,14 @@ def orch_model_options(opts: Optional[Dict[str, Any]], prefix: str) -> Dict[str,
 #: meta 里的口径键（续跑校验比这一组）。guard_thresholds / step_compaction_cfg = 覆盖后的生效值
 HARNESS_MODE_KEYS = ("mode", "fill_placement", "guard", "step_compaction", "turn_compaction",
                      "goal_verify", "fill_shape", "guard_thresholds", "step_compaction_cfg",
-                     "tool_schema_mode_effective", "agent_cfg_fingerprint", "stub_impl")
+                     "tool_schema_mode_effective", "agent_cfg_fingerprint", "stub_impl",
+                     "stub_clue")
 #: 编排器模式生产工具桩的实现版本（W-K2）：W-K2 之前的编排器行回的是 Unknown tool，缺键 = 旧实现，
 #: 续跑 / 追加与之不比「缺键不比」规则、恒比（见 harness_mismatch）
 STUB_IMPL = "usable-v1"
-#: 编排器行即便缺键也恒比的口径键
-_ALWAYS_COMPARED = ("mode", "stub_impl")
+#: 编排器行即便缺键也恒比的口径键。stub_clue（D43 (a)）同 stub_impl：D43 之前的批（行缺键 = 桩无线索）
+#: 续跑 / 追加时拒，否则同一档的 recall 混进有线索与无线索两种桩
+_ALWAYS_COMPARED = ("mode", "stub_impl", "stub_clue")
 #: 直调模式（及缺 mode 的旧行）的口径：只认 mode 与填充形态，其余不比
 _DIRECT_HARNESS = {"mode": "direct", "fill_shape": "turns"}
 
@@ -1165,8 +1167,9 @@ def orch_meta(ctx: Optional[OrchContext], args=None) -> Dict[str, Any]:
                 "turn_compaction": None, "goal_verify": None, "fill_shape": "turns",
                 "guard_thresholds": None, "step_compaction_cfg": None,
                 "orchestrator_cfg_source": None, "tool_schema_mode_effective": None,
-                "stub_impl": None}
+                "stub_impl": None, "stub_clue": None}
     from framework.core import tool_disclosure
+    from framework.memory.compactor import CLUE_RULE
     cfg, over = _orch_tools().agent_cfg(ctx.agent_base, guard=ctx.guard, step=ctx.step_compaction,
                                         goal_verify=ctx.goal_verify)
     if "max_total_iterations" in ctx.agent_base:
@@ -1182,7 +1185,10 @@ def orch_meta(ctx: Optional[OrchContext], args=None) -> Dict[str, Any]:
             "orchestrator_cfg_source": {"section": "config.yaml:agent", "overrides": over},
             "tool_schema_mode_effective": tool_disclosure.resolve_tool_schema_mode(
                 ctx.model_options, ctx.agent_base),
-            "stub_impl": STUB_IMPL}
+            "stub_impl": STUB_IMPL,
+            # D43 (a)：驱逐桩线索的规则版本（compactor.CLUE_RULE）；缺键 = D43 之前、桩只有首部。
+            # analyze.recall_source 只在有这个键时才把线索算进「桩上看得见」
+            "stub_clue": CLUE_RULE}
 
 
 def _orch_tools():

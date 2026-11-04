@@ -5,7 +5,8 @@
       [--out-md <data>/ANALYSIS.md] [--out-csv <data>/summary_by_level.csv]
 
 只读：各臂 `transcripts.jsonl`、编排器臂的 `guardrail_events.jsonl`（按行 `guard_events_lines` 切片）、
-`run_colab.log`（臂起止时刻）。不读 `sessions/`（`session_dir` 只当字符串与事件的 session 名比对）。
+`run_colab.log`（臂起止时刻）。本模块不读 `sessions/`（`session_dir` 只当字符串与事件的 session 名比对）；
+例外是经 `A.load_group` 算的 recall_source（D43 (a)）：读 `<臂>/sessions/<session_dir 末段>/` 的 spill/ 与 journal.jsonl。
 CPU、标准库 + quality.py（经 analyze.py）；bootstrap 种子固定 → 输出确定。
 
 A–F：原样调 analyze.render（9 组 = 参照 + 8 臂；--pair 见 main() 里 `[f"{REF}:direct-mock"] + PAIRS_TAIL`，

@@ -229,3 +229,151 @@ def test_a_branch_carries_the_spill_file_with_it(make_session, tmp_path):
     from pathlib import Path
     assert Path(m.group(1)).exists()                    # 分支手里那条路径仍然走得通
     assert Path(m.group(1)).read_text(encoding="utf-8") == body
+
+
+# ---- ★ D43 (a)：驱逐桩的检索线索 ----
+# 线索放在括号里、_spill_hint 之后；「全文：」句柄行仍是最后一行（`$` 锚定的旧测试靠它）；
+# 取代桩不带；单例键计数按本次全部候选建，不按单条。
+
+_HANDLE = 'file_extract(path="spill:0123456789abcdef")'
+
+
+def _evict(*resps, digest=20, handle=True, before=(), after=()):
+    """resps 是可压的候选；before / after 是额外的整条消息（落刀范围同样覆盖，after 在保护窗里）。"""
+    hist = list(before) + _hist(*[{"name": "read_file", "response": r} for r in resps],
+                                {"name": "read_file", "response": "S" * 10}) + list(after)
+    if after:
+        hist[len(before)]["tool_responses"].pop()      # 保护窗改由 after 承担
+    n = compact_tool_observations(hist, keep_recent=1, digest_chars=digest, budget_chars=50,
+                                  stub_handle=(lambda tr: _HANDLE) if handle else None)
+    return n, [tr["response"] for tr in hist[len(before)]["tool_responses"]]
+
+
+def test_eviction_stub_carries_the_clue_inside_the_bracket_and_the_handle_stays_last():
+    body = "H" * 40 + " ticket OPS-48213 written to out/report.csv" + " ." * 150
+    n, (stub, _) = _evict(body)
+    assert n == 1
+    assert stub == ("H" * 20 + f" …[Observation compacted; originally {len(body)} chars"
+                    "; mentions: OPS-48213, out/report.csv]\n全文：" + _HANDLE)
+    assert re.search(r'\]\n全文：file_extract\(path="spill:[0-9a-f]+"\)$', stub)
+
+
+def test_eviction_stub_without_tokens_is_byte_identical_to_the_old_format():
+    body = "H" * 300
+    _, (stub, _) = _evict(body, handle=False)
+    assert stub == "H" * 20 + " …[Observation compacted; originally 300 chars]"
+
+
+def test_clue_follows_the_spill_hint_and_ignores_the_seam_text():
+    """中缝落过盘的观察：线索在 hint 之后，只抽正文（尾部留着的 OPS-48213），不抽编排层中缝里的
+    落盘路径、`max_chars=…`、`truncated: showing` 这类字样。"""
+    seam = truncate_observation("a\nb\nc\n" * 300 + "OPS-48213\n", 120, ("/s/spill/x.txt", 1810))
+    assert "OPS-48213" in seam.rsplit("]...", 1)[1]        # 前提：卡值在中缝之后的尾部里
+    _, (stub, _) = _evict(seam)
+    hint = _spill_hint({"response": seam})
+    assert hint and hint in stub
+    assert stub.split(hint, 1)[1] == "; mentions: OPS-48213]"
+
+
+def test_single_line_seam_path_is_not_offered_as_a_clue():
+    """★ 单行载荷落了盘但按行取不回来（C1 刻意不给句柄）；中缝里那条绝对路径不许经线索递出去。"""
+    seam = truncate_observation("x" * 900, 120, ("/s/spill/y.txt", 900))
+    assert "/s/spill/y.txt" in seam and _spill_hint({"response": seam}) == ""
+    _, (stub, _) = _evict(seam)
+    assert "/s/spill/y.txt" not in stub and "mentions" not in stub
+
+
+def test_superseded_stub_carries_no_clue():
+    hist = _hist(_obs("read_ui_tree", "ticket OPS-48213 at conf/app.yaml " * 10, target="w", safe=True),
+                 _obs("read_ui_tree", "B" * 500, target="w", safe=True))
+    assert compact_tool_observations(hist, keep_recent=1, budget_chars=0) == 1
+    old = hist[0]["tool_responses"][0]["response"]
+    assert "superseded" in old
+    assert "mentions" not in old and "OPS-48213" not in old
+
+
+def test_key_counts_span_the_whole_compaction_range():
+    """★ 同一个键在两条候选里各出现一次：单看每条都是单例，按全段计数就不是——两条都不许带它。"""
+    a = "A" * 40 + "\nshared_key = 1\nonly_in_a = x\n" + "." * 300
+    b = "B" * 40 + "\nshared_key = 2\nonly_in_b = y\n" + "." * 300
+    n, (sa, sb, _) = _evict(a, b)
+    assert n == 2
+    assert "shared_key" not in sa and "shared_key" not in sb
+    assert "; mentions: only_in_a = x]" in sa       # 正对照：真单例照留
+    assert "; mentions: only_in_b = y]" in sb
+
+
+_PAD = "\n" + "." * 400
+
+
+def test_key_seen_in_the_protected_window_is_not_a_singleton():
+    """★ 键计数取整段 history：保护窗里那条（不可压）也有这个键 → 候选里的就不是单例。"""
+    recent = _hist({"name": "read_file", "response": "fresh read\nshared_key = 9"})
+    n, (stub,) = _evict("A" * 40 + "\nshared_key = 1\nonly_here = x" + _PAD, after=recent)
+    assert n == 1
+    assert "shared_key" not in stub
+    assert "; mentions: only_here = x]" in stub
+
+
+def test_key_in_an_already_compacted_stub_clue_counts():
+    """已压的桩以首部 + 线索参与计数：旧桩线索里亮过的键，新候选里再出现就不是单例。"""
+    old = _hist({"name": "read_file", "_compacted": True,
+                 "response": "head …[Observation compacted; originally 900 chars; mentions: shared_key = 1]"})
+    _, (stub, _) = _evict("A" * 40 + "\nshared_key = 2\nonly_here = x" + _PAD, before=old)
+    assert "shared_key" not in stub and "only_here = x" in stub
+
+
+def _readback_pair(content, *, via_target):
+    tr = {"name": "file_extract", "response": content}
+    if via_target:
+        tr["_target"] = "spill:0123456789abcdef"
+    call = {"type": "function", "name": "file_extract",
+            "arguments": {"path": "spill:0123456789abcdef"}}
+    return [{"role": "assistant", "tool_calls": [call]}, {"role": "tool", "tool_responses": [tr]}]
+
+
+def test_a_spill_readback_copy_does_not_count_against_the_original():
+    """★ 回读结果是同一份原文的副本：算进计数，卡键就成了 2、两边线索一起消失。冷恢复后 `_target`
+    被剥，靠同位调用的 path 参数认出回读。"""
+    card = "A" * 40 + "\nqueue_depth_alert_threshold = 4630" + _PAD
+    for via_target in (True, False):
+        _, (stub,) = _evict(card, after=_readback_pair(card, via_target=via_target))
+        assert "; mentions: queue_depth_alert_threshold = 4630]" in stub, via_target
+    # 反向：同样的副本若不是 spill 回读（普通读文件），它就是又一次出现，键不再是单例
+    plain = [{"role": "assistant", "tool_calls": [{"name": "read_file", "arguments": {"path": "x"}}]},
+             {"role": "tool", "tool_responses": [{"name": "read_file", "response": card}]}]
+    _, (stub,) = _evict(card, after=plain)
+    assert "queue_depth_alert_threshold" not in stub
+
+
+def test_seam_text_does_not_enter_the_key_counts():
+    """中缝里的 `start=… end=… max_chars=…` 是编排层样板：别的观察里真单例的 `start = 7` 不能被它顶掉。"""
+    seam = truncate_observation("a\nb\nc\n" * 300, 120, ("/s/spill/x.txt", 1800))
+    assert "start=" in seam
+    _, (_, stub_b, _) = _evict(seam, "B" * 40 + "\nstart = 7" + _PAD)
+    assert "; mentions: start = 7]" in stub_b
+
+
+def test_clue_dropped_when_it_would_not_make_the_stub_shorter():
+    """★ 带线索的桩不比原文短就不带：最坏情形与旧格式逐字节相同（严格小于才带）。"""
+    toks = " ".join(f"OPS-{10000 + i}" for i in range(8))
+    small = "H" * 40 + " " + toks + " " + "." * 20
+    _, (stub, _) = _evict(small, handle=False)
+    assert stub == "H" * 20 + f" …[Observation compacted; originally {len(small)} chars]"
+    big = "H" * 40 + " " + toks + " " + "." * 3000
+    _, (stub, _) = _evict(big, handle=False)
+    assert "; mentions: OPS-10000" in stub and len(stub) < len(big)
+
+
+def test_clue_guard_is_strict_at_equal_length():
+    """带线索的桩恰好与原文等长 → 不带；原文多 1 字 → 带。"""
+    head = "H" * 20
+    tail = " OPS-48213 OPS-48214 OPS-48215"
+    clue = "; mentions: OPS-48213, OPS-48214, OPS-48215"
+    L = len(head + " …[Observation compacted; originally 000 chars" + clue + "]")   # 3 位数长度
+    assert 100 <= L <= 999
+    for extra, has_clue in ((0, False), (1, True)):
+        body = head + " " * (L + extra - len(head) - len(tail)) + tail
+        assert len(body) == L + extra
+        _, (stub, _) = _evict(body, handle=False)
+        assert stub.endswith(clue + "]") is has_clue, (extra, stub)
