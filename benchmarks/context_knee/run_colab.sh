@@ -18,8 +18,17 @@
 #   TRACE_REPS（trace 步每题重复数，默认 3）、READY_MINUTES（起机到 READY 的等待上限，默认 40）、
 #   RESTARTS_MAX（服务端挂死时 stop+start 重起的次数上限，整批共用，默认 2；换模型的那次 stop+start 不计）、
 #   HUNG_RUNS（连环 timeout 判挂死的 run 数，默认 3）、MON_INTERVAL（盯挂死的轮询秒，默认 60）、
-#   SMOKE（1=每段起机后先各跑一个 run 冒烟，缺省 1；冒烟失败则跳过本段同模式全部步，不白烧）。
-#   测试接缝（只为桩自测，缺省即生产路径）：DEPLOY、PY、KNEE、TRACE、ENV_FILE、POLL（等 READY 轮询秒，默认 30）。
+#   SMOKE（1=每段起机后先各跑一个 run 冒烟，缺省 1；冒烟失败则跳过本段同模式全部步，不白烧）、
+#   READY_RETRY（首次起机 start 成功但 VM 随即 stopped/failed（FAIL_READY，rc 4）时自动重试一次：防御性停机 → 等租约释放 → 再起；
+#       缺省 1，0=关。11-02 两批首起都是这种瞬时 FAIL_READY 要人工重起。等 READY 超时 READY_MINUTES 的那种不重试（再等 40 min 是另一回事），
+#       start 命令本身失败（FAIL_START）也不重试；不占 RESTARTS_MAX。重试前停机失败照旧记 STOP_FAILED / 5，各步仍写 skipped）、
+#   MAX_VM_HOURS（单个租约的时长预算，整数小时，缺省 10；非订阅 VM 约 12 h 到期，11-02 用户告知。每步开跑前（已判定要跑、含 --resume
+#       续跑之后）算「本租约已用 + 同类步（knee / trace）本批最长干净用时 > 预算」则先换租约（stop → 等释放 → 同模型 start；不冒烟、
+#       不占 RESTARTS_MAX；起机失败同换模型失败：FAIL_START/FAIL_READY，本步起全记 skipped）再跑该步。没跑过的步类按 knee 2 h /
+#       trace 30 min 预估（EST_DEFAULT；观测 89–102 / 16–19 min）；挂死重起过的步不计入估计。刚起的租约至少跑一步（否则刚起的机
+#       会立刻再换一次，白烧一次起机）；0=不限。时钟从 start 命令发出算，比 VM 真实分配早，偏保守）。
+#   测试接缝（只为桩自测，缺省即生产路径）：DEPLOY、PY、KNEE、TRACE、ENV_FILE、POLL（等 READY 轮询秒，默认 30）、
+#       LEASE_BUDGET_SEC（覆盖 MAX_VM_HOURS×3600，秒）、READY_DEADLINE_SEC（覆盖 READY_MINUTES×60，秒）。
 # 步（口径见 benchmarks/context_knee/README.md「编排器模式」：各臂固定同一放置只切开关，不跨放置比）：
 #   第二批缺省九步（11-02 拍板，方案 §5「第二批」）——A 段（MODEL）：
 #   orch-turn-none    编排器 turn 放置 无管理（guard off / step off）        prod 前缀     0/32K/49K/57K
@@ -42,10 +51,12 @@
 # 产物：$OUT/run_colab.log（时间线，追加）、$OUT/<臂>/（transcripts.jsonl + summary.json；trace 步为 transcripts.jsonl + meta.json）、
 #   $OUT/<步>.log（harness 输出）、
 #   $OUT/smoke-{orch,direct}-<stamp>-<段 A/B>/（每段只冒本段要跑的模式）、$OUT/arms_status.txt（每步一行：<步> ok[ errors=N]|fail|skipped）、
-#   $OUT/DONE（单行，停机之后才写：BATCH_RC=<失败臂数> SKIPPED=<跳过臂数>[ ABORTED=hung] / FAIL_START / FAIL_READY / INTERRUPTED；
+#   $OUT/DONE（单行，停机之后才写：BATCH_RC=<失败臂数> SKIPPED=<跳过臂数>[ ABORTED=hung][ ROLLOVERS=<换租约次数>] / FAIL_START /
+#   FAIL_READY / INTERRUPTED；每次开跑先记一行有效配置（含 LEASE_BUDGET_SEC，防环境残留覆盖 MAX_VM_HOURS 而不察）；
 #   停机失败时改写为 STOP_FAILED。看护以 DONE 判完成即可确认 VM 已停或已记停机失败）。
 # 退出码：0 全臂 ok；1 有臂 fail 或 skipped；2 cd 仓库失败；3 起机失败或租约被占拒起（DONE 都是 FAIL_START，看日志区分）；
-#   4 超时未 READY；5 停机失败（VM 可能仍在计费：--retain 下不会自动到期，须人工 stop）；64 参数非法（未起机）；
+#   4 超时未 READY（首起含 READY_RETRY 的一次重试，仍未 READY 才算）；5 停机失败（VM 可能仍在计费：--retain 下不会自动到期，
+#   须人工 stop）；64 参数非法（未起机）；
 #   129/130/143 收到 HUP/INT/TERM（先 TERM 掉 harness 子进程，再停机，再写 DONE）。
 # 挂死判据：步（含冒烟）在后台跑，每 MON_INTERVAL 秒看 transcripts **本次启动后新追加的**末 HUNG_RUNS 行是否全是 error=timeout
 #   （trace 步的行形如 error="TimeoutError: …"，同判）
@@ -74,6 +85,8 @@ HUNG_RUNS=${HUNG_RUNS:-3}
 MON_INTERVAL=${MON_INTERVAL:-60}
 POLL=${POLL:-30}
 SMOKE=${SMOKE:-1}
+READY_RETRY=${READY_RETRY:-1}
+MAX_VM_HOURS=${MAX_VM_HOURS:-10}
 DEPLOY=${DEPLOY:-./colab/deploy.sh}
 PY=${PY:-backend/.venv/bin/python}
 KNEE=${KNEE:-benchmarks/context_knee/run_knee.py}
@@ -85,6 +98,12 @@ ENV_FILE=${ENV_FILE:-./.env.local}
 [[ "$HUNG_RUNS" == <2-> ]]      || { echo "HUNG_RUNS 须为 ≥2 的整数（现 $HUNG_RUNS）" >&2; exit 64; }
 [[ "$MON_INTERVAL" == <1-> ]]   || { echo "MON_INTERVAL 须为 ≥1 的整数（现 $MON_INTERVAL）" >&2; exit 64; }
 [[ "$POLL" == <1-> ]]           || { echo "POLL 须为 ≥1 的整数（现 $POLL）" >&2; exit 64; }
+[[ "$READY_RETRY" == [01] ]]    || { echo "READY_RETRY 须为 0 或 1（现 $READY_RETRY）" >&2; exit 64; }
+[[ "$MAX_VM_HOURS" == <0-> ]]   || { echo "MAX_VM_HOURS 须为 ≥0 的整数小时，0=不限（现 $MAX_VM_HOURS）" >&2; exit 64; }
+LEASE_BUDGET_SEC=${LEASE_BUDGET_SEC:-$((MAX_VM_HOURS * 3600))}
+[[ "$LEASE_BUDGET_SEC" == <0-> ]] || { echo "LEASE_BUDGET_SEC 须为 ≥0 的整数秒（现 $LEASE_BUDGET_SEC）" >&2; exit 64; }
+READY_DEADLINE_SEC=${READY_DEADLINE_SEC:-$((READY_MINUTES * 60))}
+[[ "$READY_DEADLINE_SEC" == <1-> ]] || { echo "READY_DEADLINE_SEC 须为 ≥1 的整数秒（现 $READY_DEADLINE_SEC）" >&2; exit 64; }
 [ -f "$ENV_FILE" ] || { echo "ENV_FILE 不存在：$ENV_FILE" >&2; exit 64; }
 if [ -f "$OUT/DONE" ] && [ "${FORCE_OUT:-0}" != 1 ]; then
   echo "OUT=$OUT 里已有 DONE（$(cat "$OUT/DONE")）：这是收官过的批次目录；换 OUT，或确实要续跑则 FORCE_OUT=1" >&2; exit 64
@@ -93,6 +112,7 @@ mkdir -p "$OUT"
 LOG=$OUT/run_colab.log
 STAMP=$(date +%Y%m%d-%H%M%S)
 touch "$LOG"; rm -f "$OUT/DONE"
+print -r -- "$(date '+%F %T') config: MODEL=$MODEL MODEL_B=$MODEL_B READY_MINUTES=$READY_MINUTES READY_RETRY=$READY_RETRY RESTARTS_MAX=$RESTARTS_MAX HUNG_RUNS=$HUNG_RUNS MAX_VM_HOURS=$MAX_VM_HOURS LEASE_BUDGET_SEC=$LEASE_BUDGET_SEC SMOKE=$SMOKE" >> "$LOG"
 : > "$OUT/arms_status.txt"
 log(){ print -r -- "$(date '+%F %T') $*" >> "$LOG"; }
 finish(){ print -r -- "$1" > "$OUT/DONE"; log "DONE $1"; }
@@ -148,6 +168,10 @@ step_cmd(){
 }
 
 started=0; stopped=0; final_rc=""; host=""; restarts=0; hpid=""; hung=0
+lease_start=0; lease_steps=0; rollovers=0   # 租约时钟（start 命令发出时刻）/ 本租约已开跑的步数 / 预算换租约次数
+ready_fail=""                               # start_and_wait 返回 4 的原因：state（VM 随即 stopped/failed）/ timeout（等满 READY_MINUTES）
+typeset -A DUR_MAX EST_DEFAULT              # 每类步（knee / trace）本批最长干净用时（秒）作下一步预计；没跑过的类用缺省估计
+EST_DEFAULT=(knee 7200 trace 1800)
 stop_colab(){
   local rc
   [ $stopped -eq 1 ] && return 0
@@ -214,12 +238,13 @@ print(d.get("state") or "none")' 2>>"$LOG" || echo error
 # 起机命令发出前就置 started=1：deploy start 预约租约并派出 worker 后即返回，这期间收到信号也必须停机。
 start_and_wait(){
   local start_rc deadline st phase state
-  stopped=0; host=""
+  stopped=0; host=""; ready_fail=""
   started=1
+  lease_start=$(date +%s); lease_steps=0
   log "START deploy $MODEL --retain"
   "$DEPLOY" start --retain --model "$MODEL" >> "$LOG" 2>&1; start_rc=$?
   if [ $start_rc -ne 0 ]; then log "deploy start FAILED rc=$start_rc"; return 3; fi
-  deadline=$(( $(date +%s) + READY_MINUTES * 60 ))
+  deadline=$(( $(date +%s) + READY_DEADLINE_SEC ))
   while [ $(date +%s) -lt $deadline ]; do
     st=$("$DEPLOY" status 2>/dev/null)
     phase=$(print -r -- "$st" | grep -m1 -E '^\s*"phase":' | sed -E 's/.*: *"([^"]*)".*/\1/')
@@ -229,10 +254,10 @@ start_and_wait(){
       host=$(print -r -- "$st" | grep -m1 -E '^\s*"host":' | sed -E 's/.*: *"([^"]*)".*/\1/')
       [ -n "$host" ] && break
     fi
-    case "$state" in stopped|stopping|failed|release-unconfirmed) log "deploy state=$state before READY"; return 4;; esac
+    case "$state" in stopped|stopping|failed|release-unconfirmed) log "deploy state=$state before READY"; ready_fail=state; return 4;; esac
     sleep $POLL
   done
-  [ -n "$host" ] || { log "no READY host within ${READY_MINUTES}min"; return 4; }
+  [ -n "$host" ] || { log "no READY host within ${READY_MINUTES}min"; ready_fail=timeout; return 4; }
   log "READY host=$host"
   return 0
 }
@@ -350,15 +375,22 @@ start_fail_exit(){
 # 换模型 / 重起共用：停机 → 等租约真正 stopped（compute_ctl 对「旧 VM 仍分配 / 旧节点仍可见」拒起，
 # 一审 Major 3）→ 起机；起机失败（3）或未 READY（4）再试一次（4 先防御性停机）。返回 start_and_wait 的 rc。
 SWITCH_WAIT_POLLS=${SWITCH_WAIT_POLLS:-20}
-restart_vm(){
-  local rc i st
-  stop_colab || { finish STOP_FAILED; final_rc=5; exit 5; }
+wait_lease_release(){
+  local i st
   for i in $(seq 1 $SWITCH_WAIT_POLLS); do
     st=$(lease_state)
     case $st in none|stopped) break;; esac
     log "wait lease release: state=$st ($i/$SWITCH_WAIT_POLLS)"
     sleep $POLL
   done
+}
+stop_and_wait_release(){
+  stop_colab || { finish STOP_FAILED; final_rc=5; exit 5; }
+  wait_lease_release
+}
+restart_vm(){
+  local rc
+  stop_and_wait_release
   start_and_wait; rc=$?
   if [ $rc -ne 0 ]; then
     log "start after stop FAILED rc=$rc（旧节点未释放？）：${POLL}s 后再试一次"
@@ -373,6 +405,12 @@ restart_vm(){
 failed=0; skipped=0; aborted=""; phase=A
 [ ${#ORDER_A} -eq 0 ] && { phase=B; MODEL=$MODEL_B; }
 start_and_wait; rc=$?
+if [ $rc -eq 4 ] && [ "$ready_fail" = state ] && [ "$READY_RETRY" = 1 ]; then
+  # 首起 VM 随即 stopped/failed（11-02 两批都是这种瞬时 FAIL_READY 要人工重起）：防御性停机 → 等租约释放 → 自动再起一次；
+  # 不占 RESTARTS_MAX。停机失败则不重试，走下面 start_fail_exit（各步写 skipped，再次停机失败记 STOP_FAILED）。
+  log "首次起机未 READY（rc=4，VM 随即 $ready_fail）：停机 → 等租约释放 → 自动重试一次（READY_RETRY=1）"
+  if stop_colab; then wait_lease_release; start_and_wait; rc=$?; else log "防御性停机失败：不重试"; fi
+fi
 if [ $rc -ne 0 ]; then
   # 起机失败 / 未 READY：防御性停机一次（started=1 已置）再写 DONE；停机失败记 STOP_FAILED / 5
   start_fail_exit $rc "${ORDER[1]}"
@@ -430,7 +468,20 @@ for arm in $ORDER; do
       resume=(--resume); log "ARM $arm: 产物已存在，--resume 续跑"
     fi
   fi
+  # 租约预算（MAX_VM_HOURS）：已判定要跑这一步（已完成的 trace 步在上面 continue 掉，不为它白换机）。本租约已用 + 同类步本批最长
+  # 干净用时（没跑过的类按 EST_DEFAULT）> 预算 → 先换租约再跑；刚起的租约至少跑一步（否则刚起的机会立刻再换一次，白烧一次起机；
+  # 每次起机最多多换一次，有界）。换租约次数每步至多一次、每次 restart_vm 至多两次 start，有界。
+  if [ $LEASE_BUDGET_SEC -gt 0 ] && [ $lease_steps -gt 0 ]; then
+    el=$(( $(date +%s) - lease_start )); est=${DUR_MAX[$kind]:-${EST_DEFAULT[$kind]:-0}}
+    if [ $((el + est)) -gt $LEASE_BUDGET_SEC ]; then
+      rollovers=$((rollovers + 1))
+      log "LEASE $arm: 本租约已用 $((el / 60)) min + 同类步预计 $((est / 60)) min > 预算 $((LEASE_BUDGET_SEC / 60)) min：换租约续跑（第 $rollovers 次，同模型 $MODEL，不占重起预算）"
+      restart_vm; rc2=$?
+      [ $rc2 -ne 0 ] && start_fail_exit $rc2 "$arm"
+    fi
+  fi
   log "ARM $arm [$phase $MODEL] start: ${extra[*]} ${resume[*]}"
+  lease_steps=$((lease_steps + 1)); step_t0=$(date +%s); step_restarted=0
   while :; do
     run_arm "$OUT/$arm" "$OUT/$arm.log" "${extra[@]}" "${resume[@]}"; rc=$?
     log "ARM $arm harness rc=$rc hung=$hung"
@@ -443,6 +494,7 @@ for arm in $ORDER; do
           arm_status $arm fail; failed=$((failed + 1))
           start_fail_exit $rc2 "$(next_step_after $arm)"
         fi
+        lease_steps=1; step_restarted=1    # 续跑的这一步算新租约上的第一步；本步用时含重起，不作估计
         if [ "$kind" = trace ]; then
           if [ -d "$OUT/$arm" ]; then
             mv "$OUT/$arm" "$OUT/$arm.partial-$STAMP-r$restarts" || log "⚠️ mv $arm 失败（rc=$?）"
@@ -465,10 +517,15 @@ for arm in $ORDER; do
     fi
     break
   done
+  # 干净跑完（没挂死、没重起）的步才计入同类步最长用时；挂死那一跑的时长（含发现 + 重起等待）不是该类步的用时
+  if [ $step_restarted -eq 0 ] && [ $hung -eq 0 ]; then
+    d=$(( $(date +%s) - step_t0 )); [ $d -gt ${DUR_MAX[$kind]:-0} ] && DUR_MAX[$kind]=$d
+  fi
 done
 
 stop_colab || { finish STOP_FAILED; final_rc=5; exit 5; }
 rc=0; [ $((failed + skipped)) -gt 0 ] && rc=1
-finish "BATCH_RC=$failed SKIPPED=$skipped${aborted:+ ABORTED=$aborted}"
+extra_done=""; [ $rollovers -gt 0 ] && extra_done=" ROLLOVERS=$rollovers"
+finish "BATCH_RC=$failed SKIPPED=$skipped${aborted:+ ABORTED=$aborted}$extra_done"
 final_rc=$rc
 exit $rc

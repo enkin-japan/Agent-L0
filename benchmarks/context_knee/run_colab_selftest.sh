@@ -1,5 +1,5 @@
 #!/bin/zsh
-# run_colab.sh 桩自测：用假 deploy / 假 harness 跑 23 个场景，不碰 Colab、不读密钥、不起任何服务。
+# run_colab.sh 桩自测：用假 deploy / 假 harness 跑 32 个场景，不碰 Colab、不读密钥、不起任何服务。
 # 覆盖一审（2026-11-02）指出的路径：挂死半小时内发现并 TERM 掉 harness（C1）、重起用完即停机跳余臂（M1）、
 # `start_and_wait; rc=$?` 起机失败记 FAIL_START（M2）、全跳过不记全过（M3）、stop_colab 的 local rc（M4）、
 # 信号先杀子进程再停机并写 INTERRUPTED（m1/m2）、同目录重跑自动 --resume（m3）、ok 需 complete 且记 errors（m4）；
@@ -12,6 +12,11 @@
 #   （trace_hang：TimeoutError 行同判挂死、半截目录挪走后从头重跑、不得 --resume；trace_done_rerun：完成的步不重跑）、
 #   B 段冒烟门（phase_b_smoke_fail）。变异证明：换模型不改 MODEL / 不分段 / hung_tail 不认 TimeoutError / 不挪半截目录 /
 #   B 段不冒烟 / 换模型不先停机 任一处，对应场景必须变红（11-02 verifier 6/6 红）。
+# 11-04：首起 FAIL_READY（VM 随即 failed）自动重试一次（ready_retry：重试后再挂死一次仍能重起，证明不占 RESTARTS_MAX；
+#   ready_retry_exhaust：只重试一次；ready_retry_off：READY_RETRY=0 同旧版；ready_retry_timeout：等 READY 超时不重试；ready_retry_stop_fail：停机失败不重试、仍写 skipped）、MAX_VM_HOURS
+#   租约预算换机（lease_rollover：已用未超但「已用 + 同类步最长用时」超预算 → 同模型 stop+start 后再跑，之后挂死仍能重起；
+#   lease_rollover_floor：刚起的租约至少跑一步，预算小于单步时每步换一次机、有界；lease_unlimited：MAX_VM_HOURS=0 不限，1.5 非法 64）。
+#   变异证明：去掉重试 / 重试不先停机 / 预算判据去掉 est / 去掉 lease_steps 门 / 换租约改模型 / 不记 lease_steps 任一处，对应场景必须变红。
 set -u
 ROOT=${0:A:h:h:h}
 CHAIN=$ROOT/benchmarks/context_knee/run_colab.sh
@@ -41,6 +46,8 @@ case $1 in
     [ "${STUB_START_FAIL:-0}" = 1 ] && { echo "start failed (stub)"; exit 1; }
     [ -n "${STUB_START_FAIL_AFTER:-}" ] && [ $nstart -gt $STUB_START_FAIL_AFTER ] && { echo "start failed (stub, #$nstart)"; exit 1; }
     print -r -- "$*" >> "$S/starts.log"          # 每次 start 的完整参数（换模型场景查 --model）
+    # 前 N 次 start 命令成功但 VM 随即 failed（11-02 的瞬时 FAIL_READY）：status 报 state=failed，链脚本等 READY 时见之返回 4
+    [ -n "${STUB_FAIL_READY_TIMES:-}" ] && [ $nstart -le $STUB_FAIL_READY_TIMES ] && { echo failed > "$S/state"; echo 0 > "$S/polls"; echo "started (stub, #$nstart → failed) $*"; exit 0; }
     echo booting > "$S/state"; echo 0 > "$S/polls"; echo "started (stub) $*";;
   stop)
     [ "${STUB_STOP_FAIL:-0}" = 1 ] && { echo "stop failed (stub)"; exit 1; }
@@ -52,10 +59,11 @@ chmod +x "$T/deploy_stub.sh"
 
 cat > "$T/knee_stub.py" <<'EOF'
 """假 harness：按产物目录名查 STUB_BEHAVIOR（JSON）决定行为；smoke-* 目录按 STUB_SMOKE（B 段模型的冒烟按 STUB_SMOKE_B，
-缺省同 STUB_SMOKE；B 段模型 = 环境 MODEL_B）。ok / errors / fail / incomplete / hang / hang_then_ok / slow。
+缺省同 STUB_SMOKE；B 段模型 = 环境 MODEL_B）。ok / errors / fail / incomplete / hang / hang_then_ok / slow / ok_slow。
 像真 run_knee 一样：产物已存在且无 --resume 则拒跑。trace-* 目录按 run_trace 口径：收尾写 meta.json 而非 summary.json、
 超时行 error="TimeoutError: …"、带 --resume 即拒跑；hang_then_ok 在 trace 下看旁边有没有 <步>.partial-* 目录（链脚本挪走的半截）。
-hang / slow 的 sleep 秒数取 STUB_HANG_SLEEP（缺省 600）：变异证明里判据被改坏时不必等满。"""
+hang / slow 的 sleep 秒数取 STUB_HANG_SLEEP（缺省 600）：变异证明里判据被改坏时不必等满。
+ok_slow = 跑 STUB_OK_SLEEP 秒（缺省 3）后正常完成：给租约预算场景一个有用时的步。"""
 import json, os, sys, time, pathlib
 args = sys.argv[1:]
 HANG_SLEEP = float(os.environ.get("STUB_HANG_SLEEP", "600"))
@@ -107,6 +115,8 @@ if beh == "hang":
     time.sleep(HANG_SLEEP); sys.exit(0)
 if beh == "slow":
     row(); time.sleep(HANG_SLEEP); summary(); sys.exit(0)
+if beh == "ok_slow":
+    row(); time.sleep(float(os.environ.get("STUB_OK_SLEEP", "3"))); row(); summary(); sys.exit(0)
 print("stub: unknown behaviour", beh); sys.exit(3)
 EOF
 
@@ -144,7 +154,7 @@ wait_log(){ # $1 场景 $2 正则：最多 30 s 等时间线出现该行
   local i; for i in {1..30}; do grep -qE "$2" "$T/$1/run_colab.log" 2>/dev/null && return 0; sleep 1; done; return 1
 }
 
-want=("$@"); [ ${#want} -eq 0 ] && want=(ok hang_recover hang_exhaust start_fail smoke_fail term stop_fail lease_busy arm_fail arm_errors restart_start_fail term_ready term_prestart done_guard phases trace_hang phase_b_smoke_fail order b_only switch_budget smoke_reset trace_done_rerun switch_start_fail d45_steps)
+want=("$@"); [ ${#want} -eq 0 ] && want=(ok hang_recover hang_exhaust start_fail smoke_fail term stop_fail lease_busy arm_fail arm_errors restart_start_fail term_ready term_prestart done_guard phases trace_hang phase_b_smoke_fail order b_only switch_budget smoke_reset trace_done_rerun switch_start_fail d45_steps ready_retry ready_retry_exhaust ready_retry_off ready_retry_timeout ready_retry_stop_fail lease_rollover lease_rollover_floor lease_unlimited)
 has(){ [[ " ${want[*]} " == *" $1 "* ]]; }
 
 if has ok; then
@@ -337,6 +347,63 @@ if has arm_errors; then
   # 同目录重跑：已有产物 → 自动 --resume（假 harness 无 --resume 会拒跑）
   env "${ENVBASE[@]}" OUT="$T/arm_errors" STUB_DIR="$T/arm_errors.stub2" ARMS=direct-mock STUB_BEHAVIOR='{"direct-mock":"ok"}' FORCE_OUT=1 zsh "$CHAIN" > "$T/arm_errors.stdout2" 2>&1; echo $? > "$T/arm_errors.rc"
   check arm_errors '[ "$(rc_of arm_errors)" = 0 ] && grep -q "产物已存在，--resume 续跑" "$T/arm_errors/run_colab.log"' "重跑未自动 --resume：rc=$(rc_of arm_errors)"
+fi
+if has ready_retry; then
+  # 首起 start 成功但 VM 随即 failed（瞬时 FAIL_READY）→ 防御性停机 → 等释放 → 自动再起一次 → 跑步；步随后挂死一次，RESTARTS_MAX=1
+  # 下仍能重起续跑 = 重试没占重起预算
+  run_chain ready_retry ARMS=direct-mock STUB_FAIL_READY_TIMES=1 RESTARTS_MAX=1 STUB_BEHAVIOR='{"direct-mock":"hang_then_ok"}'
+  check ready_retry '[ "$(rc_of ready_retry)" = 0 ] && [ "$(done_of ready_retry)" = "BATCH_RC=0 SKIPPED=0" ]' "rc=$(rc_of ready_retry) DONE=$(done_of ready_retry)"
+  check ready_retry '[ "$(calls ready_retry start)" = 3 ] && [ "$(calls ready_retry stop)" = 3 ]' "start=$(calls ready_retry start) stop=$(calls ready_retry stop)（want 3/3：首起失败防御性停机 + 重试 + 挂死重起 + 收官停机）"
+  check ready_retry 'grep -q "首次起机未 READY（rc=4，VM 随即 state）" "$T/ready_retry/run_colab.log" && grep -q "重起（1/1）后续跑" "$T/ready_retry/run_colab.log" && [ "$(status_of ready_retry)" = "direct-mock ok;" ]' "重试/重起日志缺失或 status=$(status_of ready_retry)"
+  check ready_retry '[ "$(grep -n "stop rc=0" "$T/ready_retry/run_colab.log" | head -n1 | cut -d: -f1)" -lt "$(grep -n "START deploy" "$T/ready_retry/run_colab.log" | sed -n 2p | cut -d: -f1)" ]' "重试没有先停机再起机"
+fi
+if has ready_retry_exhaust; then
+  # 重试那次也未 READY → DONE FAIL_READY / rc 4、步记 skipped、停机两次、DONE 在停机后
+  run_chain ready_retry_exhaust ARMS=direct-mock,direct-prod STUB_FAIL_READY_TIMES=2
+  check ready_retry_exhaust '[ "$(rc_of ready_retry_exhaust)" = 4 ] && [ "$(done_of ready_retry_exhaust)" = FAIL_READY ]' "rc=$(rc_of ready_retry_exhaust) DONE=$(done_of ready_retry_exhaust)"
+  check ready_retry_exhaust '[ "$(calls ready_retry_exhaust start)" = 2 ] && [ "$(calls ready_retry_exhaust stop)" = 2 ] && stop_before_done ready_retry_exhaust' "start=$(calls ready_retry_exhaust start) stop=$(calls ready_retry_exhaust stop)（want 2/2，只重试一次）"
+  check ready_retry_exhaust '[ "$(status_of ready_retry_exhaust)" = "direct-mock skipped;direct-prod skipped;" ]' "status=$(status_of ready_retry_exhaust)"
+fi
+if has ready_retry_off; then
+  # READY_RETRY=0：行为同旧版，首起未 READY 直接 FAIL_READY，起机一次停机一次
+  run_chain ready_retry_off ARMS=direct-mock STUB_FAIL_READY_TIMES=1 READY_RETRY=0
+  check ready_retry_off '[ "$(rc_of ready_retry_off)" = 4 ] && [ "$(done_of ready_retry_off)" = FAIL_READY ] && [ "$(calls ready_retry_off start)" = 1 ] && [ "$(calls ready_retry_off stop)" = 1 ]' "rc=$(rc_of ready_retry_off) DONE=$(done_of ready_retry_off) start=$(calls ready_retry_off start) stop=$(calls ready_retry_off stop)"
+fi
+if has ready_retry_timeout; then
+  # 等 READY 超时（READY_MINUTES 等满）不重试：FAIL_READY / rc 4、起机一次停机一次。桩 status 永不 ready，测试接缝 READY_DEADLINE_SEC=2
+  run_chain ready_retry_timeout ARMS=direct-mock STUB_READY_POLLS=1000 READY_DEADLINE_SEC=2
+  check ready_retry_timeout '[ "$(rc_of ready_retry_timeout)" = 4 ] && [ "$(done_of ready_retry_timeout)" = FAIL_READY ] && [ "$(calls ready_retry_timeout start)" = 1 ] && [ "$(calls ready_retry_timeout stop)" = 1 ]' "rc=$(rc_of ready_retry_timeout) DONE=$(done_of ready_retry_timeout) start=$(calls ready_retry_timeout start) stop=$(calls ready_retry_timeout stop)（等 READY 超时不得重试）"
+  check ready_retry_timeout '! grep -q "自动重试一次" "$T/ready_retry_timeout/run_colab.log" && grep -q "no READY host within" "$T/ready_retry_timeout/run_colab.log"' "超时路径日志不对"
+fi
+if has ready_retry_stop_fail; then
+  # 首起 VM 随即 failed、防御性停机失败 → 不重试、起机只一次；各步仍写 skipped；再次停机失败记 STOP_FAILED / rc 5
+  run_chain ready_retry_stop_fail ARMS=direct-mock,direct-prod STUB_FAIL_READY_TIMES=1 STUB_STOP_FAIL=1
+  check ready_retry_stop_fail '[ "$(rc_of ready_retry_stop_fail)" = 5 ] && [ "$(done_of ready_retry_stop_fail)" = STOP_FAILED ] && [ "$(calls ready_retry_stop_fail start)" = 1 ]' "rc=$(rc_of ready_retry_stop_fail) DONE=$(done_of ready_retry_stop_fail) start=$(calls ready_retry_stop_fail start)（停机失败不得重试起机）"
+  check ready_retry_stop_fail '[ "$(status_of ready_retry_stop_fail)" = "direct-mock skipped;direct-prod skipped;" ] && grep -q "防御性停机失败：不重试" "$T/ready_retry_stop_fail/run_colab.log"' "status=$(status_of ready_retry_stop_fail)（每步须有一行 skipped）"
+fi
+if has lease_rollover; then
+  # 租约预算 20 s：第一步跑 12 s 后已用约 15 s（未超预算），但「已用 + 同类最长约 13 s > 20」→ 第二步开跑前同模型 stop+start 换租约；
+  # 只看已用不加预计用时的判据在这里不会换机（变异证明用）。第二步随后挂死一次，RESTARTS_MAX=1 下仍能重起 = 换租约不占重起预算
+  run_chain lease_rollover ARMS=direct-mock,direct-prod LEASE_BUDGET_SEC=20 RESTARTS_MAX=1 STUB_BEHAVIOR='{"direct-mock":"ok_slow","direct-prod":"hang_then_ok"}' STUB_OK_SLEEP=12
+  check lease_rollover '[ "$(rc_of lease_rollover)" = 0 ] && [ "$(done_of lease_rollover)" = "BATCH_RC=0 SKIPPED=0 ROLLOVERS=1" ]' "rc=$(rc_of lease_rollover) DONE=$(done_of lease_rollover)"
+  check lease_rollover '[ "$(calls lease_rollover start)" = 3 ] && [ "$(calls lease_rollover stop)" = 3 ] && [ "$(start_models lease_rollover)" = "stub/model;stub/model;stub/model;" ]' "start=$(calls lease_rollover start) stop=$(calls lease_rollover stop) models=$(start_models lease_rollover)（want 3/3：换租约 + 挂死重起，同模型）"
+  check lease_rollover '[ "$(status_of lease_rollover)" = "direct-mock ok;direct-prod ok;" ] && grep -q "LEASE direct-prod: 本租约已用" "$T/lease_rollover/run_colab.log" && grep -q "重起（1/1）后续跑" "$T/lease_rollover/run_colab.log"' "status=$(status_of lease_rollover)；换租约 / 重起日志缺失"
+  check lease_rollover '[ "$(grep -n "LEASE direct-prod" "$T/lease_rollover/run_colab.log" | cut -d: -f1)" -lt "$(grep -n "ARM direct-prod .* start:" "$T/lease_rollover/run_colab.log" | cut -d: -f1)" ] && [ "$(grep -c "stop rc=0" "$T/lease_rollover/run_colab.log")" = 3 ]' "换租约须在第二步开跑之前，且先停机"
+  check lease_rollover '[ "$(print -l "$T"/lease_rollover/smoke-direct-*(N/) | wc -l | tr -d " ")" = 1 ]' "换租约后不该再冒烟（冒烟目录数 $(print -l "$T"/lease_rollover/smoke-direct-*(N/) | wc -l | tr -d " ")）"
+fi
+if has lease_rollover_floor; then
+  # 预算 1 s 小于任何一步：刚起的租约仍至少跑一步（否则刚起就再换一次，白烧起机）；三步 → 起机三次（每步一次），全 ok
+  run_chain lease_rollover_floor ARMS=direct-mock,direct-prod,direct-catalog LEASE_BUDGET_SEC=1
+  check lease_rollover_floor '[ "$(rc_of lease_rollover_floor)" = 0 ] && [ "$(done_of lease_rollover_floor)" = "BATCH_RC=0 SKIPPED=0 ROLLOVERS=2" ]' "rc=$(rc_of lease_rollover_floor) DONE=$(done_of lease_rollover_floor)"
+  check lease_rollover_floor '[ "$(calls lease_rollover_floor start)" = 3 ] && [ "$(calls lease_rollover_floor stop)" = 3 ] && [ "$(status_of lease_rollover_floor)" = "direct-mock ok;direct-prod ok;direct-catalog ok;" ]' "start=$(calls lease_rollover_floor start) stop=$(calls lease_rollover_floor stop) status=$(status_of lease_rollover_floor)"
+fi
+if has lease_unlimited; then
+  # MAX_VM_HOURS=0 走生产换算（不给 LEASE_BUDGET_SEC）：不限，同样的两步只起一次机；时间线首行记有效配置；MAX_VM_HOURS=1.5 非法 → 64 不起机
+  run_chain lease_unlimited ARMS=direct-mock,direct-prod MAX_VM_HOURS=0 STUB_BEHAVIOR='{"direct-mock":"ok_slow"}'
+  check lease_unlimited '[ "$(rc_of lease_unlimited)" = 0 ] && [ "$(done_of lease_unlimited)" = "BATCH_RC=0 SKIPPED=0" ] && [ "$(calls lease_unlimited start)" = 1 ]' "rc=$(rc_of lease_unlimited) DONE=$(done_of lease_unlimited) start=$(calls lease_unlimited start)"
+  check lease_unlimited 'head -n1 "$T/lease_unlimited/run_colab.log" | grep -q "config: .*MAX_VM_HOURS=0 LEASE_BUDGET_SEC=0 "' "首行有效配置缺失：$(head -n1 "$T/lease_unlimited/run_colab.log")"
+  run_chain lease_unlimited_bad ARMS=direct-mock MAX_VM_HOURS=1.5
+  check lease_unlimited '[ "$(rc_of lease_unlimited_bad)" = 64 ] && [ "$(calls lease_unlimited_bad start)" = 0 ]' "MAX_VM_HOURS=1.5 应 64 不起机：rc=$(rc_of lease_unlimited_bad) start=$(calls lease_unlimited_bad start)"
 fi
 
 print -r -- "run_colab selftest: pass=$pass fail=$fail (scenarios: ${want[*]})"
