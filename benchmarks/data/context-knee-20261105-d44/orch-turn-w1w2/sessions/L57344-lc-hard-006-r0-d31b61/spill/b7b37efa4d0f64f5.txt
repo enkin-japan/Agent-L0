@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/scheduler/log/scheduler-08.log", "content": "2026-09-07T08:25:36Z INFO  [scheduler-3] dropped 843 malformed records from partition 2069\n2026-09-07T08:03:23Z WARN  [scheduler-6] rotated segment seg-5010.dat size_mb=251\n2026-09-07T07:52:45Z DEBUG [scheduler-8] batch 837 committed rows=182 lag_ms=399"}

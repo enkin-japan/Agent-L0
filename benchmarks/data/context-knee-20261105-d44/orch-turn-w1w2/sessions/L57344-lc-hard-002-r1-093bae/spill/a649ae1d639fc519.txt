@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Locate and list the reports folder
+  ○ [2] Identify files containing DRAFT vs final reports
+  ○ [3] Delete DRAFT files
+  ○ [4] Rename remaining .md files with -final (copy then delete original)
+  ○ [5] Verify results and answer with the three verbatim values

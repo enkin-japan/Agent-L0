@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/mailer/log/mailer-17.log", "content": "2026-09-27T05:23:52Z DEBUG [mailer-2] connection pool resized from 264 to 2318\n2026-09-27T05:41:43Z INFO  [mailer-1] gc pause 328ms heap_mb=1445\n2026-09-27T05:26:49Z ERROR [mailer-4] worker heartbeat ok queue=3408 inflight=85\n2026-09-27T05:24:34Z DEBUG [mailer-1] worker heartbeat ok queue=4241 inflight=346"}

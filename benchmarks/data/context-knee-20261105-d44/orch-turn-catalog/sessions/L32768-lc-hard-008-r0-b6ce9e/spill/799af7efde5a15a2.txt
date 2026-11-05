@@ -1,0 +1,4 @@
+Plan replaced.
+  ○ [1] Append '2026-08-24 OK' to logs/build.log and logs/test.log (create logs/deploy.log with it)
+  ○ [2] Write count of log files containing today's line into logs/count.txt
+  ○ [3] Report the three requested values verbatim

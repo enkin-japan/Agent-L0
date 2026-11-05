@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Identify DRAFT vs final reports
+  ○ [2] Delete DRAFT files (alpha.md, gamma.md)
+  ○ [3] Rename beta.md → beta-final.md (copy + delete original)
+  ○ [4] Verify folder state and report the three values

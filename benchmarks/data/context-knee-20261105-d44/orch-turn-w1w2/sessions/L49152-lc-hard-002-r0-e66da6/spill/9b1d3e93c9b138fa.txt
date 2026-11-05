@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Identify DRAFT vs final reports
+  ○ [2] Delete DRAFT files
+  ○ [3] Rename final report to -final and delete original
+  ○ [4] Verify folder state
+  ○ [5] Answer with the three verbatim values

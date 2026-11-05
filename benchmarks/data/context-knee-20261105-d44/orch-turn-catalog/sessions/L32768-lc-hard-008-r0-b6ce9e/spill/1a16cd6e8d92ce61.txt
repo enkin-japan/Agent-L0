@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Values to report verbatim: halyard config = /opt/halyard/conf/halyard-6f4f16.toml (from thumbnailer-19.log); ticket = OPS-60117 (from scheduler-20.log); queue_depth_alert_threshold = 1634 (from cache-

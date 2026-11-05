@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - 已确认的工具输出值：① halyard 配置文件路径 = /opt/halyard/conf/halyard-f333fa.toml（见 thumbnailer-12.log）；② 升级工单号 = OPS-84203（见 relay-01.log）；③ queue_depth_alert_threshold = 7573（见 quota-svc/deploy/values.yaml）

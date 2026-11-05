@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/telemetry/gateway-6.json", "content": "{\n  \"p95_ms_0\": 818.46,\n  \"p95_ms_1\": 380.43,\n  \"err_rate_2\": 450.03,\n  \"p95_ms_3\": 445.08,\n  \"err_rate_4\": 352.86,\n  \"cpu_pct_5\": 779.93,\n  \"err_rate_6\": 52.67,\n  \"p50_ms_7\": 441.25,\n  \"qps_8\": 629.12,\n  \"qps_9\": 192.51,\n  \"p95_ms_10\": 279.29,\n  \"ok\": true\n}"}

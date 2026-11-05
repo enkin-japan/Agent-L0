@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/indexer/deploy/values.yaml", "content": "cpu_limit: warn\n  max_batch: false\nread_only: true\nflush_interval_s: 2688\n    region: ap-east-2\n  max_batch: info\n    log_level: false\nwarmup_s: 169\n    flush_interval_s: false\nregion: true\n  shard_count: info\n  log_level: info\n  retry_limit: warn\ntimeout_ms: false"}

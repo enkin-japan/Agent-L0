@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Values needed for final reply: halyard config path = /opt/halyard/conf/halyard-f333fa.toml (from audit-trail-04.log); escalation ticket = OPS-84203 (from runbook/gateway.md); queue_depth_alert_thresho

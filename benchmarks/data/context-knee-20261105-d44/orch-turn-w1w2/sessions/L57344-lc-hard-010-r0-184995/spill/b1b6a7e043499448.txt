@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - 已确认的工具输出值：① halyard 配置路径 /opt/halyard/conf/halyard-6f4f16.toml（gateway-12.log）；② 工单号 OPS-60117（audit-trail/deploy/values.yaml）；③ queue_depth_alert_threshold = 1634（runbook/report-gen.md）

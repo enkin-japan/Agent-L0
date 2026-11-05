@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - halyard config path (from runbook/cache-warm.md): /opt/halyard/conf/halyard-31c493.toml; queue_depth_alert_threshold = 2202 (cache-warm-27.log); OPS ticket seen: OPS-34499 (audit-trail-28.log, "upgrad

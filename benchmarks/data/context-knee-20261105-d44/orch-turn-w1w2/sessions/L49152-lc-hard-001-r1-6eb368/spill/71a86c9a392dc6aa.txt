@@ -1,0 +1,3 @@
+Saved to scratchpad.
+  - Sales totals: Jan=2485 Feb=2975 Mar=3030 Apr=3540 May=3300; 1-5月合计=15330
+  - Three verbatim values: ① halyard config path=/opt/halyard/conf/halyard-f333fa.toml (from ledger-04.log) ② ticket=OPS-84203 (from runbook/ledger.md) ③ queue_depth_alert_threshold=7573 (from geo-tiles/d

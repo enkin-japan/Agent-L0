@@ -1,0 +1,1 @@
+[Reminder] Now on step "计算五个月金额合计". Focus on this step only; do not go back and redo steps that are already done. If the step you just finished produced a value a later step will need (a url, id, path, number), save it now with remember.

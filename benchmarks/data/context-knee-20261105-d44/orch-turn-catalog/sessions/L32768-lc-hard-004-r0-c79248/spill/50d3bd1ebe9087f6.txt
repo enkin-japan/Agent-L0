@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Verbatim values from earlier tool outputs: (1) halyard config path = /opt/halyard/conf/halyard-6f4f16.toml (from quota-svc/deploy/values.yaml); (2) escalation ticket = OPS-60117 (from feed-merge/log/f

@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - 三项待引用值：① halyard 配置路径 = /opt/halyard/conf/halyard-6f4f16.toml（audit-trail/deploy/values.yaml）；② 工单号 = OPS-60117（mailer-15.log 末行）；③ queue_depth_alert_threshold = 1634（gateway-10.log）

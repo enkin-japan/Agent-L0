@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/report-gen/log/report-gen-06.log", "content": "2026-09-13T13:24:33Z WARN  [report-gen-8] worker heartbeat ok queue=2282 inflight=570\n2026-09-13T14:03:29Z WARN  [report-gen-6] cache miss ratio 0.071 over last 278s\n2026-09-13T14:25:35Z DEBUG [report-gen-2] gc pause 726ms heap_mb=685"}

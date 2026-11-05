@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Required verbatim values: halyard config path = /opt/halyard/conf/halyard-6f4f16.toml (from runbook/relay.md); ticket OPS-60117 (search-api-15.log); queue_depth_alert_threshold = 1634 (geo-tiles-27.lo

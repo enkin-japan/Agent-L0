@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - 三项逐字值：① halyard 配置路径 /opt/halyard/conf/halyard-f333fa.toml（audit-trail/deploy/values.yaml）② 工单 OPS-84203（ingest/deploy/values.yaml）③ queue_depth_alert_threshold = 7573（audit-trail-26.log）

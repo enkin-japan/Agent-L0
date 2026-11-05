@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Required verbatim values for final answer: ① halyard config path = /opt/halyard/conf/halyard-f333fa.toml (from runbook/cache-warm.md); ② ticket = OPS-84203 (from audit-trail/deploy/values.yaml); ③ que

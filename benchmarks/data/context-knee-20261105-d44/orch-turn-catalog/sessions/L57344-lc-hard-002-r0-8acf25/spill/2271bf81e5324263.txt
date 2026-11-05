@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Required verbatim values: (1) halyard config path = /opt/halyard/conf/halyard-6f4f16.toml (from indexer-12.log); (2) escalation ticket = OPS-60117 (from report-gen/deploy/values.yaml); (3) queue_depth

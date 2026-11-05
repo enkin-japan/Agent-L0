@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Values to state verbatim in final reply: (1) halyard config path = /opt/halyard/conf/halyard-f333fa.toml; (2) escalation ticket ID = OPS-84203; (3) queue_depth_alert_threshold = 7573

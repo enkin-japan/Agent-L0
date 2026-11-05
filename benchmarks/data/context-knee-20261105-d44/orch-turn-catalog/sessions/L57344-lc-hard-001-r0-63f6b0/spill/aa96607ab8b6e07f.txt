@@ -1,0 +1,8 @@
+exit_code: 0
+stdout:
+total 5
+-rw-r--r--  1 user  staff      68 Jan  1 09:00 2026-01.csv
+-rw-r--r--  1 user  staff      68 Jan  1 09:00 2026-02.csv
+-rw-r--r--  1 user  staff      68 Jan  1 09:00 2026-03.csv
+-rw-r--r--  1 user  staff      69 Jan  1 09:00 2026-04.csv
+-rw-r--r--  1 user  staff      68 Jan  1 09:00 2026-05.csv

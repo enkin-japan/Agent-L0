@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Values to report verbatim: (1) halyard config path = /opt/halyard/conf/halyard-6f4f16.toml (from indexer/deploy/values.yaml); (2) escalation ticket = OPS-60117 (from feed-merge/deploy/values.yaml); (3

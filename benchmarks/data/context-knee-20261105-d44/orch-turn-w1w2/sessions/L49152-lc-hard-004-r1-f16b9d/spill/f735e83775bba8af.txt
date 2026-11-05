@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Values needed verbatim in final reply: (1) halyard config path = /opt/halyard/conf/halyard-f333fa.toml (from runbook/gateway.md); (2) escalation ticket ID = OPS-84203 (from cache-warm/deploy/values.ya

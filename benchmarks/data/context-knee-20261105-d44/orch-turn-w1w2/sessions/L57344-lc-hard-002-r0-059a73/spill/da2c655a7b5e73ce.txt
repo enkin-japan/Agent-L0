@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Locate the reports folder and list its .md files
+  ○ [2] Identify which files contain DRAFT (delete) vs final (rename with -final)
+  ○ [3] Execute deletions and renames without changing content
+  ○ [4] Find queue_depth_alert_threshold value in tool outputs
+  ○ [5] Compose final reply with the three verbatim values

@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - 去重后清单 8 项：牛奶 鸡蛋 面包 咖啡 黄油 酸奶 蜂蜜；halyard 配置路径=/opt/halyard/conf/halyard-6f4f16.toml（report-gen-07.log）；工单 OPS-60117（runbook/gateway.md）；queue_depth_alert_threshold=1634（runbook/relay.md）

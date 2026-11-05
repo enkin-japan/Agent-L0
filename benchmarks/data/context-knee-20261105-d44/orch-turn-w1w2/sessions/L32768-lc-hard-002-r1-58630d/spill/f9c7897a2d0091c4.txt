@@ -1,0 +1,3 @@
+Saved to scratchpad.
+  - Required verbatim values: (1) halyard config path = /opt/halyard/conf/halyard-f333fa.toml (from relay-10.log); (2) escalation ticket = OPS-84203 (from thumbnailer/deploy/values.yaml); (3) queue_depth_
+  - Value 3: queue_depth_alert_threshold = 7573 (scheduler-10.log line: "queue_depth_alert_threshold = 7573")

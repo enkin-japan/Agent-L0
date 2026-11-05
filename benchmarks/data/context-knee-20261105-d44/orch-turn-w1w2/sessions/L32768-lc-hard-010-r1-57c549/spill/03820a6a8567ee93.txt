@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - 三项值：① halyard 配置路径 /opt/halyard/conf/halyard-f333fa.toml（来自 thumbnailer-10.log 输出）；② 工单号 OPS-84203（来自 ingest/deploy/values.yaml "escalation: incident tracked as ticket OPS-84203"）；③ queue_depth_alert_

@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Values needed for final reply: (1) halyard config path = /opt/halyard/conf/halyard-6f4f16.toml (from feed-merge-02.log); (2) escalation ticket = OPS-60117 (from ingest-24.log); (3) queue_depth_alert_t

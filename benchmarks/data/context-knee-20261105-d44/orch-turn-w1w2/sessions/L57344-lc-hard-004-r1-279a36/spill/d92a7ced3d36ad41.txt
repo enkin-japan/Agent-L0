@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/ledger/log/ledger-28.log", "content": "2026-09-03T03:23:40Z WARN  [ledger-3] retrying upstream call attempt=575 backoff_ms=1088\n2026-09-03T03:35:33Z INFO  [ledger-6] cache miss ratio 0.89 over last 615s\n2026-09-03T03:14:49Z DEBUG [ledger-7] gc pause 787ms heap_mb=1668\n2026-09-03T03:57:04Z ERROR [ledger-6] connection pool resized from 426 to 2428"}

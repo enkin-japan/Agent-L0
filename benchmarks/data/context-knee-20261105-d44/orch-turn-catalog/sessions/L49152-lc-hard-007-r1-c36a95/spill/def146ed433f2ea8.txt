@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/indexer/log/indexer-06.log", "content": "2026-09-21T23:44:57Z INFO  [indexer-8] batch 4978 committed rows=3936 lag_ms=760\n2026-09-21T23:42:12Z DEBUG [indexer-3] schema check passed version=812\n2026-09-21T23:31:58Z DEBUG [indexer-4] batch 3885 committed rows=4904 lag_ms=828\n2026-09-21T23:29:19Z ERROR [indexer-6] gc pause 107ms heap_mb=4747"}

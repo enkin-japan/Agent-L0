@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Verbatim values from earlier tool outputs: (1) halyard config path = /opt/halyard/conf/halyard-6f4f16.toml (from gateway-05.log); (2) escalation ticket = OPS-60117 (from feed-merge-27.log); (3) queue_

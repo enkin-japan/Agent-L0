@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/quota-svc/log/quota-svc-09.log", "content": "2026-09-24T04:51:18Z ERROR [quota-svc-3] dropped 229 malformed records from partition 8659\n2026-09-24T04:49:09Z INFO  [quota-svc-2] dropped 47 malformed records from partition 2019\n2026-09-24T04:46:53Z DEBUG [quota-svc-5] batch 339 committed rows=2806 lag_ms=17"}

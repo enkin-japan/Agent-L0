@@ -1,0 +1,1 @@
+{"todos": [{"text": "legacy-2025q3 Patch feed-merge #739", "done": true}, {"text": "legacy-2025q3 Rotate feed-merge #972", "done": false}, {"text": "legacy-2025q3 清理 ledger #407", "done": false}, {"text": "legacy-2025q3 Rotate feed-merge #935", "done": true}, {"text": "legacy-2025q3 Review scheduler #940", "done": false}, {"text": "legacy-2025q3 巡检 mailer #669", "done": false}]}

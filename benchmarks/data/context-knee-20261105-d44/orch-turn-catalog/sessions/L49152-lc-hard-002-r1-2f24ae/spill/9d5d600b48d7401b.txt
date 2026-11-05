@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Locate the reports folder and list its files
+  ○ [2] Read each report to detect DRAFT
+  ○ [3] Delete DRAFT files
+  ○ [4] Rename remaining reports to *-final.md (copy then delete original)
+  ○ [5] Final reply with the three verbatim values

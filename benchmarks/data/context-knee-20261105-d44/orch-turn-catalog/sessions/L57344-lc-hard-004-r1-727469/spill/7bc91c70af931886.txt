@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - policy/ dir found at ~/policy (relative "policy" from home). Task: replace "90 days"→"30 days" in all policy/ files; one file read-only → write policy/pending-changes.md naming it.
