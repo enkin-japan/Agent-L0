@@ -10,7 +10,8 @@ import sys
 import time
 from pathlib import Path
 
-from framework.memory.compactor import assign_key_counts, observation_clue
+from framework.memory.compactor import (CLUE_ENTROPY_MIN_CHARS, CLUE_ENTROPY_MIN_CLASSES,
+                                        CLUE_RULE, assign_key_counts, observation_clue)
 
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO / "benchmarks") not in sys.path:
@@ -92,9 +93,10 @@ def test_assign_whose_value_is_a_captured_path_or_id_is_not_repeated():
 
 def test_order_is_id_then_path_then_assign_by_first_occurrence():
     """★ 文本里 assign 在前、路径居中、ID 在后；线索要倒过来：ID → 路径 → assign。"""
-    text = "alpha_key = 1\nbeta_key = 2\nload conf/app.yaml and /var/lib/x.db\nticket SKU-120 and OPS-48213"
+    # 键名 11-05 由 alpha_key / beta_key 改成 *_ref：R2.1 起末词 `key` 进密钥黑名单，本例只测排序
+    text = "alpha_ref = 1\nbeta_ref = 2\nload conf/app.yaml and /var/lib/x.db\nticket SKU-120 and OPS-48213"
     assert _toks(_clue(text)) == ["SKU-120", "OPS-48213", "conf/app.yaml", "/var/lib/x.db",
-                                  "alpha_key = 1", "beta_key = 2"]
+                                  "alpha_ref = 1", "beta_ref = 2"]
 
 
 def test_urls_are_not_paths():
@@ -210,6 +212,121 @@ def test_secret_looking_assignments_never_enter_the_clue():
     for bad in ("hunter2", "ghp_", "AWS_SECRET", "session_token", "Zq8Kd93"):
         assert bad not in clue, bad
     assert _toks(clue) == ["region_tag = eu"]
+
+
+# ---- R2.1（11-05 阶段复审 M2 + 一审修补）：键名末词、值形态、URL 查询串 / 片段 ----
+# 样例全是明显合成的假值（重复字符 / 顺序字母），只有形态像凭据。每条子规则至少有一个只靠它拦的样例。
+
+CTRL = "\nregion_tag = eu"          # 对照：无害的单例赋值，必须留下
+
+
+def _only_ctrl(text, bads):
+    clue = _clue(text + CTRL)
+    for bad in bads:
+        assert bad not in clue, bad
+    assert _toks(clue) == ["region_tag = eu"]
+
+
+def test_rule_version_is_r2_1():
+    assert CLUE_RULE == "R2.1"
+
+
+def test_secret_key_last_word_never_enters_the_clue():
+    """值本身无害，只靠键名末词拦：`key` / `keys` / `pass` / `pwd` / `sig` / `signature`，含驼峰、`.` 切词。"""
+    _only_ctrl('{"key": "abc1"}\n{"pass": "foo2"}\n{"pwd": "bar3"}\nlicense_key = 42\nlicenseKey = 7\n'
+               "OPENAI_KEY=12\nreq_sig = ab12\nlicense.key = 5\nssh_keys = 6\nreq_signature = 77",
+               ("abc1", "foo2", "bar3", "license", "OPENAI", "req_sig", "ssh_keys", "req_signature"))
+
+
+def test_secret_key_camel_acronyms():
+    _only_ctrl("DBPass = 8\nSSHKey = 9\nAWSKey = 10", ("DBPass", "SSHKey", "AWSKey"))
+
+
+def test_secret_key_tail_modifiers_are_stripped():
+    """尾部编号 / 版本 / 编码修饰剥掉再看末词：每个修饰各一例。"""
+    _only_ctrl("db_pass2 = 11\nsigning_key_v2 = 12\nkey_b64 = 13\nclient_key_data = 14\n"
+               "encryption_key_hex = 15\ntls_key_pem = 16\nmaster_key_raw = 17\nhmac_sig_value = 18\n"
+               "backup_key_2 = 19",
+               ("db_pass2", "signing_key", "key_b64", "client_key", "encryption_key", "tls_key",
+                "master_key", "hmac_sig", "backup_key"))
+
+
+def test_secret_key_extra_words():
+    _only_ctrl("wifi_passphrase = a1\ndoor_passcode = a2\nlogin_otp = a3\ndb_pswd = a4",
+               ("passphrase", "passcode", "otp", "pswd"))
+
+
+def test_credential_shaped_values_never_enter_the_clue():
+    """键名无害，只靠值形态拦（都短于 20 字或含 `-`/`.`，旧的不透明值规则拦不住）。"""
+    _only_ctrl("SLACK_BOT=xoxb-1111-aaaa\nslack_user = xoxp-2222-bbbb\nslack_cfg = xoxe.xoxp-1\n"
+               "slack_app = xapp-1-cccc\ndeploy_ref = sk-xxxxxxxx\ngh_ref = ghp_xxxx\ngh_app_ref = gho_xxxx\n"
+               "gl_ref = glpat-xxxx",
+               ("xoxb", "xoxp", "xoxe", "xapp", "sk-", "ghp_", "gho_", "glpat"))
+    # AWS 访问键 ID 单独成值（20 字、无 ./-）时旧的不透明值规则已拦；带后缀时只剩前缀规则能拦
+    _only_ctrl("aws_id = AKIAXXXXXXXXXXXXXXXX-01\naws_tmp = ASIAXXXXXXXXXXXXXXXX-01\nmaps_ref = AIzaxxxx\n"
+               "goog_ref = ya29.xxxx\npem_head = -----BEGIN RSA\nhdr = Bearer xxxx",
+               ("AKIA", "ASIA", "AIza", "ya29", "BEGIN", "Bearer"))
+
+
+def test_credential_prefix_near_misses_are_kept():
+    """`sk-` 后不足 8 字（`sk-SK` 地区码）、AKIA 后差一位（15 个）不算凭据前缀。"""
+    akia15 = "AKIA" + "X" * 15
+    assert _toks(_clue(f"locale = sk-SK\nshort_ref = {akia15}")) == ["locale = sk-SK", f"short_ref = {akia15}"]
+
+
+def test_high_entropy_threshold_boundary():
+    """分隔符之间的一段字母数字 ≥ 20 字、且大小写数字三类俱全才拦；19 字或只有 2 类照收；
+    三类俱全但每段都不到 20 字（按段量、不按整值）照收。"""
+    assert (CLUE_ENTROPY_MIN_CHARS, CLUE_ENTROPY_MIN_CLASSES) == (20, 3)
+    seg = "Abcdefghijklmnopqrs1"
+    hi, short, two, split = "x-" + seg, "x-" + seg[:18] + "1", "x-" + seg.lower(), "Abcdefghij-klmnopqr12"
+    assert (len(seg), len(short) - 2, len(split)) == (20, 19, 21)
+    clue = _clue(f"v_hi = {hi}\nv_short = {short}\nv_two = {two}\nv_split = {split}")
+    assert _toks(clue) == [f"v_short = {short}", f"v_two = {two}", f"v_split = {split}"]
+
+
+def test_url_query_string_never_enters_the_clue():
+    """★ `?user=alice&…` 整段不进线索（有无 scheme 都一样），连带查询串里的 ID。"""
+    _only_ctrl("fetched https://host.example.com/search?user=alice&ticket=OPS-55555 ok\n"
+               "GET /api/v1/items?sort=asc&owner=bob\n{\"link\": \"https://h.example.com/x?q=zzz\"}",
+               ("alice", "OPS-55555", "sort", "bob", "zzz"))
+
+
+def test_url_query_flag_bracket_and_fragment_are_masked():
+    """首参无值 flag、方括号参数、`#k=v` 片段同样整段遮。"""
+    # 两行键名不同：同键出现两次会被单例规则先丢，测不到遮罩
+    _only_ctrl("GET /a?verbose&user=alice1 ok\nGET /b?a[]=1&owner=alice2 ok", ("alice1", "alice2"))
+    # 片段单独一条（文本里没有 `?`）：遮罩不能只在有 `?` 时才跑
+    _only_ctrl("redirect https://h.example.com/cb#state=s1&user=alice3 ok", ("alice3", "state"))
+
+
+def test_secret_values_shaped_like_ids_or_paths_are_not_captured():
+    """密钥键下的值即便是 ID / 路径形态也不经 ID / 路径通道漏进线索；无害的 ID 照收。"""
+    text = ('{"password": "XK-998877"}\napi_token: ABC-123456\nssh_key = /home/u/.ssh/id_x.pem\n'
+            "ticket OPS-48213")
+    clue = _clue(text)
+    for bad in ("XK-998877", "ABC-123456", "id_x.pem"):
+        assert bad not in clue, bad
+    assert _toks(clue) == ["OPS-48213"]
+
+
+def test_r2_1_filters_do_not_overblock_keys():
+    """不误伤：`keyword` / `monkey` / `signal` 不是整词命中，`pass_rate` / `key_count` 的末词不是密钥词，
+    20 字以上的连字符英文词组只有 2 个字符类；散文里的问号不当查询串。"""
+    text = ("keyword = foo\nmonkey = 3\nsignal = high\npass_rate = 98\nkey_count = 4\n"
+            "motto = keep-calm-and-carry-on-now\nreally? retry_limit = 5")
+    assert _toks(_clue(text)) == ["keyword = foo", "monkey = 3", "signal = high", "pass_rate = 98",
+                                  "key_count = 4", "motto = keep-calm-and-carry-on-now",
+                                  "retry_limit = 5"]
+
+
+def test_r2_1_filters_do_not_overblock_values():
+    """一审 Minor 1 钉住：UUID、主机名、路径、版本串、区域名、带大写的包名都必须进线索。"""
+    vals = [("rid", "550e8400-e29b-41d4-a716-446655440000"), ("host", "db-primary-01.internal.example"),
+            ("dir", "/var/lib/postgres/data_v12"), ("ver", "v2.14.0-beta.1-linux-amd64"),
+            ("zone", "us-east-1-prod-cluster"), ("svc", "com.example.OrderService2")]
+    text = "\n".join(f"{k} = {v}" for k, v in vals)
+    assert _toks(_clue(text)) == [f"{k} = {v}" for k, v in vals]
 
 
 def test_url_userinfo_host_and_scheme_yield_nothing():

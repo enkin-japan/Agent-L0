@@ -1,5 +1,5 @@
 # D43 (a) 实施期 b2 重放（implementer，2026-11-04；数字见提交说明「口径与成本」）：已实现的 observation_clue 在 b2 真实 spill 上重放：三卡覆盖与非空线索数（对 analyst 的 28/28、30/30、149/504）
-# 重跑（仓库根）：backend/.venv/bin/python benchmarks/context_knee/d43_pre/validate_r2.py benchmarks/data/context-knee-20261102-b2 orch-turn-w1 20  （catalog 同法）
+# 重跑（仓库根）：backend/.venv/bin/python benchmarks/context_knee/d43_pre/validate_r2.py benchmarks/data/context-knee-20261102-b2 orch-turn-w1 10  （catalog 同法；存档 validate_r2_out.txt 与引用数字是 NRUNS=10 的结果，阶段复审 M5 改正）
 # 原样搬自会话 scratchpad，只加这三行与相对 sys.path；结论数字以当日输出为准。
 """Validate the implemented observation_clue on b2 real spills vs analyst numbers (28/28 w1, 30/30 catalog, 149/504)."""
 import json, re, sys, collections

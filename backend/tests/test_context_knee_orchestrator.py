@@ -26,6 +26,7 @@ from tests.fake_engine import call              # noqa: E402
 from framework.core import events               # noqa: E402
 from framework.core.journal import new_turn_id  # noqa: E402
 from framework.core.orchestrator import Orchestrator   # noqa: E402
+from framework.memory.compactor import CLUE_RULE    # noqa: E402
 from framework.memory.session import ChatSession      # noqa: E402
 from framework.utils.config_loader import data_dir, load_section   # noqa: E402
 
@@ -802,15 +803,16 @@ def test_resume_refuses_orchestrator_dir_with_other_stub_impl(tmp_path, old):
 def test_harness_mismatch_always_compares_stub_clue():
     """D43 (a)：行缺 stub_clue（D43 之前、桩无线索）对现行口径恒判不同——同 stub_impl，
     不走「后加的键旧行缺 = 不比」。"""
-    new_meta = {"mode": "orchestrator", "stub_impl": K.STUB_IMPL, "stub_clue": "R2"}
+    new_meta = {"mode": "orchestrator", "stub_impl": K.STUB_IMPL, "stub_clue": CLUE_RULE}
     new = tuple(new_meta.get(k) for k in K.HARNESS_MODE_KEYS)
     old_row = {k: v for k, v in zip(K.HARNESS_MODE_KEYS, new) if k != "stub_clue"}
     assert "stub_clue" in K._ALWAYS_COMPARED
     assert K.harness_mismatch(old_row, new) is True
-    assert K.harness_mismatch({**old_row, "stub_clue": "R2"}, new) is False
+    assert K.harness_mismatch({**old_row, "stub_clue": CLUE_RULE}, new) is False
 
 
-@pytest.mark.parametrize("old", [None, "R1"])
+# "R2"：11-05 线索规则升 R2.1 后，R2 时代（D44 验收批）的目录同样拒续跑
+@pytest.mark.parametrize("old", [None, "R1", "R2"])
 def test_resume_refuses_orchestrator_dir_with_other_stub_clue(tmp_path, old):
     """端到端：b2 时代的目录（行缺 stub_clue）或别的线索规则，续跑拒。"""
     base = ["--dry-run", "--orchestrator", "--levels", "0", "--reps", "1", "--limit", "1"]
@@ -818,7 +820,7 @@ def test_resume_refuses_orchestrator_dir_with_other_stub_clue(tmp_path, old):
     assert K.main(base + ["--out", str(o)]) == 0
     t = o / "transcripts.jsonl"
     rows = [json.loads(ln) for ln in t.read_text().splitlines()]
-    assert {r["stub_clue"] for r in rows} == {"R2"}
+    assert {r["stub_clue"] for r in rows} == {CLUE_RULE}
     for r in rows:
         if old is None:
             r.pop("stub_clue")

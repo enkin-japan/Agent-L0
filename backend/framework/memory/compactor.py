@@ -163,7 +163,7 @@ def _spill_orig_chars(tr: Dict[str, Any]) -> int:
     return int(total) if total else len(str(tr.get("response", "")))
 
 
-# ---- D43 (a) 驱逐桩的检索线索（规则 R2） ----
+# ---- D43 (a) 驱逐桩的检索线索（规则 R2；11-05 修订为 R2.1，见 CLUE_RULE） ----
 # 依据：b2 批（benchmarks/data/context-knee-20261102-b2）真实 spill 上的前置复算
 # （benchmarks/context_knee/d43_pre/c_clue_noise.py）：R2 让三张卡在 w1 28/28、catalog 30/30
 # 落进「线索或首部」，同时把非空线索从 R1 的 319/504 条观察压到 149/504。一审修补（JSON 键与
@@ -183,6 +183,12 @@ _CLUE_PATH_RE = re.compile(r"(?<![\w.:/@-])(?:[\w.-]+)?(?:/[\w.-]+)+", re.ASCII)
 # URL 的 userinfo（`scheme://user:pw@`）：切词前整段换成 `@`——既不出赋值也不出值，`@` 又挡住
 # 其后的主机被当成相对路径的起点
 _CLUE_USERINFO_RE = re.compile(r"(?<=://)[^\s/@\"'<>]*@")
+# URL 查询串与片段（11-05 修订）：`?` / `#` 之后到下一个 `=` 之前没有空白 / 引号 / `#`（首参可以是
+# 无值 flag `?verbose&user=…`、方括号 `?a[]=1&…`）的，从 `?` / `#` 起到空白 / 引号 / `#` 为止整段遮成
+# `@`（不限有无 scheme，`/api/x?user=alice&id=OPS-123` 同样）——不出赋值、不出 ID / 路径。此前只遮
+# userinfo，`?` 不是词字符，`user=alice` 按行中 `key = value` 收了进来。前瞻限 256 字，保线性。
+# 已知副作用：正则文本里的 `(?=…=…` 之类也会被当查询串遮到下一个空白——只少线索，不泄密。
+_CLUE_QUERY_RE = re.compile(r"[?#](?=[^\s\"'<>#=]{0,256}=)[^\s\"'<>#]*")
 # 赋值三种写法：JSON 的 `"key": v`；行首的 `key: v` / `key = v`；行中只认 `key = v`——行中冒号
 # 多半是散文（`escalation: incident …`、`Note: done`），当赋值只会把噪声写进线索。
 # 值：整段 ≤ 64 字（更长的不截半个值进来）、后面不紧跟 `:`（`url = https://…` 不出 `https`）、
@@ -197,9 +203,35 @@ _CLUE_ASSIGN_RE = re.compile(
 _CLUE_SECRET_KEY_RE = re.compile(
     r"passw|secret|token|api_?key|auth|cookie|credential|bearer|private_key|access_key|session_id",
     re.I)
+# 11-05 修订（阶段复审 M2）：键按 `_` / `.` / 驼峰（含缩写 `DBPass` → DB + Pass）切词，剥掉尾部的
+# 编号 / 版本 / 编码修饰（`2`、`v2`、`b64`、`hex`、`pem`、`raw`、`data`、`value`；词尾数字也剥：
+# `pass2` → `pass`）后，**末词**（复合键的中心词）是下列之一也不收——`"key"`、`OPENAI_KEY`、
+# `license_key`、`licenseKey`、`SSHKey`、`db_pass2`、`signing_key_v2`、`client_key_data`、`"pwd"`、`req_sig`。
+# 只认整词：`keyword`、`monkey`、`signal` 不中；只认末词：`key_count`、`pass_rate` 不中。
+# 有意取舍：末词 `key` 也会拦 `partition_key` / `cache_key` / `sort_key` 这类不是密钥的键——宁可少一条线索。
+# 不收 `pin`（误伤面太大）。token / secret / credential / auth / passw（含 passwd / password）已由上面的
+# 子串规则在任意位置拦下，不在此表重复。（键只允许 `[\w.]`，切词不必管 `-`。）
+_CLUE_SECRET_KEY_WORDS = frozenset({"key", "keys", "pass", "pwd", "pswd", "passphrase", "passcode",
+                                    "otp", "sig", "signature"})
+_CLUE_KEY_SPLIT_RE = re.compile(r"[_.]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+_CLUE_KEY_TAIL_RE = re.compile(r"\d+|v\d+|b64|hex|pem|raw|data|value", re.I)
+# 值形态（11-05）：常见凭据前缀，键名再无害也不收（`SLACK_BOT=xoxb-…`）。`sk-` 要求其后至少 8 个
+# 字符（`locale = sk-SK` 照收）。值的字符集是 [\w./-]、不含空格，`Bearer <tok>` / `-----BEGIN …` 只切得到
+# 前一段，故按整值 `Bearer` / 前缀 `-----BEGIN` 认。
+_CLUE_SECRET_VALUE_RE = re.compile(
+    r"sk-[A-Za-z0-9_-]{8,}|xox[abprs]-|xoxe|xapp-|gh[pousr]_|glpat-|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza|ya29\."
+    r"|-----BEGIN|(?i:bearer)$")
+# 高熵长串（11-05）：值里有一段连续字母数字（按非字母数字切开）≥ CLUE_ENTROPY_MIN_CHARS 字、且小写 /
+# 大写 / 数字三类占满 CLUE_ENTROPY_MIN_CLASSES 类的不收。符号不计类、按段而不按整值量——否则 UUID、
+# 主机名、路径、版本串（小写 + 数字 + 分隔符）和 `com.example.OrderService2` 这类 R2 要留的线索全被误丢
+# （一审 Minor 1）。不含 ./- 的整值 ≥ 20 字已由下方旧的不透明值规则拦下，本条补的是夹在分隔符里的长段。
+CLUE_ENTROPY_MIN_CHARS = 20
+CLUE_ENTROPY_MIN_CLASSES = 3
+_CLUE_ALNUM_RUN_RE = re.compile(r"[A-Za-z0-9]+")
 # 线索规则版本号：context_knee harness 记进每行 meta（`stub_clue`），analyze 的 recall_source
 # 据此判断那批 run 的桩里有没有线索（缺键 = D43 之前，桩只有首部）。改规则时改这个串。
-CLUE_RULE = "R2"
+# R2.1 = 11-05 修订：键名末词黑名单、值形态（凭据前缀 / 高熵）、URL 查询串整段遮掉。
+CLUE_RULE = "R2.1"
 CLUE_MAX_TOKENS = 8
 CLUE_MAX_CHARS = 240
 _CLUE_PREFIX = "; mentions: "
@@ -209,13 +241,36 @@ _CLUE_SEP = ", "
 def _clue_decode(text: str) -> str:
     """JSON 串转义只为切词解码（\\n → 换行 …）；单趟替换，`\\\\n` 解成反斜杠 + n 而不是换行。
     不解码时 `"...\\nqueue_depth = 1"` 会被切成 `nqueue_depth`（b2 上 14/28 张卡的名次因此不同）。
-    随后把 URL userinfo 遮成 `@`（只为切词）。"""
+    随后把 URL userinfo 与查询串遮成 `@`（只为切词）。"""
     if "\\" in text:
         text = _CLUE_ESC_RE.sub(
             lambda m: chr(int(m.group(1), 16)) if m.group(1) else _CLUE_ESC[m.group(2)], text)
     if "://" in text:
         text = _CLUE_USERINFO_RE.sub(lambda m: "@" * len(m.group(0)), text)
+    if "?" in text or "#" in text:
+        text = _CLUE_QUERY_RE.sub(lambda m: "@" * len(m.group(0)), text)
     return text
+
+
+def _clue_secret_key(key: str) -> bool:
+    if _CLUE_SECRET_KEY_RE.search(key):
+        return True
+    words = [w for w in _CLUE_KEY_SPLIT_RE.split(key) if w]
+    while words and _CLUE_KEY_TAIL_RE.fullmatch(words[-1]):
+        words.pop()
+    return bool(words) and words[-1].rstrip("0123456789").lower() in _CLUE_SECRET_KEY_WORDS
+
+
+def _clue_secret_value(val: str) -> bool:
+    if _CLUE_SECRET_VALUE_RE.match(val):
+        return True
+    for run in _CLUE_ALNUM_RUN_RE.findall(val):
+        if len(run) >= CLUE_ENTROPY_MIN_CHARS:
+            classes = (any(c.islower() for c in run) + any(c.isupper() for c in run)
+                       + any(c.isdigit() for c in run))
+            if classes >= CLUE_ENTROPY_MIN_CLASSES:
+                return True
+    return False
 
 
 def _clue_assigns(decoded: str) -> List[Tuple[str, str, str]]:
@@ -276,13 +331,14 @@ def assign_key_counts(texts: Iterable[str]) -> Counter:
 
 def observation_clue(text: str, *, head: str, key_counts: Mapping[str, int],
                      max_tokens: int = CLUE_MAX_TOKENS, max_chars: int = CLUE_MAX_CHARS) -> str:
-    """驱逐桩的一行检索线索（D43 (a)，规则 R2）：返回 `"; mentions: t1, t2, …"` 或 ``""``。
+    """驱逐桩的一行检索线索（D43 (a)，规则 R2.1）：返回 `"; mentions: t1, t2, …"` 或 ``""``。
 
     纯函数、无 I/O、确定性。规则：
-    1. JSON 串转义先解码（只为切词，不改原文）；URL userinfo 遮掉；
+    1. JSON 串转义先解码（只为切词，不改原文）；URL userinfo、查询串与片段（`?k=v…` / `#k=v…` 整段）遮掉；
     2. 三类词：ID（`OPS-48213`、`SKU-120`、`CVE-2024-1234`；SHA-256 / ISO-8601 这类不算）、路径
        （≥1 个斜杠、末段带含字母的扩展名；URL 的主机 / 路径不算）、`key = value`（JSON 键、行首的
-       `key:` / `key =`、行中的 `key =`；值本身就是已抽到的 ID / 路径的不重复列；像密钥的键、
+       `key:` / `key =`、行中的 `key =`；值本身就是已抽到的 ID / 路径的不重复列；像密钥的键（子串
+       黑名单 + 末词黑名单）、像凭据的值（常见前缀、含 ≥ 20 字且大小写数字三类俱全的字母数字段）、
        ≥ 20 字且不含 `.`/`/`/`-` 的不透明值不收）；
     3. 在 `head`（桩里看得见的那部分文本）里作为完整一词出现过的丢掉；去重保留首次出现；
     4. `key = value` 只留单例：键在本观察里只出现一次、且 `key_counts[key] == 1`（调用方用
@@ -293,9 +349,11 @@ def observation_clue(text: str, *, head: str, key_counts: Mapping[str, int],
     """
     dec = _clue_decode(str(text))
     seen_head = _clue_decode(str(head))
-    ids = _clue_ids(dec)
-    paths = _clue_paths(dec)
     assigns = _clue_assigns(dec)
+    # 密钥键 / 凭据形态下的值即便长得像 ID / 路径也不进线索（`"password": "XK-998877"`；一审 Minor 3）
+    secret_vals = {val for key, val, _ in assigns if _clue_secret_key(key) or _clue_secret_value(val)}
+    ids = [t for t in _clue_ids(dec) if t not in secret_vals]
+    paths = [t for t in _clue_paths(dec) if t not in secret_vals]
     captured = set(ids) | set(paths)
     local = Counter(k for k, _, _ in assigns)
     ranked: List[str] = []
@@ -314,7 +372,7 @@ def observation_clue(text: str, *, head: str, key_counts: Mapping[str, int],
     for key, val, src in assigns:
         if val in captured or local[key] != 1 or key_counts.get(key, 0) != 1:
             continue
-        if _CLUE_SECRET_KEY_RE.search(key):
+        if val in secret_vals:
             continue
         if len(val) >= 20 and not any(c in val for c in "./-"):
             continue

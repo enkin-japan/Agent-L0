@@ -352,7 +352,11 @@ def sec_u(G, aggs, evs, prev_ok: bool) -> List[str]:
     cmp_names = [x for n in MANAGED for x in ([n] + ([pv(n)] if pv and pv(n) in G else []))]
 
     # U1 ---------------------------------------------------------------- D43 (a)
+    # 口径版本门（阶段复审附带项）：analyze.recall_source 只看行内 stub_clue 真值、不比规则版本，
+    # 线索按**当前** compactor 规则重建——运行时读常量打印，规则一改这一列复跑就会变。
+    from framework.memory.compactor import CLUE_RULE
     L.append("#### U1. D43 (a)：49K / 57K 档回忆、来源与回读\n")
+    L.append(f"桩·仅线索 列按当前 `compactor.CLUE_RULE`（值 `{CLUE_RULE}`）重建；规则一改此列复跑会变。\n")
     L.append("recall = analyze.aggregate 同口径（recall_ok 非空、未 aborted 的 run）；ITT = aborted 也进分母按未回忆计；"
              "来源 = 卡值计数（单位卡值，含 aborted run；analyze.recall_source）；「含来源 run」= 末轮正文里至少一个卡值归该来源的 run；"
              "桩·桩头 = 归桩的卡值落在桩补写 spill 原文首部 200 字（STUB_DIGEST_CHARS）里；桩·仅线索 = 不在首部、只在 "

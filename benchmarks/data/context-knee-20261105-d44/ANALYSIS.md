@@ -2,13 +2,13 @@
 
 > 方案：`docs/plans/2026-10-31-context-management-plan.md` §6 D43 / D44 行、§9 11-04 条目；设计与字段口径 `docs/plans/2026-11-04-d44-d43b-spec.md`；harness 口径 `benchmarks/context_knee/README.md`。
 > 原始数据：本目录 Qwen3.8-27B-INT4（`RedHatAI/Qwen3.8-27B-INT4`，Colab A100 vLLM，MTP 关，current 采样，seed 未生效）编排器四臂 `orch-turn-none/ orch-turn-w1/ orch-turn-w1w2/`（prod 前缀）+ `orch-turn-catalog/`（catalog 前缀，开关同 w1w2），levels 0/32768/49152/57344，hard 10 题 × 2 rep，各 80 run、0 error。`smoke-orch-*` 冒烟不计。
-> 时间线（`run_colab.log`）：06:54 起机、07:06 READY、四臂 07:07–13:01 各 86–91 min、13:01 停机确认、`DONE BATCH_RC=0 SKIPPED=0`；harness rc 全 0、hung 0、无重起、无换租约（MAX_VM_HOURS=10 首次生效，未触发）。租约 6.1 h（单位数未核余额；b2 口径 6.73 u/h ≈ 41 单位）。
+> 时间线（`run_colab.log`）：06:54 起机、07:06 READY、四臂 07:07–13:01 各 86–91 min、13:01 停机确认、`DONE BATCH_RC=0 SKIPPED=0`；harness rc 全 0、hung 0、无重起、无换租约（MAX_VM_HOURS=10 首次生效，未触发）。租约 6.1 h（单位数未核余额；b2 实耗 49 单位 / 9.2 h ≈ 5.3 u/h，按此约 33 单位）。
 > 对照：`../context-knee-20261102-b2/` 同四臂（自动部分以 `@b2` 后缀并入）；参照 `../context-knee-20261031/qwen-current/`（10-31 W0 直调）。b2 → 本批之间的生产代码改动：D43 (a) b3f2609、D43b + D44 3564404（本批验这三项），**另有 D46 d60bd50（`_coerce`）、D45 38411d7、D47 44ca2aa、D47-next 55cff85**，跨批成功率差不能只算在三项上（prefix_base 13,708 → 13,757，catalog 5,280 → 5,329）。
 > 脚本：`benchmarks/context_knee/analyze_d44.py`（A–Q 节原样复用 analyze_orch / analyze；新增 U 节；省掉本批没有数据的 R / T 节）。复跑命令见自动部分开头。
 > §1–§3 由主会话手写（analyst 草稿定稿）；自动部分节字母为引用；凡标「推断」的不是测出来的。
 
 ## 1. 结论
-1. **D43 (a) 判「显著回升」✅：57K 档回忆从 0–20% 回到 80–92%。** w1 11/12 = 92% [65,99]、w1w2 8/10 = 80% [49,94]、catalog 12/14 = 86% [60,96]，b2 同臂 0/11、1/5、0/5（Fisher p = 9.6e-06 / 0.089 / 0.0018）；aborted 计入分母（ITT）11/20、8/20、12/20 对 0/20、1/20、0/20（p = 0.00015 / 0.02 / 4.5e-05）；三臂合并 1/21 → 31/36（U1）。**机制是桩而不是回读，按消元法归因**：57K 档原观察已被 ceiling 驱逐、无回读而模型答出的卡值只能来自桩；回忆成功的 31 run 里 26 个三张卡全部归桩（10/11、5/8、11/12），含回读的只有 1 / 3 / 1 个。归桩的卡值 30 / 17 / 33 个里**在桩头 200 字命中的只有 3 / 4 / 12**，其余 27 / 13 / 21 只在按 R2 规则重建的线索行里命中（运行时桩文本不在 transcripts 里，重建与运行时不保证逐字一致；按桩头口径「全桩」run 为 0 / 0 / 1）——线索行是 D43 (a) 新加的东西，b2 同形桩头回忆 0–20%，所以回升归线索行成立，但「线索行逐字等于运行时」是重建口径；回读调用 19 / 14 / 3 次（b2 43 / 107 / 75），但读到卡的比例 16/19、7/14、3/3（b2 7/43、12/107、8/75）——句柄少读了、读了就命中。回读 run 的 aborted 14/18 → 4/10（p = 0.097，不显著）。49K 档无 fold、无回读，回忆 90 / 92 / 70%（b2 93 / 91 / 92%），catalog 49K 低 22 点落在区间内。**保留项**：卡值是单例 ID / 路径 / key=value，正是 R2 规则挑的词；线索对非此形态线索的泛化本批测不到。
+1. **D43 (a) 判「显著回升」✅：57K 档回忆从 0–20% 回到 80–92%。** w1 11/12 = 92% [65,99]、w1w2 8/10 = 80% [49,94]、catalog 12/14 = 86% [60,96]，b2 同臂 0/11、1/5、0/5（Fisher p = 9.6e-06 / 0.089 / 0.0018）；aborted 计入分母（ITT）11/20、8/20、12/20 对 0/20、1/20、0/20（p = 0.00015 / 0.02 / 4.5e-05）；三臂合并 1/21 → 31/36（U1）。**机制是桩而不是回读，按消元法归因**：57K 档原观察已被 ceiling 驱逐、无回读而模型答出的卡值只能来自桩；回忆成功的 31 run 里 26 个三张卡全部归桩（10/11、5/8、11/12），含回读的只有 1 / 3 / 1 个。归桩的卡值 30 / 17 / 33 个里**在桩头 200 字命中的只有 3 / 4 / 12**，其余 27 / 13 / 21 只在按 R2 规则重建的线索行里命中（运行时桩文本不在 transcripts 里，重建与运行时不保证逐字一致；按桩头口径「全桩」run 为 0 / 0 / 1）——线索行是 D43 (a) 新加的东西，b2 同形桩头回忆 0–20%，所以回升归线索行成立，但「线索行逐字等于运行时」是重建口径；回读调用 19 / 14 / 3 次（b2 43 / 107 / 75），但读到卡的比例 16/19、7/14、3/3（b2 7/43、12/107、8/75）——句柄少读了、读了就命中。回读 run 的 aborted 14/18 → 4/10（p = 0.097，不显著）。**按预注册判据**（§6 D43 行：看回读列与 aborted 数、不看 recall 单值）：57K 三管理臂回读 43 / 107 / 75 → 19 / 14 / 3 次，aborted 39/60 → 24/60（Fisher p = 0.010；w1 9 → 8 基本没变、w1w2 15 → 10、catalog 15 → 6）——按预注册判据也判过（阶段复审 M3 补）。49K 档无首迭代 fold、无回读（3 个已 aborted 的 run 有后期 W1 fold，不进 recall 分母），回忆 90 / 92 / 70%（b2 93 / 91 / 92%），catalog 49K 低 22 点落在区间内。**保留项**：卡值是单例 ID / 路径 / key=value，正是 R2 规则挑的词；线索对非此形态线索的泛化本批测不到。
 2. **D43b 判「机制成立、效应不可判」。** 本批没有一次回读观察被 W2 压成桩（b2 有 6 次）；免压只发生在 2 run（w1w2 57K 1 事件 count 1；catalog 32K 2 事件 count 3），两处读到的卡值都出现在之后的 step_completed 与末轮正文（U2）。w1 臂无 W2 回忆 92%、w1w2 80%，D43b 对回忆的贡献分不出来；要单独证明需要回读多且跨 W2 边界的数据。
 3. **D44 预检生效，只在 catalog 触发，恢复 11/11；catalog 对 w1w2 无证据更差。** 预检回执 11 条 / 11 run，全部「缺必填 + 未知键」同时出现（run_math 10：模型用 `command` 代 `code`；move_file 1），都附完整声明、schema_fed 11、`missing_arg_recovered` 11/11；prod 三臂 0 条；b2 的 16 条「缺参」是 harness 桩自己发的，没有一条带 `was not executed`（口径不同，不可直接比）。打回的调用在 journal 里 11/11 没有 tool_started（确实没执行）；harness 记账层失败正则 / system_errors / steps 三项 11/11 命中，但与回执同源、恒真，只说明记账没漏；编排层 F1 行为（unresolved_failure → failure_swallow_nudge、原样重发 → duplicate_call）本批数据里**没有被触发**（重发 0 条、nudge 0 次，因为 11 条都一次改对），只有 golden test 证明。这 11 run 全部失败，其中 1 个只因多计这一步超限（U3）。catalog − w1w2：成功率按档 +0 / +0 / −10 / +5，合并 −1 [−14,+12]（b2 −4 [−10,+2]）；Pass^2 合并 +0 [−15,+15]（b2 −8 [−15,0]）；首 prompt L0 13,900 → 5,472（×0.394，−61%），57K ×0.833（E、Q、U3）。
 4. **无管理臂 L0 35%（7/20），b2 60%；配对差 −25 [−55,+5]。** P2 门槛「L0 ≥ 70%」仍未达且方向反了。跨批混淆：D45 / D46 / D47 改动、seed 未生效；lc-hard-009 从 b2 的 0/8（regex 失败 = D46 缺陷）变 5/8，说明 D46 生效，其余题变差（U4、D）。只报数字，不下结论。
@@ -18,14 +18,15 @@
 ## 2. 口径缺陷与待修
 - `analyze_orch.py` Q 节把预检回执按先匹配到的子句归类（11 条全记「缺必填」）；拆分看 U3。journal 不记被打回的调用，「计失败」只能用 feed、行字段与事件流证明。
 - recall 缺省分母不含 aborted，两批 aborted 数不同；U1 并列 ITT 口径，结论方向一致。
-- 桩归因的「线索」列是 `observation_clue` 重建口径（U1 拆列）：要落实运行时桩文本，harness 应把 compaction 时实际写进 history 的桩抄进 transcripts（或事件 detail）。
+- harness 的 turn 放置（`run_knee.py` `keep_recent_calls=True, compact_history=False`）不走 D47 轮首种任务：本批 orch-turn-* 四臂 task 全程 None，`remember` 被拒、无 [Goal]/[Scratchpad] 视图，与生产 TurnRunner 不同（阶段复审修补时 implementer 发现，推断未改）；要不要让 harness 也种任务待定。
+- 桩归因的「线索」列是 `observation_clue` 重建口径（U1 拆列；复跑按当前 `compactor.CLUE_RULE`，11-05 阶段复审 M2 后为 R2.1，本批数据产生于 R2——线索重建规则一改此列会变，表头已标；经 reviewer 对 b2 + d44 全部 9,407 条观察重放，R2 对 R2.1 线索逐条相同、卡值丢 0，本批数字不受影响）：要落实运行时桩文本，harness 应把 compaction 时实际写进 history 的桩抄进 transcripts（或事件 detail）。
 - D44 编排层行为（F1）本批未触发，数据无法核；下一批若要核，需要有模型原样重发被拒调用的样本。
 - 委托口径勘误：b2「14/18 迭代耗尽 aborted」中 14 是全部 aborted，迭代耗尽 11。
 - `analyze_d44.py` 另起文件的原因：`analyze_orch.main_b2` 缺 Gemma 臂直接 SystemExit、`--prev` 只认上午批臂名；批次布局识别仍是硬编码，下一批再出一个文件就该抽成参数。
 - 11-04 残项仍在：recall_source 回读配对按 feed 名，一轮两次 file_extract 且一次被打回时可能错配（本批被打回的 11 条都不是 file_extract，未触发）。
 
 ## 3. 待拍板
-- **D44 catalog 是否作 Qwen 缺省**：数据到齐——成功率 / Pass^2 无差（区间含 0）、首 prompt L0 −61%、代价是 11/80 run 先猜错 run_math 参数名多花一步（预检一次就对）。选项 (i) catalog 作缺省；(ii) 保持 full；(iii) catalog 作缺省 + run_math 等高频工具进前缀完整声明的 core 列表（打回的 11 条里 10 条是它）。**建议 (iii)**。
+- **D44 catalog 是否作 Qwen 缺省**：数据到齐——成功率 / Pass^2 无差（区间含 0）、首 prompt L0 −61%、代价是 11/80 run 先猜错参数名多花一步（run_math 10、move_file 1）（预检一次就对）。选项 (i) catalog 作缺省；(ii) 保持 full；(iii) catalog 作缺省 + run_math 等高频工具进前缀完整声明的 core 列表（打回的 11 条里 10 条是它）。**建议 (iii)**。
 - **被打回的调用是否计评分步数**（max_steps 10）：本批 1 run 只因此失败。生产里它确实耗一轮迭代，建议照计、不改口径。
 - **P2 门槛（无管理臂 L0 ≥ 70%）三批未达且本批 35%**：选项 (a) 下一批先种 seed、L0 加 rep 单独量基线噪声；(b) 接受「编排器路径 L0 基线 35–60%」改判法。建议 (a) 随下一次租约顺带，不单独起机。
 - **D43b 单独证明**：本批免压只 2 run。选项：接受机制成立不再单测；或下一批加一臂把 W2 边界压到回读之后。建议接受。
@@ -33,7 +34,7 @@
 # 自动部分
 
 <!-- BEGIN AUTO -->
-_复跑：`PYTHONDONTWRITEBYTECODE=1 backend/.venv/bin/python benchmarks/context_knee/analyze_d44.py --data benchmarks/data/context-knee-20261105-d44 --ref benchmarks/data/context-knee-20261031/qwen-current --prev benchmarks/data/context-knee-20261102-b2 --out-md benchmarks/data/context-knee-20261105-d44/ANALYSIS.md --out-csv benchmarks/data/context-knee-20261105-d44/summary_by_level.csv`_
+_复跑：`PYTHONDONTWRITEBYTECODE=1 backend/.venv/bin/python benchmarks/context_knee/analyze_d44.py --data benchmarks/data/context-knee-20261105-d44 --ref benchmarks/data/context-knee-20261031/qwen-current --prev benchmarks/data/context-knee-20261102-b2 --out-md /private/tmp/claude-501/-Volumes-enkin-project-Agent/5f76a36a-f6d1-43b7-8719-ce9002957a9e/scratchpad/d44/auto_r21.md --out-csv /private/tmp/claude-501/-Volumes-enkin-project-Agent/5f76a36a-f6d1-43b7-8719-ce9002957a9e/scratchpad/d44/auto_r21.csv`_
 
 _自动生成：`benchmarks/context_knee/analyze_d44.py`（D44 布局：A–F 节 = analyze.render 原样，自动对照关闭、E 节只列指定对；I/J/K/M/N/O/P/Q 节 = analyze_orch 原样，R/T 节本批无数据不渲染；F 节生产前缀取 orch-turn-none 行内 prefix_base_tokens 13757；`@b2` = --prev 批同名臂）；规则 metric=pass_hat_2 drop=0.2 recover=0.1 基线候选=[0, 4096]；重复行保留 latest（非 error 优先）；bootstrap 10000 次 seed 20261031：Pass^2 只按题重抽（题内 rep 对保持完整），成功率先按题再档内按 rep 重抽；相对基线一律限定共同题集。采样 card(sent …) = 已发送、未回执核验。_
 
@@ -792,6 +793,8 @@ spill 文件含 W2 步骤边界压缩（spill_full）落的盘，不只 ceiling�
 ### U. D44 验收批专节（D43 (a) / D43b / D44；`@b2` = b2 批同名臂；本节 = analyze_d44.py 新增）
 
 #### U1. D43 (a)：49K / 57K 档回忆、来源与回读
+
+桩·仅线索 列按当前 `compactor.CLUE_RULE`（值 `R2.1`）重建；规则一改此列复跑会变。
 
 recall = analyze.aggregate 同口径（recall_ok 非空、未 aborted 的 run）；ITT = aborted 也进分母按未回忆计；来源 = 卡值计数（单位卡值，含 aborted run；analyze.recall_source）；「含来源 run」= 末轮正文里至少一个卡值归该来源的 run；桩·桩头 = 归桩的卡值落在桩补写 spill 原文首部 200 字（STUB_DIGEST_CHARS）里；桩·仅线索 = 不在首部、只在 compactor.observation_clue 重建的线索里命中——重建线索与运行时桩不保证一致（运行时桩不在 transcripts 里），这一列是重建口径；回读 = transcript 里 file_extract(path=spill:…) 调用；「读到卡」= journal 里该次回读结果（status=ok 且截断时补 spill 原文；非 ok 的回读不算读到）含任一卡值；journal 列 — = 至少一个 run 无会话目录或无 journal.jsonl；首迭代 fold = 本 run 有 iteration=1 的 context_guard_fold 事件（首次生成前就压）。
 

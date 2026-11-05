@@ -165,9 +165,13 @@ def test_sub_generation_fuse_survives_suspension(make_session):
 
 @pytest.mark.parametrize("with_task", [False, True])
 def test_manual_resume_keeps_duplicate_fingerprints(make_session, with_task):
-    # D47：新鲜轮轮首恒种任务，所以 with_task=False 档的第一轮实际也会走 task.recent_calls
-    # （session.task_state 在 submit 内被种上）；no_task_calls 的携带路径现在只剩「续跑且
-    # task 为 None」一种可达形态。两档断言不变——这里只是记录口径变化，不缩小覆盖。
+    # D47：新鲜轮轮首恒种任务，所以 with_task=False 档的第一轮实际也走 task.recent_calls
+    # （session.task_state 在 submit 内被种上）——两档测的是同一条路径，不是「无任务 / 有任务」两条；
+    # 本测试不覆盖 no_task_calls。该携带路径（orchestrator 轮首播种 / 收尾转存 / resume_after_approval
+    # 回存）当前没有调用方能到达：生产 TurnRunner / scheduler 的新鲜轮都种任务；context_knee harness 的
+    # turn 放置虽以 keep_recent_calls=True 起整轮、不种任务，但审批策略 auto、从不调 resume_after_approval、
+    # 每 run 新建 ChatSession。它由机制测试 test_no_task_fingerprints_carry_across_approval 单独覆盖
+    # （11-05 阶段复审 M1）。
     engine = PausingEngine([{"tool_calls": [call("probe", i=1)]},
                             {"tool_calls": [call("probe", i=1)]}, {"text": "答案"},
                             {"tool_calls": [call("probe", i=1)]}, {"text": "新轮"}])
@@ -186,6 +190,40 @@ def test_manual_resume_keeps_duplicate_fingerprints(make_session, with_task):
 
     run(scenario())
     assert len(registry.executed) == 2
+
+
+def test_no_task_fingerprints_carry_across_approval(make_session):
+    """M1（11-05 阶段复审）：no_task_calls 携带路径的机制测试——当前没有调用方能到达（生产 TurnRunner /
+    scheduler / context_knee harness 都不到），这里以 keep_recent_calls=True、compact_history=False 起整轮
+    人为造出 task_state 全程 None 的形态。审批前的指纹（orchestrator 轮首从 carried_turn_stats 播种、
+    挂起时转存）与批准执行的调用（resume_after_approval 回存）都必须跨审批续跑沿用。"""
+    engine = FakeEngine([{"tool_calls": [call("probe", i=1)]},
+                         {"tool_calls": [call("danger", i=1)]},
+                         {"tool_calls": [call("probe", i=1), call("danger", i=1)]},
+                         {"text": "答案"}])
+    registry = FakeRegistry([FakeTool("danger", approval=True), FakeTool("probe")])
+    orch = make_orch(engine, registry)
+    session = make_session()
+    session.add_user_message("查询")
+    begin_turn(session)
+    assert session.task_state is None
+
+    async def scenario():
+        first = await orch.run_turn(session, journal=session.journal, keep_recent_calls=True,
+                                    compact_history=False, **GEN)
+        assert first["status"] == "pending_approval"
+        assert session.task_state is None                       # 确实走的无任务态
+        second = await orch.resume_after_approval(session, True, journal=session.journal, **GEN)
+        assert second["status"] == "pending_approval"
+        assert session.task_state is None
+        return await orch.resume_after_approval(session, True, journal=session.journal, **GEN)
+
+    last = run(scenario())
+    assert last["status"] == "success", last
+    assert [c["name"] for c in registry.executed] == ["probe", "danger"]
+    blocked = [tr for m in session.history if m["role"] == "tool"
+               for tr in m.get("tool_responses", []) if "Duplicate call blocked" in str(tr.get("response"))]
+    assert [tr["name"] for tr in blocked] == ["probe", "danger"]
 
 
 def test_denied_call_fingerprint_survives_manual_suspend(make_session):
