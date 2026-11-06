@@ -86,7 +86,11 @@ turn1_session_dir, session_dir`，以及 turn 1 的调用数和 env 快照；met
 
 `run_trace.py --report --out <dir>`，或 `summarize_trace.py <dir> [<dir> ...]`（可以合并多批，比如 legacy / new、
 640 / 900 各跑一批）。按 `(model, summary_max_tokens, template, task_state, drop_task, tool_digest_chars,
-turn1_iterations)` 分组输出（后两键 D45 加；老批次的行没有这两键，归 `None` 组，数值不变）；每组末两列
+turn1_iterations, tool_schema_mode_effective, mock_merge_rule)` 分组输出（`tool_digest_chars` / `turn1_iterations`
+D45 加；老批次的行没有这两键，归 `None` 组，数值不变。末两键 D44 (iii) 加：生效披露模式（条目选项 > agent 段，
+`--prefix catalog` / `full` 强制）与 mock 工具并入 core 的规则——2026-11-05 起 Qwen 条目改 catalog，同一条
+`--model … --prefix mock` 命令的前缀从 full 变成 catalog，不分组就会把两种口径当成同一组的更多 rep；老批次缺这两键，
+归 `None` 组，报表「披露 / mock 并入」两列显示 `None(旧)`，与已记录口径的批次分开）；每组末两列
 （D47）是 turn 1 `remember` 调用总数与 turn 1 记录带便签的对数（按对计一次；组内全无该键的老批次显示「—」，组内个别行缺键按 0 计）；配对键还要加上源目录和
 (题, rep)，所以各批各自配对。同一配对键的同一支出现两次（同一目录传了两遍、transcripts 被拼接过）时直接报错退出，
 不会静默覆盖。同组多目录相当于更多 rep：

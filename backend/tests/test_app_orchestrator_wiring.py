@@ -19,10 +19,16 @@ def _entry(dialect):
     pytest.fail(f"注册表里没有 {dialect} 条目")
 
 
-@pytest.mark.parametrize("dialect, expected", [("gemma4", "catalog"), ("qwen35", "full")])
-def test_app_passes_selected_entry_mode_to_orchestrator(monkeypatch, dialect, expected):
+# D44 (iii)（2026-11-05）起两家族真条目都是 catalog：只靠真条目，工厂把模式写死成 catalog 也全绿。
+# 故另加一档「qwen35 条目改设 full」的合成条目（不改 config），守住「模式确实取自所选条目」。
+@pytest.mark.parametrize("dialect, override, expected", [
+    ("gemma4", None, "catalog"), ("qwen35", None, "catalog"), ("qwen35", "full", "full")])
+def test_app_passes_selected_entry_mode_to_orchestrator(monkeypatch, dialect, override, expected):
     import app as entry          # 惰性导入：不在收集期触发 app.py 的装配副作用
-    monkeypatch.setattr(entry, "MODEL_OPTIONS", _entry(dialect))
+    opts = _entry(dialect)
+    if override is not None:
+        opts = {**opts, "tool_schema_mode": override}
+    monkeypatch.setattr(entry, "MODEL_OPTIONS", opts)
     orch = entry._make_orchestrator(FakeEngine([]), FakeRegistry([FakeTool("edit_file")]))
     assert orch.tool_schema_mode == expected
 

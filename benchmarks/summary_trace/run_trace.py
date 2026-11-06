@@ -43,6 +43,7 @@ from context_knee import orch_tools as OT                                   # no
 from context_knee import run_knee as K                                      # noqa: E402
 from framework.core.orchestrator import NO_PLAN_NUDGE_ITERATIONS            # noqa: E402
 from framework.core.thinking_replay import THINKING_REPLAY_MODES            # noqa: E402
+from framework.core.tool_disclosure import resolve_tool_schema_mode          # noqa: E402
 from framework.memory.compactor import (SUMMARY_TOOL_DIGEST_CHARS,          # noqa: E402
                                         _TOOL_SECTION_HEADER)
 
@@ -305,7 +306,9 @@ async def run_pair(args, engine, counter, item: Dict[str, Any], rep: int, meta: 
         inner1 = make_inner(dry_turn1_script(env1))
         proxy1 = K.OrchKneeEngine(inner1)
         proxies.append(proxy1)
-        orch1 = Orchestrator(proxy1, reg1, OT.keep_mock_tools_full(_cfg(ctx, args.turn1_iterations), asm),
+        orch1 = Orchestrator(proxy1, reg1,
+                             OT.keep_mock_tools_full(_cfg(ctx, args.turn1_iterations), asm,
+                                                     ctx.model_options),
                              model_options=ctx.model_options)
         s1 = ChatSession(f"{tag}-t1", ctx.sessions_dir, system_prompt=system,
                          backend=getattr(inner1, "backend", None))
@@ -349,7 +352,8 @@ async def run_pair(args, engine, counter, item: Dict[str, Any], rep: int, meta: 
             proxy = K.OrchKneeEngine(inner)
             proxies.append(proxy)
             orch = Orchestrator(proxy, reg,
-                                OT.keep_mock_tools_full(_cfg(ctx, args.continue_iterations), asm),
+                                OT.keep_mock_tools_full(_cfg(ctx, args.continue_iterations), asm,
+                                                        ctx.model_options),
                                 model_options=ctx.model_options)
             s = fork_session(s1, f"{tag}-{branch}", ctx.sessions_dir, system,
                              getattr(inner, "backend", None))
@@ -522,6 +526,11 @@ async def _amain(args, orch_globals) -> int:
             "token_counter": counter.mode,
             "thinking_replay_mode": counter.replay.mode if counter.replay else None,
             "thinking_replay_k": counter.replay.k if counter.replay else None,
+            # D44 (iii) 一审 M1：披露口径进行 / meta 与 summarize_trace 分组键。条目 tool_schema_mode 一改，
+            # 同一条命令的前缀就换了口径（Qwen full → catalog），合批不得当成同一组更多 rep。
+            # 生效值与 keep_mock_tools_full / Orchestrator 同一解析（条目选项 > agent 段）
+            "tool_schema_mode_effective": resolve_tool_schema_mode(ctx.model_options, ctx.agent_base),
+            "mock_merge_rule": OT.MOCK_MERGE_RULE,
             "stamp": stamp, **K.context_limit_meta(engine)}
     print(f"== 成对续跑评估 {repo}（{args.backend}，模板 {args.template}，task_state {args.task_state}）："
           f"{len(items)} 题 × {args.reps} rep → {outdir}")

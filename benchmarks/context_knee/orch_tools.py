@@ -212,12 +212,25 @@ def agent_cfg(base: Dict[str, Any], *, guard: bool, step: bool, goal_verify: boo
     return cfg, over
 
 
-def keep_mock_tools_full(cfg: Dict[str, Any], asm) -> Dict[str, Any]:
-    """--prefix catalog（编排器）：题目 mock 工具并入本 run 的 agent.tool_routing.core，使编排器的
+#: keep_mock_tools_full 的并入规则版本（D44 (iii)，2026-11-06）：effective_mode = 按生效 tool_schema_mode 判
+#: （此前按 --prefix 字面值，只 catalog 档并入）。run_knee 记入行 / meta 的 mock_merge_rule 并恒比
+#: （_ALWAYS_COMPARED），缺键 = 旧规则的目录，续跑 / 追加拒
+MOCK_MERGE_RULE = "effective_mode"
+
+
+def keep_mock_tools_full(cfg: Dict[str, Any], asm,
+                         model_options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """编排器生效披露为 catalog 时：题目 mock 工具并入本 run 的 agent.tool_routing.core，使编排器的
     catalog 披露里它们恒为完整 schema、只有生产工具集走目录行——与直调 catalog 档（prefix.assemble
     「其后 mock 工具完整」）同一对待，两种模式的 catalog 臂才可比。只改本 run 的 cfg 副本，不碰
-    config.yaml / 生产路径；其他档原样返回。"""
-    if getattr(asm, "mode", None) != "catalog":
+    config.yaml / 生产路径；生效 full 原样返回。
+
+    判据是**生效的** tool_schema_mode = tool_disclosure.resolve_tool_schema_mode(model_options, cfg)
+    （与 Orchestrator 构造时、行键 tool_schema_mode_effective 同一解析），不是 --prefix 字面值：
+    D44 (iii)（2026-11-05）起 Qwen 条目也是 catalog，--prefix prod 随生产生效为 catalog，须与
+    --prefix catalog 同样并入，两臂才可比。model_options 传交给 Orchestrator 的那份。"""
+    from framework.core.tool_disclosure import resolve_tool_schema_mode
+    if resolve_tool_schema_mode(model_options, cfg) != "catalog":
         return cfg
     out = copy.deepcopy(cfg)
     tr = dict(out.get("tool_routing") or {})

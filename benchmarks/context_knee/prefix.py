@@ -1,4 +1,4 @@
-"""拐点 harness 的前缀档位（W-2「量法」：`--prefix mock|prod|catalog|routed`）。
+"""拐点 harness 的前缀档位（W-2「量法」：`--prefix mock|prod|catalog|routed|full`）。
 
 方案 docs/plans/2026-10-31-context-management-plan.md §W-2：测量形态 ≠ 生产形态（harness 前缀
 ~0.6K vs 生产 full ~13.6K tok），本模块把题目的 mock 工具与生产前缀拼起来，供同一历史档位对比。
@@ -11,6 +11,10 @@
   目录行（tool_disclosure.disclose），其后 mock 工具完整；grammar_tools = 完整 schema 全集。
 - routed：catalog 之上，按题面 task.user（不含回忆句，跨档不变）经 tool_disclosure.route_tools 选
   top_k（agent.tool_routing），选中者完整 schema。每题一次、题内冻结（纯函数，同输入同输出）。
+- full（D44 (iii) 一审 m3，2026-11-06）：装配与 prod 逐字节相同（生产 system + 全量完整 schema）；只在
+  `--orchestrator` 下有意义——run_knee.orch_model_options 把条目层 tool_schema_mode 强制成 full（镜像
+  catalog 档），用来在条目已是 catalog 的模型上测 full 臂。直调模式的 prod 本就是全量完整声明，
+  run_knee 在直调模式拒 full（不给同一装配第二个名字，免得 prefix_mode 分组 / 续跑比对多一个同义档）。
 
 工具集取法与 backend/scripts/measure_prefix.py 同源（scripts/tool_token_audit.collect_schemas：密封
 构造、不探活 RAG、不含 rag_admin、skill_invoke 取生产形）。元工具 schema 是 orchestrator 的模块级常量
@@ -28,7 +32,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-PREFIX_MODES = ("mock", "prod", "catalog", "routed")
+PREFIX_MODES = ("mock", "prod", "catalog", "routed", "full")
+#: 装配 = prod 全量完整声明的档（full 只是编排器模式下强制条目 full 的名字）
+_FULL_DECL_MODES = ("prod", "full")
 
 _BACKEND = Path(__file__).resolve().parents[2] / "backend"
 
@@ -108,12 +114,12 @@ def assemble(mode: str, mock_tools: Sequence[Dict[str, Any]], query: str = "",
     from framework.core import tool_disclosure as td
     ts = toolset or production_toolset()
     mock_names = {t["name"] for t in mock_tools}
-    metas_src = ts.metas_full if mode == "prod" else ts.metas_catalog
+    metas_src = ts.metas_full if mode in _FULL_DECL_MODES else ts.metas_catalog
     shadowed = [s["name"] for s in (*ts.physical, *metas_src) if s["name"] in mock_names]
     physical = [s for s in ts.physical if s["name"] not in mock_names]
     metas = [m for m in metas_src if m["name"] not in mock_names]
     system = production_system_prompt()
-    if mode == "prod":
+    if mode in _FULL_DECL_MODES:
         tools = physical + metas + mock_tools
         return PrefixAssembly(mode=mode, system_prompt=system, tools=tools,
                               grammar_tools=list(tools), mock_tools=mock_tools,
@@ -140,7 +146,7 @@ def production_decl(mode: str, toolset: Optional[ProdToolset] = None) -> Optiona
         return None
     from framework.core import tool_disclosure as td
     ts = toolset or production_toolset()
-    if mode == "prod":
+    if mode in _FULL_DECL_MODES:
         return list(ts.physical) + list(ts.metas_full)
     meta_names = [m["name"] for m in ts.metas_catalog]
     core, _ = td.split_core(ts.core_cfg, [s["name"] for s in ts.physical])

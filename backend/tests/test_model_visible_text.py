@@ -101,10 +101,13 @@ def test_tool_declarations_under_token_budget(family, render, repo):
 # agent.tool_routing.core 完整 schema + 其余确定性工具的目录行（名字 + summary），不含任务期
 # 路由件（每任务 ≤ top_k 件，随任务变）；计数口径同上（逐件声明之和、自家方言、自家分词器）。
 # 2026-11-01 实测 gemma4 3735 / qwen35 3715（core 七件 = config.yaml 当日值，含 run_shell_command；
-# 首审修订后 summary 口径），线取较大者 +2%。
-# 整段前缀（含 DEFAULT_SYSTEM_PROMPT 与包裹，同七件口径）实测 gemma4 5266 / qwen35 5280，见
-# backend/scripts/measure_prefix.py。
-BUDGET_CATALOG = 3810
+# 首审修订后 summary 口径），线取较大者 +2% = 3810。
+# 2026-11-06 重定（D44 (iii)，用户 11-05 拍板）：core 九件 = 七件 + run_math + rag_search，实测 gemma4 4494 /
+# qwen35 4457；同日七件口径为 3784 / 3764（较 11-01 已 +49，期间文本改动），新增两件增量 run_math
+# +369 / +364、rag_search +341 / +329（gemma4 / qwen35），合计 +710 / +693。线仍取较大者 +2%（上取整到 10）。
+# 整段前缀（含 DEFAULT_SYSTEM_PROMPT 与包裹，九件口径）实测 gemma4 6025 / qwen35 6022（11-01 七件
+# 5266 / 5280），见 backend/scripts/measure_prefix.py。
+BUDGET_CATALOG = 4590
 
 
 def _catalog_schemas():

@@ -14,6 +14,7 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO / "benchmarks") not in sys.path:
     sys.path.append(str(REPO / "benchmarks"))
 
+from context_knee import orch_tools as OT          # noqa: E402
 from summary_trace import run_trace as T          # noqa: E402
 from summary_trace import summarize_trace as S    # noqa: E402
 import tests.fake_engine as fe                    # noqa: E402
@@ -97,7 +98,7 @@ def test_two_branches_post_folded_and_repeated_counted(tmp_path, summarize_calls
     assert by["pre"]["cont_live_task"] is True and by["post"]["cont_live_task"] is True
     # 报表能出
     rep = S.report([out])
-    assert "| new | on | off | 200 | 3 | 1 | 1 |" in rep
+    assert "| new | on | off | 200 | 3 | full | effective_mode | 1 | 1 |" in rep   # 干跑无条目 = agent 段 full
 
 
 def test_template_legacy_passes_legacy_text(tmp_path, summarize_calls):
@@ -165,11 +166,14 @@ def test_catalog_prefix_forces_catalog_with_mock_tools_full(tmp_path, summarize_
     monkeypatch.setattr(fe.FakeEngine, "generate_once", spy)
     _out, rows = _run(tmp_path, "--prefix", "catalog")
     assert [r.get("error") for r in rows] == [None, None]
+    assert {(r["tool_schema_mode_effective"], r["mock_merge_rule"]) for r in rows} == \
+        {("catalog", OT.MOCK_MERGE_RULE)}                           # 披露口径进行（分组键）
     decl = {d["name"]: d for d in seen[0]}
     assert "get_tool_schema" in decl
     for name in ("list_files", "read_file", "write_file", "append_file", "delete_file"):
         assert "parameters" in decl[name], name
-    assert "parameters" not in decl["web_read"] and "parameters" not in decl["rag_search"]
+    assert "parameters" not in decl["web_read"] and "parameters" not in decl["web_research"]
+    assert "parameters" in decl["rag_search"]           # D44 (iii) 2026-11-05 进 agent.tool_routing.core
 
 
 def test_existing_transcripts_refused(tmp_path, summarize_calls):
@@ -327,6 +331,23 @@ def test_group_keys_split_on_tool_digest_and_turn1_iterations(tmp_path):
     assert all(g["n_pairs"] == 1 for g in agg["groups"])
     rep = S.report([tmp_path / "d200", tmp_path / "d0"])
     assert "| tool_digest | turn1_iter |" in rep and "| 200 | 6 |" in rep and "| 0 | 6 |" in rep
+
+
+def test_group_keys_split_on_disclosure_mode_and_legacy_batch_is_none(tmp_path):
+    """D44 (iii) 一审 M1：同一条命令在条目改 catalog 前后跑出的两批（披露 full / catalog）合批时分两组；
+    加键之前的老批次缺两键 → 归 "None" 组，报表两列标「None(旧)」。"""
+    _write(tmp_path / "full", _pair(tool_schema_mode_effective="full", mock_merge_rule="effective_mode"))
+    _write(tmp_path / "cat", _pair(tool_schema_mode_effective="catalog", mock_merge_rule="effective_mode"))
+    _write(tmp_path / "old", _pair())
+    dirs = [tmp_path / n for n in ("full", "cat", "old")]
+    agg = S.aggregate(S.load_rows(dirs))
+    keys = sorted((g["tool_schema_mode_effective"], g["mock_merge_rule"]) for g in agg["groups"])
+    assert keys == [("None", "None"), ("catalog", "effective_mode"), ("full", "effective_mode")]
+    assert all(g["n_pairs"] == 1 for g in agg["groups"])
+    rep = S.report(dirs)
+    assert "| 披露 | mock 并入 |" in rep
+    assert "| None(旧) | None(旧) |" in rep
+    assert "| full | effective_mode |" in rep and "| catalog | effective_mode |" in rep
 
 
 def test_failed_post_branch_still_persists_summary_input(tmp_path, monkeypatch):

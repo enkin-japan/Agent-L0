@@ -138,7 +138,11 @@ inference:
     # tool_schema_mode（可选，D29 / W-2 2026-11-01）：条目级工具披露模式，值限 full | catalog，优先于
     # agent.tool_schema_mode 全局缺省；其他值拒启。prompt 一律在执行端装配、原样上行算力端（D26），
     # 所以分档只能按模型家族/条目，不按本机/远端：gemma4 两条目 catalog（稠密全注意力，prefill 随前缀
-    # 线性涨，49K 首填 42 s），qwen35 两条目不设 = full（线性注意力占 3/4、49K 无拐点，省不出什么）。
+    # 线性涨，49K 首填 42 s），qwen35 两条目原不设 = full（线性注意力占 3/4、49K 无拐点，省不出什么）；
+    # D44 (iii)（2026-11-05 用户拍板）改 catalog：d44 验收批 catalog 臂成功率与 w1w2 持平（−1 [−14,+12]）、
+    # 首 prompt L0 ×0.394，且 57K 召回不劣（12/14 vs w1w2 8/10），省下的前缀换给上下文。注意：这些证据
+    # 是 core 七件、CUDA INT4 条目的口径；现行 core 九件（下方 tool_routing.core）与 MLX 条目未经实机，
+    # ×0.394 对现行配置只是上界（九件前缀约多 700 tok）。
     # catalog 下前缀 = system + 元工具 + agent.tool_routing.core + 任务期路由选中工具的完整 schema，其余
     # 工具只留「名字 — summary」目录行，模型用 get_tool_schema 按名取详情。
     # thinking_replay（可选，D36 / W3 2026-11-01）：条目级思考回放策略，值限 all | tool_turns | last_k，缺省 last_k；
@@ -177,6 +181,8 @@ inference:
       revision: "3e6447f082e89cc7f0bc6e5441afd38dfce760ff"
       dialect: "qwen35"
       capabilities: ["text", "vision"]
+      tool_schema_mode: "catalog"     # D44 (iii) 2026-11-05：见上方 tool_schema_mode 说明（本条目为外推，d44 只测了 CUDA 条目）；
+                                      # 下方 profile 数字是 full 口径（run 20260824），重画像前引用须注明
       thinking_replay: "tool_turns"   # D36（W3）：同上，本机 MLX 轮内不滑窗
       speculative: { mode: "drafter", draft_model: "mlx-community/Qwen3.8-27B-MTP-4bit",
                      draft_revision: "b643c01b6d3b094e325edb6ebd832e16c486c575",
@@ -210,6 +216,7 @@ inference:
       dialect: "qwen35"
       capabilities: ["text", "vision"]
       cuda_deployment: { prequantized: true, supports_mtp: true }
+      tool_schema_mode: "catalog"     # D44 (iii) 2026-11-05：d44 验收批即此档 catalog 臂（见上方说明）
       thinking_replay: "last_k"   # D36（W3）：同上，K 缺省 2（D19，待测）
       # Qwen3.8 模型卡 top_p 0.95 / top_k 20；rep 1.0（同上，不罚 prompt）；温度 / min_p 见上方说明不设
       sampling: { top_p: 0.95, top_k: 20, repetition_penalty: 1.0 }
@@ -534,7 +541,7 @@ agent:
                               # （工具声明紧跟 system，换集合=前缀缓存整段失效，进任务一次失配、退出不再失配）；
                               # 0 = 不路由（core 之外全目录行）。首个任务前的纯聊天轮无路由件。
                               # embedding 打分归 W-2b（rag_server 融合模式尚无 /embed）。
-    core:                     # 常驻完整 schema 的工具（文件/计划/记忆）；元工具 update_plan / complete_step /
+    core:                     # 常驻完整 schema 的工具（文件/计划/记忆 + 高频带参件）；元工具 update_plan / complete_step /
                               # remember / get_tool_schema 天然常驻不必列。名字不在已注册工具里的：启动告警并跳过
                               # （rag_admin 等按探活出现，不能拒启）。
       - memory_write
@@ -544,6 +551,9 @@ agent:
       - list_dir
       - skill_invoke
       - run_shell_command   # 描述自称 PRIMARY tool、system 提示词点名；目录行+一次取详情的往返不值 ~460 tok（主会话 11-01）
+      - run_math            # D44 (iii) 2026-11-05：catalog 下参数预检打回最高频件（d44 10/11、b2 9 次，模型把 code 写成 command）；
+                              # 常驻完整声明省掉首次打回。move_file / copy_file 各打回 1 次不进。
+      - rag_search          # 同上：b2 打回 6 次；RAG 离线时未注册→启动告警跳过
   # 上下文上限护栏（W1，D1/D2/D33–D35，2026-11-01）：每次主循环生成前用执行端分词器实测整段 prompt
   # （与生成同一条 _assemble_prompt 装配路 + tokenizer.encode；无分词器才退 ASCII/4 + 非 ASCII 字数，宁高估），与三档比较：
   #   soft  ：只记账（本轮峰值 turn_peak_prompt_tokens、事件 context_soft）；

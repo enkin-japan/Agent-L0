@@ -27,6 +27,7 @@ from framework.core import events               # noqa: E402
 from framework.core.journal import new_turn_id  # noqa: E402
 from framework.core.orchestrator import Orchestrator   # noqa: E402
 from framework.memory.compactor import CLUE_RULE    # noqa: E402
+from framework.mcp.registry import PRECHECK_FULL_MODE_HINT   # noqa: E402
 from framework.memory.session import ChatSession      # noqa: E402
 from framework.utils.config_loader import data_dir, load_section   # noqa: E402
 
@@ -146,7 +147,14 @@ def test_orchestrator_rejects_handmade_routed_prefix(tmp_path, capsys):
     with pytest.raises(SystemExit) as e:
         K.main(["--dry-run", "--orchestrator", "--prefix", "routed", "--levels", "0",
                 "--out", str(tmp_path / "d")])
-    assert e.value.code == 2 and "--prefix mock|prod|catalog" in capsys.readouterr().err
+    assert e.value.code == 2 and "--prefix mock|prod|catalog|full" in capsys.readouterr().err
+
+
+def test_direct_mode_rejects_full_prefix(tmp_path, capsys):
+    """--prefix full 只在编排器模式有意义（强制条目 full）；直调 prod 已是全量完整声明，不给第二个名字。"""
+    with pytest.raises(SystemExit) as e:
+        K.main(["--dry-run", "--prefix", "full", "--levels", "0", "--out", str(tmp_path / "d")])
+    assert e.value.code == 2 and "--prefix full 只在 --orchestrator 下有效" in capsys.readouterr().err
 
 
 def test_direct_mode_rows_record_mode_direct_and_null_switches(tmp_path):
@@ -559,13 +567,22 @@ def test_bridged_write_failure_is_failed_and_counted_apart_from_system_errors(tm
     assert rec["guard_events"].get("failure_swallow_nudge") == 1   # 编排层把写失败判成失败
 
 
-def test_catalog_prefix_precheck_feeds_declaration_and_stub_not_invoked(tmp_path, monkeypatch):
-    """D44 经 harness 编排器模式（catalog 前缀）：run_math 发错参数名 → 注册表预检打回、回执附 run_math 的
-    完整声明、桩没执行；按声明改正后桩照常执行。tool_error 事件（guardrail_events.jsonl）带 schema_fed。"""
+def _precheck_tool_errors(ctx, rec):
+    evs = [json.loads(x) for x in ctx.events_path.read_text().splitlines() if x.strip()]
+    return [e["detail"] for e in evs[rec["guard_events_lines"][0]:rec["guard_events_lines"][1]]
+            if e["type"] == "tool_error"]
+
+
+def test_catalog_prefix_precheck_core_tool_gets_hint_not_declaration(tmp_path, monkeypatch):
+    """D44 经 harness 编排器模式（catalog 前缀）：run_math 发错参数名 → 注册表预检打回、桩没执行；按声明
+    改正后桩照常执行。D44 (iii)（2026-11-05）起 run_math 在 agent.tool_routing.core，完整声明已在前缀里
+    （orchestrator._precheck_schema_feedback）→ 回执只附 full 模式尾句、不重复喂声明，schema_fed=False。
+    非 core 工具附完整声明那条路径见下一用例。"""
     item = _item()
     asm = K.item_prefix(item, "catalog")
     ctx = _ctx(tmp_path, placement="turn")
     ctx.model_options = K.orch_model_options({}, "catalog")
+    assert "run_math" in ctx.agent_base["tool_routing"]["core"]       # 前提：真 config 的 core
     script = [{"tool_calls": [call("run_math", expression="1200 + 830")], "metrics": _m(100)},
               {"tool_calls": [call("run_math", code="1200 + 830")], "metrics": _m(100)},
               {"text": "2030", "metrics": _m(100)}]
@@ -574,15 +591,50 @@ def test_catalog_prefix_precheck_feeds_declaration_and_stub_not_invoked(tmp_path
     assert feeds[0]["content"].startswith(
         "System Error: 'run_math' was not executed: missing required argument(s): 'code'; "
         "unknown argument(s): 'expression' (accepted: ")
-    assert "\nFull declaration of 'run_math':\n" in feeds[0]["content"]
+    assert feeds[0]["content"].endswith(PRECHECK_FULL_MODE_HINT)
+    assert "Full declaration of" not in feeds[0]["content"]
     assert feeds[1]["content"] == "2030"
     assert rec["stub_served"].get("run_math") == 1                  # 只有改正后那次进了桩
     assert rec["system_errors"] == 1 and rec["stub_failed"] == 0
-    evs = [json.loads(x) for x in ctx.events_path.read_text().splitlines() if x.strip()]
-    te = [e["detail"] for e in evs[rec["guard_events_lines"][0]:rec["guard_events_lines"][1]]
-          if e["type"] == "tool_error"]
-    assert len(te) == 1 and te[0]["kind"] == "precheck" and te[0]["schema_fed"] is True
+    te = _precheck_tool_errors(ctx, rec)
+    assert len(te) == 1 and te[0]["kind"] == "precheck" and te[0]["schema_fed"] is False
     assert te[0]["missing"] == "code" and te[0]["unknown"] == "expression"
+
+
+def test_catalog_prefix_precheck_non_core_tool_feeds_declaration(tmp_path, monkeypatch):
+    """catalog 前缀下**非 core** 的带参工具（file_extract：真 config 的 core 外、本题不被路由，前缀里只是
+    目录行）发错参数名 → 预检回执附该工具的完整声明、schema_fed=True、没执行；按声明改正后照常执行。
+    run_math 进 core 后，这条「目录行 → 打回附声明」路径由本用例守住（backend/scripts/drill_catalog_e2e.py
+    真机演练用同一件工具）。"""
+    item = _item()
+    asm = K.item_prefix(item, "catalog")
+    ctx = _ctx(tmp_path, placement="turn")
+    ctx.model_options = K.orch_model_options({}, "catalog")
+    assert "file_extract" not in ctx.agent_base["tool_routing"]["core"]
+    seen = []
+    orig = fe.FakeEngine.generate_once
+
+    async def spy(self, session, tools=None, **kw):
+        seen.append(list(tools or []))
+        return await orig(self, session, tools=tools, **kw)
+    monkeypatch.setattr(fe.FakeEngine, "generate_once", spy)
+    script = [{"tool_calls": [call("file_extract", file="a.txt")], "metrics": _m(100)},
+              {"tool_calls": [call("file_extract", path="a.txt")], "metrics": _m(100)},
+              {"text": "a.txt 的内容是 1。", "metrics": _m(100)}]
+    rec, _ = _run(monkeypatch, ctx, script, level=0, prefix=asm, item=item)
+    decl0 = {d["name"]: d for d in seen[0]}
+    assert "parameters" not in decl0["file_extract"]                # 前提：前缀里只是目录行
+    feeds = [f for f in _feeds(rec) if f["name"] == "file_extract"]
+    assert feeds[0]["content"].startswith(
+        "System Error: 'file_extract' was not executed: missing required argument(s): 'path'; "
+        "unknown argument(s): 'file' (accepted: ")
+    assert "\nFull declaration of 'file_extract':\n" in feeds[0]["content"]
+    assert not feeds[0]["content"].endswith(PRECHECK_FULL_MODE_HINT)
+    assert feeds[1]["content"].endswith("    1 | 1")                 # 改正后经 vfs 桥照常读出
+    assert rec["system_errors"] == 1
+    te = _precheck_tool_errors(ctx, rec)
+    assert len(te) == 1 and te[0]["kind"] == "precheck" and te[0]["schema_fed"] is True
+    assert te[0]["missing"] == "path" and te[0]["unknown"] == "file"
 
 
 def test_bridged_reads_do_not_consume_env_read_faults(tmp_path):
@@ -662,16 +714,101 @@ def test_orchestrator_catalog_prefix_dry_run_and_disclosure(tmp_path, monkeypatc
     for t in asm.mock_tools:                                         # 每件 mock 工具完整 schema
         assert decl[t["name"]]["parameters"] == t["parameters"], t["name"]
     catalog_only = [n for n, d in decl.items() if "parameters" not in d]
-    assert "web_read" in catalog_only and "rag_search" in catalog_only
+    assert "web_read" in catalog_only                                # 生产非 core 只剩目录行
+    assert "rag_search" not in catalog_only and "parameters" in decl["rag_search"]   # D44 (iii) 进 core
     assert not set(catalog_only) & {t["name"] for t in asm.mock_tools}
     assert "parameters" in decl["run_shell_command"]                 # 生产 core 仍完整
     grammar = {g["name"]: g for g in seen[0][1]}
     assert grammar["web_read"]["parameters"]["required"] == ["urls"]
-    # 只动本 run 的 cfg 副本：prod 档原样
+    # 只动本 run 的 cfg 副本；判据是生效披露（条目选项 > agent 段），不是 --prefix 字面值
     base = {"tool_routing": {"top_k": 6, "core": ["edit_file"]}}
-    assert OT.keep_mock_tools_full(base, K.item_prefix(item, "prod")) is base
-    assert OT.keep_mock_tools_full(base, asm)["tool_routing"]["core"][0] == "edit_file"
+    assert OT.keep_mock_tools_full(base, K.item_prefix(item, "prod"), {}) is base     # 生效 full
+    assert OT.keep_mock_tools_full(base, asm, {"tool_schema_mode": "full"}) is base
+    merged = OT.keep_mock_tools_full(base, asm, ctx.model_options)
+    assert merged["tool_routing"]["core"][0] == "edit_file"
+    assert set(merged["tool_routing"]["core"][1:]) == {t["name"] for t in asm.mock_tools}
     assert base["tool_routing"]["core"] == ["edit_file"]
+
+
+def _first_decl(monkeypatch, tmp_path, prefix_mode, entry_options):
+    """经 _one_run_orch 跑一 run（ctx.model_options 走 run_knee 同一条 orch_model_options），
+    返回 (首次生成的声明 {name: decl}, asm)。"""
+    seen = []
+    orig = fe.FakeEngine.generate_once
+
+    async def spy(self, session, tools=None, **kw):
+        seen.append(list(tools or []))
+        return await orig(self, session, tools=tools, **kw)
+    monkeypatch.setattr(fe.FakeEngine, "generate_once", spy)
+    item = _item()
+    asm = K.item_prefix(item, prefix_mode)
+    ctx = _ctx(tmp_path, placement="turn")
+    ctx.model_options = K.orch_model_options(entry_options, prefix_mode)
+    _run(monkeypatch, ctx, _plan_script(), level=0, prefix=asm, item=item)
+    return {d["name"]: d for d in seen[0]}, asm
+
+
+def test_orchestrator_prod_prefix_follows_entry_mode_for_mock_tool_merge(tmp_path, monkeypatch):
+    """D44 (iii)：编排器 --prefix prod 完全随生产条目。条目 catalog（真 config 的 Qwen 条目）→ 生效 catalog，
+    题目 mock 工具与 --prefix catalog 同样并入 core（带 parameters 出现在声明里），两臂声明面逐件同形；
+    条目 full → --prefix prod 不并入（keep_mock_tools_full 原样返回），全部完整声明、无 get_tool_schema。"""
+    from framework.utils.model_selection import model_options
+    qwen = model_options("mlx-community/Qwen3.8-27B-4bit")
+    assert qwen.get("tool_schema_mode") == "catalog"                 # 前提：真 config 条目
+    prod, asm = _first_decl(monkeypatch, tmp_path / "p", "prod", qwen)
+    cat, _ = _first_decl(monkeypatch, tmp_path / "c", "catalog", qwen)
+    assert "get_tool_schema" in prod
+    for t in asm.mock_tools:
+        assert prod[t["name"]]["parameters"] == t["parameters"], t["name"]
+    assert "parameters" not in prod["web_read"]                      # 生产非 core 仍是目录行
+    shape = lambda decl: {n: "parameters" in d for n, d in decl.items()}   # noqa: E731
+    assert shape(prod) == shape(cat)
+    # 条目 full：prod 档不并入（并入判据看生效值），声明全完整
+    full_opts = {**qwen, "tool_schema_mode": "full"}
+    cfg = {"tool_routing": {"top_k": 6, "core": ["edit_file"]}}
+    assert OT.keep_mock_tools_full(cfg, asm, K.orch_model_options(full_opts, "prod")) is cfg
+    full, _ = _first_decl(monkeypatch, tmp_path / "f", "prod", full_opts)
+    assert "get_tool_schema" not in full
+    assert all("parameters" in d for d in full.values())
+
+
+def test_orchestrator_full_prefix_forces_full_on_catalog_entry(tmp_path, monkeypatch):
+    """一审 m3：条目已是 catalog（真 config 的 Qwen 条目）时 --prefix full 强制条目层 full（镜像 catalog 档）：
+    生效 full、mock 工具不并入 core、全部声明完整（无 get_tool_schema）；装配与 prod 档相同。"""
+    from context_knee import prefix as P
+    from framework.core import tool_disclosure
+    from framework.utils.model_selection import model_options
+    qwen = model_options("mlx-community/Qwen3.8-27B-4bit")
+    assert qwen.get("tool_schema_mode") == "catalog"                 # 前提：真 config 条目
+    opts = K.orch_model_options(qwen, "full")
+    assert opts["tool_schema_mode"] == "full" and qwen["tool_schema_mode"] == "catalog"   # 不改原条目
+    ctx = _ctx(tmp_path / "m", placement="turn")
+    ctx.model_options = opts
+    assert K.orch_meta(ctx)["tool_schema_mode_effective"] == "full"
+    assert tool_disclosure.resolve_tool_schema_mode(opts, ctx.agent_base) == "full"
+    item = _item()
+    asm = K.item_prefix(item, "full")
+    prod = K.item_prefix(item, "prod")
+    assert (asm.tools, asm.system_prompt, asm.grammar_tools) == (prod.tools, prod.system_prompt,
+                                                                 prod.grammar_tools)
+    assert P.production_decl("full") == P.production_decl("prod")
+    cfg = {"tool_routing": {"top_k": 6, "core": ["edit_file"]}}
+    assert OT.keep_mock_tools_full(cfg, asm, opts) is cfg            # 不并入
+    full, _ = _first_decl(monkeypatch, tmp_path / "f", "full", qwen)
+    assert "get_tool_schema" not in full
+    assert all("parameters" in d for d in full.values())
+    for t in asm.mock_tools:
+        assert full[t["name"]]["parameters"] == t["parameters"], t["name"]
+
+
+def test_orchestrator_full_prefix_dry_run_records_effective_full(tmp_path):
+    out = tmp_path / "f"
+    assert K.main(["--dry-run", "--orchestrator", "--prefix", "full", "--levels", "0",
+                   "--reps", "1", "--limit", "1", "--out", str(out)]) == 0
+    rec = json.loads((out / "transcripts.jsonl").read_text().splitlines()[0])
+    assert "error" not in rec, rec.get("traceback")
+    assert rec["prefix_mode"] == "full" and rec["tool_schema_mode_effective"] == "full"
+    assert rec["stub_unknown"] == 0
 
 
 def test_build_registry_rejects_non_empty_tools_dir(tmp_path):
@@ -826,6 +963,30 @@ def test_resume_refuses_orchestrator_dir_with_other_stub_clue(tmp_path, old):
             r.pop("stub_clue")
         else:
             r["stub_clue"] = old
+    t.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n")
+    with pytest.raises(SystemExit, match="W-K"):
+        K.main(base[:3] + ["0,4096"] + base[4:] + ["--out", str(o), "--resume"])
+
+
+@pytest.mark.parametrize("old", [None, "prefix_literal"])
+def test_resume_refuses_orchestrator_dir_with_other_mock_merge_rule(tmp_path, old):
+    """D44 (iii)：旧并入规则的目录（行缺 mock_merge_rule = 只 --prefix catalog 并入 mock 工具）或别的规则，
+    续跑拒；同键同值续跑照常接受。"""
+    base = ["--dry-run", "--orchestrator", "--levels", "0", "--reps", "1", "--limit", "1"]
+    o = tmp_path / "o"
+    assert K.main(base + ["--out", str(o)]) == 0
+    t = o / "transcripts.jsonl"
+    rows = [json.loads(ln) for ln in t.read_text().splitlines()]
+    assert {r["mock_merge_rule"] for r in rows} == {OT.MOCK_MERGE_RULE}
+    assert "mock_merge_rule" in K._ALWAYS_COMPARED
+    ok = tmp_path / "ok"                                  # 同键同值：续跑接受
+    assert K.main(base + ["--out", str(ok)]) == 0
+    assert K.main(base[:3] + ["0,4096"] + base[4:] + ["--out", str(ok), "--resume"]) == 0
+    for r in rows:
+        if old is None:
+            r.pop("mock_merge_rule")
+        else:
+            r["mock_merge_rule"] = old
     t.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n")
     with pytest.raises(SystemExit, match="W-K"):
         K.main(base[:3] + ["0,4096"] + base[4:] + ["--out", str(o), "--resume"])

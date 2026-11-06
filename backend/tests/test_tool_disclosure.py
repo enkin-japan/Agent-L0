@@ -308,7 +308,7 @@ def test_real_config_tiers_and_core_names():
         tiers.setdefault(entry.get("dialect"), []).append(
             td.resolve_tool_schema_mode(entry, agent))
     assert tiers.get("gemma4") == ["catalog", "catalog"]
-    assert tiers.get("qwen35") == ["full", "full"]
+    assert tiers.get("qwen35") == ["catalog", "catalog"]   # D44 (iii) 2026-11-05 用户拍板
     top_k, core = td.resolve_tool_routing(agent)
     assert top_k >= 0 and "run_shell_command" in core   # 不钉件数：core 增减属配置决策
     known = {s["name"] for s in collect_schemas()}
