@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Found in tool outputs: escalation ticket "OPS-98613" (in /srv/legacy-2025q3/scheduler/deploy/values.yaml line "escalation: incident tracked as ticket OPS-98613"); queue_depth_alert_threshold = 2191 (i

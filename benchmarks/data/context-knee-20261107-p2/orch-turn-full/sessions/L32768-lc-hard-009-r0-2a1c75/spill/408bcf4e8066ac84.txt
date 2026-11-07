@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/runbook/mailer.md", "content": "# mailer runbook\n## Rollback\n- Do not purge the dead-letter queue without a snapshot\n- If disk usage > 85%, rotate segments first\n- Escalate to the on-call rotation if two retries fail\n## Rollback\n- If disk usage > 85%, rotate segments first\n- Do not purge the dead-letter queue without a snapshot"}

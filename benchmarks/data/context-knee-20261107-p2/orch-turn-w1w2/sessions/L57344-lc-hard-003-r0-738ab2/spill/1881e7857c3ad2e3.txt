@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Candidate values to quote verbatim: halyard config path = /opt/halyard/conf/halyard-840cc9.toml (seen in geo-tiles-13.log); OPS ticket = OPS-98613 (seen in runbook/gateway.md); queue_depth_alert_thres

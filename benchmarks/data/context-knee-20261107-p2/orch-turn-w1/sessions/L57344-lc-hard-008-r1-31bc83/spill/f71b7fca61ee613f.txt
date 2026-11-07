@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/audit-trail/log/audit-trail-23.log", "content": "2026-09-11T08:04:09Z ERROR [audit-trail-4] slow query 94ms table=events_7775 plan=index_scan\n2026-09-11T08:19:07Z INFO  [audit-trail-7] slow query 262ms table=events_1134 plan=index_scan\n2026-09-11T07:56:42Z DEBUG [audit-trail-7] dropped 177 malformed records from partition 7400"}

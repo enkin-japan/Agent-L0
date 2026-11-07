@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/mailer/deploy/values.yaml", "content": "    max_batch: false\n  max_batch: 1063\n    timeout_ms: false\n  pool_size: 2365\n    warmup_s: 890\nregion: 404\n    warmup_s: ap-east-2\n    region: ap-east-2\n    region: warn\nwarmup_s: 1685\nlog_level: info\n    max_batch: info\n    replicas: warn\nretry_limit: warn"}

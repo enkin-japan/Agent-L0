@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Locate the team directory and the 4 people's duty files
+  ○ [2] Read each person's duty days for this week
+  ○ [3] Write duty-summary.txt (one person per line)
+  ○ [4] Verify the 3 values to quote verbatim (halyard config path, OPS- ticket, queue_depth_alert_threshold)
+  ○ [5] Deliver final answer with the 3 values verbatim

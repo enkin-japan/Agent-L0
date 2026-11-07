@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Locate the reports folder (real Mac or task files) and list its files
+  ○ [2] Identify which report files contain the word DRAFT
+  ○ [3] Delete DRAFT files; rename remaining .md reports by inserting -final before .md (copy then delete original)
+  ○ [4] Verify final state of the reports folder
+  ○ [5] Compose final reply with the 3 verbatim values

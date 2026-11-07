@@ -1,0 +1,4 @@
+Saved to scratchpad.
+  - halyard config path (cache-warm-10.log): /opt/halyard/conf/halyard-67b574.toml
+  - escalation ticket ID (audit-trail/deploy/values.yaml): OPS-50015
+  - queue_depth_alert_threshold (mailer/deploy/values.yaml): 6880

@@ -1,0 +1,68 @@
+2026-11-07 12:55:54 config: MODEL=RedHatAI/Qwen3.8-27B-INT4 MODEL_B=google/gemma-4-31B-it-qat-w4a16-ct READY_MINUTES=40 READY_RETRY=1 RESTARTS_MAX=2 HUNG_RUNS=3 MAX_VM_HOURS=10 LEASE_BUDGET_SEC=36000 SMOKE=1 LEVEL_REPS=0=6 KNEE_SEED=1107
+2026-11-07 12:55:55 START deploy RedHatAI/Qwen3.8-27B-INT4 --retain
+2026-11-07 12:55:55 后台部署进程已启动（尚未 READY） {"pid": 29788, "logs": "./colab/deploy.sh logs -f", "stop": "./colab/deploy.sh stop"}
+2026-11-07 12:55:57 wait READY: state=preparing phase=
+2026-11-07 12:56:29 wait READY: state=allocating phase=
+2026-11-07 12:57:00 wait READY: state=allocating phase=
+2026-11-07 12:57:32 wait READY: state=stopping phase=
+2026-11-07 12:57:32 deploy state=stopping before READY
+2026-11-07 12:57:32 首次起机未 READY（rc=4，VM 随即 state）：停机 → 等租约释放 → 自动重试一次（READY_RETRY=1）
+2026-11-07 12:57:32 STOP colab
+2026-11-07 12:57:32 等待正在进行的 VM 分配结束（如有），然后回收
+2026-11-07 12:57:42 stop rc=0
+2026-11-07 12:57:43 START deploy RedHatAI/Qwen3.8-27B-INT4 --retain
+2026-11-07 12:57:43 后台部署进程已启动（尚未 READY） {"pid": 30073, "logs": "./colab/deploy.sh logs -f", "stop": "./colab/deploy.sh stop"}
+2026-11-07 12:57:46 wait READY: state=allocating phase=
+2026-11-07 12:58:18 wait READY: state=booting phase=installing-python
+2026-11-07 12:58:49 wait READY: state=booting phase=installing-dependencies
+2026-11-07 12:59:21 wait READY: state=booting phase=checking-cuda-runtime
+2026-11-07 12:59:52 wait READY: state=booting phase=downloading-model
+2026-11-07 13:00:24 wait READY: state=booting phase=downloading-model
+2026-11-07 13:00:55 wait READY: state=booting phase=downloading-model
+2026-11-07 13:01:27 wait READY: state=booting phase=loading-models
+2026-11-07 13:01:58 wait READY: state=booting phase=loading-models
+2026-11-07 13:02:29 wait READY: state=booting phase=loading-models
+2026-11-07 13:03:00 wait READY: state=booting phase=loading-models
+2026-11-07 13:03:31 wait READY: state=booting phase=loading-models
+2026-11-07 13:04:02 wait READY: state=booting phase=loading-models
+2026-11-07 13:04:34 wait READY: state=booting phase=loading-models
+2026-11-07 13:05:05 wait READY: state=booting phase=loading-models
+2026-11-07 13:05:36 wait READY: state=booting phase=loading-models
+2026-11-07 13:06:07 wait READY: state=booting phase=loading-models
+2026-11-07 13:06:39 wait READY: state=booting phase=loading-models
+2026-11-07 13:07:11 wait READY: state=booting phase=loading-models
+2026-11-07 13:07:42 wait READY: state=booting phase=loading-models
+2026-11-07 13:08:13 wait READY: state=booting phase=loading-models
+2026-11-07 13:08:45 wait READY: state=booting phase=loading-models
+2026-11-07 13:09:16 wait READY: state=booting phase=loading-models
+2026-11-07 13:09:47 wait READY: state=booting phase=loading-models
+2026-11-07 13:10:19 wait READY: state=booting phase=loading-models
+2026-11-07 13:10:50 wait READY: state=ready phase=ready
+2026-11-07 13:10:50 READY host=agent-compute.tail8d18fd.ts.net
+2026-11-07 13:10:50 smoke orch [A RedHatAI/Qwen3.8-27B-INT4] (prod, turn, L0, 1 题 1 rep) → smoke-orch-20261107-125554-A
+2026-11-07 13:11:50 smoke orch OK
+2026-11-07 13:11:50 ARM orch-turn-none [A RedHatAI/Qwen3.8-27B-INT4] start: --orchestrator --fill-placement turn --guard off --step-compaction off --prefix prod --levels 0,32768,49152,57344 
+2026-11-07 15:04:58 ARM orch-turn-none harness rc=0 hung=0
+2026-11-07 15:04:58 arm orch-turn-none: ok
+2026-11-07 15:04:58 ARM orch-turn-w1 [A RedHatAI/Qwen3.8-27B-INT4] start: --orchestrator --fill-placement turn --guard on --step-compaction off --prefix prod --levels 0,32768,49152,57344 
+2026-11-07 16:53:05 ARM orch-turn-w1 harness rc=0 hung=0
+2026-11-07 16:53:05 arm orch-turn-w1: ok
+2026-11-07 16:53:05 ARM orch-turn-w1w2 [A RedHatAI/Qwen3.8-27B-INT4] start: --orchestrator --fill-placement turn --guard on --step-compaction on --prefix prod --levels 0,32768,49152,57344 
+2026-11-07 18:42:11 ARM orch-turn-w1w2 harness rc=0 hung=0
+2026-11-07 18:42:11 arm orch-turn-w1w2: ok
+2026-11-07 18:42:11 ARM orch-turn-catalog [A RedHatAI/Qwen3.8-27B-INT4] start: --orchestrator --fill-placement turn --guard on --step-compaction on --prefix catalog --levels 0,32768,49152,57344 
+2026-11-07 20:31:18 ARM orch-turn-catalog harness rc=0 hung=0
+2026-11-07 20:31:18 arm orch-turn-catalog: ok
+2026-11-07 20:31:18 ARM orch-turn-full [A RedHatAI/Qwen3.8-27B-INT4] start: --orchestrator --fill-placement turn --guard on --step-compaction on --prefix full --levels 0,32768,49152,57344 
+2026-11-07 22:15:25 ARM orch-turn-full harness rc=0 hung=0
+2026-11-07 22:15:25 arm orch-turn-full: ok
+2026-11-07 22:15:25 STOP colab
+2026-11-07 22:15:25 等待正在进行的 VM 分配结束（如有），然后回收
+2026-11-07 22:15:25 正在核对并回收 VM {"session": "agent-compute-c8bde622e1df"}
+2026-11-07 22:15:25 正在注销 Tailscale 临时节点
+2026-11-07 22:15:29 正在请求 Colab 释放 VM
+[colab] Stopping session 'agent-compute-c8bde622e1df'...
+[colab] Session terminated.
+2026-11-07 22:15:31 已确认 VM 从 Colab 服务端移除 {"session": "agent-compute-c8bde622e1df", "tailnet_cleanup": "ephemeral-logout-confirmed"}
+2026-11-07 22:15:31 stop rc=0
+2026-11-07 22:15:31 DONE BATCH_RC=0 SKIPPED=0

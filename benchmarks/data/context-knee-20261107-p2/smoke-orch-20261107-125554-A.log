@@ -1,0 +1,36 @@
+[RemoteBackend] 模型身份核对通过：RedHatAI/Qwen3.8-27B-INT4（revision=91bd022d5b49442a868bc35008f6c21e1860edfa，capabilities=['text', 'vision']）
+[RemoteBackend] 已连接 inference-server: http://agent-compute.tail8d18fd.ts.net:14161
+[MCP-rag_search] ⚠️ RAG 服务器 (127.0.0.1:14160) 探活失败: hermetic construction
+[Skill] ✅ 成功加载剧本: briefing
+[Skill] ✅ 成功加载剧本: chart-report
+[Skill] ✅ 成功加载剧本: deck
+[Skill] ✅ 成功加载剧本: ingest
+[Skill] ✅ 成功加载剧本: research
+== 拐点测量 RedHatAI/Qwen3.8-27B-INT4（remote，计数 engine，前缀 prod 13757 tok）：1 题 × 1 档 [0] × 1 rep → benchmarks/data/context-knee-20261107-p2/smoke-orch-20261107-125554-A
+== 编排器模式：放置 turn，guard on，W2 on，轮首压缩 off，goal_verify off，披露 catalog；事件 → benchmarks/data/context-knee-20261107-p2/smoke-orch-20261107-125554-A/guardrail_events.jsonl
+[Engine] 约束采样引擎就绪（llguidance）
+[Engine] 约束采样构建失败，永久禁用（纠错闭环兜底）: NotImplementedError: qwen35 方言使用原生 XML 调用体（<function=…><parameter=…>），按设计不启用 约束采样——engine 将 fail-open 到自由采样 + 解析纠错闭环。
+[Engine] 前缀命中 4704/6162 tokens，gen 42.3 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 6272/6375 tokens，gen 50.0 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 6272/6500 tokens，gen 57.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 6272/7210 tokens，gen 52.9 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 6272/7408 tokens，gen 45.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 6272/7510 tokens，gen 49.3 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 6272/7739 tokens，gen 35.1 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 6272/7697 tokens，gen 45.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 7840/7969 tokens，gen 55.5 tps
+❌ L0 lc-hard-001 r0 prompt=6162 (est 6162, err None) recall - rep_guard 0 (30.35s)  | 步数超限: 12 > 10
+== 产物: benchmarks/data/context-knee-20261107-p2/smoke-orch-20261107-125554-A（表格：summarize.py benchmarks/data/context-knee-20261107-p2/smoke-orch-20261107-125554-A）

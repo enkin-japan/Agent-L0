@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - 三项需逐字引用的工具输出值：① halyard 配置路径 /opt/halyard/conf/halyard-840cc9.toml（ledger-04.log）② 工单 OPS-98613（billing-sync/deploy/values.yaml）③ queue_depth_alert_threshold = 2191（runbook/gateway.md）

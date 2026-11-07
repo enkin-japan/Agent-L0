@@ -1,0 +1,3 @@
+exit_code: 127
+stderr:
+zsh: not executed: this offline sandbox emulates only read-only commands over the task's files: ls [path], cat <file>…, grep [-n] [-i] [-r] <pattern> <file|dir>…, find [dir] -name <glob>, head|tail -n N <file>, wc -l <file>, echo …, pwd — no pipes, redirects or command chaining. Use the file tools (list_files / read_file / write_file …) for anything else.

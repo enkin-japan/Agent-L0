@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/feed-merge/log/feed-merge-24.log", "content": "2026-09-23T07:35:05Z ERROR [feed-merge-8] batch 3119 committed rows=1871 lag_ms=226\n2026-09-23T06:48:38Z INFO  [feed-merge-1] slow query 852ms table=events_5259 plan=index_scan\n2026-09-23T07:06:43Z INFO  [feed-merge-2] retrying upstream call attempt=303 backoff_ms=3273"}

@@ -1,0 +1,3 @@
+Saved to scratchpad.
+  - 三项需逐字引用的工具输出值：① halyard 配置路径 /opt/halyard/conf/halyard-840cc9.toml（ledger-04.log）② 工单 OPS-98613（billing-sync/deploy/values.yaml）③ queue_depth_alert_threshold = 2191（runbook/gateway.md）
+  - 月度合计：1月2485 2月2975 3月3030 4月3540 5月3300，1–5月总额15330

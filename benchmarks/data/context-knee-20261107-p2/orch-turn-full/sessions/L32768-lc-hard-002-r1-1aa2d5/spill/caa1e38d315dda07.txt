@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Read the three report files and classify DRAFT vs final
+  ○ [2] Trash DRAFT files
+  ○ [3] Copy final reports to -final names and trash originals
+  ○ [4] Verify final folder state
+  ○ [5] Answer with the three verbatim values

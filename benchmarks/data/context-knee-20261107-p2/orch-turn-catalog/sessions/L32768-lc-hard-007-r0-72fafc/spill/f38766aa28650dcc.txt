@@ -1,0 +1,4 @@
+Saved to scratchpad.
+  - ① halyard config path (thumbnailer-24.log): /opt/halyard/conf/halyard-840cc9.toml
+  - ② OPS ticket (audit-trail-08.log): OPS-98613
+  - ③ queue_depth_alert_threshold (indexer-25.log): 2191

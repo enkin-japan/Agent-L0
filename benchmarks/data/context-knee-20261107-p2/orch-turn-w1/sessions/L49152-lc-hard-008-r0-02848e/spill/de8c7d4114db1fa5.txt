@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Required verbatim values: halyard config path = /opt/halyard/conf/halyard-840cc9.toml (from audit-trail-24.log); escalation ticket = OPS-98613 (indexer values.yaml); queue_depth_alert_threshold = 2191

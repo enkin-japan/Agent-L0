@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Verbatim values for final answer: (1) halyard config path = /opt/halyard/conf/halyard-840cc9.toml (from relay-24.log); (2) escalation ticket = OPS-98613 (from thumbnailer-17.log); (3) queue_depth_aler

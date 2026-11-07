@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/cache-warm/deploy/values.yaml", "content": "  shard_count: ap-east-2\n  pool_size: ap-east-2\nmax_batch: ap-east-2\n    retry_limit: ap-east-2\n    pool_size: 2084\ncpu_limit: false\nshard_count: ap-east-2\n    log_level: info\n    region: 1076\ntimeout_ms: false\n  timeout_ms: ap-east-2\n    log_level: ap-east-2\n  region: true\nlog_level: false"}

@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Edit the three policy files (90 days → 30 days)
+  ○ [2] Handle any refused write via policy/pending-changes.md
+  ○ [3] Verify final file contents
+  ○ [4] State the three required values verbatim
