@@ -7,7 +7,7 @@
 
 为什么另起一个文件：analyze_orch.main_b2 要求 Gemma 两臂与 trace 三步都在（本批没有，直接 SystemExit），
 且 --prev 只认 11-02 上午批的臂名（TURN + direct-*）。本文件复用 analyze_orch 的全部节函数，只换布局：
-- 本批四臂 = analyze_orch.B2_ORCH；--prev = b2 批同名四臂，组名后缀 `@b2`（不是 `@am`）；
+- 本批臂 = analyze_orch.orch_arms：B2_ORCH 四臂在前，--data 下其余 orch-* 臂按名追加；--prev = b2 批同名四臂，组名后缀 `@b2`（不是 `@am`）；
 - 不渲染 R（Gemma）/ T（trace）节；N 节只读 run_colab.log；
 - U 节（本文件新增）：D43 (a) 回忆与回读、D43b W2 免压、D44 预检回执、none 臂 L0、口径对照。
 只读：各臂 transcripts.jsonl / guardrail_events.jsonl / sessions/<session_dir 末段>/（spill/、journal.jsonl）、
@@ -39,7 +39,9 @@ from context_knee import analyze as A  # noqa: E402
 from context_knee import analyze_orch as O  # noqa: E402
 from context_knee.quality import COHERENT_THRESHOLDS  # noqa: E402
 
-ARMS = list(O.B2_ORCH)            # orch-turn-none / w1 / w1w2 / catalog
+#: 缺省臂 = O.B2_ORCH（orch-turn-none / w1 / w1w2 / catalog）；main 按 O.orch_arms(--data) 改写为
+#: 「已知四臂 + 目录下其余 orch-* 臂按名追加」，退出时恢复
+ARMS = list(O.B2_ORCH)
 MANAGED = ARMS[1:]
 TAG = "@b2"
 HI = (49152, 57344)
@@ -73,7 +75,7 @@ def kn_ci(k: int, n: int) -> str:
     lo, hi = A.wilson(k, n)
     if lo is None:
         return f"—（0/0）"
-    return f"{k}/{n} = {k / n:.0%} [{lo:.0%},{hi:.0%}]"
+    return f"{A.fmt_k(k)}/{n} = {k / n:.0%} [{lo:.0%},{hi:.0%}]"
 
 
 def recall_kn(rs) -> Tuple[int, int]:
@@ -703,20 +705,25 @@ def main(argv=None) -> int:
     ap.add_argument("--out-md", default=None)
     ap.add_argument("--out-csv", default=None)
     a = ap.parse_args(argv)
+    global ARMS, MANAGED
     data, ref = Path(a.data), Path(a.ref)
-    missing = [n for n in ARMS if not (data / n / "transcripts.jsonl").is_file()]
+    arms = O.orch_arms(data)
+    missing = [n for n in O.B2_ORCH if not (data / n / "transcripts.jsonl").is_file()]
     if missing:
         raise SystemExit(f"❌ D44 布局缺臂：{missing}")
     prev = Path(a.prev) if a.prev else None
-    prev_arms = [n for n in ARMS if prev and (prev / n / "transcripts.jsonl").is_file()]
+    prev_arms = [n for n in arms if prev and (prev / n / "transcripts.jsonl").is_file()]
     if a.prev and not prev_arms:
-        raise SystemExit(f"❌ --prev {a.prev} 下没有 {ARMS} 任何一臂")
+        raise SystemExit(f"❌ --prev {a.prev} 下没有 {arms} 任何一臂")
     ref_key = os.path.basename(os.path.normpath(a.ref))
-    if ref_key in ARMS or ref_key in {n + TAG for n in prev_arms}:
+    if ref_key in arms or ref_key in {n + TAG for n in prev_arms}:
         raise SystemExit(f"❌ 参照目录名「{ref_key}」与臂名冲突")
     saved = (O.REF, O.ARMS, O.EXTRA_ORCH, A.comparisons, O.RAG_NOTE)
     saved_a = (A.KEEP, A.th_global, A.wall_global)
-    O.REF, O.ARMS, O.EXTRA_ORCH = ref_key, list(ARMS), ["orch-turn-catalog"]
+    saved_arms = (ARMS, MANAGED)
+    ARMS, MANAGED = arms, arms[1:]
+    # 编排器表并入的臂 = catalog + orch_arms 追加的其余 orch-turn-* 臂
+    O.REF, O.ARMS, O.EXTRA_ORCH = ref_key, list(ARMS), ["orch-turn-catalog"] + arms[len(O.B2_ORCH):]
     O.RAG_NOTE = "rag_search 在本批是 W-K2 可用桩（回生产空结果形态）"
     try:
         args = Namespace(metric="pass_hat_2", drop=0.20, recover=0.10, baseline_levels=[0, 4096], high_from=16384,
@@ -785,6 +792,7 @@ def main(argv=None) -> int:
     finally:
         O.REF, O.ARMS, O.EXTRA_ORCH, A.comparisons, O.RAG_NOTE = saved
         A.KEEP, A.th_global, A.wall_global = saved_a
+        ARMS, MANAGED = saved_arms
 
 
 if __name__ == "__main__":

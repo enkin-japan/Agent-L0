@@ -60,10 +60,13 @@ DEFAULT_LEVELS = "0,4096,8192,16384,32768,49152,57344"
 # ---------------- 采样覆盖 ----------------
 
 #: CUDA 后端映射进 vLLM SamplingParams 的键（cuda/backend.py:489-500；top_p/top_k/presence/
-#: frequency 为 2026-10-31 加入的可选透传，远端代码须为该版本）；其余键远端不认
+#: frequency 为 2026-10-31 加入的可选透传，seed 为 2026-11-07 加入，远端代码须为该版本）；其余键远端不认。
+#: seed 是逐 run 值（--seed*1000+rep，见 set_run_seed），不收 --sampling seed=（parse_sampling 拒）
 SAMPLING_KEYS = {"temperature": float, "min_p": float, "max_tokens": int,
                  "repetition_penalty": float, "top_p": float, "top_k": int,
-                 "presence_penalty": float, "frequency_penalty": float}
+                 "presence_penalty": float, "frequency_penalty": float, "seed": int}
+#: 逐 run 层的键（不进批次级 --sampling 覆盖）
+_PER_RUN_KEYS = ("seed",)
 #: 同时是 generate_once 形参的键：在引擎入口覆盖（engine 的截断判定等用的是同一个值）
 _GEN_KWARGS = ("temperature", "min_p", "max_tokens")
 
@@ -79,6 +82,9 @@ def parse_sampling(spec: str) -> Dict[str, Any]:
         if "=" not in part:
             raise SystemExit(f"❌ --sampling 项须为 k=v：{part!r}")
         k, v = (x.strip() for x in part.split("=", 1))
+        if k in _PER_RUN_KEYS:
+            raise SystemExit(f"❌ --sampling {k}=：采样种子按 run 派生（--seed*1000+rep，远端逐 run "
+                             f"进请求体 sampling.seed），用 --seed 指定批次种子")
         if k in SAMPLING_KEYS:
             try:
                 applied[k] = SAMPLING_KEYS[k](v)
@@ -90,18 +96,36 @@ def parse_sampling(spec: str) -> Dict[str, Any]:
     return {"sent": applied, "ignored": ignored}
 
 
-def install_sampling_override(backend, overrides: Dict[str, Any]) -> bool:
+def install_sampling_override(backend, overrides: Dict[str, Any], *,
+                              per_run_seed: bool = False) -> bool:
     """在后端实例上包一层 stream_generate（RemoteBackend.stream_generate 收 `sampling`
-    字典，remote/backend.py:336-341）：把覆盖值 merge 进 sampling（覆盖优先）再转发。
-    引擎按注册表条目 sampling 解析采样（W-1），这里的 --sampling 覆盖层仍优先。幂等。"""
-    if not overrides or getattr(backend, "_knee_sampling", None) is not None:
+    字典，remote/backend.py:373-388 原样进请求体）：把覆盖值 merge 进 sampling（覆盖优先）再转发。
+    引擎按注册表条目 sampling 解析采样（W-1），这里的 --sampling 覆盖层仍优先。幂等。
+    两层：批次级 overrides（--sampling，装载时固定）+ 逐 run 层 backend._knee_run_sampling
+    （per_run_seed=True 时启用，set_run_seed 每 run 开始前改写；合并时最后叠上、优先）。
+    装载时两层都空（无 --sampling、不发种子）= 不包。"""
+    if (not overrides and not per_run_seed) or getattr(backend, "_knee_sampling", None) is not None:
         return False
     orig = backend.stream_generate
+    fixed = dict(overrides)
 
     def stream_generate(prompt, *args, sampling=None, **kw):
-        return orig(prompt, *args, sampling={**(sampling or {}), **overrides}, **kw)
+        per_run = getattr(backend, "_knee_run_sampling", None) or {}
+        return orig(prompt, *args, sampling={**(sampling or {}), **fixed, **per_run}, **kw)
     backend.stream_generate = stream_generate
-    backend._knee_sampling = dict(overrides)
+    backend._knee_sampling = fixed
+    backend._knee_run_sampling = {} if per_run_seed else None
+    return True
+
+
+def set_run_seed(backend, seed: int) -> bool:
+    """逐 run 采样种子进覆盖层：之后本后端的每次 stream_generate 请求体 sampling.seed = seed
+    （远端 cuda 后端映射进 vLLM SamplingParams(seed=)，cuda/backend.py 可选键）。
+    返回 True = 已装（后端带逐 run 层，即 install_sampling_override(per_run_seed=True)）；
+    其余（fake / mlx / 未包）= False，不改任何东西。"""
+    if backend is None or not isinstance(getattr(backend, "_knee_run_sampling", None), dict):
+        return False
+    backend._knee_run_sampling = {"seed": int(seed)}
     return True
 
 
@@ -540,6 +564,42 @@ def parse_levels(s: str) -> List[int]:
     return vals
 
 
+def resolve_level_reps(levels: List[int], default: int, spec: str) -> Dict[int, int]:
+    """--level-reps `level=n[,level=n...]` → 每档 rep 数（未列档 = --reps）。列出的档须在 --levels 里
+    （写错档位静默不生效会让噪声基线少跑），n 须为正整数。"""
+    if default < 1:
+        raise SystemExit(f"❌ --reps 须为正整数：{default}")
+    out = {lv: default for lv in levels}
+    for part in (spec or "").split(","):
+        if not part.strip():
+            continue
+        if "=" not in part:
+            raise SystemExit(f"❌ --level-reps 项须为 level=n：{part!r}")
+        k, v = (x.strip() for x in part.split("=", 1))
+        try:
+            lv, n = int(k), int(v)
+        except ValueError:
+            raise SystemExit(f"❌ --level-reps {part.strip()!r} 须为整数 level=n")
+        if lv not in out:
+            raise SystemExit(f"❌ --level-reps 档 {lv} 不在 --levels {levels} 里")
+        if n < 1:
+            raise SystemExit(f"❌ --level-reps {lv}={n}：rep 数须为正整数")
+        out[lv] = n
+    return out
+
+
+def _reps_label(reps_of: Dict[int, int], default: int) -> str:
+    extra = {lv: n for lv, n in reps_of.items() if n != default}
+    return str(default) if not extra else (
+        f"{default}（" + "，".join(f"L{lv}={n}" for lv, n in sorted(extra.items())) + "）")
+
+
+def seed_sent_expected(backend: str) -> bool:
+    """本批 run 的采样种子是否进请求体（逐 run 层）：只有 remote（服务端采样）发；mlx 走进程内
+    mx.random.seed（sampling_seed_applied），fake 无采样。续跑口径与 install 共用这一判定。"""
+    return backend == "remote"
+
+
 def select_items(args) -> List[Dict[str, Any]]:
     items = load_items([ITEMS_DIR / f"{args.tasks}.jsonl"])
     if args.ids:
@@ -600,8 +660,9 @@ def context_limit_meta(engine) -> Dict[str, Any]:
 
 
 def _seed_sampler(backend: str, sampling_seed: int) -> bool:
-    """进程内 MLX 采样走 mx.random 全局态：每 run 前播种。remote/cuda 的采样在服务端，
-    generate_once 无 seed 参数——记 False（不可控），不假装播了。"""
+    """进程内 MLX 采样走 mx.random 全局态：每 run 前播种（行字段 sampling_seed_applied）。
+    remote/cuda 的采样在服务端：这里记 False；种子走逐 run 覆盖层进请求体 sampling.seed
+    （set_run_seed，行字段 sampling_seed_sent）。"""
     if backend != "mlx":
         return False
     import mlx.core as mx
@@ -718,6 +779,7 @@ async def amain(args) -> int:
 async def _amain(args, orch_globals: "_OrchGlobals") -> int:
     from framework.utils.model_selection import model_options
     levels = parse_levels(args.levels)
+    reps_of = resolve_level_reps(levels, args.reps, getattr(args, "level_reps", "") or "")
     items = select_items(args)
     if args.dry_run:
         args.backend = "fake"
@@ -762,7 +824,8 @@ async def _amain(args, orch_globals: "_OrchGlobals") -> int:
         check_resume_compat(transcripts, repo, sampling["sent"], args.seed, entry_sampling,
                             entry_only=not args.resume, prefix_mode=args.prefix,
                             thinking_replay=(replay.mode, replay.k),
-                            harness_mode=harness_mode_of(mode_meta))
+                            harness_mode=harness_mode_of(mode_meta),
+                            seed_sent=seed_sent_expected(args.backend))
     if transcripts.exists() and not args.append:
         raise SystemExit(f"❌ {transcripts} 已存在：换 --out，或显式 --append 追加"
                          f"（或 --resume 续跑缺的 run）")
@@ -778,7 +841,8 @@ async def _amain(args, orch_globals: "_OrchGlobals") -> int:
     else:
         engine = await make_engine(args, repo, opts)
         try:
-            install_sampling_override(engine.backend, sampling["sent"])
+            install_sampling_override(engine.backend, sampling["sent"],
+                                      per_run_seed=seed_sent_expected(args.backend))
             if replay_override is not None:
                 engine.thinking_replay = replay_override   # 计数器随后从引擎取，自然同步
             counter = engine_counter(engine)
@@ -806,7 +870,8 @@ async def _amain(args, orch_globals: "_OrchGlobals") -> int:
             **mode_meta}
     print(f"== 拐点测量 {repo}（{args.backend}，计数 {counter.mode}，前缀 {args.prefix}"
           f"{'' if prefix_meta['prefix_base_tokens'] is None else ' ' + str(prefix_meta['prefix_base_tokens']) + ' tok'}"
-          f"）：{len(items)} 题 × {len(levels)} 档 {levels} × {args.reps} rep → {outdir}")
+          f"）：{len(items)} 题 × {len(levels)} 档 {levels} × {_reps_label(reps_of, args.reps)} rep"
+          f" → {outdir}")
 
     records: List[Dict[str, Any]] = []
     if args.resume:
@@ -823,7 +888,7 @@ async def _amain(args, orch_globals: "_OrchGlobals") -> int:
         with transcripts.open("a", encoding="utf-8") as fh:
             for level in levels:
                 for item_idx, item in enumerate(items):
-                    for rep in range(args.reps):
+                    for rep in range(reps_of[level]):
                         if (level, item["id"], rep) in done:
                             continue
                         if orch_ctx is not None:
@@ -852,11 +917,13 @@ async def _amain(args, orch_globals: "_OrchGlobals") -> int:
             if args.append and transcripts.exists():
                 records = load_records(outdir)      # summary 按整个 transcripts 聚合
             uniq = dedupe(records)                  # 同 (level,题,rep) 取最新非 error
+            # reps = 缺省 rep 数（--reps，旧键语义）；level_reps = 本次各档实际 rep 数（--level-reps 生效后）
             summary = {**meta, "levels": levels, "reps": args.reps,
+                       "level_reps": {str(lv): reps_of[lv] for lv in levels},
                        "items": [it["id"] for it in items], "n_rows": len(records),
                        "n_runs": len(uniq), "n_errors": sum(1 for r in uniq if "error" in r),
                        "complete": {(lv, it["id"], r) for lv in levels for it in items
-                                    for r in range(args.reps)} <= load_done(transcripts),
+                                    for r in range(reps_of[lv])} <= load_done(transcripts),
                        "by_level": aggregate(uniq)}
             (outdir / "summary.json").write_text(
                 json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -996,8 +1063,10 @@ async def drain_inference(engine, timeout: float) -> Optional[bool]:
 async def _one_run(args, engine, counter, item, item_idx, level, rep, meta,
                    prefix: Optional["prefix_mod.PrefixAssembly"] = None) -> Dict[str, Any]:
     """单 run；任何异常收成一条 {"error": …} 记录，不中止批次。prefix=None = mock 档。"""
-    meta = row_meta(meta, item["id"])
     sampling_seed = args.seed * 1000 + rep
+    # 远端：本 run 种子进逐 run 覆盖层（此后每次请求体 sampling.seed）；行（含 error 行）记 sampling_seed_sent
+    meta = {**row_meta(meta, item["id"]),
+            "sampling_seed_sent": set_run_seed(getattr(engine, "backend", None), sampling_seed)}
     proxy = None
     t0 = time.monotonic()
     try:
@@ -1240,8 +1309,10 @@ async def _one_run_orch(args, engine, counter, item, item_idx, level, rep, meta,
     from framework.core.orchestrator import Orchestrator
     from framework.memory.session import ChatSession
     OT = _orch_tools()
-    meta = row_meta(meta, item["id"])
     sampling_seed = args.seed * 1000 + rep
+    # 远端：本 run 种子进逐 run 覆盖层（此后每次请求体 sampling.seed）；行（含 error 行）记 sampling_seed_sent
+    meta = {**row_meta(meta, item["id"]),
+            "sampling_seed_sent": set_run_seed(getattr(engine, "backend", None), sampling_seed)}
     proxy = None
     session = None
     sid = None
@@ -1394,7 +1465,8 @@ def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], see
                         entry: Dict[str, Any], *, entry_only: bool = False,
                         prefix_mode: str = "mock",
                         thinking_replay: Tuple[str, Optional[int]] = (DEFAULT_REPLAY_MODE, DEFAULT_REPLAY_K),
-                        harness_mode: Optional[Tuple[Any, ...]] = None) -> None:
+                        harness_mode: Optional[Tuple[Any, ...]] = None,
+                        seed_sent: bool = False) -> None:
     """续跑只能接同口径的批：已有行的 model / 已发送采样 / seed / 注册表条目采样任一不同即拒
     （混进来的 rep 会被 Pass^2 当作同一组）。缺 model/sampling/seed 字段的行（极旧格式）不参与
     这三项比较；缺 entry_sampling 的行（W-1 之前）视为 {}——当时引擎不读条目采样。
@@ -1407,10 +1479,14 @@ def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], see
     harness 口径（W-K）：harness_mode = HARNESS_MODE_KEYS 元组（None = 直调模式）；缺 mode 的旧行 =
     直调模式；直调行与编排器行、或编排器行开关 / 放置 / 填充形态 fill_shape / 生效阈值 guard_thresholds /
     W2 参数 step_compaction_cfg / 披露生效值 tool_schema_mode_effective / 生效 agent 段指纹
-    agent_cfg_fingerprint 不同，resume / append 都拒（直调行只比 mode 与 fill_shape；编排器旧行缺的键不比）。"""
+    agent_cfg_fingerprint 不同，resume / append 都拒（直调行只比 mode 与 fill_shape；编排器旧行缺的键不比）。
+    种子透传（2026-11-07）：seed_sent = 本批 run 种子是否进请求体（seed_sent_expected：remote 才发）；
+    缺 sampling_seed_sent 的行（之前的批）视为 False（未发种子）。不同即拒，resume / append 都拒、
+    直调与编排器同比（种子受控的 rep 与不受控的 rep 混算，噪声基线就不是一个口径）。"""
     if not transcripts.exists():
         return
     bad = set()
+    seed_sent_bad = set()
     entry_bad = set()
     prefix_bad = set()
     replay_bad = set()
@@ -1430,6 +1506,9 @@ def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], see
             replay_bad.add(f"{old_mode}/{old_k} ≠ {new_mode}/{new_k}")
         if harness_mismatch(r, tuple(new_harness)):
             harness_bad.add(f"{_harness_label(harness_mode_of(r))} ≠ {_harness_label(tuple(new_harness))}")
+        old_sent = bool(r.get("sampling_seed_sent", False))
+        if old_sent != bool(seed_sent):
+            seed_sent_bad.add(f"{old_sent} ≠ {bool(seed_sent)}")
         old_entry = r.get("entry_sampling") or {}
         if old_entry != entry:
             entry_bad.add(f"{json.dumps(old_entry, sort_keys=True)} ≠ {json.dumps(entry, sort_keys=True)}")
@@ -1453,6 +1532,9 @@ def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], see
     if harness_bad:
         bad.add("harness 模式 / 编排器开关不同（W-K），直调行与编排器行不能混入同一 transcripts；另起目录（"
                 + "；".join(sorted(harness_bad)) + "）")
+    if seed_sent_bad:
+        bad.add("采样种子透传口径不同（sampling_seed_sent；旧行缺键 = 未发种子），不能与旧目录合并；"
+                "另起目录（" + "；".join(sorted(seed_sent_bad)) + "）")
     if bad:
         raise SystemExit("❌ --resume/--append 口径不一致，拒绝合并：" + "；".join(sorted(bad)))
 
@@ -1499,7 +1581,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--backend", default="remote", help="remote|mlx|fake")
     ap.add_argument("--levels", default=DEFAULT_LEVELS,
                     help="首次生成 prompt 总 token 目标（0 = 不填充的自然基线）")
-    ap.add_argument("--reps", type=int, default=2)
+    ap.add_argument("--reps", type=int, default=2, help="每档 rep 数（--level-reps 未列的档）")
+    ap.add_argument("--level-reps", default="",
+                    help="按档 rep 数 level=n[,level=n]（如 0=6 = L0 跑 6 rep 作噪声基线）；未列档用 --reps；"
+                         "--resume 只补缺的 rep")
     ap.add_argument("--tasks", default="hard", choices=["hard", "seed"])
     ap.add_argument("--ids", default="", help="只跑这些题 id（逗号分隔）")
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 题")
@@ -1508,7 +1593,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--dry-run", action="store_true", help="= --backend fake：FakeEngine 跑完全流程")
     ap.add_argument("--sampling", default="",
                     help="采样覆盖 k=v[,k=v]；生效键 temperature/min_p/max_tokens/repetition_penalty/"
-                         "top_p/top_k/presence_penalty/frequency_penalty")
+                         "top_p/top_k/presence_penalty/frequency_penalty（seed 不收：按 run 由 --seed 派生）")
     ap.add_argument("--run-timeout", type=float, default=600.0,
                     help="单 run 墙钟上限秒（0=不限）；超时记 error=timeout 行并继续")
     ap.add_argument("--resume", action="store_true",

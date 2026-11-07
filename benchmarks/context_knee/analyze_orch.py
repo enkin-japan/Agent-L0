@@ -329,7 +329,7 @@ def sec_i(G, aggs, raws, evs, args) -> List[str]:
         denom = a["n"] + err_at_level[lv]
         L.append(f"- 敏感性：{TURN[0]} {lv} 档 error 行（{it} r{rep}：{e[:60]}…）按失败计入分母时成功率 "
                  f"{a['pass_k']}/{denom} = {pc(a['pass_k'] / denom)}（去重口径 {pc(a['success_rate'])}；该档 error 行共 {err_at_level[lv]} 条）；"
-                 f"{it} 因只剩 1 个有效 rep 被排出 Pass^2 分母（不是「记 0」），现 Pass^2 = {a['pass2_k']}/{a['n_items2']} = {pc(a['pass_hat_2'])}。")
+                 f"{it} 因只剩 1 个有效 rep 被排出 Pass^2 分母（不是「记 0」），现 Pass^2 = {A.fmt_k(a['pass2_k'])}/{a['n_items2']} = {pc(a['pass_hat_2'])}。")
     L.append("")
     return L
 
@@ -525,6 +525,15 @@ B2_EXTRA_COLS = ["stub_served_total", "stub_unknown_total", "feed_unknown_tool",
                  "iter_exhausted_runs", "context_guard_aborts", "ceiling_folds", "ceiling_compacted",
                  "ceiling_spilled", "sent_over_ceiling_gens", "spill_files", "spill_readbacks",
                  "missing_arg_recovered", "schema_fed", "w2_readback_exempt"]
+
+
+def orch_arms(data: Path, known: Optional[List[str]] = None) -> List[str]:
+    """编排器臂列表：已知顺序（缺省 B2_ORCH）在前，--data 下其余 `orch-turn-*` 臂目录（有 transcripts.jsonl）
+    按名追加（如 orch-turn-full；orch-history-ref 等非 turn 放置的目录不算）。已知臂是否齐由调用方判（缺臂报错）。"""
+    known = list(B2_ORCH if known is None else known)
+    extra = sorted(p.name for p in data.glob("orch-turn-*")
+                   if p.is_dir() and p.name not in known and (p / "transcripts.jsonl").is_file())
+    return known + extra
 
 
 def b2_layout(data: Path) -> bool:
@@ -927,6 +936,8 @@ def write_csv_b2(path: Path, groups, aggs, extra: Dict[Tuple[str, int], Dict[str
                             "fail_primary": json.dumps(a["fail_primary"], ensure_ascii=False, sort_keys=True),
                             "incoherent": json.dumps(a["incoherent"], ensure_ascii=False, sort_keys=True)})
                 row.update(extra.get((g["name"], lv), {}))
+                if isinstance(row.get("pass2_k"), float):
+                    row["pass2_k"] = A.fmt_k(row["pass2_k"])
                 for k, v in row.items():
                     if isinstance(v, float):
                         row[k] = round(v, 4)
@@ -1045,12 +1056,13 @@ def main(argv=None) -> int:
 
 
 def main_b2(a, data: Path, ref: Path) -> int:
-    """第二批布局：编排器四臂（none / w1 / w1w2 / catalog）+ Gemma 直调两臂 + trace 三步；
+    """第二批布局：编排器四臂（none / w1 / w1w2 / catalog；目录下其余 orch-* 臂按名追加）+ Gemma 直调两臂 + trace 三步；
     A–F 原样 analyze.render（自动对照关掉、只用下面 pair 指定的），然后 I / J / K / M / N（与 11-02 批同一套，
     编排器表并入 catalog 臂）与 O–T（本批新增）。"""
     global REF, ARMS, EXTRA_ORCH
     ref_key = os.path.basename(os.path.normpath(a.ref))
-    arms = [n for n in B2_ORCH + GEMMA if (data / n / "transcripts.jsonl").is_file()]
+    orch = orch_arms(data)                 # B2_ORCH 四臂 + 本目录其余 orch-* 臂（按名）
+    arms = [n for n in orch + GEMMA if (data / n / "transcripts.jsonl").is_file()]
     missing = [n for n in B2_ORCH + GEMMA if n not in arms]
     if missing:
         raise SystemExit(f"❌ 第二批布局缺臂：{missing}")
@@ -1070,7 +1082,8 @@ def main_b2(a, data: Path, ref: Path) -> int:
         names_taken.add(k)
     global RAG_NOTE
     saved = (REF, ARMS, EXTRA_ORCH, A.comparisons, RAG_NOTE)
-    REF, ARMS, EXTRA_ORCH = ref_key, arms, ["orch-turn-catalog"]
+    # 编排器表并入的臂 = catalog + orch_arms 追加的其余 orch-turn-* 臂
+    REF, ARMS, EXTRA_ORCH = ref_key, arms, ["orch-turn-catalog"] + orch[len(B2_ORCH):]
     RAG_NOTE = "rag_search 在本批是 W-K2 可用桩（回生产空结果形态）"
     try:
         args = Namespace(metric="pass_hat_2", drop=0.20, recover=0.10, baseline_levels=[0, 4096], high_from=16384,
@@ -1092,7 +1105,7 @@ def main_b2(a, data: Path, ref: Path) -> int:
         raws.update({n + PREV_TAG: raw_rows(prev / n) for n in prev_arms})
         evs = {d.name: load_events(d) for d in dirs}
         evs.update({n + PREV_TAG: load_events(prev / n) for n in prev_arms})
-        _attach_sessions(G, data, B2_ORCH)
+        _attach_sessions(G, data, orch)
         pb = sorted({r.get("prefix_base_tokens") for r in G["orch-turn-none"]["records"]} - {None})
         args.prod_prefix = max(pb) if pb else None
         warn = None if len(pb) == 1 else f"orch-turn-none 的 prefix_base_tokens 不唯一：{pb or '全缺'}，取较大值"
@@ -1109,9 +1122,9 @@ def main_b2(a, data: Path, ref: Path) -> int:
         parts += sec_k(G, evs)
         parts += sec_m(G, aggs, raws)
         parts += sec_n(G, raws, evs, data, logs=("run_colab.lease1.log", "run_colab.log"))
-        orch_all = B2_ORCH + [n + P for n in TURN if n + P in G]
+        orch_all = orch + [n + P for n in TURN if n + P in G]
         parts += sec_o(G, aggs, orch_all)
-        parts += sec_p(G, aggs, evs, B2_ORCH, [n + P for n in TURN if n + P in G])
+        parts += sec_p(G, aggs, evs, orch, [n + P for n in TURN if n + P in G])
         parts += sec_q(G, aggs, evs)
         gem_names = GEMMA + [f"direct-mock{P}", f"direct-catalog{P}"] + [x.name for x in extra] + [REF]
         gem_pairs = [(x.name, "gemma-direct-mock") for x in extra] + [

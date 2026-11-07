@@ -1,5 +1,5 @@
 #!/bin/zsh
-# run_colab.sh 桩自测：用假 deploy / 假 harness 跑 32 个场景，不碰 Colab、不读密钥、不起任何服务。
+# run_colab.sh 桩自测：用假 deploy / 假 harness 跑 33 个场景，不碰 Colab、不读密钥、不起任何服务。
 # 覆盖一审（2026-11-02）指出的路径：挂死半小时内发现并 TERM 掉 harness（C1）、重起用完即停机跳余臂（M1）、
 # `start_and_wait; rc=$?` 起机失败记 FAIL_START（M2）、全跳过不记全过（M3）、stop_colab 的 local rc（M4）、
 # 信号先杀子进程再停机并写 INTERRUPTED（m1/m2）、同目录重跑自动 --resume（m3）、ok 需 complete 且记 errors（m4）；
@@ -17,6 +17,8 @@
 #   租约预算换机（lease_rollover：已用未超但「已用 + 同类步最长用时」超预算 → 同模型 stop+start 后再跑，之后挂死仍能重起；
 #   lease_rollover_floor：刚起的租约至少跑一步，预算小于单步时每步换一次机、有界；lease_unlimited：MAX_VM_HOURS=0 不限，1.5 非法 64）。
 #   变异证明：去掉重试 / 重试不先停机 / 预算判据去掉 est / 去掉 lease_steps 门 / 换租约改模型 / 不记 lease_steps 任一处，对应场景必须变红。
+# 11-07：level_reps_seed（LEVEL_REPS / KNEE_SEED：冒烟不带 --level-reps 但带 --seed，正式 knee 步两者都带，config 行记两者；
+#   LEVEL_REPS 坏格式起机前 64）。变异证明：冒烟也传 LEVEL_REPS / 不传 KNEE_SEED / 去掉格式校验 任一处，该场景必须变红。
 set -u
 ROOT=${0:A:h:h:h}
 CHAIN=$ROOT/benchmarks/context_knee/run_colab.sh
@@ -154,7 +156,7 @@ wait_log(){ # $1 场景 $2 正则：最多 30 s 等时间线出现该行
   local i; for i in {1..30}; do grep -qE "$2" "$T/$1/run_colab.log" 2>/dev/null && return 0; sleep 1; done; return 1
 }
 
-want=("$@"); [ ${#want} -eq 0 ] && want=(ok hang_recover hang_exhaust start_fail smoke_fail term stop_fail lease_busy arm_fail arm_errors restart_start_fail term_ready term_prestart done_guard phases trace_hang phase_b_smoke_fail order b_only switch_budget smoke_reset trace_done_rerun switch_start_fail d45_steps ready_retry ready_retry_exhaust ready_retry_off ready_retry_timeout ready_retry_stop_fail lease_rollover lease_rollover_floor lease_unlimited)
+want=("$@"); [ ${#want} -eq 0 ] && want=(ok hang_recover hang_exhaust start_fail smoke_fail term stop_fail lease_busy arm_fail arm_errors restart_start_fail term_ready term_prestart done_guard phases trace_hang phase_b_smoke_fail order b_only switch_budget smoke_reset trace_done_rerun switch_start_fail d45_steps ready_retry ready_retry_exhaust ready_retry_off ready_retry_timeout ready_retry_stop_fail lease_rollover lease_rollover_floor lease_unlimited level_reps_seed)
 has(){ [[ " ${want[*]} " == *" $1 "* ]]; }
 
 if has ok; then
@@ -404,6 +406,17 @@ if has lease_unlimited; then
   check lease_unlimited 'head -n1 "$T/lease_unlimited/run_colab.log" | grep -q "config: .*MAX_VM_HOURS=0 LEASE_BUDGET_SEC=0 "' "首行有效配置缺失：$(head -n1 "$T/lease_unlimited/run_colab.log")"
   run_chain lease_unlimited_bad ARMS=direct-mock MAX_VM_HOURS=1.5
   check lease_unlimited '[ "$(rc_of lease_unlimited_bad)" = 64 ] && [ "$(calls lease_unlimited_bad start)" = 0 ]' "MAX_VM_HOURS=1.5 应 64 不起机：rc=$(rc_of lease_unlimited_bad) start=$(calls lease_unlimited_bad start)"
+fi
+if has level_reps_seed; then
+  # P2 噪声基线：LEVEL_REPS=0=6 只给正式 knee 步（冒烟固定 --levels 0 --reps 1，不带）；KNEE_SEED 冒烟与正式步都带；时间线首行记两者
+  run_chain level_reps_seed ARMS=orch-turn-none LEVEL_REPS=0=6 KNEE_SEED=11
+  smoke_args=$(cat "$T"/level_reps_seed/smoke-orch-*-A/stub.args(N) 2>/dev/null)
+  check level_reps_seed '[ "$(rc_of level_reps_seed)" = 0 ] && [ "$(done_of level_reps_seed)" = "BATCH_RC=0 SKIPPED=0" ]' "rc=$(rc_of level_reps_seed) DONE=$(done_of level_reps_seed)"
+  check level_reps_seed '[ -n "$smoke_args" ] && ! print -r -- "$smoke_args" | grep -q -- "--level-reps" && print -r -- "$smoke_args" | grep -q -- "--seed 11"' "冒烟须不带 --level-reps、带 --seed 11：$smoke_args"
+  check level_reps_seed 'grep -q -- "--level-reps 0=6 --seed 11" "$T/level_reps_seed/orch-turn-none/stub.args"' "正式 knee 步参数：$(cat "$T/level_reps_seed/orch-turn-none/stub.args" 2>/dev/null)"
+  check level_reps_seed 'head -n1 "$T/level_reps_seed/run_colab.log" | grep -q "config: .*LEVEL_REPS=0=6 KNEE_SEED=11"' "首行有效配置缺 LEVEL_REPS/KNEE_SEED：$(head -n1 "$T/level_reps_seed/run_colab.log")"
+  run_chain level_reps_seed_bad ARMS=orch-turn-none LEVEL_REPS=0=6,
+  check level_reps_seed '[ "$(rc_of level_reps_seed_bad)" = 64 ] && [ "$(calls level_reps_seed_bad start)" = 0 ]' "LEVEL_REPS=0=6, 应 64 不起机：rc=$(rc_of level_reps_seed_bad) start=$(calls level_reps_seed_bad start)"
 fi
 
 print -r -- "run_colab selftest: pass=$pass fail=$fail (scenarios: ${want[*]})"

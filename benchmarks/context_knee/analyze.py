@@ -72,6 +72,32 @@ def wilson(k: int, n: int, z: float = 1.959964) -> Tuple[Optional[float], Option
     return max(0.0, c - h), min(1.0, c + h)
 
 
+def pass_hat_2_of(reps: List[bool]) -> float:
+    """单题 Pass^2 无偏估计 C(c,2)/C(n,2)（n = rep 数 ≥ 2，c = 通过数；summarize.pass_hat_k 同式）。
+    n = 2 时 = float(all(reps))，与泛化前逐项相同。"""
+    n, c = len(reps), sum(1 for x in reps if x)
+    return math.comb(c, 2) / math.comb(n, 2)
+
+
+def pass_at_2_of(reps: List[bool]) -> float:
+    """单题 Pass@2 无偏估计 1 − C(n−c,2)/C(n,2)；n = 2 时 = float(any(reps))。"""
+    n, c = len(reps), sum(1 for x in reps if x)
+    return 1 - math.comb(n - c, 2) / math.comb(n, 2)
+
+
+def fmt_k(k) -> str:
+    """Pass^2 的 k（pass2_k）打印：整数照整数（n = 2 的批输出不变），小数（rep > 2 的无偏估计之和）两位小数。"""
+    if isinstance(k, float) and not k.is_integer():
+        return f"{k:.2f}"
+    return str(int(k)) if isinstance(k, float) else str(k)
+
+
+def _ksum(vals: List[float]):
+    """逐题估计之和：全为整数（n = 2 的题只会是 0/1）时返回 int，与泛化前的计数逐字相同。"""
+    tot = sum(vals)
+    return int(tot) if all(float(v).is_integer() for v in vals) else tot
+
+
 def sign_test_p(up: int, down: int) -> Optional[float]:
     n = up + down
     if n == 0:
@@ -381,9 +407,10 @@ def aggregate(g: Dict[str, Any], th: Dict[str, float], wall_invalid: set) -> Dic
         n = len(rs)
         k = sum(1 for s in sc if s.get("pass"))
         items = per_item(rs)
-        two = {i: v for i, v in items.items() if len(v) == 2}
-        both = sum(1 for v in two.values() if all(v))
-        anyp = sum(1 for v in two.values() if any(v))
+        # Pass^2 / Pass@2：rep ≥ 2 的题按无偏式逐题估计（L0 噪声基线可跑 6 rep）；只剩 1 个有效 rep 的题排出
+        two = {i: v for i, v in items.items() if len(v) >= 2}
+        both = _ksum([pass_hat_2_of(v) for v in two.values()])
+        anyp = _ksum([pass_at_2_of(v) for v in two.values()])
         rec = [s for s in sc if s.get("recall_ok") is not None and not s.get("aborted")]
         slots = {}
         for slot in ("front", "mid", "back"):
@@ -456,20 +483,20 @@ def aggregate(g: Dict[str, Any], th: Dict[str, float], wall_invalid: set) -> Dic
 # ---------------------------------------------------------------- 配对比较
 def paired_units(units: Dict[str, Tuple[List[List[bool]], List[List[bool]]]], metric: str):
     """b − a，按题聚类配对。units[题] = (a 侧各档 rep 列表, b 侧各档 rep 列表)。
-    每题每侧的值 = 该侧各档 f(reps) 的均值；f = 通过率（success_rate）或「全部 rep 通过」（pass_hat_2，
-    只用 rep 数 = 2 的档）。点估计 = 各题 (b − a) 的均值。区间：pass_hat_2 只做题级
+    每题每侧的值 = 该侧各档 f(reps) 的均值；f = 通过率（success_rate）或单题无偏 Pass^2 C(c,2)/C(n,2)
+    （pass_hat_2，只用 rep 数 ≥ 2 的档；n = 2 即「两 rep 都过」）。点估计 = 各题 (b − a) 的均值。区间：pass_hat_2 只做题级
     bootstrap（按题有放回重抽，题内各档 rep 对原样保留——「两 rep 都过」是题内 rep 对的性质，再抽 rep
     会把 [T,F] 抽成 [T,T]，系统性抬高、区间偏离点估计）；success_rate 两段（先按题、再档内按 rep）。
     符号检验按题的升/降。"""
     def keep(lists):
-        return [v for v in lists if v and (metric != "pass_hat_2" or len(v) == 2)]
+        return [v for v in lists if v and (metric != "pass_hat_2" or len(v) >= 2)]
     u = {i: (keep(a), keep(b)) for i, (a, b) in units.items()}
     u = {i: ab for i, ab in u.items() if ab[0] and ab[1]}
     if not u:
         return None
 
     def f(reps):
-        return float(all(reps)) if metric == "pass_hat_2" else sum(reps) / len(reps)
+        return pass_hat_2_of(reps) if metric == "pass_hat_2" else sum(reps) / len(reps)
 
     def side(lists):
         return sum(f(v) for v in lists) / len(lists)
@@ -523,12 +550,12 @@ def common_diff(a_items: Dict[str, List[bool]], b_items: Dict[str, List[bool]],
                 metric: str) -> Tuple[Optional[float], int]:
     """共同题集上的点差 b − a（不做 bootstrap，拐点判定用）。返回 (差, 共同题数)。"""
     ids = [i for i in a_items if i in b_items and a_items[i] and b_items[i]
-           and (metric != "pass_hat_2" or (len(a_items[i]) == 2 and len(b_items[i]) == 2))]
+           and (metric != "pass_hat_2" or (len(a_items[i]) >= 2 and len(b_items[i]) >= 2))]
     if not ids:
         return None, 0
 
     def f(v):
-        return float(all(v)) if metric == "pass_hat_2" else sum(v) / len(v)
+        return pass_hat_2_of(v) if metric == "pass_hat_2" else sum(v) / len(v)
     return sum(f(b_items[i]) - f(a_items[i]) for i in ids) / len(ids), len(ids)
 
 
@@ -911,6 +938,8 @@ def write_csv(path: Path, groups, aggs):
                             "mtp_by_dirname": g["mtp"], "level": lv,
                             "fail_primary": json.dumps(a["fail_primary"], ensure_ascii=False, sort_keys=True),
                             "incoherent": json.dumps(a["incoherent"], ensure_ascii=False, sort_keys=True)})
+                if isinstance(row.get("pass2_k"), float):
+                    row["pass2_k"] = fmt_k(row["pass2_k"])
                 for k, v in row.items():
                     if isinstance(v, float):
                         row[k] = round(v, 4)

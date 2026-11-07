@@ -27,6 +27,9 @@
 #       不占 RESTARTS_MAX；起机失败同换模型失败：FAIL_START/FAIL_READY，本步起全记 skipped）再跑该步。没跑过的步类按 knee 2 h /
 #       trace 30 min 预估（EST_DEFAULT；观测 89–102 / 16–19 min）；挂死重起过的步不计入估计。刚起的租约至少跑一步（否则刚起的机
 #       会立刻再换一次，白烧一次起机）；0=不限。时钟从 start 命令发出算，比 VM 真实分配早，偏保守）。
+#   LEVEL_REPS（knee 步按档 rep 数，run_knee --level-reps 格式「档=n,…」如 0=6；缺省不传=各档 --reps 缺省 2。用户 11-05 拍板
+#       P2 门槛噪声基线：下一租约 L0 加 rep）、KNEE_SEED（knee 步 --seed 基值，缺省不传=run_knee 缺省 7；11-07 起远端采样种子
+#       seed*1000+rep 随请求体 sampling 透传到 cuda 后端，行记 sampling_seed_sent；算力端须部署含该改动的 cuda/backend.py）。
 #   测试接缝（只为桩自测，缺省即生产路径）：DEPLOY、PY、KNEE、TRACE、ENV_FILE、POLL（等 READY 轮询秒，默认 30）、
 #       LEASE_BUDGET_SEC（覆盖 MAX_VM_HOURS×3600，秒）、READY_DEADLINE_SEC（覆盖 READY_MINUTES×60，秒）。
 # 步（口径见 benchmarks/context_knee/README.md「编排器模式」：各臂固定同一放置只切开关，不跨放置比）：
@@ -35,6 +38,8 @@
 #   orch-turn-w1      编排器 turn 放置 +W1（guard on / step off）           prod 前缀     同上
 #   orch-turn-w1w2    编排器 turn 放置 +W1+W2（guard on / step on）         prod 前缀     同上
 #   orch-turn-catalog 编排器 turn 放置 +W1+W2 catalog 前缀对照（D39c）       catalog 前缀  同上
+#   orch-turn-full    编排器 turn 放置 +W1+W2 full 前缀对照（非缺省批；D44 (iii) 11-06 起 Qwen 条目已是 catalog，
+#                     上面三臂的 prod 前缀生效为 catalog，与 b2/d44 的 full 口径对照须显式此臂）   full 前缀     同上
 #   trace-new-900     summary_trace 成对续跑：新模板 / task_state on / 900 tok（现行生产）     --drop-task on
 #   trace-legacy-640  同上：旧模板 / task_state off / 640 tok（W4 前的生产）
 #   trace-new-640     同上：新模板 / task_state on / 640 tok（把模板与预算拆开看）
@@ -78,6 +83,8 @@ cd "$ROOT" || exit 2
 MODEL=${MODEL:-RedHatAI/Qwen3.8-27B-INT4}
 MODEL_B=${MODEL_B:-google/gemma-4-31B-it-qat-w4a16-ct}
 TRACE_REPS=${TRACE_REPS:-3}
+LEVEL_REPS=${LEVEL_REPS:-}      # knee 步 --level-reps（「档=n,…」）；空=不传
+KNEE_SEED=${KNEE_SEED:-}        # knee 步 --seed 基值；空=不传（run_knee 缺省 7）
 OUT=${OUT:-benchmarks/data/context-knee-$(date +%Y%m%d)}
 READY_MINUTES=${READY_MINUTES:-40}
 RESTARTS_MAX=${RESTARTS_MAX:-2}
@@ -97,6 +104,10 @@ ENV_FILE=${ENV_FILE:-./.env.local}
 [[ "$RESTARTS_MAX" == <0-> ]]   || { echo "RESTARTS_MAX 须为 ≥0 的整数（现 $RESTARTS_MAX）" >&2; exit 64; }
 [[ "$HUNG_RUNS" == <2-> ]]      || { echo "HUNG_RUNS 须为 ≥2 的整数（现 $HUNG_RUNS）" >&2; exit 64; }
 [[ "$MON_INTERVAL" == <1-> ]]   || { echo "MON_INTERVAL 须为 ≥1 的整数（现 $MON_INTERVAL）" >&2; exit 64; }
+[[ -z "$KNEE_SEED" || "$KNEE_SEED" == <0-> ]] || { echo "KNEE_SEED 须为 ≥0 的整数或空（现 $KNEE_SEED）" >&2; exit 64; }
+if [ -n "$LEVEL_REPS" ]; then
+  [[ "$LEVEL_REPS" =~ "^[0-9]+=[1-9][0-9]*(,[0-9]+=[1-9][0-9]*)*$" ]] || { echo "LEVEL_REPS 须为「档=n,…」（n≥1；现 $LEVEL_REPS）" >&2; exit 64; }
+fi
 [[ "$POLL" == <1-> ]]           || { echo "POLL 须为 ≥1 的整数（现 $POLL）" >&2; exit 64; }
 [[ "$READY_RETRY" == [01] ]]    || { echo "READY_RETRY 须为 0 或 1（现 $READY_RETRY）" >&2; exit 64; }
 [[ "$MAX_VM_HOURS" == <0-> ]]   || { echo "MAX_VM_HOURS 须为 ≥0 的整数小时，0=不限（现 $MAX_VM_HOURS）" >&2; exit 64; }
@@ -112,7 +123,7 @@ mkdir -p "$OUT"
 LOG=$OUT/run_colab.log
 STAMP=$(date +%Y%m%d-%H%M%S)
 touch "$LOG"; rm -f "$OUT/DONE"
-print -r -- "$(date '+%F %T') config: MODEL=$MODEL MODEL_B=$MODEL_B READY_MINUTES=$READY_MINUTES READY_RETRY=$READY_RETRY RESTARTS_MAX=$RESTARTS_MAX HUNG_RUNS=$HUNG_RUNS MAX_VM_HOURS=$MAX_VM_HOURS LEASE_BUDGET_SEC=$LEASE_BUDGET_SEC SMOKE=$SMOKE" >> "$LOG"
+print -r -- "$(date '+%F %T') config: MODEL=$MODEL MODEL_B=$MODEL_B READY_MINUTES=$READY_MINUTES READY_RETRY=$READY_RETRY RESTARTS_MAX=$RESTARTS_MAX HUNG_RUNS=$HUNG_RUNS MAX_VM_HOURS=$MAX_VM_HOURS LEASE_BUDGET_SEC=$LEASE_BUDGET_SEC SMOKE=$SMOKE LEVEL_REPS=${LEVEL_REPS:-<unset>} KNEE_SEED=${KNEE_SEED:-<unset>}" >> "$LOG"
 : > "$OUT/arms_status.txt"
 log(){ print -r -- "$(date '+%F %T') $*" >> "$LOG"; }
 finish(){ print -r -- "$1" > "$OUT/DONE"; log "DONE $1"; }
@@ -130,6 +141,7 @@ ARM_ARGS[orch-history-ref]="--orchestrator --fill-placement history --guard on -
 ARM_ARGS[direct-catalog]="--prefix catalog --levels 0,32768,49152"
 ARM_ARGS[direct-routed]="--prefix routed --levels 0,32768,49152"
 ARM_ARGS[orch-turn-catalog]="--orchestrator --fill-placement turn --guard on --step-compaction on --prefix catalog --levels $ORCH_LV"
+ARM_ARGS[orch-turn-full]="--orchestrator --fill-placement turn --guard on --step-compaction on --prefix full --levels $ORCH_LV"
 # trace-* 步：summary_trace 成对续跑（run_trace.py），--drop-task on = 任务完成后被弃、只能靠摘要的目标场景（W4 残留项）；
 #   前缀用 run_trace 缺省 --prefix mock（summary_trace/README 模板口径：量摘要模板，不量工具披露）
 ARM_ARGS[trace-new-900]="--template new --task-state on --summary-max-tokens 900"
@@ -157,13 +169,28 @@ step_mode(){  case $1 in orch-*|trace-*) print orch;; *) print direct;; esac; } 
 ORDER_A=(); ORDER_B=()
 for a in $ORDER; do if [ "$(step_phase $a)" = B ]; then ORDER_B+=($a); else ORDER_A+=($a); fi; done
 ORDER=($ORDER_A $ORDER_B)
+# LEVEL_REPS 的档必须在本批每个 knee 步自己的 --levels 里（direct-*/gemma-* 与 orch-* 档位不同；run_knee 对不在
+# --levels 的档拒启，若到起机后才发现则该步 fail / 整段 skipped 白烧）
+if [ -n "$LEVEL_REPS" ]; then
+  for a in $ORDER; do
+    [ "$(step_kind $a)" = trace ] && continue
+    [ -n "${ARM_ARGS[$a]:-}" ] || continue
+    lv="${${ARM_ARGS[$a]##*--levels }%% *}"
+    for kv in ${(s:,:)LEVEL_REPS}; do
+      [[ ",$lv," == *",${kv%%=*},"* ]] || { echo "LEVEL_REPS 的档 ${kv%%=*} 不在步 $a 的 --levels $lv" >&2; exit 64; }
+    done
+  done
+fi
 
-# 当前步的命令行（--out 与步参数由 run_arm 追加）；--model 取当前段模型 $MODEL
+# 当前步的命令行（--out 与步参数由 run_arm 追加）；--model 取当前段模型 $MODEL；$2=smoke 为冒烟（不带 LEVEL_REPS）
 CMD=()
 step_cmd(){
   case $(step_kind $1) in
     trace) CMD=("$PY" "$TRACE" --model "$MODEL" --backend remote --tasks hard --reps "$TRACE_REPS" --run-timeout 600 --drop-task on);;
-    *)     CMD=("$PY" "$KNEE"  --model "$MODEL" --backend remote --tasks hard --run-timeout 600);;
+    *)     CMD=("$PY" "$KNEE"  --model "$MODEL" --backend remote --tasks hard --run-timeout 600)
+           # 冒烟（$2=smoke）固定 --levels 0 --reps 1，不带 LEVEL_REPS（其档不在 --levels 会拒启 / L0 多跑 rep）；seed 照传
+           if [ -n "$LEVEL_REPS" ] && [ "${2:-}" != smoke ]; then CMD+=(--level-reps "$LEVEL_REPS"); fi
+           if [ -n "$KNEE_SEED" ]; then CMD+=(--seed "$KNEE_SEED"); fi;;
   esac
 }
 
@@ -424,7 +451,7 @@ run_smokes(){   # $1 段名 其余 = 本段步名
   orch_ok=1; direct_ok=1
   [ "$SMOKE" = 1 ] || return 0
   tag="$STAMP-$ph"
-  step_cmd orch-turn-none
+  step_cmd orch-turn-none smoke
   if [ $need_orch -eq 1 ]; then
     log "smoke orch [$ph $MODEL] (prod, turn, L0, 1 题 1 rep) → smoke-orch-$tag"
     run_arm "$OUT/smoke-orch-$tag" "$OUT/smoke-orch-$tag.log" --orchestrator --fill-placement turn --prefix prod --levels 0 --reps 1 --limit 1

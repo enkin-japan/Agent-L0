@@ -1463,3 +1463,204 @@ def test_resume_and_summarize_accept_legacy_rows_without_new_keys(tmp_path, caps
     summ = json.loads((out / "summary.json").read_text())
     assert summ["complete"] is True and summ["n_runs"] == 2
     assert S.main([str(out)]) == 0
+
+
+# ---- 2026-11-07：采样种子逐 run 透传远端 + 按档 rep ----
+
+class _SseResp:
+    status_code = 200
+
+    def iter_lines(self):
+        yield b"event: chunk"
+        yield ('data: ' + json.dumps({"text": "完成。", "prompt_tokens": 1,
+                                      "generation_tokens": 1}, ensure_ascii=False)).encode()
+        yield b""
+        yield b"event: done"
+        yield b"data: {}"
+
+    def close(self):
+        pass
+
+
+class _CaptureSession:
+    """RemoteBackend._session 替身：截获 /v1/generate 请求体（即算力端收到的 JSON），不联网。"""
+
+    def __init__(self):
+        self.bodies = []
+
+    def post(self, url, json=None, **kw):
+        if url.endswith("/v1/generate"):
+            self.bodies.append(copy.deepcopy(json))
+            return _SseResp()
+        from types import SimpleNamespace
+        return SimpleNamespace(status_code=501, json=lambda: {}, close=lambda: None)
+
+    def delete(self, *a, **kw):
+        pass
+
+    def close(self):
+        pass
+
+
+def _capture_remote(monkeypatch):
+    """make_engine → 真 AgentEngine + 真 RemoteBackend（请求层换成 _CaptureSession）。"""
+    from types import SimpleNamespace
+    from framework.backends.remote.backend import RemoteBackend
+    from framework.core.engine import AgentEngine
+    made = []
+
+    async def fake_make_engine(args, repo, opts):
+        be = RemoteBackend(SimpleNamespace(tokenizer=_KneeLenTok()), "http://knee.invalid")
+        be._session = _CaptureSession()
+        eng = AgentEngine(be, model_options=opts, env={})
+        made.append(eng)
+        return eng
+    monkeypatch.setattr(K, "make_engine", fake_make_engine)
+    return made
+
+
+@pytest.mark.parametrize("orch", [False, True])
+def test_remote_request_body_carries_per_run_seed(tmp_path, monkeypatch, orch):
+    """--backend remote：每 run 的 sampling_seed（--seed*1000+rep）进本 run 每个请求体的 sampling.seed；
+    行记 sampling_seed_sent=True；进程内语义 sampling_seed_applied 不变（remote = False）。直调与编排器两种模式。"""
+    made = _capture_remote(monkeypatch)
+    out = tmp_path / "seed"
+    argv = ["--model", "gemma-4-31b-it-4bit", "--backend", "remote", "--levels", "0",
+            "--reps", "2", "--limit", "1", "--seed", "5", "--out", str(out),
+            "--sampling", "temperature=0.6"]
+    assert K.main(argv + (["--orchestrator"] if orch else [])) == 0
+    rows = [json.loads(ln) for ln in (out / "transcripts.jsonl").read_text().splitlines()]
+    assert [r.get("error") for r in rows] == [None, None], rows[0].get("traceback")
+    assert [(r["rep"], r["sampling_seed"]) for r in rows] == [(0, 5000), (1, 5001)]
+    assert all(r["sampling_seed_sent"] is True and r["sampling_seed_applied"] is False for r in rows)
+    (eng,) = made
+    seeds = [b["sampling"].get("seed") for b in eng.backend._session.bodies]
+    # 请求按 run 先后发出：先全是 rep0 的种子，再全是 rep1 的；没有不带种子的请求
+    assert seeds and seeds == sorted(seeds) and set(seeds) == {5000, 5001}
+    assert all(b["sampling"]["temperature"] == 0.6 for b in eng.backend._session.bodies)
+    # 同口径续跑：接受；旧行缺 sampling_seed_sent（= 未发种子）→ 拒
+    assert K.main(argv + (["--orchestrator"] if orch else []) + ["--resume"]) == 0
+    _rows(out / "transcripts.jsonl", sampling_seed_sent=None)
+    with pytest.raises(SystemExit, match=r"sampling_seed_sent.*False ≠ True"):
+        K.main(argv + (["--orchestrator"] if orch else []) + ["--resume"])
+    with pytest.raises(SystemExit, match=r"sampling_seed_sent.*False ≠ True"):
+        K.main(argv + (["--orchestrator"] if orch else []) + ["--append"])
+
+
+def test_dry_run_rows_do_not_send_seed_and_sampling_seed_key_rejected(tmp_path):
+    out = tmp_path / "d"
+    assert K.main(["--dry-run", "--levels", "0", "--reps", "1", "--limit", "1",
+                   "--out", str(out)]) == 0
+    (rec,) = [json.loads(ln) for ln in (out / "transcripts.jsonl").read_text().splitlines()]
+    assert rec["sampling_seed_sent"] is False and rec["sampling_seed"] == 7000
+    with pytest.raises(SystemExit, match="--seed"):
+        K.parse_sampling("temperature=0.6,seed=3")
+
+
+def test_sampling_override_per_run_seed_layer():
+    calls = []
+
+    class _Be:
+        def stream_generate(self, prompt, *, cache, sampling=None, **kw):
+            calls.append(dict(sampling or {}))
+            return iter(())
+    be = _Be()
+    assert K.set_run_seed(be, 1) is False                       # 未包 = 不装
+    assert K.set_run_seed(None, 1) is False
+    assert K.install_sampling_override(be, {}, per_run_seed=True) is True
+    assert K.install_sampling_override(be, {}, per_run_seed=True) is False   # 幂等
+    be.stream_generate("p", cache=None, sampling={"temperature": 0.2})
+    assert calls[-1] == {"temperature": 0.2}                   # 装了还没 set：不带种子
+    assert K.set_run_seed(be, 7001) is True
+    be.stream_generate("p", cache=None, sampling={"seed": 1, "max_tokens": 1})
+    assert calls[-1] == {"seed": 7001, "max_tokens": 1}         # 逐 run 层最后叠、优先
+    K.set_run_seed(be, 7002)
+    be.stream_generate("p", cache=None)
+    assert calls[-1] == {"seed": 7002}
+    fixed_only = _Be()
+    assert K.install_sampling_override(fixed_only, {"top_k": 20}) is True
+    assert K.set_run_seed(fixed_only, 7000) is False             # 无逐 run 层（mlx 路）不发种子
+    assert K.install_sampling_override(_Be(), {}) is False       # 两层都空 = 不包
+    assert K.seed_sent_expected("remote") and not K.seed_sent_expected("mlx")
+    assert not K.seed_sent_expected("fake")
+
+
+def test_resume_compat_seed_sent(tmp_path):
+    """check_resume_compat：sampling_seed_sent 恒比（resume / append、直调 / 编排器）；缺键 = False。"""
+    t = tmp_path / "transcripts.jsonl"
+    for mode in ({}, {"mode": "orchestrator"}):
+        t.write_text(json.dumps({"model": "dry-run/fake", "seed": 7, "level": 0, "rep": 0,
+                                 "item_id": "x", "sampling_seed_sent": True, "thinking_replay_mode": "last_k",
+                                 "thinking_replay_k": 2, **mode}) + "\n")
+        hm = K.harness_mode_of(json.loads(t.read_text()))
+        K.check_resume_compat(t, "dry-run/fake", {}, 7, {}, harness_mode=hm, seed_sent=True)
+        K.check_resume_compat(t, "dry-run/fake", {}, 7, {}, harness_mode=hm, seed_sent=True,
+                              entry_only=True)
+        for eo in (False, True):
+            with pytest.raises(SystemExit, match=r"True ≠ False"):
+                K.check_resume_compat(t, "dry-run/fake", {}, 7, {}, harness_mode=hm, entry_only=eo)
+        _rows(t, sampling_seed_sent=None)                      # 之前的批：缺键
+        K.check_resume_compat(t, "dry-run/fake", {}, 7, {}, harness_mode=hm)   # 都未发：接受
+        for eo in (False, True):
+            with pytest.raises(SystemExit, match=r"False ≠ True"):
+                K.check_resume_compat(t, "dry-run/fake", {}, 7, {}, harness_mode=hm,
+                                      seed_sent=True, entry_only=eo)
+
+
+def test_level_reps_rows_summary_and_resume_fills_missing(tmp_path, capsys, monkeypatch):
+    """--level-reps 0=6：L0 跑 6 rep、其余档 --reps 2；summary 记缺省 reps 与按档 level_reps，complete 按档；
+    --resume 只补缺的 rep。complete 按档判：L0 只缺 rep 4/5（rep 0/1 齐）时必须是 False——
+    「complete 改回 range(args.reps)」的变异体在这里判 True、变红。"""
+    out = tmp_path / "lr"
+    base = ["--dry-run", "--levels", "0,4096", "--reps", "2", "--limit", "2", "--out", str(out),
+            "--level-reps", "0=6"]
+    assert K.main(base) == 0
+    t = out / "transcripts.jsonl"
+    rows = [json.loads(ln) for ln in t.read_text().splitlines()]
+    from collections import Counter
+    per = Counter((r["level"], r["item_id"]) for r in rows)
+    ids = sorted({r["item_id"] for r in rows})
+    assert len(ids) == 2 and len(rows) == 2 * 6 + 2 * 2
+    assert all(per[(0, i)] == 6 and per[(4096, i)] == 2 for i in ids)
+    assert sorted({r["rep"] for r in rows if r["level"] == 0}) == list(range(6))
+    assert {r["sampling_seed"] for r in rows if r["level"] == 0} == {7000 + k for k in range(6)}
+    summ = json.loads((out / "summary.json").read_text())
+    assert summ["reps"] == 2 and summ["level_reps"] == {"0": 6, "4096": 2}
+    assert summ["complete"] is True and summ["n_runs"] == 16
+    # 删掉 L0 的 rep 4/5 与 L4096 一行：续跑只补这 5 行
+    keep = [r for r in rows if not (r["level"] == 0 and r["rep"] >= 4)
+            and not (r["level"] == 4096 and r["item_id"] == ids[0] and r["rep"] == 1)]
+    t.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in keep), encoding="utf-8")
+    # 第一次续跑：L0 rep 4/5 仍失败（记 error 行，不算完成）→ 只补上 L4096 那行，summary 按档判 False
+    real_one_run = K._one_run
+
+    async def flaky(args, engine, counter, item, item_idx, level, rep, meta, prefix=None):
+        if level == 0 and rep >= 4:
+            return {**meta, "level": level, "rep": rep, "item_id": item["id"], "error": "boom",
+                    "gens": [], "wall_s": 0.0}
+        return await real_one_run(args, engine, counter, item, item_idx, level, rep, meta, prefix)
+    monkeypatch.setattr(K, "_one_run", flaky)
+    capsys.readouterr()
+    assert K.main(base + ["--resume"]) == 0
+    assert "跳过 11 个已完成 run" in capsys.readouterr().out
+    summ = json.loads((out / "summary.json").read_text())
+    assert summ["complete"] is False and summ["n_errors"] == 4
+    assert all((4096, i, k) in K.load_done(t) for i in ids for k in (0, 1))   # 2-rep 档全齐
+    # 第二次续跑：只补 L0 rep 4/5（error 行重跑）→ complete True
+    monkeypatch.setattr(K, "_one_run", real_one_run)
+    n_before = len(t.read_text().splitlines())
+    assert K.main(base + ["--resume"]) == 0
+    assert "跳过 12 个已完成 run" in capsys.readouterr().out
+    rows2 = [json.loads(ln) for ln in t.read_text().splitlines()]
+    added = rows2[n_before:]
+    assert sorted((r["level"], r["item_id"], r["rep"]) for r in added) == sorted(
+        [(0, i, k) for i in ids for k in (4, 5)])
+    summ = json.loads((out / "summary.json").read_text())
+    assert summ["complete"] is True and summ["n_runs"] == 16 and summ["n_errors"] == 0
+
+
+@pytest.mark.parametrize("spec,msg", [("8192=3", "不在 --levels"), ("0=0", "正整数"),
+                                      ("0:3", "level=n"), ("x=3", "整数")])
+def test_level_reps_rejects_bad_spec(spec, msg):
+    with pytest.raises(SystemExit, match=msg):
+        K.resolve_level_reps([0, 4096], 2, spec)

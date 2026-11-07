@@ -260,3 +260,32 @@ def test_render_shows_recall_src_columns(tmp_path):
                                 gen_reserve=12288, prod_prefix=9424, pair=[])
     out = A.render([grp], aggs, args)
     assert "recall_src 桩/回读/原文" in out and "| 0/0/2 | 0(0) |" in out
+
+
+# ---- Pass^2 泛化到 rep ≥ 2（2026-11-07：L0 噪声基线 6 rep）----
+
+def test_pass_hat_2_unbiased_for_more_reps_and_identical_for_two(tmp_path):
+    from math import comb
+    # n = 2：逐项等于泛化前的 all / any
+    for v in ([True, True], [True, False], [False, True], [False, False]):
+        assert A.pass_hat_2_of(v) == float(all(v)) and A.pass_at_2_of(v) == float(any(v))
+    six = [True, True, True, False, False, True]               # c = 4, n = 6
+    assert A.pass_hat_2_of(six) == comb(4, 2) / comb(6, 2)
+    assert A.pass_at_2_of(six) == 1 - comb(2, 2) / comb(6, 2)
+    rows = ([_row(0, "a", r, ok) for r, ok in enumerate(six)]
+            + [_row(0, "b", r, ok) for r, ok in enumerate([True, True])]
+            + [_row(0, "c", 0, True)]                           # 只剩 1 rep：排出 Pass^2 分母
+            + [_row(4096, "a", r, True) for r in range(2)] + [_row(4096, "b", r, r == 0) for r in range(2)])
+    g = A.load_group(_write(tmp_path / "g", rows))
+    agg = A.aggregate(g, A.th_global, set())
+    a0 = agg[0]
+    assert a0["n_items2"] == 2 and a0["pass2_k"] == comb(4, 2) / comb(6, 2) + 1
+    assert a0["pass_hat_2"] == (comb(4, 2) / comb(6, 2) + 1) / 2
+    assert a0["pass_at_2"] == (1 - comb(2, 2) / comb(6, 2) + 1) / 2
+    a1 = agg[4096]
+    assert (a1["pass2_k"], type(a1["pass2_k"])) == (1, int)    # 全是 2 rep：仍是整数计数
+    # 配对与共同题集：6 rep 的题不再被排出
+    d, n = A.common_diff(a1["_items"], a0["_items"], "pass_hat_2")
+    assert n == 2 and d == ((comb(4, 2) / comb(6, 2) - 1) + (1 - 0)) / 2
+    p = A.paired(a1["_items"], a0["_items"], "pass_hat_2")
+    assert p["n_items"] == 2 and p["diff"] == d

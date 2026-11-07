@@ -522,8 +522,11 @@ class CudaVLLMBackend:
             )
             # 可选采样键按需透传（Qwen3.8 / Gemma 4 模型卡推荐 top_p / top_k / presence_penalty；
             # 调用方不给就不传，沿用 vLLM 缺省）。2026-10-31 P0 拐点测量加入：此前这些键被静默丢弃。
+            # seed（2026-11-07）：逐请求采样种子 → SamplingParams(seed=)，拐点 harness 逐 run 发
+            # （--seed*1000+rep）；不给 = vLLM 缺省（不设种子）。
             for _k, _cast in (("top_p", float), ("top_k", int),
-                              ("presence_penalty", float), ("frequency_penalty", float)):
+                              ("presence_penalty", float), ("frequency_penalty", float),
+                              ("seed", int)):
                 if sampling.get(_k) is not None:
                     sp_kwargs[_k] = _cast(sampling[_k])
             # vLLM 投机解码硬拒 min_p。依启动时实际解析的引擎配置判断：

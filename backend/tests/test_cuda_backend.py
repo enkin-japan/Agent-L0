@@ -729,3 +729,25 @@ def test_cuda_optional_sampling_keys_pass_through_only_when_given(cuda_stream):
     kw = engine.requests[0][1]
     assert (kw["top_p"], kw["top_k"], kw["presence_penalty"]) == (0.95, 20, 0.0)
     assert kw["repetition_penalty"] == 1.0 and "frequency_penalty" not in kw
+
+
+def test_cuda_seed_passes_to_sampling_params_only_when_given(cuda_stream):
+    """sampling.seed（拐点 harness 逐 run 发，2026-11-07）：给了 → SamplingParams(seed=int)；
+    没给 / None → 不设（vLLM 缺省不播种）。"""
+    class OneShot(_BurstEngine):
+        async def generate(self, prompt, params, rid):
+            self.requests.append((prompt, params.kwargs, rid))
+            yield _completion("ok", [1, 2], "stop")
+
+    engine = OneShot()
+    b = cuda_stream.backend
+    b._engine = engine
+    for sampling in ({"max_tokens": 8}, {"max_tokens": 8, "seed": None}):
+        list(b.stream_generate("synthetic", cache=b.new_cache(), sampling=sampling,
+                               features={"want_delta": True}))
+    assert all("seed" not in kw for _, kw, _ in engine.requests)
+    engine.requests.clear()
+    list(b.stream_generate("synthetic", cache=b.new_cache(),
+                           sampling={"max_tokens": 8, "seed": "7001"},
+                           features={"want_delta": True}))
+    assert engine.requests[0][1]["seed"] == 7001

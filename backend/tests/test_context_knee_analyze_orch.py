@@ -238,3 +238,19 @@ def test_fold_forensics_error_vs_ok_pair(tmp_path):
     assert FF.strip_ts(e["input_text"]) == FF.strip_ts(o["input_text"])
     out = FF.render([leg, new])
     assert "逐字相同的 1 个" in out and "memory.json 未落盘的 1 个" in out
+
+
+def test_orch_arms_known_order_then_other_orch_dirs_by_name(tmp_path):
+    """臂列表：B2_ORCH 已知顺序在前，其余 orch-turn-* 臂目录（有 transcripts.jsonl）按名追加；
+    无 transcripts 的目录、同名 .log 文件、orch-history-ref 等非 orch-turn-* 目录不算。"""
+    for n in O.B2_ORCH + ["orch-turn-full", "orch-turn-a-extra", "orch-history-ref", "smoke-orch-1"]:
+        (tmp_path / n).mkdir()
+        (tmp_path / n / "transcripts.jsonl").write_text("")
+    (tmp_path / "orch-turn-empty").mkdir()
+    (tmp_path / "orch-turn-full.log").write_text("")
+    assert O.orch_arms(tmp_path) == O.B2_ORCH + ["orch-turn-a-extra", "orch-turn-full"]
+    assert O.orch_arms(tmp_path / "nope") == O.B2_ORCH
+
+
+def test_fmt_k_integer_unchanged_fraction_two_decimals():
+    assert [A.fmt_k(x) for x in (3, 0, 3.0, 2.4666666666666666, 0.4)] == ["3", "0", "3", "2.47", "0.40"]
