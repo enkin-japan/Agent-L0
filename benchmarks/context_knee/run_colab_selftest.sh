@@ -19,6 +19,9 @@
 #   变异证明：去掉重试 / 重试不先停机 / 预算判据去掉 est / 去掉 lease_steps 门 / 换租约改模型 / 不记 lease_steps 任一处，对应场景必须变红。
 # 11-07：level_reps_seed（LEVEL_REPS / KNEE_SEED：冒烟不带 --level-reps 但带 --seed，正式 knee 步两者都带，config 行记两者；
 #   LEVEL_REPS 坏格式起机前 64）。变异证明：冒烟也传 LEVEL_REPS / 不传 KNEE_SEED / 去掉格式校验 任一处，该场景必须变红。
+# 11-07 晚：level_reps_arms（LEVEL_REPS_ARMS 点名的 knee 步才带 --level-reps，其余步不带、逗号锚定不误带同前缀步；档位只对点名步校验；
+#   点名不在本批 knee 步 / 点名 trace 步 / 无 LEVEL_REPS / 拆出 0 个步名 → 64 不起机，且 64 不删收官目录的 DONE）。
+#   变异证明：step_cmd 去掉 reps_arm 判断 / 档位校验去掉 reps_arm 跳过 / 去掉 trace 判断 / 去掉逗号锚点
 set -u
 ROOT=${0:A:h:h:h}
 CHAIN=$ROOT/benchmarks/context_knee/run_colab.sh
@@ -156,7 +159,7 @@ wait_log(){ # $1 场景 $2 正则：最多 30 s 等时间线出现该行
   local i; for i in {1..30}; do grep -qE "$2" "$T/$1/run_colab.log" 2>/dev/null && return 0; sleep 1; done; return 1
 }
 
-want=("$@"); [ ${#want} -eq 0 ] && want=(ok hang_recover hang_exhaust start_fail smoke_fail term stop_fail lease_busy arm_fail arm_errors restart_start_fail term_ready term_prestart done_guard phases trace_hang phase_b_smoke_fail order b_only switch_budget smoke_reset trace_done_rerun switch_start_fail d45_steps ready_retry ready_retry_exhaust ready_retry_off ready_retry_timeout ready_retry_stop_fail lease_rollover lease_rollover_floor lease_unlimited level_reps_seed)
+want=("$@"); [ ${#want} -eq 0 ] && want=(ok hang_recover hang_exhaust start_fail smoke_fail term stop_fail lease_busy arm_fail arm_errors restart_start_fail term_ready term_prestart done_guard phases trace_hang phase_b_smoke_fail order b_only switch_budget smoke_reset trace_done_rerun switch_start_fail d45_steps ready_retry ready_retry_exhaust ready_retry_off ready_retry_timeout ready_retry_stop_fail lease_rollover lease_rollover_floor lease_unlimited level_reps_seed level_reps_arms)
 has(){ [[ " ${want[*]} " == *" $1 "* ]]; }
 
 if has ok; then
@@ -414,9 +417,37 @@ if has level_reps_seed; then
   check level_reps_seed '[ "$(rc_of level_reps_seed)" = 0 ] && [ "$(done_of level_reps_seed)" = "BATCH_RC=0 SKIPPED=0" ]' "rc=$(rc_of level_reps_seed) DONE=$(done_of level_reps_seed)"
   check level_reps_seed '[ -n "$smoke_args" ] && ! print -r -- "$smoke_args" | grep -q -- "--level-reps" && print -r -- "$smoke_args" | grep -q -- "--seed 11"' "冒烟须不带 --level-reps、带 --seed 11：$smoke_args"
   check level_reps_seed 'grep -q -- "--level-reps 0=6 --seed 11" "$T/level_reps_seed/orch-turn-none/stub.args"' "正式 knee 步参数：$(cat "$T/level_reps_seed/orch-turn-none/stub.args" 2>/dev/null)"
-  check level_reps_seed 'head -n1 "$T/level_reps_seed/run_colab.log" | grep -q "config: .*LEVEL_REPS=0=6 KNEE_SEED=11"' "首行有效配置缺 LEVEL_REPS/KNEE_SEED：$(head -n1 "$T/level_reps_seed/run_colab.log")"
+  check level_reps_seed 'head -n1 "$T/level_reps_seed/run_colab.log" | grep -q "config: .*LEVEL_REPS=0=6 LEVEL_REPS_ARMS=<unset> KNEE_SEED=11"' "首行有效配置缺 LEVEL_REPS/KNEE_SEED：$(head -n1 "$T/level_reps_seed/run_colab.log")"
   run_chain level_reps_seed_bad ARMS=orch-turn-none LEVEL_REPS=0=6,
   check level_reps_seed '[ "$(rc_of level_reps_seed_bad)" = 64 ] && [ "$(calls level_reps_seed_bad start)" = 0 ]' "LEVEL_REPS=0=6, 应 64 不起机：rc=$(rc_of level_reps_seed_bad) start=$(calls level_reps_seed_bad start)"
+fi
+if has level_reps_arms; then
+  # 11-07 晚拍板：LEVEL_REPS_ARMS 点名的 knee 步才带 --level-reps（none 带、w1 不带）；点名不在本批 knee 步里 → 64 不起机；
+  # 只给 LEVEL_REPS_ARMS 不给 LEVEL_REPS → 64
+  run_chain level_reps_arms ARMS=orch-turn-none,orch-turn-w1 LEVEL_REPS=0=6 LEVEL_REPS_ARMS=orch-turn-none KNEE_SEED=11
+  check level_reps_arms '[ "$(rc_of level_reps_arms)" = 0 ] && [ "$(done_of level_reps_arms)" = "BATCH_RC=0 SKIPPED=0" ]' "rc=$(rc_of level_reps_arms) DONE=$(done_of level_reps_arms)"
+  check level_reps_arms 'grep -q -- "--level-reps 0=6 --seed 11" "$T/level_reps_arms/orch-turn-none/stub.args"' "none 应带 --level-reps：$(cat "$T/level_reps_arms/orch-turn-none/stub.args" 2>/dev/null)"
+  check level_reps_arms '! grep -q -- "--level-reps" "$T/level_reps_arms/orch-turn-w1/stub.args" && grep -q -- "--seed 11" "$T/level_reps_arms/orch-turn-w1/stub.args"' "w1 应不带 --level-reps、带 --seed：$(cat "$T/level_reps_arms/orch-turn-w1/stub.args" 2>/dev/null)"
+  check level_reps_arms 'head -n1 "$T/level_reps_arms/run_colab.log" | grep -q "config: .*LEVEL_REPS=0=6 LEVEL_REPS_ARMS=orch-turn-none KNEE_SEED=11"' "首行有效配置缺 LEVEL_REPS_ARMS：$(head -n1 "$T/level_reps_arms/run_colab.log")"
+  run_chain level_reps_arms_bad ARMS=orch-turn-none LEVEL_REPS=0=6 LEVEL_REPS_ARMS=orch-turn-w1w2
+  check level_reps_arms '[ "$(rc_of level_reps_arms_bad)" = 64 ] && [ "$(calls level_reps_arms_bad start)" = 0 ]' "点名不在本批应 64 不起机：rc=$(rc_of level_reps_arms_bad) start=$(calls level_reps_arms_bad start)"
+  run_chain level_reps_arms_noreps ARMS=orch-turn-none LEVEL_REPS_ARMS=orch-turn-none
+  check level_reps_arms '[ "$(rc_of level_reps_arms_noreps)" = 64 ] && [ "$(calls level_reps_arms_noreps start)" = 0 ]' "无 LEVEL_REPS 应 64 不起机：rc=$(rc_of level_reps_arms_noreps) start=$(calls level_reps_arms_noreps start)"
+  # 一审 T1：档位只对点名步校验——57344 不在 direct-mock 的 --levels：点名 none 应起机，点名 direct-mock 应 64
+  run_chain level_reps_arms_lv ARMS=orch-turn-none,direct-mock LEVEL_REPS=57344=3 LEVEL_REPS_ARMS=orch-turn-none KNEE_SEED=11
+  check level_reps_arms '[ "$(rc_of level_reps_arms_lv)" = 0 ] && grep -q -- "--level-reps 57344=3" "$T/level_reps_arms_lv/orch-turn-none/stub.args" && ! grep -q -- "--level-reps" "$T/level_reps_arms_lv/direct-mock/stub.args"' "点名 none 档位校验应只看 none：rc=$(rc_of level_reps_arms_lv)"
+  run_chain level_reps_arms_lv_bad ARMS=orch-turn-none,direct-mock LEVEL_REPS=57344=3 LEVEL_REPS_ARMS=direct-mock
+  check level_reps_arms '[ "$(rc_of level_reps_arms_lv_bad)" = 64 ] && [ "$(calls level_reps_arms_lv_bad start)" = 0 ]' "点名 direct-mock 档位不在其 --levels 应 64：rc=$(rc_of level_reps_arms_lv_bad) start=$(calls level_reps_arms_lv_bad start)"
+  # 一审 T2：点名 trace 步 → 64
+  run_chain level_reps_arms_trace ARMS=orch-turn-none,trace-new-900 LEVEL_REPS=0=6 LEVEL_REPS_ARMS=trace-new-900
+  check level_reps_arms '[ "$(rc_of level_reps_arms_trace)" = 64 ] && [ "$(calls level_reps_arms_trace start)" = 0 ]' "点名 trace 步应 64：rc=$(rc_of level_reps_arms_trace) start=$(calls level_reps_arms_trace start)"
+  # 一审 T3：逗号锚定——点名 w1w2 不能误带 w1
+  run_chain level_reps_arms_anchor ARMS=orch-turn-w1,orch-turn-w1w2 LEVEL_REPS=0=6 LEVEL_REPS_ARMS=orch-turn-w1w2
+  check level_reps_arms '[ "$(rc_of level_reps_arms_anchor)" = 0 ] && grep -q -- "--level-reps 0=6" "$T/level_reps_arms_anchor/orch-turn-w1w2/stub.args" && ! grep -q -- "--level-reps" "$T/level_reps_arms_anchor/orch-turn-w1/stub.args"' "点名 w1w2 时 w1 不应带：$(cat "$T/level_reps_arms_anchor/orch-turn-w1/stub.args" 2>/dev/null)"
+  # 一审 M1：拆出 0 个步名 → 64；M2：64 退出不删收官目录的 DONE、不清 arms_status
+  mkdir -p "$T/level_reps_arms_empty"; print -r -- "BATCH_RC=0 SKIPPED=0" > "$T/level_reps_arms_empty/DONE"; print -r -- "orch-turn-none ok" > "$T/level_reps_arms_empty/arms_status.txt"
+  run_chain level_reps_arms_empty ARMS=orch-turn-none LEVEL_REPS=0=6 LEVEL_REPS_ARMS=, FORCE_OUT=1
+  check level_reps_arms '[ "$(rc_of level_reps_arms_empty)" = 64 ] && [ "$(calls level_reps_arms_empty start)" = 0 ] && [ "$(cat "$T/level_reps_arms_empty/DONE" 2>/dev/null)" = "BATCH_RC=0 SKIPPED=0" ] && [ "$(cat "$T/level_reps_arms_empty/arms_status.txt" 2>/dev/null)" = "orch-turn-none ok" ]' "「,」应 64 且不动 DONE/arms_status：rc=$(rc_of level_reps_arms_empty) DONE=$(cat "$T/level_reps_arms_empty/DONE" 2>/dev/null)"
 fi
 
 print -r -- "run_colab selftest: pass=$pass fail=$fail (scenarios: ${want[*]})"

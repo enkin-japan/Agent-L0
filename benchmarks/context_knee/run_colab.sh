@@ -29,7 +29,9 @@
 #       会立刻再换一次，白烧一次起机）；0=不限。时钟从 start 命令发出算，比 VM 真实分配早，偏保守）。
 #   LEVEL_REPS（knee 步按档 rep 数，run_knee --level-reps 格式「档=n,…」如 0=6；缺省不传=各档 --reps 缺省 2。用户 11-05 拍板
 #       P2 门槛噪声基线：下一租约 L0 加 rep）、KNEE_SEED（knee 步 --seed 基值，缺省不传=run_knee 缺省 7；11-07 起远端采样种子
-#       seed*1000+rep 随请求体 sampling 透传到 cuda 后端，行记 sampling_seed_sent；算力端须部署含该改动的 cuda/backend.py）。
+#       seed*1000+rep 随请求体 sampling 透传到 cuda 后端，行记 sampling_seed_sent；算力端须部署含该改动的 cuda/backend.py）、
+#   LEVEL_REPS_ARMS（逗号分隔的步名：只有这些 knee 步带 --level-reps，其余 knee 步按缺省 rep；空=全部 knee 步。用户 11-07 晚拍板：
+#       共同随机数下 none/w1/w1w2 在 L0 同输入同输出，L0 加 rep 只在 none + full 做；每个步名须在本批 ARMS 的 knee 步里，否则 64 不起机）。
 #   测试接缝（只为桩自测，缺省即生产路径）：DEPLOY、PY、KNEE、TRACE、ENV_FILE、POLL（等 READY 轮询秒，默认 30）、
 #       LEASE_BUDGET_SEC（覆盖 MAX_VM_HOURS×3600，秒）、READY_DEADLINE_SEC（覆盖 READY_MINUTES×60，秒）。
 # 步（口径见 benchmarks/context_knee/README.md「编排器模式」：各臂固定同一放置只切开关，不跨放置比）：
@@ -84,6 +86,7 @@ MODEL=${MODEL:-RedHatAI/Qwen3.8-27B-INT4}
 MODEL_B=${MODEL_B:-google/gemma-4-31B-it-qat-w4a16-ct}
 TRACE_REPS=${TRACE_REPS:-3}
 LEVEL_REPS=${LEVEL_REPS:-}      # knee 步 --level-reps（「档=n,…」）；空=不传
+LEVEL_REPS_ARMS=${LEVEL_REPS_ARMS:-}  # 只给这些 knee 步带 --level-reps（逗号分隔）；空=全部 knee 步
 KNEE_SEED=${KNEE_SEED:-}        # knee 步 --seed 基值；空=不传（run_knee 缺省 7）
 OUT=${OUT:-benchmarks/data/context-knee-$(date +%Y%m%d)}
 READY_MINUTES=${READY_MINUTES:-40}
@@ -122,9 +125,7 @@ fi
 mkdir -p "$OUT"
 LOG=$OUT/run_colab.log
 STAMP=$(date +%Y%m%d-%H%M%S)
-touch "$LOG"; rm -f "$OUT/DONE"
-print -r -- "$(date '+%F %T') config: MODEL=$MODEL MODEL_B=$MODEL_B READY_MINUTES=$READY_MINUTES READY_RETRY=$READY_RETRY RESTARTS_MAX=$RESTARTS_MAX HUNG_RUNS=$HUNG_RUNS MAX_VM_HOURS=$MAX_VM_HOURS LEASE_BUDGET_SEC=$LEASE_BUDGET_SEC SMOKE=$SMOKE LEVEL_REPS=${LEVEL_REPS:-<unset>} KNEE_SEED=${KNEE_SEED:-<unset>}" >> "$LOG"
-: > "$OUT/arms_status.txt"
+touch "$LOG"
 log(){ print -r -- "$(date '+%F %T') $*" >> "$LOG"; }
 finish(){ print -r -- "$1" > "$OUT/DONE"; log "DONE $1"; }
 arm_status(){ print -r -- "$1 $2" >> "$OUT/arms_status.txt"; log "arm $1: $2"; }
@@ -169,18 +170,35 @@ step_mode(){  case $1 in orch-*|trace-*) print orch;; *) print direct;; esac; } 
 ORDER_A=(); ORDER_B=()
 for a in $ORDER; do if [ "$(step_phase $a)" = B ]; then ORDER_B+=($a); else ORDER_A+=($a); fi; done
 ORDER=($ORDER_A $ORDER_B)
-# LEVEL_REPS 的档必须在本批每个 knee 步自己的 --levels 里（direct-*/gemma-* 与 orch-* 档位不同；run_knee 对不在
-# --levels 的档拒启，若到起机后才发现则该步 fail / 整段 skipped 白烧）
+# LEVEL_REPS_ARMS：只有点名的 knee 步带 --level-reps；点名的步必须是本批 ORDER 里的 knee 步（含 B 段），拆出的步名至少 1 个
+# （「,」拆成 0 个会静默让谁都不带 rep 而照常起机——一审 M1）
+reps_arm(){ [ -z "$LEVEL_REPS_ARMS" ] || [[ ",$LEVEL_REPS_ARMS," == *",$1,"* ]]; }
+if [ -n "$LEVEL_REPS_ARMS" ]; then
+  [ -n "$LEVEL_REPS" ] || { echo "LEVEL_REPS_ARMS 需要同时给 LEVEL_REPS" >&2; exit 64; }
+  reps_arms=(${(s:,:)LEVEL_REPS_ARMS})
+  [ ${#reps_arms} -ge 1 ] || { echo "LEVEL_REPS_ARMS 没有步名（现「$LEVEL_REPS_ARMS」）" >&2; exit 64; }
+  for a in $reps_arms; do
+    [[ " $ORDER " == *" $a "* ]] && [ "$(step_kind $a)" != trace ] || { echo "LEVEL_REPS_ARMS 的步 $a 不是本批的 knee 步（ORDER: $ORDER）" >&2; exit 64; }
+  done
+fi
+# LEVEL_REPS 的档必须在每个要带它的 knee 步（LEVEL_REPS_ARMS 点名的；空=全部 knee 步）自己的 --levels 里（direct-*/gemma-* 与
+# orch-* 档位不同；run_knee 对不在 --levels 的档拒启，若到起机后才发现则该步 fail / 整段 skipped 白烧）
 if [ -n "$LEVEL_REPS" ]; then
   for a in $ORDER; do
     [ "$(step_kind $a)" = trace ] && continue
     [ -n "${ARM_ARGS[$a]:-}" ] || continue
+    reps_arm "$a" || continue
     lv="${${ARM_ARGS[$a]##*--levels }%% *}"
     for kv in ${(s:,:)LEVEL_REPS}; do
       [[ ",$lv," == *",${kv%%=*},"* ]] || { echo "LEVEL_REPS 的档 ${kv%%=*} 不在步 $a 的 --levels $lv" >&2; exit 64; }
     done
   done
 fi
+
+# 参数全部校验通过，才清旧 DONE、记本次有效配置、清 arms_status（一审 M2：64 退出不该动收官目录的 DONE / arms_status）
+rm -f "$OUT/DONE"
+print -r -- "$(date '+%F %T') config: MODEL=$MODEL MODEL_B=$MODEL_B READY_MINUTES=$READY_MINUTES READY_RETRY=$READY_RETRY RESTARTS_MAX=$RESTARTS_MAX HUNG_RUNS=$HUNG_RUNS MAX_VM_HOURS=$MAX_VM_HOURS LEASE_BUDGET_SEC=$LEASE_BUDGET_SEC SMOKE=$SMOKE LEVEL_REPS=${LEVEL_REPS:-<unset>} LEVEL_REPS_ARMS=${LEVEL_REPS_ARMS:-<unset>} KNEE_SEED=${KNEE_SEED:-<unset>}" >> "$LOG"
+: > "$OUT/arms_status.txt"
 
 # 当前步的命令行（--out 与步参数由 run_arm 追加）；--model 取当前段模型 $MODEL；$2=smoke 为冒烟（不带 LEVEL_REPS）
 CMD=()
@@ -189,7 +207,7 @@ step_cmd(){
     trace) CMD=("$PY" "$TRACE" --model "$MODEL" --backend remote --tasks hard --reps "$TRACE_REPS" --run-timeout 600 --drop-task on);;
     *)     CMD=("$PY" "$KNEE"  --model "$MODEL" --backend remote --tasks hard --run-timeout 600)
            # 冒烟（$2=smoke）固定 --levels 0 --reps 1，不带 LEVEL_REPS（其档不在 --levels 会拒启 / L0 多跑 rep）；seed 照传
-           if [ -n "$LEVEL_REPS" ] && [ "${2:-}" != smoke ]; then CMD+=(--level-reps "$LEVEL_REPS"); fi
+           if [ -n "$LEVEL_REPS" ] && [ "${2:-}" != smoke ] && reps_arm "$1"; then CMD+=(--level-reps "$LEVEL_REPS"); fi
            if [ -n "$KNEE_SEED" ]; then CMD+=(--seed "$KNEE_SEED"); fi;;
   esac
 }
