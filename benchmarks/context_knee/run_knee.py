@@ -1157,14 +1157,16 @@ def orch_model_options(opts: Optional[Dict[str, Any]], prefix: str) -> Dict[str,
 HARNESS_MODE_KEYS = ("mode", "fill_placement", "guard", "step_compaction", "turn_compaction",
                      "goal_verify", "fill_shape", "guard_thresholds", "step_compaction_cfg",
                      "tool_schema_mode_effective", "agent_cfg_fingerprint", "stub_impl",
-                     "stub_clue", "mock_merge_rule")
+                     "stub_clue", "mock_merge_rule", "verify_gate_rule")
 #: 编排器模式生产工具桩的实现版本（W-K2）：W-K2 之前的编排器行回的是 Unknown tool，缺键 = 旧实现，
 #: 续跑 / 追加与之不比「缺键不比」规则、恒比（见 harness_mismatch）
 STUB_IMPL = "usable-v1"
 #: 编排器行即便缺键也恒比的口径键。stub_clue（D43 (a)）同 stub_impl：D43 之前的批（行缺键 = 桩无线索）
 #: 续跑 / 追加时拒，否则同一档的 recall 混进有线索与无线索两种桩。mock_merge_rule（D44 (iii)）同理：
 #: 旧规则（行缺键）只在 --prefix catalog 并入 mock 工具，生效 catalog 条目的 prod / mock 档披露面不同
-_ALWAYS_COMPARED = ("mode", "stub_impl", "stub_clue", "mock_merge_rule")
+#: verify_gate_rule（2026-11-07 写后回读修复）同理：旧批（行缺键）任何 edit_file/write_file 都武装
+#: T1-4 推回、模型逐文件回读，步数口径不同
+_ALWAYS_COMPARED = ("mode", "stub_impl", "stub_clue", "mock_merge_rule", "verify_gate_rule")
 #: 直调模式（及缺 mode 的旧行）的口径：只认 mode 与填充形态，其余不比
 _DIRECT_HARNESS = {"mode": "direct", "fill_shape": "turns"}
 
@@ -1239,8 +1241,10 @@ def orch_meta(ctx: Optional[OrchContext], args=None) -> Dict[str, Any]:
                 "turn_compaction": None, "goal_verify": None, "fill_shape": "turns",
                 "guard_thresholds": None, "step_compaction_cfg": None,
                 "orchestrator_cfg_source": None, "tool_schema_mode_effective": None,
-                "stub_impl": None, "stub_clue": None, "mock_merge_rule": None}
+                "stub_impl": None, "stub_clue": None, "mock_merge_rule": None,
+                "verify_gate_rule": None}
     from framework.core import tool_disclosure
+    from framework.core.orchestrator import VERIFY_GATE_RULE
     from framework.memory.compactor import CLUE_RULE
     cfg, over = _orch_tools().agent_cfg(ctx.agent_base, guard=ctx.guard, step=ctx.step_compaction,
                                         goal_verify=ctx.goal_verify)
@@ -1262,7 +1266,9 @@ def orch_meta(ctx: Optional[OrchContext], args=None) -> Dict[str, Any]:
             # analyze.recall_source 只在有这个键时才把线索算进「桩上看得见」
             "stub_clue": CLUE_RULE,
             # D44 (iii)：mock 工具并入 core 的规则版本（orch_tools.MOCK_MERGE_RULE，恒比）
-            "mock_merge_rule": _orch_tools().MOCK_MERGE_RULE}
+            "mock_merge_rule": _orch_tools().MOCK_MERGE_RULE,
+            # 2026-11-07：T1-4 写后验证门控武装判据的规则版本（orchestrator.VERIFY_GATE_RULE，恒比）
+            "verify_gate_rule": VERIFY_GATE_RULE}
 
 
 def _orch_tools():

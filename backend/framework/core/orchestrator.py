@@ -19,6 +19,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -308,6 +309,16 @@ VERIFY_NUDGE_MAX = 1
 # （无法静态判断命令是否改动），用它会让每个只读 shell 轮次误触发验证门控、白烧一次生成。
 # 故只把这两个确定改文件的工具计作写；shell 内的 sed -i/rm 等写不被覆盖（尽力而为，误报比漏报更伤）。
 _FILE_WRITE_TOOLS = {"edit_file", "write_file"}
+# 纯内容文件：没有可运行的「真检查」，写工具的成功回执本身就是验证。写这类文件不武装 T1-4
+# 门控——2026-11-07 P2 批 lc-hard-004/008 实案：门控推回逼模型逐文件回读刚写的 .md，每 run
+# 白多 4 步、步数超限判败（docs/plans/2026-11-07-verify-nudge-reread-spec.md）。无扩展名按代码算。
+_RECEIPT_IS_VERIFICATION_EXTS = {".md", ".txt", ".log", ".csv", ".tsv", ".rst"}
+# 例外：扩展名虽是 .txt 但本质是依赖 / 构建清单（requirements*.txt、constraints*.txt、CMakeLists.txt），
+# 改了有真检查可跑（装依赖、构建），仍按代码武装（一审 m4）。
+_CODE_LIKE_TXT = re.compile(r"^(?:requirements|constraints)[^/\\]*\.txt$|^CMakeLists\.txt$", re.IGNORECASE)
+#: T1-4 武装判据的规则版本：knee harness 记进每行的口径键并恒比，判据再变即拒与旧批混跑 / 续跑
+#: （与 stub_clue / mock_merge_rule 同一惯例；2026-11-07 之前的批缺键 = 任何写都武装）。
+VERIFY_GATE_RULE = "prose-neutral-v1"
 
 # ── D2 谎报围堵（#84，2026-08-10 26B 档实案）────────────────────────────────
 # 失败判据：工具层显式错误，或 shell 响应头部的非零退出码。只认硬信号——语义级
@@ -356,6 +367,26 @@ def _obs_failed(obs: Any) -> bool:
     if isinstance(obs, dict) and "_failed" in obs:
         return bool(obs["_failed"])
     return _resp_failed(obs.get("response") if isinstance(obs, dict) else obs)
+
+
+def _arms_verify_gate(call: Dict[str, Any], obs: Any) -> bool:
+    """T1-4 写后验证门控的武装判据（单一入口：主循环扫描与审批续跑共用，判据不得分叉）。
+
+    只有**成功**写到**非纯内容文件**的 edit_file / write_file 才算「未验证写」：
+    C4 拦截的调用没真执行；失败写什么都没改（归 D2 失败吞没门控管）；纯内容文件
+    （`_RECEIPT_IS_VERIFICATION_EXTS`）没有可运行的真检查，成功回执本身就是验证——
+    2026-11-07 P2 批实案：对这些写也推回，模型只会逐文件回读刚写的内容、白烧步数。
+    """
+    if call.get("name") not in _FILE_WRITE_TOOLS:
+        return False
+    if isinstance(obs, dict) and obs.get("_blocked"):
+        return False
+    if _obs_failed(obs):
+        return False
+    path = str((call.get("arguments") or {}).get("path") or "")
+    if _CODE_LIKE_TXT.match(os.path.basename(path)):
+        return True
+    return os.path.splitext(path)[1].lower() not in _RECEIPT_IS_VERIFICATION_EXTS
 
 
 def _last_user_text(history: List[Dict[str, Any]], limit: Optional[int] = 500) -> str:
@@ -1619,8 +1650,11 @@ class Orchestrator:
                 elif _batch_failed:
                     upgrade_failures += 1
                 _stamp_turn_stats()  # [仪表 Phase 0] 刷新废轮计数（_execute_physical 可能新增 parse 失败）
-                # [验证门控 T1-4 状态跟踪] 按声明序扫描本批物理调用：改文件（edit_file/write_file）
-                # 置「未验证」，其后任何非写调用（读回文件 / 跑代码 / grep 等）视为复查、清除标记。
+                # [验证门控 T1-4 状态跟踪] 按声明序扫描本批物理调用：成功改代码类文件（edit_file/
+                # write_file，扩展名不在 _RECEIPT_IS_VERIFICATION_EXTS）置「未验证」，其后任何非写调用
+                # （读回文件 / 跑代码 / grep 等）视为复查、清除标记。纯内容写（成功回执即验证）与失败写
+                # （什么都没改，归 D2 失败吞没门控管）是中性的：既不武装也不清除（2026-11-07 修：此前
+                # 任何写都武装，逼模型回读刚写的 .md、白烧步数）。
                 # 写屏障（_execute_physical）保证写后重读不会被去重拦截，故复查总能真正执行；
                 # 声明序与批内实际执行序一致（串行写之前会先冲刷此前积压的只读批）。
                 for c, r in zip(phys_calls, phys_responses):
@@ -1628,7 +1662,8 @@ class Orchestrator:
                     if c.get("type") == "error" or r.get("_blocked"):
                         continue
                     if c.get("name") in _FILE_WRITE_TOOLS:
-                        unverified_write = True
+                        if _arms_verify_gate(c, r):
+                            unverified_write = True
                     else:
                         unverified_write = False
                 # [结构性提醒 T1-1] 在最新观察旁贴一条条件式 nudge（步骤边界/漂移/收尾验证）。
@@ -1755,8 +1790,9 @@ class Orchestrator:
                         continue
 
                 # [验证门控 T1-4] 收尾前的确定性检查：本轮改动过系统状态（写调用）、之后却没有
-                # 任何只读复查 = 「已执行」被当成「已验证」。推回一次，要求先复查改动是否真正
-                # 解决用户报告的问题。仅在正常收尾路径触发（计划未完成的纯文本 = 向用户提问/
+                # 任何只读复查 = 「已执行」被当成「已验证」。推回一次，要求先验证改动的**效果**是否真正
+                # 解决用户报告的问题（2026-11-07 改文案：原文「re-read what you changed」逼模型回读刚写的
+                # 文件，回执已证明落盘、回读证明不了更多，只白烧步数）。仅在正常收尾路径触发（计划未完成的纯文本 = 向用户提问/
                 # 汇报障碍，不适用）；推回有界，模型坚持不验证则放行其答复。
                 wrapping_up = task is None or not task.plan or task.all_done()
                 if wrapping_up and unverified_write and verify_nudges < VERIFY_NUDGE_MAX:
@@ -1766,14 +1802,17 @@ class Orchestrator:
                     session.add_assistant_message(content=text, thoughts=thoughts)
                     # 推回走可变尾部（T3-c）：一次性提醒，用完即弃、不进历史、不被摘要压缩
                     pending_tail_notes.append(
-                        "[System guardrail] You modified state this turn (write tool calls) but never "
-                        "re-checked the result. Do NOT tell the user it is done/fixed yet. First verify: "
-                        "re-read what you changed, trace the flow end-to-end to confirm the change is "
-                        "actually reached and takes effect, and check that it explains and resolves the "
-                        "user's ORIGINAL problem (not just a plausible nearby issue); run a real check if "
-                        "feasible. If verification shows the fix is wrong or incomplete, keep working. "
-                        "If you genuinely cannot verify, say so explicitly in your answer and tell the "
-                        "user what to test — do not claim success.")
+                        "[System guardrail] You modified state this turn (write tool calls) and then "
+                        "wrapped up without any real check. The write receipts already confirm the file "
+                        "contents landed, so do NOT re-read the files you just wrote — that proves nothing "
+                        "more. Do NOT tell the user it is done/fixed yet. If no real check is feasible "
+                        "here (nothing to execute), answer now and say explicitly what you could not "
+                        "verify and what the user should test — do not claim success. Otherwise verify "
+                        "the EFFECT first: run the real check (execute the code, run the test or "
+                        "command), follow the call path from the entry point to your change to confirm "
+                        "it is actually reached and takes effect, and check that it resolves the user's "
+                        "ORIGINAL problem (not just a plausible nearby issue). If verification shows the "
+                        "fix is wrong or incomplete, keep working.")
                     continue
 
                 # [D2 谎报围堵：错误不可吞] 最近的物理调用失败且其后再无成功调用，却要收尾
@@ -2150,13 +2189,16 @@ class Orchestrator:
         # 收尾验证 + 目标对齐（想法3 轻量）：刚完成某步且全部步骤已就绪、计划有一定规模 →
         # ①把结果对回「用户最初的目标」（弱模型跑长多步任务极易漂移到相邻的事）②别把「已执行」
         # 当「已验证」。确定性触发（all_done），零额外生成——只是最终答复前读到的一条提醒。
+        # 2026-11-07 改文案：明说写回执已证明落盘、别为确认写入而回读（原文被模型读成「去回读」）。
         if did_complete_step and task.all_done() and len(task.plan) >= 3:
             goal = (task.goal or "").strip()
             goal_ref = f" the user's ORIGINAL goal (\"{goal[:120]}\")" if goal else " the user's ORIGINAL goal"
             return ("[Reminder] All plan steps are marked done. Before giving the final answer, "
                     "re-read" + goal_ref + " and check your result actually ACHIEVES it — not just a "
-                    "nearby thing you drifted into. Also confirm the key deliverables were truly "
-                    "verified (\"executed\" is not \"verified\"). If it falls short, keep working "
+                    "nearby thing you drifted into. Also confirm the key deliverables are truly "
+                    "verified — for code, by a real check that actually ran (\"executed\" is not "
+                    "\"verified\"); successful write receipts already prove file contents landed, so "
+                    "do not re-read files just to confirm writes. If it falls short, keep working "
                     "instead of wrapping up.")
         # 步骤边界：刚推进到新步 → 重新锚定注意力，别回头重做已完成的步。
         # 记事板提示自限：仅在便签仍为空时追加——一旦模型开始记录即消失，不逐步膨胀。
@@ -2521,10 +2563,10 @@ class Orchestrator:
 
         session.add_tool_message(responses)
         # 刚批准执行的调用含改文件工具 → 续跑的 run_turn 以「未验证写」状态起步（T1-4）：
-        # 文件写恰是最不该「改完即宣布成功」的一类，续跑不能丢失这个标记。判据与主循环一致
-        # （只认 edit_file/write_file），不用对 shell 无效的 is_read_only。
+        # 文件写恰是最不该「改完即宣布成功」的一类，续跑不能丢失这个标记。判据与主循环共用
+        # `_arms_verify_gate`（成功写到非纯内容文件；不用对 shell 无效的 is_read_only）。
         wrote_unverified = approved and any(
-            c.get("name") in _FILE_WRITE_TOOLS and not r.get("_blocked")
+            _arms_verify_gate(c, r)
             for c, r in zip(pending_calls, responses) if c.get("type") != "error"
         )
         # 回到编排主循环（若再次命中敏感工具会再次挂起）。keep_recent_calls：保留刚执行的

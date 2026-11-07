@@ -25,7 +25,7 @@ import tests.fake_engine as fe                  # noqa: E402
 from tests.fake_engine import call              # noqa: E402
 from framework.core import events               # noqa: E402
 from framework.core.journal import new_turn_id  # noqa: E402
-from framework.core.orchestrator import Orchestrator   # noqa: E402
+from framework.core.orchestrator import VERIFY_GATE_RULE, Orchestrator   # noqa: E402
 from framework.memory.compactor import CLUE_RULE    # noqa: E402
 from framework.mcp.registry import PRECHECK_FULL_MODE_HINT   # noqa: E402
 from framework.memory.session import ChatSession      # noqa: E402
@@ -968,25 +968,28 @@ def test_resume_refuses_orchestrator_dir_with_other_stub_clue(tmp_path, old):
         K.main(base[:3] + ["0,4096"] + base[4:] + ["--out", str(o), "--resume"])
 
 
+@pytest.mark.parametrize("key, current", [("mock_merge_rule", OT.MOCK_MERGE_RULE),
+                                          ("verify_gate_rule", VERIFY_GATE_RULE)])
 @pytest.mark.parametrize("old", [None, "prefix_literal"])
-def test_resume_refuses_orchestrator_dir_with_other_mock_merge_rule(tmp_path, old):
+def test_resume_refuses_orchestrator_dir_with_other_mock_merge_rule(tmp_path, old, key, current):
     """D44 (iii)：旧并入规则的目录（行缺 mock_merge_rule = 只 --prefix catalog 并入 mock 工具）或别的规则，
-    续跑拒；同键同值续跑照常接受。"""
+    续跑拒；同键同值续跑照常接受。verify_gate_rule（2026-11-07 写后回读修复）同理：旧批任何写都武装
+    T1-4 推回、步数口径不同，缺键或别的规则续跑拒。"""
     base = ["--dry-run", "--orchestrator", "--levels", "0", "--reps", "1", "--limit", "1"]
     o = tmp_path / "o"
     assert K.main(base + ["--out", str(o)]) == 0
     t = o / "transcripts.jsonl"
     rows = [json.loads(ln) for ln in t.read_text().splitlines()]
-    assert {r["mock_merge_rule"] for r in rows} == {OT.MOCK_MERGE_RULE}
-    assert "mock_merge_rule" in K._ALWAYS_COMPARED
+    assert {r[key] for r in rows} == {current}
+    assert key in K._ALWAYS_COMPARED
     ok = tmp_path / "ok"                                  # 同键同值：续跑接受
     assert K.main(base + ["--out", str(ok)]) == 0
     assert K.main(base[:3] + ["0,4096"] + base[4:] + ["--out", str(ok), "--resume"]) == 0
     for r in rows:
         if old is None:
-            r.pop("mock_merge_rule")
+            r.pop(key)
         else:
-            r["mock_merge_rule"] = old
+            r[key] = old
     t.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n")
     with pytest.raises(SystemExit, match="W-K"):
         K.main(base[:3] + ["0,4096"] + base[4:] + ["--out", str(o), "--resume"])
@@ -1110,3 +1113,64 @@ def test_amain_exception_restores_events_path_and_approval_policy(tmp_path, monk
     with pytest.raises(RuntimeError, match="boom"):
         K.main(["--dry-run", "--orchestrator", "--levels", "0", "--out", str(tmp_path / "x")])
     assert events.get_path() == prev and approval_policy.current() is pol
+
+
+def _lc_hard_004():
+    """lc-hard-004 原题（items/longchain/hard.jsonl）：policy/security.md 只读，其余两份改 90→30，
+    被拒的那份记进 policy/pending-changes.md；max_steps 11。"""
+    p = Path(__file__).resolve().parents[1] / "benchmarks/model_eval/items/longchain/hard.jsonl"
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            it = json.loads(line)
+            if it["id"] == "lc-hard-004":
+                return it
+    raise AssertionError("lc-hard-004 not found")
+
+
+def test_prose_writes_do_not_trigger_verify_nudge_reread(tmp_path, monkeypatch):
+    """2026-11-07 P2 批实案：T1-4 写后验证门控对纯 .md 写也武装，推回文本又逐字要求「re-read what
+    you changed」，模型逐文件回读刚写的文件，每 run 白多 4 步、步数超限判败。修后 .md 的成功写回执
+    即验证、EACCES 失败写中性 → 写完直接收尾被接受，8 步通过；回读分支只在门控仍触发时才会走到。"""
+    item = _lc_hard_004()
+    assert item["task"]["env_init"]["readonly"] == ["policy/security.md"]
+    assert item["expect"]["max_steps"] == 11
+
+    def edit(f, a, b):
+        return {"tool_calls": [call("edit_file", path=f"policy/{f}", old_string=a, new_string=b)],
+                "metrics": _m(100)}
+    final = "Updated backup.md and access.md; security.md is read-only, recorded in pending-changes.md."
+    script = [{"tool_calls": [call("list_files")], "metrics": _m(100)},
+              {"tool_calls": [call("read_file", path="policy/security.md")], "metrics": _m(100)},
+              {"tool_calls": [call("read_file", path="policy/backup.md")], "metrics": _m(100)},
+              {"tool_calls": [call("read_file", path="policy/access.md")], "metrics": _m(100)},
+              edit("security.md", "rotated every 90 days", "rotated every 30 days"),   # EACCES
+              edit("backup.md", "kept for 90 days", "kept for 30 days"),
+              edit("access.md", "expire after 90 days", "expire after 30 days"),
+              {"tool_calls": [call("write_file", path="policy/pending-changes.md",
+                                   content="policy/security.md still needs a manual update "
+                                           "(read-only): 90 days -> 30 days.\n")],
+               "metrics": _m(100)},
+              {"text": final, "metrics": _m(100)},
+              # ↓ 仅当门控仍对 .md 写推回时才会走到：逐文件回读 ×4 → 再收尾（修复前的形态）
+              {"tool_calls": [call("read_file", path="policy/security.md"),
+                              call("read_file", path="policy/backup.md"),
+                              call("read_file", path="policy/access.md"),
+                              call("read_file", path="policy/pending-changes.md")],
+               "metrics": _m(100)},
+              {"text": final, "metrics": _m(100)}]
+    rec, _ = _run(monkeypatch, _ctx(tmp_path, placement="turn"), script, level=0,
+                  prefix=K.item_prefix(item, "prod"), item=item)
+    feeds = _feeds(rec)
+    # EACCES 的 edit 真被判成失败（硬错误回执），但它写的是 .md，按扩展名本来就中性——本题不检验
+    # 「失败写中性」（那在 lifecycles test_failed_write_does_not_arm_verify_nudge）；它钉住的是
+    # 「成功 .md 写不武装」+ 失败吞没门控被后续成功写清掉
+    assert feeds[4]["content"].startswith("System Error: failed to write policy/security.md: EACCES")
+    assert [f["content"].startswith("OK: replaced") for f in feeds[5:7]] == [True, True]
+    assert not rec["guard_events"].get("verify_nudge")
+    assert not rec["guard_events"].get("failure_swallow_nudge")
+    assert rec["turn_status"] == "success" and rec["turn_response"] == final
+    sc = rec["score"]
+    assert sc["steps"] == 8 and sc["steps_ok"] is True and sc["final_text_ok"] is True
+    assert sc["state_ok"] is True and sc["pass"] is True
+    # 9 次生成 = 8 次工具 + 1 次收尾：回读分支（read_file ×4 → 再收尾）没被消费
+    assert len(rec["gens"]) == 9 and rec["turn_metrics"]["generations"] == 9

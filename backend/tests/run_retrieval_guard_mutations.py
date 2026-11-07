@@ -108,8 +108,10 @@ MUTATIONS = [
      "test_serial_retrieval_failure_is_accounted"),
     # M-L: a C4-blocked approved write still seeds the resumed unverified-write flag
     ("M-L_resume_blocked_write_unverified", "orchestrator.py",
-     'c.get("name") in _FILE_WRITE_TOOLS and not r.get("_blocked")',
-     'c.get("name") in _FILE_WRITE_TOOLS',
+     '            _arms_verify_gate(c, r)\n'
+     '            for c, r in zip(pending_calls',
+     '            c.get("name") in _FILE_WRITE_TOOLS\n'
+     '            for c, r in zip(pending_calls',
      "test_resumed_c4_blocked_file_write_is_not_an_unverified_write"),
     # M-E: the iteration-budget exit replaces its real reason with the retrieval text
     ("M-E_exit_reason_replaced", "orchestrator.py",

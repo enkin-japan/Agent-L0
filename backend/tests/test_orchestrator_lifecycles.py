@@ -288,8 +288,8 @@ def test_truncation_escalates_then_recovers(make_session):
 
 def test_verify_nudge_on_unverified_write(make_session):
     engine = FakeEngine([
-        {"tool_calls": [call("write_file", path="/a", content="x")]},
-        {"text": "已修好。"},        # 写后未复查即收尾 → 推回一次
+        {"tool_calls": [call("write_file", path="/a.py", content="x")]},
+        {"text": "已修好。"},        # 写代码文件后未复查即收尾 → 推回一次
         {"text": "已修好并验证。"},  # 推回预算用尽 → 放行
     ])
     registry = FakeRegistry([FakeTool("write_file", result="ok",
@@ -305,6 +305,123 @@ def test_verify_nudge_on_unverified_write(make_session):
     assert result["response"] == "已修好并验证。"
     # 推回经可变尾部注入(不进历史):第三次生成应看到验证提醒 tail_note
     assert any("verify" in n.lower() for n in engine.calls[2]["tail_notes"])
+    # 2026-11-07：推回要求验证「效果」，明确禁止回读刚写的文件（回执已证明落盘）
+    notes = " ".join(engine.calls[2]["tail_notes"])
+    assert "do NOT re-read" in notes
+    assert "re-read what you changed" not in notes
+
+
+def test_verify_nudge_skipped_for_prose_write(make_session):
+    """纯内容文件（.md 等）的成功写回执即验证：写后直接收尾不吃 T1-4 推回、不逼回读。"""
+    engine = FakeEngine([
+        {"tool_calls": [call("write_file", path="notes.md", content="x")]},
+        {"text": "笔记已写好。"},
+    ])
+    registry = FakeRegistry([FakeTool("write_file", result="OK: wrote 1 chars to notes.md",
+                                      read_only=False, concurrency_safe=False)])
+    orch = make_orch(engine, registry)
+    session = make_session()
+    session.add_user_message("记一下")
+    begin_turn(session)
+
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
+
+    assert result["status"] == "success"
+    assert result["response"] == "笔记已写好。"       # 第一条收尾即被接受
+    assert len(engine.calls) == 2
+    assert not any("[System guardrail]" in n for c in engine.calls for n in c["tail_notes"])
+
+
+def test_failed_write_does_not_arm_verify_nudge(make_session):
+    """失败写什么都没改：不武装 T1-4（归 D2 失败吞没门控管），只吃 failure_swallow 推回。"""
+    engine = FakeEngine([
+        {"tool_calls": [call("write_file", path="x.py", content="x")]},
+        {"text": "写好了。"},          # 失败写后宣布完成 → 失败吞没推回(而非验证推回)
+        {"text": "写入失败了:权限不足。"},
+    ])
+    registry = FakeRegistry([FakeTool("write_file", result="System Error: permission denied: x.py",
+                                      read_only=False, concurrency_safe=False)])
+    orch = make_orch(engine, registry)
+    session = make_session()
+    session.add_user_message("写个文件")
+    begin_turn(session)
+
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
+
+    assert result["response"] == "写入失败了:权限不足。"
+    assert len(engine.calls) == 3
+    notes = [n for c in engine.calls for n in c["tail_notes"]]
+    assert any("most recent tool call FAILED" in n for n in engine.calls[2]["tail_notes"])
+    assert not any("You modified state this turn" in n for n in notes)
+
+
+def test_prose_write_after_code_write_keeps_verify_nudge(make_session):
+    """中性写不清标记：先成功写代码文件、再写 README.md 收尾，仍要吃 T1-4 推回（一审 m2）。"""
+    engine = FakeEngine([
+        {"tool_calls": [call("write_file", path="app.py", content="x")]},
+        {"tool_calls": [call("write_file", path="README.md", content="y")]},
+        {"text": "都写好了。"},          # 代码写之后只有纯内容写、无复查 → 推回
+        {"text": "都写好了，未运行验证。"},
+    ])
+    registry = FakeRegistry([FakeTool("write_file", result="OK: wrote 1 chars",
+                                      read_only=False, concurrency_safe=False)])
+    orch = make_orch(engine, registry)
+    session = make_session()
+    session.add_user_message("写两个文件")
+    begin_turn(session)
+
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
+
+    assert result["response"] == "都写好了，未运行验证。"
+    assert len(engine.calls) == 4
+    assert any("You modified state this turn" in n for n in engine.calls[3]["tail_notes"])
+
+
+def test_dependency_manifest_txt_still_arms_verify_nudge(make_session):
+    """.txt 例外：requirements*.txt 是依赖清单，改了有真检查可跑（装依赖），仍按代码武装。"""
+    engine = FakeEngine([
+        {"tool_calls": [call("write_file", path="requirements-dev.txt", content="x")]},
+        {"text": "依赖已加。"},
+        {"text": "依赖已加，未安装验证。"},
+    ])
+    registry = FakeRegistry([FakeTool("write_file", result="OK: wrote 1 chars",
+                                      read_only=False, concurrency_safe=False)])
+    orch = make_orch(engine, registry)
+    session = make_session()
+    session.add_user_message("加个依赖")
+    begin_turn(session)
+
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
+
+    assert result["response"] == "依赖已加，未安装验证。"
+    assert len(engine.calls) == 3
+    assert any("You modified state this turn" in n for n in engine.calls[2]["tail_notes"])
+
+
+def test_resumed_approved_prose_write_does_not_arm_verify_nudge(make_session):
+    """审批续跑路径与主循环共用 _arms_verify_gate：批准执行的 write_file 写的是 .md →
+    续跑首条收尾即被接受，不吃 T1-4 推回（一审 m3）。"""
+    engine = FakeEngine([
+        {"tool_calls": [call("write_file", path="notes.md", content="x")]},
+        {"text": "笔记已写好。"},          # 批准后的续跑生成
+    ])
+    registry = FakeRegistry([FakeTool("write_file", result="OK: wrote 1 chars to notes.md",
+                                      approval=True, read_only=False, concurrency_safe=False)])
+    orch = make_orch(engine, registry)
+    session = make_session()
+    session.add_user_message("记一下")
+    begin_turn(session)
+
+    result = run(orch.run_turn(session, journal=session.journal, **GEN))
+    assert result["status"] == "pending_approval"
+
+    resumed = run(orch.resume_after_approval(session, approved=True,
+                                             journal=session.journal, **GEN))
+
+    assert resumed["status"] == "success"
+    assert resumed["response"] == "笔记已写好。"
+    assert len(engine.calls) == 2
+    assert not any("[System guardrail]" in n for c in engine.calls for n in c["tail_notes"])
 
 
 # ---------- 计划元工具与提前收尾门控 ----------

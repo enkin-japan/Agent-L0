@@ -678,7 +678,7 @@ def test_c4_block_does_not_count_as_upgrade_failure(make_session, monkeypatch):
     assert result["status"] == "warning"
 
 
-VERIFY_NOTE = "never re-checked the result"
+VERIFY_NOTE = "You modified state this turn"   # T1-4 推回文案的稳定前缀（2026-11-07 文案改写后不再含 re-checked）
 
 
 def test_resumed_c4_blocked_file_write_is_not_an_unverified_write(make_session):
