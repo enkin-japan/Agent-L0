@@ -222,7 +222,8 @@ class RunPlan:
     tools: List[Dict[str, Any]]     # prompt 面声明（mock 档 = 题目 mock 工具）
     min_fill_tokens: int = 0        # 最少 3 个伪轮次的代价（目标再小也得这么多）
     warning: Optional[str] = None
-    # --prefix 档位（W-2）；mock 档下三者为 None，run_item / 引擎走 W-2 前原路径
+    # 装配档（W-2；= prefix.decl_mode：编排器 prod 随条目生效 catalog 时为 catalog，不是 --prefix 字面值）；
+    # mock 档下三者为 None，run_item / 引擎走 W-2 前原路径
     prefix_mode: str = "mock"
     system_prompt: Optional[str] = None             # run_item(system_prompt=)
     grammar_tools: Optional[List[Dict[str, Any]]] = None
@@ -708,24 +709,29 @@ def row_meta(meta: Dict[str, Any], item_id: str) -> Dict[str, Any]:
 
 
 def build_prefixes(mode: str, items: List[Dict[str, Any]], engine, repo: str,
-                   opts: Dict[str, Any]):
+                   opts: Dict[str, Any], tool_schema_mode: Optional[str] = None):
     """每题一份前缀装配（题内冻结）+ meta 字段。prefix_base_tokens = 生产稳定前缀
     （system + 生产声明，未剔撞名、不含 mock 工具与路由件，include_env=False；mock 档 = 极简
-    system 无工具），真分词器计数；分词器不可得记 None 并告警一次（mock + fake 不载分词器、不告警）。"""
-    toolset = None if mode == "mock" else prefix_mod.production_toolset()
-    prefixes = {it["id"]: item_prefix(it, mode, toolset) for it in items}
-    meta: Dict[str, Any] = {"prefix_mode": mode, "prefix_base_tokens": None}
-    if mode != "mock" or engine is not None:
+    system 无工具），真分词器计数；分词器不可得记 None 并告警一次（mock + fake 不载分词器、不告警）。
+    tool_schema_mode = 编排器生效披露（orch_meta 的 tool_schema_mode_effective；直调 None）：prod 档的
+    装配与口径随它（prefix.decl_mode：生效 catalog → 按 catalog 算），prefix_mode 仍记 --prefix 字面值，
+    prefix_decl 记实际装配档。"""
+    decl = prefix_mod.decl_mode(mode, tool_schema_mode)
+    toolset = None if decl == "mock" else prefix_mod.production_toolset()
+    prefixes = {it["id"]: item_prefix(it, decl, toolset) for it in items}
+    # prefix_decl = 实际装配 / 计数的档（续跑比对用：2026-11-07 之前的编排器 prod 行缺键 = 按字面值 full 计）
+    meta: Dict[str, Any] = {"prefix_mode": mode, "prefix_decl": decl, "prefix_base_tokens": None}
+    if decl != "mock" or engine is not None:
         dialect, enc, why = _prefix_counter(engine, repo, opts)
         if dialect is None:
             print(f"⚠️ prefix_base_tokens 记 null：{why}")
         else:
-            system = (prefix_mod.production_system_prompt() if mode != "mock"
+            system = (prefix_mod.production_system_prompt() if decl != "mock"
                       else DEFAULT_SYSTEM_PROMPT)
             meta["prefix_base_tokens"] = prefix_mod.prefix_base_tokens(
-                dialect, enc, system, prefix_mod.production_decl(mode, toolset))
-    if mode != "mock":
-        meta["prefix_top_k"] = toolset.top_k if mode == "routed" else None
+                dialect, enc, system, prefix_mod.production_decl(decl, toolset))
+    if decl != "mock":
+        meta["prefix_top_k"] = toolset.top_k if decl == "routed" else None
         meta["prefix_shadowed"] = {i: a.shadowed for i, a in prefixes.items()}
         meta["prefix_core_skipped"] = {i: a.core_skipped for i, a in prefixes.items()}
         meta["prefix_n_tools"] = {i: _tool_counts(a) for i, a in prefixes.items()}
@@ -823,6 +829,8 @@ async def _amain(args, orch_globals: "_OrchGlobals") -> int:
     if args.append:     # --resume 已隐含 --append
         check_resume_compat(transcripts, repo, sampling["sent"], args.seed, entry_sampling,
                             entry_only=not args.resume, prefix_mode=args.prefix,
+                            prefix_decl=prefix_mod.decl_mode(
+                                args.prefix, mode_meta["tool_schema_mode_effective"]),
                             thinking_replay=(replay.mode, replay.k),
                             harness_mode=harness_mode_of(mode_meta),
                             seed_sent=seed_sent_expected(args.backend))
@@ -850,7 +858,8 @@ async def _amain(args, orch_globals: "_OrchGlobals") -> int:
             engine.backend.shutdown()
             raise
     try:
-        prefixes, prefix_meta = build_prefixes(args.prefix, items, engine, repo, opts)
+        prefixes, prefix_meta = build_prefixes(args.prefix, items, engine, repo, opts,
+                                               tool_schema_mode=mode_meta["tool_schema_mode_effective"])
     except BaseException:
         if engine is not None:
             engine.backend.shutdown()
@@ -869,6 +878,7 @@ async def _amain(args, orch_globals: "_OrchGlobals") -> int:
             # W-K：harness 口径（mode = direct | orchestrator；直调模式其余键 null）
             **mode_meta}
     print(f"== 拐点测量 {repo}（{args.backend}，计数 {counter.mode}，前缀 {args.prefix}"
+          f"{'' if prefix_meta['prefix_decl'] == args.prefix else '（装配 ' + prefix_meta['prefix_decl'] + '）'}"
           f"{'' if prefix_meta['prefix_base_tokens'] is None else ' ' + str(prefix_meta['prefix_base_tokens']) + ' tok'}"
           f"）：{len(items)} 题 × {len(levels)} 档 {levels} × {_reps_label(reps_of, args.reps)} rep"
           f" → {outdir}")
@@ -1463,7 +1473,7 @@ def _sent_of(r: Dict[str, Any]) -> Dict[str, Any]:
 
 def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], seed: int,
                         entry: Dict[str, Any], *, entry_only: bool = False,
-                        prefix_mode: str = "mock",
+                        prefix_mode: str = "mock", prefix_decl: Optional[str] = None,
                         thinking_replay: Tuple[str, Optional[int]] = (DEFAULT_REPLAY_MODE, DEFAULT_REPLAY_K),
                         harness_mode: Optional[Tuple[Any, ...]] = None,
                         seed_sent: bool = False) -> None:
@@ -1472,7 +1482,10 @@ def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], see
     这三项比较；缺 entry_sampling 的行（W-1 之前）视为 {}——当时引擎不读条目采样。
     entry_only（单纯 --append）：只比条目采样与前缀档——summary 按整个 transcripts 聚合，条目口径
     一变，新旧行实际发送的采样就不同，却在 sampling_overrides 上看不出来。
-    前缀档（W-2 --prefix）：缺 prefix_mode 的行（W-2 之前）视为 mock；档不同 resume / append 都拒
+    前缀档（W-2 --prefix）：缺 prefix_mode 的行（W-2 之前）视为 mock；档不同 resume / append 都拒。
+    装配档 prefix_decl（2026-11-07）：缺键的行 = 按 --prefix 字面值装配（之前编排器 prod 一律按 full 计数）；
+    与本次 decl_mode 不同即拒——否则生效 catalog 条目的 prod 目录里 prefix_base_tokens / prefix_n_tools 混进
+    full 与 catalog 两种口径（analyze F 节「不唯一，取较大值」会取到旧 full 值）
     （system 与工具声明不同 = 不同测量形态，混算即把两条曲线揉成一条）。
     思考回放口径（W3）：thinking_replay = 本次 (mode, k)（缺省 = 模块缺省 last_k/2，即条目没写键时的口径）；缺 thinking_replay_mode 的行（W3 之前）视为
     (all, None)——当时引擎全部回放；mode 不同即拒，k 只在 mode == last_k 时比较；resume / append 都拒。
@@ -1500,6 +1513,8 @@ def check_resume_compat(transcripts: Path, model: str, sent: Dict[str, Any], see
         old_prefix = r.get("prefix_mode") or "mock"
         if old_prefix != prefix_mode:
             prefix_bad.add(f"{old_prefix} ≠ {prefix_mode}")
+        elif (r.get("prefix_decl") or old_prefix) != (prefix_decl or prefix_mode):   # 同档才比装配档
+            prefix_bad.add(f"装配档 {r.get('prefix_decl') or old_prefix} ≠ {prefix_decl or prefix_mode}")
         old_mode = r.get("thinking_replay_mode") or "all"
         old_k = r.get("thinking_replay_k") if "thinking_replay_mode" in r else None
         if old_mode != new_mode or (new_mode == "last_k" and old_k != new_k):
