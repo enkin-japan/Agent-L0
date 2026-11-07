@@ -60,6 +60,7 @@ for a in "$@"; do
             if [ "$b" = "colab" ]; then gate=colab; rc="${FAKE_COLAB_RC:-0}"; fi
         done
         printf '%s' "${FAKE_SECRET_KEY:-}" > "$LEAK_DIR/$gate"
+        env | sed -n 's/^\(GIT_[A-Z_0-9]*\)=.*/\1/p' | sort | tr '\n' ' ' > "$LEAK_DIR/$gate.gitenv"
         exit "$rc"
     fi
 done
@@ -78,6 +79,7 @@ exit 0
 _APPLE_STUB = """\
 #!/bin/bash
 printf '%s' "${FAKE_SECRET_KEY:-}" > "$LEAK_DIR/apple"
+env | sed -n 's/^\(GIT_[A-Z_0-9]*\)=.*/\1/p' | sort | tr '\n' ' ' > "$LEAK_DIR/apple.gitenv"
 exit "${FAKE_APPLE_RC:-0}"
 """
 
@@ -85,6 +87,7 @@ exit "${FAKE_APPLE_RC:-0}"
 _WEB_PROBE = """\
 #!/bin/sh
 printf '%s' "${FAKE_SECRET_KEY:-}" > "$LEAK_DIR/web"
+env | sed -n 's/^\(GIT_[A-Z_0-9]*\)=.*/\1/p' | sort | tr '\n' ' ' > "$LEAK_DIR/web.gitenv"
 exit "${FAKE_WEB_RC:-0}"
 """
 
@@ -178,6 +181,11 @@ def _run(devctl, args, cwd, **fake_rcs):
 def _leak_seen_by(tmp_path, gate):
     """某条门的子进程实际看到的 FAKE_SECRET_KEY 值（空串 = 没看到）。"""
     return (tmp_path / _LEAK_SUBDIR / gate).read_text(encoding="utf-8")
+
+
+def _git_env_seen_by(tmp_path, gate):
+    """某条门的子进程实际看到的全部 GIT_* 变量名（空格分隔；空串 = 一个都没看到）。"""
+    return (tmp_path / _LEAK_SUBDIR / f"{gate}.gitenv").read_text(encoding="utf-8")
 
 
 def _out(r):
@@ -617,3 +625,29 @@ def test_no_gate_is_exempt_from_the_secret_scrub(tmp_path):
         probe = tmp_path / _LEAK_SUBDIR / g
         assert probe.exists(), f"{g} 门没有留下取证文件——它是不是绕过了 check_drop_secrets？"
         assert probe.read_text(encoding="utf-8") == "", f"{g} 门的子进程看到了密钥"
+
+
+# ---- git 进程环境不得进门（2026-11-08 事故：worktree 提交经钩子把主库翻成 bare）----
+
+def test_git_process_env_is_scrubbed_from_every_gate(tmp_path):
+    """linked worktree 的 `git commit` 会把 GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE 导出给钩子，
+    钩子再跑 devctl check；colab 门里的 `git init <临时目录>` 在 GIT_DIR 存在时重初始化的是**主库**
+    并写 core.bare=true（实测 2026-11-08 00:00 前后，主库与全部 worktree 随即不可用）。
+    四条门的子进程必须一个 git 环境变量都看不到。"""
+    devctl = _scaffold(tmp_path)
+    r = _run(devctl, ["check"], tmp_path,
+             FAKE_PYTEST_RC=0, FAKE_WEB_RC=0, FAKE_APPLE_RC=0,
+             GIT_DIR=str(tmp_path / "victim.git"),
+             GIT_WORK_TREE=str(tmp_path),
+             GIT_INDEX_FILE=str(tmp_path / "victim.git" / "index"),
+             GIT_COMMON_DIR=str(tmp_path / "victim.git"),
+             GIT_PREFIX="sub/",
+             GIT_OBJECT_DIRECTORY=str(tmp_path / "victim.git" / "objects"),
+             GIT_ALTERNATE_OBJECT_DIRECTORIES=str(tmp_path / "alt"),
+             GIT_CEILING_DIRECTORIES=str(tmp_path),
+             GIT_NAMESPACE="ns",
+             GIT_CONFIG_PARAMETERS="'user.name=t'")   # `git -c` 的透传项，本仓提交惯用
+    assert r.returncode == 0, _out(r)
+    for gate in ("backend", "colab", "web", "apple"):
+        assert _git_env_seen_by(tmp_path, gate).strip() == "", f"{gate} 门看到了 git 进程环境：{_git_env_seen_by(tmp_path, gate)}"
+

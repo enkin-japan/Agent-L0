@@ -486,6 +486,17 @@ check_collect_secret_keys() {
 check_drop_secrets() {
     local k
     for k in $CHECK_SECRET_KEYS; do unset "$k"; done
+    # git 的进程环境也一并摘掉（2026-11-07 23:54 事故）：从 linked worktree 发起 `git commit` 时 git 会把
+    # GIT_DIR（指向主库 .git/worktrees/<名>）等导出给 pre-commit 钩子，钩子再跑本脚本的门；colab 门里 3 处调用点
+    # （约 31 次）`git init -q <临时目录>` 在 GIT_DIR 存在时**重初始化的是主库**（<临时目录>/.git 根本不建），
+    # 并把主库 config 写成 core.bare=true，主库与全部 worktree 随即「must be run in a work tree」。
+    # 门从不需要这些变量（各门只认自己的临时目录）；主 checkout 提交只导出 GIT_INDEX_FILE / GIT_PREFIX 之类，不含
+    # GIT_DIR，所以此前从未触发。清单取 git 自己的权威表（`git rev-parse --local-env-vars`，含 GIT_CONFIG_PARAMETERS
+    # 等 `-c` 透传项），再并上固定名单兜底（git 不在 PATH 时也摘）。
+    local gv
+    gv=$(git rev-parse --local-env-vars 2>/dev/null) || gv=""
+    for k in $gv GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_PREFIX \
+             GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CEILING_DIRECTORIES GIT_NAMESPACE GIT_CONFIG_PARAMETERS; do unset "$k"; done
 }
 
 # 退出码合并（2 > 1 > 3 > 0）。
