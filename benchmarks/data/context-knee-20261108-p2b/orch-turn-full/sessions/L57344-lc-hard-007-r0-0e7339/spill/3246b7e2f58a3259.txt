@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/report-gen/log/report-gen-21.log", "content": "2026-09-08T00:21:16Z INFO  [report-gen-1] connection pool resized from 635 to 3312\n2026-09-08T00:05:33Z INFO  [report-gen-4] dropped 664 malformed records from partition 863\n2026-09-08T00:50:20Z DEBUG [report-gen-7] rotated segment seg-2278.dat size_mb=422"}

@@ -1,0 +1,1 @@
+Step 3 done. Note: this step executed ZERO tools — if it was supposed to actually do something (create/write/run/verify), that has NOT happened; do it first instead of just describing it. Now on step 4: Final answer with the three verbatim values

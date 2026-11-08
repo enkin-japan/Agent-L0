@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Get full file list and locate policy/ files
+  ○ [2] Read each policy/ file, replace '90 days' with '30 days', write back (skip read-only one)
+  ○ [3] Write policy/pending-changes.md naming the read-only file
+  ○ [4] Find queue_depth_alert_threshold value
+  ○ [5] Final answer with the three verbatim values

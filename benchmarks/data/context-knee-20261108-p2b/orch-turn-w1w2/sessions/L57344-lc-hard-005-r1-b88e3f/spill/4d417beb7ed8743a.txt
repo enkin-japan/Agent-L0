@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/geo-tiles/deploy/values.yaml", "content": "    flush_interval_s: 2452\n    timeout_ms: ap-east-2\n  shard_count: false\n    cpu_limit: 1433\n    max_batch: info\nreplicas: info\n    timeout_ms: ap-east-2\n    timeout_ms: ap-east-2\ncpu_limit: true\npool_size: info\n  region: false"}

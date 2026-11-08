@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Read all files in reports/ and classify DRAFT vs final
+  ○ [2] Delete (trash) DRAFT files
+  ○ [3] Copy each final report to <name>-final.md and delete the original
+  ○ [4] Verify final state of reports/
+  ○ [5] Answer the three verbatim-value question honestly

@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/ledger/log/ledger-25.log", "content": "2026-09-06T12:50:21Z ERROR [ledger-3] gc pause 536ms heap_mb=2193\n2026-09-06T13:14:09Z INFO  [ledger-6] schema check passed version=2161\n2026-09-06T12:51:55Z ERROR [ledger-2] worker heartbeat ok queue=1520 inflight=620\n2026-09-06T13:28:17Z ERROR [ledger-7] retrying upstream call attempt=254 backoff_ms=4121"}

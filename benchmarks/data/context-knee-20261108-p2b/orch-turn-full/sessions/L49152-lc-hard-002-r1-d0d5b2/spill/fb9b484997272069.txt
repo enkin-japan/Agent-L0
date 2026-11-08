@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Required verbatim values: (1) halyard config path = /opt/halyard/conf/halyard-67b574.toml (from cache-warm-10.log line "halyard: loaded config from /opt/halyard/conf/halyard-67b574.toml"); (2) escalat

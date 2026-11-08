@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] 定位 inbox 目录及其中两份报告，确认 2025 出现位置
+  ○ [2] 将两份报告中 2025 改为 2026（其余文字不动）
+  ○ [3] 从此前工具输出（spill 全文）中核实三项值：halyard 配置路径、OPS- 工单号、queue_depth_alert_threshold
+  ○ [4] 写 inbox/changelog.txt 一行说明
+  ○ [5] 给出最终答复（含三项值逐字）

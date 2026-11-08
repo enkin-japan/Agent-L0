@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Read the 5 metrics files and record their sample numbers
+  ○ [2] Compute each file's average (verify they divide evenly)
+  ○ [3] Write metrics/summary.json with exact key order
+  ○ [4] Final reply with the three verbatim values

@@ -1,0 +1,1 @@
+{"path": "policy/pending-changes.md", "content": "# Pending manual changes\n\nThe following file is read-only and could not be updated automatically. It still needs a manual update (replace \"90 days\" with \"30 days\"):\n\n- policy/security.md\n"}

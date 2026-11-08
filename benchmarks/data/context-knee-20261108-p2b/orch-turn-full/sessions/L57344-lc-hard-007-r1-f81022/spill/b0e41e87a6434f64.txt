@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - 三项待逐字引用的值：① halyard 配置路径 = /opt/halyard/conf/halyard-67b574.toml（出自 geo-tiles-14.log 工具输出）；② 工单号 = OPS-50015（出自 report-gen-13.log 工具输出）；③ queue_depth_alert_threshold = 6880（出自 runbook/relay.md 工具输出）

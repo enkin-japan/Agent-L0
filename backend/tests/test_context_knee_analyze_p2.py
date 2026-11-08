@@ -153,3 +153,230 @@ def test_batch_span_counts_deploys_and_done():
     bs = P.batch_span(log)
     assert bs["deploys"] == 2 and bs["ready"] == ["2026-11-07 13:10:50"]
     assert abs(bs["minutes"] - (9 * 60 + 19 + 37 / 60)) < 1e-9
+
+
+# ---------------------------------------------------------------- catalog 臂可缺（p2b 批起）与 --p2 W 节
+def _arm_dirs(root, names):
+    for n in names:
+        (root / n).mkdir(parents=True, exist_ok=True)
+        (root / n / "transcripts.jsonl").write_text("", encoding="utf-8")
+
+
+def test_layout_arms_catalog_optional_but_turn_and_full_required(tmp_path):
+    import pytest
+    base = ["orch-turn-none", "orch-turn-w1", "orch-turn-w1w2", "orch-turn-full"]
+    _arm_dirs(tmp_path / "b", base)
+    assert P.layout_arms(tmp_path / "b") == base                      # 无 catalog：不报缺、不塞进臂表
+    _arm_dirs(tmp_path / "c", base + ["orch-turn-catalog"])
+    assert P.layout_arms(tmp_path / "c") == base[:3] + ["orch-turn-catalog", "orch-turn-full"]   # 有 catalog：p2 原顺序
+    _arm_dirs(tmp_path / "d", ["orch-turn-none", "orch-turn-w1w2", "orch-turn-full"])
+    with pytest.raises(SystemExit):
+        P.layout_arms(tmp_path / "d")                                  # 缺 w1 仍报错
+
+
+def test_prod_prefix_without_catalog_takes_none_only_if_decl_is_effective():
+    new = {"prefix_decl": "catalog", "tool_schema_mode_effective": "catalog", "prefix_base_tokens": 6051}
+    old = {"tool_schema_mode_effective": "catalog", "prefix_base_tokens": 13757}       # 2d3fd99c 之前：声明值
+    assert P.prod_prefix({"orch-turn-none": {"records": [new, dict(new)]}}, False) == ("orch-turn-none", 6051, None)
+    src, pb, warn = P.prod_prefix({"orch-turn-none": {"records": [new, old]}}, False)
+    assert (src, pb) == ("orch-turn-none", None) and "本批无 catalog 臂" in warn          # 不拿声明值顶替
+    cat = {"orch-turn-catalog": {"records": [{"prefix_base_tokens": 6022}]}, "orch-turn-none": {"records": [old]}}
+    assert P.prod_prefix(cat, True) == ("orch-turn-catalog", 6022, None)
+
+
+def test_strip_u3_catalog_replaces_only_the_catalog_table():
+    u = ["### U.\n", "#### U2. x\n", "row", "#### U3. D44：实参预检回执与 catalog 对 w1w2\n", "表头", "| catalog − w1w2 | 合并 0 档 |",
+         "", "预检回执（feed 里 …）：\n", "| 组 | 回执 |", "#### U4. y\n"]
+    out = P.strip_u3_catalog(u)
+    assert "| catalog − w1w2 | 合并 0 档 |" not in out and "表头" not in out
+    assert out[:3] == u[:3] and out[-3:] == u[-3:] and any("本批无 catalog 臂" in x for x in out)
+
+
+def test_prefix_meta_ok_old_prod_rows_untrusted():
+    assert P.prefix_meta_ok({"prefix_decl": "catalog", "tool_schema_mode_effective": "catalog"})
+    assert not P.prefix_meta_ok({"prefix_decl": "full", "tool_schema_mode_effective": "catalog"})
+    assert not P.prefix_meta_ok({"prefix_mode": "prod", "tool_schema_mode_effective": "catalog"})      # 旧 prod 行
+    assert P.prefix_meta_ok({"prefix_mode": "full", "tool_schema_mode_effective": "full"})             # 旧 full 行
+
+
+def test_first_divergent_turn_and_prompt_delta():
+    a = _row()
+    assert P.first_divergent_turn(a, _row()) is None
+    assert P.first_divergent_turn(a, _row(thoughts=("tX", "t2"))) == 0
+    assert P.first_divergent_turn(a, _row(second_text="other")) == 1
+    assert P.first_divergent_turn(a, _row(final="ok2")) == 2                # 轮全同、只差末轮答复 → 轮数
+    assert P.first_prompt_delta(a, _row(prompt=6191)) == 29
+    assert P.first_prompt_delta(a, {"gens": [{}]}) is None
+
+
+def test_recall_items_and_band_knee():
+    rows = [_row(item="x", rep=0), _row(item="x", rep=1), _row(item="y", rep=0)]
+    rows[0]["score"].update(recall_ok=True)
+    rows[1]["score"].update(recall_ok=False, aborted=True)                  # aborted 不计（aggregate 同口径）
+    assert P.recall_items(rows) == {"x": [True]}
+    ag = {0: {"_items": {"a": [True, True], "b": [True, True]}}, 32768: {"success_rate": 1.0}, 49152: {"success_rate": 0.5}}
+    assert P.band_knee(ag) == (1.0, 49152)
+    assert P.band_knee({32768: {"success_rate": 0.0}}) == (None, None)
+
+
+def _sess(tmp, name, text):
+    d = tmp / name
+    d.mkdir()
+    (d / "system.json").write_text(json.dumps({"role": "system", "content": text}), encoding="utf-8")
+    return d
+
+
+def _group(name, rows):
+    from context_knee import analyze as A
+    from context_knee.quality import COHERENT_THRESHOLDS
+    g = {"name": name, "records": rows, "missing": [], "concurrent_levels": set()}
+    return g, A.aggregate(g, dict(COHERENT_THRESHOLDS), set())
+
+
+def test_sec_w_identity_input_diff_and_paired_rows(tmp_path):
+    n = "orch-turn-none"
+    meta = {"prefix_decl": "catalog", "tool_schema_mode_effective": "catalog"}
+    old_rows, new_rows = [], []
+    for i, item in enumerate(["i1", "i2"]):
+        for rep in (0, 1, 2):
+            # 输出按 rep 不同（second_text 带 rep 号）、p2 只有 rep 0 过：rep 错位配对（(i, r) 对 (i, 1−r)）会改变逐字相同数与分叉对数
+            o = _row(item=item, rep=rep, ok=rep in (0, 2), prompt=6165, second_text=f"fin{rep}")
+            o.update(prefix_mode="prod", tool_schema_mode_effective="catalog", prefix_base_tokens=13757,
+                     _local_session=_sess(tmp_path, f"o{i}{rep}", "a\n- re-read the changed section\nb"))
+            old_rows.append(o)
+            if rep == 2:
+                continue                       # 本批只有 rep 0/1：p2 的 rep 2 只在一侧（W1 仅 p2 计数、W2 截到共同 rep）
+            # 本批：i1 两 rep 改过（输出第 2 轮分叉、两 rep 都过），i2 两 rep 输出逐字相同（同过同败）
+            nw = _row(item=item, rep=rep, ok=item == "i1" or rep == 0, prompt=6194,
+                      second_text=f"fin{rep}x" if item == "i1" else f"fin{rep}")
+            nw.update(prefix_mode="prod", prefix_base_tokens=6051, **meta,
+                      _local_session=_sess(tmp_path, f"n{i}{rep}", "a\n- do not re-read\nb"))
+            new_rows.append(nw)
+    g_new, ag_new = _group(n, new_rows)
+    g_old, ag_old = _group(n + P.TAG_P2, old_rows)
+    L = P.sec_w({n: g_new}, {n: ag_new}, [n], {g_old["name"]: g_old}, {g_old["name"]: ag_old}, "ref", {}, {},
+                only_p2=["orch-turn-catalog"])
+    txt = "\n".join(L)
+    assert "p2 有、本批无：catalog" in txt                                   # main 从 p2 目录算出的缺臂显式列出
+    # 仅 p2 2 行（rep 2）不进配对；逐字相同 2/4 = i2 的两 rep；「声明值」标在实际不合格的 p2 侧
+    assert "| none | 0 | 2 / 0 | 2/4 | 0/4 | 0/4 | 4/4 | +29:4 | 13757（声明值，不可比） → 6051 | t1:2 |" in txt
+    assert "⚠️ L0 输出对该改动稳健" in txt                                  # 2/4 ≥ 一半 → 告警
+    assert "旧：- re-read the changed section ‖ 新：- do not re-read" in txt and "1 种不同的差（覆盖 4 对" in txt
+    # W2：p2 截到 rep 0–1（2/4 = 50%），不截是 4/6 = 67%
+    assert "| none | 0（rep 0–1 配对，none@p2 3→2 rep） | 2/4 = 50% → 3/4 = 75% |" in txt
+    assert "| none | 0 | 2 | 1 / 0 |" in txt                                # W3：只数分叉的 i1 两对，r1 p2b 赢
+
+
+def test_sec_w_only_p2_from_loaded_groups_still_listed():
+    n = "orch-turn-none"
+    g, ag = _group(n, [_row()])
+    go, ago = _group(n + P.TAG_P2, [_row()])
+    gc, agc = _group("orch-turn-catalog" + P.TAG_P2, [_row()])
+    L = P.sec_w({n: g}, {n: ag}, [n], {go["name"]: go, gc["name"]: gc}, {go["name"]: ago, gc["name"]: agc}, "ref", {}, {})
+    assert "p2 有、本批无：catalog" in "\n".join(L)
+
+
+def test_aligned_truncates_to_common_reps_only_when_rep_sets_differ():
+    a = [_row(item="x", rep=r, ok=r < 2) for r in range(6)]
+    b = [_row(item="x", rep=r, ok=False) for r in range(2)]
+    al = P.aligned(a, b, 0, ("orch-turn-full", "orch-turn-w1w2"))
+    assert al["items_a"] == {"x": [True, True]} and al["reps"] == [0, 1]
+    assert al["note"] == "rep 0–1 配对，full 6→2 rep"
+    same = P.aligned(b, b, 0)
+    assert same["note"] == "" and same["items_a"] == {"x": [False, False]}
+    assert P.rep_lab({0, 2, 5}) == "rep 0,2,5" and P.rep_lab({3}) == "rep 3"
+
+
+def test_e_pairs_aliases_only_same_seed_pairs_with_unequal_reps():
+    G = {"orch-turn-none": {"name": "orch-turn-none", "missing": [], "dropped": [],
+                            "records": [_row(item="x", rep=r) for r in range(6)] + [_row(item="x", rep=r, level=32768) for r in range(2)]},
+         "orch-turn-w1w2": {"name": "orch-turn-w1w2", "missing": [], "dropped": [],
+                            "records": [_row(item="x", rep=r) for r in range(2)]},
+         "orch-turn-w1w2@d44": {"name": "orch-turn-w1w2@d44", "missing": [], "dropped": [],
+                                "records": [_row(item="x", rep=r) for r in range(2)]}}
+    out, alias = P.e_pairs(["orch-turn-none:orch-turn-w1w2", "orch-turn-w1w2@d44:orch-turn-none"], G,
+                           ["orch-turn-none", "orch-turn-w1w2"])
+    (a1, b1, lab1), (a2, b2, lab2) = out
+    assert lab1 == "orch-turn-none→orch-turn-w1w2（指定；L0 rep 0–1 配对）"
+    al = {g["name"]: g for g in alias}
+    assert sorted(int(r["rep"]) for r in al[a1]["records"] if r["level"] == 0) == [0, 1]
+    assert sum(1 for r in al[a1]["records"] if r["level"] == 32768) == 2          # 未截的档原样
+    assert (a2, b2, lab2) == ("orch-turn-w1w2@d44", "orch-turn-none", "orch-turn-w1w2@d44→orch-turn-none（指定）")   # 跨批不截
+
+
+# ---------------------------------------------------------------- main 端到端（合成批目录）
+LV4 = (0, 32768, 49152, 57344)
+
+
+def _arm_rows(l0reps, ok, full=False, decl=None, eff=None):
+    rows = []
+    for lv in LV4:
+        for it in ("i1", "i2"):
+            for rep in range(l0reps if lv == 0 else 2):
+                r = _row(item=it, rep=rep, level=lv, ok=ok(it, lv, rep), second_text=f"fin{rep}")
+                r.update(model="m", stamp="s1", prefix_mode="full" if full else "prod", wall_s=10.0,
+                         prefix_decl=decl or ("full" if full else "catalog"),
+                         tool_schema_mode_effective=eff or ("full" if full else "catalog"),
+                         prefix_base_tokens=13786 if full else 6051)
+                rows.append(r)
+    return rows
+
+
+def _write_arm(d, rows):
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "transcripts.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+
+def _batch(tmp, w12_decl=None, none_decl=None, p2=True):
+    """无 catalog 的本批：none / full L0 6 rep，w1 / w1w2 L0 2 rep。full L0 rep 0/1 全过、rep 2–5 全败；
+    w1w2 / w1 L0 i1 过 i2 败。p2 批：w1w2 L0 6 rep（rep 0/1 全败、rep 2–5 全过）+ catalog 臂（本批没有）。"""
+    data = tmp / "data"
+    _write_arm(data / "orch-turn-none", _arm_rows(6, lambda it, lv, rep: rep % 2 == 0, decl=none_decl))
+    for n in ("orch-turn-w1", "orch-turn-w1w2"):
+        _write_arm(data / n, _arm_rows(2, lambda it, lv, rep: it == "i1" or lv > 0,
+                                       decl=w12_decl if n == "orch-turn-w1w2" else None))
+    _write_arm(data / "orch-turn-full", _arm_rows(6, lambda it, lv, rep: rep < 2, full=True))
+    (data / "run_colab.log").write_text("2026-11-08 10:00:00 START deploy m\n2026-11-08 11:00:00 DONE BATCH_RC=0\n",
+                                        encoding="utf-8")
+    _write_arm(tmp / "ref", _arm_rows(2, lambda it, lv, rep: True))
+    argv = ["--data", str(data), "--ref", str(tmp / "ref"), "--out-md", str(tmp / "out.md")]
+    if p2:
+        _write_arm(tmp / "p2" / "orch-turn-w1w2", _arm_rows(6, lambda it, lv, rep: lv == 0 and rep >= 2))
+        _write_arm(tmp / "p2" / "orch-turn-catalog", _arm_rows(2, lambda it, lv, rep: True))
+        argv += ["--p2", str(tmp / "p2")]
+    return argv
+
+
+def test_main_catalog_absent_and_asymmetric_reps(tmp_path):
+    assert P.main(_batch(tmp_path)) == 0
+    txt = (tmp_path / "out.md").read_text(encoding="utf-8")
+    # 缺 catalog：U3 的 catalog − w1w2 表换成说明行（main 的 strip_u3_catalog），不渲染空表
+    assert "本批无 catalog 臂（11-07 拍板删臂）：U3 的 catalog − w1w2 按档表不渲染" in txt
+    assert "orch-turn-catalog − orch-turn-w1w2 按档" not in txt and "合并 0 档" not in txt
+    assert "### Q. 前缀对照：orch-turn-w1w2（prod 前缀，本批生效 = catalog，行内 prefix_decl 为证）" in txt
+    # W：p2 的 catalog 臂没载入（本批没有），仍要点名
+    assert "p2 有、本批无：catalog" in txt
+    # rep 数按臂实数写，不写死 6
+    assert "臂内 none 6 / w1 2 / w1w2 2 / full 6 rep" in txt
+    # V4：full 6 rep 对 w1w2 2 rep → 截到 rep 0–1：full 4/4 = 100% → w1w2 2/4 = 50%（不截是 33% → 50%，+16.7）
+    assert "| w1w2 − full | 0（m=2；rep 0–1 配对，full 6→2 rep） | 100% → 50% | -50（P=" in txt
+    assert "| w1w2 − full | 四档合并（0 档 rep 0–1 配对） |" in txt
+    # E 节同口径：本批臂间 rep 数不同的对走截后别名组，标签注明
+    assert "| orch-turn-full→orch-turn-w1w2（指定；L0 rep 0–1 配对） | 0 | -50 [" in txt
+    assert "〔" not in txt                                                     # 别名组名不外泄
+    # W2：p2 w1w2 6 rep 截到 rep 0–1（全败）→ 本批 2/4（不截是 8/12 = 67% → 50%）
+    assert "| w1w2 | 0（rep 0–1 配对，w1w2@p2 6→2 rep） | 0/4 = 0% → 2/4 = 50% |" in txt
+    assert "| w1w2 | 0 | 8 / 0 |" in txt                                       # W1：仅 p2 8 行（rep 2–5）
+
+
+def test_main_flags_w1w2_not_catalog_in_q_title(tmp_path):
+    assert P.main(_batch(tmp_path, w12_decl="full", p2=False)) == 0
+    txt = (tmp_path / "out.md").read_text(encoding="utf-8")
+    assert "### Q. ⚠️ orch-turn-w1w2 行内 prefix_decl=['full']、tool_schema_mode_effective=['catalog']，不是 catalog" in txt
+    assert "本批生效 = catalog，行内 prefix_decl 为证" not in txt
+
+
+def test_main_exits_when_prod_prefix_unavailable(tmp_path):
+    import pytest
+    with pytest.raises(SystemExit, match="F 节生产前缀取不到"):
+        P.main(_batch(tmp_path, none_decl="full", p2=False))       # none 行 prefix_decl ≠ 生效 → 不取声明值，停

@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/gateway/deploy/values.yaml", "content": "region: false\n  region: warn\n    retry_limit: info\n  read_only: warn\n  region: 2460\n  retry_limit: 1215\nreplicas: true\n    max_batch: info\n    replicas: ap-east-2\n  log_level: ap-east-2\npool_size: ap-east-2\n  shard_count: true\n    replicas: ap-east-2\n    warmup_s: warn\nreplicas: true"}

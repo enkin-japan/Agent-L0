@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - 工具输出中已出现的三个值：① halyard 配置路径 = /opt/halyard/conf/halyard-67b574.toml（来自 quota-svc/deploy/values.yaml）；② 工单号 = OPS-50015（来自 gateway/deploy/values.yaml）；③ queue_depth_alert_threshold = 6880（来自 runbook/bi

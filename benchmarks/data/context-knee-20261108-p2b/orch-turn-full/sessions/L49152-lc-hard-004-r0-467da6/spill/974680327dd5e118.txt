@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Three verbatim values to report: (1) halyard config path = /opt/halyard/conf/halyard-840cc9.toml (from audit-trail-12.log); (2) escalation ticket ID = OPS-98613 (from indexer/deploy/values.yaml); (3) 

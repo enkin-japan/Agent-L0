@@ -1,0 +1,56 @@
+2026-11-08 12:30:17 config: MODEL=RedHatAI/Qwen3.8-27B-INT4 MODEL_B=google/gemma-4-31B-it-qat-w4a16-ct READY_MINUTES=40 READY_RETRY=1 RESTARTS_MAX=2 HUNG_RUNS=3 MAX_VM_HOURS=10 LEASE_BUDGET_SEC=36000 SMOKE=1 LEVEL_REPS=0=6 LEVEL_REPS_ARMS=orch-turn-none,orch-turn-full KNEE_SEED=1107
+2026-11-08 12:30:19 START deploy RedHatAI/Qwen3.8-27B-INT4 --retain
+2026-11-08 12:30:19 后台部署进程已启动（尚未 READY） {"pid": 71029, "logs": "./colab/deploy.sh logs -f", "stop": "./colab/deploy.sh stop"}
+2026-11-08 12:30:21 wait READY: state=allocating phase=
+2026-11-08 12:30:52 wait READY: state=allocating phase=
+2026-11-08 12:31:24 wait READY: state=booting phase=installing-python
+2026-11-08 12:31:55 wait READY: state=booting phase=installing-dependencies
+2026-11-08 12:32:26 wait READY: state=booting phase=downloading-model
+2026-11-08 12:32:58 wait READY: state=booting phase=downloading-model
+2026-11-08 12:33:29 wait READY: state=booting phase=downloading-model
+2026-11-08 12:34:00 wait READY: state=booting phase=downloading-model
+2026-11-08 12:34:32 wait READY: state=booting phase=downloading-model
+2026-11-08 12:35:03 wait READY: state=booting phase=downloading-model
+2026-11-08 12:35:35 wait READY: state=booting phase=downloading-model
+2026-11-08 12:36:06 wait READY: state=booting phase=loading-models
+2026-11-08 12:36:38 wait READY: state=booting phase=loading-models
+2026-11-08 12:37:10 wait READY: state=booting phase=loading-models
+2026-11-08 12:37:42 wait READY: state=booting phase=loading-models
+2026-11-08 12:38:14 wait READY: state=booting phase=loading-models
+2026-11-08 12:38:46 wait READY: state=booting phase=loading-models
+2026-11-08 12:39:17 wait READY: state=booting phase=loading-models
+2026-11-08 12:39:49 wait READY: state=booting phase=loading-models
+2026-11-08 12:40:21 wait READY: state=booting phase=loading-models
+2026-11-08 12:40:52 wait READY: state=booting phase=loading-models
+2026-11-08 12:41:23 wait READY: state=booting phase=loading-models
+2026-11-08 12:41:55 wait READY: state=booting phase=loading-models
+2026-11-08 12:42:28 wait READY: state=booting phase=loading-models
+2026-11-08 12:43:01 wait READY: state=booting phase=loading-models
+2026-11-08 12:43:33 wait READY: state=booting phase=loading-models
+2026-11-08 12:44:04 wait READY: state=booting phase=loading-models
+2026-11-08 12:44:36 wait READY: state=ready phase=ready
+2026-11-08 12:44:36 READY host=agent-compute.tail8d18fd.ts.net
+2026-11-08 12:44:36 smoke orch [A RedHatAI/Qwen3.8-27B-INT4] (prod, turn, L0, 1 题 1 rep) → smoke-orch-20261108-123017-A
+2026-11-08 12:45:37 smoke orch OK
+2026-11-08 12:45:37 ARM orch-turn-none [A RedHatAI/Qwen3.8-27B-INT4] start: --orchestrator --fill-placement turn --guard off --step-compaction off --prefix prod --levels 0,32768,49152,57344 
+2026-11-08 14:30:43 ARM orch-turn-none harness rc=0 hung=0
+2026-11-08 14:30:43 arm orch-turn-none: ok
+2026-11-08 14:30:43 ARM orch-turn-w1 [A RedHatAI/Qwen3.8-27B-INT4] start: --orchestrator --fill-placement turn --guard on --step-compaction off --prefix prod --levels 0,32768,49152,57344 
+2026-11-08 16:01:48 ARM orch-turn-w1 harness rc=0 hung=0
+2026-11-08 16:01:48 arm orch-turn-w1: ok
+2026-11-08 16:01:48 ARM orch-turn-w1w2 [A RedHatAI/Qwen3.8-27B-INT4] start: --orchestrator --fill-placement turn --guard on --step-compaction on --prefix prod --levels 0,32768,49152,57344 
+2026-11-08 17:33:53 ARM orch-turn-w1w2 harness rc=0 hung=0
+2026-11-08 17:33:53 arm orch-turn-w1w2: ok
+2026-11-08 17:33:53 ARM orch-turn-full [A RedHatAI/Qwen3.8-27B-INT4] start: --orchestrator --fill-placement turn --guard on --step-compaction on --prefix full --levels 0,32768,49152,57344 
+2026-11-08 19:11:58 ARM orch-turn-full harness rc=0 hung=0
+2026-11-08 19:11:58 arm orch-turn-full: ok
+2026-11-08 19:11:58 STOP colab
+2026-11-08 19:11:58 等待正在进行的 VM 分配结束（如有），然后回收
+2026-11-08 19:11:58 正在核对并回收 VM {"session": "agent-compute-9663026afaad"}
+2026-11-08 19:11:59 正在注销 Tailscale 临时节点
+2026-11-08 19:12:34 正在请求 Colab 释放 VM
+[colab] Stopping session 'agent-compute-9663026afaad'...
+[colab] Session terminated.
+2026-11-08 19:12:36 已确认 VM 从 Colab 服务端移除 {"session": "agent-compute-9663026afaad", "tailnet_cleanup": "logout-unconfirmed"}
+2026-11-08 19:12:36 stop rc=0
+2026-11-08 19:12:36 DONE BATCH_RC=0 SKIPPED=0

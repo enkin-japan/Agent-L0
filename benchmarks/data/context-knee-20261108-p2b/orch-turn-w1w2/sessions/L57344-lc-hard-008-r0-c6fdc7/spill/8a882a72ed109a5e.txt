@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Values to report verbatim: (1) halyard config path = /opt/halyard/conf/halyard-840cc9.toml (seen in quota-svc-06.log); (2) escalation ticket ID = OPS-98613 (seen in cache-warm/deploy/values.yaml); (3)

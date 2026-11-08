@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Edit the three policy files (90 days → 30 days), handling the read-only one
+  ○ [2] Write policy/pending-changes.md if a write is refused
+  ○ [3] Locate the OPS- ticket ID from earlier tool outputs
+  ○ [4] Final answer with the three verbatim values

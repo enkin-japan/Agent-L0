@@ -1,0 +1,4 @@
+Plan replaced.
+  ○ [1] Append '2026-08-24 OK' to logs/build.log, logs/test.log, logs/deploy.log (create deploy.log if missing)
+  ○ [2] Count log files containing the line and write the number to logs/count.txt
+  ○ [3] State the three required values verbatim in the final reply

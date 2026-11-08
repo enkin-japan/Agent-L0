@@ -1,0 +1,2409 @@
+[RemoteBackend] 模型身份核对通过：RedHatAI/Qwen3.8-27B-INT4（revision=91bd022d5b49442a868bc35008f6c21e1860edfa，capabilities=['text', 'vision']）
+[RemoteBackend] 已连接 inference-server: http://agent-compute.tail8d18fd.ts.net:14161
+[MCP-rag_search] ⚠️ RAG 服务器 (127.0.0.1:14160) 探活失败: hermetic construction
+[Skill] ✅ 成功加载剧本: briefing
+[Skill] ✅ 成功加载剧本: chart-report
+[Skill] ✅ 成功加载剧本: deck
+[Skill] ✅ 成功加载剧本: ingest
+[Skill] ✅ 成功加载剧本: research
+== 拐点测量 RedHatAI/Qwen3.8-27B-INT4（remote，计数 engine，前缀 full 13786 tok）：10 题 × 4 档 [0, 32768, 49152, 57344] × 2（L0=6） rep → benchmarks/data/context-knee-20261108-p2b/orch-turn-full
+== 编排器模式：放置 turn，guard on，W2 on，轮首压缩 off，goal_verify off，披露 full；事件 → benchmarks/data/context-knee-20261108-p2b/orch-turn-full/guardrail_events.jsonl
+[Engine] 约束采样引擎就绪（llguidance）
+[Engine] 约束采样构建失败，永久禁用（纠错闭环兜底）: NotImplementedError: qwen35 方言使用原生 XML 调用体（<function=…><parameter=…>），按设计不启用 约束采样——engine 将 fail-open 到自由采样 + 解析纠错闭环。
+[Engine] 前缀命中 12544/13926 tokens，gen 41.0 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14143 tokens，gen 48.9 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14268 tokens，gen 56.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14980 tokens，gen 54.9 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 14112/15403 tokens，gen 49.4 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 14112/15606 tokens，gen 47.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15573 tokens，gen 47.6 tps
+✅ L0 lc-hard-001 r0 prompt=13926 (est 13926, err None) recall - rep_guard 0 (35.19s)
+[Engine] 前缀命中 12544/13926 tokens，gen 41.0 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14143 tokens，gen 49.4 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14268 tokens，gen 56.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14976 tokens，gen 52.6 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 14112/15197 tokens，gen 50.6 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 14112/15399 tokens，gen 48.5 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15560 tokens，gen 47.1 tps
+✅ L0 lc-hard-001 r1 prompt=13926 (est 13926, err None) recall - rep_guard 0 (24.03s)
+[Engine] 前缀命中 12544/13926 tokens，gen 40.6 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14141 tokens，gen 51.5 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14275 tokens，gen 56.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14985 tokens，gen 55.1 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 14112/15428 tokens，gen 49.1 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 15680/15632 tokens，gen 57.2 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15580 tokens，gen 48.6 tps
+✅ L0 lc-hard-001 r2 prompt=13926 (est 13926, err None) recall - rep_guard 0 (30.01s)
+[Engine] 前缀命中 12544/13926 tokens，gen 45.7 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14184 tokens，gen 48.7 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14306 tokens，gen 56.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14975 tokens，gen 54.9 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 14112/15403 tokens，gen 49.1 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 14112/15604 tokens，gen 47.6 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15564 tokens，gen 49.2 tps
+✅ L0 lc-hard-001 r3 prompt=13926 (est 13926, err None) recall - rep_guard 0 (31.08s)
+[Engine] 前缀命中 12544/13926 tokens，gen 40.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14138 tokens，gen 49.7 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14266 tokens，gen 56.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14980 tokens，gen 52.4 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 14112/15200 tokens，gen 50.5 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15387 tokens，gen 49.8 tps
+✅ L0 lc-hard-001 r4 prompt=13926 (est 13926, err None) recall - rep_guard 0 (21.71s)
+[Engine] 前缀命中 12544/13926 tokens，gen 40.8 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14142 tokens，gen 49.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14267 tokens，gen 56.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14980 tokens，gen 54.9 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 14112/15398 tokens，gen 49.2 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 14112/15596 tokens，gen 48.8 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15584 tokens，gen 47.7 tps
+✅ L0 lc-hard-001 r5 prompt=13926 (est 13926, err None) recall - rep_guard 0 (29.68s)
+[Engine] 前缀命中 12544/13930 tokens，gen 49.7 tps
+[Engine] 前缀命中 14112/14450 tokens，gen 47.1 tps
+[Orchestrator] 执行工具: find_files
+[Engine] 前缀命中 14112/14817 tokens，gen 47.9 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14699 tokens，gen 49.5 tps
+[Orchestrator] 执行工具: list_files
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 14112/14898 tokens，gen 47.5 tps
+[Engine] 前缀命中 14112/15097 tokens，gen 48.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/15303 tokens，gen 49.3 tps
+[Engine] 前缀命中 14112/15578 tokens，gen 40.5 tps
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 15680/15706 tokens，gen 54.8 tps
+[Engine] 前缀命中 15680/15841 tokens，gen 56.0 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 15680/16009 tokens，gen 48.2 tps
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 15680/16049 tokens，gen 44.7 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 15680/16093 tokens，gen 51.0 tps
+[Engine] 前缀命中 15680/16381 tokens，gen 53.8 tps
+✅ L0 lc-hard-002 r0 prompt=13930 (est 13930, err None) recall - rep_guard 0 (43.44s)
+[Engine] 前缀命中 12544/13930 tokens，gen 41.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14151 tokens，gen 51.5 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14244 tokens，gen 56.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14553 tokens，gen 55.0 tps
+[Engine] 前缀命中 14112/15070 tokens，gen 50.7 tps
+[Engine] 前缀命中 14112/15398 tokens，gen 42.5 tps
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 14112/15399 tokens，gen 42.2 tps
+[Engine] 前缀命中 14112/15556 tokens，gen 45.1 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 15680/15690 tokens，gen 51.6 tps
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 15680/15731 tokens，gen 53.6 tps
+[Engine] 前缀命中 15680/15956 tokens，gen 55.4 tps
+✅ L0 lc-hard-002 r1 prompt=13930 (est 13930, err None) recall - rep_guard 0 (35.38s)
+[Engine] 前缀命中 12544/13930 tokens，gen 41.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14151 tokens，gen 51.2 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14244 tokens，gen 56.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14553 tokens，gen 55.0 tps
+[Engine] 前缀命中 14112/15069 tokens，gen 49.5 tps
+[Engine] 前缀命中 14112/15352 tokens，gen 42.4 tps
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 14112/15350 tokens，gen 42.1 tps
+[Engine] 前缀命中 14112/15504 tokens，gen 45.5 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15643 tokens，gen 32.2 tps
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 15680/15688 tokens，gen 53.6 tps
+[Engine] 前缀命中 15680/15914 tokens，gen 56.1 tps
+✅ L0 lc-hard-002 r2 prompt=13930 (est 13930, err None) recall - rep_guard 0 (34.44s)
+[Engine] 前缀命中 12544/13930 tokens，gen 46.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14195 tokens，gen 51.2 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14288 tokens，gen 55.9 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14553 tokens，gen 55.3 tps
+[Engine] 前缀命中 14112/15092 tokens，gen 49.7 tps
+[Engine] 前缀命中 14112/15384 tokens，gen 42.0 tps
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 14112/15372 tokens，gen 41.7 tps
+[Engine] 前缀命中 14112/15526 tokens，gen 45.3 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 15680/15665 tokens，gen 52.7 tps
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 15680/15725 tokens，gen 53.0 tps
+[Engine] 前缀命中 15680/15946 tokens，gen 52.7 tps
+✅ L0 lc-hard-002 r3 prompt=13930 (est 13930, err None) recall - rep_guard 0 (32.71s)
+[Engine] 前缀命中 12544/13930 tokens，gen 41.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14151 tokens，gen 51.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14244 tokens，gen 56.1 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14553 tokens，gen 55.0 tps
+[Engine] 前缀命中 14112/15069 tokens，gen 50.4 tps
+[Engine] 前缀命中 14112/15385 tokens，gen 42.0 tps
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 14112/15383 tokens，gen 40.7 tps
+[Engine] 前缀命中 14112/15530 tokens，gen 45.2 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15667 tokens，gen 32.0 tps
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 15680/15718 tokens，gen 54.3 tps
+[Engine] 前缀命中 15680/15970 tokens，gen 56.1 tps
+✅ L0 lc-hard-002 r4 prompt=13930 (est 13930, err None) recall - rep_guard 0 (35.22s)
+[Engine] 前缀命中 12544/13930 tokens，gen 46.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14195 tokens，gen 52.3 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14293 tokens，gen 56.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14558 tokens，gen 55.3 tps
+[Engine] 前缀命中 14112/15095 tokens，gen 49.5 tps
+[Engine] 前缀命中 14112/15381 tokens，gen 42.1 tps
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 14112/15366 tokens，gen 40.9 tps
+[Engine] 前缀命中 14112/15511 tokens，gen 45.3 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15648 tokens，gen 32.2 tps
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 15680/15699 tokens，gen 53.9 tps
+[Engine] 前缀命中 15680/15929 tokens，gen 56.1 tps
+✅ L0 lc-hard-002 r5 prompt=13930 (est 13930, err None) recall - rep_guard 0 (35.99s)
+[Engine] 前缀命中 12544/13898 tokens，gen 40.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14111 tokens，gen 50.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14208 tokens，gen 56.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14558 tokens，gen 51.5 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14659 tokens，gen 49.8 tps
+[Engine] 前缀命中 14112/14772 tokens，gen 52.3 tps
+[Orchestrator] 执行工具: append_file
+[Engine] 前缀命中 14112/14942 tokens，gen 53.6 tps
+[Engine] 前缀命中 14112/15251 tokens，gen 48.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15343 tokens，gen 40.5 tps
+[Orchestrator] 执行工具: move_file
+[Engine] 前缀命中 14112/15235 tokens，gen 36.6 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/15254 tokens，gen 41.7 tps
+❌ L0 lc-hard-003 r0 prompt=13898 (est 13898, err None) recall - rep_guard 0 (33.44s)  | 步数超限: 13 > 11
+[Engine] 前缀命中 12544/13898 tokens，gen 44.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14138 tokens，gen 51.3 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14240 tokens，gen 56.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14561 tokens，gen 53.2 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14693 tokens，gen 48.9 tps
+[Engine] 前缀命中 14112/14799 tokens，gen 53.3 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14975 tokens，gen 50.9 tps
+✅ L0 lc-hard-003 r1 prompt=13898 (est 13898, err None) recall - rep_guard 0 (22.82s)
+[Engine] 前缀命中 12544/13898 tokens，gen 43.9 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14136 tokens，gen 51.7 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14240 tokens，gen 56.1 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14564 tokens，gen 53.1 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14690 tokens，gen 48.9 tps
+[Engine] 前缀命中 14112/14796 tokens，gen 55.1 tps
+[Engine] 前缀命中 14112/15181 tokens，gen 46.8 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/15307 tokens，gen 47.5 tps
+[Orchestrator] 执行工具: append_file
+[Engine] 前缀命中 14112/15152 tokens，gen 49.0 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15246 tokens，gen 36.4 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/15278 tokens，gen 42.9 tps
+❌ L0 lc-hard-003 r2 prompt=13898 (est 13898, err None) recall - rep_guard 0 (38.74s)  | 步数超限: 13 > 11
+[Engine] 前缀命中 12544/13898 tokens，gen 44.9 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14144 tokens，gen 51.7 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14246 tokens，gen 56.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14562 tokens，gen 53.7 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14710 tokens，gen 48.8 tps
+[Engine] 前缀命中 14112/14816 tokens，gen 53.6 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15002 tokens，gen 44.1 tps
+✅ L0 lc-hard-003 r3 prompt=13898 (est 13898, err None) recall - rep_guard 0 (21.67s)
+[Engine] 前缀命中 12544/13898 tokens，gen 40.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14111 tokens，gen 49.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14203 tokens，gen 55.9 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14556 tokens，gen 51.5 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14662 tokens，gen 50.3 tps
+[Engine] 前缀命中 14112/14779 tokens，gen 52.4 tps
+[Orchestrator] 执行工具: append_file
+[Engine] 前缀命中 14112/14955 tokens，gen 51.4 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15133 tokens，gen 38.8 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/15140 tokens，gen 46.9 tps
+✅ L0 lc-hard-003 r4 prompt=13898 (est 13898, err None) recall - rep_guard 0 (25.18s)
+[Engine] 前缀命中 12544/13898 tokens，gen 44.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14141 tokens，gen 51.0 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14241 tokens，gen 56.1 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14559 tokens，gen 53.7 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14708 tokens，gen 48.7 tps
+[Engine] 前缀命中 14112/14814 tokens，gen 51.6 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14917 tokens，gen 45.1 tps
+✅ L0 lc-hard-003 r5 prompt=13898 (est 13898, err None) recall - rep_guard 0 (20.09s)
+[Engine] 前缀命中 12544/13949 tokens，gen 34.5 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 12544/14092 tokens，gen 42.9 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14289 tokens，gen 54.7 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14558 tokens，gen 47.9 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14647 tokens，gen 52.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14883 tokens，gen 52.7 tps
+[Engine] 前缀命中 14112/15439 tokens，gen 43.0 tps
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 14112/15557 tokens，gen 38.6 tps
+[Engine] 前缀命中 15680/15723 tokens，gen 54.9 tps
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 15680/15844 tokens，gen 53.7 tps
+[Engine] 前缀命中 15680/16061 tokens，gen 52.1 tps
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 15680/16179 tokens，gen 53.2 tps
+[Engine] 前缀命中 15680/16478 tokens，gen 50.6 tps
+[Orchestrator] 执行工具: write_file
+❌ L0 lc-hard-004 r0 prompt=13949 (est 13949, err None) recall - rep_guard 0 (38.21s)  | 步数超限: 13 > 11; 回合上限 13 耗尽仍在发调用; 无收尾答复
+[Engine] 前缀命中 12544/13949 tokens，gen 48.6 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14258 tokens，gen 51.9 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14352 tokens，gen 54.9 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14580 tokens，gen 53.6 tps
+[Engine] 前缀命中 14112/15030 tokens，gen 53.2 tps
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 14112/15367 tokens，gen 47.2 tps
+[Engine] 前缀命中 15680/15664 tokens，gen 55.3 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 15680/15758 tokens，gen 53.7 tps
+[Engine] 前缀命中 15680/15906 tokens，gen 55.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 15680/16255 tokens，gen 49.8 tps
+[Engine] 前缀命中 15680/16551 tokens，gen 51.8 tps
+❌ L0 lc-hard-004 r1 prompt=13949 (est 13949, err None) recall - rep_guard 0 (37.34s)  | 步数超限: 13 > 11
+[Engine] 前缀命中 12544/13949 tokens，gen 48.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14255 tokens，gen 51.8 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14348 tokens，gen 55.4 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14587 tokens，gen 55.8 tps
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 14112/14937 tokens，gen 51.4 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15093 tokens，gen 52.2 tps
+✅ L0 lc-hard-004 r2 prompt=13949 (est 13949, err None) recall - rep_guard 0 (23.1s)
+[Engine] 前缀命中 12544/13949 tokens，gen 48.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14256 tokens，gen 49.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14341 tokens，gen 55.4 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14580 tokens，gen 54.8 tps
+[Engine] 前缀命中 14112/15162 tokens，gen 45.1 tps
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 14112/15267 tokens，gen 39.4 tps
+[Engine] 前缀命中 14112/15409 tokens，gen 43.1 tps
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 14112/15535 tokens，gen 37.1 tps
+[Engine] 前缀命中 15680/15744 tokens，gen 54.7 tps
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 15680/15862 tokens，gen 55.5 tps
+[Engine] 前缀命中 15680/16149 tokens，gen 53.4 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 15680/16305 tokens，gen 51.5 tps
+[Engine] 前缀命中 15680/16414 tokens，gen 50.2 tps
+❌ L0 lc-hard-004 r3 prompt=13949 (est 13949, err None) recall - rep_guard 0 (41.07s)  | 回合上限 13 耗尽仍在发调用; 无收尾答复
+[Engine] 前缀命中 12544/13949 tokens，gen 41.0 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14168 tokens，gen 49.0 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14246 tokens，gen 55.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14550 tokens，gen 55.1 tps
+[Engine] 前缀命中 14112/15147 tokens，gen 45.5 tps
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 14112/15263 tokens，gen 38.9 tps
+[Engine] 前缀命中 14112/15395 tokens，gen 43.5 tps
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 14112/15523 tokens，gen 36.6 tps
+[Engine] 前缀命中 15680/15732 tokens，gen 54.7 tps
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 15680/15852 tokens，gen 55.2 tps
+[Engine] 前缀命中 15680/16121 tokens，gen 53.6 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 15680/16278 tokens，gen 48.5 tps
+[Engine] 前缀命中 15680/16530 tokens，gen 52.4 tps
+✅ L0 lc-hard-004 r4 prompt=13949 (est 13949, err None) recall - rep_guard 0 (39.47s)
+[Engine] 前缀命中 12544/13949 tokens，gen 48.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14256 tokens，gen 50.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14341 tokens，gen 55.4 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14581 tokens，gen 53.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14770 tokens，gen 47.0 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14852 tokens，gen 48.3 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14861 tokens，gen 52.0 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15040 tokens，gen 50.4 tps
+✅ L0 lc-hard-004 r5 prompt=13949 (est 13949, err None) recall - rep_guard 0 (25.24s)
+[Engine] 前缀命中 12544/14067 tokens，gen 31.7 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14184 tokens，gen 57.2 tps
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Engine] 前缀命中 14112/14592 tokens，gen 53.2 tps
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14862 tokens，gen 48.2 tps
+✅ L0 lc-hard-005 r0 prompt=14067 (est 14067, err None) recall - rep_guard 0 (13.47s)
+[Engine] 前缀命中 12544/14067 tokens，gen 35.5 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14197 tokens，gen 57.1 tps
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Engine] 前缀命中 14112/14599 tokens，gen 53.6 tps
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14872 tokens，gen 49.6 tps
+✅ L0 lc-hard-005 r1 prompt=14067 (est 14067, err None) recall - rep_guard 0 (13.76s)
+[Engine] 前缀命中 12544/14067 tokens，gen 33.3 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14189 tokens，gen 57.2 tps
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Engine] 前缀命中 14112/14606 tokens，gen 53.7 tps
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14889 tokens，gen 51.1 tps
+✅ L0 lc-hard-005 r2 prompt=14067 (est 14067, err None) recall - rep_guard 0 (14.92s)
+[Engine] 前缀命中 12544/14067 tokens，gen 35.5 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14197 tokens，gen 57.1 tps
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Engine] 前缀命中 14112/14598 tokens，gen 53.6 tps
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14870 tokens，gen 49.7 tps
+✅ L0 lc-hard-005 r3 prompt=14067 (est 14067, err None) recall - rep_guard 0 (13.14s)
+[Engine] 前缀命中 12544/14067 tokens，gen 32.6 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14187 tokens，gen 57.0 tps
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Engine] 前缀命中 14112/14601 tokens，gen 53.8 tps
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14892 tokens，gen 52.4 tps
+✅ L0 lc-hard-005 r4 prompt=14067 (est 14067, err None) recall - rep_guard 0 (15.04s)
+[Engine] 前缀命中 12544/14067 tokens，gen 33.3 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14189 tokens，gen 57.3 tps
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Engine] 前缀命中 14112/14648 tokens，gen 53.8 tps
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14937 tokens，gen 49.1 tps
+✅ L0 lc-hard-005 r5 prompt=14067 (est 14067, err None) recall - rep_guard 0 (14.11s)
+[Engine] 前缀命中 12544/13913 tokens，gen 41.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14132 tokens，gen 49.5 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14212 tokens，gen 55.5 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14494 tokens，gen 56.1 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14969 tokens，gen 53.0 tps
+❌ L0 lc-hard-006 r0 prompt=13913 (est 13913, err None) recall - rep_guard 0 (21.13s)  | files/merged.txt: exists 期望 True，实际 False; files/count.txt: exists 期望 True，实际 False
+[Engine] 前缀命中 12544/13913 tokens，gen 41.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14132 tokens，gen 49.1 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14213 tokens，gen 55.4 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14495 tokens，gen 54.1 tps
+[Engine] 前缀命中 14112/14650 tokens，gen 53.1 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14834 tokens，gen 51.1 tps
+❌ L0 lc-hard-006 r1 prompt=13913 (est 13913, err None) recall - rep_guard 0 (17.2s)  | files/count.txt: regex 失败: '(?<![0-9])7(?![0-9])' 不匹配 '8\n'
+[Engine] 前缀命中 12544/13913 tokens，gen 41.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14132 tokens，gen 51.9 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14221 tokens，gen 54.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14503 tokens，gen 56.0 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14932 tokens，gen 52.2 tps
+❌ L0 lc-hard-006 r2 prompt=13913 (est 13913, err None) recall - rep_guard 0 (18.75s)  | files/merged.txt: exists 期望 True，实际 False; files/count.txt: exists 期望 True，实际 False
+[Engine] 前缀命中 12544/13913 tokens，gen 46.0 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14176 tokens，gen 51.3 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14265 tokens，gen 54.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14478 tokens，gen 55.2 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14701 tokens，gen 49.3 tps
+✅ L0 lc-hard-006 r3 prompt=13913 (est 13913, err None) recall - rep_guard 0 (14.91s)
+[Engine] 前缀命中 12544/13913 tokens，gen 41.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14133 tokens，gen 48.7 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14210 tokens，gen 55.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14474 tokens，gen 55.1 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14715 tokens，gen 53.1 tps
+✅ L0 lc-hard-006 r4 prompt=13913 (est 13913, err None) recall - rep_guard 0 (15.53s)
+[Engine] 前缀命中 12544/13913 tokens，gen 41.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14132 tokens，gen 49.2 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14209 tokens，gen 55.5 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14491 tokens，gen 56.0 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14894 tokens，gen 49.4 tps
+✅ L0 lc-hard-006 r5 prompt=13913 (est 13913, err None) recall - rep_guard 0 (15.95s)
+[Engine] 前缀命中 12544/13927 tokens，gen 45.7 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14186 tokens，gen 50.7 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14296 tokens，gen 54.5 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14502 tokens，gen 54.9 tps
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 14112/14731 tokens，gen 50.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14850 tokens，gen 46.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14996 tokens，gen 50.4 tps
+✅ L0 lc-hard-007 r0 prompt=13927 (est 13927, err None) recall - rep_guard 0 (20.28s)
+[Engine] 前缀命中 12544/13927 tokens，gen 48.3 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14229 tokens，gen 51.2 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14342 tokens，gen 55.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14547 tokens，gen 55.7 tps
+[Engine] 前缀命中 14112/15290 tokens，gen 47.0 tps
+[Engine] 前缀命中 14112/15528 tokens，gen 48.5 tps
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 15680/15737 tokens，gen 54.4 tps
+[Engine] 前缀命中 15680/15918 tokens，gen 55.1 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 15680/16031 tokens，gen 52.2 tps
+[Engine] 前缀命中 15680/16359 tokens，gen 52.1 tps
+✅ L0 lc-hard-007 r1 prompt=13927 (est 13927, err None) recall - rep_guard 0 (35.29s)
+[Engine] 前缀命中 12544/13927 tokens，gen 42.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14155 tokens，gen 49.9 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14259 tokens，gen 53.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14471 tokens，gen 55.1 tps
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 14112/14706 tokens，gen 51.1 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14837 tokens，gen 48.1 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14993 tokens，gen 51.2 tps
+✅ L0 lc-hard-007 r2 prompt=13927 (est 13927, err None) recall - rep_guard 0 (20.83s)
+[Engine] 前缀命中 12544/13927 tokens，gen 49.6 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14257 tokens，gen 50.7 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14366 tokens，gen 55.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14563 tokens，gen 55.4 tps
+[Engine] 前缀命中 14112/15159 tokens，gen 49.0 tps
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 14112/15255 tokens，gen 42.6 tps
+[Engine] 前缀命中 14112/15327 tokens，gen 46.6 tps
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 14112/15444 tokens，gen 40.5 tps
+[Engine] 前缀命中 14112/15656 tokens，gen 42.6 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 15680/15760 tokens，gen 54.7 tps
+[Engine] 前缀命中 15680/16094 tokens，gen 55.0 tps
+✅ L0 lc-hard-007 r3 prompt=13927 (est 13927, err None) recall - rep_guard 0 (37.5s)
+[Engine] 前缀命中 12544/13927 tokens，gen 43.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14164 tokens，gen 49.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14268 tokens，gen 54.4 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14481 tokens，gen 53.4 tps
+[Engine] 前缀命中 14112/14888 tokens，gen 49.0 tps
+[Engine] 前缀命中 14112/15208 tokens，gen 50.6 tps
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 14112/15429 tokens，gen 42.8 tps
+[Engine] 前缀命中 15680/15660 tokens，gen 56.7 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 15680/15770 tokens，gen 55.5 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 15680/16043 tokens，gen 54.0 tps
+[Engine] 前缀命中 15680/16444 tokens，gen 54.0 tps
+❌ L0 lc-hard-007 r4 prompt=13927 (est 13927, err None) recall - rep_guard 0 (34.4s)  | 步数超限: 10 > 9
+[Engine] 前缀命中 12544/13927 tokens，gen 43.1 tps
+[Orchestrator] 执行工具: list_dir
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14155 tokens，gen 54.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14338 tokens，gen 56.3 tps
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 14112/14623 tokens，gen 52.3 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14751 tokens，gen 47.5 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14887 tokens，gen 52.1 tps
+✅ L0 lc-hard-007 r5 prompt=13927 (est 13927, err None) recall - rep_guard 0 (18.74s)
+[Engine] 前缀命中 14112/13934 tokens，gen 57.5 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 14112/14638 tokens，gen 52.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14837 tokens，gen 52.8 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14581 tokens，gen 51.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14656 tokens，gen 50.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 15680/14762 tokens，gen 58.2 tps
+[Engine] 前缀命中 15680/16190 tokens，gen 52.9 tps
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: append_file
+[Engine] 前缀命中 15680/16357 tokens，gen 47.1 tps
+[Engine] 前缀命中 14112/15583 tokens，gen 42.8 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 15680/15696 tokens，gen 55.2 tps
+[Engine] 前缀命中 15680/15934 tokens，gen 53.3 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 15680/16015 tokens，gen 54.4 tps
+❌ L0 lc-hard-008 r0 prompt=13934 (est 13934, err None) recall - rep_guard 0 (65.38s)  | 步数超限: 11 > 10; 回合上限 12 耗尽仍在发调用; 无收尾答复
+[Engine] 前缀命中 12544/13934 tokens，gen 51.3 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14323 tokens，gen 51.4 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14407 tokens，gen 53.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14513 tokens，gen 56.6 tps
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15204 tokens，gen 47.0 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15283 tokens，gen 48.9 tps
+✅ L0 lc-hard-008 r1 prompt=13934 (est 13934, err None) recall - rep_guard 0 (28.71s)
+[Engine] 前缀命中 14112/13934 tokens，gen 58.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14340 tokens，gen 50.9 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14423 tokens，gen 53.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14512 tokens，gen 56.9 tps
+[Engine] 前缀命中 15680/15939 tokens，gen 56.1 tps
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 15680/16225 tokens，gen 53.0 tps
+[Engine] 前缀命中 14112/15515 tokens，gen 40.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15560 tokens，gen 36.9 tps
+[Engine] 前缀命中 14112/15654 tokens，gen 45.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 15680/15948 tokens，gen 55.0 tps
+[Engine] 前缀命中 15680/16311 tokens，gen 52.1 tps
+❌ L0 lc-hard-008 r2 prompt=13934 (est 13934, err None) recall - rep_guard 0 (55.32s)  | 步数超限: 12 > 10
+[Engine] 前缀命中 14112/13934 tokens，gen 57.6 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 14112/14411 tokens，gen 55.1 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14695 tokens，gen 55.5 tps
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14843 tokens，gen 50.9 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14994 tokens，gen 51.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/15052 tokens，gen 43.3 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15074 tokens，gen 51.1 tps
+✅ L0 lc-hard-008 r3 prompt=13934 (est 13934, err None) recall - rep_guard 0 (38.32s)
+[Engine] 前缀命中 14112/13934 tokens，gen 57.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/15223 tokens，gen 41.4 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/15327 tokens，gen 43.9 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14535 tokens，gen 56.5 tps
+[Engine] 前缀命中 14112/15484 tokens，gen 49.3 tps
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 15680/15729 tokens，gen 56.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/15472 tokens，gen 43.6 tps
+[Engine] 前缀命中 15680/15722 tokens，gen 53.2 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 15680/15762 tokens，gen 52.8 tps
+[Engine] 前缀命中 15680/15842 tokens，gen 56.5 tps
+❌ L0 lc-hard-008 r4 prompt=13934 (est 13934, err None) recall - rep_guard 0 (58.46s)  | 步数超限: 11 > 10
+[Engine] 前缀命中 14112/13934 tokens，gen 57.1 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 14112/14260 tokens，gen 55.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14485 tokens，gen 56.0 tps
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14697 tokens，gen 48.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14751 tokens，gen 53.4 tps
+✅ L0 lc-hard-008 r5 prompt=13934 (est 13934, err None) recall - rep_guard 0 (20.38s)
+[Engine] 前缀命中 12544/13936 tokens，gen 32.0 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 14112/14113 tokens，gen 56.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14474 tokens，gen 55.4 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14778 tokens，gen 55.2 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 14112/15275 tokens，gen 51.8 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/15344 tokens，gen 46.8 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/15395 tokens，gen 51.7 tps
+✅ L0 lc-hard-009 r0 prompt=13936 (est 13936, err None) recall - rep_guard 0 (32.45s)
+[Engine] 前缀命中 12544/13936 tokens，gen 34.3 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 14112/14120 tokens，gen 56.4 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14483 tokens，gen 56.2 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 14112/14888 tokens，gen 50.7 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 14112/15054 tokens，gen 47.9 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 14112/15037 tokens，gen 53.2 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/15306 tokens，gen 51.6 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 15680/15676 tokens，gen 57.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 15680/15834 tokens，gen 56.9 tps
+[Orchestrator] transition → failure_swallow_nudge
+[Engine] 前缀命中 17248/16327 tokens，gen 58.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 17248/17184 tokens，gen 57.5 tps
+❌ L0 lc-hard-009 r1 prompt=13936 (est 13936, err None) recall - rep_guard 0 (74.21s)  | 步数超限: 12 > 10
+[Engine] 前缀命中 12544/13936 tokens，gen 32.4 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 14112/14114 tokens，gen 56.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14476 tokens，gen 55.5 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14795 tokens，gen 53.9 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 14112/15175 tokens，gen 51.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/15182 tokens，gen 39.6 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/15253 tokens，gen 51.3 tps
+✅ L0 lc-hard-009 r2 prompt=13936 (est 13936, err None) recall - rep_guard 0 (27.34s)
+[Engine] 前缀命中 12544/13936 tokens，gen 32.4 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 14112/14114 tokens，gen 56.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14475 tokens，gen 55.4 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14776 tokens，gen 55.6 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 14112/15322 tokens，gen 52.6 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/15452 tokens，gen 48.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/15519 tokens，gen 45.2 tps
+✅ L0 lc-hard-009 r3 prompt=13936 (est 13936, err None) recall - rep_guard 0 (31.2s)
+[Engine] 前缀命中 12544/13936 tokens，gen 32.1 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 14112/14113 tokens，gen 56.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14474 tokens，gen 55.5 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14794 tokens，gen 55.2 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 15680/15301 tokens，gen 57.8 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 15680/15685 tokens，gen 57.7 tps
+[Orchestrator] transition → failure_swallow_nudge
+[Engine] 前缀命中 15680/16054 tokens，gen 54.9 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 15680/15811 tokens，gen 56.4 tps
+✅ L0 lc-hard-009 r4 prompt=13936 (est 13936, err None) recall - rep_guard 0 (45.89s)
+[Engine] 前缀命中 12544/13936 tokens，gen 34.6 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 14112/14121 tokens，gen 56.4 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14489 tokens，gen 56.2 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 14112/14905 tokens，gen 54.0 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 14112/15212 tokens，gen 52.8 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/15471 tokens，gen 51.6 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 15680/15615 tokens，gen 57.2 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 15680/15836 tokens，gen 57.0 tps
+✅ L0 lc-hard-009 r5 prompt=13936 (est 13936, err None) recall - rep_guard 0 (44.62s)
+[Engine] 前缀命中 12544/13911 tokens，gen 46.2 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14177 tokens，gen 50.5 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14271 tokens，gen 56.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14619 tokens，gen 54.2 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14839 tokens，gen 53.9 tps
+✅ L0 lc-hard-010 r0 prompt=13911 (est 13911, err None) recall - rep_guard 0 (18.92s)
+[Engine] 前缀命中 12544/13911 tokens，gen 47.7 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14200 tokens，gen 50.7 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14294 tokens，gen 56.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14626 tokens，gen 54.2 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14856 tokens，gen 54.1 tps
+✅ L0 lc-hard-010 r1 prompt=13911 (est 13911, err None) recall - rep_guard 0 (18.88s)
+[Engine] 前缀命中 12544/13911 tokens，gen 46.3 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14177 tokens，gen 50.8 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14271 tokens，gen 56.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14619 tokens，gen 53.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14831 tokens，gen 53.4 tps
+✅ L0 lc-hard-010 r2 prompt=13911 (est 13911, err None) recall - rep_guard 0 (16.5s)
+[Engine] 前缀命中 12544/13911 tokens，gen 46.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14178 tokens，gen 50.0 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14272 tokens，gen 56.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14646 tokens，gen 54.5 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14906 tokens，gen 49.4 tps
+✅ L0 lc-hard-010 r3 prompt=13911 (est 13911, err None) recall - rep_guard 0 (17.69s)
+[Engine] 前缀命中 12544/13911 tokens，gen 45.3 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14165 tokens，gen 49.8 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14257 tokens，gen 55.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14602 tokens，gen 54.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14894 tokens，gen 54.6 tps
+✅ L0 lc-hard-010 r4 prompt=13911 (est 13911, err None) recall - rep_guard 0 (21.24s)
+[Engine] 前缀命中 12544/13911 tokens，gen 46.3 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 14112/14177 tokens，gen 51.1 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 14112/14273 tokens，gen 56.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 14112/14615 tokens，gen 54.8 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 14112/14894 tokens，gen 52.2 tps
+✅ L0 lc-hard-010 r5 prompt=13911 (est 13911, err None) recall - rep_guard 0 (18.25s)
+[Engine] 前缀命中 32928/32617 tokens，gen 56.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33212 tokens，gen 49.0 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33438 tokens，gen 50.0 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33165 tokens，gen 55.3 tps
+[Engine] 前缀命中 32928/34252 tokens，gen 47.7 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/34430 tokens，gen 33.3 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 32928/34366 tokens，gen 48.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 轮内压缩（step）：[2, 84) 折叠 30 条观察，释放 22,163 字符
+[Engine] 前缀命中 23520/24361 tokens，gen 51.2 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 23520/24551 tokens，gen 52.5 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 23520/25019 tokens，gen 38.6 tps
+[Engine] 前缀命中 25088/25193 tokens，gen 54.4 tps
+[Engine] 前缀命中 25088/25578 tokens，gen 54.8 tps
+❌ L32768 lc-hard-001 r0 prompt=32617 (est 32617, err -151) recall 3/3 rep_guard 0 (82.77s)  | 步数超限: 12 > 10
+[Engine] 前缀命中 32928/33066 tokens，gen 55.3 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/34029 tokens，gen 49.2 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 32928/34279 tokens，gen 30.0 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 32928/33757 tokens，gen 50.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/33919 tokens，gen 44.7 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 34496/34315 tokens，gen 56.0 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 34496/34699 tokens，gen 54.3 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 34496/34883 tokens，gen 53.6 tps
+❌ L32768 lc-hard-001 r1 prompt=33066 (est 33066, err 298) recall 3/3 rep_guard 0 (63.98s)  | files/summary.txt: exists 期望 True，实际 False; 步数超限: 11 > 10
+[Engine] 前缀命中 32928/33158 tokens，gen 50.1 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 32928/33200 tokens，gen 52.7 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33456 tokens，gen 44.6 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33597 tokens，gen 40.2 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33617 tokens，gen 38.6 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 32928/33740 tokens，gen 45.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/33960 tokens，gen 51.4 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/34313 tokens，gen 40.8 tps
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 34496/34503 tokens，gen 50.1 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 32928/34456 tokens，gen 44.7 tps
+❌ L32768 lc-hard-002 r0 prompt=33158 (est 33158, err 390) recall 3/3 rep_guard 0 (43.83s)  | 步数超限: 13 > 12
+[Engine] 前缀命中 32928/33395 tokens，gen 46.7 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 32928/33442 tokens，gen 54.0 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/34038 tokens，gen 32.4 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 34496/34162 tokens，gen 56.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 34496/34810 tokens，gen 53.8 tps
+[Orchestrator] 轮内压缩（step）：[2, 72) 折叠 27 条观察，释放 22,181 字符
+[Engine] 前缀命中 23520/23742 tokens，gen 55.4 tps
+[Orchestrator] 执行工具: trash_file
+[Orchestrator] 执行工具: trash_file
+[Engine] 前缀命中 23520/23773 tokens，gen 54.6 tps
+[Engine] 前缀命中 23520/23846 tokens，gen 50.4 tps
+[Orchestrator] 执行工具: copy_file
+[Engine] 前缀命中 23520/23697 tokens，gen 51.6 tps
+[Orchestrator] 执行工具: trash_file
+[Engine] 前缀命中 23520/23609 tokens，gen 56.4 tps
+[Engine] 前缀命中 23520/24229 tokens，gen 35.7 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 23520/24278 tokens，gen 47.8 tps
+[Orchestrator] 轮内压缩（step）：[2, 86) 折叠 1 条观察，释放 -69 字符
+[Engine] 前缀命中 23520/24385 tokens，gen 53.2 tps
+[Engine] 前缀命中 25088/24974 tokens，gen 56.8 tps
+✅ L32768 lc-hard-002 r1 prompt=33395 (est 33395, err 627) recall 3/3 rep_guard 0 (97.01s)
+[Engine] 前缀命中 32928/32746 tokens，gen 56.0 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33124 tokens，gen 49.9 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 32928/33166 tokens，gen 54.1 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/33283 tokens，gen 51.4 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/33408 tokens，gen 47.9 tps
+[Engine] 前缀命中 32928/33525 tokens，gen 47.5 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/33603 tokens，gen 50.6 tps
+✅ L32768 lc-hard-003 r0 prompt=32746 (est 32746, err -22) recall 3/3 rep_guard 0 (38.41s)
+[Engine] 前缀命中 31360/32284 tokens，gen 51.9 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 31360/32769 tokens，gen 26.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 31360/32827 tokens，gen 43.4 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/32878 tokens，gen 54.6 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/33016 tokens，gen 53.4 tps
+[Engine] 前缀命中 32928/33129 tokens，gen 53.6 tps
+[Orchestrator] 执行工具: append_file
+[Engine] 前缀命中 32928/33273 tokens，gen 52.9 tps
+[Engine] 前缀命中 32928/33488 tokens，gen 50.7 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/33597 tokens，gen 41.9 tps
+[Orchestrator] 执行工具: move_file
+[Engine] 前缀命中 32928/33576 tokens，gen 51.2 tps
+❌ L32768 lc-hard-003 r1 prompt=32284 (est 32284, err -484) recall 3/3 rep_guard 0 (52.4s)  | 步数超限: 12 > 11
+[Engine] 前缀命中 32928/32489 tokens，gen 56.4 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 32928/33014 tokens，gen 54.5 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 32928/33133 tokens，gen 52.9 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 32928/32932 tokens，gen 56.2 tps
+[Engine] 前缀命中 32928/33626 tokens，gen 51.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/34076 tokens，gen 49.1 tps
+[Orchestrator] 轮内压缩（step）：[2, 70) 折叠 24 条观察，释放 18,117 字符
+[Engine] 前缀命中 23520/23747 tokens，gen 55.8 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 23520/24007 tokens，gen 52.1 tps
+[Engine] 前缀命中 23520/24121 tokens，gen 50.0 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 23520/24234 tokens，gen 50.9 tps
+[Engine] 前缀命中 23520/24452 tokens，gen 48.4 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 23520/24801 tokens，gen 43.5 tps
+[Orchestrator] 轮内压缩（step）：[2, 82) 折叠 1 条观察，释放 -46 字符
+[Engine] 前缀命中 23520/25036 tokens，gen 49.3 tps
+❌ L32768 lc-hard-004 r0 prompt=32489 (est 32489, err -279) recall 3/3 rep_guard 0 (83.31s)  | 步数超限: 14 > 11
+[Engine] 前缀命中 32928/33736 tokens，gen 46.7 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33964 tokens，gen 34.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 32928/33998 tokens，gen 44.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/34293 tokens，gen 49.4 tps
+[Engine] 前缀命中 34496/34960 tokens，gen 50.1 tps
+[Orchestrator] 轮内压缩（step）：[2, 68) 折叠 27 条观察，释放 21,417 字符
+[Engine] 前缀命中 21952/22478 tokens，gen 54.9 tps
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 21952/22783 tokens，gen 46.8 tps
+[Orchestrator] 轮内压缩（step）：[2, 72) 折叠 1 条观察，释放 -52 字符
+[Engine] 前缀命中 21952/23037 tokens，gen 47.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 21952/23173 tokens，gen 41.1 tps
+[Engine] 前缀命中 21952/23373 tokens，gen 42.8 tps
+[Engine] 前缀命中 23520/23733 tokens，gen 56.1 tps
+✅ L32768 lc-hard-004 r1 prompt=33736 (est 33736, err 968) recall 3/3 rep_guard 0 (62.39s)
+[Engine] 前缀命中 31360/32586 tokens，gen 32.4 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 31360/32653 tokens，gen 47.9 tps
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Engine] 前缀命中 32928/32966 tokens，gen 54.7 tps
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/33230 tokens，gen 52.6 tps
+[Engine] 前缀命中 32928/33334 tokens，gen 53.4 tps
+✅ L32768 lc-hard-005 r0 prompt=32586 (est 32586, err -182) recall 3/3 rep_guard 0 (30.34s)
+[Engine] 前缀命中 31360/32802 tokens，gen 30.5 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/32886 tokens，gen 55.9 tps
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Engine] 前缀命中 32928/33295 tokens，gen 51.9 tps
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/33559 tokens，gen 47.6 tps
+[Engine] 前缀命中 32928/33555 tokens，gen 51.8 tps
+✅ L32768 lc-hard-005 r1 prompt=32802 (est 32802, err 34) recall 3/3 rep_guard 0 (32.07s)
+[Engine] 前缀命中 32928/32834 tokens，gen 56.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33337 tokens，gen 41.7 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 32928/33392 tokens，gen 49.9 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/33324 tokens，gen 54.3 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/33852 tokens，gen 52.2 tps
+❌ L32768 lc-hard-006 r0 prompt=32834 (est 32834, err 66) recall 3/3 rep_guard 0 (41.49s)  | files/merged.txt: exists 期望 True，实际 False; files/count.txt: exists 期望 True，实际 False
+[Engine] 前缀命中 32928/32871 tokens，gen 56.0 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33272 tokens，gen 43.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 32928/33294 tokens，gen 51.1 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/33355 tokens，gen 53.1 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/33604 tokens，gen 51.7 tps
+❌ L32768 lc-hard-006 r1 prompt=32871 (est 32871, err 103) recall 3/3 rep_guard 0 (32.54s)  | files/merged.txt: exists 期望 True，实际 False; files/count.txt: exists 期望 True，实际 False
+[Engine] 前缀命中 32928/32707 tokens，gen 56.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33447 tokens，gen 45.3 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 32928/33509 tokens，gen 52.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33370 tokens，gen 53.6 tps
+[Engine] 前缀命中 32928/34131 tokens，gen 44.1 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/34071 tokens，gen 44.8 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/33996 tokens，gen 45.9 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/34150 tokens，gen 44.3 tps
+[Engine] 前缀命中 34496/34538 tokens，gen 54.6 tps
+[Engine] 前缀命中 34496/34640 tokens，gen 53.9 tps
+[Engine] 前缀命中 34496/34738 tokens，gen 52.3 tps
+❌ L32768 lc-hard-007 r0 prompt=32707 (est 32707, err -61) recall 0/3 rep_guard 0 (70.78s)  | files/inbox/report-a.txt: eq 失败: '季度报告 A：2025 年第四季度营收同比增长 12%。' != '季度报告 A：2026 年第四季度营收同比增长 12%。'; f
+[Engine] 前缀命中 31360/32646 tokens，gen 45.9 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/32935 tokens，gen 53.4 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 32928/33060 tokens，gen 54.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/33289 tokens，gen 55.1 tps
+[Engine] 前缀命中 34496/34795 tokens，gen 52.3 tps
+[Orchestrator] 轮内压缩（step）：[2, 68) 折叠 25 条观察，释放 21,226 字符
+[Engine] 前缀命中 23520/22834 tokens，gen 57.4 tps
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 21952/23045 tokens，gen 50.6 tps
+[Orchestrator] 轮内压缩（step）：[2, 72) 折叠 1 条观察，释放 -62 字符
+[Engine] 前缀命中 23520/23431 tokens，gen 55.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 21952/22622 tokens，gen 51.3 tps
+[Engine] 前缀命中 21952/22822 tokens，gen 52.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 21952/23381 tokens，gen 49.2 tps
+❌ L32768 lc-hard-007 r1 prompt=32646 (est 32646, err -122) recall 0/3 rep_guard 0 (101.25s)  | 步数超限: 12 > 9; 回合上限 11 耗尽仍在发调用; 无收尾答复
+[Engine] 前缀命中 32928/32821 tokens，gen 55.9 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33537 tokens，gen 47.5 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 32928/33625 tokens，gen 49.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/33415 tokens，gen 54.4 tps
+[Engine] 前缀命中 34496/34478 tokens，gen 53.3 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 34496/34521 tokens，gen 55.7 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 34496/34713 tokens，gen 53.1 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 34496/35005 tokens，gen 51.5 tps
+[Orchestrator] 轮内压缩（step）：[2, 84) 折叠 27 条观察，释放 19,884 字符
+[Engine] 前缀命中 25088/25123 tokens，gen 55.8 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 25088/25308 tokens，gen 54.3 tps
+[Engine] 前缀命中 25088/25581 tokens，gen 53.6 tps
+[Engine] 前缀命中 25088/25866 tokens，gen 51.6 tps
+[Orchestrator] 轮内压缩（step）：[2, 92) 折叠 1 条观察，释放 -57 字符
+❌ L32768 lc-hard-008 r0 prompt=32821 (est 32821, err 53) recall 0/3 rep_guard 0 (85.58s)  | 步数超限: 12 > 10; 回合上限 12 耗尽仍在发调用; 无收尾答复
+[Engine] 前缀命中 32928/32899 tokens，gen 55.7 tps
+[Orchestrator] 执行工具: list_dir
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 32928/33600 tokens，gen 47.9 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/33743 tokens，gen 45.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33489 tokens，gen 54.7 tps
+[Engine] 前缀命中 34496/34789 tokens，gen 53.3 tps
+[Orchestrator] 轮内压缩（step）：[2, 78) 折叠 29 条观察，释放 18,195 字符
+[Engine] 前缀命中 23520/24878 tokens，gen 42.9 tps
+[Orchestrator] 执行工具: run_shell_command
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 23520/24654 tokens，gen 50.4 tps
+[Orchestrator] 轮内压缩（step）：[2, 82) 折叠 1 条观察，释放 -30 字符
+[Engine] 前缀命中 23520/24996 tokens，gen 41.6 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 25088/25098 tokens，gen 54.6 tps
+[Engine] 前缀命中 25088/25106 tokens，gen 54.4 tps
+[Engine] 前缀命中 25088/25253 tokens，gen 53.8 tps
+[Engine] 前缀命中 25088/25640 tokens，gen 53.9 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+❌ L32768 lc-hard-008 r1 prompt=32899 (est 32899, err 131) recall 0/3 rep_guard 0 (83.55s)  | files/logs/build.log: contains_all 失败: 缺 '2026-08-24 OK'; files/logs/test.log: contains_all 失败: 缺 '2
+[Engine] 前缀命中 32928/32971 tokens，gen 52.3 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 32928/33015 tokens，gen 51.9 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 32928/33091 tokens，gen 50.9 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 32928/33318 tokens，gen 52.9 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/33618 tokens，gen 43.6 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33818 tokens，gen 42.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33912 tokens，gen 35.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33976 tokens，gen 48.8 tps
+[Orchestrator] 执行工具: run_shell_command
+[Orchestrator] 执行工具: run_shell_command
+[Orchestrator] 执行工具: run_shell_command
+[Orchestrator] 执行工具: run_shell_command
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/34295 tokens，gen 47.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 34496/34553 tokens，gen 50.3 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 34496/34659 tokens，gen 55.4 tps
+❌ L32768 lc-hard-009 r0 prompt=32971 (est 32971, err 203) recall 3/3 rep_guard 0 (52.47s)  | 步数超限: 18 > 10
+[Engine] 前缀命中 31360/32809 tokens，gen 26.8 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 31360/32857 tokens，gen 44.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/33176 tokens，gen 53.1 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/33402 tokens，gen 52.2 tps
+[Engine] 前缀命中 32928/33579 tokens，gen 52.9 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 32928/33972 tokens，gen 50.2 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/34143 tokens，gen 40.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/34262 tokens，gen 49.2 tps
+✅ L32768 lc-hard-009 r1 prompt=32809 (est 32809, err 41) recall 3/3 rep_guard 0 (47.72s)
+[Engine] 前缀命中 32928/33634 tokens，gen 52.7 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/34077 tokens，gen 44.6 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/34306 tokens，gen 43.3 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 32928/34174 tokens，gen 30.4 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 32928/34248 tokens，gen 46.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 34496/34495 tokens，gen 54.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 34496/34746 tokens，gen 54.0 tps
+[Orchestrator] 执行工具: run_shell_command
+[Orchestrator] 执行工具: run_shell_command
+[Orchestrator] 执行工具: run_shell_command
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 34496/35069 tokens，gen 53.8 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 34496/35659 tokens，gen 37.7 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 34496/35756 tokens，gen 42.3 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 34496/35565 tokens，gen 43.1 tps
+[Orchestrator] 执行工具: run_shell_command
+❌ L32768 lc-hard-010 r0 prompt=33634 (est 33634, err 866) recall 0/3 rep_guard 0 (67.59s)  | files/blockers.txt: exists 期望 True，实际 False; 步数超限: 20 > 9; 回合上限 11 耗尽仍在发调用; 无收尾答复
+[Engine] 前缀命中 32928/32927 tokens，gen 54.9 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33172 tokens，gen 50.3 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 32928/33222 tokens，gen 52.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 31360/33573 tokens，gen 57.2 tps
+[Guard] 复读输出 channel=thinking reason=ngram_dup gen=602 tokens sample="m to be from a different conversation. I'm realizing the tool outputs I'm seeing"
+[Orchestrator] transition → repetition_nudge
+[Engine] 前缀命中 32928/33603 tokens，gen 57.1 tps
+[Guard] 复读输出 channel=thinking reason=ngram_dup gen=680 tokens sample="thing up. I'm realizing the user is asking me to quote three specific values ver"
+❌ L32768 lc-hard-010 r1 prompt=32927 (est 32927, err 159) recall 0/3 rep_guard 2 (44.74s)  | files/blockers.txt: exists 期望 True，实际 False; repetition_guard
+[Engine] 前缀命中 48608/49555 tokens，gen 50.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 48608/50021 tokens，gen 24.3 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 48608/50110 tokens，gen 43.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 50176/50486 tokens，gen 52.5 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 50176/50792 tokens，gen 51.1 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 50176/51173 tokens，gen 49.4 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 50176/51391 tokens，gen 50.6 tps
+✅ L49152 lc-hard-001 r0 prompt=49555 (est 49510, err 403) recall 3/3 rep_guard 0 (74.68s)
+[Engine] 前缀命中 48608/49282 tokens，gen 51.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 48608/49727 tokens，gen 41.2 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 48608/49831 tokens，gen 31.6 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 48608/49677 tokens，gen 48.1 tps
+[Engine] 前缀命中 50176/50470 tokens，gen 42.2 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 50176/50649 tokens，gen 52.1 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 50176/51124 tokens，gen 47.4 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 50176/51556 tokens，gen 36.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 51744/51964 tokens，gen 53.4 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 51744/52639 tokens，gen 47.3 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 51744/52829 tokens，gen 45.3 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 51744/53054 tokens，gen 39.9 tps
+[Orchestrator] 轮内压缩（step）：[2, 133) 折叠 46 条观察，释放 37,822 字符
+❌ L49152 lc-hard-001 r1 prompt=49282 (est 49237, err 130) recall 0/3 rep_guard 0 (87.09s)  | files/summary.txt: exists 期望 True，实际 False; 步数超限: 22 > 10; 回合上限 12 耗尽仍在发调用; 无收尾答复
+[Engine] 前缀命中 48608/49368 tokens，gen 49.9 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 48608/49695 tokens，gen 34.5 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 48608/49773 tokens，gen 36.3 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 48608/49795 tokens，gen 49.6 tps
+[Engine] 前缀命中 50176/50594 tokens，gen 46.3 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/50775 tokens，gen 41.0 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 50176/50621 tokens，gen 48.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 50176/50888 tokens，gen 44.4 tps
+[Orchestrator] 轮内压缩（step）：[2, 128) 折叠 49 条观察，释放 36,187 字符
+[Engine] 前缀命中 28224/29541 tokens，gen 38.9 tps
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 28224/29662 tokens，gen 39.4 tps
+[Engine] 前缀命中 29792/29858 tokens，gen 53.7 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 29792/29963 tokens，gen 52.0 tps
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 29792/30011 tokens，gen 53.3 tps
+[Engine] 前缀命中 29792/30261 tokens，gen 41.0 tps
+[Orchestrator] 执行工具: list_files
+❌ L49152 lc-hard-002 r0 prompt=49368 (est 49323, err 216) recall 0/3 rep_guard 0 (83.38s)  | 步数超限: 13 > 12; 回合上限 14 耗尽仍在发调用; 无收尾答复
+[Engine] 前缀命中 12544/49080 tokens，gen 55.8 tps
+[Guard] 复读输出 channel=thinking reason=ngram_dup gen=503 tokens sample="an and cannot verify rather than fabricating information. I'm realizing the user"
+[Orchestrator] transition → repetition_nudge
+[Engine] 前缀命中 48608/49065 tokens，gen 52.6 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 48608/49610 tokens，gen 44.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 48608/49923 tokens，gen 41.7 tps
+[Engine] 前缀命中 48608/49890 tokens，gen 36.9 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/50073 tokens，gen 54.8 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/50494 tokens，gen 46.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/50603 tokens，gen 49.4 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 50176/50990 tokens，gen 44.7 tps
+[Orchestrator] 轮内压缩（step）：[2, 135) 折叠 51 条观察，释放 37,761 字符
+[Engine] 前缀命中 29792/30959 tokens，gen 46.5 tps
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 29792/31164 tokens，gen 32.1 tps
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 29792/31178 tokens，gen 31.9 tps
+[Engine] 前缀命中 29792/31320 tokens，gen 41.4 tps
+[Orchestrator] 轮内压缩（step）：[2, 143) 折叠 1 条观察，释放 -24 字符
+[Engine] 前缀命中 31360/31590 tokens，gen 50.4 tps
+[Orchestrator] 执行工具: list_dir
+❌ L49152 lc-hard-002 r1 prompt=49080 (est 49035, err -72) recall 0/3 rep_guard 1 (101.0s)  | 步数超限: 14 > 12; 回合上限 14 耗尽仍在发调用; 无收尾答复
+[Engine] 前缀命中 48608/49680 tokens，gen 49.6 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 48608/50138 tokens，gen 31.0 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/50269 tokens，gen 53.4 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 50176/50171 tokens，gen 54.7 tps
+[Engine] 前缀命中 50176/50816 tokens，gen 39.9 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 50176/50750 tokens，gen 44.8 tps
+[Orchestrator] 执行工具: find_files
+[Engine] 前缀命中 50176/50809 tokens，gen 47.8 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/51068 tokens，gen 39.1 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 50176/51400 tokens，gen 43.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 50176/51585 tokens，gen 34.0 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 50176/51639 tokens，gen 32.6 tps
+[Engine] 前缀命中 51744/51777 tokens，gen 53.8 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 51744/52311 tokens，gen 46.4 tps
+[Orchestrator] 轮内压缩（step）：[2, 122) 折叠 38 条观察，释放 35,895 字符
+❌ L49152 lc-hard-003 r0 prompt=49680 (est 49635, err 528) recall 0/3 rep_guard 0 (85.46s)  | 步数超限: 14 > 11; 回合上限 13 耗尽仍在发调用; 无收尾答复
+[Engine] 前缀命中 50176/49389 tokens，gen 55.3 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/50413 tokens，gen 53.4 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 51744/51494 tokens，gen 54.7 tps
+[Orchestrator] 执行工具: find_files
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 51744/51295 tokens，gen 54.7 tps
+[Engine] 前缀命中 51744/51902 tokens，gen 53.3 tps
+[Orchestrator] 执行工具: list_dir
+[Orchestrator] 执行工具: list_dir
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 51744/52025 tokens，gen 42.6 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 50176/51162 tokens，gen 44.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 50176/51051 tokens，gen 44.3 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/51522 tokens，gen 41.5 tps
+[Orchestrator] 轮内压缩（step）：[2, 129) 折叠 44 条观察，释放 34,173 字符
+[Engine] 前缀命中 29792/30434 tokens，gen 46.7 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 29792/30491 tokens，gen 44.7 tps
+[Engine] 前缀命中 29792/30594 tokens，gen 50.0 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 29792/30841 tokens，gen 43.1 tps
+[Orchestrator] 轮内压缩（step）：[2, 137) 折叠 1 条观察，释放 -46 字符
+❌ L49152 lc-hard-003 r1 prompt=49389 (est 49344, err 237) recall 0/3 rep_guard 0 (150.87s)  | files/duty-summary.txt: exists 期望 True，实际 False; 步数超限: 16 > 11; 回合上限 13 耗尽仍在发调用; 无收尾答复
+[Engine] 前缀命中 0/49374 tokens，gen 55.7 tps
+[Guard] 复读输出 channel=thinking reason=ngram_dup gen=578 tokens sample='s request is asking me to replace "90 days" with "30 days" in files under policy'
+[Orchestrator] transition → repetition_nudge
+[Engine] 前缀命中 48608/49359 tokens，gen 51.7 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 48608/49956 tokens，gen 39.8 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/50236 tokens，gen 53.6 tps
+[Engine] 前缀命中 50176/50858 tokens，gen 38.4 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 50176/50903 tokens，gen 44.8 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 50176/50469 tokens，gen 49.2 tps
+[Orchestrator] 执行工具: find_files
+[Engine] 前缀命中 50176/50726 tokens，gen 47.9 tps
+[Orchestrator] 轮内压缩（step）：[2, 126) 折叠 47 条观察，释放 34,709 字符
+[Engine] 前缀命中 29792/30377 tokens，gen 48.1 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 29792/30541 tokens，gen 54.2 tps
+[Engine] 前缀命中 31360/31430 tokens，gen 55.9 tps
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 31360/31804 tokens，gen 51.7 tps
+[Orchestrator] 轮内压缩（step）：[2, 134) 折叠 1 条观察，释放 -69 字符
+[Engine] 前缀命中 31360/31709 tokens，gen 51.5 tps
+[Orchestrator] 执行工具: write_file
+❌ L49152 lc-hard-004 r0 prompt=49374 (est 49329, err 222) recall 0/3 rep_guard 1 (123.45s)  | 步数超限: 12 > 11; 回合上限 13 耗尽仍在发调用; 无收尾答复
+[Engine] 前缀命中 48608/49309 tokens，gen 46.2 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 48608/49503 tokens，gen 27.7 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 48608/49524 tokens，gen 47.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 48608/49914 tokens，gen 47.2 tps
+[Engine] 前缀命中 50176/50800 tokens，gen 50.3 tps
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 50176/51058 tokens，gen 50.4 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 50176/51421 tokens，gen 44.6 tps
+[Orchestrator] 轮内压缩（step）：[2, 122) 折叠 47 条观察，释放 36,941 字符
+[Engine] 前缀命中 29792/30712 tokens，gen 52.6 tps
+[Orchestrator] 轮内压缩（step）：[2, 124) 折叠 2 条观察，释放 -86 字符
+[Engine] 前缀命中 29792/30893 tokens，gen 49.9 tps
+✅ L49152 lc-hard-004 r1 prompt=49309 (est 49264, err 157) recall 3/3 rep_guard 0 (83.03s)
+[Engine] 前缀命中 48608/49333 tokens，gen 35.1 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 47040/49359 tokens，gen 55.7 tps
+[Guard] 复读输出 channel=thinking reason=ngram_dup gen=600 tokens sample='rify whether they actually appeared in the conversation. The halyard config path'
+[Orchestrator] transition → repetition_nudge
+[Engine] 前缀命中 48608/49389 tokens，gen 55.8 tps
+[Guard] 复读输出 channel=thinking reason=ngram_dup gen=466 tokens sample="areful about what I'm actually seeing versus what's being shown to me as context"
+❌ L49152 lc-hard-005 r0 prompt=49333 (est 49288, err 181) recall 0/3 rep_guard 2 (43.27s)  | todos: 无元素匹配 {'text': '提交周报', 'done': True}（实际 []）; todos: 无元素匹配 {'text': '交房租', 'done': True}（实际 []
+[Engine] 前缀命中 48608/49822 tokens，gen 34.9 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 48608/49910 tokens，gen 48.3 tps
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Engine] 前缀命中 50176/50370 tokens，gen 50.4 tps
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: todo_complete
+[Engine] 前缀命中 50176/50533 tokens，gen 48.6 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 50176/50479 tokens，gen 53.3 tps
+[Orchestrator] 执行工具: todo_list
+[Engine] 前缀命中 51744/51595 tokens，gen 54.1 tps
+[Engine] 前缀命中 53312/52665 tokens，gen 55.2 tps
+✅ L49152 lc-hard-005 r1 prompt=49822 (est 49777, err 670) recall 3/3 rep_guard 0 (103.26s)
+[Engine] 前缀命中 48608/49163 tokens，gen 50.9 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 48608/49505 tokens，gen 41.2 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 48608/49576 tokens，gen 41.5 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 48608/49655 tokens，gen 46.1 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 48608/49820 tokens，gen 43.0 tps
+[Engine] 前缀命中 48608/49990 tokens，gen 46.4 tps
+✅ L49152 lc-hard-006 r0 prompt=49163 (est 49118, err 11) recall 3/3 rep_guard 0 (51.18s)
+[Engine] 前缀命中 48608/49206 tokens，gen 51.2 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 48608/49628 tokens，gen 44.3 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 48608/49862 tokens，gen 40.8 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/49717 tokens，gen 54.8 tps
+[Engine] 前缀命中 50176/51122 tokens，gen 41.2 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/51167 tokens，gen 36.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/50247 tokens，gen 52.2 tps
+[Orchestrator] 轮内压缩（step）：[2, 142) 折叠 47 条观察，释放 36,993 字符
+[Engine] 前缀命中 29792/31047 tokens，gen 41.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 29792/31238 tokens，gen 44.1 tps
+[Engine] 前缀命中 31360/31550 tokens，gen 54.6 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 31360/31743 tokens，gen 52.2 tps
+❌ L49152 lc-hard-006 r1 prompt=49206 (est 49161, err 54) recall 0/3 rep_guard 0 (94.29s)  | files/merged.txt: exists 期望 True，实际 False; files/count.txt: exists 期望 True，实际 False; 步数超限: 10 > 9; 回
+[Engine] 前缀命中 50176/49892 tokens，gen 55.0 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/50510 tokens，gen 49.5 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 50176/50644 tokens，gen 47.7 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 50176/50403 tokens，gen 53.5 tps
+[Engine] 前缀命中 50176/51491 tokens，gen 35.6 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 51744/51551 tokens，gen 54.3 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/51284 tokens，gen 31.8 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/51383 tokens，gen 35.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 50176/51598 tokens，gen 37.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 51744/51743 tokens，gen 51.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 51744/51840 tokens，gen 54.0 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+❌ L49152 lc-hard-007 r0 prompt=49892 (est 49847, err 740) recall 0/3 rep_guard 0 (87.57s)  | files/inbox/report-a.txt: eq 失败: '季度报告 A：2025 年第四季度营收同比增长 12%。' != '季度报告 A：2026 年第四季度营收同比增长 12%。'; f
+[Engine] 前缀命中 48608/49502 tokens，gen 41.3 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 48608/49555 tokens，gen 45.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 48608/49775 tokens，gen 47.8 tps
+[Engine] 前缀命中 50176/50132 tokens，gen 54.5 tps
+[Engine] 前缀命中 50176/50875 tokens，gen 43.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/50837 tokens，gen 45.4 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 50176/50977 tokens，gen 45.9 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 50176/51192 tokens，gen 44.8 tps
+[Engine] 前缀命中 50176/51609 tokens，gen 41.5 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 51744/51704 tokens，gen 53.8 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 51744/51795 tokens，gen 53.7 tps
+❌ L49152 lc-hard-007 r1 prompt=49502 (est 49457, err 350) recall 0/3 rep_guard 0 (73.87s)  | files/inbox/report-a.txt: eq 失败: '季度报告 A：2025 年第四季度营收同比增长 12%。' != '季度报告 A：2026 年第四季度营收同比增长 12%。'; f
+[Engine] 前缀命中 48608/49604 tokens，gen 47.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 48608/49856 tokens，gen 45.5 tps
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: append_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 48608/50150 tokens，gen 30.5 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 50176/50185 tokens，gen 54.3 tps
+[Engine] 前缀命中 50176/50408 tokens，gen 53.2 tps
+✅ L49152 lc-hard-008 r0 prompt=49604 (est 49559, err 452) recall 3/3 rep_guard 0 (46.73s)
+[Engine] 前缀命中 48608/49344 tokens，gen 50.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 48608/49659 tokens，gen 42.2 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 48608/49765 tokens，gen 43.8 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 48608/49972 tokens，gen 49.2 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 50176/50374 tokens，gen 49.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 50176/50374 tokens，gen 54.0 tps
+✅ L49152 lc-hard-008 r1 prompt=49344 (est 49299, err 192) recall 3/3 rep_guard 0 (55.11s)
+[Engine] 前缀命中 48608/49449 tokens，gen 41.3 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 48608/49583 tokens，gen 45.9 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 48608/49894 tokens，gen 41.4 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 48608/50071 tokens，gen 43.9 tps
+[Engine] 前缀命中 50176/50278 tokens，gen 54.1 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 50176/50943 tokens，gen 49.7 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/51136 tokens，gen 50.8 tps
+[Orchestrator] transition → failure_swallow_nudge
+[Engine] 前缀命中 51744/51269 tokens，gen 55.2 tps
+✅ L49152 lc-hard-009 r0 prompt=49449 (est 49404, err 297) recall 3/3 rep_guard 0 (87.49s)
+[Engine] 前缀命中 48608/49179 tokens，gen 38.2 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 48608/49280 tokens，gen 47.5 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 48608/49609 tokens，gen 45.6 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 48608/49852 tokens，gen 43.1 tps
+[Engine] 前缀命中 48608/50026 tokens，gen 46.9 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 50176/50381 tokens，gen 53.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 50176/50629 tokens，gen 52.5 tps
+[Orchestrator] transition → failure_swallow_nudge
+[Engine] 前缀命中 50176/50973 tokens，gen 51.3 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 50176/51317 tokens，gen 50.8 tps
+✅ L49152 lc-hard-009 r1 prompt=49179 (est 49134, err 27) recall 3/3 rep_guard 0 (85.84s)
+[Engine] 前缀命中 48608/48700 tokens，gen 53.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 48608/49299 tokens，gen 35.7 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 48608/49358 tokens，gen 47.5 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 48608/49320 tokens，gen 52.8 tps
+[Engine] 前缀命中 50176/50329 tokens，gen 52.3 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 50176/50401 tokens，gen 53.6 tps
+✅ L49152 lc-hard-010 r0 prompt=48700 (est 48655, err -452) recall 3/3 rep_guard 0 (69.91s)
+[Engine] 前缀命中 48608/49448 tokens，gen 48.3 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 48608/49706 tokens，gen 44.2 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 48608/49916 tokens，gen 41.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 50176/50173 tokens，gen 53.3 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 50176/50180 tokens，gen 54.1 tps
+[Engine] 前缀命中 50176/50350 tokens，gen 53.8 tps
+✅ L49152 lc-hard-010 r1 prompt=49448 (est 49403, err 296) recall 3/3 rep_guard 0 (50.55s)
+[Orchestrator] 轮内压缩（ceiling）：[0, 154) 折叠 63 条观察，释放 52,663 字符
+[Orchestrator] 上下文上限护栏：应急压缩 63 条观察，57,530 → 31,474 token（ceiling 53,248）
+[Engine] 前缀命中 31360/31474 tokens，gen 55.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 31360/32159 tokens，gen 33.9 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 31360/32234 tokens，gen 50.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 31360/32419 tokens，gen 50.6 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 31360/32703 tokens，gen 45.3 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 31360/32881 tokens，gen 38.6 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/32970 tokens，gen 55.5 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 32928/33778 tokens，gen 47.3 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/33899 tokens，gen 52.6 tps
+❌ L57344 lc-hard-001 r0 prompt=31474 (est 57530, err -25870) recall 3/3 rep_guard 0 (75.26s)  | 步数超限: 12 > 10
+[Orchestrator] 轮内压缩（ceiling）：[0, 130) 折叠 51 条观察，释放 45,170 字符
+[Orchestrator] 上下文上限护栏：应急压缩 51 条观察，57,433 → 31,177 token（ceiling 53,248）
+[Engine] 前缀命中 29792/31177 tokens，gen 42.3 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 31360/31395 tokens，gen 49.9 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 31360/31473 tokens，gen 55.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 31360/32163 tokens，gen 49.5 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 31360/32359 tokens，gen 49.6 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 31360/32571 tokens，gen 49.5 tps
+✅ L57344 lc-hard-001 r1 prompt=31177 (est 57433, err -26167) recall 3/3 rep_guard 0 (38.02s)
+[Orchestrator] 轮内压缩（ceiling）：[0, 138) 折叠 57 条观察，释放 41,632 字符
+[Orchestrator] 上下文上限护栏：应急压缩 57 条观察，57,480 → 32,601 token（ceiling 53,248）
+[Engine] 前缀命中 31360/32601 tokens，gen 26.0 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 31360/32654 tokens，gen 41.6 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/32874 tokens，gen 55.6 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 32928/33219 tokens，gen 47.0 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 32928/33297 tokens，gen 45.7 tps
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 32928/33317 tokens，gen 54.6 tps
+✅ L57344 lc-hard-002 r0 prompt=32601 (est 57480, err -24743) recall 3/3 rep_guard 0 (33.99s)
+[Orchestrator] 轮内压缩（ceiling）：[0, 140) 折叠 56 条观察，释放 47,246 字符
+[Orchestrator] 上下文上限护栏：应急压缩 56 条观察，57,725 → 31,517 token（ceiling 53,248）
+[Engine] 前缀命中 31360/31517 tokens，gen 53.9 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 31360/31693 tokens，gen 44.6 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 31360/31743 tokens，gen 51.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/32056 tokens，gen 56.8 tps
+[Engine] 前缀命中 32928/33533 tokens，gen 53.5 tps
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: delete_file
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: delete_file
+[Engine] 前缀命中 32928/34151 tokens，gen 38.1 tps
+[Orchestrator] 轮内压缩（step）：[2, 152) 折叠 5 条观察，释放 898 字符
+[Engine] 前缀命中 32928/33074 tokens，gen 54.0 tps
+[Engine] 前缀命中 32928/33267 tokens，gen 43.2 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 32928/33316 tokens，gen 48.9 tps
+[Orchestrator] 轮内压缩（step）：[2, 158) 折叠 1 条观察，释放 -60 字符
+[Engine] 前缀命中 32928/33515 tokens，gen 47.9 tps
+[Engine] 前缀命中 32928/33873 tokens，gen 49.7 tps
+✅ L57344 lc-hard-002 r1 prompt=31517 (est 57725, err -25827) recall 3/3 rep_guard 0 (69.47s)
+[Orchestrator] 轮内压缩（ceiling）：[0, 120) 折叠 44 条观察，释放 40,339 字符
+[Orchestrator] 上下文上限护栏：应急压缩 44 条观察，57,115 → 31,162 token（ceiling 53,248）
+[Engine] 前缀命中 31360/31162 tokens，gen 56.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 31360/31725 tokens，gen 43.3 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 31360/31771 tokens，gen 52.1 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 31360/31793 tokens，gen 52.9 tps
+[Engine] 前缀命中 31360/32005 tokens，gen 47.1 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 31360/32129 tokens，gen 42.9 tps
+[Engine] 前缀命中 31360/32211 tokens，gen 50.0 tps
+[Engine] 前缀命中 31360/32424 tokens，gen 47.6 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 31360/32618 tokens，gen 45.1 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 31360/32663 tokens，gen 49.4 tps
+✅ L57344 lc-hard-003 r0 prompt=31162 (est 57115, err -26182) recall 3/3 rep_guard 0 (57.54s)
+[Orchestrator] 轮内压缩（ceiling）：[0, 140) 折叠 49 条观察，释放 39,730 字符
+[Orchestrator] 上下文上限护栏：应急压缩 49 条观察，57,448 → 32,716 token（ceiling 53,248）
+[Engine] 前缀命中 32928/32716 tokens，gen 56.3 tps
+[Orchestrator] 执行工具: list_dir
+[Orchestrator] 执行工具: file_extract
+[Engine] 前缀命中 32928/33548 tokens，gen 49.5 tps
+[Orchestrator] 执行工具: list_dir
+[Orchestrator] 执行工具: file_extract
+[Orchestrator] 执行工具: file_extract
+[Engine] 前缀命中 34496/35684 tokens，gen 46.1 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 34496/35658 tokens，gen 42.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 34496/35805 tokens，gen 40.8 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 34496/35906 tokens，gen 36.1 tps
+[Engine] 前缀命中 34496/35983 tokens，gen 39.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 36064/36179 tokens，gen 54.1 tps
+[Engine] 前缀命中 36064/36371 tokens，gen 52.2 tps
+[Engine] 前缀命中 36064/36550 tokens，gen 50.7 tps
+[Engine] 前缀命中 36064/36675 tokens，gen 49.2 tps
+[Engine] 前缀命中 36064/36792 tokens，gen 48.6 tps
+[Engine] 前缀命中 36064/36909 tokens，gen 48.0 tps
+❌ L57344 lc-hard-003 r1 prompt=32716 (est 57448, err -24628) recall 0/3 rep_guard 0 (73.95s)  | files/duty-summary.txt: exists 期望 True，实际 False; 步数超限: 19 > 11; 回合上限 13 耗尽仍在发调用; 无收尾答复
+[Orchestrator] 轮内压缩（ceiling）：[0, 134) 折叠 52 条观察，释放 45,365 字符
+[Orchestrator] 上下文上限护栏：应急压缩 52 条观察，57,184 → 31,080 token（ceiling 53,248）
+[Engine] 前缀命中 29792/31080 tokens，gen 49.7 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 31360/31463 tokens，gen 53.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 31360/31644 tokens，gen 54.8 tps
+[Orchestrator] 执行工具: run_shell_command
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 31360/31926 tokens，gen 53.9 tps
+[Engine] 前缀命中 31360/32789 tokens，gen 42.9 tps
+[Orchestrator] 执行工具: file_extract
+[Engine] 前缀命中 32928/33364 tokens，gen 52.4 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 32928/33454 tokens，gen 51.9 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 轮内压缩（step）：[2, 148) 折叠 4 条观察，释放 905 字符
+[Engine] 前缀命中 32928/33513 tokens，gen 52.3 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/33611 tokens，gen 54.0 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 34496/34377 tokens，gen 55.7 tps
+[Orchestrator] 执行工具: run_shell_command
+[Orchestrator] 轮内压缩（step）：[2, 154) 折叠 1 条观察，释放 86 字符
+[Engine] 前缀命中 34496/34820 tokens，gen 53.6 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 34496/34783 tokens，gen 53.9 tps
+[Orchestrator] 执行工具: run_shell_command
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 34496/35015 tokens，gen 52.0 tps
+❌ L57344 lc-hard-004 r0 prompt=31080 (est 57184, err -26264) recall 0/3 rep_guard 0 (98.04s)  | 步数超限: 19 > 11; 回合上限 13 耗尽仍在发调用; 无收尾答复
+[Orchestrator] 轮内压缩（ceiling）：[0, 134) 折叠 55 条观察，释放 47,537 字符
+[Orchestrator] 上下文上限护栏：应急压缩 55 条观察，57,494 → 31,583 token（ceiling 53,248）
+[Engine] 前缀命中 31360/31583 tokens，gen 50.0 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 31360/31629 tokens，gen 52.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 31360/31846 tokens，gen 54.3 tps
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 31360/32304 tokens，gen 49.9 tps
+[Engine] 前缀命中 31360/32532 tokens，gen 45.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 31360/32631 tokens，gen 42.0 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/32831 tokens，gen 56.1 tps
+✅ L57344 lc-hard-004 r1 prompt=31583 (est 57494, err -25761) recall 3/3 rep_guard 0 (40.64s)
+[Orchestrator] 轮内压缩（ceiling）：[0, 130) 折叠 50 条观察，释放 46,759 字符
+[Orchestrator] 上下文上限护栏：应急压缩 50 条观察，57,120 → 32,617 token（ceiling 53,248）
+[Engine] 前缀命中 31360/32617 tokens，gen 41.2 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 31360/32713 tokens，gen 40.6 tps
+[Engine] 前缀命中 32928/32832 tokens，gen 55.8 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/33174 tokens，gen 54.3 tps
+[Engine] 前缀命中 32928/33423 tokens，gen 53.1 tps
+[Engine] 前缀命中 32928/33592 tokens，gen 51.9 tps
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Engine] 前缀命中 32928/33817 tokens，gen 48.3 tps
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/33755 tokens，gen 52.2 tps
+✅ L57344 lc-hard-005 r0 prompt=32617 (est 57120, err -24727) recall 3/3 rep_guard 0 (57.58s)
+[Orchestrator] 轮内压缩（ceiling）：[0, 150) 折叠 59 条观察，释放 42,834 字符
+[Orchestrator] 上下文上限护栏：应急压缩 59 条观察，58,019 → 32,856 token（ceiling 53,248）
+[Engine] 前缀命中 31360/32856 tokens，gen 30.2 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/32955 tokens，gen 55.6 tps
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Orchestrator] 执行工具: todo_add
+[Engine] 前缀命中 32928/33275 tokens，gen 52.0 tps
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: todo_complete
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/33539 tokens，gen 52.0 tps
+[Orchestrator] 执行工具: rag_search
+[Engine] 前缀命中 32928/33823 tokens，gen 51.6 tps
+[Orchestrator] 执行工具: file_extract
+[Orchestrator] 执行工具: file_extract
+[Orchestrator] 执行工具: file_extract
+[Engine] 前缀命中 36064/36697 tokens，gen 51.5 tps
+✅ L57344 lc-hard-005 r1 prompt=32856 (est 58019, err -24488) recall 3/3 rep_guard 0 (42.05s)
+[Orchestrator] 轮内压缩（ceiling）：[0, 122) 折叠 49 条观察，释放 45,092 字符
+[Orchestrator] 上下文上限护栏：应急压缩 49 条观察，56,827 → 32,361 token（ceiling 53,248）
+[Engine] 前缀命中 32928/32361 tokens，gen 56.5 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 32928/33189 tokens，gen 53.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/33369 tokens，gen 53.3 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/32984 tokens，gen 55.8 tps
+[Orchestrator] 执行工具: file_extract
+[Orchestrator] 执行工具: file_extract
+[Orchestrator] 执行工具: file_extract
+[Engine] 前缀命中 34496/34756 tokens，gen 53.9 tps
+✅ L57344 lc-hard-006 r0 prompt=32361 (est 56827, err -24983) recall 3/3 rep_guard 0 (49.9s)
+[Orchestrator] 轮内压缩（ceiling）：[0, 156) 折叠 52 条观察，释放 43,238 字符
+[Orchestrator] 上下文上限护栏：应急压缩 52 条观察，57,460 → 34,999 token（ceiling 53,248）
+[Engine] 前缀命中 34496/34999 tokens，gen 52.8 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 34496/35454 tokens，gen 46.3 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 34496/35583 tokens，gen 37.1 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 34496/35470 tokens，gen 35.1 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 34496/35512 tokens，gen 43.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 34496/35672 tokens，gen 37.7 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 34496/35757 tokens，gen 37.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 34496/35863 tokens，gen 42.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Orchestrator] 执行工具: run_shell_command
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 36064/36055 tokens，gen 55.2 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 36064/36301 tokens，gen 52.9 tps
+[Orchestrator] 执行工具: run_shell_command
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 36064/36469 tokens，gen 51.0 tps
+[Orchestrator] 执行工具: list_files
+❌ L57344 lc-hard-006 r1 prompt=34999 (est 57460, err -22345) recall 0/3 rep_guard 0 (55.54s)  | files/merged.txt: exists 期望 True，实际 False; files/count.txt: exists 期望 True，实际 False; 步数超限: 18 > 9; 回
+[Orchestrator] 轮内压缩（ceiling）：[0, 142) 折叠 56 条观察，释放 42,098 字符
+[Orchestrator] 上下文上限护栏：应急压缩 56 条观察，57,617 → 34,016 token（ceiling 53,248）
+[Engine] 前缀命中 34496/34016 tokens，gen 56.1 tps
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 34496/35074 tokens，gen 53.2 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 34496/35564 tokens，gen 39.3 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 34496/34779 tokens，gen 54.2 tps
+[Engine] 前缀命中 34496/35240 tokens，gen 50.6 tps
+[Orchestrator] 轮内压缩（step）：[2, 152) 折叠 2 条观察，释放 3,215 字符
+[Engine] 前缀命中 34496/34201 tokens，gen 55.7 tps
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 34496/35075 tokens，gen 46.0 tps
+[Orchestrator] 轮内压缩（step）：[2, 156) 折叠 1 条观察，释放 -62 字符
+[Engine] 前缀命中 34496/35216 tokens，gen 45.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 34496/34332 tokens，gen 55.7 tps
+[Engine] 前缀命中 34496/34738 tokens，gen 54.5 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 34496/35181 tokens，gen 49.8 tps
+❌ L57344 lc-hard-007 r0 prompt=34016 (est 57617, err -23328) recall 0/3 rep_guard 0 (109.13s)  | 步数超限: 12 > 9; 回合上限 11 耗尽仍在发调用; 无收尾答复
+[Orchestrator] 轮内压缩（ceiling）：[0, 130) 折叠 53 条观察，释放 50,890 字符
+[Orchestrator] 上下文上限护栏：应急压缩 53 条观察，57,519 → 29,429 token（ceiling 53,248）
+[Engine] 前缀命中 29792/29429 tokens，gen 56.4 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 29792/30899 tokens，gen 39.8 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 29792/30981 tokens，gen 44.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 29792/30506 tokens，gen 53.2 tps
+[Orchestrator] 轮内压缩（step）：[2, 137) 折叠 2 条观察，释放 1,630 字符
+[Engine] 前缀命中 29792/30382 tokens，gen 53.6 tps
+[Engine] 前缀命中 29792/30976 tokens，gen 47.0 tps
+[Orchestrator] 执行工具: edit_file
+[Orchestrator] 执行工具: edit_file
+[Engine] 前缀命中 29792/30960 tokens，gen 43.1 tps
+[Orchestrator] 轮内压缩（step）：[2, 143) 折叠 1 条观察，释放 -50 字符
+[Engine] 前缀命中 29792/31006 tokens，gen 41.1 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 29792/31105 tokens，gen 49.4 tps
+[Engine] 前缀命中 31360/31726 tokens，gen 50.8 tps
+[Orchestrator] 轮内压缩（step）：[2, 149) 折叠 1 条观察，释放 -71 字符
+[Engine] 前缀命中 31360/32156 tokens，gen 52.1 tps
+✅ L57344 lc-hard-007 r1 prompt=29429 (est 57519, err -27915) recall 3/3 rep_guard 0 (81.31s)
+[Orchestrator] 轮内压缩（ceiling）：[0, 140) 折叠 52 条观察，释放 47,751 字符
+[Orchestrator] 上下文上限护栏：应急压缩 52 条观察，57,064 → 32,451 token（ceiling 53,248）
+[Engine] 前缀命中 32928/32451 tokens，gen 56.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33179 tokens，gen 54.7 tps
+[Orchestrator] 执行工具: list_files
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33605 tokens，gen 54.4 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 34496/34134 tokens，gen 56.6 tps
+[Engine] 前缀命中 34496/34371 tokens，gen 56.1 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/34251 tokens，gen 50.4 tps
+❌ L57344 lc-hard-008 r0 prompt=32451 (est 57064, err -24893) recall 3/3 rep_guard 0 (74.18s)  | 步数超限: 12 > 10
+[Orchestrator] 轮内压缩（ceiling）：[0, 142) 折叠 57 条观察，释放 46,780 字符
+[Orchestrator] 上下文上限护栏：应急压缩 57 条观察，57,637 → 31,695 token（ceiling 53,248）
+[Engine] 前缀命中 31360/31695 tokens，gen 55.2 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/32879 tokens，gen 55.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 32928/33144 tokens，gen 55.5 tps
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: write_file
+[Orchestrator] 执行工具: file_extract
+[Orchestrator] 执行工具: file_extract
+[Engine] 前缀命中 32928/34071 tokens，gen 47.0 tps
+[Engine] 前缀命中 32928/34199 tokens，gen 35.8 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/34140 tokens，gen 50.7 tps
+✅ L57344 lc-hard-008 r1 prompt=31695 (est 57637, err -25649) recall 3/3 rep_guard 0 (60.88s)
+[Orchestrator] 轮内压缩（ceiling）：[0, 154) 折叠 60 条观察，释放 45,323 字符
+[Orchestrator] 上下文上限护栏：应急压缩 60 条观察，57,625 → 33,735 token（ceiling 53,248）
+[Engine] 前缀命中 32928/33735 tokens，gen 49.3 tps
+[Orchestrator] 执行工具: list_dir
+[Engine] 前缀命中 32928/33995 tokens，gen 49.9 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 34496/34360 tokens，gen 56.1 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 34496/34523 tokens，gen 55.3 tps
+[Engine] 前缀命中 34496/34739 tokens，gen 51.4 tps
+[Orchestrator] 执行工具: file_extract
+[Engine] 前缀命中 34496/35915 tokens，gen 38.1 tps
+[Orchestrator] 执行工具: file_extract
+[Engine] 前缀命中 36064/36914 tokens，gen 52.5 tps
+✅ L57344 lc-hard-009 r0 prompt=33735 (est 57625, err -23609) recall 3/3 rep_guard 0 (48.18s)
+[Orchestrator] 轮内压缩（ceiling）：[0, 158) 折叠 60 条观察，释放 41,414 字符
+[Orchestrator] 上下文上限护栏：应急压缩 60 条观察，57,512 → 35,216 token（ceiling 53,248）
+[Engine] 前缀命中 34496/35216 tokens，gen 47.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 34496/35435 tokens，gen 33.4 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 34496/35462 tokens，gen 49.5 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 34496/35877 tokens，gen 50.2 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 36064/36279 tokens，gen 53.7 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 36064/36476 tokens，gen 54.0 tps
+[Orchestrator] transition → verify_nudge
+[Engine] 前缀命中 36064/36792 tokens，gen 53.6 tps
+✅ L57344 lc-hard-009 r1 prompt=35216 (est 57512, err -22128) recall 3/3 rep_guard 0 (56.84s)
+[Orchestrator] 轮内压缩（ceiling）：[0, 136) 折叠 54 条观察，释放 46,939 字符
+[Orchestrator] 上下文上限护栏：应急压缩 54 条观察，57,463 → 31,711 token（ceiling 53,248）
+[Engine] 前缀命中 31360/31711 tokens，gen 54.2 tps
+[Orchestrator] 执行工具: list_dir
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 31360/32336 tokens，gen 48.2 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 31360/32597 tokens，gen 38.7 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 31360/32452 tokens，gen 47.9 tps
+[Orchestrator] 执行工具: run_shell_command
+[Orchestrator] 执行工具: run_shell_command
+[Orchestrator] 执行工具: run_shell_command
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/32768 tokens，gen 56.3 tps
+[Engine] 前缀命中 32928/33138 tokens，gen 52.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 32928/33249 tokens，gen 53.8 tps
+❌ L57344 lc-hard-010 r0 prompt=31711 (est 57463, err -25633) recall 3/3 rep_guard 0 (47.27s)  | files/blockers.txt: exists 期望 True，实际 False; 步数超限: 12 > 9
+[Orchestrator] 轮内压缩（ceiling）：[0, 132) 折叠 49 条观察，释放 43,983 字符
+[Orchestrator] 上下文上限护栏：应急压缩 49 条观察，57,130 → 32,852 token（ceiling 53,248）
+[Engine] 前缀命中 32928/32852 tokens，gen 55.7 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33502 tokens，gen 45.2 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33757 tokens，gen 45.7 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33448 tokens，gen 55.1 tps
+[Engine] 前缀命中 34496/35259 tokens，gen 45.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 34496/35333 tokens，gen 40.3 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/34408 tokens，gen 28.5 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 34496/34481 tokens，gen 53.4 tps
+[Orchestrator] 轮内压缩（step）：[2, 148) 折叠 4 条观察，释放 2,760 字符
+[Engine] 前缀命中 32928/33227 tokens，gen 51.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33445 tokens，gen 47.1 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 32928/33542 tokens，gen 43.7 tps
+[Orchestrator] 执行工具: run_shell_command
+❌ L57344 lc-hard-010 r1 prompt=32852 (est 57130, err -24492) recall 0/3 rep_guard 0 (76.01s)  | files/blockers.txt: exists 期望 True，实际 False; 回合上限 11 耗尽仍在发调用; 无收尾答复
+== 产物: benchmarks/data/context-knee-20261108-p2b/orch-turn-full（表格：summarize.py benchmarks/data/context-knee-20261108-p2b/orch-turn-full）

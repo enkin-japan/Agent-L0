@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/mailer/log/mailer-21.log", "content": "2026-09-07T04:29:35Z ERROR [mailer-8] cache miss ratio 0.699 over last 88s\n2026-09-07T04:42:54Z INFO  [mailer-1] schema check passed version=3911\n2026-09-07T04:42:01Z INFO  [mailer-8] rotated segment seg-2020.dat size_mb=238\n2026-09-07T04:23:30Z WARN  [mailer-2] batch 253 committed rows=1408 lag_ms=112"}

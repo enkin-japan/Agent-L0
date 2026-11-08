@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Classify reports: DRAFT files vs final files
+  ○ [2] Delete DRAFT files (alpha.md, gamma.md)
+  ○ [3] Rename final file beta.md -> beta-final.md (copy then delete original)
+  ○ [4] Verify the three values to report verbatim
+  ○ [5] Deliver final answer with the three verbatim values

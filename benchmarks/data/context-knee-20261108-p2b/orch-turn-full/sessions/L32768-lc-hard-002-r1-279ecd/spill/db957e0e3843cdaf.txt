@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Verbatim values from earlier tool outputs: (1) halyard config path = /opt/halyard/conf/halyard-67b574.toml (from cache-warm-10.log); (2) escalation ticket ID = OPS-50015 (from cache-warm-10.log); (3) 

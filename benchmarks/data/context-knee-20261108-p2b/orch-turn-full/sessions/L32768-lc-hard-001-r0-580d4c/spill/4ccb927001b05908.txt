@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - 已找到的三项值：① halyard 配置路径 = /opt/halyard/conf/halyard-840cc9.toml（来自 indexer/deploy/values.yaml 中 "halyard: loaded config from /opt/halyard/conf/halyard-840cc9.toml"）；② 工单号 = OPS-98613（indexer-14.log: "e

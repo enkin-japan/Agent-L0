@@ -1,0 +1,6 @@
+exit_code: 0
+stdout:
+total 3
+-rw-r--r--  1 user  staff      53 Jan  1 09:00 access.md
+-rw-r--r--  1 user  staff      48 Jan  1 09:00 backup.md
+-rw-r--r--  1 user  staff      89 Jan  1 09:00 security.md

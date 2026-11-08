@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Locate the policy/ directory and list its files
+  ○ [2] Read each policy file, find '90 days' occurrences
+  ○ [3] Replace '90 days'→'30 days' in each writable file; on a refused write, stop on that file
+  ○ [4] Write policy/pending-changes.md naming the read-only file
+  ○ [5] Report the three verbatim values (halyard config path, OPS ticket, queue_depth_alert_threshold)

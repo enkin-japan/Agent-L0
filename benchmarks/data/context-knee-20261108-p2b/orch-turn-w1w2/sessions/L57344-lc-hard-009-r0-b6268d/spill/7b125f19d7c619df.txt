@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Three verbatim values needed in final reply: (1) halyard config path = /opt/halyard/conf/halyard-840cc9.toml (from scheduler-18.log); (2) escalation ticket = OPS-98613 (from report-gen/deploy/values.y
