@@ -10,8 +10,8 @@
 - 成功率 Wilson 95%（单位 = run）；Pass^2 Wilson 95%（单位 = 题，只计 rep 数 = 2 的题）。
   同题两 rep 相关，run 级区间偏窄——这是已知的乐观偏差，表中如实标注。
 - 相对基线的差：限定共同题集（两档都有的题；Pass^2 另要求两档都 2 rep），表里标各档题数。
-  区间：Pass^2 只做题级 bootstrap（按题有放回重抽，题内 rep 对保持完整，不再重抽 rep）；成功率两段
-  bootstrap（先按题、再档内按 rep）。种子固定。符号检验（题级升降）给双侧精确 p。拐点判定同样用共同题集上的差。
+  区间：Pass^2 与成功率都只做题级 bootstrap（按题有放回重抽，题内 rep 保持原样，不再重抽 rep；成功率
+  2026-11-07 起——此前两段「先按题、再档内按 rep」把跨臂配对的 rep 方差重复计入，见 paired_units）。种子固定。符号检验（题级升降）给双侧精确 p。拐点判定同样用共同题集上的差。
 - 采样标签 card(sent …) = harness 已发送给后端的键值；远端是否生效没有回执核验。sampling 不唯一的组标 mixed，
   不参与自动对照。
 - 连贯率：quality.final_text_quality(末轮正文, 记录 lang) 现算，is_coherent 判；空答复不进分母。
@@ -484,10 +484,14 @@ def aggregate(g: Dict[str, Any], th: Dict[str, float], wall_invalid: set) -> Dic
 def paired_units(units: Dict[str, Tuple[List[List[bool]], List[List[bool]]]], metric: str):
     """b − a，按题聚类配对。units[题] = (a 侧各档 rep 列表, b 侧各档 rep 列表)。
     每题每侧的值 = 该侧各档 f(reps) 的均值；f = 通过率（success_rate）或单题无偏 Pass^2 C(c,2)/C(n,2)
-    （pass_hat_2，只用 rep 数 ≥ 2 的档；n = 2 即「两 rep 都过」）。点估计 = 各题 (b − a) 的均值。区间：pass_hat_2 只做题级
-    bootstrap（按题有放回重抽，题内各档 rep 对原样保留——「两 rep 都过」是题内 rep 对的性质，再抽 rep
-    会把 [T,F] 抽成 [T,T]，系统性抬高、区间偏离点估计）；success_rate 两段（先按题、再档内按 rep）。
-    符号检验按题的升/降。"""
+    （pass_hat_2，只用 rep 数 ≥ 2 的档；n = 2 即「两 rep 都过」）。点估计 = 各题 (b − a) 的均值。区间：两种
+    metric 都只做题级 bootstrap（按题有放回重抽，题内各档 rep 原样保留）。pass_hat_2：「两 rep 都过」是题内
+    rep 对的性质，再抽 rep 会把 [T,F] 抽成 [T,T]，系统性抬高、区间偏离点估计。success_rate（2026-11-07
+    起，与 analyze_p2.paired_item 同口径）：配对的单位是题，题内 rep 只是该题观测的一部分，原来的两段重抽
+    （先按题、再档内按 rep）把 rep 方差再计一次、区间偏宽——对种子透传之前的批同样成立，只是采样种子透传
+    （f0d967c）后臂间同题同 rep 同种子严格配对，逐字相同的两臂也得出非零宽区间（P2 批 L0 [−12,+12]）才
+    暴露出来；只按题重抽时相同数据零宽。旧档案 ANALYSIS.md 里嵌的「_复跑」命令现在给出的成功率区间比留档
+    文本窄（点估计与 Pass^2 列不变），留档不重写。符号检验按题的升/降。"""
     def keep(lists):
         return [v for v in lists if v and (metric != "pass_hat_2" or len(v) >= 2)]
     u = {i: (keep(a), keep(b)) for i, (a, b) in units.items()}
@@ -504,17 +508,11 @@ def paired_units(units: Dict[str, Tuple[List[List[bool]], List[List[bool]]]], me
     per = {i: side(u[i][1]) - side(u[i][0]) for i in ids}
     diff = sum(per.values()) / len(ids)
     rng = random.Random(BOOT_SEED)
-
-    def rs(lists):
-        if metric == "pass_hat_2":
-            return lists
-        return [[rng.choice(v) for _ in v] for v in lists]
     boots = []
     for _ in range(BOOT_N):
         tot = 0.0
         for _k in ids:
-            a, b = u[rng.choice(ids)]
-            tot += side(rs(b)) - side(rs(a))
+            tot += per[rng.choice(ids)]     # 每题一次 choice（pass_hat_2 的 RNG 消耗序与改前相同）
         boots.append(tot / len(ids))
     boots.sort()
     up = sum(1 for i in ids if per[i] > 1e-12)
@@ -664,7 +662,7 @@ def render(groups, aggs, args) -> str:
     base_levels = args.baseline_levels
     L.append(f"_自动生成：`benchmarks/context_knee/analyze.py`；规则 metric={args.metric} drop={args.drop} "
              f"recover={args.recover} 基线候选={base_levels}；重复行保留 {KEEP}（非 error 优先）；bootstrap {BOOT_N} 次 seed {BOOT_SEED}：Pass^2 只按题重抽（题内 rep 对保持完整），"
-             f"成功率先按题再档内按 rep 重抽；相对基线一律限定共同题集。采样 card(sent …) = 已发送、未回执核验。_\n")
+             f"成功率同样只按题重抽（2026-11-07 起；此前两段）；相对基线一律限定共同题集。采样 card(sent …) = 已发送、未回执核验。_\n")
     L.append("### A. 输入与去重\n")
     L.append("| 组 | 模型 | 采样 | MTP(按目录名) | 原始行 | 去重后有效 | 缺测(error) | 丢弃重复行 | 重复行 pass 分歧 | wall 不可用档 | 全组复读命中(run) | 全组 aborted |")
     L.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
@@ -745,7 +743,7 @@ def render(groups, aggs, args) -> str:
         b = agg[k["base_level"]]
         L.append("")
         L.append(f"基线档题数：Pass^2 {b['n_items2']} 题 / 成功率 {len(b['_items'])} 题；差一律在共同题集上算。\n")
-        L.append("| level | Pass^2 (本档题数) | 共同题数 | 配对差 [题级 bootstrap 95%] | 题级 升/降 | 符号检验 p | Wilson 区间与基线重叠 | 成功率 (本档题数) | 成功率共同题数 | 成功率配对差 [两段 95%] |")
+        L.append("| level | Pass^2 (本档题数) | 共同题数 | 配对差 [题级 bootstrap 95%] | 题级 升/降 | 符号检验 p | Wilson 区间与基线重叠 | 成功率 (本档题数) | 成功率共同题数 | 成功率配对差 [题级 bootstrap 95%] |")
         L.append("|---|---|---|---|---|---|---|---|---|---|")
         for lv, a in agg.items():
             if lv == k["base_level"]:
@@ -809,7 +807,7 @@ def render(groups, aggs, args) -> str:
             for x in FAIL_ORDER) + " |")
     L.append("")
 
-    L.append("### E. 对照（b − a，共同档位、共同题集；Pass^2 题级 bootstrap、成功率两段 bootstrap 95%；正 = b 更好）\n")
+    L.append("### E. 对照（b − a，共同档位、共同题集；Pass^2 与成功率都题级 bootstrap 95%；正 = b 更好）\n")
     L.append("> 采样对照：card(sent …) 只说明 harness 发送了这些键；**采样键是否在远端生效未经回执核验**。\n")
     for g in groups:
         if sampling_label(g) == "mixed":

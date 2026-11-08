@@ -7,14 +7,17 @@
   grammar_tools 为 None，run_item 与引擎走原路径）。
 - prod：生产 system（session.DEFAULT_SYSTEM_PROMPT）+ 生产确定性工具全集完整 schema + full 档元工具
   （update_plan / complete_step / remember）+ 题目 mock 工具；grammar_tools 与 prompt 面同集合。
+  编排器模式下 prod 随条目生效披露（decl_mode，2026-11-07）：条目 tool_schema_mode=catalog 时装配与行内
+  口径按 catalog 档算（实际送入编排器的就是 catalog 前缀），prefix_mode 仍记 prod、行另记 prefix_decl。
 - catalog：system 同 prod；元工具（+get_tool_schema）与 agent.tool_routing.core 完整、其余生产工具
   目录行（tool_disclosure.disclose），其后 mock 工具完整；grammar_tools = 完整 schema 全集。
 - routed：catalog 之上，按题面 task.user（不含回忆句，跨档不变）经 tool_disclosure.route_tools 选
   top_k（agent.tool_routing），选中者完整 schema。每题一次、题内冻结（纯函数，同输入同输出）。
 - full（D44 (iii) 一审 m3，2026-11-06）：装配与 prod 逐字节相同（生产 system + 全量完整 schema）；只在
   `--orchestrator` 下有意义——run_knee.orch_model_options 把条目层 tool_schema_mode 强制成 full（镜像
-  catalog 档），用来在条目已是 catalog 的模型上测 full 臂。直调模式的 prod 本就是全量完整声明，
-  run_knee 在直调模式拒 full（不给同一装配第二个名字，免得 prefix_mode 分组 / 续跑比对多一个同义档）。
+  catalog 档），用来在条目已是 catalog 的模型上测 full 臂。直调模式的 prod 本就是全量完整声明（直调
+  不经披露，条目的 tool_schema_mode 不起作用），run_knee 在直调模式拒 full（不给同一装配第二个名字，
+  免得 prefix_mode 分组 / 续跑比对多一个同义档）。
 
 工具集取法与 backend/scripts/measure_prefix.py 同源（scripts/tool_token_audit.collect_schemas：密封
 构造、不探活 RAG、不含 rag_admin、skill_invoke 取生产形）。元工具 schema 是 orchestrator 的模块级常量
@@ -99,6 +102,25 @@ class PrefixAssembly:
 def _check_mode(mode: str) -> str:
     if mode not in PREFIX_MODES:
         raise ValueError(f"--prefix 须为 {' | '.join(PREFIX_MODES)}，得到 {mode!r}")
+    return mode
+
+
+def decl_mode(mode: str, tool_schema_mode: Optional[str] = None) -> str:
+    """装配与行内口径（prefix_base_tokens / prefix_n_tools / prefix_core_skipped）实际按哪一档算。
+
+    prod 档不写死 full：编排器模式下随条目生效披露 tool_schema_mode（= orch_meta 的
+    tool_schema_mode_effective，tool_disclosure.resolve_tool_schema_mode 解析的条目级 full | catalog）——
+    生效 catalog 时实际送入编排器的是 catalog 前缀，口径也按 catalog 算（2026-11-07 P2 批 ANALYSIS §2
+    缺陷 (1)：prod 行写 full 的 13757 tok / prompt_full 60，而首 prompt 与 catalog 臂逐 token 相同）。
+    直调模式（tool_schema_mode=None）prod 本就是全量完整声明，原样。full / catalog / routed / mock
+    不随它变（full 档本身就是把条目强制成 full 的名字，catalog 档同理）。生效值域取
+    tool_disclosure.TOOL_SCHEMA_MODES（域扩了这里先拒，不静默当 full）。"""
+    from framework.core.tool_disclosure import TOOL_SCHEMA_MODES
+    _check_mode(mode)
+    if tool_schema_mode is not None and tool_schema_mode not in TOOL_SCHEMA_MODES:
+        raise ValueError(f"tool_schema_mode 须为 None | {' | '.join(TOOL_SCHEMA_MODES)}，得到 {tool_schema_mode!r}")
+    if mode == "prod" and tool_schema_mode == "catalog":
+        return "catalog"
     return mode
 
 

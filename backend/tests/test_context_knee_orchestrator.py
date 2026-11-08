@@ -1174,3 +1174,103 @@ def test_prose_writes_do_not_trigger_verify_nudge_reread(tmp_path, monkeypatch):
     assert sc["state_ok"] is True and sc["pass"] is True
     # 9 次生成 = 8 次工具 + 1 次收尾：回读分支（read_file ×4 → 再收尾）没被消费
     assert len(rec["gens"]) == 9 and rec["turn_metrics"]["generations"] == 9
+
+
+# ---------------- P2 批 §2 缺陷 (1)：--prefix prod 的行内前缀口径随生效披露 ----------------
+
+def _knee_items(n=2):
+    from benchmarks.model_eval.itemlib import load_items
+    return load_items([K.ITEMS_DIR / "seed.jsonl"])[:n]
+
+
+def test_build_prefixes_prod_follows_effective_tool_schema_mode(monkeypatch):
+    """口径护栏：build_prefixes 的 prefix_base_tokens / prefix_n_tools / prefix_core_skipped / prefix_shadowed
+    对 --prefix prod 按生效披露 tool_schema_mode_effective 算——生效 catalog 时逐项等于 --prefix catalog 的，
+    生效 full 时等于 --prefix full 的；直调（None）仍 = full。prefix_mode 始终记 --prefix 字面值；catalog / full
+    档不随生效值变。分词器用假方言（build_prompt 序列化 system + 声明、按字符计）：只比相等 / 不等，不比绝对数。"""
+    from context_knee import prefix as P
+
+    class Dialect:
+        def build_prompt(self, messages, tools=None, include_env=True):
+            return json.dumps([messages, tools, include_env], ensure_ascii=False, sort_keys=True)
+    monkeypatch.setattr(K, "_prefix_counter", lambda engine, repo, opts: (Dialect(), len, None))
+    items = _knee_items()
+    keys = ("prefix_base_tokens", "prefix_n_tools", "prefix_core_skipped", "prefix_shadowed")
+
+    def build(mode, eff):
+        prefixes, meta = K.build_prefixes(mode, items, None, "x/y", {}, tool_schema_mode=eff)
+        assert meta["prefix_mode"] == mode and set(meta["prefix_n_tools"]) == {it["id"] for it in items}
+        return prefixes, {k: meta[k] for k in keys}
+    _, full = build("full", "full")
+    _, cat = build("catalog", "catalog")
+    assert full["prefix_base_tokens"] > cat["prefix_base_tokens"] > 0
+    assert full != cat
+    pre_c, prod_c = build("prod", "catalog")
+    assert prod_c == cat and prod_c != full
+    assert all(a.mode == "catalog" and a.core for a in pre_c.values())       # 装配本身也按 catalog
+    _, prod_f = build("prod", "full")
+    assert prod_f == full
+    _, prod_direct = build("prod", None)
+    assert prod_direct == full
+    # 生效值只改 prod：catalog / full 档传任一生效值都不变
+    assert build("catalog", "full")[1] == cat and build("full", "catalog")[1] == full
+    assert (P.decl_mode("prod", "catalog"), P.decl_mode("prod", "full"), P.decl_mode("prod", None)) == \
+        ("catalog", "prod", "prod")
+    assert (P.decl_mode("catalog", "full"), P.decl_mode("full", "catalog"), P.decl_mode("mock", "catalog")) == \
+        ("catalog", "full", "mock")
+    with pytest.raises(ValueError, match="tool_schema_mode"):
+        P.decl_mode("prod", "routed")
+
+
+def test_orchestrator_prod_dry_run_prefix_meta_matches_catalog_arm(tmp_path):
+    """端到端：真 config 的 Qwen 条目是 catalog（D44 (iii)）→ --orchestrator --prefix prod 的行写
+    tool_schema_mode_effective=catalog，且行内 prefix_n_tools / prefix_core_skipped / prefix_shadowed 与
+    --prefix catalog 臂同题逐项相等（P2 批里 prod 行写的是 full 的 prompt_full=60）；prefix_mode 仍记 prod。"""
+    rows = {}
+    for mode in ("prod", "catalog"):
+        out = tmp_path / mode
+        assert K.main(["--dry-run", "--orchestrator", "--prefix", mode, "--model", "mlx-community/Qwen3.8-27B-4bit",
+                       "--levels", "0", "--reps", "1", "--limit", "1", "--out", str(out)]) == 0
+        rec = json.loads((out / "transcripts.jsonl").read_text().splitlines()[0])
+        assert "error" not in rec, rec.get("traceback")
+        assert rec["prefix_mode"] == mode and rec["tool_schema_mode_effective"] == "catalog"
+        rows[mode] = rec
+    for k in ("prefix_n_tools", "prefix_core_skipped", "prefix_shadowed"):
+        assert rows["prod"][k] == rows["catalog"][k], k
+    assert rows["prod"]["prefix_n_tools"]["prompt_full"] < rows["prod"]["prefix_n_tools"]["prompt"]   # 目录行在列
+    assert rows["prod"]["prefix_decl"] == "catalog" and rows["catalog"]["prefix_decl"] == "catalog"
+
+
+def test_build_prefixes_prod_meta_matches_orchestrator_declaration(tmp_path, monkeypatch):
+    """口径与实发对表：条目 catalog 下 --prefix prod 的 prefix_n_tools（prompt 件数 / 完整 schema 件数）等于
+    编排器首次生成实际声明的件数（经 _first_decl 抓 FakeEngine 收到的 tools），不只是 harness 自己两档互比。"""
+    from framework.utils.model_selection import model_options
+    qwen = model_options("mlx-community/Qwen3.8-27B-4bit")
+    assert qwen.get("tool_schema_mode") == "catalog"
+    decl, asm = _first_decl(monkeypatch, tmp_path, "prod", qwen)
+    item = _item()
+    _, meta = K.build_prefixes("prod", [item], None, "x/y", {}, tool_schema_mode="catalog")
+    n = meta["prefix_n_tools"][item["id"]]
+    assert n["prompt"] == len(decl)
+    assert n["prompt_full"] == sum(1 for d in decl.values() if "parameters" in d)
+    assert meta["prefix_decl"] == "catalog" and meta["prefix_mode"] == "prod"
+    # 写死 full 的旧口径与实发不符（护栏的反例）
+    _, old = K.build_prefixes("prod", [item], None, "x/y", {}, tool_schema_mode="full")
+    assert old["prefix_n_tools"][item["id"]]["prompt_full"] != n["prompt_full"]
+
+
+def test_resume_rejects_prefix_decl_mismatch(tmp_path):
+    """续跑比对：旧目录的编排器 prod 行缺 prefix_decl（= 按 full 计数）时，生效 catalog 的 prod 续跑拒绝合并；
+    同装配档放行。"""
+    tr = tmp_path / "transcripts.jsonl"
+    row = {"prefix_mode": "prod", "entry_sampling": {}, "thinking_replay_mode": "last_k", "thinking_replay_k": 2}
+    tr.write_text(json.dumps(row) + "\n")
+    kw = dict(entry_only=True, prefix_mode="prod", thinking_replay=("last_k", 2))
+    with pytest.raises(SystemExit, match="装配档 prod ≠ catalog"):
+        K.check_resume_compat(tr, "m", {}, 0, {}, prefix_decl="catalog", **kw)
+    K.check_resume_compat(tr, "m", {}, 0, {}, prefix_decl="prod", **kw)        # 旧行缺键 = 字面值
+    K.check_resume_compat(tr, "m", {}, 0, {}, **kw)                            # 直调：不传 = 字面值
+    tr.write_text(json.dumps({**row, "prefix_decl": "catalog"}) + "\n")
+    K.check_resume_compat(tr, "m", {}, 0, {}, prefix_decl="catalog", **kw)
+    with pytest.raises(SystemExit, match="装配档 catalog ≠ prod"):
+        K.check_resume_compat(tr, "m", {}, 0, {}, prefix_decl="prod", **kw)

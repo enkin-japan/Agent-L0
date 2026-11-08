@@ -1234,7 +1234,7 @@ def test_resume_compat_prefix_mode(tmp_path):
     K.check_resume_compat(t, "dry-run/fake", {}, 7, {}, prefix_mode="prod")
     with pytest.raises(SystemExit, match="前缀档"):
         K.check_resume_compat(t, "dry-run/fake", {}, 7, {}, prefix_mode="routed", entry_only=True)
-    _rows(t, prefix_mode=None)                                            # W-2 之前的旧目录
+    _rows(t, prefix_mode=None, prefix_decl=None)                          # W-2 之前的旧目录（两键都没有）
     K.check_resume_compat(t, "dry-run/fake", {}, 7, {})                   # 缺键 = mock
     K.check_resume_compat(t, "dry-run/fake", {}, 7, {}, prefix_mode="mock", entry_only=True)
     with pytest.raises(SystemExit, match="mock ≠ prod"):

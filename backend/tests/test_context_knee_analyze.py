@@ -133,6 +133,24 @@ def test_pass_hat_bootstrap_item_level_centered():
     assert p["down"] == 5 and p["up"] == 0
 
 
+def test_success_rate_bootstrap_item_level_only():
+    """success_rate 区间也只按题重抽（题内 rep 原样；与 analyze_p2.paired_item 同口径，2026-11-07）：
+    两侧逐字相同 → 点差与区间全零宽（原两段重抽——先按题、再档内按 rep——给出非零宽，P2 批 L0 [−12,+12]）；
+    一题 0→1、一题不变 → 点差 0.5、题级重抽区间恰为 [0, 1]，中位落在 {0, 0.5, 1}。"""
+    same = {"i1": ([TF], [TF]), "i2": ([[False, False]], [[False, False]])}
+    r = A.paired_units(same, "success_rate")
+    assert (r["n_items"], r["diff"], r["lo"], r["hi"], r["median"]) == (2, 0.0, 0.0, 0.0, 0.0)
+    assert (r["up"], r["down"]) == (0, 0)
+    one = {"i1": ([[False, False]], [TT]), "i2": ([TF], [TF])}
+    r = A.paired_units(one, "success_rate")
+    assert r["diff"] == 0.5 and r["lo"] == 0.0 and r["hi"] == 1.0 and r["median"] in (0.0, 0.5, 1.0)
+    assert (r["up"], r["down"]) == (1, 0)
+    # 多档：题内各档 rep 不被重抽 → 同一题两侧各档 rep 完全相同时仍零宽
+    multi = {"i1": ([TF, [False, True]], [TF, [False, True]]), "i2": ([TT, TF], [TT, TF])}
+    r = A.paired_units(multi, "success_rate")
+    assert (r["diff"], r["lo"], r["hi"]) == (0.0, 0.0, 0.0)
+
+
 # ---- W1 峰值列 ----
 
 def test_aggregate_peak_prompt_median_and_csv_tail_column(tmp_path):
