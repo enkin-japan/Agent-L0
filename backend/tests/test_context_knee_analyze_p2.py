@@ -14,6 +14,7 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO / "benchmarks") not in sys.path:
     sys.path.append(str(REPO / "benchmarks"))
 
+from context_knee import analyze_orch as O   # noqa: E402
 from context_knee import analyze_p2 as P   # noqa: E402
 
 
@@ -172,6 +173,15 @@ def test_layout_arms_catalog_optional_but_turn_and_full_required(tmp_path):
     _arm_dirs(tmp_path / "d", ["orch-turn-none", "orch-turn-w1w2", "orch-turn-full"])
     with pytest.raises(SystemExit):
         P.layout_arms(tmp_path / "d")                                  # 缺 w1 仍报错
+
+
+def test_layout_arms_required_override_for_two_arm_batches(tmp_path):
+    import pytest
+    _arm_dirs(tmp_path / "e", ["orch-turn-none", "orch-turn-w1w2"])        # w12eval 批：只 none + w1w2
+    assert P.layout_arms(tmp_path / "e", required=["orch-turn-none", "orch-turn-w1w2"]) == \
+        ["orch-turn-none", "orch-turn-w1w2"]
+    with pytest.raises(SystemExit):
+        P.layout_arms(tmp_path / "e")                                      # 缺省 required 仍要三臂 + full：报错
 
 
 def test_prod_prefix_without_catalog_takes_none_only_if_decl_is_effective():
@@ -378,5 +388,24 @@ def test_main_flags_w1w2_not_catalog_in_q_title(tmp_path):
 
 def test_main_exits_when_prod_prefix_unavailable(tmp_path):
     import pytest
+    turn_before = list(O.TURN)
     with pytest.raises(SystemExit, match="F 节生产前缀取不到"):
         P.main(_batch(tmp_path, none_decl="full", p2=False))       # none 行 prefix_decl ≠ 生效 → 不取声明值，停
+    # 这条 SystemExit 在 try 内抛（main 已把 O.TURN 收窄到在场臂）：finally 必须把它复原，不泄漏给下一次 main 调用
+    assert O.TURN == turn_before
+
+
+def test_main_two_arm_mode_renders_without_full_arm(tmp_path):
+    data = tmp_path / "data"
+    _write_arm(data / "orch-turn-none", _arm_rows(6, lambda it, lv, rep: rep % 2 == 0))
+    _write_arm(data / "orch-turn-w1w2", _arm_rows(6, lambda it, lv, rep: it == "i1"))
+    (data / "run_colab.log").write_text("2026-11-08 10:00:00 START deploy m\n2026-11-08 11:00:00 DONE BATCH_RC=0\n",
+                                        encoding="utf-8")
+    _write_arm(tmp_path / "ref", _arm_rows(2, lambda it, lv, rep: True))
+    argv = ["--data", str(data), "--ref", str(tmp_path / "ref"), "--out-md", str(tmp_path / "out2.md"), "--two-arm"]
+    turn_before = list(O.TURN)
+    assert P.main(argv) == 0
+    txt = (tmp_path / "out2.md").read_text(encoding="utf-8")
+    assert "本批无 orch-turn-full 臂" in txt                                     # Q 节不渲染 full 对照
+    assert "#### V4. 本批无 orch-turn-full 臂：改列 w1w2 − none" in txt           # V4 改列 w1w2 − none
+    assert O.TURN == turn_before                                                 # 收窄后 finally 已复原

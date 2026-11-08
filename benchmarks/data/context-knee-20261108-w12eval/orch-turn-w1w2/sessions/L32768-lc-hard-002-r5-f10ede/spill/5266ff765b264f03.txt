@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Locate the reports folder and list its files
+  ○ [2] Identify files containing DRAFT (delete) vs final reports (rename with -final)
+  ○ [3] Perform deletions and copy+delete renames
+  ○ [4] Verify final state and compose answer with the three required values

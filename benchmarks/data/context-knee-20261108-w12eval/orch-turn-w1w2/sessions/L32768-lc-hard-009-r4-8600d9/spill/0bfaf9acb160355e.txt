@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Locate metrics/ directory and list its files
+  ○ [2] Read each metrics file and compute averages
+  ○ [3] Write metrics/summary.json with the five keys in order
+  ○ [4] Final answer with the three verbatim values

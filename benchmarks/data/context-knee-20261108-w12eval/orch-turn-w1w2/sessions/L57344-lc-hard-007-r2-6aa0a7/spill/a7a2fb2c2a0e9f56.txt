@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] 定位 inbox 目录及其中两份报告
+  ○ [2] 把两份报告里的 2025 改为 2026（其余不动，archive/config 不碰）
+  ○ [3] 写 inbox/changelog.txt 一行说明
+  ○ [4] 核实三项工具输出值（halyard 配置路径、OPS 工单号、queue_depth_alert_threshold）
+  ○ [5] 给出最终答复

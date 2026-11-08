@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/quota-svc/log/quota-svc-04.log", "content": "2026-09-09T14:53:22Z WARN  [quota-svc-1] worker heartbeat ok queue=265 inflight=713\n2026-09-09T15:14:28Z WARN  [quota-svc-3] connection pool resized from 294 to 3922\n2026-09-09T14:53:02Z WARN  [quota-svc-5] schema check passed version=1573"}

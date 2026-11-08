@@ -1,0 +1,5 @@
+{"kind": "journal_header", "v": 1}
+{"seq": 1, "turn_id": "t_47870a1b8ae1", "ts": 1794159690.05, "type": "turn_queued", "data": {"prompt": "We shortened the rotation interval: in every file under policy/, replace \"90 days\" with \"30 days\" and keep the rest of the text as it is. One of those files is read-only - if a write is refused, stop trying on that file, leave it exactly as it is, and instead write policy/pending-changes.md naming the file that still needs a manual update.", "attachments": [], "gen": {}, "origin": "chat"}}
+{"seq": 2, "turn_id": "t_47870a1b8ae1", "ts": 1794159690.05, "type": "turn_started", "data": {}}
+{"seq": 44, "turn_id": "t_47870a1b8ae1", "ts": 1794159701.392, "type": "tool_started", "data": {"call_id": "a7cae6e6", "name": "read_file", "args": {"path": "/srv/legacy-2025q3/telemetry/geo-tiles-1.json"}}}
+{"seq": 45, "turn_id": "t_47870a1b8ae1", "ts": 1794159701.394, "type": "tool_result", "data": {"call_id": "a7cae6e6", "name": "read_file", "response": "{\"error\": \"File not found: /srv/legacy-2025q3/telemetry/geo-tiles-1.json\"}", "status": "ok"}}

@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/thumbnailer/deploy/values.yaml", "content": "  timeout_ms: true\n  warmup_s: ap-east-2\n  warmup_s: warn\n    replicas: 2829\n    read_only: true\n  retry_limit: 810\n    timeout_ms: ap-east-2\n  timeout_ms: ap-east-2\n  read_only: warn\n    log_level: warn\n    replicas: 3011\n    pool_size: false\n    read_only: false"}

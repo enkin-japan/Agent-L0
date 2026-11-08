@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Locate the reports folder and list its files
+  ○ [2] Identify DRAFT files and delete them
+  ○ [3] Rename final reports with -final suffix (copy then delete original)
+  ○ [4] Verify final state and report the three required values

@@ -1,0 +1,3 @@
+Saved to scratchpad.
+  - sales 1–5月金额: 1月=2485, 2月=2975, 3月=3030, 4月=3540, 5月=3300; 合计=15355
+  - 三项值：① halyard 配置路径=/opt/halyard/conf/halyard-91ee16.toml（ingest runbook）② 工单号=OPS-13337（cache-warm-05.log）③ queue_depth_alert_threshold=7055（relay runbook）

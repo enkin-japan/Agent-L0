@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/ledger/log/ledger-24.log", "content": "2026-09-02T22:28:24Z INFO  [ledger-6] rotated segment seg-1471.dat size_mb=222\n2026-09-02T23:25:38Z DEBUG [ledger-4] dropped 762 malformed records from partition 2669\n2026-09-02T22:46:52Z INFO  [ledger-7] schema check passed version=5110"}

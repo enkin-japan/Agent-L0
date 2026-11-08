@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Found so far: halyard config path = /opt/halyard/conf/halyard-91ee16.toml (in relay/deploy/values.yaml); queue_depth_alert_threshold = 7055 (in runbook/cache-warm.md); still need OPS- ticket ID

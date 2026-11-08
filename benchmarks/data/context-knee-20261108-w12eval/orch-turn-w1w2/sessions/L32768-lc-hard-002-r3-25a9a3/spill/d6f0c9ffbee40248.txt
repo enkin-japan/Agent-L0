@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Required verbatim values: (1) halyard config path = /opt/halyard/conf/halyard-a8d471.toml (from runbook/mailer.md); (2) escalation ticket = OPS-17472 (from mailer-11.log); (3) queue_depth_alert_thresh

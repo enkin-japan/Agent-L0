@@ -1,0 +1,4 @@
+Plan replaced.
+  ○ [1] Edit policy/access.md, backup.md, security.md: 90 days → 30 days
+  ○ [2] Handle any refused write via policy/pending-changes.md
+  ○ [3] Final answer with the three verbatim values

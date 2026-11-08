@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/thumbnailer/deploy/values.yaml", "content": "  pool_size: 3754\n  max_batch: ap-east-2\nflush_interval_s: 2491\n  flush_interval_s: ap-east-2\n    region: false\n    replicas: ap-east-2\ntimeout_ms: true\nshard_count: true\n    log_level: true\n  retry_limit: info\nmax_batch: 2149\n  flush_interval_s: 1024"}

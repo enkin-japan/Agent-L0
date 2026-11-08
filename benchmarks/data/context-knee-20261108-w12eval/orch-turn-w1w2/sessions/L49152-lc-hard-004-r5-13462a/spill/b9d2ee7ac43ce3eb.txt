@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/geo-tiles/deploy/values.yaml", "content": "    log_level: true\n  replicas: true\n  max_batch: info\nlog_level: true\n  max_batch: 3317\n  replicas: true\nreplicas: 682\nregion: 3444\npool_size: info\nread_only: true\n    read_only: ap-east-2\nretry_limit: true\n    region: false"}

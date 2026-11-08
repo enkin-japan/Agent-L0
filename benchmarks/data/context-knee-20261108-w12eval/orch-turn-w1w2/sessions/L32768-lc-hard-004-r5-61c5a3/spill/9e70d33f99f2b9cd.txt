@@ -1,0 +1,4 @@
+Plan replaced.
+  ○ [6] Replace '90 days' with '30 days' in policy/access.md, policy/backup.md, policy/security.md (one file per call; if a write is refused, stop on that file)
+  ○ [7] If any write was refused, write policy/pending-changes.md naming the read-only file
+  ○ [8] Final reply with the three verbatim values

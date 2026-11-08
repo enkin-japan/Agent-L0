@@ -14,7 +14,8 @@
 - U 节 = analyze_d44.sec_u(prev_ok=False)：只列本批，不并跨批列（sec_u 的跨批文字写死 b2）。
 - V 节（本文件新增）：V1 逐字相同率（跨臂 / 臂内跨 rep / 种子核对）→ V2 L0 噪声基线 → V3 五臂 × 四档与 d44 / b2
   → V4 full 对 catalog / w1w2 → V5 时长。
-- catalog 臂可缺（11-08 p2b 批起删臂）：已知臂 = O.B2_ORCH 里目录在的；必需 = O.TURN 三臂 + orch-turn-full。缺 catalog 时
+- catalog 臂可缺（11-08 p2b 批起删臂）：已知臂 = O.B2_ORCH 里目录在的；必需 = O.TURN 三臂 + orch-turn-full
+  （--two-arm：只需 none + w1w2，O.TURN 临时收窄到在场臂，缺 full 时 Q 节写明不渲染、V4 改列 w1w2 − none）。缺 catalog 时
   Q / U3 / V4 里对 catalog 的部分显式写「本批无 catalog 臂」；Q / V4 的 full 对照改用 w1w2（p2 批 V1a：w1w2 与 catalog
   全档逐字相同），并列出 w1w2 行内 prefix_decl 作证。不做静默替换。F 节生产前缀：有 catalog 臂取其行内值；否则取
   orch-turn-none 行内值，前提是行内 prefix_decl == tool_schema_mode_effective（2d3fd99c 起前缀元数据随生效档位）。
@@ -341,6 +342,14 @@ def short(n: str) -> str:
     return n.replace("orch-turn-", "")
 
 
+_BATCH_PREFIX_RE = re.compile(r"^context-knee-\d{8}-")
+
+
+def batch_label(p: str) -> str:
+    """目录名去掉 context-knee-YYYYMMDD- 前缀，给 W 节当批次标签（p2b 批跑出来仍是「p2b」「p2」，回归逐字节不变）。"""
+    return _BATCH_PREFIX_RE.sub("", os.path.basename(os.path.normpath(p)))
+
+
 def pair_cell1(p) -> str:
     """同 pair_cell，一位小数（V4：区间端点贴 0 时看得出是否跨 0）。"""
     if p is None:
@@ -355,12 +364,19 @@ def pair_cell(p) -> str:
 
 
 def tail_cell(d: Optional[float], null: Sequence[float], t: Optional[float]) -> str:
-    """观察差 d 的尾概率 P(|Δ| ≥ |d|) 与按门槛 t 的判定（t = None：门槛超出零分布支撑，任何差都判噪声内）。"""
+    """观察差 d 的尾概率 P(|Δ| ≥ |d|) 与按门槛 t 的判定（t = None：门槛超出零分布支撑——不判噪声内，写最大 |Δ| 与其尾概率）。"""
     if d is None:
         return "—"
     p = tail_p(null, d)
-    over = t is not None and abs(d) >= t - EPS
-    return f"{d * 100:+.0f}（P={'—' if p is None else f'{p:.1%}'}，{'超噪声' if over else '噪声内'}）"
+    pstr = "—" if p is None else f"{p:.1%}"
+    if t is None:
+        mx = max(null) if null else None
+        if mx is None:
+            return f"{d * 100:+.0f}（P={pstr}，超出支撑）"
+        mp = tail_p(null, mx)
+        return f"{d * 100:+.0f}（P={pstr}，门槛超出支撑，最大 |Δ| {mx * 100:.0f}，P={'—' if mp is None else f'{mp:.1%}'}）"
+    over = abs(d) >= t - EPS
+    return f"{d * 100:+.0f}（P={pstr}，{'超噪声' if over else '噪声内'}）"
 
 
 def pt_items(items: Dict[str, List[bool]], reps: Optional[Sequence[int]] = None) -> Dict[str, List[bool]]:
@@ -429,13 +445,20 @@ def items_ph2(items: Dict[str, List[bool]]) -> Optional[float]:
     return sum(A.pass_hat_2_of(v) for v in two) / len(two) if two else None
 
 
-def l0_rep_text(K, names: Sequence[str]) -> str:
-    """各臂 L0 rep 数：全同 → 「6 rep」；不同 → 「none 6 / w1 2 / … rep」。"""
-    cnt = {n: len({k[1] for k in K[n][0]}) for n in names}
+def lv_rep_text(K, names: Sequence[str], lv: int) -> str:
+    """各臂该档 rep 数：全同 → 「6 rep」；不同 → 「none 6 / w1 2 / … rep」。"""
+    cnt = {n: len({k[1] for k in K[n][lv]}) for n in names if K[n][lv]}
+    if not cnt:
+        return "—"
     vals = set(cnt.values())
     if len(vals) == 1:
         return f"{vals.pop()} rep"
     return " / ".join(f"{short(n)} {c}" for n, c in cnt.items()) + " rep"
+
+
+def l0_rep_text(K, names: Sequence[str]) -> str:
+    """各臂 L0 rep 数：全同 → 「6 rep」；不同 → 「none 6 / w1 2 / … rep」。"""
+    return lv_rep_text(K, names, 0)
 
 
 def pooled_aligned(al: Dict[int, Dict[str, Any]], sel: Sequence[int]) -> Tuple[Any, Any, str]:
@@ -458,7 +481,7 @@ def w12_is_catalog(G) -> Tuple[List[str], List[str], bool]:
 
 # ---------------------------------------------------------------- V 节
 def sec_v(G, aggs, arms: List[str], data: Path, prev: Optional[Path], b2G, b2aggs, args,
-          stash: Optional[Dict[str, Any]] = None) -> List[str]:
+          stash: Optional[Dict[str, Any]] = None, two_arm: bool = False) -> List[str]:
     """stash 给出时写入 nulls / thr（V2c 零分布与门槛），供 W 节判噪声。"""
     L = ["### V. P2 噪声基线专节（本节 = analyze_p2.py 新增；`@d44` = d44 批同名臂，`@b2` = b2 批同名臂）\n"]
     K = {n: {lv: keyed(G[n]["records"], lv) for lv in LEVELS} for n in arms}
@@ -587,7 +610,10 @@ def sec_v(G, aggs, arms: List[str], data: Path, prev: Optional[Path], b2G, b2agg
                  f"{pt(a0['pass_at_2'])} |")
     L.append("")
     reps_cls = [c[0] for c in cls]
-    L.append(f"V2c. 拆分零分布：从同一臂 L0 的 {l0_rep_text(K, reps_cls)} 里取两组不相交 rep 当两条假臂（每条 = 10 题 × m rep；m=2 同真实 32K/49K/57K 档设计），"
+    fill_rep_real = {lv_rep_text(K, arms, lv) for lv in LEVELS[1:]}
+    fill_rep_txt = ("m=2 同真实 32K/49K/57K 档设计" if fill_rep_real == {"2 rep"} else
+                    f"m=2（本批 32K/49K/57K 档实际 {'、'.join(sorted(fill_rep_real))}，不是 2 rep 设计——按在场臂数与 rep 数现算）")
+    L.append(f"V2c. 拆分零分布：从同一臂 L0 的 {l0_rep_text(K, reps_cls)} 里取两组不相交 rep 当两条假臂（每条 = 10 题 × m rep；{fill_rep_txt}），"
              f"枚举全部无序拆分得 |Δ| 的零分布。只用 L0 逐字相同类的代表（{', '.join(short(x) for x in reps_cls)}），逐字相同的臂不重复计。"
              "**门槛 t = 零分布可取值里 P(|Δ| ≥ t) ≤ 5% 的最小值**（零分布离散，直接按枚举计尾概率，不用分位数）。"
              "拆分之间共用 rep，尾概率是近似；本批 L0 通过率 " + "、".join(f"{short(n)} {pc(aggs[n][0]['success_rate'])}" for n in reps_cls if 0 in aggs[n])
@@ -630,9 +656,10 @@ def sec_v(G, aggs, arms: List[str], data: Path, prev: Optional[Path], b2G, b2agg
     def tlab(metric, m):
         t = thr[(metric, m)]
         return "> 零分布最大值" if t is None else f"≥ {pt(t, 0)} 点（P={tail_p(nulls[(metric, m)], t):.1%}）"
+    l0_cls_rep = l0_rep_text(K, reps_cls)   # 按实际在场臂数与 rep 数现算（reps_cls 的 L0 rep 数，通常同 2026-11-08 起 6 rep）
     L.append(f"**建议门槛**：同档两臂（10 题 × 2 rep，m=2 零分布）成功率差 {tlab('success', 2)}、Pass^2 差 {tlab('pass_hat_2', 2)} 才算超出 L0 rep 噪声"
-             f"（P(|Δ| ≥ t) ≤ 5%）；L0 两臂各 6 rep 时以 m=3 拆分值作参考（成功率 {tlab('success', 3)}、Pass^2 {tlab('pass_hat_2', 3)}；"
-             "6 rep 对 6 rep 的真实噪声更小，m=3 值偏保守）。逐字相同的臂对不适用（差恒 0）。下表凡「超噪声 / 噪声内」都按此判，并给观察差的尾概率。\n")
+             f"（P(|Δ| ≥ t) ≤ 5%）；L0 两臂各 {l0_cls_rep} 时以 m=3 拆分值作参考（成功率 {tlab('success', 3)}、Pass^2 {tlab('pass_hat_2', 3)}；"
+             f"{l0_cls_rep} 对 {l0_cls_rep} 的真实噪声更小，m=3 值偏保守）。逐字相同的臂对不适用（差恒 0）。下表凡「超噪声 / 噪声内」都按此判，并给观察差的尾概率。\n")
     if stash is not None:
         stash.update(nulls=nulls, thr=thr)
 
@@ -695,8 +722,12 @@ def sec_v(G, aggs, arms: List[str], data: Path, prev: Optional[Path], b2G, b2agg
     # V4 ------------------------------------------------------------
     cat, w12 = CAT, W12
     has_cat = cat in arms
-    L.append(f"#### V4. full 臂对 {'catalog / w1w2' if has_cat else 'w1w2 / none（本批生效前缀 = catalog）'}（b − a，按题配对；区间只按题聚类重抽，种子 {A.BOOT_SEED}）\n")
-    if not has_cat:
+    anchor = FULL if FULL in arms else "orch-turn-none"   # 无 full 臂（w12eval 批只有 none + w1w2）→ V4 改列 w1w2 − none
+    L.append(f"#### V4. full 臂对 {'catalog / w1w2' if has_cat else 'w1w2 / none（本批生效前缀 = catalog）'}（b − a，按题配对；区间只按题聚类重抽，种子 {A.BOOT_SEED}）\n"
+             if FULL in arms else f"#### V4. 本批无 {FULL} 臂：改列 w1w2 − none（b − a，按题配对；区间只按题聚类重抽，种子 {A.BOOT_SEED}）\n")
+    if FULL not in arms:
+        pairs = [("orch-turn-none", w12)]
+    elif not has_cat:
         decl, eff, ok = w12_is_catalog(G)
         L.append(f"{NO_CAT}：对照臂用 w1w2——p2 批 V1a 已证 w1w2 与 catalog 全档逐字相同（同输入同输出）；本批 w1w2 行内 "
                  f"prefix_decl={decl}、tool_schema_mode_effective={eff}"
@@ -741,10 +772,10 @@ def sec_v(G, aggs, arms: List[str], data: Path, prev: Optional[Path], b2G, b2agg
             L.append(f"| {short(b_n)} − {short(a_n)} | {lab}{nt} | — | {pp(ps['diff'] if ps else None)}（合并无零分布） | {pair_cell1(ps)} | — | "
                      f"{pp(ph['diff'] if ph else None)} | {pair_cell1(ph)} |")
     L.append("")
-    hi_lv = max(lvs[FULL]) if lvs[FULL] else None
+    hi_lv = max(lvs[anchor]) if lvs[anchor] else None
     L.append(f"首 prompt 中位（L0 / {hi_lv}）：" + "、".join(
         f"{short(n)} {O.n0(aggs[n].get(0, {}).get('prompt_tokens_median'))} / {O.n0(aggs[n].get(hi_lv, {}).get('prompt_tokens_median'))}"
-        for n in (FULL, pairs[0][1])))
+        for n in (anchor, pairs[0][1])))
     cd = cat + TAG
     if cd in aggs and cat in aggs and 0 in aggs[cd] and 0 in aggs[cat]:
         x0, x1 = aggs[cd][0]["prompt_tokens_median"], aggs[cat][0]["prompt_tokens_median"]
@@ -763,6 +794,9 @@ def sec_v(G, aggs, arms: List[str], data: Path, prev: Optional[Path], b2G, b2agg
 
     # V5 ------------------------------------------------------------
     L.append("#### V5. 时长（run_colab.log 臂起止；Σwall = transcripts 行 wall_s 之和）\n")
+    if two_arm:
+        L.append("⚠️ 拷贝续跑批：本批 Σwall 含拷贝行（rep 0–1 在上一批 VM 跑），「本批墙钟」只含新跑 rep；"
+                  "与 d44 整臂相减的增量与「L0 多出的 rep 估计」不适用，用时判定见证据脚本按 rep 段拆分表。\n")
     cur = arm_minutes((data / "run_colab.log").read_text(encoding="utf-8"))
     old = arm_minutes((prev / "run_colab.log").read_text(encoding="utf-8")) if prev and (prev / "run_colab.log").is_file() else {}
     L.append("| 臂 | 本批墙钟 min | d44 同形态臂 | d44 墙钟 min | 墙钟增量 min | 本批 L0 rep 数 | 本批 Σwall L0 min | 本批 Σwall 填充三档 min | L0 多出的 rep 估计 min（= L0 Σwall × (rep−2)/rep） | d44 Σwall L0 / 填充三档 min |")
@@ -887,10 +921,10 @@ def p2_only_arms(p2: Optional[Path], arms: Sequence[str]) -> List[str]:
 
 
 def sec_w(G, aggs, arms: List[str], p2G, p2aggs, ref_key: str, b2aggs, stash: Dict[str, Any],
-          only_p2: Optional[Sequence[str]] = None) -> List[str]:
+          only_p2: Optional[Sequence[str]] = None, data_label: str = "p2b", p2_label: str = "p2") -> List[str]:
     """本批对 --p2 批（同 KNEE_SEED → 同 per-request 种子；p2G / p2aggs 的组名 = 臂名 + TAG_P2）。
     only_p2 = p2 有、本批无的臂（main 用 p2_only_arms 从 p2 目录算；p2G 只载入共同臂，单靠 p2G 算不出来）。"""
-    L = [f"### W. 本批对 --p2 批（同 KNEE_SEED、同 per-request 种子；`{TAG_P2}` = p2 批同名臂；本节 = analyze_p2.py 新增）\n"]
+    L = [f"### W. 本批对 --p2 批（同 KNEE_SEED、同 per-request 种子；`{TAG_P2}` = {p2_label} 批同名臂；本节 = analyze_p2.py 新增）\n"]
     both = [n for n in arms if n + TAG_P2 in p2G]
     only_p2 = sorted(set(only_p2 or []) | ({k[:-len(TAG_P2)] for k in p2G} - set(arms)))
     L.append(f"共同臂：{', '.join(short(n) for n in both) or '无'}；p2 有、本批无：{', '.join(short(n) for n in only_p2) or '无'}"
@@ -903,10 +937,10 @@ def sec_w(G, aggs, arms: List[str], p2G, p2aggs, ref_key: str, b2aggs, stash: Di
 
     # W1 ------------------------------------------------------------
     L.append("#### W1. 跨批逐字相同与输入差（先看这个：输出大多相同 = 改动没碰到模型输入或没改变输出）\n")
-    L.append("每格 = 相同对 / 配对数（配对 = 两批都有的 (item, rep)；「仅 p2 / 仅本批」= 只在一侧的行数，不进配对）。"
-             "首 prompt 差 = p2b − p2 的首次生成 prompt_tokens（引擎回报）取值:对数；"
+    L.append(f"每格 = 相同对 / 配对数（配对 = 两批都有的 (item, rep)；「仅 {p2_label} / 仅本批」= 只在一侧的行数，不进配对）。"
+             f"首 prompt 差 = {data_label} − {p2_label} 的首次生成 prompt_tokens（引擎回报）取值:对数；"
              "填充档输入签名另含 fill.prompt_tokens_measured。首个分叉轮 = 第一处 (thoughts, text, tool_calls) 不同的轮下标:对数。\n")
-    L.append("| 臂 | level | 仅 p2 / 仅本批 行数 | 输出相同 | 输入签名相同 | system.json sha 相同 | 填充 fingerprint 相同 | 首 prompt 差:对数 | prefix_base_tokens p2 → p2b | 首个分叉轮:对数 |")
+    L.append(f"| 臂 | level | 仅 {p2_label} / 仅本批 行数 | 输出相同 | 输入签名相同 | system.json sha 相同 | 填充 fingerprint 相同 | 首 prompt 差:对数 | prefix_base_tokens {p2_label} → {data_label} | 首个分叉轮:对数 |")
     L.append("|---|---|---|---|---|---|---|---|---|---|")
     tot = {lv: [0, 0] for lv in LEVELS}
     diffs: Dict[Tuple[str, ...], int] = {}
@@ -966,7 +1000,7 @@ def sec_w(G, aggs, arms: List[str], p2G, p2aggs, ref_key: str, b2aggs, stash: Di
     L.append("- 按档合计输出相同：" + "、".join(f"{lv}:{e}/{c}" for lv, (e, c) in tot.items() if c))
     def dist(dd):
         return "、".join(f"{'—' if d is None else f'{d:+d}'}:{v}" for d, v in sorted(dd.items(), key=lambda x: (x[0] is None, x[0] or 0)))
-    L.append(f"- prefix_base_tokens 差（p2b − p2，只取两批行内前缀元数据都按生效档位计的臂，prefix_meta_ok）：{sorted(pb_delta) or '—'}；"
+    L.append(f"- prefix_base_tokens 差（{data_label} − {p2_label}，只取两批行内前缀元数据都按生效档位计的臂，prefix_meta_ok）：{sorted(pb_delta) or '—'}；"
              f"全部配对的首 prompt 差：{dist(pd_all)}；其中填充 fingerprint 相同的对：{dist(pd_fp)}")
     L.append(f"- 填充 fingerprint 不同的对 {len(fp_exc)}：" + ("；".join(fp_exc) if fp_exc else "无")
              + "（这些对的填充内容不同，跨批输入不只差前缀 / 系统提示；原因本脚本未核验。W2 / W3 按臂档标出其个数）")
@@ -984,11 +1018,11 @@ def sec_w(G, aggs, arms: List[str], p2G, p2aggs, ref_key: str, b2aggs, stash: Di
     L.append("")
 
     # W2 ------------------------------------------------------------
-    L.append("#### W2. 同臂同档 p2b − p2（按题配对；区间 = paired_item，只按题重抽，种子 "
+    L.append(f"#### W2. 同臂同档 {data_label} − {p2_label}（按题配对；区间 = paired_item，只按题重抽，种子 "
              f"{A.BOOT_SEED}；尾概率 = V2c 本批零分布，两侧都 ≥ 6 rep 的格用 m=3、其余用 m=2。两批 rep 编号集合不同的格"
-             "（如 w1 / w1w2 L0：p2 6 rep、本批 2 rep）两侧都截到共同 rep 再配对，格内注明「rep 0–1 配对」与截前→截后 rep 数，"
-             "p2 → p2b 列与 recall 也是截后值）\n")
-    L.append("| 臂 | level | 成功率 p2 → p2b | 差（尾概率，判定） | 按题 95% CI（升/降） | Pass^2 p2 → p2b | 差（尾概率，判定） | 按题 95% CI（升/降） | recall p2 → p2b | recall 差 按题 95% CI（升/降） |")
+             f"（如某臂某档：{p2_label} rep 数更多、{data_label} rep 数更少）两侧都截到共同 rep 再配对，格内注明「rep 0–1 配对」与截前→截后 rep 数，"
+             f"{p2_label} → {data_label} 列与 recall 也是截后值）\n")
+    L.append(f"| 臂 | level | 成功率 {p2_label} → {data_label} | 差（尾概率，判定） | 按题 95% CI（升/降） | Pass^2 {p2_label} → {data_label} | 差（尾概率，判定） | 按题 95% CI（升/降） | recall {p2_label} → {data_label} | recall 差 按题 95% CI（升/降） |")
     L.append("|---|---|---|---|---|---|---|---|---|---|")
     for n in both:
         ao, an = p2aggs[n + TAG_P2], aggs[n]
@@ -1022,9 +1056,9 @@ def sec_w(G, aggs, arms: List[str], p2G, p2aggs, ref_key: str, b2aggs, stash: Di
     L.append("")
 
     # W3 ------------------------------------------------------------
-    L.append("#### W3. 跨批分叉对符号检验（a = p2，b = p2b；只数输出分叉的 (题, rep) 对，同题多 rep 相关未校正；"
+    L.append(f"#### W3. 跨批分叉对符号检验（a = {p2_label}，b = {data_label}；只数输出分叉的 (题, rep) 对，同题多 rep 相关未校正；"
              "配对键 (item, rep)，只在一侧的 rep 自然不进；「填充 fp 不同」= 该臂档填充 fingerprint 跨批不同的配对数，不论是否分叉，见 W1）\n")
-    L.append("| 臂 | level | 分叉对 | p2b 赢 / p2 赢 | p | 填充 fp 不同 |")
+    L.append(f"| 臂 | level | 分叉对 | {data_label} 赢 / {p2_label} 赢 | p | 填充 fp 不同 |")
     L.append("|---|---|---|---|---|---|")
     for n in both:
         t3 = {"diverged": 0, "b_wins": 0, "a_wins": 0}
@@ -1072,10 +1106,11 @@ def sec_w(G, aggs, arms: List[str], p2G, p2aggs, ref_key: str, b2aggs, stash: Di
 
 
 # ---------------------------------------------------------------- 布局（catalog 臂可缺）
-def layout_arms(data: Path) -> List[str]:
-    """本批臂：O.B2_ORCH 里目录在的（catalog 可缺）+ 其余 orch-turn-* 按名；缺 O.TURN 三臂或 full 任一 → SystemExit。"""
+def layout_arms(data: Path, required: Optional[Sequence[str]] = None) -> List[str]:
+    """本批臂：O.B2_ORCH 里目录在的（catalog 可缺）+ 其余 orch-turn-* 按名；缺 required 任一 → SystemExit。
+    required 缺省 = O.TURN 三臂 + full；--two-arm（W1/W2 评价批，只续跑 none + w1w2）时 = none + w1w2。"""
     arms = O.orch_arms(data, [n for n in O.B2_ORCH if (data / n / "transcripts.jsonl").is_file()])
-    missing = [n for n in O.TURN + [FULL] if n not in arms]
+    missing = [n for n in (O.TURN + [FULL] if required is None else required) if n not in arms]
     if missing:
         raise SystemExit(f"❌ P2 布局缺臂：{missing}")
     return arms
@@ -1150,9 +1185,11 @@ def main(argv=None) -> int:
     ap.add_argument("--p2", default=None, help="上一同种子批目录（同名臂，组名加 @p2，只进 W 节）")
     ap.add_argument("--out-md", default=None)
     ap.add_argument("--out-csv", default=None)
+    ap.add_argument("--two-arm", action="store_true",
+                    help="只要求 none + w1w2 两臂（W1/W2 评价批）：w1 / full 可缺，缺 full 时 Q 节不渲染、V4 改列 w1w2 − none")
     a = ap.parse_args(argv)
     data, ref = Path(a.data), Path(a.ref)
-    arms = layout_arms(data)
+    arms = layout_arms(data, ["orch-turn-none", W12] if a.two_arm else None)
     has_cat = CAT in arms
     prev = Path(a.prev) if a.prev else None
     prev_arms = [n for n in arms if prev and (prev / n / "transcripts.jsonl").is_file()]
@@ -1161,6 +1198,7 @@ def main(argv=None) -> int:
     b2 = Path(a.b2) if a.b2 else None
     b2_arms = [n for n in arms if b2 and (b2 / n / "transcripts.jsonl").is_file()]
     p2 = Path(a.p2) if a.p2 else None
+    data_label, p2_label = batch_label(a.data), batch_label(a.p2) if a.p2 else "p2"
     p2_arms = [n for n in O.orch_arms(p2, []) if n in arms] if p2 else []
     if p2 and not p2_arms:
         raise SystemExit(f"❌ --p2 {a.p2} 下没有 {arms} 任何一臂")
@@ -1168,13 +1206,14 @@ def main(argv=None) -> int:
     ref_key = os.path.basename(os.path.normpath(a.ref))
     if ref_key in arms or ref_key in {n + TAG for n in prev_arms} | {n + TAG_P2 for n in p2_arms} | {n + TAG_B2 for n in b2_arms}:
         raise SystemExit(f"❌ 参照目录名「{ref_key}」与臂名冲突")
-    saved = (O.REF, O.ARMS, O.EXTRA_ORCH, A.comparisons, O.RAG_NOTE)
+    saved = (O.REF, O.ARMS, O.EXTRA_ORCH, A.comparisons, O.RAG_NOTE, O.TURN)
     saved_a = (A.KEEP, A.th_global, A.wall_global)
     saved_d = (D.ARMS, D.MANAGED, D.TAG)
     D.ARMS, D.MANAGED, D.TAG = arms, arms[1:], TAG
     O.REF, O.ARMS, O.EXTRA_ORCH = ref_key, list(arms), [n for n in arms if n not in O.TURN]
     O.RAG_NOTE = "rag_search 在本批是 W-K2 可用桩（回生产空结果形态）"
     try:
+        O.TURN = [n for n in O.TURN if n in arms]   # w1 / full 可缺（11-08 w12eval 批只有 none + w1w2）；挪进 try 内，万一后面提前 raise 也走 finally 复原
         args = Namespace(metric="pass_hat_2", drop=0.20, recover=0.10, baseline_levels=[0, 4096], high_from=16384,
                          max_model_len=65536, gen_reserve=12288, prod_prefix=None, pair=[])
         A.KEEP = "latest"
@@ -1231,7 +1270,9 @@ def main(argv=None) -> int:
         parts += O.sec_n(G, raws, evs, data, logs=("run_colab.log",))
         parts += O.sec_o(G, aggs, arms + prev_names)
         parts += O.sec_p(G, aggs, evs, arms + prev_names, prev_names)
-        if has_cat:
+        if FULL not in arms:
+            parts += [f"### Q. 前缀对照：本批无 {FULL} 臂（只有 {'、'.join(arms)}），{W12} 对 {FULL} 不渲染\n"]
+        elif has_cat:
             q = O.sec_q(G, aggs, evs)
             q[0] = q[0].replace("（prod 前缀）", "（prod 前缀；本批生效 = catalog，见 V1）", 1)
             parts += q
@@ -1258,9 +1299,10 @@ def main(argv=None) -> int:
             u = strip_u3_catalog(u)
         parts += u
         stash: Dict[str, Any] = {}
-        parts += sec_v(G, aggs, arms, data, prev, b2G, b2aggs, args, stash)
+        parts += sec_v(G, aggs, arms, data, prev, b2G, b2aggs, args, stash, two_arm=a.two_arm)
         if p2_arms:
-            parts += sec_w(G, aggs, arms, p2G, p2aggs, ref_key, b2aggs, stash, only_p2=p2_only)
+            parts += sec_w(G, aggs, arms, p2G, p2aggs, ref_key, b2aggs, stash, only_p2=p2_only,
+                           data_label=data_label, p2_label=p2_label)
         auto = "\n".join(parts).rstrip() + "\n"
         auto = auto.replace("`@am` = 11-02 上午批同名臂", f"`{TAG}` = d44 批同名臂")
         marker = "_自动生成：`benchmarks/context_knee/analyze.py`；"
@@ -1276,7 +1318,7 @@ def main(argv=None) -> int:
             auto = auto.replace(note, f"（取 {pf_src} 行内字段 prefix_base_tokens，见上）", 1)
         rerun = ("_复跑：`PYTHONDONTWRITEBYTECODE=1 backend/.venv/bin/python benchmarks/context_knee/analyze_p2.py "
                  f"--data {a.data} --ref {a.ref}" + (f" --prev {a.prev}" if a.prev else "") + (f" --b2 {a.b2}" if a.b2 else "")
-                 + (f" --p2 {a.p2}" if a.p2 else "") + (f" --out-md {a.out_md}" if a.out_md else "") + (f" --out-csv {a.out_csv}" if a.out_csv else "") + "`_\n\n")
+                 + (f" --p2 {a.p2}" if a.p2 else "") + (" --two-arm" if a.two_arm else "") + (f" --out-md {a.out_md}" if a.out_md else "") + (f" --out-csv {a.out_csv}" if a.out_csv else "") + "`_\n\n")
         auto = rerun + auto
         if a.out_csv:
             O.write_csv_b2(Path(a.out_csv), groups, aggs, O.b2_csv_extra(G, evs, arms + prev_names))
@@ -1286,7 +1328,7 @@ def main(argv=None) -> int:
             print(auto)
         return 0
     finally:
-        O.REF, O.ARMS, O.EXTRA_ORCH, A.comparisons, O.RAG_NOTE = saved
+        O.REF, O.ARMS, O.EXTRA_ORCH, A.comparisons, O.RAG_NOTE, O.TURN = saved
         A.KEEP, A.th_global, A.wall_global = saved_a
         D.ARMS, D.MANAGED, D.TAG = saved_d
 

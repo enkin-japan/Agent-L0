@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/telemetry/feed-merge-8.json", "content": "{\n  \"err_rate_0\": 146.46,\n  \"p50_ms_1\": 282.18,\n  \"err_rate_2\": 799.7,\n  \"cpu_pct_3\": 51.39,\n  \"p50_ms_4\": 475.11,\n  \"cpu_pct_5\": 455.41,\n  \"cpu_pct_6\": 359.74,\n  \"qps_7\": 760.37,\n  \"err_rate_8\": 331.09,\n  \"cpu_pct_9\": 870.5,\n  \"err_rate_10\": 166.02,\n  \"ok\": true\n}"}

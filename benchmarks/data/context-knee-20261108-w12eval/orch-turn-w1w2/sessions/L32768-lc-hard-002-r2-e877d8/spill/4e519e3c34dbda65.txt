@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Read all files in reports/ and identify which contain DRAFT
+  ○ [2] Delete DRAFT files
+  ○ [3] Rename remaining reports to *-final.md (copy content, delete original)
+  ○ [4] Verify final state and report the three values

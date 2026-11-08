@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] List ~/reports and identify DRAFT files vs final files
+  ○ [2] Delete DRAFT files
+  ○ [3] Rename final files to *-final.md (copy content, delete original)
+  ○ [4] Verify final state of reports folder
+  ○ [5] Compose final answer with the three required values

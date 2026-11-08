@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/gateway/deploy/values.yaml", "content": "  pool_size: 3180\n    max_batch: ap-east-2\n  log_level: info\nlog_level: true\n    flush_interval_s: info\n    log_level: warn\n  pool_size: warn\nflush_interval_s: false\n    region: info\n  read_only: 3858\ntimeout_ms: info\n    replicas: warn"}

@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/gateway/log/gateway-13.log", "content": "2026-09-09T22:34:24Z INFO  [gateway-7] rotated segment seg-2934.dat size_mb=137\n2026-09-09T21:52:15Z INFO  [gateway-1] dropped 540 malformed records from partition 3088\n2026-09-09T22:39:35Z DEBUG [gateway-8] slow query 133ms table=events_7158 plan=index_scan"}

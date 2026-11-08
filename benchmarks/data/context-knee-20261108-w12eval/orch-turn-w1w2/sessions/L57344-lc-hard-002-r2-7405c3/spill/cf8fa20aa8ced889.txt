@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/report-gen/log/report-gen-14.log", "content": "2026-09-02T23:27:53Z WARN  [report-gen-6] gc pause 355ms heap_mb=2326\n2026-09-02T23:12:50Z INFO  [report-gen-3] rotated segment seg-2232.dat size_mb=445\n2026-09-02T23:39:40Z INFO  [report-gen-1] slow query 213ms table=events_4275 plan=index_scan"}

@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/relay/deploy/values.yaml", "content": "  replicas: true\n  cpu_limit: info\nregion: true\nreplicas: false\n  read_only: false\nreplicas: warn\nshard_count: false\n    read_only: false\n    max_batch: info\nread_only: 2904\n  log_level: info\n  warmup_s: ap-east-2\n  retry_limit: info"}

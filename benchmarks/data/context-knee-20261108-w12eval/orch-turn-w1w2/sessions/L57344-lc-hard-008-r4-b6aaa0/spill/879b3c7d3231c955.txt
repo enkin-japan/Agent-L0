@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/telemetry/scheduler-3.json", "content": "{\n  \"qps_0\": 636.57,\n  \"cpu_pct_1\": 501.37,\n  \"p50_ms_2\": 806.93,\n  \"p95_ms_3\": 122.68,\n  \"cpu_pct_4\": 447.9,\n  \"qps_5\": 108.89,\n  \"cpu_pct_6\": 189.11,\n  \"err_rate_7\": 703.88,\n  \"err_rate_8\": 24.72,\n  \"cpu_pct_9\": 150.43,\n  \"qps_10\": 652.76,\n  \"ok\": true\n}"}

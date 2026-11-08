@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - logs/build.log = "2026-08-22 OK\n2026-08-23 FAILED\n"; logs/test.log = "2026-08-23 OK\n"; deploy.log does not exist yet. Spills: halyard conf in spill:c4f194569389650b (geo-tiles values.yaml, mentions

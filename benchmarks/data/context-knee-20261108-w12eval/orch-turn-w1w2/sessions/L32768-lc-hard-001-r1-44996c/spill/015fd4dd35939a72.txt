@@ -1,0 +1,5 @@
+Saved to scratchpad.
+  - halyard config path (from scheduler-20.log): /opt/halyard/conf/halyard-67b574.toml
+  - 升级工单号 (relay-04.log): OPS-50015
+  - queue_depth_alert_threshold (thumbnailer-19.log): 6880
+  - 1–5月合计 = 15330（1月2485/2月2975/3月3030/4月3540/5月3300）

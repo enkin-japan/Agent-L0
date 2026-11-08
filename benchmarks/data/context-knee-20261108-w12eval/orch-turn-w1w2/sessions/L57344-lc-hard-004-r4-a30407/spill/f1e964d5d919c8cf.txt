@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Values to report verbatim: halyard config path = /opt/halyard/conf/halyard-91ee16.toml (seen in runbook/audit-trail.md output); escalation ticket = OPS-13337 (scheduler-24.log); queue_depth_alert_thre

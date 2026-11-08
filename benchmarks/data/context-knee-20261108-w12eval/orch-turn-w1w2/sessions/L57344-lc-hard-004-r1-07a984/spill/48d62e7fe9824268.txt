@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] List policy/ files and find '90 days' occurrences
+  ○ [2] Replace '90 days' → '30 days' in each writable file; handle the read-only refusal
+  ○ [3] Write policy/pending-changes.md naming the read-only file
+  ○ [4] Verify the three values (halyard config path, OPS ticket, queue_depth_alert_threshold) and answer

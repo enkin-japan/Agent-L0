@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/geo-tiles/log/geo-tiles-19.log", "content": "2026-09-17T20:09:43Z DEBUG [geo-tiles-7] slow query 497ms table=events_236 plan=index_scan\n2026-09-17T19:55:07Z ERROR [geo-tiles-8] rotated segment seg-2644.dat size_mb=33\n2026-09-17T20:12:15Z DEBUG [geo-tiles-4] batch 7644 committed rows=1415 lag_ms=865"}

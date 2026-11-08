@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Values needed for final reply: halyard config path = /opt/halyard/conf/halyard-a8d471.toml (from scheduler/deploy/values.yaml); escalation ticket = OPS-17472 (scheduler-11.log); queue_depth_alert_thre

@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Locate logs/ directory and the three log files
+  ○ [2] Append '2026-08-24 OK' to build.log, test.log, deploy.log
+  ○ [3] Write count of files containing the line into logs/count.txt
+  ○ [4] Find the OPS- ticket ID in tool outputs
+  ○ [5] Final answer with the three verbatim values

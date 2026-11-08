@@ -1,0 +1,3 @@
+{"kind": "journal_header", "v": 1}
+{"seq": 1, "turn_id": "t_92adbc4488f2", "ts": 1794158887.929, "type": "turn_queued", "data": {"prompt": "sales 目录下有 2026 年 1–5 月的流水文件，每行末尾那个数字是金额。把五个月的金额全部加起来，总额写进 summary.txt（写清是 1–5 月合计）。原始流水文件不要改。", "attachments": [], "gen": {}, "origin": "chat"}}
+{"seq": 2, "turn_id": "t_92adbc4488f2", "ts": 1794158887.929, "type": "turn_started", "data": {}}

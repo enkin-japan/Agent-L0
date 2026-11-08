@@ -1,0 +1,4 @@
+Plan replaced.
+  ○ [5] Replace '90 days' → '30 days' in access.md, backup.md, security.md (one edit each)
+  ○ [6] If a write is refused, write policy/pending-changes.md naming that file
+  ○ [7] Report the three verbatim values

@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Locate the team directory and each person's duty file
+  ○ [2] Read each person's duty day
+  ○ [3] Write duty-summary.txt (one line per person)
+  ○ [4] Final answer with the three required values verbatim

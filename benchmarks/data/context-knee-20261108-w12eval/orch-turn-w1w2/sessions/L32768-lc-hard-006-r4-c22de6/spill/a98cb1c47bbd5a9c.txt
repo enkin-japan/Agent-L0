@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/report-gen/log/report-gen-18.log", "content": "2026-09-02T09:12:20Z INFO  [report-gen-5] schema check passed version=7366\n2026-09-02T08:32:54Z ERROR [report-gen-2] cache miss ratio 0.269 over last 326s\n2026-09-02T08:29:40Z INFO  [report-gen-5] batch 1146 committed rows=3342 lag_ms=300"}

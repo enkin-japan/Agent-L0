@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/ledger/deploy/values.yaml", "content": "    flush_interval_s: info\n    read_only: 2494\n    pool_size: 846\n  replicas: warn\n    retry_limit: 2194\n    log_level: ap-east-2\nshard_count: 2487\nretry_limit: true\n    warmup_s: true\n  max_batch: 2197\nmax_batch: ap-east-2\n    flush_interval_s: false\nregion: true\n    max_batch: 2909"}

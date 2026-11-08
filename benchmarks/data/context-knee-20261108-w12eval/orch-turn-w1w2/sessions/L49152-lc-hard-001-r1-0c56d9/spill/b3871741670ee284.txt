@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/report-gen/deploy/values.yaml", "content": "  max_batch: ap-east-2\nshard_count: 3823\n    max_batch: info\n    read_only: true\n  max_batch: true\n  log_level: true\n  warmup_s: 3089\n  read_only: 3139\n  max_batch: false\n  flush_interval_s: false\n    retry_limit: false\ntimeout_ms: true\ntimeout_ms: info\n  read_only: warn"}

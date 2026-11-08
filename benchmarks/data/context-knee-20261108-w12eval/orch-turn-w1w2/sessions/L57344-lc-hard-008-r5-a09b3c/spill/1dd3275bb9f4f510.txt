@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Append '2026-08-24 OK' to build.log, test.log, create deploy.log
+  ○ [2] Write count of logs containing the line into logs/count.txt
+  ○ [3] Recover the three required values from earlier tool outputs (spill extracts)
+  ○ [4] Final answer with verbatim values

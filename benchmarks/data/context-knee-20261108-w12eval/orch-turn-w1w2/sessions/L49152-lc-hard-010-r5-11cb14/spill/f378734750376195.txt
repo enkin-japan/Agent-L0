@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/telemetry/quota-svc-1.json", "content": "{\n  \"err_rate_0\": 154.54,\n  \"cpu_pct_1\": 31.14,\n  \"p95_ms_2\": 744.04,\n  \"err_rate_3\": 249.08,\n  \"err_rate_4\": 447.3,\n  \"cpu_pct_5\": 331.12,\n  \"cpu_pct_6\": 746.22,\n  \"cpu_pct_7\": 364.6,\n  \"p95_ms_8\": 628.56,\n  \"err_rate_9\": 720.24,\n  \"p95_ms_10\": 411.07,\n  \"ok\": true\n}"}

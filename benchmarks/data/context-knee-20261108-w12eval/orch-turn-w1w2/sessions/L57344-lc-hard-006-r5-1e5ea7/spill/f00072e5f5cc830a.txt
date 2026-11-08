@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/billing-sync/deploy/values.yaml", "content": "  max_batch: ap-east-2\nmax_batch: 2783\n  timeout_ms: info\n    pool_size: ap-east-2\n  timeout_ms: false\n    flush_interval_s: ap-east-2\n    flush_interval_s: true\nregion: 3712\npool_size: 2192\n    pool_size: info\n    cpu_limit: false\nread_only: warn\n    read_only: 1160\n  flush_interval_s: true"}

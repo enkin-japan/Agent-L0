@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/gateway/deploy/values.yaml", "content": "  cpu_limit: ap-east-2\n    pool_size: ap-east-2\n  pool_size: info\n    flush_interval_s: warn\nreplicas: 3609\n    read_only: ap-east-2\n    region: info\n    flush_interval_s: info\n    cpu_limit: warn\n    cpu_limit: info\n    pool_size: info\n  cpu_limit: warn\nread_only: warn\nmax_batch: info"}

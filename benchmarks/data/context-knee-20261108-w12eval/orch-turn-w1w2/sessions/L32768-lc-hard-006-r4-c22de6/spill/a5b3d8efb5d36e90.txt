@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Locate the lists directory and read the three shopping lists
+  ○ [2] Merge & dedupe into merged.txt (one item per line)
+  ○ [3] Write deduped item count to count.txt
+  ○ [4] Compose final answer with the three required verbatim values

@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Replace '90 days' → '30 days' in policy/access.md
+  ○ [2] Replace '90 days' → '30 days' in policy/backup.md
+  ○ [3] Replace '90 days' → '30 days' in policy/security.md (read-only expected)
+  ○ [4] Write policy/pending-changes.md naming the file that still needs manual update
+  ○ [5] Report the three verbatim values

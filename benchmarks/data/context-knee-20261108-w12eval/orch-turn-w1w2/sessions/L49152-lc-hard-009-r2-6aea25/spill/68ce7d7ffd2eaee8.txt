@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Locate and read all files under metrics/
+  ○ [2] Compute per-file averages
+  ○ [3] Write metrics/summary.json with exact key order
+  ○ [4] Final reply with the three verbatim values

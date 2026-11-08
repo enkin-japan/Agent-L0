@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - halyard config path (from search-api-13.log): /opt/halyard/conf/halyard-dd4e9d.toml; escalation ticket: OPS-20835 (mailer values.yaml); queue_depth_alert_threshold = 1797 (ledger values.yaml)

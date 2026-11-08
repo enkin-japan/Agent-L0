@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/relay/log/relay-10.log", "content": "2026-09-14T23:03:46Z WARN  [relay-1] rotated segment seg-2522.dat size_mb=291\n2026-09-14T23:02:23Z WARN  [relay-3] schema check passed version=3766\n2026-09-14T22:52:20Z INFO  [relay-3] gc pause 451ms heap_mb=646\n2026-09-14T22:24:43Z INFO  [relay-8] slow query 840ms table=events_8471 plan=index_scan"}

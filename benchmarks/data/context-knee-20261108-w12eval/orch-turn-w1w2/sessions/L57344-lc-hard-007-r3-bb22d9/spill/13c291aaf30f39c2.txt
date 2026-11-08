@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - 三项需逐字引用的值：① halyard 配置路径 /opt/halyard/conf/halyard-a8d471.toml（见 search-api-15.log）② 工单号 OPS-17472（见 cache-warm-18.log）③ queue_depth_alert_threshold = 8436（见 audit-trail-12.log）

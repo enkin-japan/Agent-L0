@@ -1,0 +1,4 @@
+Plan replaced.
+  ○ [1] Append '2026-08-24 OK' to logs/build.log, logs/test.log, logs/deploy.log
+  ○ [2] Write count of files containing today's line to logs/count.txt
+  ○ [3] Final answer with the three verbatim values

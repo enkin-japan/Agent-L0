@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/feed-merge/log/feed-merge-19.log", "content": "2026-09-01T02:42:30Z DEBUG [feed-merge-2] connection pool resized from 710 to 1343\n2026-09-01T03:21:59Z DEBUG [feed-merge-8] schema check passed version=3194\n2026-09-01T03:19:19Z ERROR [feed-merge-6] retrying upstream call attempt=460 backoff_ms=4439"}
