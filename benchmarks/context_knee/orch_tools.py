@@ -191,15 +191,23 @@ def build_registry(tools_dir: Path, env, stubs: Sequence[Dict[str, Any]],
 
 
 def agent_cfg(base: Dict[str, Any], *, guard: bool, step: bool, goal_verify: bool,
-              max_total_iterations: Optional[int] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+              max_total_iterations: Optional[int] = None, hard_tokens: Optional[int] = None,
+              fold_mode: Optional[str] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """config.yaml agent 段（深拷贝）+ 开关覆盖 → (cfg, 覆盖项)。max_total_iterations 只在 agent 段
-    本有该键时覆盖（编排器的回合熔断键；与 executor 的 max_turns 对齐）。"""
+    本有该键时覆盖（编排器的回合熔断键；与 executor 的 max_turns 对齐）。hard_tokens / fold_mode
+    非 None 时覆盖 context_guard 同名键（W1 复测臂）；不在此校验，交给 resolve_context_guard 装配期拒。"""
     cfg = copy.deepcopy(base or {})
     over: Dict[str, Any] = {}
     cg = dict(cfg.get("context_guard") or {})
     cg["enabled"] = bool(guard)
-    cfg["context_guard"] = cg
     over["context_guard.enabled"] = bool(guard)
+    if hard_tokens is not None:
+        cg["hard_tokens"] = hard_tokens
+        over["context_guard.hard_tokens"] = hard_tokens
+    if fold_mode is not None:
+        cg["fold_mode"] = fold_mode
+        over["context_guard.fold_mode"] = fold_mode
+    cfg["context_guard"] = cg
     sc = dict(cfg.get("step_compaction") or {})
     sc["enabled"] = bool(step)
     cfg["step_compaction"] = sc
@@ -210,6 +218,16 @@ def agent_cfg(base: Dict[str, Any], *, guard: bool, step: bool, goal_verify: boo
         cfg["max_total_iterations"] = int(max_total_iterations)
         over["max_total_iterations"] = int(max_total_iterations)
     return cfg, over
+
+
+def norm_guard_thresholds(g: Any) -> Any:
+    """guard_thresholds 的比对/展示归一：fold_mode 键 2026-11-09（D48）才加入，之前的行 / meta 都是
+    full 口径（当时只有一种 fold），缺键按 "full" 补齐再比——旧档案目录（w12eval / p2b …）的 full 臂
+    仍可续跑 / 追加，而 minimal 对 full 照样拒；analyze_orch.py 的唯一性判定与 thr 展示列同一归一，
+    不然同臂一半有 fold_mode 一半缺键会被误判成「不唯一」。非 dict 原样返回。"""
+    if isinstance(g, dict) and "fold_mode" not in g:
+        return {**g, "fold_mode": "full"}
+    return g
 
 
 #: keep_mock_tools_full 的并入规则版本（D44 (iii)，2026-11-06）：effective_mode = 按生效 tool_schema_mode 判

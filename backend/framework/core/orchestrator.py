@@ -305,6 +305,12 @@ GOAL_VERIFY_MAX_TOKENS = 220
 # （弱模型改一行就宣布修好的高频失败形态）。最多推回 VERIFY_NUDGE_MAX 次，用尽后放行——
 # 模型坚持不验证时接受其答复，杜绝死循环。
 VERIFY_NUDGE_MAX = 1
+# W1 ceiling 应急压缩 fold_mode=minimal：最多分几批折（每批折后重量）；估算一条观察折成桩后剩多少 token 时，
+# 桩里首部之外的固定部分（「…[Observation compacted; originally N chars」+ 线索 ≤240 字 + 句柄行）的估值
+CEILING_FOLD_MAX_PASSES = 8
+CEILING_FOLD_STUB_OVERHEAD_EST = 80
+# ceiling 应急压缩的保护窗（全 history 观察倒数，两种 fold_mode 同）
+CEILING_KEEP_RECENT = 2
 # 「写」判据只认真实的文件写工具：run_shell_command 的 is_read_only 对 cat/ls 也返回 False
 # （无法静态判断命令是否改动），用它会让每个只读 shell 轮次误触发验证门控、白烧一次生成。
 # 故只把这两个确定改文件的工具计作写；shell 内的 sed -i/rm 等写不被覆盖（尽力而为，误报比漏报更伤）。
@@ -574,10 +580,15 @@ class Orchestrator:
             return
         self.context_limits = context_guard.derive_limits(self.context_guard, lim)
 
-    def _emergency_compact(self, session: ChatSession) -> Tuple[int, int]:
-        """轮内应急机械压缩（ceiling 兜底）：model-facing history 里保护窗口（最近 2 条）之外的
-        工具观察一律折成桩，返回被压缩条数。摘要折叠只能在轮边界做（rebuild_from_log 会清掉
-        进行中的本轮），归 W2。
+    def _emergency_compact(self, session: ChatSession, *, measure=None, current: Optional[int] = None,
+                           stats: Optional[Dict[str, Any]] = None) -> Tuple[int, int]:
+        """轮内应急机械压缩（ceiling 兜底）。按 context_guard.fold_mode 分两种折法：
+
+        full（缺省）：model-facing history 里保护窗口（最近 2 条）之外的工具观察一律折成桩。
+        minimal：见 _emergency_compact_minimal——从最旧的观察起分批折、折后用 measure 重量，
+        量到 < hard 即停；须传 measure（无参、返回与 _context_guard_pre 同一量法的 token 数，量的是
+        真要发出去的那份 prompt）与 current（折前量值）。stats 非 None 时写入 passes（full 记 1）。
+        摘要折叠只能在轮边界做（rebuild_from_log 会清掉进行中的本轮），归 W2。
 
         落盘日志保留全文：本轮观察的 dict 与暂存轮次（审批/挂起）的 response 共享引用，且
         轮末落盘就是 history 切片——故先把本轮（session.turn_history_start_idx 起，含审批/挂起
@@ -590,13 +601,83 @@ class Orchestrator:
         W1b 回读句柄：被折的观察全文先补写进本会话 spill 目录、桩末带 file_extract 短句柄（与 W2
         同一 _spill_stub_handle），**不看** step_compaction.spill_full——ceiling 桩若不给路，内存里
         的原文对模型就是彻底消失（2026-11-02 57K 臂实测：事实卡召回 91% → 0%）。会话无 session_dir
-        或补写失败 → 桩不给句柄（旧行为）。返回 (压缩条数, 带句柄条数)。"""
+        或补写失败 → 桩不给句柄（旧行为）。返回 (压缩条数, 带句柄条数)；minimal 为各批累计。"""
+        if self.context_guard.fold_mode == "minimal":
+            if measure is None or current is None:
+                raise ValueError("fold_mode=minimal 的应急压缩须传入 measure 与 current"
+                                 "（与 _context_guard_pre 同一量法）")
+            return self._emergency_compact_minimal(session, measure, int(current), stats)
         cb = self._spill_stub_handle(session, digest_chars=self.observation_compact_chars,
                                      label="ceiling 应急压缩")
         out = self._compact_turn_range(
-            session, 0, None, keep_recent=2, digest_chars=self.observation_compact_chars,
-            label="ceiling", stub_handle=cb)
+            session, 0, None, keep_recent=CEILING_KEEP_RECENT,
+            digest_chars=self.observation_compact_chars, label="ceiling", stub_handle=cb)
+        if stats is not None:
+            stats["passes"] = 1
         return out["count"], (cb.spilled if cb is not None else 0)
+
+    def _minimal_fold_candidates(self, session: ChatSession) -> List[Tuple[int, int]]:
+        """fold_mode=minimal 的折桩候选 [(history 下标, 估计折后可省 token)]，最旧在前。口径与
+        compact_tool_observations_detailed 的预算驱逐候选一致：全 history 观察倒数 CEILING_KEEP_RECENT
+        条之外、未压过、正文 > observation_compact_chars。可省 = fallback_estimate(正文) −
+        fallback_estimate(首部) − 桩固定部分估值（下限 1：候选必有进展）。"""
+        digest = self.observation_compact_chars
+        obs: List[Tuple[int, Dict[str, Any]]] = []
+        for mi, msg in enumerate(session.history):
+            if msg.get("role") == "tool":
+                for tr in msg.get("tool_responses") or []:
+                    if isinstance(tr, dict):
+                        obs.append((mi, tr))
+        out: List[Tuple[int, int]] = []
+        for mi, tr in obs[:max(0, len(obs) - CEILING_KEEP_RECENT)]:
+            resp = str(tr.get("response", ""))
+            if tr.get("_compacted") or len(resp) <= digest:
+                continue
+            saving = (context_guard.fallback_estimate(resp)
+                      - context_guard.fallback_estimate(resp.strip()[:digest])
+                      - CEILING_FOLD_STUB_OVERHEAD_EST)
+            out.append((mi, max(1, saving)))
+        return out
+
+    def _emergency_compact_minimal(self, session: ChatSession, measure, current: int,
+                                   stats: Optional[Dict[str, Any]]) -> Tuple[int, int]:
+        """fold_mode=minimal：折到刚好够用。每批：取最旧的候选、累计估计可省量直到凑够「当前量值 −
+        hard + 1」的缺口，把落刀区间 [0, 末个入选候选下标 + 1) 交给 _compact_turn_range（保护窗仍按全
+        history 倒数，区间小也不会误保护/误折窗内条目；区间里更早的候选都已入选，同一消息里的其余观察
+        一并折），折后 measure() 重量；量值 < hard、候选耗尽、批数到 CEILING_FOLD_MAX_PASSES 或某批
+        0 条进展即停——本函数单次调用内有界。外层（_context_guard_pre 的 ceiling 分支）还会在同一次
+        生成前随外层 range(3) 最多重入 3 次，每次都可能再跑满 CEILING_FOLD_MAX_PASSES 批：两层上限
+        叠加，用完仍 ≥ ceiling 也终止，不是只有「折到候选耗尽（0 条）」才终止。带句柄规则与 full 同
+        （每批一个 _spill_stub_handle 回调）。"""
+        hard = self.context_guard.hard
+        total = spilled = passes = 0
+        cur = current
+        while passes < CEILING_FOLD_MAX_PASSES and cur >= hard:
+            cands = self._minimal_fold_candidates(session)
+            if not cands:
+                break
+            gap = cur - hard + 1
+            acc, end = 0, 0
+            for mi, saving in cands:
+                acc += saving
+                end = mi + 1
+                if acc >= gap:
+                    break
+            cb = self._spill_stub_handle(session, digest_chars=self.observation_compact_chars,
+                                         label="ceiling 应急压缩（minimal）")
+            out = self._compact_turn_range(
+                session, 0, end, keep_recent=CEILING_KEEP_RECENT,
+                digest_chars=self.observation_compact_chars, label="ceiling-minimal",
+                stub_handle=cb)
+            passes += 1
+            total += out["count"]
+            spilled += cb.spilled if cb is not None else 0
+            if not out["count"]:
+                break           # 候选在区间内却 0 条落刀（不应发生）：不空转
+            cur = int(measure())
+        if stats is not None:
+            stats["passes"] = passes
+        return total, spilled
 
     def _compact_turn_range(self, session: ChatSession, start: int, end: Optional[int], *,
                             keep_recent: int, digest_chars: int, label: str,
@@ -1078,23 +1159,62 @@ class Orchestrator:
                             iteration=session.carried_iterations + iterations + 1)
 
             m, level = _guard_measure(prompt_args, limits)
+            fold_mode = guard_cfg.fold_mode
+            minimal = fold_mode == "minimal"
+            last_measure: Dict[str, Any] = {}
+
+            def _remeasure() -> int:
+                """minimal 折叠的逐批重量：与上面同一量法（_guard_measure），末次结果留给下面续判。"""
+                last_measure["ml"] = _guard_measure(prompt_args, limits)
+                return last_measure["ml"][0].tokens
+
             # 每个分支各翻一面旗，最多各走一次；循环只为让「压缩后落到 hard」与「尾注把 hard
-            # 推到 ceiling」都回到同一套判定，不出现分支间漏判
+            # 推到 ceiling」都回到同一套判定，不出现分支间漏判。fold_mode=minimal 的 ceiling 分支不受
+            # 一次性旗限制（每次生成前到 ceiling 都可再折）——但仍是有界的：本次生成前这个 for 最多
+            # range(3) 次外层 pass，每次 ceiling 分支再各自最多 CEILING_FOLD_MAX_PASSES 批
+            # （_emergency_compact_minimal 内部）；两层上限叠加，用完仍 ≥ ceiling 也终止，不是只有
+            # 「折到候选耗尽（0 条）」才终止——只是真走到那一步（可达性低：要估算长期高估可省量、
+            # 批数/外层 pass 还没耗尽候选先耗尽）时同样会提前终止，省掉继续空扫。
+            # [D48] 本次调用累计（minimal 可能在同一次调用里折好几次：ceiling→hard→尾注推回
+            # ceiling→再折）：事件/print 用首个 before 与累计 compacted/spilled/passes，不是最后
+            # 一次折叠的局部值。是否发事件仍按旧语义——某次折叠尝试后 level 真的离开了 ceiling
+            # （fold_succeeded），而不是按 compacted 条数：full 模式下即便 compacted==0，只要那次
+            # remeasure 把 level 量出了 ceiling 之外也算成功（test_ceiling_compaction_short_
+            # observation_has_no_handle）；反之 compacted>0 但 level 量出来仍是 ceiling（候选全折完
+            # 仍不够）不算成功、不发事件（test_ceiling_abort_after_compaction_reports_counts、
+            # 以及 minimal 第二次 ceiling 折完仍 ceiling 的那次尝试）。
+            fold_before = fold_after = None
+            fold_compacted = fold_spilled = fold_passes = 0
+            fold_succeeded = False
             for _ in range(3):
-                if level == "ceiling" and not guard_flags["compacted"]:
+                if level == "ceiling" and (minimal or not guard_flags["compacted"]):
                     guard_flags["compacted"] = True
-                    before = m.tokens
-                    n, n_spilled = self._emergency_compact(session)
-                    guard_flags["ceiling_compacted"], guard_flags["ceiling_spilled"] = n, n_spilled
-                    m, level = _guard_measure(prompt_args, limits)
+                    if fold_before is None:
+                        fold_before = m.tokens
+                    fold_stats: Dict[str, Any] = {}
+                    if minimal:
+                        last_measure.clear()
+                        n, n_spilled = self._emergency_compact(
+                            session, measure=_remeasure, current=m.tokens, stats=fold_stats)
+                        if "ml" in last_measure:       # 末次重量即折后量值；0 批则未重量、仍是折前值
+                            m, level = last_measure["ml"]
+                            fold_after = m.tokens
+                    else:
+                        n, n_spilled = self._emergency_compact(session, stats=fold_stats)
+                        m, level = _guard_measure(prompt_args, limits)
+                        fold_after = m.tokens
+                    guard_flags["ceiling_compacted"] += n
+                    guard_flags["ceiling_spilled"] += n_spilled
+                    passes = fold_stats.get("passes", 1)
+                    fold_compacted += n
+                    fold_spilled += n_spilled
+                    fold_passes += passes
                     if level != "ceiling":
-                        events.emit(context_guard.EVT_FOLD, session=session.session_id,
-                                    before=before, after=m.tokens, ceiling=limits.ceiling,
-                                    compacted=n, spilled=n_spilled,
-                                    iteration=session.carried_iterations + iterations + 1)
-                        session.push_activity("note", "上下文接近上限，已折叠旧观察")
-                        print(f"[Orchestrator] 上下文上限护栏：应急压缩 {n} 条观察，"
-                              f"{before:,} → {m.tokens:,} token（ceiling {limits.ceiling:,}）")
+                        fold_succeeded = True
+                    if level == "ceiling" and minimal and not n:
+                        # minimal：折了 0 条（候选耗尽）仍 ≥ ceiling → 终止。只是省掉接下来的空扫——
+                        # 不 break 同样会在外层 range(3) 用完后落到下面的 ceiling 终止判定。
+                        break
                     continue
                 if level == "hard" and not guard_flags["hard"]:
                     guard_flags["hard"] = True
@@ -1121,6 +1241,15 @@ class Orchestrator:
                     m, level = _guard_measure(prompt_args, limits)   # 量的是含尾注、真要发出去的那份
                     continue
                 break
+            if fold_succeeded:          # 本次调用至少一次折叠把 level 量出了 ceiling 之外才发事件
+                events.emit(context_guard.EVT_FOLD, session=session.session_id,
+                            before=fold_before, after=fold_after, ceiling=limits.ceiling,
+                            compacted=fold_compacted, spilled=fold_spilled, mode=fold_mode,
+                            passes=fold_passes, iteration=session.carried_iterations + iterations + 1)
+                session.push_activity("note", "上下文接近上限，已折叠旧观察")
+                print(f"[Orchestrator] 上下文上限护栏：应急压缩（{fold_mode}，{fold_passes} 批）"
+                      f"{fold_compacted} 条观察，{fold_before:,} → {fold_after:,} token"
+                      f"（ceiling {limits.ceiling:,}）")
             if level == "ceiling":
                 msg = (f"上下文已达模型上限（{m.tokens:,} / 上限 {limits.limit:,} token，"
                        f"生成预留 {guard_cfg.reserve:,}），本轮已停止。可以试试：①新开会话继续；"

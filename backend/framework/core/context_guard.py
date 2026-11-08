@@ -7,6 +7,13 @@
             不让后端收到一个注定 overflow（或静默退化）的请求。
 阈值是整段 prompt 的绝对 token 数（含前缀），与 summary_* 的「前缀之上」口径不同。
 
+ceiling 应急压缩的两种折法（fold_mode）：
+  full    ：（缺省 = 生产现行）保护窗（最近 2 条）外的工具观察一次全部折桩；一轮只折一次，
+            再到 ceiling 即终止。
+  minimal ：从最旧的观察起分批折桩、每批折后重量，量到 < hard 即停（折到刚好够用）；每次生成前
+            到 ceiling 都可再折，折了 0 条仍 ≥ ceiling 才终止。动机：w12eval 批实测窗内整体 fold
+            净负（57K 档 Pass^2 26% → 13%），fold 的价值只剩防溢出（2026-11-09 用户拍板）。
+
 配置失败关闭：未知键、非正整数、soft ≥ hard、hard ≥ ceiling 一律在装配期抛 ValueError——inprocess 即
 启动失败；remote 为计算装配失败并退避重试（数据服务照常），装配后探活发现上限不相容则算力端标为不可用——
 拼错的键静默回落缺省，会把「护栏配了却没生效」伪装成模型行为问题。
@@ -14,9 +21,11 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-CONTEXT_GUARD_KEYS = frozenset({"enabled", "soft_tokens", "hard_tokens", "generation_reserve"})
+CONTEXT_GUARD_KEYS = frozenset({"enabled", "soft_tokens", "hard_tokens", "generation_reserve",
+                                "fold_mode"})
 DEFAULTS: Dict[str, Any] = dict(enabled=True, soft_tokens=24576, hard_tokens=39322,
-                                generation_reserve=12288)
+                                generation_reserve=12288, fold_mode="full")
+FOLD_MODES = ("full", "minimal")
 
 LEVELS = ("ok", "soft", "hard", "ceiling")
 
@@ -39,6 +48,7 @@ class ContextGuardConfig:
     soft: int
     hard: int
     reserve: int
+    fold_mode: str = "full"
 
 
 @dataclass(frozen=True)
@@ -83,7 +93,11 @@ def resolve_context_guard(agent_cfg: Optional[Dict[str, Any]]) -> ContextGuardCo
     reserve = _positive_int("generation_reserve", merged["generation_reserve"])
     if soft >= hard:
         raise ValueError(f"agent.context_guard 须 soft_tokens < hard_tokens，得到 {soft} ≥ {hard}")
-    return ContextGuardConfig(enabled=enabled, soft=soft, hard=hard, reserve=reserve)
+    fold_mode = merged["fold_mode"]
+    if not isinstance(fold_mode, str) or fold_mode not in FOLD_MODES:
+        raise ValueError(f"agent.context_guard.fold_mode 须为 {'|'.join(FOLD_MODES)}，得到 {fold_mode!r}")
+    return ContextGuardConfig(enabled=enabled, soft=soft, hard=hard, reserve=reserve,
+                              fold_mode=fold_mode)
 
 
 def derive_limits(cfg: ContextGuardConfig, context_limit: int) -> ContextLimits:

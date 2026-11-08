@@ -152,3 +152,125 @@ def test_long_chain_crosses_soft_hard_ceiling_and_aborts_with_originals_on_disk(
             for tr in m["tool_responses"]]
     assert disk == [SMALL] * 6 + [HUGE] * 2
     assert "上下文已达模型上限" in lines[0]["response"][-1]["content"]
+
+
+# ---- fold_mode=minimal（W1 修订 2026-11-09：hard 提到 ceiling 附近，折到刚好够用、需要几次折几次） ----
+# 观察 ≈ 12,000 token（fallback_estimate：ASCII 4 字符 ≈ 1 token）；hard 51,200、ceiling 53,248
+OBS12K = 48_000
+HARD_NEAR_CEILING = 51_200
+
+
+def _prefilled_run(make_session, *, mode, n_prefill, script, tool_results, obs_max=200_000):
+    """history 里预铺 n_prefill 条 ≈12K token 的旧观察（内容互异：a/b/c…），再跑一轮 script。
+    tool_results：{工具名: 返回正文}。返回 (结果, 引擎, 会话, 编排器, 预铺观察原文)。"""
+    eng = ContentMeasureEngine(script)
+    cfg = {"react_max_steps": 4, "max_total_iterations": 20, "replan_max": 3,
+           "observation_max_chars": obs_max, "observation_budget_chars": 10 ** 7,
+           "tool_timeout_seconds": 5, "max_parse_retries": 3, "thinking_mode": "manual",
+           "goal_verify": False,
+           "context_guard": {"hard_tokens": HARD_NEAR_CEILING, "fold_mode": mode}}
+    reg = FakeRegistry([FakeTool(n, result=t) for n, t in tool_results.items()])
+    orch = Orchestrator(eng, reg, cfg)
+    orch.bind_context_limit()
+    assert orch.context_guard.fold_mode == mode and orch.context_limits.ceiling == 53_248
+    session = make_session()
+    originals = []
+    for i in range(n_prefill):
+        text = "abcdefgh"[i] * OBS12K
+        originals.append(text)
+        session.add_user_message(f"旧问 {i}")
+        session.add_assistant_message(tool_calls=[call("read_old", path=f"o{i}")])
+        session.add_tool_message([{"name": "read_old", "response": text}])
+        session.add_assistant_message(content=f"旧答 {i}")
+    runner = TurnRunner(orch, TaskScheduler(policy=ClassPolicy()))
+
+    async def go():
+        ctx = await runner.accept_turn(session, session.session_id, prompt="继续", images=[],
+                                       audios=[], ingested_text="", attachments=[], gen=dict(GEN))
+        return await runner.run_accepted(session, session.session_id, ctx)
+    return asyncio.run(go()), eng, session, orch, originals
+
+
+def _live_obs(session):
+    return [tr["response"] for m in session.history if m.get("role") == "tool"
+            for tr in m["tool_responses"]]
+
+
+def test_minimal_fold_first_prompt_over_ceiling_folds_only_oldest(make_session):
+    r, eng, session, orch, orig = _prefilled_run(
+        make_session, mode="minimal", n_prefill=5, script=[{"text": "完成"}],
+        tool_results={"read_old": "x"})
+    limits = orch.context_limits
+    assert eng.measured[0] >= limits.ceiling                       # 首 prompt 即到 ceiling
+    assert r["status"] == "success" and len(eng.calls) == 1        # 折后照常生成
+    fold = _events(cg.EVT_FOLD)
+    assert len(fold) == 1
+    d = fold[0]["detail"]
+    # 场景确定：5 条预铺观察（keep_recent=2 窗外 3 条候选）+ 固定内容长度 → 首批即把窗外最旧
+    # 1 条折完就够（够量：60,085 → 48,162 < hard 51,200），精确值而非下界
+    assert d["mode"] == "minimal" and d["passes"] == 1 and d["compacted"] == 1
+    assert d["before"] >= limits.ceiling and d["after"] < HARD_NEAR_CEILING
+    assert eng.measured[-1] == d["after"]                          # 发出去的就是折后量到的那份
+    live = _live_obs(session)
+    assert STUB_MARK in live[0] and len(live[0]) < len(orig[0])    # 只折最旧
+    assert live[1:3] == orig[1:3]                                  # 更新的非窗内观察仍是原文
+    assert live[3:] == orig[3:]                                    # 保护窗（最近 2 条）原文
+    assert _events("turn_abort") == []
+
+
+def _second_ceiling_script():
+    return [{"tool_calls": [call("read_huge", path="n1")]}, {"text": "完成"}]
+
+
+def test_minimal_fold_refolds_on_second_ceiling_where_full_aborts(make_session):
+    # minimal：首次 ceiling 折最旧 1 条；大观察回灌后同一轮再到 ceiling → 再折（第二个 fold 事件）
+    r, eng, session, orch, orig = _prefilled_run(
+        make_session, mode="minimal", n_prefill=5, script=_second_ceiling_script(),
+        tool_results={"read_old": "x", "read_huge": HUGE})
+    ceiling = orch.context_limits.ceiling
+    assert r["status"] == "success" and len(eng.calls) == 2 and eng.script == []
+    folds = [e["detail"] for e in _events(cg.EVT_FOLD)]
+    assert len(folds) == 2 and all(f["mode"] == "minimal" for f in folds)
+    assert folds[0]["iteration"] == 1 and folds[1]["iteration"] == 2
+    assert all(f["before"] >= ceiling and f["after"] < HARD_NEAR_CEILING for f in folds)
+    # 场景确定：第二次 ceiling 时窗外候选 = orig[1..3]（orig[0] 已折、orig[4]/HUGE 在保护窗内）；
+    # HUGE 把量值推到 78,163，一批凑足缺口须吞下全部 3 条候选才够（78,163 → 42,394 < hard），精确值
+    assert folds[0]["compacted"] == 1 and folds[1]["compacted"] == 3
+    assert _events("turn_abort") == []
+    live = _live_obs(session)
+    assert live[-2:] == [orig[4], HUGE]                            # 保护窗原文
+    folded = [STUB_MARK in x for x in live[:-2]]
+    assert folded[0] and folded == sorted(folded, reverse=True)   # 折的恒是最旧的一段前缀
+
+
+def test_full_fold_second_ceiling_in_same_scenario_aborts(make_session):
+    r, eng, session, orch, orig = _prefilled_run(
+        make_session, mode="full", n_prefill=5, script=_second_ceiling_script(),
+        tool_results={"read_old": "x", "read_huge": HUGE})
+    assert r["status"] == "warning" and len(eng.calls) == 1        # 第二次 ceiling 被拦
+    folds = [e["detail"] for e in _events(cg.EVT_FOLD)]
+    assert len(folds) == 1 and folds[0]["mode"] == "full" and folds[0]["passes"] == 1
+    assert folds[0]["compacted"] == 3                              # 保护窗外一次全折
+    aborts = _events("turn_abort")
+    assert len(aborts) == 1 and aborts[0]["detail"]["reason"] == cg.ABORT_REASON
+    assert aborts[0]["detail"]["compacted"] == 3
+
+
+def test_minimal_fold_candidates_exhausted_aborts_with_cumulative_count(make_session):
+    # 第 1 次生成前折 1 条；回灌 ≈60K token 的观察后窗外候选全折仍 ≥ ceiling → 终止
+    giant = "g" * 240_000
+    r, eng, session, orch, orig = _prefilled_run(
+        make_session, mode="minimal", n_prefill=5, obs_max=10 ** 6,
+        script=[{"tool_calls": [call("read_giant", path="n1")]}, {"text": "不该走到这里"}],
+        tool_results={"read_old": "x", "read_giant": giant})
+    ceiling = orch.context_limits.ceiling
+    assert r["status"] == "warning" and len(eng.calls) == 1
+    assert "上下文已达模型上限" in r["response"][-1]["content"]
+    folds = [e["detail"] for e in _events(cg.EVT_FOLD)]
+    assert len(folds) == 1 and folds[0]["compacted"] == 1          # 第二次折完仍 ceiling：无 fold 事件
+    aborts = _events("turn_abort")
+    assert len(aborts) == 1 and aborts[0]["detail"]["reason"] == cg.ABORT_REASON
+    assert aborts[0]["detail"]["prompt_tokens"] >= ceiling
+    assert aborts[0]["detail"]["compacted"] == 1 + 3                # 两次 ceiling 累计（非覆盖）
+    live = _live_obs(session)
+    assert all(STUB_MARK in x for x in live[:-2]) and live[-2:] == [orig[4], giant]

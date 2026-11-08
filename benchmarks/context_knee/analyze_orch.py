@@ -39,6 +39,7 @@ for _p in (_HERE.parents[1] / "backend", _HERE.parent):
     if str(_p) not in sys.path:
         sys.path.append(str(_p))
 from context_knee import analyze as A  # noqa: E402
+from context_knee.orch_tools import norm_guard_thresholds  # noqa: E402
 from context_knee.quality import COHERENT_THRESHOLDS  # noqa: E402
 
 REF = "qwen-current"      # 占位默认；main() 按 --ref 的目录名覆盖这个全局（见 REF 推导）
@@ -347,7 +348,11 @@ def sec_j(G, aggs, raws, evs, levels=(49152, 57344)) -> List[str]:
             if not rs:
                 continue
             ce = sorted({ceiling_of(r) for r in rs} - {None})
-            gt = sorted({json.dumps(r.get("guard_thresholds"), sort_keys=True) for r in rs})
+            # D48：fold_mode 键 2026-11-09 才加入，归一（缺键按 full 补齐）后再判唯一性/展示——
+            # 不然同臂一半行有 fold_mode、一半（更早）缺键会被误判成「不唯一」（与 run_knee.
+            # harness_mode_of 的续跑口径比对共用同一归一函数，见 orch_tools.norm_guard_thresholds）
+            gt = sorted({json.dumps(norm_guard_thresholds(r.get("guard_thresholds")), sort_keys=True)
+                        for r in rs})
             folds = [(e.get("detail") or {}) for r in rs for e in seg(r, ev) if e["type"] == "context_guard_fold"]
             hards = [(e.get("detail") or {}) for r in rs for e in seg(r, ev) if e["type"] == "context_hard"]
             f1 = sum(1 for f in folds if f.get("iteration") == 1)
@@ -359,9 +364,11 @@ def sec_j(G, aggs, raws, evs, levels=(49152, 57344)) -> List[str]:
             if len(gt_vals) > 1:
                 print(f"⚠️ {name} L{lv}：guard_thresholds 不唯一（{len(gt_vals)} 种）：{gt_vals}", file=sys.stderr)
             gts = gt_vals[0] if gt_vals else None
-            thr = (("；".join(f"{v['soft']}/{v['hard']}" for v in gt_vals) + f"/{','.join(map(str, ce))}")
+            thr = (("；".join(f"{v['soft']}/{v['hard']}（fold {v['fold_mode']}）" for v in gt_vals)
+                    + f"/{','.join(map(str, ce))}")
                    if len(gt_vals) > 1 else
-                   (f"{gts['soft']}/{gts['hard']}/{','.join(map(str, ce))}" if gts else f"—（guard off；按 {cmax} 计）"))
+                   (f"{gts['soft']}/{gts['hard']}/{','.join(map(str, ce))}（fold {gts['fold_mode']}）"
+                    if gts else f"—（guard off；按 {cmax} 计）"))
             rec = aggs[name][lv]["recall_rate"]
             L.append(f"| {name} | {lv} | {len(rs)} | {thr} | {f1} / {len(folds) - f1} | "
                      f"{n0(min([f['before'] for f in folds] or [None]) if folds else None)}–{n0(max([f['before'] for f in folds]) if folds else None)} | "

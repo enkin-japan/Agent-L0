@@ -159,7 +159,7 @@ wait_log(){ # $1 场景 $2 正则：最多 30 s 等时间线出现该行
   local i; for i in {1..30}; do grep -qE "$2" "$T/$1/run_colab.log" 2>/dev/null && return 0; sleep 1; done; return 1
 }
 
-want=("$@"); [ ${#want} -eq 0 ] && want=(ok hang_recover hang_exhaust start_fail smoke_fail term stop_fail lease_busy arm_fail arm_errors restart_start_fail term_ready term_prestart done_guard phases trace_hang phase_b_smoke_fail order b_only switch_budget smoke_reset trace_done_rerun switch_start_fail d45_steps ready_retry ready_retry_exhaust ready_retry_off ready_retry_timeout ready_retry_stop_fail lease_rollover lease_rollover_floor lease_unlimited level_reps_seed level_reps_arms)
+want=("$@"); [ ${#want} -eq 0 ] && want=(ok hang_recover hang_exhaust start_fail smoke_fail term stop_fail lease_busy arm_fail arm_errors restart_start_fail term_ready term_prestart done_guard phases trace_hang phase_b_smoke_fail order b_only switch_budget smoke_reset trace_done_rerun switch_start_fail d45_steps ready_retry ready_retry_exhaust ready_retry_off ready_retry_timeout ready_retry_stop_fail lease_rollover lease_rollover_floor lease_unlimited level_reps_seed level_reps_arms rev_arm)
 has(){ [[ " ${want[*]} " == *" $1 "* ]]; }
 
 if has ok; then
@@ -448,6 +448,14 @@ if has level_reps_arms; then
   mkdir -p "$T/level_reps_arms_empty"; print -r -- "BATCH_RC=0 SKIPPED=0" > "$T/level_reps_arms_empty/DONE"; print -r -- "orch-turn-none ok" > "$T/level_reps_arms_empty/arms_status.txt"
   run_chain level_reps_arms_empty ARMS=orch-turn-none LEVEL_REPS=0=6 LEVEL_REPS_ARMS=, FORCE_OUT=1
   check level_reps_arms '[ "$(rc_of level_reps_arms_empty)" = 64 ] && [ "$(calls level_reps_arms_empty start)" = 0 ] && [ "$(cat "$T/level_reps_arms_empty/DONE" 2>/dev/null)" = "BATCH_RC=0 SKIPPED=0" ] && [ "$(cat "$T/level_reps_arms_empty/arms_status.txt" 2>/dev/null)" = "orch-turn-none ok" ]' "「,」应 64 且不动 DONE/arms_status：rc=$(rc_of level_reps_arms_empty) DONE=$(cat "$T/level_reps_arms_empty/DONE" 2>/dev/null)"
+fi
+
+# D48 复测臂与 ORCH_LV 覆盖（11-09）：rev 臂带 hard/fold 参数且 --levels 取 ORCH_LV；ORCH_LV 非法 → 64 不起机
+if (( ${want[(Ie)rev_arm]} )); then
+  run_chain rev_arm ARMS=orch-turn-none,orch-turn-w1w2-rev ORCH_LV=0,49152,57344 LEVEL_REPS=49152=6,57344=6 KNEE_SEED=1107
+  check rev_arm '[ "$(rc_of rev_arm)" = 0 ] && grep -q -- "--guard on --step-compaction on --guard-hard-tokens 51200 --guard-fold-mode minimal --prefix prod --levels 0,49152,57344" "$T/rev_arm/orch-turn-w1w2-rev/stub.args" && grep -q -- "--level-reps 49152=6,57344=6" "$T/rev_arm/orch-turn-w1w2-rev/stub.args" && grep -q -- "--guard off --step-compaction off --prefix prod --levels 0,49152,57344" "$T/rev_arm/orch-turn-none/stub.args" && ! grep -q -- "--guard-hard-tokens" "$T/rev_arm/orch-turn-none/stub.args" && grep -q "ORCH_LV=0,49152,57344" "$T/rev_arm/run_colab.log"' "rev 臂参数：$(cat "$T/rev_arm/orch-turn-w1w2-rev/stub.args" 2>/dev/null)"
+  run_chain rev_arm_lv_bad ARMS=orch-turn-w1w2-rev ORCH_LV=0,49152,abc
+  check rev_arm '[ "$(rc_of rev_arm_lv_bad)" = 64 ] && [ "$(calls rev_arm_lv_bad start)" = 0 ]' "ORCH_LV 非法应 64：rc=$(rc_of rev_arm_lv_bad) start=$(calls rev_arm_lv_bad start)"
 fi
 
 print -r -- "run_colab selftest: pass=$pass fail=$fail (scenarios: ${want[*]})"

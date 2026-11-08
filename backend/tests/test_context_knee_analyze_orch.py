@@ -60,6 +60,34 @@ def test_w1b_row_fold_spill_and_strict_over_ceiling():
     assert w["over_limit"] == 0 and w["has_flags_key"] is False
 
 
+def test_sec_j_normalizes_missing_fold_mode_key_and_shows_fold_in_thr(tmp_path, capsys):
+    """D48：guard_thresholds.fold_mode 键 2026-11-09 才加入，同臂一半行（更早）缺键、一半有
+    fold_mode="full"——经 orch_tools.norm_guard_thresholds 归一后两者等价，不该被误报「不唯一」；
+    thr 列展示 fold full（与 run_knee.harness_mode_of 的续跑口径比对共用同一归一函数）。"""
+    def _row(rep, with_fold_mode):
+        gt = {"soft": 24576, "hard": 39322, "reserve": 12288}
+        if with_fold_mode:
+            gt["fold_mode"] = "full"
+        return {"level": 0, "item_id": "lc-x", "rep": rep, "stamp": "s1", "model": "m/x",
+                "score": {"pass": True}, "gens": [], "context_limit": 65536,
+                "guard_thresholds": gt}
+    name = O.TURN[0]
+    d = tmp_path / name
+    d.mkdir()
+    rows = [_row(0, False), _row(1, True)]
+    (d / "transcripts.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    # sec_j 无条件遍历 TURN + EXTRA_ORCH：其余两臂给空 records（该档 rs 为空直接 continue，
+    # 不会去碰对应的 aggs，故给空字典占位即可）
+    G = {name: A.load_group(d), **{n: {"records": []} for n in O.TURN[1:] + O.EXTRA_ORCH}}
+    aggs = {name: A.aggregate(G[name], A.th_global, set()),
+           **{n: {} for n in O.TURN[1:] + O.EXTRA_ORCH}}
+    raws = {n: [] for n in O.TURN + O.EXTRA_ORCH}
+    out = O.sec_j(G, aggs, raws, {}, levels=(0,))
+    assert "不唯一" not in capsys.readouterr().err
+    line = next(ln for ln in out if ln.startswith(f"| {name} | 0 |"))
+    assert "fold full" in line
+
+
 def test_b2_csv_extra_counts_ceiling_equal_and_spill_readbacks():
     row = _orch_row(gens=[{"prompt_tokens": 53248}], spill_readbacks=3)   # 53248 == ceiling
     G = {"arm": {"records": [row]}}

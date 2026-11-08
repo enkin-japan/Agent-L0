@@ -30,6 +30,7 @@
 #   LEVEL_REPS（knee 步按档 rep 数，run_knee --level-reps 格式「档=n,…」如 0=6；缺省不传=各档 --reps 缺省 2。用户 11-05 拍板
 #       P2 门槛噪声基线：下一租约 L0 加 rep）、KNEE_SEED（knee 步 --seed 基值，缺省不传=run_knee 缺省 7；11-07 起远端采样种子
 #       seed*1000+rep 随请求体 sampling 透传到 cuda 后端，行记 sampling_seed_sent；算力端须部署含该改动的 cuda/backend.py）、
+#   ORCH_LV（编排器 knee 步的 --levels，逗号分隔非负整数，缺省 0,32768,49152,57344；D48 复测批 0,49152,57344。11-09 加）、
 #   LEVEL_REPS_ARMS（逗号分隔的步名：只有这些 knee 步带 --level-reps，其余 knee 步按缺省 rep；空=全部 knee 步。用户 11-07 晚拍板：
 #       共同随机数下 none/w1/w1w2 在 L0 同输入同输出，L0 加 rep 只在 none + full 做；每个步名须在本批 ARMS 的 knee 步里，否则 64 不起机）。
 #   测试接缝（只为桩自测，缺省即生产路径）：DEPLOY、PY、KNEE、TRACE、ENV_FILE、POLL（等 READY 轮询秒，默认 30）、
@@ -39,6 +40,7 @@
 #   orch-turn-none    编排器 turn 放置 无管理（guard off / step off）        prod 前缀     0/32K/49K/57K
 #   orch-turn-w1      编排器 turn 放置 +W1（guard on / step off）           prod 前缀     同上
 #   orch-turn-w1w2    编排器 turn 放置 +W1+W2（guard on / step on）         prod 前缀     同上
+#   orch-turn-w1w2-rev 编排器 turn 放置 +W1+W2 落刀修订（D48，非缺省批）：hard 51,200 + fold minimal  prod 前缀  同上
 #   orch-turn-catalog 编排器 turn 放置 +W1+W2 catalog 前缀对照（D39c）       catalog 前缀  同上
 #   orch-turn-full    编排器 turn 放置 +W1+W2 full 前缀对照（非缺省批；D44 (iii) 11-06 起 Qwen 条目已是 catalog，
 #                     上面三臂的 prod 前缀生效为 catalog，与 b2/d44 的 full 口径对照须显式此臂）   full 前缀     同上
@@ -130,12 +132,14 @@ log(){ print -r -- "$(date '+%F %T') $*" >> "$LOG"; }
 finish(){ print -r -- "$1" > "$OUT/DONE"; log "DONE $1"; }
 arm_status(){ print -r -- "$1 $2" >> "$OUT/arms_status.txt"; log "arm $1: $2"; }
 
-ORCH_LV=0,32768,49152,57344
+ORCH_LV=${ORCH_LV:-0,32768,49152,57344}   # 编排器 knee 步的 --levels（D48 复测批只跑 0,49152,57344）
 DIRECT_LV=0,16384,32768,49152
+[[ "$ORCH_LV" =~ "^[0-9]+(,[0-9]+)*$" ]] || { echo "ORCH_LV 须为逗号分隔的非负整数档位（现 $ORCH_LV）" >&2; exit 64; }
 typeset -A ARM_ARGS
 ARM_ARGS[orch-turn-none]="--orchestrator --fill-placement turn --guard off --step-compaction off --prefix prod --levels $ORCH_LV"
 ARM_ARGS[orch-turn-w1]="--orchestrator --fill-placement turn --guard on --step-compaction off --prefix prod --levels $ORCH_LV"
 ARM_ARGS[orch-turn-w1w2]="--orchestrator --fill-placement turn --guard on --step-compaction on --prefix prod --levels $ORCH_LV"
+ARM_ARGS[orch-turn-w1w2-rev]="--orchestrator --fill-placement turn --guard on --step-compaction on --guard-hard-tokens 51200 --guard-fold-mode minimal --prefix prod --levels $ORCH_LV"
 ARM_ARGS[direct-mock]="--levels $DIRECT_LV"
 ARM_ARGS[direct-prod]="--prefix prod --levels $DIRECT_LV"
 ARM_ARGS[orch-history-ref]="--orchestrator --fill-placement history --guard on --step-compaction on --turn-compaction on --prefix prod --levels $ORCH_LV"
@@ -197,7 +201,7 @@ fi
 
 # 参数全部校验通过，才清旧 DONE、记本次有效配置、清 arms_status（一审 M2：64 退出不该动收官目录的 DONE / arms_status）
 rm -f "$OUT/DONE"
-print -r -- "$(date '+%F %T') config: MODEL=$MODEL MODEL_B=$MODEL_B READY_MINUTES=$READY_MINUTES READY_RETRY=$READY_RETRY RESTARTS_MAX=$RESTARTS_MAX HUNG_RUNS=$HUNG_RUNS MAX_VM_HOURS=$MAX_VM_HOURS LEASE_BUDGET_SEC=$LEASE_BUDGET_SEC SMOKE=$SMOKE LEVEL_REPS=${LEVEL_REPS:-<unset>} LEVEL_REPS_ARMS=${LEVEL_REPS_ARMS:-<unset>} KNEE_SEED=${KNEE_SEED:-<unset>}" >> "$LOG"
+print -r -- "$(date '+%F %T') config: MODEL=$MODEL MODEL_B=$MODEL_B READY_MINUTES=$READY_MINUTES READY_RETRY=$READY_RETRY RESTARTS_MAX=$RESTARTS_MAX HUNG_RUNS=$HUNG_RUNS MAX_VM_HOURS=$MAX_VM_HOURS LEASE_BUDGET_SEC=$LEASE_BUDGET_SEC SMOKE=$SMOKE LEVEL_REPS=${LEVEL_REPS:-<unset>} LEVEL_REPS_ARMS=${LEVEL_REPS_ARMS:-<unset>} KNEE_SEED=${KNEE_SEED:-<unset>} ORCH_LV=$ORCH_LV" >> "$LOG"
 : > "$OUT/arms_status.txt"
 
 # 当前步的命令行（--out 与步参数由 run_arm 追加）；--model 取当前段模型 $MODEL；$2=smoke 为冒烟（不带 LEVEL_REPS）

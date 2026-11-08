@@ -857,6 +857,17 @@ async def _amain(args, orch_globals: "_OrchGlobals") -> int:
         except BaseException:
             engine.backend.shutdown()
             raise
+    if orch_ctx is not None and orch_ctx.guard:
+        try:
+            _precheck_cfg, _ = _orch_tools().agent_cfg(
+                orch_ctx.agent_base, guard=orch_ctx.guard, step=orch_ctx.step_compaction,
+                goal_verify=orch_ctx.goal_verify, hard_tokens=orch_ctx.guard_hard_tokens,
+                fold_mode=orch_ctx.guard_fold_mode)
+            orch_guard_precheck(_precheck_cfg, probe_context_limit(args, engine))
+        except BaseException:
+            if engine is not None:
+                engine.backend.shutdown()
+            raise
     try:
         prefixes, prefix_meta = build_prefixes(args.prefix, items, engine, repo, opts,
                                                tool_schema_mode=mode_meta["tool_schema_mode_effective"])
@@ -889,7 +900,8 @@ async def _amain(args, orch_globals: "_OrchGlobals") -> int:
     if orch_ctx is not None:
         print(f"== 编排器模式：放置 {orch_ctx.fill_placement}，guard {mode_meta['guard']}，"
               f"W2 {mode_meta['step_compaction']}，轮首压缩 {mode_meta['turn_compaction']}，"
-              f"goal_verify {mode_meta['goal_verify']}，披露 {mode_meta['tool_schema_mode_effective']}"
+              f"goal_verify {mode_meta['goal_verify']}，披露 {mode_meta['tool_schema_mode_effective']}，"
+              f"hard {mode_meta['guard_thresholds']['hard']:,}，fold {mode_meta['guard_thresholds']['fold_mode']}"
               f"；事件 → {orch_ctx.events_path}")
     _INTERRUPT.reset()
     loop = asyncio.get_running_loop()
@@ -1154,6 +1166,9 @@ ORCH_FLAGS = {"fill_placement": "turn", "guard": "on", "step_compaction": "on",
 #: keep_mock_tools_full，按生效值判、不按 --prefix 字面值）。routed 的「按题面手工选路由件」是
 #: 直调模式的装配形态，编排器的路由在任务建立时自己做，故无对应物
 ORCH_PREFIX_MODES = ("mock", "prod", "catalog", "full")
+#: 编排器模式专属的取值型开关（缺省 None = 沿用 config.yaml agent 段；直调模式给了即 argparse error）：
+#: W1 复测臂的 context_guard.hard_tokens / fold_mode 覆盖（记入 meta.guard_thresholds 与 overrides）
+ORCH_VALUE_FLAGS = ("guard_hard_tokens", "guard_fold_mode")
 
 
 def orch_model_options(opts: Optional[Dict[str, Any]], prefix: str) -> Dict[str, Any]:
@@ -1201,10 +1216,12 @@ def agent_cfg_fingerprint(cfg: Dict[str, Any]) -> str:
 
 def harness_mode_of(r: Dict[str, Any]) -> Tuple[Any, ...]:
     """一行（或 meta）的 harness 口径元组；缺 mode 的旧行 / 直调行 = 直调口径（完整伪轮次填充，
-    编排器开关与 cfg 键不比）。"""
+    编排器开关与 cfg 键不比）。guard_thresholds 的归一（fold_mode 缺键补 "full"）与 analyze_orch.py
+    共用 orch_tools.norm_guard_thresholds（D48），不各自维护一份。"""
     if not r.get("mode") or r.get("mode") == "direct":
         return tuple(_DIRECT_HARNESS.get(k) for k in HARNESS_MODE_KEYS)
-    return tuple(r.get(k) for k in HARNESS_MODE_KEYS)
+    return tuple(_orch_tools().norm_guard_thresholds(r.get(k)) if k == "guard_thresholds" else r.get(k)
+                 for k in HARNESS_MODE_KEYS)
 
 
 def effective_cfg_meta(cfg: Dict[str, Any]) -> Dict[str, Any]:
@@ -1212,10 +1229,40 @@ def effective_cfg_meta(cfg: Dict[str, Any]) -> Dict[str, Any]:
     from framework.core import context_guard, step_compaction
     g = context_guard.resolve_context_guard(cfg)
     sc = step_compaction.resolve_step_compaction(cfg)
-    return {"guard_thresholds": {"soft": g.soft, "hard": g.hard, "reserve": g.reserve},
+    return {"guard_thresholds": {"soft": g.soft, "hard": g.hard, "reserve": g.reserve,
+                                 "fold_mode": g.fold_mode},
             "step_compaction_cfg": {"trigger_level": sc.trigger_level,
                                     "cold_refill_trigger_level": sc.cold_refill_trigger_level,
                                     "keep_recent": sc.keep_recent, "digest_chars": sc.digest_chars}}
+
+
+def probe_context_limit(args, engine) -> Optional[int]:
+    """引擎的上下文上限，取法同 Orchestrator.bind_context_limit()（约 1399 行：读
+    self.engine.context_limit）：真后端直接读已装载的引擎；fake/dry-run 没有真引擎（_amain 的
+    engine 变量恒 None）——探针用 _one_run_orch 同款 `FakeEngine([])`，它的 context_limit
+    （缺省 65536）就是每个 fake run 实际会绑定的那个值，不是凭空另造一个数。"""
+    if engine is not None:
+        return getattr(engine, "context_limit", None)
+    from tests.fake_engine import FakeEngine
+    return FakeEngine([]).context_limit
+
+
+def orch_guard_precheck(cfg: Dict[str, Any], context_limit: Optional[int]) -> None:
+    """装配期 W1 阈值预检（引擎装载后、首个 run 之前；只在 --orchestrator 且 guard on 时调用，
+    见 _amain）：与 bind_context_limit() 同一判定——resolve_context_guard 读生效 agent cfg，
+    derive_limits 核对阈值与上限。上限未知（context_limit is None：引擎报不出上限，护栏本就
+    不绑不生效，同 bind_context_limit 的「不绑」分支）→ 跳过、打印说明，不算失败。阈值与上限
+    不相容 → 直接退出（SystemExit，同本文件其余装配期校验的退出方式），不进入任何 run——不然
+    要等第一个 run 的首次生成在 _context_guard_pre 里才炸，白跑一整个 run 的装配 + 生成。"""
+    from framework.core import context_guard
+    if context_limit is None:
+        print("⚠️ W1 阈值预检跳过：引擎报不出上下文上限（context_limit=None），护栏本就不生效")
+        return
+    gcfg = context_guard.resolve_context_guard(cfg)
+    try:
+        context_guard.derive_limits(gcfg, context_limit)
+    except ValueError as e:
+        raise SystemExit(f"❌ W1 阈值预检失败（上下文上限 {context_limit:,} token）：{e}")
 
 
 @dataclass
@@ -1229,6 +1276,8 @@ class OrchContext:
     step_compaction: bool = True
     turn_compaction: bool = True        # 已按放置生效（turn 放置恒 False）
     goal_verify: bool = False
+    guard_hard_tokens: Optional[int] = None   # --guard-hard-tokens：覆盖 context_guard.hard_tokens
+    guard_fold_mode: Optional[str] = None     # --guard-fold-mode：覆盖 context_guard.fold_mode
     cursor: Any = None                  # orch_tools.EventCursor（指向 out_dir 的事件文件）
 
     @property
@@ -1257,7 +1306,9 @@ def orch_meta(ctx: Optional[OrchContext], args=None) -> Dict[str, Any]:
     from framework.core.orchestrator import VERIFY_GATE_RULE
     from framework.memory.compactor import CLUE_RULE
     cfg, over = _orch_tools().agent_cfg(ctx.agent_base, guard=ctx.guard, step=ctx.step_compaction,
-                                        goal_verify=ctx.goal_verify)
+                                        goal_verify=ctx.goal_verify,
+                                        hard_tokens=ctx.guard_hard_tokens,
+                                        fold_mode=ctx.guard_fold_mode)
     if "max_total_iterations" in ctx.agent_base:
         over["max_total_iterations"] = "per item: task.max_turns 或 executor 缺省（记入行 max_total_iterations）"
     onoff = lambda b: "on" if b else "off"      # noqa: E731
@@ -1300,7 +1351,9 @@ def make_orch_context(args, out_dir: Path, opts: Dict[str, Any]) -> OrchContext:
                        model_options=orch_model_options(opts, getattr(args, "prefix", "mock")),
                        fill_placement=placement,
                        guard=on("guard"), step_compaction=on("step_compaction"),
-                       turn_compaction=turn_comp, goal_verify=on("goal_verify"))
+                       turn_compaction=turn_comp, goal_verify=on("goal_verify"),
+                       guard_hard_tokens=getattr(args, "guard_hard_tokens", None),
+                       guard_fold_mode=getattr(args, "guard_fold_mode", None))
 
 
 def _gen_kwargs(item: Dict[str, Any], sent: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1348,7 +1401,8 @@ async def _one_run_orch(args, engine, counter, item, item_idx, level, rep, meta,
                                      spill_tool=spill)
         max_turns = int(task.get("max_turns") or _default_max_turns(task))
         cfg, _over = OT.agent_cfg(ctx.agent_base, guard=ctx.guard, step=ctx.step_compaction,
-                                  goal_verify=ctx.goal_verify, max_total_iterations=max_turns)
+                                  goal_verify=ctx.goal_verify, max_total_iterations=max_turns,
+                                  hard_tokens=ctx.guard_hard_tokens, fold_mode=ctx.guard_fold_mode)
         # 生效披露 catalog（--prefix catalog 强制，或 prod / mock 随条目 tool_schema_mode）：mock 工具
         # 并入本 run 的 core。按生效值判，与 orch_meta 的 tool_schema_mode_effective 同一解析
         cfg = OT.keep_mock_tools_full(cfg, asm, ctx.model_options)
@@ -1648,13 +1702,20 @@ def build_parser() -> argparse.ArgumentParser:
                     help="[编排器] 轮首机械压缩 run_turn(compact_history=)（缺省 on；turn 放置强制 off）")
     ap.add_argument("--goal-verify", default=None, choices=["on", "off"],
                     help="[编排器] 收尾目标校验 agent.goal_verify（缺省 off：省一次生成）")
+    ap.add_argument("--guard-hard-tokens", type=int, default=None,
+                    help="[编排器] 覆盖 agent.context_guard.hard_tokens（缺省沿用 config.yaml；"
+                         "须 soft < hard < ceiling，装配期校验）")
+    ap.add_argument("--guard-fold-mode", default=None, choices=["full", "minimal"],
+                    help="[编排器] 覆盖 agent.context_guard.fold_mode：full = 保护窗外一次全折（缺省"
+                         "沿用 config.yaml，生产为 full）；minimal = 从最旧起分批折到 < hard 即停")
     return ap
 
 
 def check_mode_args(ap: argparse.ArgumentParser, args) -> None:
     """编排器专属开关只在 --orchestrator 下有效；编排器模式只支持 ORCH_PREFIX_MODES。"""
     if not args.orchestrator:
-        given = [f"--{k.replace('_', '-')}" for k in ORCH_FLAGS if getattr(args, k) is not None]
+        given = [f"--{k.replace('_', '-')}" for k in (*ORCH_FLAGS, *ORCH_VALUE_FLAGS)
+                 if getattr(args, k) is not None]
         if given:
             ap.error(f"{' '.join(given)} 只在 --orchestrator 下有效")
         if args.prefix == "full":

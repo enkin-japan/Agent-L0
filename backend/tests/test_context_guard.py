@@ -71,6 +71,25 @@ def test_enabled_must_be_bool():
         cg.resolve_context_guard({"context_guard": {"enabled": "yes"}})
 
 
+def test_fold_mode_defaults_to_full_and_accepts_minimal():
+    assert cg.resolve_context_guard({}).fold_mode == "full"
+    assert cg.resolve_context_guard({"context_guard": {"fold_mode": "full"}}).fold_mode == "full"
+    c = cg.resolve_context_guard({"context_guard": {"fold_mode": "minimal", "hard_tokens": 51200}})
+    assert (c.fold_mode, c.hard) == ("minimal", 51200)
+
+
+@pytest.mark.parametrize("bad", ["Minimal", "none", "", None, 1, True, ["minimal"]])
+def test_fold_mode_invalid_refused(bad):
+    with pytest.raises(ValueError, match="fold_mode"):
+        cg.resolve_context_guard({"context_guard": {"fold_mode": bad}})
+
+
+def test_unknown_key_still_refused_next_to_fold_mode():
+    with pytest.raises(ValueError) as e:
+        cg.resolve_context_guard({"context_guard": {"fold_mode": "minimal", "fold": "minimal"}})
+    assert "'fold'" in str(e.value) and "fold_mode" in str(e.value)
+
+
 def test_derive_limits_ceiling_and_refusal_names_all_four_numbers():
     assert cg.derive_limits(CFG, 65536) == cg.ContextLimits(limit=65536, ceiling=53248)
     with pytest.raises(ValueError) as e:
@@ -250,6 +269,124 @@ def test_second_ceiling_in_turn_aborts_without_another_compaction(make_session):
     assert len(eng.measure_calls) == 3                        # 第二次 ceiling 不再压缩、不再重量
     assert _events("turn_abort")[0]["detail"]["reason"] == "context_guard"
     assert "上下文已达模型上限" in session.history[-1]["content"]
+
+
+# ---- fold_mode=minimal：_emergency_compact 的分批量法（量值由脚本给，钉批数与停止条件） ----
+def _minimal_orch(n_obs, make_session, obs_chars=48_000):
+    orch = _orch(FakeEngine([]), guard={"hard_tokens": 51200, "fold_mode": "minimal"})
+    session = make_session()
+    for i in range(n_obs):
+        session.add_assistant_message(tool_calls=[{"name": "read_thing", "arguments": {"p": i}}])
+        session.add_tool_message([{"name": "read_thing", "response": chr(97 + i) * obs_chars}])
+    return orch, session
+
+
+def _stubbed_flags(session):
+    return ["Observation compacted" in tr["response"] for m in session.history
+            if m.get("role") == "tool" for tr in m["tool_responses"]]
+
+
+def test_minimal_refolds_next_batch_when_estimate_falls_short(make_session):
+    orch, session = _minimal_orch(6, make_session)
+    seen = iter([52000, 50000])
+    stats = {}
+    n, _sp = orch._emergency_compact(session, measure=lambda: next(seen), current=60000, stats=stats)
+    # 第 1 批缺口 8,801 → 估 ≈11.9K/条，折最旧 1 条；重量仍 ≥ hard → 第 2 批再折下一条
+    assert (n, stats["passes"]) == (2, 2)
+    assert _stubbed_flags(session) == [True, True, False, False, False, False]
+
+
+def test_minimal_batch_covers_gap_in_one_pass(make_session):
+    orch, session = _minimal_orch(6, make_session)
+    stats = {}
+    n, _sp = orch._emergency_compact(session, measure=lambda: 40000, current=80000, stats=stats)
+    # 缺口 28,801 → 一批凑 3 条（3 × ≈11.9K）
+    assert (n, stats["passes"]) == (3, 1)
+    assert _stubbed_flags(session) == [True, True, True, False, False, False]
+
+
+def test_minimal_stops_at_max_passes(make_session):
+    orch, session = _minimal_orch(12, make_session)
+    stats = {}
+    n, _sp = orch._emergency_compact(session, measure=lambda: 60000, current=60000, stats=stats)
+    # 每批凑缺口 8,801 只要 1 条；量值不降 → 到 8 批上限即停，窗外仍剩 2 条原文
+    assert (n, stats["passes"]) == (8, 8)
+    assert _stubbed_flags(session) == [True] * 8 + [False] * 4
+
+
+def test_minimal_stops_when_candidates_exhausted(make_session):
+    orch, session = _minimal_orch(4, make_session)
+    calls = []
+    stats = {}
+    n, _sp = orch._emergency_compact(session, measure=lambda: calls.append(1) or 60000,
+                                     current=60000, stats=stats)
+    assert (n, stats["passes"], len(calls)) == (2, 2, 2)
+    assert _stubbed_flags(session) == [True, True, False, False]   # 保护窗不动
+    n2, _ = orch._emergency_compact(session, measure=lambda: 60000, current=60000, stats=stats)
+    assert (n2, stats["passes"]) == (0, 0)                          # 候选耗尽：0 批、不重量
+
+
+def test_minimal_requires_measure(make_session):
+    orch, session = _minimal_orch(4, make_session)
+    with pytest.raises(ValueError, match="measure"):
+        orch._emergency_compact(session)
+
+
+def test_minimal_second_ceiling_in_turn_folds_again(make_session):
+    """单元版（量值脚本）：minimal 下第二次 ceiling 再折、照常生成；full 下同脚本终止（见上一节）。"""
+    eng = FakeEngine([{"tool_calls": [call("read_thing", path=p)]} for p in "abcde"]
+                     + [{"text": "完成"}])
+    # 第 4 次生成前（3 条观察、窗外 1 条）首次 ceiling；第 6 次生成前（5 条）二次 ceiling。小观察的
+    # 估计可省量远不够缺口 → 每批把窗外候选全折（第二次折 obs1、obs2）
+    eng.measure_script = [100, 100, 100, 60000, 30000, 100, 60000, 30000]
+    orch = _orch(eng, tools=[BIG_TOOL], guard={"hard_tokens": 51200, "fold_mode": "minimal"})
+    session = make_session()
+    r = _run(orch, session)
+    assert r["status"] == "success" and len(eng.calls) == 6
+    assert [("Observation compacted" in tr["response"]) for m in session.history
+            if m.get("role") == "tool" for tr in m["tool_responses"]] == [True, True, True, False, False]
+    folds = [e["detail"] for e in _events(cg.EVT_FOLD)]
+    assert [(f["before"], f["after"], f["mode"]) for f in folds] == \
+        [(60000, 30000, "minimal"), (60000, 30000, "minimal")]
+    assert all(f["passes"] == 1 for f in folds)
+
+
+def test_minimal_ceiling_with_nothing_to_fold_aborts(make_session):
+    eng = FakeEngine([{"text": "不该走到这里"}])
+    eng.measure_script = [60000]
+    r = _run(_orch(eng, guard={"hard_tokens": 51200, "fold_mode": "minimal"}), make_session())
+    assert r["status"] == "warning" and eng.calls == []
+    assert len(eng.measure_calls) == 1                              # 0 条可折：不重量、直接终止
+    assert _events(cg.EVT_FOLD) == []
+    d = _events("turn_abort")[0]["detail"]
+    assert d["reason"] == "context_guard" and (d["compacted"], d["spilled"]) == (0, 0)
+
+
+def test_minimal_fold_tail_note_pushes_back_to_ceiling_with_no_candidates_aborts(make_session):
+    """同一次 _context_guard_pre 调用内的复合路径：首量 ceiling → minimal 折（窗外仅 1 条可折）
+    落到 hard 档 → hard 分支的尾注把量值推回 ceiling → 下一 pass minimal 候选已耗尽（0 批、不
+    重量）→ 终止，引擎从未被调用一次。钉死 `_context_guard_pre` 里 `last_measure.clear()` 与
+    `if "ml" in last_measure` 两行：去掉 clear() 会让第二次 ceiling 判定误用第一次折叠留在
+    last_measure 里的旧值（level 误判回 hard，不会终止）；去掉 `"ml" in` 判断会在第二次 0 批、
+    未重量时对还没写过键的 last_measure 取 "ml" 直接抛 KeyError。"""
+    eng = FakeEngine([{"text": "不该走到这里"}])
+    eng.measure_script = [60000, 52000, 53300]
+    orch = _orch(eng, guard={"hard_tokens": 51200, "fold_mode": "minimal"})
+    session = make_session()
+    for i in range(3):                  # keep_recent=2：只有最旧这 1 条落在窗外、可折
+        session.add_assistant_message(tool_calls=[{"name": "read_thing", "arguments": {"p": i}}])
+        session.add_tool_message([{"name": "read_thing", "response": chr(97 + i) * 1000}])
+    r = _run(orch, session)
+    assert r["status"] == "warning" and eng.calls == []
+    assert len(eng.measure_calls) == 3
+    fold = _events(cg.EVT_FOLD)
+    assert len(fold) == 1
+    d = fold[0]["detail"]
+    assert (d["before"], d["after"], d["compacted"], d["passes"], d["mode"]) \
+        == (60000, 52000, 1, 1, "minimal")
+    assert len(_events(cg.EVT_HARD)) == 1
+    ab = _events("turn_abort")[0]["detail"]
+    assert ab["reason"] == "context_guard" and (ab["compacted"], ab["spilled"]) == (1, 1)
 
 
 # ---- W1b：ceiling 应急压缩的桩带回读句柄（不看 step_compaction.spill_full） ----
