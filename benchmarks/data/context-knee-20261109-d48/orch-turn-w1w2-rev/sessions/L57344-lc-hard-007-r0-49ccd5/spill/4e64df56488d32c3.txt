@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/search-api/deploy/values.yaml", "content": "retry_limit: 2884\n  log_level: info\nlog_level: warn\nregion: ap-east-2\n    max_batch: 1107\nwarmup_s: warn\n    log_level: false\n  retry_limit: false\n    max_batch: false\n    warmup_s: 1045\n  flush_interval_s: true\n  replicas: info\n    max_batch: false\npool_size: info"}

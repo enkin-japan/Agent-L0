@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - 三个必须逐字引用的值：① halyard 配置路径 /opt/halyard/conf/halyard-91ee16.toml（见 quota-svc-11.log）② 工单号 OPS-13337（见 ledger/deploy/values.yaml）③ queue_depth_alert_threshold = 7055（见 scheduler-15.log）

@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Values needed verbatim in final answer: halyard config path = /opt/halyard/conf/halyard-c70c48.toml (from geo-tiles/deploy/values.yaml); ticket = OPS-68989 (report-gen-11.log); queue_depth_alert_thres

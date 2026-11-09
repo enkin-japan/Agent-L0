@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/audit-trail/deploy/values.yaml", "content": "retry_limit: warn\nmax_batch: 591\ncpu_limit: false\n    warmup_s: info\n  max_batch: false\n    flush_interval_s: warn\n    timeout_ms: false\nshard_count: true\n    retry_limit: true\n  log_level: info\nlog_level: false\nretry_limit: true\n    timeout_ms: warn\n  max_batch: info"}

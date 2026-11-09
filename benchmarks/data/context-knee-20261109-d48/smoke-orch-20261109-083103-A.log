@@ -1,0 +1,29 @@
+[RemoteBackend] 模型身份核对通过：RedHatAI/Qwen3.8-27B-INT4（revision=91bd022d5b49442a868bc35008f6c21e1860edfa，capabilities=['text', 'vision']）
+[RemoteBackend] 已连接 inference-server: http://agent-compute.tail8d18fd.ts.net:14161
+[MCP-rag_search] ⚠️ RAG 服务器 (127.0.0.1:14160) 探活失败: hermetic construction
+[Skill] ✅ 成功加载剧本: briefing
+[Skill] ✅ 成功加载剧本: chart-report
+[Skill] ✅ 成功加载剧本: deck
+[Skill] ✅ 成功加载剧本: ingest
+[Skill] ✅ 成功加载剧本: research
+== 拐点测量 RedHatAI/Qwen3.8-27B-INT4（remote，计数 engine，前缀 prod（装配 catalog） 6051 tok）：1 题 × 1 档 [0] × 1 rep → benchmarks/data/context-knee-20261109-d48/smoke-orch-20261109-083103-A
+== 编排器模式：放置 turn，guard on，W2 on，轮首压缩 off，goal_verify off，披露 catalog，hard 39,322，fold full；事件 → benchmarks/data/context-knee-20261109-d48/smoke-orch-20261109-083103-A/guardrail_events.jsonl
+[Engine] 约束采样引擎就绪（llguidance）
+[Engine] 约束采样构建失败，永久禁用（纠错闭环兜底）: NotImplementedError: qwen35 方言使用原生 XML 调用体（<function=…><parameter=…>），按设计不启用 约束采样——engine 将 fail-open 到自由采样 + 解析纠错闭环。
+[Engine] 前缀命中 4704/6191 tokens，gen 42.6 tps
+[Orchestrator] 执行工具: run_shell_command
+[Engine] 前缀命中 6272/6408 tokens，gen 49.9 tps
+[Orchestrator] 执行工具: list_files
+[Engine] 前缀命中 6272/6534 tokens，gen 57.7 tps
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Orchestrator] 执行工具: read_file
+[Engine] 前缀命中 6272/7242 tokens，gen 55.3 tps
+[Orchestrator] 执行工具: run_math
+[Engine] 前缀命中 6272/7598 tokens，gen 52.9 tps
+[Orchestrator] 执行工具: write_file
+[Engine] 前缀命中 7840/7870 tokens，gen 56.9 tps
+✅ L0 lc-hard-001 r0 prompt=6191 (est 6191, err None) recall - rep_guard 0 (29.37s)
+== 产物: benchmarks/data/context-knee-20261109-d48/smoke-orch-20261109-083103-A（表格：summarize.py benchmarks/data/context-knee-20261109-d48/smoke-orch-20261109-083103-A）

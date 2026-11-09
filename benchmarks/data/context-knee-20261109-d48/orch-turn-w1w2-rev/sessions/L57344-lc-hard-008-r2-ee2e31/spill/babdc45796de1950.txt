@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/quota-svc/log/quota-svc-10.log", "content": "2026-09-08T21:36:43Z INFO  [quota-svc-6] worker heartbeat ok queue=3088 inflight=439\n2026-09-08T21:10:22Z WARN  [quota-svc-2] batch 746 committed rows=4720 lag_ms=66\n2026-09-08T21:48:11Z DEBUG [quota-svc-7] cache miss ratio 0.481 over last 174s"}

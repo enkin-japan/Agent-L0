@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/runbook/mailer.md", "content": "# mailer runbook\n- Escalate to the on-call rotation if two retries fail\n- 先确认上游队列是否积压，再看 worker 心跳\n- 重启顺序：gateway → relay → ingest\n- Check the dashboard panel `lag_p95` before restarting\n## Rollback\n- Escalate to the on-call rotation if two retries fail\n- Do not purge the dead-letter queue without a snapshot"}

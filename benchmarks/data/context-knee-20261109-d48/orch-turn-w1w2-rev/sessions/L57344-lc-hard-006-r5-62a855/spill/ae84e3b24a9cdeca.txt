@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - halyard config path (from cache-warm-13.log): /opt/halyard/conf/halyard-c70c48.toml; queue_depth_alert_threshold = 7632 (ledger-03.log); OPS-68989 is an incident ticket (audit-trail-19.log) — still ne

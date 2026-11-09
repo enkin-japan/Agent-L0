@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/gateway/log/gateway-17.log", "content": "2026-09-02T17:23:42Z INFO  [gateway-5] gc pause 150ms heap_mb=2698\n2026-09-02T16:43:07Z INFO  [gateway-8] cache miss ratio 0.927 over last 242s\n2026-09-02T17:37:52Z INFO  [gateway-4] schema check passed version=6196\n2026-09-02T17:21:07Z INFO  [gateway-6] schema check passed version=2042"}

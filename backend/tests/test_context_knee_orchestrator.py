@@ -8,6 +8,7 @@ test_context_knee_harness.py 原样钉住，这里只钉编排器专属 flag 在
 import asyncio
 import copy
 import json
+import yaml
 import re
 import sys
 from pathlib import Path
@@ -849,7 +850,7 @@ def test_resume_compat_rejects_mixing_direct_and_orchestrator(tmp_path):
 
 
 @pytest.mark.parametrize("key,patch", [("guard_thresholds", {"soft": 1}),
-                                       ("guard_thresholds", {"fold_mode": "minimal"}),
+                                       ("guard_thresholds", {"fold_mode": "__other_fold_mode__"}),
                                        ("step_compaction_cfg", {"keep_recent": 9}),
                                        ("fill_shape", "turns"),
                                        ("tool_schema_mode_effective", "catalog"),
@@ -862,6 +863,9 @@ def test_resume_compat_rejects_different_effective_cfg(tmp_path, key, patch):
     t = o / "transcripts.jsonl"
     rows = [json.loads(ln) for ln in t.read_text().splitlines()]
     for r in rows:
+        if isinstance(patch, dict) and patch.get("fold_mode") == "__other_fold_mode__":
+            # 生产 fold_mode 随 config.yaml 变（D48 翻为 minimal）：取与生效值不同的那个，别写死
+            patch = {"fold_mode": "full" if r["guard_thresholds"]["fold_mode"] == "minimal" else "minimal"}
         r[key] = {**r[key], **patch} if isinstance(patch, dict) else patch
     t.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n")
     with pytest.raises(SystemExit, match="W-K"):
@@ -869,9 +873,10 @@ def test_resume_compat_rejects_different_effective_cfg(tmp_path, key, patch):
 
 
 def test_resume_compat_accepts_rows_without_fold_mode_as_full(tmp_path):
-    """D48 之前的行 guard_thresholds 没有 fold_mode 键：按 full 归一，与现行 full 口径续跑不拒；
-    同样的旧行对 --guard-fold-mode minimal 仍拒。"""
-    base = ["--dry-run", "--orchestrator", "--levels", "0", "--reps", "1", "--limit", "1"]
+    """D48 之前的行 guard_thresholds 没有 fold_mode 键：按 full 归一——对 full 口径（显式
+    --guard-fold-mode full；生产缺省自 D48 起是 minimal，不能依赖它）续跑不拒，对 minimal 口径拒。"""
+    base = ["--dry-run", "--orchestrator", "--levels", "0", "--reps", "1", "--limit", "1",
+            "--guard-fold-mode", "full"]
     o = tmp_path / "o"
     assert K.main(base + ["--out", str(o)]) == 0
     t = o / "transcripts.jsonl"
@@ -881,18 +886,21 @@ def test_resume_compat_accepts_rows_without_fold_mode_as_full(tmp_path):
     t.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n")
     assert K.main(base[:3] + ["0,4096"] + base[4:] + ["--out", str(o), "--resume"]) == 0
     with pytest.raises(SystemExit, match="W-K"):
-        K.main(base[:3] + ["0,4096"] + base[4:] + ["--guard-fold-mode", "minimal",
-                                                    "--out", str(o), "--resume"])
+        K.main(base[:3] + ["0,4096"] + base[4:-2] + ["--guard-fold-mode", "minimal",
+                                                       "--out", str(o), "--resume"])
 
 
 def test_guard_hard_and_fold_mode_overrides_reach_meta_and_overrides(tmp_path):
     """--guard-hard-tokens / --guard-fold-mode：进 meta.guard_thresholds（续跑比对随之覆盖）与
-    orchestrator_cfg_source.overrides；缺省不写覆盖项、生效值 = config.yaml（生产 full）。"""
+    orchestrator_cfg_source.overrides；缺省不写覆盖项、生效值 = config.yaml（D48 起生产 minimal / 51200，
+    这里直接对 config.yaml 读值比，不写死）。"""
     base = ["--dry-run", "--orchestrator", "--levels", "0", "--reps", "1", "--limit", "1"]
     d = tmp_path / "d"
     assert K.main(base + ["--out", str(d)]) == 0
     meta = json.loads((d / "transcripts.jsonl").read_text().splitlines()[0])   # 行 = meta 口径键 + 本 run
-    assert meta["guard_thresholds"]["fold_mode"] == "full"
+    prod = yaml.safe_load((Path(__file__).resolve().parents[2] / "config.yaml").read_text())["agent"]["context_guard"]
+    assert meta["guard_thresholds"]["fold_mode"] == prod.get("fold_mode", "full")
+    assert meta["guard_thresholds"]["hard"] == prod["hard_tokens"]
     over = meta["orchestrator_cfg_source"]["overrides"]
     assert "context_guard.hard_tokens" not in over and "context_guard.fold_mode" not in over
     o = tmp_path / "o"
@@ -905,9 +913,10 @@ def test_guard_hard_and_fold_mode_overrides_reach_meta_and_overrides(tmp_path):
     assert over["context_guard.hard_tokens"] == 51200 and over["context_guard.fold_mode"] == "minimal"
     rows = [json.loads(ln) for ln in (o / "transcripts.jsonl").read_text().splitlines()]
     assert rows and all(r["guard_thresholds"]["fold_mode"] == "minimal" for r in rows)
-    # 同目录换回缺省 fold_mode 续跑 → 口径不同被拒
+    # 同目录显式换成 full 续跑 → 口径不同被拒（生产缺省自 D48 起就是 minimal，换回缺省不再构成差异）
     with pytest.raises(SystemExit, match="W-K"):
-        K.main(base + ["--out", str(o), "--guard-hard-tokens", "51200", "--resume"])
+        K.main(base + ["--out", str(o), "--guard-hard-tokens", "51200",
+                       "--guard-fold-mode", "full", "--resume"])
 
 
 def test_guard_hard_tokens_at_ceiling_precheck_rejects_before_any_run(tmp_path):

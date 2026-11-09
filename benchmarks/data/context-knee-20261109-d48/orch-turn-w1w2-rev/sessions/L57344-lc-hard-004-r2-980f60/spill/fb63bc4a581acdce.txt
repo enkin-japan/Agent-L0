@@ -1,0 +1,6 @@
+exit_code: 0
+stdout:
+policy/access.md:2:- Guest accounts expire after 30 days.
+policy/backup.md:2:- Snapshots are kept for 30 days.
+policy/pending-changes.md:3:The following file is read-only and could not be updated automatically. It still needs a manual update (replace "90 days" with "30 days"):
+policy/security.md:2:- API keys are rotated every 90 days.

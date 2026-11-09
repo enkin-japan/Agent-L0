@@ -409,3 +409,110 @@ def test_main_two_arm_mode_renders_without_full_arm(tmp_path):
     assert "本批无 orch-turn-full 臂" in txt                                     # Q 节不渲染 full 对照
     assert "#### V4. 本批无 orch-turn-full 臂：改列 w1w2 − none" in txt           # V4 改列 w1w2 − none
     assert O.TURN == turn_before                                                 # 收窄后 finally 已复原
+
+
+def _rows_l0_2_fill_6(ok):
+    """D48 批形态：L0 2 rep（口径锚），填充档 6 rep。"""
+    rows = []
+    for lv in LV4:
+        for it in ("i1", "i2"):
+            for rep in range(2 if lv == 0 else 6):
+                r = _row(item=it, rep=rep, level=lv, ok=ok(it, lv, rep), second_text=f"fin{rep}")
+                r.update(model="m", stamp="s1", prefix_mode="prod", wall_s=10.0, prefix_decl="catalog",
+                         tool_schema_mode_effective="catalog", prefix_base_tokens=6051)
+                rows.append(r)
+    return rows
+
+
+def test_main_two_arm_arm_b_renames_second_arm_and_survives_empty_l0_null(tmp_path):
+    """--arm-b：11-09 D48 批第二臂叫 orch-turn-w1w2-rev，L0 只 2 rep（m=2 零分布为空）。
+    缺 --arm-b 仍报缺 w1w2；--arm-b 不配 --two-arm 报错；V4 / E 节按新臂名配对；V4 m=3 格的 m=2 对照写 —。"""
+    import pytest
+    data = tmp_path / "data"
+    _write_arm(data / "orch-turn-none", _rows_l0_2_fill_6(lambda it, lv, rep: rep % 2 == 0))
+    _write_arm(data / "orch-turn-w1w2-rev", _rows_l0_2_fill_6(lambda it, lv, rep: it == "i1"))
+    (data / "run_colab.log").write_text("2026-11-09 10:00:00 START deploy m\n2026-11-09 11:00:00 DONE BATCH_RC=0\n",
+                                        encoding="utf-8")
+    _write_arm(tmp_path / "ref", _arm_rows(2, lambda it, lv, rep: True))
+    base = ["--data", str(data), "--ref", str(tmp_path / "ref"), "--out-md", str(tmp_path / "o.md")]
+    with pytest.raises(SystemExit, match="orch-turn-w1w2"):
+        P.main(base + ["--two-arm"])                                          # 缺省第二臂名仍是 w1w2
+    with pytest.raises(SystemExit, match="--arm-b 只配 --two-arm"):
+        P.main(base + ["--arm-b", "orch-turn-w1w2-rev"])
+    turn_before = list(O.TURN)
+    assert P.main(base + ["--two-arm", "--arm-b", "orch-turn-w1w2-rev"]) == 0
+    txt = (tmp_path / "o.md").read_text(encoding="utf-8")
+    assert "#### V4. 本批无 orch-turn-full 臂：改列 w1w2-rev − none" in txt
+    assert "| w1w2-rev − none | 32768（m=3） |" in txt and "；m=2 P=—" in txt     # 6 对 6：m=3，m=2 零分布空 → —
+    assert "orch-turn-none→orch-turn-w1w2-rev（指定" in txt                     # E 节按新臂名配对
+    assert "--two-arm --arm-b orch-turn-w1w2-rev" in txt                      # 复跑行带上开关
+    assert "orch-turn-w1w2-rev 对 orch-turn-full 不渲染" in txt
+    assert O.TURN == turn_before
+
+
+# ---------------------------------------------------------------- D48 一审修补：V5 拷贝续跑判定 / U3 占位 / --arm-b 自配
+def test_copied_resume_rows_requires_matching_stamp_and_key():
+    """只按 (level,item_id,rep) 共同键且 stamp 相同的行数：同种子续跑但重新生成（stamp 不同）不算拷贝；
+    --p2 批没有本批首臂（arms[0]）时直接判 0，不抛错。"""
+    none = [_row(item="i1", rep=0, level=0), _row(item="i1", rep=1, level=0)]
+    for r in none:
+        r["stamp"] = "copyA"
+    p2_same = [dict(r) for r in none]                                     # 同键同 stamp：拷贝
+    p2_diff = [dict(r, stamp="fresh") for r in none]                      # 同键不同 stamp：新生成
+    g_none, _ = _group("orch-turn-none", none)
+    g_p2_same, _ = _group("orch-turn-none" + P.TAG_P2, p2_same)
+    g_p2_diff, _ = _group("orch-turn-none" + P.TAG_P2, p2_diff)
+    assert P.copied_resume_rows({"orch-turn-none": g_none}, ["orch-turn-none"],
+                                 {g_p2_same["name"]: g_p2_same}) == 2
+    assert P.copied_resume_rows({"orch-turn-none": g_none}, ["orch-turn-none"],
+                                 {g_p2_diff["name"]: g_p2_diff}) == 0
+    assert P.copied_resume_rows({"orch-turn-none": g_none}, ["orch-turn-none"], {}) == 0   # 无 --p2
+    assert P.copied_resume_rows({"orch-turn-none": g_none}, [], {g_p2_same["name"]: g_p2_same}) == 0  # 无臂
+
+
+def test_v5_copy_warning_gated_by_detected_copied_rows_not_two_arm(tmp_path):
+    """V5「拷贝续跑批」警告改按 --p2 批同键同 stamp 的行数判定，不再只看 --two-arm：w12eval 形态（stamp 相同）
+    仍告警；同样 --two-arm 但 --p2 批是新生成（stamp 不同，如 d48 对 w12eval）不告警。"""
+    data = tmp_path / "data"
+    none_rows = _arm_rows(6, lambda it, lv, rep: rep % 2 == 0)
+    _write_arm(data / "orch-turn-none", none_rows)
+    _write_arm(data / "orch-turn-w1w2", _arm_rows(6, lambda it, lv, rep: it == "i1"))
+    (data / "run_colab.log").write_text("2026-11-08 10:00:00 START deploy m\n2026-11-08 11:00:00 DONE BATCH_RC=0\n",
+                                        encoding="utf-8")
+    _write_arm(tmp_path / "ref", _arm_rows(2, lambda it, lv, rep: True))
+    base = ["--data", str(data), "--ref", str(tmp_path / "ref"), "--two-arm"]
+
+    p2_copy = tmp_path / "p2_copy"                                        # 同键同 stamp（_arm_rows 恒 stamp="s1"）
+    _write_arm(p2_copy / "orch-turn-none", _arm_rows(6, lambda it, lv, rep: rep % 2 == 0))
+    assert P.main(base + ["--p2", str(p2_copy), "--out-md", str(tmp_path / "copy.md")]) == 0
+    assert "⚠️ 拷贝续跑批：" in (tmp_path / "copy.md").read_text(encoding="utf-8")
+
+    p2_fresh = tmp_path / "p2_fresh"                                      # 同键不同 stamp：新生成
+    fresh_rows = _arm_rows(6, lambda it, lv, rep: rep % 2 == 0)
+    for r in fresh_rows:
+        r["stamp"] = "fresh"
+    _write_arm(p2_fresh / "orch-turn-none", fresh_rows)
+    assert P.main(base + ["--p2", str(p2_fresh), "--out-md", str(tmp_path / "fresh.md")]) == 0
+    assert "拷贝续跑批" not in (tmp_path / "fresh.md").read_text(encoding="utf-8")
+
+
+def test_sec_u_w1w2_placeholder_independent_of_catalog_presence(tmp_path):
+    """有 catalog、--arm-b 换名缺字面 orch-turn-w1w2 时，U3 占位要给 CAT 和 W12 各自独立补空（不是只在缺 catalog
+    时补），否则 analyze_d44.sec_u 对 aggs["orch-turn-w1w2"] KeyError（旧代码 `aggs if has_cat else {...}`
+    在 has_cat=True 时不补 W12，必炸）。"""
+    data = tmp_path / "data"
+    _write_arm(data / "orch-turn-none", _rows_l0_2_fill_6(lambda it, lv, rep: rep % 2 == 0))
+    _write_arm(data / "orch-turn-w1w2-rev", _rows_l0_2_fill_6(lambda it, lv, rep: it == "i1"))
+    _write_arm(data / "orch-turn-catalog", _rows_l0_2_fill_6(lambda it, lv, rep: True))
+    (data / "run_colab.log").write_text("2026-11-09 10:00:00 START deploy m\n2026-11-09 11:00:00 DONE BATCH_RC=0\n",
+                                        encoding="utf-8")
+    _write_arm(tmp_path / "ref", _arm_rows(2, lambda it, lv, rep: True))
+    argv = ["--data", str(data), "--ref", str(tmp_path / "ref"), "--out-md", str(tmp_path / "u3.md"),
+            "--two-arm", "--arm-b", "orch-turn-w1w2-rev"]
+    assert P.main(argv) == 0
+
+
+def test_main_rejects_arm_b_equal_to_none():
+    import pytest
+    with pytest.raises(SystemExit, match="不能配自己"):
+        P.main(["--data", "x", "--ref", "y", "--two-arm", "--arm-b", "orch-turn-none"])

@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Values for final reply: (1) halyard config path = /opt/halyard/conf/halyard-ad35ab.toml (from report-gen-25.log); (2) escalation ticket = OPS-37166 (from billing-sync-16.log); (3) queue_depth_alert_th

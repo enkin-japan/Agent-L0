@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Locate the reports folder and list its files
+  ○ [2] Read each report; classify DRAFT vs final
+  ○ [3] Delete DRAFT files; rename final files with -final suffix
+  ○ [4] Verify final state of the folder
+  ○ [5] Answer with the three required values

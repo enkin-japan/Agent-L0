@@ -1,0 +1,3 @@
+Saved to scratchpad.
+  - 去重后清单 7 项：牛奶、鸡蛋、面包、咖啡、黄油、酸奶、蜂蜜（a:牛奶鸡蛋面包咖啡; b:鸡蛋黄油牛奶酸奶; c:面包蜂蜜鸡蛋）
+  - 三项值：① halyard 配置路径 /opt/halyard/conf/halyard-a8d471.toml（见 quota-svc-02.log 输出）② 工单号 OPS-17472（见 relay-03.log 输出）③ queue_depth_alert_threshold = 8436（见 cache-warm-23.log 输出）

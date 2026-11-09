@@ -15,7 +15,8 @@
 - V 节（本文件新增）：V1 逐字相同率（跨臂 / 臂内跨 rep / 种子核对）→ V2 L0 噪声基线 → V3 五臂 × 四档与 d44 / b2
   → V4 full 对 catalog / w1w2 → V5 时长。
 - catalog 臂可缺（11-08 p2b 批起删臂）：已知臂 = O.B2_ORCH 里目录在的；必需 = O.TURN 三臂 + orch-turn-full
-  （--two-arm：只需 none + w1w2，O.TURN 临时收窄到在场臂，缺 full 时 Q 节写明不渲染、V4 改列 w1w2 − none）。缺 catalog 时
+  （--two-arm：只需 none + w1w2，O.TURN 临时收窄到在场臂，缺 full 时 Q 节写明不渲染、V4 改列 w1w2 − none；
+  --arm-b NAME 换第二臂名，缺省 orch-turn-w1w2，11-09 D48 批 = orch-turn-w1w2-rev，作额外臂进 I/J/K 等节）。缺 catalog 时
   Q / U3 / V4 里对 catalog 的部分显式写「本批无 catalog 臂」；Q / V4 的 full 对照改用 w1w2（p2 批 V1a：w1w2 与 catalog
   全档逐字相同），并列出 w1w2 行内 prefix_decl 作证。不做静默替换。F 节生产前缀：有 catalog 臂取其行内值；否则取
   orch-turn-none 行内值，前提是行内 prefix_decl == tool_schema_mode_effective（2d3fd99c 起前缀元数据随生效档位）。
@@ -479,10 +480,25 @@ def w12_is_catalog(G) -> Tuple[List[str], List[str], bool]:
     return decl, eff, decl == eff == ["catalog"]
 
 
+def copied_resume_rows(G, arms: List[str], p2G) -> int:
+    """跨 --p2 批的拷贝续跑行数：本批（取 arms 里首个在场臂）与 --p2 批同 (level,item_id,rep) 且 stamp 相同的行数。
+    stamp 相同即该行是整段拷贝过来的（未重新生成），不是同种子续跑的巧合——w12eval 对 p2b 120/120 全同，
+    d48 对 w12eval 140 个共同键 0 同 stamp（新 VM 全新生成）。"""
+    if not arms or not p2G:
+        return 0
+    n = arms[0]
+    key = n + TAG_P2
+    if n not in G or key not in p2G:
+        return 0
+    a = {(int(r["level"]), r["item_id"], int(r["rep"])): r.get("stamp") for r in G[n]["records"]}
+    b = {(int(r["level"]), r["item_id"], int(r["rep"])): r.get("stamp") for r in p2G[key]["records"]}
+    return sum(1 for k, sa in a.items() if sa is not None and b.get(k) == sa)
+
+
 # ---------------------------------------------------------------- V 节
-def sec_v(G, aggs, arms: List[str], data: Path, prev: Optional[Path], b2G, b2aggs, args,
-          stash: Optional[Dict[str, Any]] = None, two_arm: bool = False) -> List[str]:
-    """stash 给出时写入 nulls / thr（V2c 零分布与门槛），供 W 节判噪声。"""
+def sec_v(G, aggs, arms: List[str], data: Path, prev: Optional[Path], b2G, b2aggs, p2G, args,
+          stash: Optional[Dict[str, Any]] = None, two_arm: bool = False, arm_b: str = W12) -> List[str]:
+    """stash 给出时写入 nulls / thr（V2c 零分布与门槛），供 W 节判噪声。arm_b = 无 full 臂时 V4 与 none 配对的第二臂（--arm-b）。"""
     L = ["### V. P2 噪声基线专节（本节 = analyze_p2.py 新增；`@d44` = d44 批同名臂，`@b2` = b2 批同名臂）\n"]
     K = {n: {lv: keyed(G[n]["records"], lv) for lv in LEVELS} for n in arms}
     lvs = {n: [lv for lv in LEVELS if K[n][lv]] for n in arms}
@@ -720,11 +736,11 @@ def sec_v(G, aggs, arms: List[str], data: Path, prev: Optional[Path], b2G, b2agg
     L.append("")
 
     # V4 ------------------------------------------------------------
-    cat, w12 = CAT, W12
+    cat, w12 = CAT, arm_b
     has_cat = cat in arms
     anchor = FULL if FULL in arms else "orch-turn-none"   # 无 full 臂（w12eval 批只有 none + w1w2）→ V4 改列 w1w2 − none
     L.append(f"#### V4. full 臂对 {'catalog / w1w2' if has_cat else 'w1w2 / none（本批生效前缀 = catalog）'}（b − a，按题配对；区间只按题聚类重抽，种子 {A.BOOT_SEED}）\n"
-             if FULL in arms else f"#### V4. 本批无 {FULL} 臂：改列 w1w2 − none（b − a，按题配对；区间只按题聚类重抽，种子 {A.BOOT_SEED}）\n")
+             if FULL in arms else f"#### V4. 本批无 {FULL} 臂：改列 {short(w12)} − none（b − a，按题配对；区间只按题聚类重抽，种子 {A.BOOT_SEED}）\n")
     if FULL not in arms:
         pairs = [("orch-turn-none", w12)]
     elif not has_cat:
@@ -759,8 +775,9 @@ def sec_v(G, aggs, arms: List[str], data: Path, prev: Optional[Path], b2G, b2agg
             def tc(p, metric):
                 d = p["diff"] if p else None
                 c = tail_cell(d, nulls[(metric, m)], thr[(metric, m)])
-                if m == 3 and d is not None:      # 6 对 6 的格另给 m=2 尾概率作对照
-                    c += f"；m=2 P={tail_p(nulls[(metric, 2)], d):.1%}"
+                if m == 3 and d is not None:      # 6 对 6 的格另给 m=2 尾概率作对照（L0 只 2 rep 的批 m=2 零分布为空 → —）
+                    p2 = tail_p(nulls[(metric, 2)], d)
+                    c += f"；m=2 P={'—' if p2 is None else f'{p2:.1%}'}"
                 return c
             nt = f"；{al[lv]['note']}" if al[lv]["note"] else ""
             L.append(f"| {short(b_n)} − {short(a_n)} | {lv}（m={m}{nt}） | {pc(items_rate(ia))} → {pc(items_rate(ib))} | "
@@ -794,7 +811,7 @@ def sec_v(G, aggs, arms: List[str], data: Path, prev: Optional[Path], b2G, b2agg
 
     # V5 ------------------------------------------------------------
     L.append("#### V5. 时长（run_colab.log 臂起止；Σwall = transcripts 行 wall_s 之和）\n")
-    if two_arm:
+    if copied_resume_rows(G, arms, p2G):
         L.append("⚠️ 拷贝续跑批：本批 Σwall 含拷贝行（rep 0–1 在上一批 VM 跑），「本批墙钟」只含新跑 rep；"
                   "与 d44 整臂相减的增量与「L0 多出的 rep 估计」不适用，用时判定见证据脚本按 rep 段拆分表。\n")
     cur = arm_minutes((data / "run_colab.log").read_text(encoding="utf-8"))
@@ -1187,9 +1204,15 @@ def main(argv=None) -> int:
     ap.add_argument("--out-csv", default=None)
     ap.add_argument("--two-arm", action="store_true",
                     help="只要求 none + w1w2 两臂（W1/W2 评价批）：w1 / full 可缺，缺 full 时 Q 节不渲染、V4 改列 w1w2 − none")
+    ap.add_argument("--arm-b", default=W12,
+                    help=f"--two-arm 的第二臂名（缺省 {W12}；11-09 D48 批 orch-turn-w1w2-rev）；只配 --two-arm 用")
     a = ap.parse_args(argv)
+    if a.arm_b != W12 and not a.two_arm:
+        raise SystemExit("❌ --arm-b 只配 --two-arm 用")
+    if a.arm_b == "orch-turn-none":
+        raise SystemExit("❌ --arm-b orch-turn-none：不能配自己（第一臂恒为 orch-turn-none）")
     data, ref = Path(a.data), Path(a.ref)
-    arms = layout_arms(data, ["orch-turn-none", W12] if a.two_arm else None)
+    arms = layout_arms(data, ["orch-turn-none", a.arm_b] if a.two_arm else None)
     has_cat = CAT in arms
     prev = Path(a.prev) if a.prev else None
     prev_arms = [n for n in arms if prev and (prev / n / "transcripts.jsonl").is_file()]
@@ -1238,7 +1261,7 @@ def main(argv=None) -> int:
         if args.prod_prefix is None:          # analyze.render F 节要算 top*0.8 − prod_prefix：取不到就停，不带 None 进去
             raise SystemExit(f"❌ F 节生产前缀取不到（{pf_src}）：{warn}")
         pair_specs = [f"{n}{TAG}:{n}" for n in prev_arms] + ([f"orch-turn-w1w2{TAG}:{FULL}"] if "orch-turn-w1w2" in prev_arms else []) + [
-            "orch-turn-none:orch-turn-w1", "orch-turn-none:orch-turn-w1w2", "orch-turn-w1:orch-turn-w1w2"] + (
+            "orch-turn-none:orch-turn-w1", f"orch-turn-none:{a.arm_b}", "orch-turn-w1:orch-turn-w1w2"] + (
             [f"orch-turn-w1w2:{CAT}", f"{FULL}:{CAT}"] if has_cat else []) + [f"{FULL}:orch-turn-w1w2"]
         aggs = {g["name"]: A.aggregate(g, A.th_global, A.wall_global) for g in groups}
         # E 节：本批臂间同种子，某档 rep 数不同（L0 6 对 2）的对截到共同 rep（别名组只进 render 的 aggs）；
@@ -1271,7 +1294,7 @@ def main(argv=None) -> int:
         parts += O.sec_o(G, aggs, arms + prev_names)
         parts += O.sec_p(G, aggs, evs, arms + prev_names, prev_names)
         if FULL not in arms:
-            parts += [f"### Q. 前缀对照：本批无 {FULL} 臂（只有 {'、'.join(arms)}），{W12} 对 {FULL} 不渲染\n"]
+            parts += [f"### Q. 前缀对照：本批无 {FULL} 臂（只有 {'、'.join(arms)}），{a.arm_b} 对 {FULL} 不渲染\n"]
         elif has_cat:
             q = O.sec_q(G, aggs, evs)
             q[0] = q[0].replace("（prod 前缀）", "（prod 前缀；本批生效 = catalog，见 V1）", 1)
@@ -1292,14 +1315,16 @@ def main(argv=None) -> int:
             parts += O.sec_q(G, aggs, evs, a_name=W12 + TAG, b_name=CAT + TAG)
         elif not has_cat:
             parts += [f"（{NO_CAT}：d44 批 catalog@d44 对 w1w2@d44 的 Q 表不并入。）", ""]
-        # sec_u 的 U3 首表写死 catalog − w1w2：缺 catalog 时给它一个空占位让函数走完，再把那张表整段换成显式说明
-        u = D.sec_u(G, aggs if has_cat else {**aggs, CAT: {}}, evs, False)
+        # sec_u 的 U3 首表写死 catalog − w1w2：CAT / W12 两个键各自独立补空占位（与 has_cat 无关——有 catalog、
+        # --arm-b 换名缺 w1w2 时 analyze_d44.sec_u 也会对 aggs[W12] KeyError），让函数走完，再把那张表整段换成显式说明
+        u_aggs = {**aggs, **({} if CAT in aggs else {CAT: {}}), **({} if W12 in aggs else {W12: {}})}
+        u = D.sec_u(G, u_aggs, evs, False)
         u[0] = f"### U. analyze_d44 U 节（D43 (a) / D43b / D44 机制计数；本批只列本批 {len(arms)} 臂，不并跨批列）\n"
         if not has_cat:
             u = strip_u3_catalog(u)
         parts += u
         stash: Dict[str, Any] = {}
-        parts += sec_v(G, aggs, arms, data, prev, b2G, b2aggs, args, stash, two_arm=a.two_arm)
+        parts += sec_v(G, aggs, arms, data, prev, b2G, b2aggs, p2G, args, stash, two_arm=a.two_arm, arm_b=a.arm_b)
         if p2_arms:
             parts += sec_w(G, aggs, arms, p2G, p2aggs, ref_key, b2aggs, stash, only_p2=p2_only,
                            data_label=data_label, p2_label=p2_label)
@@ -1318,7 +1343,8 @@ def main(argv=None) -> int:
             auto = auto.replace(note, f"（取 {pf_src} 行内字段 prefix_base_tokens，见上）", 1)
         rerun = ("_复跑：`PYTHONDONTWRITEBYTECODE=1 backend/.venv/bin/python benchmarks/context_knee/analyze_p2.py "
                  f"--data {a.data} --ref {a.ref}" + (f" --prev {a.prev}" if a.prev else "") + (f" --b2 {a.b2}" if a.b2 else "")
-                 + (f" --p2 {a.p2}" if a.p2 else "") + (" --two-arm" if a.two_arm else "") + (f" --out-md {a.out_md}" if a.out_md else "") + (f" --out-csv {a.out_csv}" if a.out_csv else "") + "`_\n\n")
+                 + (f" --p2 {a.p2}" if a.p2 else "") + (" --two-arm" if a.two_arm else "")
+                 + (f" --arm-b {a.arm_b}" if a.arm_b != W12 else "") + (f" --out-md {a.out_md}" if a.out_md else "") + (f" --out-csv {a.out_csv}" if a.out_csv else "") + "`_\n\n")
         auto = rerun + auto
         if a.out_csv:
             O.write_csv_b2(Path(a.out_csv), groups, aggs, O.b2_csv_extra(G, evs, arms + prev_names))

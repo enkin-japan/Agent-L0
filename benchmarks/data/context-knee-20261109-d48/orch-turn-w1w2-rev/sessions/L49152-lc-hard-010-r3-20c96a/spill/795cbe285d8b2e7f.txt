@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/quota-svc/log/quota-svc-04.log", "content": "2026-09-07T06:55:23Z INFO  [quota-svc-4] gc pause 184ms heap_mb=703\n2026-09-07T07:00:05Z DEBUG [quota-svc-3] connection pool resized from 486 to 2469\n2026-09-07T07:05:01Z INFO  [quota-svc-2] worker heartbeat ok queue=3389 inflight=718\n2026-09-07T06:55:46Z DEBUG [quota-svc-8] gc pause 270ms heap_mb=1574"}

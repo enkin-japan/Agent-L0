@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Required verbatim values from earlier tool outputs: (1) halyard config path = /opt/halyard/conf/halyard-91ee16.toml (from thumbnailer-21.log ops-audit line); (2) escalation ticket ID = OPS-13337 (from

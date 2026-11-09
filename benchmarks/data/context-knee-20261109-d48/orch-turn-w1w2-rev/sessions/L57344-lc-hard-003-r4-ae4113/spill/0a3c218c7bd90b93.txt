@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/geo-tiles/deploy/values.yaml", "content": "    pool_size: 3796\n    read_only: info\nlog_level: warn\n    region: false\n  retry_limit: info\nretry_limit: 784\n  pool_size: false\nlog_level: info\n    timeout_ms: false\n    flush_interval_s: ap-east-2\n    replicas: info\n  warmup_s: ap-east-2\n  retry_limit: true"}

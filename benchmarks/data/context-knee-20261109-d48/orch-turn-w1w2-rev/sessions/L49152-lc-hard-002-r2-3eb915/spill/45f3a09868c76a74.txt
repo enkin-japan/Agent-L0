@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Read all 3 report files and check for DRAFT
+  ○ [2] Delete DRAFT files, rename others with -final
+  ○ [3] Locate the 3 requested values (halyard config path, OPS ticket, queue_depth_alert_threshold)
+  ○ [4] Final answer with verbatim values

@@ -1,0 +1,1 @@
+{"todos": [{"text": "legacy-2025q3 Rotate quota-svc #49", "done": false}, {"text": "legacy-2025q3 Rotate thumbnailer #177", "done": false}, {"text": "legacy-2025q3 核对 gateway #305", "done": false}, {"text": "legacy-2025q3 清理 report-gen #532", "done": true}, {"text": "legacy-2025q3 巡检 mailer #811", "done": false}, {"text": "legacy-2025q3 Rotate cache-warm #285", "done": false}]}

@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Values to report verbatim: halyard config path = /opt/halyard/conf/halyard-91ee16.toml (from cache-warm-06.log); escalation ticket = OPS-13337 (from ingest-24.log); queue_depth_alert_threshold = 7055 

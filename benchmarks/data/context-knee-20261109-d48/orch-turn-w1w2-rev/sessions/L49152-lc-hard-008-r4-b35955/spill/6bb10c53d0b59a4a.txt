@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Read existing log files and locate the three required values
+  ○ [2] Append '2026-08-24 OK' to build.log, test.log, deploy.log
+  ○ [3] Write count of files containing today's line to logs/count.txt
+  ○ [4] Verify and report the three values

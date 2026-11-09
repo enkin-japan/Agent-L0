@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/geo-tiles/log/geo-tiles-21.log", "content": "2026-09-20T17:35:05Z INFO  [geo-tiles-8] worker heartbeat ok queue=4626 inflight=87\n2026-09-20T17:27:27Z ERROR [geo-tiles-5] cache miss ratio 0.686 over last 259s\n2026-09-20T17:31:21Z DEBUG [geo-tiles-1] batch 8039 committed rows=2898 lag_ms=265"}

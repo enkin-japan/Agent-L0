@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Values to state verbatim: (1) halyard config path = /opt/halyard/conf/halyard-dd4e9d.toml (from indexer-02.log); (2) escalation ticket = OPS-20835 (from billing-sync/deploy/values.yaml); (3) queue_dep

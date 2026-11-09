@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/geo-tiles/log/geo-tiles-10.log", "content": "2026-09-01T13:42:07Z INFO  [geo-tiles-4] rotated segment seg-547.dat size_mb=187\n2026-09-01T13:10:31Z DEBUG [geo-tiles-7] schema check passed version=7519\n2026-09-01T13:19:55Z INFO  [geo-tiles-4] dropped 283 malformed records from partition 5058"}

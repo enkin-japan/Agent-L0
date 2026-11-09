@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/geo-tiles/deploy/values.yaml", "content": "region: true\nreplicas: warn\n  cpu_limit: warn\n    max_batch: false\nmax_batch: warn\n    shard_count: false\npool_size: true\nregion: false\n  pool_size: warn\ntimeout_ms: info\ncpu_limit: info\n    cpu_limit: ap-east-2\n  region: false\n    retry_limit: true\nread_only: info"}

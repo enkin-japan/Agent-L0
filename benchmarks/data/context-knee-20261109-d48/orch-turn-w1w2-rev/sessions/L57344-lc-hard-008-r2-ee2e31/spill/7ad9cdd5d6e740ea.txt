@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/cache-warm/deploy/values.yaml", "content": "  read_only: warn\n  max_batch: info\n  flush_interval_s: warn\n  read_only: 1451\n  warmup_s: warn\n    replicas: warn\n  read_only: true\n  max_batch: info\nmax_batch: ap-east-2\n    max_batch: info\n  warmup_s: ap-east-2\n    flush_interval_s: 2086\n  region: true"}

@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Save the three required values to scratchpad
+  ○ [2] Read all report files and classify DRAFT vs final
+  ○ [3] Delete DRAFT reports
+  ○ [4] Copy final reports to -final names and delete originals
+  ○ [5] Verify final state and answer

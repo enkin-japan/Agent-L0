@@ -564,14 +564,19 @@ agent:
   # inprocess mlx = inference.mlx.context_limit；inprocess cuda = inference.cuda.max_model_len。
   # 阈值是整段 prompt 的绝对 token 数（含前缀），不是「前缀之上」口径（与 summary_* 不同）。
   # 数值来源 D1/D2（用户 10-31）：Qwen3.8-27B-INT4 与 Gemma 4 31B QAT 远端 49K 内无拐点，
-  # soft = 49,152 × 0.5、hard = 49,152 × 0.8；两家族同值。校验：0 < soft < hard < ceiling 否则装配失败
+  # soft = 49,152 × 0.5、hard 原 = 49,152 × 0.8 = 39,322；两家族同值。
+  # D48（用户 11-09 拍板翻缺省，benchmarks/data/context-knee-20261109-d48/ANALYSIS.md）：hard 推到 ceiling − 2,048 = 51,200
+  # （角色由「中段收敛提醒」改为「fold 前最后提醒」），fold_mode=minimal（ceiling 落刀从最旧观察起分批折、每批重量、
+  # 量到 < hard 即停；full = 保护窗外一次全折）。复测：49K 首生成前零干预、57K 首生成 27K → 41K、0 溢出、Σwall −6%，
+  # 对无管理回到噪声内。fold_mode 非法值装配失败。校验：0 < soft < hard < ceiling 否则装配失败
   # （inprocess = 进程拒启；remote = 计算装配失败并退避重试、数据服务照常；算力端重开换 --max-model-len 时
   # 探活复核处重算上限并重绑）；
   # 客户端 max_tokens 超过 generation_reserve 时钳回并记事件（否则 ceiling 不成立）。
   context_guard:
     enabled: true
     soft_tokens: 24576
-    hard_tokens: 39322
+    hard_tokens: 51200        # D48：ceiling 53,248 − 2,048（原 39322）
+    fold_mode: minimal        # D48：full | minimal（原缺省 full）
     generation_reserve: 12288 # = 截断升档上限 ESCALATED_MAX_TOKENS；ceiling = 上限 − 本值（65536 → 53248）
   # 轮内步骤边界压缩（W2 / D37，2026-11-01）：步骤完成（complete_step 落地）时把**本轮已完成步骤段**（到本批 tool 消息之前，
   # 模型尚未看过的同批观察不碰）的工具观察折成桩（首 digest_chars 字 + 回读句柄），该步 result 已在 TaskState 作步骤摘要，不另调模型；

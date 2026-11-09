@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/quota-svc/log/quota-svc-19.log", "content": "2026-09-14T17:43:16Z DEBUG [quota-svc-5] rotated segment seg-5519.dat size_mb=242\n2026-09-14T17:42:53Z DEBUG [quota-svc-7] slow query 658ms table=events_658 plan=index_scan\n2026-09-14T18:31:30Z DEBUG [quota-svc-6] slow query 595ms table=events_9508 plan=index_scan"}

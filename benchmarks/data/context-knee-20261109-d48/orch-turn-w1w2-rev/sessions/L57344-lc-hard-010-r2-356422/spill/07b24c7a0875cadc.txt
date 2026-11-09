@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/scheduler/log/scheduler-27.log", "content": "2026-09-05T22:22:57Z INFO  [scheduler-8] connection pool resized from 367 to 3150\n2026-09-05T22:30:39Z INFO  [scheduler-6] worker heartbeat ok queue=3881 inflight=669\n2026-09-05T23:11:34Z ERROR [scheduler-3] retrying upstream call attempt=371 backoff_ms=4730"}

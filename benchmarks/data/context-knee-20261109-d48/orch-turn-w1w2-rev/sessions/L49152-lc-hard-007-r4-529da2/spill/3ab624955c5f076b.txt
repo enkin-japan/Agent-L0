@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Required verbatim values from tool outputs: ① halyard config path = /opt/halyard/conf/halyard-91ee16.toml (from scheduler-13.log); ② ticket = OPS-13337 (gateway-05.log); ③ queue_depth_alert_threshold 

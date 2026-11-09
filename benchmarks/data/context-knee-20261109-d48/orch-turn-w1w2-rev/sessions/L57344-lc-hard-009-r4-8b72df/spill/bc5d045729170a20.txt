@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Required verbatim values: (1) halyard config path — NOT yet found; (2) escalation ticket OPS-13337 (from runbook/relay.md); (3) queue_depth_alert_threshold = 7055 (from scheduler-09.log)

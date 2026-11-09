@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/relay/deploy/values.yaml", "content": "  retry_limit: warn\n    read_only: true\n    log_level: 1502\n  read_only: false\n    read_only: true\n  retry_limit: warn\nretry_limit: 1058\ncpu_limit: ap-east-2\n  log_level: 2939\nregion: warn\nretry_limit: 2423\n  read_only: 3185\n    flush_interval_s: true"}

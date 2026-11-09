@@ -1,0 +1,4 @@
+Plan replaced.
+  ○ [1] Replace '90 days' → '30 days' in policy/access.md, policy/backup.md, policy/security.md (stop on refused write)
+  ○ [2] If any write is refused, create policy/pending-changes.md naming that file
+  ○ [3] Final reply stating the three values verbatim

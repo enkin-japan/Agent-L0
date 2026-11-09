@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/telemetry/ledger-9.json", "content": "{\n  \"qps_0\": 403.96,\n  \"p50_ms_1\": 509.51,\n  \"cpu_pct_2\": 607.41,\n  \"p95_ms_3\": 301.81,\n  \"err_rate_4\": 840.41,\n  \"err_rate_5\": 725.49,\n  \"err_rate_6\": 260.16,\n  \"qps_7\": 294.06,\n  \"qps_8\": 11.8,\n  \"err_rate_9\": 274.65,\n  \"ok\": true\n}"}

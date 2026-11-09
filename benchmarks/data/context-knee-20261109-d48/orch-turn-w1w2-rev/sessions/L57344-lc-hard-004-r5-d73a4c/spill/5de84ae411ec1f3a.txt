@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Values to report verbatim: (1) halyard config path = /opt/halyard/conf/halyard-c70c48.toml (from gateway-09.log ops-audit line); (2) escalation ticket = OPS-68989 (from billing-sync-08.log); (3) queue

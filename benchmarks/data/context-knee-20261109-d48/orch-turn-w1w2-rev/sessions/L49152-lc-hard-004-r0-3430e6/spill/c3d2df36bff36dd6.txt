@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Required verbatim values: (1) halyard config path = /opt/halyard/conf/halyard-840cc9.toml (from billing-sync-10.log); (2) escalation ticket = OPS-98613 (from relay/deploy/values.yaml); (3) queue_depth

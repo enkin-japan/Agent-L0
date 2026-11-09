@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/search-api/deploy/values.yaml", "content": "replicas: info\nmax_batch: 1989\n  shard_count: 2949\nmax_batch: true\nshard_count: false\nlog_level: false\nmax_batch: true\n    max_batch: info\n    replicas: info\n    max_batch: false\ntimeout_ms: false\nread_only: 1836\nwarmup_s: false\ntimeout_ms: warn"}
