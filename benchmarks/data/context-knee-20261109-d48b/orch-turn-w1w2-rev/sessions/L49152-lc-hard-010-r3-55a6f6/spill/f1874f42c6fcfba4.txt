@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - 已确认的工具输出值：① halyard 配置路径 = /opt/halyard/conf/halyard-a8d471.toml（report-gen/deploy/values.yaml）；② 工单号 = OPS-17472（relay-24.log）；③ queue_depth_alert_threshold = 8436（ingest-23.log）

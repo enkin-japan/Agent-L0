@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Verbatim values for final reply: (1) halyard config path = /opt/halyard/conf/halyard-c70c48.toml (gateway-09.log); (2) escalation ticket = OPS-68989 (billing-sync-08.log); (3) queue_depth_alert_thresh

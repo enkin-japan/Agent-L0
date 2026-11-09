@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Locate the reports folder and list its files
+  ○ [2] Check long-term memory for the three requested values (halyard config path, OPS- ticket, queue_depth_alert_threshold)
+  ○ [3] Delete DRAFT reports; rename final reports to *-final.md (copy then delete original)
+  ○ [4] Verify final state of the folder
+  ○ [5] Reply with the three verbatim values

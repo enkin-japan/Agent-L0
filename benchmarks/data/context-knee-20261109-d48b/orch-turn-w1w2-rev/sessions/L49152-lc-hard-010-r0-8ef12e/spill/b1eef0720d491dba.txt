@@ -1,0 +1,3 @@
+Saved to scratchpad.
+  - 已确认的工具输出值：① halyard 配置路径 = /opt/halyard/conf/halyard-840cc9.toml（runbook/report-gen.md）；② 升级工单 = OPS-98613（quota-svc-10.log）；③ queue_depth_alert_threshold = 2191（mailer-24.log）
+  - 阻塞行数：day1=2, day2=1, day3=3, day4=0，总计 6；最多的是 day3.md

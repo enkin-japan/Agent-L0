@@ -589,8 +589,11 @@ agent:
   # ≈ 该步尾段，soft 起每个步骤边界都压；缓存不可裁（MLX：递归/线性状态，改历史 = 整段冷预填）只在 hard 起压，hard 那次本就
   # 要退全量，之后每个边界再各付一次冷填（full_renders 记账）。最近 keep_recent 条观察（全 history 口径）永不改。
   # 未知键 / 非法值装配失败（与 context_guard 同）。
+  # 生产缺省关（D50，2026-11-10 用户拍板）：w12eval / d48 / d48b 三批里 W1+W2 从未优于无管理，d48b 批按点估
+  # 未过 P2 出口第一条（合并 Pass^2 比 0.887 / 0.862），W1 单独三条全过（1.016 / 1.103）——证据见
+  # benchmarks/data/context-knee-20261109-d48b/ANALYSIS.md §2/§3。代码与其余参数保留，重开只改本键。
   step_compaction:
-    enabled: true
+    enabled: false
     trigger_level: soft              # 块级前缀缓存后端：轮内档位 ≥ 此档起在步骤边界压；值限 soft | hard
     cold_refill_trigger_level: hard  # 缓存不可裁后端（MLX）：改历史 = 整段冷预填，只在 hard 起压
     keep_recent: 2                   # 步骤边界时最近几条观察不动（全 history 倒数；轮首压缩的 observation_keep_recent 6 是另一道）

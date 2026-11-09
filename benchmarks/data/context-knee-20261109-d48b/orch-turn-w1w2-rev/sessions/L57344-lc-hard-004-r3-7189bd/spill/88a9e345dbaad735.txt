@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/gateway/log/gateway-26.log", "content": "2026-09-21T12:29:58Z DEBUG [gateway-1] slow query 388ms table=events_5133 plan=index_scan\n2026-09-21T13:12:57Z ERROR [gateway-8] worker heartbeat ok queue=3818 inflight=388\n2026-09-21T12:57:04Z INFO  [gateway-6] cache miss ratio 0.206 over last 81s"}

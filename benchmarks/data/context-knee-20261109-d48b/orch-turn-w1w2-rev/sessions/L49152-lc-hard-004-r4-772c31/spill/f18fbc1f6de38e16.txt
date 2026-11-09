@@ -1,0 +1,3 @@
+Saved to scratchpad.
+  - policy/ files: access.md ("Guest accounts expire after 90 days."), backup.md ("Snapshots are kept for 90 days."), security.md ("API keys are rotated every 90 days." + "Access reviews happen quarterly.
+  - Read-only file: policy/security.md (EACCES). Updated OK: access.md, backup.md.

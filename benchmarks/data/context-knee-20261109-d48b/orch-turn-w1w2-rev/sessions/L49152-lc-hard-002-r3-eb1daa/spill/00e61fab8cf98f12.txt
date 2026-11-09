@@ -1,0 +1,4 @@
+Plan replaced.
+  ○ [1] Read the three report files and check for DRAFT
+  ○ [2] Delete DRAFT files; rename final ones with -final (copy then delete original)
+  ○ [3] Verify final state and answer with the three verbatim values

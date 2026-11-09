@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Locate all files under policy/
+  ○ [2] Read each policy file and replace '90 days' with '30 days'
+  ○ [3] Handle any read-only file (write refused -> create policy/pending-changes.md)
+  ○ [4] Report the 3 required values verbatim

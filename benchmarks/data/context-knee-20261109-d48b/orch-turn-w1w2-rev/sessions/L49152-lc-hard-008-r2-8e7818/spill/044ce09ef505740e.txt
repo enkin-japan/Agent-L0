@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Locate logs dir and read existing log files
+  ○ [2] Append '2026-08-24 OK' to build/test/deploy logs
+  ○ [3] Count log files containing the line and write logs/count.txt
+  ○ [4] Final answer with the three verbatim values

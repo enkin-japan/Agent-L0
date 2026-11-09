@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/telemetry/mailer-1.json", "content": "{\n  \"qps_0\": 175.01,\n  \"err_rate_1\": 626.79,\n  \"cpu_pct_2\": 802.52,\n  \"qps_3\": 253.95,\n  \"cpu_pct_4\": 354.55,\n  \"qps_5\": 860.46,\n  \"err_rate_6\": 777.28,\n  \"qps_7\": 82.73,\n  \"p95_ms_8\": 661.84,\n  \"p50_ms_9\": 192.53,\n  \"qps_10\": 673.64,\n  \"p95_ms_11\": 747.63,\n  \"ok\": true\n}"}

@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/scheduler/deploy/values.yaml", "content": "    replicas: info\n    log_level: false\n  timeout_ms: 576\n    timeout_ms: info\n    read_only: true\nshard_count: info\n  max_batch: 3944\n  max_batch: 2091\n    cpu_limit: info\n    max_batch: true\n    region: true\n    log_level: ap-east-2\n    pool_size: true\nregion: ap-east-2"}

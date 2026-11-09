@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Locate the reports folder and list its .md files
+  ○ [2] Identify which report files contain the word DRAFT
+  ○ [3] Delete DRAFT files
+  ○ [4] Rename remaining reports by inserting -final before .md (copy content, delete original)
+  ○ [5] Verify final state and report the three required values

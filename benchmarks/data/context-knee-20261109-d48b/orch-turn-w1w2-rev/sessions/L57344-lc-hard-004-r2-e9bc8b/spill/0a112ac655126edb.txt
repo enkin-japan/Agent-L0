@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Read all policy/ files
+  ○ [2] Replace '90 days' → '30 days' in each file (skip read-only one)
+  ○ [3] Write policy/pending-changes.md if a write was refused
+  ○ [4] Final answer with the three verbatim values

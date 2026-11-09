@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Verbatim values from earlier tool outputs: (1) halyard config path = /opt/halyard/conf/halyard-c70c48.toml (from report-gen.md runbook); (2) escalation ticket = OPS-68989 (from geo-tiles/deploy/values

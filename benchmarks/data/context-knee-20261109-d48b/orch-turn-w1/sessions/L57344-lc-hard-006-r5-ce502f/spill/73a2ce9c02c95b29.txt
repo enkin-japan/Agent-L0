@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/runbook/ingest.md", "content": "# ingest runbook\n- If disk usage > 85%, rotate segments first\n## Contacts (role-based)\n## Contacts (role-based)\n- 配置变更必须走评审\n## 巡检步骤\n- Escalate to the on-call rotation if two retries fail\n- 配置变更必须走评审\n- 夜间窗口 02:00–04:00 禁止变更\n- 重启顺序：gateway → relay → ingest"}

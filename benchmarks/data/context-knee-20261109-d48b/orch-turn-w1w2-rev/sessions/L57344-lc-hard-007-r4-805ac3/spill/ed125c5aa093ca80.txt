@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - 需逐字引用的三个值：① halyard 配置路径 = /opt/halyard/conf/halyard-91ee16.toml（出自 runbook/quota-svc.md）；② 工单号 = OPS-13337（出自 gateway-05.log）；③ queue_depth_alert_threshold = 7055（出自 relay/deploy/values.yaml）

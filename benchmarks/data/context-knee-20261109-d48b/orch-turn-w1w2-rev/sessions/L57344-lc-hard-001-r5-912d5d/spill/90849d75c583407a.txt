@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/quota-svc/log/quota-svc-14.log", "content": "2026-09-26T12:25:55Z INFO  [quota-svc-8] worker heartbeat ok queue=3045 inflight=497\n2026-09-26T12:07:52Z WARN  [quota-svc-7] slow query 315ms table=events_499 plan=index_scan\n2026-09-26T12:27:17Z DEBUG [quota-svc-3] dropped 283 malformed records from partition 7904"}

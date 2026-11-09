@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/relay/deploy/values.yaml", "content": "timeout_ms: true\nflush_interval_s: 2208\ntimeout_ms: true\n  retry_limit: true\n    max_batch: info\n    log_level: false\nshard_count: 119\n    retry_limit: 3331\nregion: info\n  cpu_limit: warn\nreplicas: true\n  timeout_ms: 2831\n    pool_size: warn\n  region: 1252"}

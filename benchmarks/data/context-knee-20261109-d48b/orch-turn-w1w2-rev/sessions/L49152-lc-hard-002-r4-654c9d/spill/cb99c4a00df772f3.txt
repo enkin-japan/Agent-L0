@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Required verbatim values: (1) halyard config path = /opt/halyard/conf/halyard-91ee16.toml (from cache-warm/deploy/values.yaml line "halyard: loaded config from ..."); (2) escalation ticket = OPS-13337

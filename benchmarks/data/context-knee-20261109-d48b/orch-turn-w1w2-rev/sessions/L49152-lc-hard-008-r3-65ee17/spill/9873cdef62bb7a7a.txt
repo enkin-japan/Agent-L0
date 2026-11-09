@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/telemetry/report-gen-11.json", "content": "{\n  \"err_rate_0\": 307.85,\n  \"p95_ms_1\": 166.62,\n  \"qps_2\": 607.35,\n  \"qps_3\": 794.45,\n  \"err_rate_4\": 713.4,\n  \"qps_5\": 369.85,\n  \"p50_ms_6\": 44.13,\n  \"err_rate_7\": 804.11,\n  \"qps_8\": 449.33,\n  \"cpu_pct_9\": 270.68,\n  \"ok\": true\n}"}

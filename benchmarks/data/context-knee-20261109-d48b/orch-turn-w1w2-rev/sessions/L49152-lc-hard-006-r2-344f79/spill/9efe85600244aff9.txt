@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - ① halyard config path = /opt/halyard/conf/halyard-dd4e9d.toml (from indexer-26.log); ② OPS ticket = OPS-20835 (runbook/audit-trail.md); ③ queue_depth_alert_threshold = 1797 (mailer-02.log)

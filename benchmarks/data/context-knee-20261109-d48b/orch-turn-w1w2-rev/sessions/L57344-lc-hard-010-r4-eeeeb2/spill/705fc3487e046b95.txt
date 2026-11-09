@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/billing-sync/log/billing-sync-20.log", "content": "2026-09-11T06:28:53Z WARN  [billing-sync-4] connection pool resized from 869 to 451\n2026-09-11T07:00:17Z DEBUG [billing-sync-2] slow query 439ms table=events_4934 plan=index_scan\n2026-09-11T06:39:36Z ERROR [billing-sync-8] batch 6480 committed rows=4262 lag_ms=21"}

@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Locate inbox and identify the two report files
+  ○ [2] Change 2025→2026 in both reports only
+  ○ [3] Write one-line changelog in inbox/changelog.txt
+  ○ [4] Verify changes and report the three required values

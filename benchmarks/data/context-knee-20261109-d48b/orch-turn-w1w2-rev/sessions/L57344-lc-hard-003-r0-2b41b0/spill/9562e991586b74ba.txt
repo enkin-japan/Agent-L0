@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/scheduler/deploy/values.yaml", "content": "cpu_limit: ap-east-2\nreplicas: 1263\nflush_interval_s: ap-east-2\nlog_level: info\n  shard_count: ap-east-2\ntimeout_ms: info\n  pool_size: false\n    timeout_ms: 2462\n    shard_count: info\nretry_limit: ap-east-2\n    timeout_ms: true\npool_size: warn\n    pool_size: true"}

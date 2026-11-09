@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/thumbnailer/deploy/values.yaml", "content": "retry_limit: info\nregion: warn\nwarmup_s: info\nread_only: 3495\n  log_level: ap-east-2\n  retry_limit: false\n  replicas: info\nregion: info\n  read_only: false\ntimeout_ms: 3280\n    log_level: false\n  region: false\n    read_only: true\nshard_count: info"}

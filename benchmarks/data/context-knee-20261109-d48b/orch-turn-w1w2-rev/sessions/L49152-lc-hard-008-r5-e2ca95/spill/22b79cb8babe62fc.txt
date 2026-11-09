@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/thumbnailer/log/thumbnailer-20.log", "content": "2026-09-23T00:57:37Z INFO  [thumbnailer-7] dropped 275 malformed records from partition 8881\n2026-09-23T01:27:38Z WARN  [thumbnailer-5] batch 1460 committed rows=4167 lag_ms=123\n2026-09-23T01:11:23Z WARN  [thumbnailer-6] worker heartbeat ok queue=3470 inflight=293"}

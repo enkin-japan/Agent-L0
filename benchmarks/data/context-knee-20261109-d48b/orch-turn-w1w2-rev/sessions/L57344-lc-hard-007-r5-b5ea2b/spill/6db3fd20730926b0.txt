@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - 已确认的工具输出值：① halyard 配置路径 = /opt/halyard/conf/halyard-c70c48.toml（来自 geo-tiles/deploy/values.yaml 末行）；② 工单号 = OPS-68989（来自 runbook/gateway.md）；③ queue_depth_alert_threshold = 7632（来自 scheduler-28.log）

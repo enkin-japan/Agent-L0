@@ -1,0 +1,4 @@
+Saved to scratchpad.
+  - 合并清单去重后 8 项：牛奶、鸡蛋、面包、咖啡、黄油、酸奶、蜂蜜（a:牛奶鸡蛋面包咖啡; b:鸡蛋黄油牛奶酸奶; c:面包蜂蜜鸡蛋）
+  - queue_depth_alert_threshold = 7055（来自 scheduler-15.log 的 ops-audit 行）
+  - halyard 配置路径线索：/opt/halyard/conf/halyard-91ee16.toml（quota-svc-11.log 摘要提及）；OPS- 工单号线索：OPS-13337（ledger/deploy/values.yaml）

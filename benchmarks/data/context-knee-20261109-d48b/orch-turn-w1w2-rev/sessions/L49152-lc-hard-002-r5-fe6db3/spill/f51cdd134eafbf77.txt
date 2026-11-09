@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Three values to report verbatim: (1) halyard config path = /opt/halyard/conf/halyard-c70c48.toml (from runbook/report-gen.md); (2) escalation ticket = OPS-68989 (from runbook/gateway.md); (3) queue_de

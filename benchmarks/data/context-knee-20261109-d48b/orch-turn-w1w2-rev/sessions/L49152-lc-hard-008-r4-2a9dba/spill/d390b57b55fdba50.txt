@@ -1,0 +1,4 @@
+Plan replaced.
+  ○ [1] Append '2026-08-24 OK' to build.log, test.log, deploy.log (create deploy.log)
+  ○ [2] Write count of matching log files to logs/count.txt
+  ○ [3] Report the three requested values verbatim

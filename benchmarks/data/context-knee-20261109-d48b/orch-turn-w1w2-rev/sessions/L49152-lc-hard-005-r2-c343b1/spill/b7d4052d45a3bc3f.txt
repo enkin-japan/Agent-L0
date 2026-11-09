@@ -1,0 +1,3 @@
+Saved to scratchpad.
+  - todo-notes.txt 内容：[x] 提交周报 / [ ] 预约牙医 / [x] 交房租 / [ ] 买咖啡豆 / [ ] 修打印机。未完成=预约牙医、买咖啡豆、修打印机
+  - 三项需逐字引用的工具输出值：① /opt/halyard/conf/halyard-dd4e9d.toml（gateway-19.log）② OPS-20835（relay-26.log）③ 1797（feed-merge-02.log）

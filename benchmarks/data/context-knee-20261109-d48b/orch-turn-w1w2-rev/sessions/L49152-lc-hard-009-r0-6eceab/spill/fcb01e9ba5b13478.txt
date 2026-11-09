@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Save the three verbatim values found in tool outputs
+  ○ [2] Locate metrics/ and read each sample file
+  ○ [3] Compute per-file averages
+  ○ [4] Write metrics/summary.json with exact key order
+  ○ [5] Final reply with the three verbatim values

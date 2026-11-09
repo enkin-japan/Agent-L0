@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Read all files in ~/reports and identify DRAFT vs final
+  ○ [2] Delete DRAFT files
+  ○ [3] Rename final files with -final suffix (copy then delete original)
+  ○ [4] Verify final state and report the three values

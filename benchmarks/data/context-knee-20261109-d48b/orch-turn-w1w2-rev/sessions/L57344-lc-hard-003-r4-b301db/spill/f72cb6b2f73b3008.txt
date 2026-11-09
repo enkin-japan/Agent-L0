@@ -1,0 +1,1 @@
+{"path": "/srv/legacy-2025q3/telemetry/thumbnailer-10.json", "content": "{\n  \"p50_ms_0\": 293.59,\n  \"cpu_pct_1\": 647.35,\n  \"p50_ms_2\": 198.46,\n  \"cpu_pct_3\": 634.43,\n  \"p95_ms_4\": 577.38,\n  \"err_rate_5\": 500.23,\n  \"p50_ms_6\": 768.71,\n  \"p95_ms_7\": 230.39,\n  \"p95_ms_8\": 75.78,\n  \"p95_ms_9\": 122.47,\n  \"err_rate_10\": 87.74,\n  \"ok\": true\n}"}

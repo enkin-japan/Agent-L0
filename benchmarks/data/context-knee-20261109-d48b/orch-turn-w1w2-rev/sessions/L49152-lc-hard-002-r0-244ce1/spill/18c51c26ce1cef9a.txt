@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Locate the reports folder and list its files
+  ○ [2] Identify DRAFT files and delete them
+  ○ [3] Rename remaining reports with -final before .md
+  ○ [4] Find the three values (halyard config path, OPS- ticket, queue_depth_alert_threshold)
+  ○ [5] Report results with verbatim values

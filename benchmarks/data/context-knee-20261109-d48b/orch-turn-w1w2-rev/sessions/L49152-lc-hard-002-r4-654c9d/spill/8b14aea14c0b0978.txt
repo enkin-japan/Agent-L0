@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Read the three report files and check for DRAFT
+  ○ [2] Delete DRAFT files; rename final reports to -final
+  ○ [3] Verify final state of reports folder
+  ○ [4] Answer with the three required values

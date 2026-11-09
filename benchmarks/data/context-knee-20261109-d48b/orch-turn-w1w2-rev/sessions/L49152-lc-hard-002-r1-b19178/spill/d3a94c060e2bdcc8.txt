@@ -1,0 +1,6 @@
+Plan replaced.
+  ○ [1] Locate the reports folder and list its files
+  ○ [2] Identify files containing DRAFT (delete them)
+  ○ [3] Rename remaining .md reports to *-final.md (copy content, delete original)
+  ○ [4] Verify final state of reports folder
+  ○ [5] Compose final reply with the three required values

@@ -1,0 +1,5 @@
+Plan replaced.
+  ○ [1] Locate the policy/ directory and list its files
+  ○ [2] Replace '90 days' with '30 days' in each policy file (skip read-only ones)
+  ○ [3] Write policy/pending-changes.md naming any file that still needs manual update
+  ○ [4] Report the three values verbatim (halyard config path, OPS- ticket, queue_depth_alert_threshold)

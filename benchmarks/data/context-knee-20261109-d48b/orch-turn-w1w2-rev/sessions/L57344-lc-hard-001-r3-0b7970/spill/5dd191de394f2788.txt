@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - 三项逐字值：① halyard 配置路径 /opt/halyard/conf/halyard-a8d471.toml（cache-warm values.yaml）；② 工单 OPS-17472（feed-merge-20.log escalation）；③ queue_depth_alert_threshold = 8436（geo-tiles values.yaml）

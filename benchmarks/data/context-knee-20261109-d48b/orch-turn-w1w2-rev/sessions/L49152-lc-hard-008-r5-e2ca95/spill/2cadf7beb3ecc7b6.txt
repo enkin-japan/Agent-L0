@@ -1,0 +1,2 @@
+Saved to scratchpad.
+  - Values to state verbatim: (1) halyard config path = /opt/halyard/conf/halyard-c70c48.toml (from geo-tiles/deploy/values.yaml); (2) escalation ticket = OPS-68989 (report-gen-11.log); (3) queue_depth_al

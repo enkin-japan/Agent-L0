@@ -86,7 +86,8 @@ def test_repo_config_section_resolves():
     from pathlib import Path
     cfg = yaml.safe_load((Path(__file__).resolve().parents[2] / "config.yaml").read_text())
     c = sc.resolve_step_compaction(cfg["agent"])
-    assert c.enabled is True and c.trigger_level == "soft" and c.cold_refill_trigger_level == "hard"
+    assert c.enabled is False          # 生产缺省关（D50，2026-11-10）；其余参数保留，重开只改 enabled
+    assert c.trigger_level == "soft" and c.cold_refill_trigger_level == "hard"
 
 
 DEF = sc.resolve_step_compaction({})
