@@ -307,6 +307,7 @@ GOAL_VERIFY_MAX_TOKENS = 220
 VERIFY_NUDGE_MAX = 1
 # W1 ceiling 应急压缩 fold_mode=minimal：最多分几批折（每批折后重量）；估算一条观察折成桩后剩多少 token 时，
 # 桩里首部之外的固定部分（「…[Observation compacted; originally N chars」+ 线索 ≤240 字 + 句柄行）的估值
+# （fallback_estimate 口径估值，与正文一并乘密度——桩里的线索 ≤240 字抽自被折正文，密度与正文相同）
 CEILING_FOLD_MAX_PASSES = 8
 CEILING_FOLD_STUB_OVERHEAD_EST = 80
 # ceiling 应急压缩的保护窗（全 history 观察倒数，两种 fold_mode 同）
@@ -580,14 +581,17 @@ class Orchestrator:
             return
         self.context_limits = context_guard.derive_limits(self.context_guard, lim)
 
-    def _emergency_compact(self, session: ChatSession, *, measure=None, current: Optional[int] = None,
+    def _emergency_compact(self, session: ChatSession, *, measure=None,
+                           current: Optional["context_guard.PromptMeasure"] = None,
                            stats: Optional[Dict[str, Any]] = None) -> Tuple[int, int]:
         """轮内应急机械压缩（ceiling 兜底）。按 context_guard.fold_mode 分两种折法：
 
         full（缺省）：model-facing history 里保护窗口（最近 2 条）之外的工具观察一律折成桩。
         minimal：见 _emergency_compact_minimal——从最旧的观察起分批折、折后用 measure 重量，
-        量到 < hard 即停；须传 measure（无参、返回与 _context_guard_pre 同一量法的 token 数，量的是
-        真要发出去的那份 prompt）与 current（折前量值）。stats 非 None 时写入 passes（full 记 1）。
+        量到 < hard 即停；须传 measure（无参、返回与 _context_guard_pre 同一量法的 PromptMeasure，量的
+        是真要发出去的那份 prompt）与 current（折前的 PromptMeasure；其 density 用来校准首批候选的
+        估计可省量）。stats 非 None 时写入 passes（full 记 1）；minimal 另写 density（末批所用系数）、
+        density_raw 与 method（末批所用量值的 PromptMeasure.density 原值与 method；0 批时三者皆 None）。
         摘要折叠只能在轮边界做（rebuild_from_log 会清掉进行中的本轮），归 W2。
 
         落盘日志保留全文：本轮观察的 dict 与暂存轮次（审批/挂起）的 response 共享引用，且
@@ -603,10 +607,11 @@ class Orchestrator:
         的原文对模型就是彻底消失（2026-11-02 57K 臂实测：事实卡召回 91% → 0%）。会话无 session_dir
         或补写失败 → 桩不给句柄（旧行为）。返回 (压缩条数, 带句柄条数)；minimal 为各批累计。"""
         if self.context_guard.fold_mode == "minimal":
-            if measure is None or current is None:
+            if (measure is None or current is None
+                    or not isinstance(current, context_guard.PromptMeasure)):
                 raise ValueError("fold_mode=minimal 的应急压缩须传入 measure 与 current"
-                                 "（与 _context_guard_pre 同一量法）")
-            return self._emergency_compact_minimal(session, measure, int(current), stats)
+                                 "（须是 PromptMeasure，与 _context_guard_pre 同一量法）")
+            return self._emergency_compact_minimal(session, measure, current, stats)
         cb = self._spill_stub_handle(session, digest_chars=self.observation_compact_chars,
                                      label="ceiling 应急压缩")
         out = self._compact_turn_range(
@@ -616,11 +621,15 @@ class Orchestrator:
             stats["passes"] = 1
         return out["count"], (cb.spilled if cb is not None else 0)
 
-    def _minimal_fold_candidates(self, session: ChatSession) -> List[Tuple[int, int]]:
+    def _minimal_fold_candidates(self, session: ChatSession,
+                                 density: float = 1.0) -> List[Tuple[int, int]]:
         """fold_mode=minimal 的折桩候选 [(history 下标, 估计折后可省 token)]，最旧在前。口径与
         compact_tool_observations_detailed 的预算驱逐候选一致：全 history 观察倒数 CEILING_KEEP_RECENT
-        条之外、未压过、正文 > observation_compact_chars。可省 = fallback_estimate(正文) −
-        fallback_estimate(首部) − 桩固定部分估值（下限 1：候选必有进展）。"""
+        条之外、未压过、正文 > observation_compact_chars。可省 = round(density × (fallback_estimate(正文)
+        − fallback_estimate(首部) − 桩固定部分估值))（下限 1：候选必有进展）。density 来自最近一次量值
+        （context_guard.fold_density）：fallback_estimate 对真实正文可偏低 2× 以上（D48b），不校准就会
+        把缺口高估成多条候选、一批多折；桩固定部分估值也是 fallback_estimate 口径（桩里的线索 ≤240 字
+        抽自被折正文、密度与正文相同），故与正文一并乘密度，不单独扣减。"""
         digest = self.observation_compact_chars
         obs: List[Tuple[int, Dict[str, Any]]] = []
         for mi, msg in enumerate(session.history):
@@ -633,13 +642,14 @@ class Orchestrator:
             resp = str(tr.get("response", ""))
             if tr.get("_compacted") or len(resp) <= digest:
                 continue
-            saving = (context_guard.fallback_estimate(resp)
-                      - context_guard.fallback_estimate(resp.strip()[:digest])
-                      - CEILING_FOLD_STUB_OVERHEAD_EST)
+            saving = round(density * (context_guard.fallback_estimate(resp)
+                                      - context_guard.fallback_estimate(resp.strip()[:digest])
+                                      - CEILING_FOLD_STUB_OVERHEAD_EST))
             out.append((mi, max(1, saving)))
         return out
 
-    def _emergency_compact_minimal(self, session: ChatSession, measure, current: int,
+    def _emergency_compact_minimal(self, session: ChatSession, measure,
+                                   current: "context_guard.PromptMeasure",
                                    stats: Optional[Dict[str, Any]]) -> Tuple[int, int]:
         """fold_mode=minimal：折到刚好够用。每批：取最旧的候选、累计估计可省量直到凑够「当前量值 −
         hard + 1」的缺口，把落刀区间 [0, 末个入选候选下标 + 1) 交给 _compact_turn_range（保护窗仍按全
@@ -648,15 +658,29 @@ class Orchestrator:
         0 条进展即停——本函数单次调用内有界。外层（_context_guard_pre 的 ceiling 分支）还会在同一次
         生成前随外层 range(3) 最多重入 3 次，每次都可能再跑满 CEILING_FOLD_MAX_PASSES 批：两层上限
         叠加，用完仍 ≥ ceiling 也终止，不是只有「折到候选耗尽（0 条）」才终止。带句柄规则与 full 同
-        （每批一个 _spill_stub_handle 回调）。"""
+        （每批一个 _spill_stub_handle 回调）。
+
+        密度校准（D48b）：候选可省量按 fallback_estimate 估，与分词器实测差一个随内容变的系数（英文日志、
+        代码、CJK 各不相同；d48 批实测填充正文偏低约 2.2×，首批多折约 2.6×）。每批先取最近一次量值的
+        context_guard.fold_density 缩放候选可省量；density 是整段 prompt（系统提示、工具 schema、模板、
+        各类观察混在一起）的混合密度，只是候选正文密度的近似——系统提示是中文（密度 <1）会把系数拉到
+        低于填充正文自身的密度，首批校准因此只能部分消除超折，剩余超折属预期。折后重量的 PromptMeasure
+        带回新 density，下一批即按它重校准：折掉一批正文会改变整段的内容构成，混合密度随之变化，用
+        最新量值总比沿用旧值更接近；精确做法是算上一批的边际密度（(折前 tokens − 折后 tokens) ÷
+        (折前估值 − 折后估值)），留作后续。density 未知（chars 量法 / 假引擎）= 1.0，与校准前逐字节
+        同行为。"""
         hard = self.context_guard.hard
         total = spilled = passes = 0
-        cur = current
-        while passes < CEILING_FOLD_MAX_PASSES and cur >= hard:
-            cands = self._minimal_fold_candidates(session)
+        cur_m = current
+        used_dens = None        # 末个真落刀批所用的系数（0 批 = None）
+        used_density_raw = None  # 末个真落刀批所用量值的 PromptMeasure.density 原值（D48b；可为 None）
+        used_method = None       # 同上，量值的 method
+        while passes < CEILING_FOLD_MAX_PASSES and cur_m.tokens >= hard:
+            dens = context_guard.fold_density(cur_m)
+            cands = self._minimal_fold_candidates(session, dens)
             if not cands:
                 break
-            gap = cur - hard + 1
+            gap = cur_m.tokens - hard + 1
             acc, end = 0, 0
             for mi, saving in cands:
                 acc += saving
@@ -670,13 +694,19 @@ class Orchestrator:
                 digest_chars=self.observation_compact_chars, label="ceiling-minimal",
                 stub_handle=cb)
             passes += 1
+            used_dens = dens
+            used_density_raw = cur_m.density
+            used_method = cur_m.method
             total += out["count"]
             spilled += cb.spilled if cb is not None else 0
             if not out["count"]:
                 break           # 候选在区间内却 0 条落刀（不应发生）：不空转
-            cur = int(measure())
+            cur_m = measure()
         if stats is not None:
             stats["passes"] = passes
+            stats["density"] = used_dens
+            stats["density_raw"] = used_density_raw
+            stats["method"] = used_method
         return total, spilled
 
     def _compact_turn_range(self, session: ChatSession, start: int, end: Optional[int], *,
@@ -1163,10 +1193,11 @@ class Orchestrator:
             minimal = fold_mode == "minimal"
             last_measure: Dict[str, Any] = {}
 
-            def _remeasure() -> int:
-                """minimal 折叠的逐批重量：与上面同一量法（_guard_measure），末次结果留给下面续判。"""
+            def _remeasure() -> "context_guard.PromptMeasure":
+                """minimal 折叠的逐批重量：与上面同一量法（_guard_measure），末次结果留给下面续判；
+                返回整个 PromptMeasure（其 density 供下一批重校准）。"""
                 last_measure["ml"] = _guard_measure(prompt_args, limits)
-                return last_measure["ml"][0].tokens
+                return last_measure["ml"][0]
 
             # 每个分支各翻一面旗，最多各走一次；循环只为让「压缩后落到 hard」与「尾注把 hard
             # 推到 ceiling」都回到同一套判定，不出现分支间漏判。fold_mode=minimal 的 ceiling 分支不受
@@ -1185,6 +1216,9 @@ class Orchestrator:
             # 以及 minimal 第二次 ceiling 折完仍 ceiling 的那次尝试）。
             fold_before = fold_after = None
             fold_compacted = fold_spilled = fold_passes = 0
+            fold_dens = None             # minimal 末次折叠末批所用的密度系数（full 恒 None）
+            fold_density_raw = None     # 同上，所用量值的 PromptMeasure.density 原值（可为 None）
+            fold_method = None          # 同上，所用量值的 method
             fold_succeeded = False
             for _ in range(3):
                 if level == "ceiling" and (minimal or not guard_flags["compacted"]):
@@ -1195,7 +1229,7 @@ class Orchestrator:
                     if minimal:
                         last_measure.clear()
                         n, n_spilled = self._emergency_compact(
-                            session, measure=_remeasure, current=m.tokens, stats=fold_stats)
+                            session, measure=_remeasure, current=m, stats=fold_stats)
                         if "ml" in last_measure:       # 末次重量即折后量值；0 批则未重量、仍是折前值
                             m, level = last_measure["ml"]
                             fold_after = m.tokens
@@ -1206,6 +1240,10 @@ class Orchestrator:
                     guard_flags["ceiling_compacted"] += n
                     guard_flags["ceiling_spilled"] += n_spilled
                     passes = fold_stats.get("passes", 1)
+                    if fold_stats.get("density") is not None:
+                        fold_dens = fold_stats["density"]
+                        fold_density_raw = fold_stats.get("density_raw")
+                        fold_method = fold_stats.get("method")
                     fold_compacted += n
                     fold_spilled += n_spilled
                     fold_passes += passes
@@ -1245,9 +1283,12 @@ class Orchestrator:
                 events.emit(context_guard.EVT_FOLD, session=session.session_id,
                             before=fold_before, after=fold_after, ceiling=limits.ceiling,
                             compacted=fold_compacted, spilled=fold_spilled, mode=fold_mode,
-                            passes=fold_passes, iteration=session.carried_iterations + iterations + 1)
+                            passes=fold_passes, density=fold_dens,
+                            density_raw=fold_density_raw, method=fold_method,
+                            iteration=session.carried_iterations + iterations + 1)
                 session.push_activity("note", "上下文接近上限，已折叠旧观察")
-                print(f"[Orchestrator] 上下文上限护栏：应急压缩（{fold_mode}，{fold_passes} 批）"
+                _dens_note = f"，密度 {fold_dens:.2f}" if fold_dens is not None else ""
+                print(f"[Orchestrator] 上下文上限护栏：应急压缩（{fold_mode}，{fold_passes} 批{_dens_note}）"
                       f"{fold_compacted} 条观察，{fold_before:,} → {fold_after:,} token"
                       f"（ceiling {limits.ceiling:,}）")
             if level == "ceiling":

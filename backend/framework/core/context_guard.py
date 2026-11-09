@@ -13,11 +13,17 @@ ceiling 应急压缩的两种折法（fold_mode）：
   minimal ：从最旧的观察起分批折桩、每批折后重量，量到 < hard 即停（折到刚好够用）；每次生成前
             到 ceiling 都可再折，折了 0 条仍 ≥ ceiling 才终止。动机：w12eval 批实测窗内整体 fold
             净负（57K 档 Pass^2 26% → 13%），fold 的价值只剩防溢出（2026-11-09 用户拍板）。
+            候选的估计可省量按实测密度校准（D48b，2026-11-09）：fallback_estimate 对真实正文偏低约
+            2.2×，未校准时首批凑缺口会多折约 2.6×；引擎量 prompt 时顺带给出 density（分词器实测
+            token ÷ 同一文本的 fallback_estimate，是整段 prompt 的混合密度，只是候选正文密度的近似），
+            每批用最近一次量值的 density 缩放（见 fold_density）；折掉一批后混合密度会变，故逐批重取
+            而非沿用首批（精确做法留作后续，见 orchestrator._emergency_compact_minimal）。
 
 配置失败关闭：未知键、非正整数、soft ≥ hard、hard ≥ ceiling 一律在装配期抛 ValueError——inprocess 即
 启动失败；remote 为计算装配失败并退避重试（数据服务照常），装配后探活发现上限不相容则算力端标为不可用——
 拼错的键静默回落缺省，会把「护栏配了却没生效」伪装成模型行为问题。
 """
+import math
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -32,6 +38,12 @@ LEVELS = ("ok", "soft", "hard", "ceiling")
 # 每张图片在文本 prompt 里只是占位符（qwen35 VISION_PLACEHOLDER 之类），文本分词量不到视觉 token；
 # CUDA 上报的 prompt_tokens 也是文本 ids 数。守卫宁高估不低估：按图片数加这个常量。
 IMAGE_TOKENS_EST = 1024
+
+# minimal 折叠的密度校准钳位（D48b）：实测 token 与 fallback_estimate 相差 4 倍以上视为仪表异常
+# （分词器/装配出错、文本几乎为空之类），不让一次离谱量值把折叠量放大或缩小到失控——钳到边界
+# 仍是「往实测方向修正」，逐批重量会再兜一次。
+FOLD_DENSITY_MIN = 0.25
+FOLD_DENSITY_MAX = 4.0
 
 # 护栏事件名（guardrail_events.jsonl）
 EVT_SOFT = "context_soft"
@@ -60,11 +72,14 @@ class ContextLimits:
 @dataclass(frozen=True)
 class PromptMeasure:
     """一次 prompt 规模测量（engine.measure_prompt 的返回值）。
-    method: "tokenizer"（执行端分词器 encode）| "chars"（fallback_estimate）。"""
+    method: "tokenizer"（执行端分词器 encode）| "chars"（fallback_estimate）。
+    density: 文本部分实测 token ÷ fallback_estimate(同一文本)（不含图片估值）；None = 未知
+    （无分词器 / chars 量法 / 假引擎）。minimal 折叠用它校准候选的估计可省量（fold_density）。"""
     tokens: int
     method: str
     chars: int
     images: int
+    density: Optional[float] = None
 
 
 def _positive_int(name: str, value: Any) -> int:
@@ -131,5 +146,17 @@ def level_rank(level: Optional[str]) -> int:
 
 def fallback_estimate(text: str) -> int:
     """无分词器时的保守估算：ASCII 字符数 // 4 + 非 ASCII 字符数（CJK 约 1 字 1 token）。"""
-    ascii_n = sum(1 for ch in text if ord(ch) < 128)
+    ascii_n = len(text.encode("ascii", "ignore"))     # = ord(ch) < 128 的字符数（C 速度；每次量都算）
     return ascii_n // 4 + (len(text) - ascii_n)
+
+
+def fold_density(m: Optional[PromptMeasure]) -> float:
+    """minimal 折叠用的密度系数：m / m.density 缺失、非 int/float（bool 也拒；字符串等需显式转换的
+    类型不接）、非有限数或 ≤ 0 → 1.0（不校准，旧行为）；否则钳到 [FOLD_DENSITY_MIN, FOLD_DENSITY_MAX]。"""
+    d = getattr(m, "density", None) if m is not None else None
+    if not isinstance(d, (int, float)) or isinstance(d, bool):
+        return 1.0
+    d = float(d)
+    if not math.isfinite(d) or d <= 0:
+        return 1.0
+    return min(FOLD_DENSITY_MAX, max(FOLD_DENSITY_MIN, d))

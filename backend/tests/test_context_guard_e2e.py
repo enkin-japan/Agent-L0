@@ -12,6 +12,8 @@ soft → hard → ceiling。压缩把 history 里的观察折成桩，量值随�
 import asyncio
 import json
 
+import pytest
+
 from framework.core import context_guard as cg
 from framework.core import events
 from framework.core.context_guard import PromptMeasure, fallback_estimate
@@ -45,10 +47,13 @@ def _snapshot(history):
 
 
 class ContentMeasureEngine(FakeEngine):
-    """量值 = fallback_estimate(会话全部正文 + 观察 + 尾注 + 任务块)；模拟引擎的全量渲染计数。"""
+    """量值 = fallback_estimate(会话全部正文 + 观察 + 尾注 + 任务块)；模拟引擎的全量渲染计数。
+    density（D48b）缺省 None = 上述 chars 量法、不报密度；给了则模拟分词器实测 = round(density × 估算)、
+    method="tokenizer"、PromptMeasure.density=density（真引擎口径：实测 ÷ fallback_estimate）。"""
 
-    def __init__(self, script):
+    def __init__(self, script, density=None):
         super().__init__(script)
+        self.density = density
         self.measured = []         # 每次 measure_prompt 的量值
         self.full = []             # 每次生成是否全量渲染
         self._last_view = None     # 上一次生成时的 history 快照
@@ -61,8 +66,12 @@ class ContentMeasureEngine(FakeEngine):
         parts = [c for _r, c, trs in _snapshot(session.history) for c in (c, *trs)]
         parts += list(tail_notes or []) + [task_block or ""]
         n = fallback_estimate("\n".join(parts))
+        if self.density is None:
+            self.measured.append(n)
+            return PromptMeasure(tokens=n, method="chars", chars=0, images=0)
+        n = round(self.density * n)
         self.measured.append(n)
-        return PromptMeasure(tokens=n, method="chars", chars=0, images=0)
+        return PromptMeasure(tokens=n, method="tokenizer", chars=0, images=0, density=self.density)
 
     async def generate_once(self, session, **kw):
         view = _snapshot(session.history)
@@ -160,10 +169,12 @@ OBS12K = 48_000
 HARD_NEAR_CEILING = 51_200
 
 
-def _prefilled_run(make_session, *, mode, n_prefill, script, tool_results, obs_max=200_000):
-    """history 里预铺 n_prefill 条 ≈12K token 的旧观察（内容互异：a/b/c…），再跑一轮 script。
-    tool_results：{工具名: 返回正文}。返回 (结果, 引擎, 会话, 编排器, 预铺观察原文)。"""
-    eng = ContentMeasureEngine(script)
+def _prefilled_run(make_session, *, mode, n_prefill, script, tool_results, obs_max=200_000,
+                   obs_chars=OBS12K, density=None):
+    """history 里预铺 n_prefill 条 obs_chars 字符（缺省 ≈12K token）的旧观察（内容互异：a/b/c…），再跑
+    一轮 script。tool_results：{工具名: 返回正文}；density 透传 ContentMeasureEngine。
+    返回 (结果, 引擎, 会话, 编排器, 预铺观察原文)。"""
+    eng = ContentMeasureEngine(script, density=density)
     cfg = {"react_max_steps": 4, "max_total_iterations": 20, "replan_max": 3,
            "observation_max_chars": obs_max, "observation_budget_chars": 10 ** 7,
            "tool_timeout_seconds": 5, "max_parse_retries": 3, "thinking_mode": "manual",
@@ -176,7 +187,7 @@ def _prefilled_run(make_session, *, mode, n_prefill, script, tool_results, obs_m
     session = make_session()
     originals = []
     for i in range(n_prefill):
-        text = "abcdefgh"[i] * OBS12K
+        text = "abcdefgh"[i] * obs_chars
         originals.append(text)
         session.add_user_message(f"旧问 {i}")
         session.add_assistant_message(tool_calls=[call("read_old", path=f"o{i}")])
@@ -274,3 +285,71 @@ def test_minimal_fold_candidates_exhausted_aborts_with_cumulative_count(make_ses
     assert aborts[0]["detail"]["compacted"] == 1 + 3                # 两次 ceiling 累计（非覆盖）
     live = _live_obs(session)
     assert all(STUB_MARK in x for x in live[:-2]) and live[-2:] == [orig[4], giant]
+
+
+# ---- D48b：minimal 候选可省量按实测密度校准（量值带 density 的分词器口径） ----
+def test_minimal_fold_density_calibrated_folds_fewer(make_session):
+    """估算偏低 2×（density 2.0，d48 批实测填充正文约 2.2×）：预铺 5 条 24,000 字符观察，每条估 6,000、
+    实测 12,000。折前实测 ≈ 2 × 30,085 ≈ 60,170 ≥ ceiling，缺口 ≈ 60,170 − 51,200 + 1 ≈ 8,971。
+      校准：每条可省 round(2 × (6,000 − 50 − 80)) = 11,740 ≥ 缺口 → 1 批 1 条，折后 ≈ 48.3K < hard。
+      不校准（系数 1）：每条 round(6,000 − 50 − 80) = 5,870 < 缺口 → 首批凑 2 条（11,740）
+      ——D48b 的「超折」，多折一条。"""
+    r, eng, session, orch, orig = _prefilled_run(
+        make_session, mode="minimal", n_prefill=5, script=[{"text": "完成"}],
+        tool_results={"read_old": "x"}, obs_chars=24_000, density=2.0)
+    limits = orch.context_limits
+    assert eng.measured[0] >= limits.ceiling
+    assert eng.measured[0] - HARD_NEAR_CEILING + 1 < 12_000        # 场景前提：缺口小于一条的实测量
+    assert r["status"] == "success" and len(eng.calls) == 1
+    fold = _events(cg.EVT_FOLD)
+    assert len(fold) == 1
+    d = fold[0]["detail"]
+    assert d["mode"] == "minimal" and d["compacted"] == 1 and d["passes"] == 1
+    assert d["density"] == pytest.approx(2.0)
+    assert d["density_raw"] == pytest.approx(2.0) and d["method"] == "tokenizer"   # Minor 3
+    assert d["after"] < HARD_NEAR_CEILING and eng.measured[-1] == d["after"]
+    live = _live_obs(session)
+    assert STUB_MARK in live[0]
+    assert live[1] == orig[1]                                      # 第二旧的观察未被折（不超折）
+    assert live[2:] == orig[2:]
+
+
+def test_minimal_fold_density_below_one_folds_enough_in_one_pass(make_session):
+    """估算偏高（density 0.5，例如 CJK 一字一估而实测更省）：预铺 6 条 96,000 字符观察，每条估
+    24,000、实测 12,000。折前实测 ≈ 0.5 × (144,000 + ~100) ≈ 72,05x，缺口 ≈ 20,85x（介于 1 条与 2 条
+    实测量之间）。
+      校准：每条可省 round(0.5 × (24,000 − 50 − 80)) = 11,935 → 首批凑 2 条（23,870 ≥ 缺口），1 批到 < hard。
+      不校准：每条 24,000 − 50 − 80 = 23,870 ≥ 缺口 → 首批只折 1 条，实测只省 ≈12K 仍 ≥ hard
+      → 第 2 批补 1 条（2 批）。"""
+    r, eng, session, orch, orig = _prefilled_run(
+        make_session, mode="minimal", n_prefill=6, script=[{"text": "完成"}],
+        tool_results={"read_old": "x"}, obs_chars=96_000, density=0.5)
+    gap = eng.measured[0] - HARD_NEAR_CEILING + 1
+    assert 12_000 < gap < 2 * 11_935                                # 场景前提
+    assert r["status"] == "success" and len(eng.calls) == 1
+    fold = _events(cg.EVT_FOLD)
+    assert len(fold) == 1
+    d = fold[0]["detail"]
+    assert d["mode"] == "minimal" and d["compacted"] == 2 and d["passes"] == 1
+    assert d["density"] == pytest.approx(0.5)
+    assert d["after"] < HARD_NEAR_CEILING
+    live = _live_obs(session)
+    assert [STUB_MARK in x for x in live] == [True, True, False, False, False, False]
+    assert live[2:] == orig[2:]
+
+
+def test_minimal_fold_without_density_reports_unit_coefficient(make_session):
+    """chars 量法（density 未知）：系数 1.0，行为同 D48b 前；事件里 density 记 1.0、density_raw 记
+    None、method 记 "chars"（Minor 3：量值本身的原始口径，与校准系数区分开）；full 记 None。"""
+    _prefilled_run(make_session, mode="minimal", n_prefill=5, script=[{"text": "完成"}],
+                   tool_results={"read_old": "x"})
+    (d,) = [e["detail"] for e in _events(cg.EVT_FOLD)]
+    assert d["density"] == 1.0 and d["density_raw"] is None and d["method"] == "chars"
+
+
+def test_full_fold_event_density_is_none(make_session):
+    _prefilled_run(make_session, mode="full", n_prefill=5, script=[{"text": "完成"}],
+                   tool_results={"read_old": "x"}, density=2.0, obs_chars=24_000)
+    (d,) = [e["detail"] for e in _events(cg.EVT_FOLD)]
+    assert d["mode"] == "full" and d["density"] is None
+    assert d["density_raw"] is None and d["method"] is None       # Minor 3：full 恒不写

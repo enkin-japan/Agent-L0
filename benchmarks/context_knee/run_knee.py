@@ -348,7 +348,8 @@ class KneeEngine:
             pm = fn(session, tools=kwargs.get("tools"), task_block=kwargs.get("task_block"),
                     tail_notes=kwargs.get("tail_notes"),
                     enable_thinking=bool(kwargs.get("enable_thinking", False)))
-            return {"measure_tokens": pm.tokens, "measure_method": pm.method}
+            return {"measure_tokens": pm.tokens, "measure_method": pm.method,
+                    "measure_density": getattr(pm, "density", None)}
         except Exception as e:      # noqa: BLE001
             return {"measure_tokens": None, "measure_method": None,
                     "measure_error": f"{type(e).__name__}: {e}"}
@@ -436,6 +437,7 @@ class OrchKneeEngine(KneeEngine):
                         enable_thinking=enable_thinking)
                 if session is self.session:
                     self._last_measure = {"measure_tokens": pm.tokens, "measure_method": pm.method,
+                                          "measure_density": getattr(pm, "density", None),
                                           "measure_source": "guard"}
                 return pm
             return measure_prompt

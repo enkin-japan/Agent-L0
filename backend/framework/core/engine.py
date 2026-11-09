@@ -485,7 +485,9 @@ class AgentEngine:
         这里也不做缓存失效与落盘、不改 session。
         有分词器 → encode 计数（method=tokenizer）；无分词器或 encode 抛异常 →
         fallback_estimate（method=chars；异常时每进程告警一次）——仪表故障不得杀掉本可生成的轮。
-        两种都按会话图片数加 IMAGE_TOKENS_EST（占位符的文本 token 量不到视觉 token）。"""
+        两种都按会话图片数加 IMAGE_TOKENS_EST（占位符的文本 token 量不到视觉 token）。
+        tokenizer 量法顺带给出 density = 文本 token ÷ fallback_estimate(同一文本)（加图片估值之前），
+        供 fold_mode=minimal 校准候选的估计可省量（D48b）；chars 量法 density=None。"""
         global _measure_fallback_warned
         include_env, env_extra = self._prompt_env(session)
         text, _tail, _offset, _view, _stats = self._assemble_prompt(
@@ -509,10 +511,13 @@ class AgentEngine:
                     events.emit("context_guard_measure_fallback",
                                 session=getattr(session, "session_id", None),
                                 error=f"{type(e).__name__}: {e}")
+        density = None
         if n is None:
             n, method = fallback_estimate(text), "chars"
+        else:
+            density = n / max(1, fallback_estimate(text))
         return PromptMeasure(tokens=n + images * IMAGE_TOKENS_EST, method=method,
-                             chars=len(text), images=images)
+                             chars=len(text), images=images, density=density)
 
     def _resolve_sampling(self, explicit: Dict[str, Any],
                           legacy: Dict[str, Any]) -> Dict[str, Any]:

@@ -119,6 +119,48 @@ def test_fallback_estimate():
     assert cg.fallback_estimate("") == 0
 
 
+def _fallback_estimate_oracle(text):
+    """D48b 前的逐字符公式，作等价 oracle（新实现改用 encode("ascii", "ignore") 计数）。"""
+    ascii_n = sum(1 for ch in text if ord(ch) < 128)
+    return ascii_n // 4 + (len(text) - ascii_n)
+
+
+def test_fallback_estimate_matches_per_char_oracle():
+    import random
+    rng = random.Random(20261109)
+    pools = ["abc xyz\n\t{}\"\\\x00\x7f", "汉字中文测试", "é ü ß ñ \x80\xff",
+             "😀🚀🧠", "\ud800\udfff"]       # 末项：孤立代理（str 里合法、不可编码为 UTF-8）
+    for _ in range(300):
+        text = "".join(rng.choice(rng.choice(pools)) for _ in range(rng.randrange(0, 200)))
+        assert cg.fallback_estimate(text) == _fallback_estimate_oracle(text), repr(text)
+    for text in ["a" * 7, "\x7f\x80", "\ud83d", "😀" * 3 + "abcd"]:
+        assert cg.fallback_estimate(text) == _fallback_estimate_oracle(text), repr(text)
+
+
+def test_prompt_measure_four_arg_construct_has_no_density():
+    m = cg.PromptMeasure(tokens=1, method="chars", chars=0, images=0)
+    assert m.density is None
+
+
+def _pm_d(density):
+    return cg.PromptMeasure(tokens=1, method="tokenizer", chars=0, images=0, density=density)
+
+
+@pytest.mark.parametrize("m,expected", [
+    (None, 1.0),                                                    # 无量值
+    (_pm_d(None), 1.0),                                             # 密度未知
+    (cg.PromptMeasure(tokens=1, method="chars", chars=0, images=0), 1.0),   # chars 量法缺省
+    (_pm_d(2.2), 2.2), (_pm_d(1.0), 1.0),                           # 区间内原样
+    (_pm_d(0.1), cg.FOLD_DENSITY_MIN), (_pm_d(9), cg.FOLD_DENSITY_MAX),     # 钳位
+    (_pm_d(0.25), 0.25), (_pm_d(4.0), 4.0),                          # 边界取等
+    (_pm_d(float("nan")), 1.0), (_pm_d(float("inf")), 1.0), (_pm_d(float("-inf")), 1.0),
+    (_pm_d(0), 1.0), (_pm_d(-2.0), 1.0),                             # 非有限 / ≤ 0 → 不校准
+    (_pm_d("2.0"), 1.0),                                             # Nit 6：字符串不隐式转换，拒
+])
+def test_fold_density(m, expected):
+    assert cg.fold_density(m) == pytest.approx(expected)
+
+
 def test_repo_config_resolves_and_derives():
     import yaml
     from pathlib import Path
@@ -281,6 +323,11 @@ def _minimal_orch(n_obs, make_session, obs_chars=48_000):
     return orch, session
 
 
+def _pm(tokens, density=None):
+    """_emergency_compact 的量值协议是 PromptMeasure（D48b）：density 缺省 None = 不校准（系数 1.0）。"""
+    return cg.PromptMeasure(tokens=tokens, method="tokenizer", chars=0, images=0, density=density)
+
+
 def _stubbed_flags(session):
     return ["Observation compacted" in tr["response"] for m in session.history
             if m.get("role") == "tool" for tr in m["tool_responses"]]
@@ -290,7 +337,8 @@ def test_minimal_refolds_next_batch_when_estimate_falls_short(make_session):
     orch, session = _minimal_orch(6, make_session)
     seen = iter([52000, 50000])
     stats = {}
-    n, _sp = orch._emergency_compact(session, measure=lambda: next(seen), current=60000, stats=stats)
+    n, _sp = orch._emergency_compact(session, measure=lambda: _pm(next(seen)), current=_pm(60000),
+                                 stats=stats)
     # 第 1 批缺口 8,801 → 估 ≈11.9K/条，折最旧 1 条；重量仍 ≥ hard → 第 2 批再折下一条
     assert (n, stats["passes"]) == (2, 2)
     assert _stubbed_flags(session) == [True, True, False, False, False, False]
@@ -299,7 +347,8 @@ def test_minimal_refolds_next_batch_when_estimate_falls_short(make_session):
 def test_minimal_batch_covers_gap_in_one_pass(make_session):
     orch, session = _minimal_orch(6, make_session)
     stats = {}
-    n, _sp = orch._emergency_compact(session, measure=lambda: 40000, current=80000, stats=stats)
+    n, _sp = orch._emergency_compact(session, measure=lambda: _pm(40000), current=_pm(80000),
+                                 stats=stats)
     # 缺口 28,801 → 一批凑 3 条（3 × ≈11.9K）
     assert (n, stats["passes"]) == (3, 1)
     assert _stubbed_flags(session) == [True, True, True, False, False, False]
@@ -308,7 +357,8 @@ def test_minimal_batch_covers_gap_in_one_pass(make_session):
 def test_minimal_stops_at_max_passes(make_session):
     orch, session = _minimal_orch(12, make_session)
     stats = {}
-    n, _sp = orch._emergency_compact(session, measure=lambda: 60000, current=60000, stats=stats)
+    n, _sp = orch._emergency_compact(session, measure=lambda: _pm(60000), current=_pm(60000),
+                                     stats=stats)
     # 每批凑缺口 8,801 只要 1 条；量值不降 → 到 8 批上限即停，窗外仍剩 2 条原文
     assert (n, stats["passes"]) == (8, 8)
     assert _stubbed_flags(session) == [True] * 8 + [False] * 4
@@ -318,18 +368,69 @@ def test_minimal_stops_when_candidates_exhausted(make_session):
     orch, session = _minimal_orch(4, make_session)
     calls = []
     stats = {}
-    n, _sp = orch._emergency_compact(session, measure=lambda: calls.append(1) or 60000,
-                                     current=60000, stats=stats)
+    n, _sp = orch._emergency_compact(session, measure=lambda: calls.append(1) or _pm(60000),
+                                     current=_pm(60000), stats=stats)
     assert (n, stats["passes"], len(calls)) == (2, 2, 2)
     assert _stubbed_flags(session) == [True, True, False, False]   # 保护窗不动
-    n2, _ = orch._emergency_compact(session, measure=lambda: 60000, current=60000, stats=stats)
+    n2, _ = orch._emergency_compact(session, measure=lambda: _pm(60000), current=_pm(60000),
+                                    stats=stats)
     assert (n2, stats["passes"]) == (0, 0)                          # 候选耗尽：0 批、不重量
+
+
+def test_minimal_density_recalibrates_every_pass(make_session):
+    """D48b 逐批重校准：每批按最近一次量值的 density 缩放候选可省量。观察 48,000 字符 'a'：
+    fallback_estimate 12,000，首部（200 字符）50，桩固定部分估值 80（与正文同口径一并乘密度）
+    → 候选可省基准 12,000 − 50 − 80 = 11,870。
+      第 1 批：量值 60,000、density 0.5 → 缺口 8,801；可省 round(0.5 × 11,870) = 5,935/条
+              → 凑 2 条（11,870 ≥ 8,801）。
+      第 2 批：重量 56,000、density 0.25（实测比首批更稀）→ 缺口 4,801；可省 round(0.25 × 11,870)
+              = 2,968/条 → 再凑 2 条（5,936 ≥ 4,801）。
+      重量 50,000 < hard → 停。共 2 批 4 条。
+    不校准（系数恒 1）可省 11,870/条，两批缺口都 ≤ 11,870 → 只折 1 + 1 条；只在首批校准、不逐批
+    重校准（沿用 0.5）：第 2 批可省仍 5,935/条 ≥ 缺口 4,801 → 只折 1 条。"""
+    orch, session = _minimal_orch(6, make_session)
+    seen = iter([_pm(56000, density=0.25), _pm(50000, density=0.3)])
+    stats = {}
+    n, _sp = orch._emergency_compact(session, measure=lambda: next(seen),
+                                     current=_pm(60000, density=0.5), stats=stats)
+    assert (n, stats["passes"]) == (4, 2)
+    assert stats["density"] == pytest.approx(0.25)                 # 末个落刀批所用系数
+    assert _stubbed_flags(session) == [True] * 4 + [False] * 2
+
+
+def test_minimal_stub_overhead_scaled_with_density(make_session):
+    """D48b 一审 Minor 1：桩固定部分估值 80 是 fallback 口径、与正文一并乘密度（桩里的线索抽自正文）。
+    density 0.5：可省 round(0.5 × (12,000 − 50 − 80)) = 5,935/条；若桩不乘密度则为
+    round(0.5 × 11,950) − 80 = 5,895/条。缺口取 11,800（量值 51,200 + 11,799 = 62,999）：
+    5,935 × 2 = 11,870 ≥ 11,800 → 折 2 条；桩不乘密度时 5,895 × 2 = 11,790 < 11,800 → 要折 3 条；
+    不校准（11,870/条）→ 只折 1 条。三种都在 6 条预铺（4 个候选）之内，重量 50,000 < hard 停。"""
+    orch, session = _minimal_orch(6, make_session)
+    stats = {}
+    n, _sp = orch._emergency_compact(session, measure=lambda: _pm(50000, density=0.5),
+                                     current=_pm(62999, density=0.5), stats=stats)
+    assert (n, stats["passes"]) == (2, 1)
+    assert _stubbed_flags(session) == [True] * 2 + [False] * 4
+
+
+def test_minimal_density_is_none_when_no_pass_runs(make_session):
+    orch, session = _minimal_orch(2, make_session)                  # 全在保护窗内：0 候选
+    stats = {}
+    n, _ = orch._emergency_compact(session, measure=lambda: _pm(60000),
+                                   current=_pm(60000, density=2.0), stats=stats)
+    assert (n, stats["passes"], stats["density"]) == (0, 0, None)
 
 
 def test_minimal_requires_measure(make_session):
     orch, session = _minimal_orch(4, make_session)
     with pytest.raises(ValueError, match="measure"):
         orch._emergency_compact(session)
+
+
+def test_minimal_requires_current_to_be_prompt_measure(make_session):
+    """Nit 8：current 须是 PromptMeasure（旧协议误传 int 的 token 数会被拒，而非悄悄当 .tokens 用）。"""
+    orch, session = _minimal_orch(4, make_session)
+    with pytest.raises(ValueError, match="PromptMeasure"):
+        orch._emergency_compact(session, measure=lambda: _pm(60000), current=60000)
 
 
 def test_minimal_second_ceiling_in_turn_folds_again(make_session):
@@ -714,6 +815,38 @@ def test_measure_adds_image_estimate():
     with_img = eng.measure_prompt(_session(images=["/tmp/x.png"]), tools=TOOLS)
     assert with_img.images == 1
     assert with_img.tokens - base.tokens == cg.IMAGE_TOKENS_EST
+
+
+class _DoubleTok:
+    """token 数恰为 fallback_estimate 的 2 倍（模拟估算偏低 2× 的真分词器）。"""
+    special_tokens_map = {}
+
+    def encode(self, s, add_special_tokens=False):
+        return [0] * (2 * cg.fallback_estimate(s))
+
+
+def test_measure_reports_tokenizer_density():
+    be = _CaptureBackend()
+    be.processor = SimpleNamespace(tokenizer=_DoubleTok())
+    eng = _engine(be, "gemma4")
+    m = eng.measure_prompt(_session(images=["/tmp/x.png"]), tools=TOOLS)
+    assert m.method == "tokenizer"
+    assert m.density == pytest.approx(2.0)                         # 文本部分，不含图片估值
+    assert m.tokens == 2 * cg.fallback_estimate(_rendered(eng, _session())) + cg.IMAGE_TOKENS_EST
+
+
+def _rendered(eng, s):
+    inc, extra = eng._prompt_env(s)
+    return eng._render_full_prompt(s, TOOLS, enable_thinking=False, task_block=None,
+                                   tail_notes=None, include_env=inc, env_extra=extra)
+
+
+def test_measure_density_none_without_tokenizer():
+    be = _CaptureBackend()
+    eng = _engine(be, "gemma4")
+    be.processor = None
+    m = eng.measure_prompt(_session(), tools=TOOLS)
+    assert m.method == "chars" and m.density is None
 
 
 def test_measure_does_not_touch_session_state():
