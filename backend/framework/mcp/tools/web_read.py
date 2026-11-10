@@ -120,7 +120,7 @@ class WebReadTool(BaseTool):
         # 抓取参数 = 调查层管道旋钮 + 阅读层覆写（单页任务的字符预算放得开）
         cfg = {**_CFG_SEARCH, **_CFG_READ, "max_pages_per_call": max_pages}
 
-        runtime.report_progress(f"阅读网页：抓取 {len(urls)} 个页面")
+        runtime.report_progress_code("web_read.fetching", count=len(urls))
         web_tools.reset_extraction_cache()  # 段落去重缓存按次为界（与调查同规矩）
         pages = web_tools.open_pages(urls, cfg)  # 本线程同步抓取；SSRF/重定向/PDF/升级梯全在内
         if not any((p.get("text") or "").strip() for p in pages):
@@ -130,7 +130,7 @@ class WebReadTool(BaseTool):
                     f"({errs}). The pages may be inaccessible or fully JS-rendered.")
         material = web_tools.wrap_untrusted(pages)
 
-        runtime.report_progress("阅读网页：归纳内容")
+        runtime.report_progress_code("web_read.summarizing")
         engine = runtime.get_engine()
         loop = runtime.get_loop()
         timeout = int(_CFG_READ.get("summary_timeout", 90))

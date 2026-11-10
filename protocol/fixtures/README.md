@@ -69,6 +69,7 @@ web(vitest)与原生 app(XCTest)各自实现 `reduce(state, event)`,**读取同�
 | `014-history-replay-boundary` | 历史下界与后来 turn=null 的完结窗口；restore.json 由真实 Web/Swift store 时序测试共享，覆盖重叠去重与 thin terminal 回同一恢复入口 |
 | `015-cancelled-execution-receipts` | 工具返回后取消，模型上下文回滚但执行事实保留，参数省略如实标注 |
 | `016-task-retry-inputs` | 重试保留输入及审批；history.json 锁定成功替换展示、失败保留旧版与所有尝试下标 |
+| `018-tool-progress-code` | **进度事件带稳定代号**（build 84）：`tool_progress` 的 additive 字段 `code`/`args` 穿过两端归约器不被吞，终态 `detail` 仍是后端原文（与界面语言无关）。守卫夹具，详见 `018-tool-progress-code.md` |
 
 ## 为什么 005/006 建在 002(暂停态)而不是 001(完整轮)上
 

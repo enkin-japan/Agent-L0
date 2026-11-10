@@ -51,15 +51,36 @@ def get_progress_hook():
     return _PROGRESS_HOOK.get()
 
 
-def report_progress(label: str, detail: str = "") -> None:
-    """工具内部上报当前动作。无钩子零开销；异常吞掉——进度是仪表，绝不影响工具本体。"""
+def report_progress(label: str, detail: str = "", *, code: Optional[str] = None,
+                    args: Optional[dict] = None) -> None:
+    """工具内部上报当前动作。无钩子零开销；异常吞掉——进度是仪表，绝不影响工具本体。
+
+    code / args（build 84，可选）：稳定代号与扁平参数（见 progress_codes），供客户端按
+    界面语言重新渲染；label / detail 文本照旧原样上报。不带 code 时钩子按旧签名调用。"""
     hook = _PROGRESS_HOOK.get()
     if hook is None:
         return
     try:
-        hook(label, detail)
+        if code is None:
+            hook(label, detail)
+        else:
+            hook(label, detail, code=code, args=args)
     except Exception:
         pass
+
+
+def report_progress_code(code: str, detail: str = "", **args) -> None:
+    """按稳定代号上报（progress_codes.PROGRESS_TEMPLATES）：label 由中文模板渲染，
+    与 code/args 一起交给钩子。渲染异常退回不带 code/args 的旧式上报（见
+    progress_codes.safe_progress），不会让整条进度丢失；只有代号本身未登记（写错代号）
+    才真正不发。"""
+    if _PROGRESS_HOOK.get() is None:
+        return
+    from .progress_codes import safe_progress
+    label, out_code, cleaned = safe_progress(code, args)
+    if label is None:
+        return
+    report_progress(label, detail, code=out_code, args=cleaned)
 
 
 # 当前轮次的用量回收槽（dict，由 orchestrator.run_turn 持有并在轮末盖进 metrics）。

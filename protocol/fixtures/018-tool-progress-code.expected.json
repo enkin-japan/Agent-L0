@@ -1,0 +1,31 @@
+{
+  "turn_state": "running",
+  "transcript": [],
+  "preview": {
+    "prompt": "东京今天多少度?顺便读一下这两页,再把这个视频的标题告诉我。",
+    "text": "",
+    "thinking": "",
+    "steps": [
+      {
+        "kind": "tool",
+        "label": "web_research",
+        "detail": "联网调查：搜索「东京 今日 气温」",
+        "status": "running"
+      },
+      {
+        "kind": "tool",
+        "label": "web_read",
+        "detail": "阅读网页：抓取 2 个页面",
+        "status": "running"
+      },
+      {
+        "kind": "tool",
+        "label": "media_download",
+        "detail": "正在解析链接 · https://v.example/watch?v=1",
+        "status": "running"
+      }
+    ],
+    "task": null
+  },
+  "pending_tools": []
+}

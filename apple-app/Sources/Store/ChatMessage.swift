@@ -153,7 +153,7 @@ extension ChatMessage {
                                              detail: call.errorMsg ?? ""))
                         } else {
                             let name = call.name ?? "unknown"
-                            var row = ChatMessage.tool(label: "\(L("调用")) \(name)",
+                            var row = ChatMessage.tool(label: "\(L("调用")) \(StepText.toolName(name))",
                                                        detail: call.arguments?.compact(max: 4000) ?? "{}")
                             row.stepRole = .call
                             row.stepName = name
@@ -176,14 +176,14 @@ extension ChatMessage {
             case "tool":
                 for item in msg.toolResponses ?? [] {
                     if item.response == "Operation cancelled: the user sent a new message without approving." {
-                        var row = ChatMessage.tool(label: (item.name ?? L("工具")) + " · " + L("未执行"),
+                        var row = ChatMessage.tool(label: (item.name.map(StepText.toolName) ?? L("工具")) + " · " + L("未执行"),
                                                    detail: L("此待审批调用已因新消息作废，未获批执行。"))
                         row.stepRole = .notRun
                         row.stepName = item.name
                         out.append(row)
                         continue
                     }
-                    var m = ChatMessage.tool(label: "\(item.name ?? L("工具")) \(L("返回"))",
+                    var m = ChatMessage.tool(label: "\(item.name.map(StepText.toolName) ?? L("工具")) \(L("返回"))",
                                              detail: item.response ?? "")
                     m.stepRole = .result
                     m.stepName = item.name
@@ -224,7 +224,7 @@ extension ChatMessage {
                     if let status = item.status { detail += "\n" + L("返回状态：") + status }
                 }
                 // These rows ARE the receipts, so their status and time are exact.
-                var row = ChatMessage.tool(label: item.name + " · " + L(started ? "已开始" : "已返回"), detail: detail)
+                var row = ChatMessage.tool(label: StepText.toolName(item.name) + " · " + L(started ? "已开始" : "已返回"), detail: detail)
                 row.stepStatus = started ? nil : item.status
                 row.stepTimestamp = item.ts
                 row.stepRole = started ? .call : .result
@@ -329,7 +329,7 @@ extension ChatMessage {
                 if detail == (item.detail ?? "") && item.truncated == true { detail += "\n" + L("记录已截断，部分内容未保留。") }
                 detail += "\n" + L("工具已返回；返回状态不保证外部操作成功。")
                 if let status = item.status { detail += "\n" + L("返回状态：") + status }
-                out[existing].toolLabel = item.name + " · " + L("已返回")
+                out[existing].toolLabel = StepText.toolName(item.name) + " · " + L("已返回")
                 out[existing].toolDetail = detail
                 out[existing].stepStatus = item.status
                 out[existing].stepTimestamp = item.ts
@@ -453,5 +453,153 @@ enum HistoryProjection {
                   winners.insert(group.displayIndex).inserted else { return false }
             return true
         }
+    }
+}
+
+/// build 84：进度代号与工具名按界面语言显示。L10n 以中文为键——这里先把代号 / 工具名
+/// 映射到中文原文（zh 模板 / zh 显示名），再经 `L()` 取当前语言的译文（日/英在 L10n.table）。
+/// 查不到、参数缺键或类型不对时一律回退后端原文，不崩（与旧客户端看到的完全相同）。
+/// 放在本文件而非新文件：所有编译 AgentStore 的 swiftc 单编测试都已带上本文件与 `L()`。
+enum StepText {
+    /// 进度代号 → 中文模板（占位 `{name}`）。必须与 backend/framework/agents/progress_codes.py
+    /// 的 PROGRESS_TEMPLATES 逐字相同：zh 渲染结果 == 后端事件里的 label 原文。
+    /// backend/tests/test_progress_codes.py 解析本表与后端、L10n.table 三方对齐。
+    static let progressTemplates: [String: String] = [
+        "research.thinking": "联网调查：思考中（{step}/{max}）",
+        "research.searching": "联网调查：搜索「{query}」",
+        "research.reading": "联网调查：阅读 {count} 个页面",
+        "research.reading_rendered": "联网调查：阅读 {count} 个页面（强制渲染）",
+        "research.summarizing": "联网调查：归纳结论",
+        "web_read.fetching": "阅读网页：抓取 {count} 个页面",
+        "web_read.summarizing": "阅读网页：归纳内容",
+        "excel.verifying": "运行交付门禁",
+        "excel.visual_qa": "视觉回读",
+        "excel.delivering": "交付",
+        "excel.inspecting": "拆解表格结构",
+        "excel.running_code": "执行代码",
+        "media.resolving": "正在解析链接",
+        "media.downloading": "正在下载媒体",
+    ]
+
+    /// 工具注册名 → 中文显示名（覆盖 backend/framework/mcp/tools/ 的全部注册名，同一测试核对）。
+    /// 表里没有的（API 工具等动态注册名）回退原始工具名。
+    static let toolNames: [String: String] = [
+        "calendar_add": "添加日程",
+        "calendar_list": "查看日程",
+        "click_ui_element": "点击界面元素",
+        "clipboard_read": "读取剪贴板",
+        "clipboard_write": "写入剪贴板",
+        "cloud_consult": "云端咨询",
+        "code_explore": "代码探查",
+        "copy_file": "复制文件",
+        "deck_critique": "评审演示文稿",
+        "deck_export_pdf": "导出 PDF",
+        "deck_export_pptx": "导出 PPTX",
+        "deck_init": "新建演示文稿",
+        "deck_remove_slide": "删除幻灯片",
+        "deck_set_slide": "编辑幻灯片",
+        "deck_status": "查看演示文稿状态",
+        "edit_file": "编辑文件",
+        "excel_research": "Excel 表格处理",
+        "file_extract": "读取文件内容",
+        "find_files": "查找文件",
+        "get_current_time": "获取当前时间",
+        "get_location": "获取位置",
+        "list_applications": "列出应用",
+        "list_dir": "列出目录",
+        "math_research": "数学推演",
+        "media_download": "下载媒体",
+        "memory_write": "写入记忆",
+        "move_file": "移动文件",
+        "notify_user": "发送通知",
+        "open_path": "打开文件或链接",
+        "press_keys": "按键操作",
+        "rag_delete_category": "删除知识库分类",
+        "rag_delete_document": "删除知识库文档",
+        "rag_get_context": "读取知识库上下文",
+        "rag_insert_document": "写入知识库文档",
+        "rag_list_categories": "列出知识库分类",
+        "rag_mark_stale": "标记知识已过期",
+        "rag_reclassify_unclassified": "整理未分类知识",
+        "rag_search": "检索知识库",
+        "rag_upsert_category": "更新知识库分类",
+        "read_ui_tree": "读取界面结构",
+        "register_api_tool": "注册 API 工具",
+        "register_skill": "注册技能",
+        "reminder_add": "添加提醒事项",
+        "render_chart": "绘制图表",
+        "run_applescript": "运行 AppleScript",
+        "run_math": "数学计算",
+        "run_shell_command": "执行命令",
+        "schedule_create": "创建定时任务",
+        "schedule_delete": "删除定时任务",
+        "schedule_list": "查看定时任务",
+        "schedule_update": "修改定时任务",
+        "set_ui_element_value": "设置界面元素的值",
+        "skill_invoke": "调用技能",
+        "system_status": "查看系统状态",
+        "trash_file": "移到废纸篓",
+        "type_text": "输入文本",
+        "web_read": "阅读网页",
+        "web_research": "联网调查",
+        "write_document": "撰写文档",
+        "write_file": "写入文件",
+        // 编排器内建的步骤工具（不在 mcp/tools/ 注册表里，直播步骤行同样会显示）
+        "update_plan": "更新计划",
+        "complete_step": "完成步骤",
+        "get_tool_schema": "查看工具说明",
+        "remember": "记录要点",
+    ]
+
+    /// 工具名的当前语言显示名；未登记的回退原名。
+    static func toolName(_ name: String) -> String {
+        guard let zh = toolNames[name] else { return name }
+        return L(zh)
+    }
+
+    /// 代号 + 参数 → 当前语言文本；代号未知 / 参数缺键 / 类型不对 → nil（调用方回退后端原文）。
+    static func progress(code: String, args: [String: JSONValue]) -> String? {
+        guard let zh = progressTemplates[code] else { return nil }
+        return fill(L(zh), args)
+    }
+
+    /// 单遍替换 `{name}`：参数值里的花括号原样保留、不会被二次展开。
+    static func fill(_ template: String, _ args: [String: JSONValue]) -> String? {
+        var out = ""
+        var rest = Substring(template)
+        while let open = rest.firstIndex(of: "{") {
+            out += rest[..<open]
+            guard let close = rest[open...].firstIndex(of: "}") else { return nil }
+            let key = String(rest[rest.index(after: open)..<close])
+            guard let value = args[key], let text = argText(value) else { return nil }
+            out += text
+            rest = rest[rest.index(after: close)...]
+        }
+        return out + rest
+    }
+
+    /// 参数只认 str / 整数（后端 clean_args 同一口径）；bool、小数、对象一律不认。
+    private static func argText(_ value: JSONValue) -> String? {
+        switch value {
+        case .string(let s): return s
+        case .number(let n):
+            guard n.rounded() == n, abs(n) < 1e15 else { return nil }
+            return String(Int64(n))
+        default: return nil
+        }
+    }
+
+    /// 直播步骤的标签：工具步按工具名表本地化，计划步（模型写的标题）原样。
+    static func label(_ step: NormalizedStep) -> String {
+        step.kind == "tool" ? toolName(step.label) : step.label
+    }
+
+    /// 直播步骤的详情：带进度代号的执行中步骤按当前语言重渲染（后端 detail 原样拼在后面，
+    /// 与归约器「label · detail」同形）；渲染不了就用归约器存下的后端原文。
+    static func detail(_ step: NormalizedStep) -> String {
+        guard let p = step.progress, let text = progress(code: p.code, args: p.args) else {
+            return step.detail
+        }
+        return [text, p.detail].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 }

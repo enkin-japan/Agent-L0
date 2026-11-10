@@ -2008,32 +2008,36 @@ final class AgentStore: ObservableObject {
     /// pending = 生成中预告,执行前就知道要调什么——Phase 3 粒度）。
     private func renderSteps() {
         liveStepItems = live.preview.steps
+        // 标签/详情经 StepText 按界面语言显示（build 84：工具名表 + 进度代号；查不到回退后端原文）
         liveSteps = live.preview.steps.map { step in
             let mark = step.kind == "plan" ? "📋" : "⚙️"
+            let label = StepText.label(step)
             switch step.status {
             case "pending":
-                return "⏳ \(step.label)…"
+                return "⏳ \(label)…"
             case "running":
-                let d = step.detail.isEmpty ? "" : "（\(step.detail.prefix(60))）"
-                return "\(mark) \(step.label)\(d)"
+                let detail = StepText.detail(step)
+                let d = detail.isEmpty ? "" : "（\(detail.prefix(60))）"
+                return "\(mark) \(label)\(d)"
             case "ok":
                 let head = step.detail.split(separator: "\n").first.map(String.init) ?? ""
-                return "✓ \(step.label)" + (head.isEmpty ? "" : " — \(head.prefix(80))")
+                return "✓ \(label)" + (head.isEmpty ? "" : " — \(head.prefix(80))")
             case "timeout":
-                return "✗ \(step.label) " + L("超时")
+                return "✗ \(label) " + L("超时")
             case "failed":
-                return "✗ \(step.label)" + (step.detail.isEmpty ? "" : " — \(step.detail.prefix(80))")
+                return "✗ \(label)" + (step.detail.isEmpty ? "" : " — \(step.detail.prefix(80))")
             default:
-                return "• \(step.label)"
+                return "• \(label)"
             }
         }
         // 活动行：执行中的工具优先,其次是生成中预告的工具(无则清空,ChatView 回退通用文案)
         if let running = live.preview.steps.last(where: { $0.status == "running" }) {
-            activity = LiveActivity(phase: "running", current: running.label +
-                (running.detail.isEmpty ? "" : "（\(running.detail.prefix(40))）"), steps: nil)
+            let detail = StepText.detail(running)
+            activity = LiveActivity(phase: "running", current: StepText.label(running) +
+                (detail.isEmpty ? "" : "（\(detail.prefix(40))）"), steps: nil)
         } else if let pending = live.preview.steps.last(where: { $0.status == "pending" }) {
             activity = LiveActivity(phase: "running",
-                                    current: L("准备调用") + " \(pending.label)…", steps: nil)
+                                    current: L("准备调用") + " \(StepText.label(pending))…", steps: nil)
         } else {
             activity = nil
         }

@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from . import excel_tools
+from .progress_codes import safe_progress
 from .sandbox_runtime import EphemeralSession, SandboxSpec, note_usage, run_sandbox
 from ..excel import inspect_workbook, verify_workbook
 
@@ -358,10 +359,14 @@ async def run_excel_task(engine, task: str, input_file: Optional[str],
 
     usage_sink：父轮的用量回收槽（F6）。与 progress 同款交接——包壳在工具线程取出后作
     参数传入，投回主循环的协程不继承工具线程 ContextVar。None = 记账空转。"""
-    def _report(label: str, detail: str = ""):
+    def _report(code: str, detail: str = ""):
+        """按代号上报（label 由中文模板渲染，与 build 83 文本逐字节相同；detail 原样）。渲染
+        异常由 safe_progress 兜底退回旧式上报，不会让整条进度丢失。"""
         if progress is not None:
             try:
-                progress(label, detail)
+                label, out_code, out_args = safe_progress(code)
+                if label is not None:
+                    progress(label, detail, code=out_code, args=out_args)
             except Exception:
                 pass
 
@@ -441,7 +446,7 @@ async def run_excel_task(engine, task: str, input_file: Optional[str],
                        " — the work directory has no .xlsx/.xlsm yet. Save one first.")
                     + " Pass file=<name> explicitly.")
 
-        _report("运行交付门禁", target.name)
+        _report("excel.verifying", target.name)
         contract_now = state.contract
         max_changed = None
         if contract_now and "max_changed" in contract_now:
@@ -464,7 +469,7 @@ async def run_excel_task(engine, task: str, input_file: Optional[str],
 
         trimmed = _trim_report(report)
         if do_visual_qa and report.get("preview_pages"):
-            _report("视觉回读", "")
+            _report("excel.visual_qa", "")
             try:
                 visual_summary = await _visual_qa(engine, report["preview_pages"],
                                                   usage_sink=usage_sink)
@@ -486,7 +491,7 @@ async def run_excel_task(engine, task: str, input_file: Optional[str],
         assets = Path(session_dir) / "assets"
         assets.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(shutil.copy2, target, assets / fname)
-        _report("交付", fname)
+        _report("excel.delivering", fname)
         return _format_digest(session_id, fname, state, summary, assumptions,
                               visual_summary, note)
 
@@ -510,14 +515,14 @@ async def run_excel_task(engine, task: str, input_file: Optional[str],
                                       "directory. Create/save one first, or pass "
                                       "file=<name>."})
                     continue
-                _report("拆解表格结构", target.name)
+                _report("excel.inspecting", target.name)
                 info = await asyncio.to_thread(
                     inspect_workbook, target, args.get("grid_sheet"))
                 responses.append({"name": name, "response": _wrap_untrusted(
                     json.dumps(info, ensure_ascii=False, indent=1, default=str))})
 
             elif name == "run_python":
-                _report("执行代码", "")
+                _report("excel.running_code", "")
                 r = await asyncio.to_thread(
                     repl.run, args.get("code", ""), args.get("timeout"))
                 out = r["output"] if r["output"] else (

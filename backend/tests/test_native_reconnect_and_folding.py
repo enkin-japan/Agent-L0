@@ -343,7 +343,7 @@ func turn(_ value: [String: Any]) -> Turn {
             // 并入的 started 回执不另起行，但要在调用行标签上留「· 已开始」（执行已开始是安全信号）
             check(tools.filter { $0.toolLabel?.contains("已开始") == true }.map(\.stepName) == ["write_file", "delete_file"]
                   && tools[0].stepRole == .call, "merged started receipt marks the call row, no second row: \(tools.map { $0.toolLabel ?? "" })")
-            check(tools[1].toolLabel == "write_file · 已返回" && tools[1].stepStatus == "ok" && tools[0].stepTimestamp == 101, "receipt facts land on the response rows")
+            check(tools[1].toolLabel == "写入文件 · 已返回" && tools[1].stepStatus == "ok" && tools[0].stepTimestamp == 101, "receipt facts land on the response rows")
             let denied: [[String: Any]] = [response[0], ["role": "tool", "tool_responses": [["name": "write_file", "response": "The user denied this tool call."]]]]
             let exact = ChatMessage.from(turn: turn(["status": "cancelled", "prompt": "q", "response": denied + response,
                 "execution_receipts": ["truncated": false, "items": [receipt(5, "tool_started", "write_file", "c5", ""),

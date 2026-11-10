@@ -13,6 +13,16 @@ struct NormalizedStep: Equatable {
     var status: String        // "running" | "ok" | "timeout" | "failed"
     /// 内部簿记:tool_started/result 的配对键(夹具比对时剥除,不进公共形状)。
     var callId: String?
+    /// 内部簿记(build 84):最近一条 tool_progress 带的稳定代号/参数(夹具比对时剥除)。
+    /// `detail` 仍是后端原文——归约结果与语言无关;按界面语言渲染在展示层(StepText)。
+    var progress: StepProgress? = nil
+}
+
+/// tool_progress 的可选结构化字段(code + 扁平 args)与后端 detail 原文。
+struct StepProgress: Equatable {
+    let code: String
+    let args: [String: JSONValue]
+    let detail: String
 }
 
 struct NormalizedPreview: Equatable {
@@ -80,6 +90,7 @@ enum TurnReducer {
                 let match = callId != nil ? step.callId == callId : step.status == "running"
                 if match && step.status == "running" {
                     s.preview.steps[i].detail = label
+                    s.preview.steps[i].progress = progressRef(env)
                     break
                 }
             }
@@ -89,6 +100,7 @@ enum TurnReducer {
             for i in s.preview.steps.indices
             where s.preview.steps[i].callId != nil && s.preview.steps[i].callId == callId {
                 s.preview.steps[i].detail = env.str("response")
+                s.preview.steps[i].progress = nil
                 s.preview.steps[i].status = env.str("status") == "timeout" ? "timeout" : "ok"
             }
 
@@ -136,6 +148,18 @@ enum TurnReducer {
             break // 未知事件类型:忽略(向前兼容,协议硬性要求)
         }
         return s
+    }
+
+    /// code 缺/空 → nil(旧后端);args 缺省视为空表,不是对象 → nil(展示层回退原文)。
+    private static func progressRef(_ env: EventEnvelope) -> StepProgress? {
+        guard let code = optionalStr(env.data["code"]), !code.isEmpty else { return nil }
+        let args: [String: JSONValue]
+        switch env.data["args"] {
+        case nil, .null?: args = [:]
+        case .object(let o)?: args = o
+        default: return nil
+        }
+        return StepProgress(code: code, args: args, detail: env.str("detail"))
     }
 
     private static func optionalStr(_ v: JSONValue?) -> String? {

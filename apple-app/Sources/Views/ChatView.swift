@@ -385,7 +385,7 @@ struct ChatView: View {
                     case .note(let text):
                         ProcessNoteRow(text: text)
                     case .step(let step):
-                        CompactStepRow(status: step.status, kind: step.kind, label: step.label, detail: step.detail)
+                        CompactStepRow(status: step.status, kind: step.kind, label: StepText.label(step), detail: StepText.detail(step))
                     }
                 }
                 HStack(spacing: Theme.s2) {

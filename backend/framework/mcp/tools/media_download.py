@@ -158,7 +158,7 @@ class MediaDownloadTool(BaseTool):
 
         # 前置轻探（process=False 不解析格式）：纯播放列表 URL 在这里拦下，
         # 否则 noplaylist 只管「视频+列表二义 URL」，纯列表照样全量拖回。
-        runtime.report_progress("正在解析链接", url)
+        runtime.report_progress_code("media.resolving", url)
         try:
             with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True,
                                    "noplaylist": True, "socket_timeout": 30}) as ydl:
@@ -177,7 +177,7 @@ class MediaDownloadTool(BaseTool):
                 return f"System Error: probe failed ({type(e).__name__}: {e})"
             return format_probe(info)
 
-        runtime.report_progress("正在下载媒体", mode)
+        runtime.report_progress_code("media.downloading", mode)
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=True)

@@ -1,0 +1,10 @@
+{"seq": 1, "turn_id": "t_9f3c2a000018", "ts": 1783700000.0, "type": "turn_queued", "data": {"prompt": "东京今天多少度?顺便读一下这两页,再把这个视频的标题告诉我。", "attachments": [], "gen": {"enable_thinking": false, "thinking_budget": 2048, "max_tokens": 4096, "temperature": 0.2, "min_p": 0.05}, "origin": "chat"}}
+{"seq": 2, "turn_id": "t_9f3c2a000018", "ts": 1783700000.1, "type": "turn_started", "data": {}}
+{"seq": 3, "turn_id": "t_9f3c2a000018", "ts": 1783700000.2, "type": "iteration_started", "data": {"n": 1, "thinking": false}}
+{"seq": 4, "turn_id": "t_9f3c2a000018", "ts": 1783700001.0, "type": "tool_started", "data": {"call_id": "c18a", "name": "web_research", "args": {"query": "东京 今日 气温"}}}
+{"seq": 5, "turn_id": "t_9f3c2a000018", "ts": 1783700001.5, "type": "tool_progress", "data": {"call_id": "c18a", "label": "联网调查：思考中（1/6）", "detail": "", "code": "research.thinking", "args": {"step": 1, "max": 6}}}
+{"seq": 6, "turn_id": "t_9f3c2a000018", "ts": 1783700003.0, "type": "tool_progress", "data": {"call_id": "c18a", "label": "联网调查：搜索「东京 今日 气温」", "detail": "", "code": "research.searching", "args": {"query": "东京 今日 气温"}}}
+{"seq": 7, "turn_id": "t_9f3c2a000018", "ts": 1783700003.1, "type": "tool_started", "data": {"call_id": "c18b", "name": "web_read", "args": {"urls": ["https://a.example/1", "https://b.example/2"]}}}
+{"seq": 8, "turn_id": "t_9f3c2a000018", "ts": 1783700003.2, "type": "tool_progress", "data": {"call_id": "c18b", "label": "阅读网页：抓取 2 个页面", "detail": "", "code": "web_read.fetching", "args": {"count": 2}}}
+{"seq": 9, "turn_id": "t_9f3c2a000018", "ts": 1783700003.3, "type": "tool_started", "data": {"call_id": "c18c", "name": "media_download", "args": {"url": "https://v.example/watch?v=1"}}}
+{"seq": 10, "turn_id": "t_9f3c2a000018", "ts": 1783700003.4, "type": "tool_progress", "data": {"call_id": "c18c", "label": "正在解析链接", "detail": "https://v.example/watch?v=1", "code": "media.resolving", "args": {}}}

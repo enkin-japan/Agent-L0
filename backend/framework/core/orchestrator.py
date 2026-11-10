@@ -2503,11 +2503,23 @@ class Orchestrator:
         # 并发语义一致，最后写入者为准），账本 emit 必须回主循环线程，走 call_soon_threadsafe。
         loop = asyncio.get_running_loop()
 
-        def _tool_progress(label: str, detail: str = "") -> None:
+        def _tool_progress(label: str, detail: str = "", code: Optional[str] = None,
+                           args: Optional[dict] = None) -> None:
             session.set_activity(label + (f"（{detail}）" if detail else ""))
-            loop.call_soon_threadsafe(
-                journal.emit, "tool_progress",
-                {"call_id": call_id, "label": label, "detail": detail})
+            payload = {"call_id": call_id, "label": label, "detail": detail}
+            # build 84：可选的稳定代号 + 扁平参数（只增不改，旧客户端忽略未知字段），
+            # 客户端据此按界面语言渲染；label/detail 仍是原样中文文本（见 progress_codes）。
+            if isinstance(code, str) and code:
+                try:
+                    from ..agents.progress_codes import clean_args
+                    payload["code"] = code
+                    payload["args"] = clean_args(args)
+                except Exception:
+                    # clean_args 对非法 args（如非映射类型）可能抛；退回不带 code/args 的
+                    # 旧式事件，保证事件本身不丢（见 test_progress_codes.py）。
+                    payload.pop("code", None)
+                    payload.pop("args", None)
+            loop.call_soon_threadsafe(journal.emit, "tool_progress", payload)
 
         _agent_runtime.set_progress_hook(_tool_progress)
         # [事实记账] 当前步的物理执行数 +1（complete_step 时随 note 落痕：0 执行却宣称

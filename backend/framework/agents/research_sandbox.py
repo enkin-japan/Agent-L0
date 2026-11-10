@@ -15,6 +15,7 @@ import time
 from typing import List, Dict, Optional
 
 from . import web_tools
+from .progress_codes import safe_progress
 from .sandbox_runtime import EphemeralSession, SandboxSpec, note_usage, run_sandbox
 
 
@@ -129,7 +130,8 @@ async def run_research(engine, query: str, cfg: dict,
     不足 convergence_reserve_seconds 时不再发工具调用，直接用已收集材料收敛出摘要，
     把「硬超时全损」变成「减配交付」。硬熔断仍由包壳兜底。
 
-    progress_cb(label)：可选进度上报（orchestrator 的钩子，见 runtime.report_progress）。
+    progress_cb(label, detail="", *, code=None, args=None)：可选进度上报（orchestrator 的钩子，
+    见 runtime.report_progress）。
     在思考/搜索/阅读/收敛节点上报当前动作，前端 ActivityCard 实时可见。fire-and-forget。
 
     usage_sink：父轮的用量回收槽（F6）。与 progress_cb 同款交接——包壳在工具线程取出后
@@ -137,11 +139,16 @@ async def run_research(engine, query: str, cfg: dict,
     """
     import asyncio
 
-    def _report(label: str) -> None:
+    def _report(code: str, **args) -> None:
+        """按代号上报：label 由中文模板渲染（与 build 83 文本逐字节相同），code/args 供客户端
+        按界面语言重渲染（见 progress_codes）。渲染异常由 safe_progress 兜底退回旧式上报，
+        不会让整条进度丢失。"""
         if progress_cb is None:
             return
         try:
-            progress_cb(label)
+            label, out_code, out_args = safe_progress(code, args)
+            if label is not None:
+                progress_cb(label, "", code=out_code, args=out_args)
         except Exception:
             pass  # 进度是仪表，绝不影响调查本体
 
@@ -170,7 +177,7 @@ async def run_research(engine, query: str, cfg: dict,
         return deadline is not None and time.monotonic() > deadline - reserve
 
     async def _on_step(step: int) -> None:
-        _report(f"联网调查：思考中（{step + 1}/{max_steps}）")
+        _report("research.thinking", step=step + 1, max=max_steps)
 
     async def _dispatch(calls):
         responses = []
@@ -179,7 +186,7 @@ async def run_research(engine, query: str, cfg: dict,
             args = c.get("arguments", {}) or {}
             if name == "web_search":
                 q = args.get("query") or query
-                _report(f"联网调查：搜索「{q[:40]}」")
+                _report("research.searching", query=f"{q[:40]}")  # 与 build 83 同一截断表达式
                 res = await asyncio.to_thread(web_tools.web_search, q, cfg, args.get("n"),
                                               args.get("time_range"), args.get("category"))
                 for item in res:  # 累积候选池（按归一化 key 去重，保信誉序），供后续 open_pages 补位
@@ -195,8 +202,8 @@ async def run_research(engine, query: str, cfg: dict,
                 responses.append({"name": name, "response": web_tools.format_search_results(res)})
             elif name == "open_pages":
                 urls = _extract_urls(args)
-                _report(f"联网调查：阅读 {len(urls)} 个页面"
-                        + ("（强制渲染）" if args.get("render") else ""))
+                _report("research.reading_rendered" if args.get("render") else "research.reading",
+                        count=len(urls))
                 res = await asyncio.to_thread(web_tools.open_pages, urls, cfg, pool, fetch_cache,
                                               bool(args.get("render")))
                 responses.append({"name": name,
@@ -212,7 +219,7 @@ async def run_research(engine, query: str, cfg: dict,
 
     async def _exhausted() -> str:
         """步数或时间预算用尽 → 强制收敛出摘要。"""
-        _report("联网调查：归纳结论")
+        _report("research.summarizing")
         sess.history.append({"role": "user",
                             "content": ("Investigation budget (steps or time) exhausted. Produce the final "
                                         "factual digest from the material collected above, honestly noting "
