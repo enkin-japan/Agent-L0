@@ -12,12 +12,16 @@
 """
 import asyncio
 import concurrent.futures
+import re
 
 from ..base import BaseTool
 
 # 配置统一在仓库根 config.yaml（web_search 段），寻址走 config_loader
 from ...utils.config_loader import load_section
 _CFG = load_section("web_search")
+
+# query 里带 http(s) 地址 → 子代理可直接 open_pages 打开，不依赖搜索（闩锁短路不拦它）
+_URL_IN_QUERY = re.compile(r"https?://\S", re.IGNORECASE)
 
 
 class WebResearchTool(BaseTool):
@@ -91,12 +95,16 @@ class WebResearchTool(BaseTool):
         return True, detail
 
     def is_available(self) -> bool:
-        """SearXNG 在线且清洗依赖可用才注册；否则主体压根看不到本工具（优雅降级）。"""
+        """（SearXNG 在线 或 已配置启用且有密钥的搜索 API）且清洗依赖可用才注册；
+        否则主体压根看不到本工具（优雅降级）。装配期判一次：SearXNG 不在时之后才添加的
+        API 要等下次装配（rescan / 重启）才让本工具上架。"""
         try:
-            from ...agents import web_tools
+            from ...agents import search_providers, web_tools
             if not web_tools.searxng_alive(_CFG):
-                print("[MCP-web_research] ⚠️ SearXNG 探活失败，联网调查工具不注册。")
-                return False
+                if not search_providers.has_configured_api():
+                    print("[MCP-web_research] ⚠️ SearXNG 探活失败且未配置搜索 API，联网调查工具不注册。")
+                    return False
+                print("[MCP-web_research] SearXNG 探活失败，已配置搜索 API，联网调查工具照常注册。")
             import trafilatura  # noqa: F401  正文抽取硬依赖，缺失则整体禁用
         except Exception as e:
             print(f"[MCP-web_research] ⚠️ 依赖不可用（{e}），联网调查工具不注册。")
@@ -104,8 +112,18 @@ class WebResearchTool(BaseTool):
         return True
 
     def execute(self, query: str) -> str:
-        from ...agents import runtime
-        from ...agents.research_sandbox import run_research
+        from ...agents import runtime, web_tools
+        from ...agents.research_sandbox import (SandboxSystemError, run_research,
+                                                search_unavailable_error)
+
+        # 整条搜索链不可用（SearXNG 闩锁生效 ∧ 没有可用的搜索 API，批 C）、且 query 里没有
+        # 可直接打开的地址：零次子生成、不进沙箱，
+        # 直接快速失败（build 85 B3）——否则每次重调都白烧一轮子生成。
+        # 注：query 带地址只豁免这里的入口短路；进沙箱后子代理若先搜索仍会快速失败，
+        # 返回文案会引导主代理改用 web_read。
+        down = web_tools.search_unavailable_engines()
+        if down is not None and not _URL_IN_QUERY.search(query or ""):
+            return str(search_unavailable_error(down))
 
         if not runtime.is_ready():
             return "System Error: research runtime not initialized (engine/event loop missing)."
@@ -135,6 +153,10 @@ class WebResearchTool(BaseTool):
         except Exception as e:
             return f"System Error: web research raised an exception: {e}"
 
+        # 沙箱自判的系统级失败（如搜索不可用快速失败）原样交回，让编排层判为失败；
+        # 按类型识别（模型写不出这个类型），子代理文本照旧一律套不可信边界。
+        if isinstance(digest, SandboxSystemError):
+            return str(digest)
         return self._wrap(digest, query)
 
     @staticmethod

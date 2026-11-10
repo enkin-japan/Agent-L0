@@ -2576,11 +2576,8 @@ final class AgentStore: ObservableObject {
     private static func match(query: String, in turns: [Turn],
                               session: SessionMetaItem) -> SearchHit? {
         for turn in turns {
-            var texts: [String] = []
-            if let prompt = turn.prompt { texts.append(prompt) }
-            for msg in turn.response ?? [] where msg.role == "assistant" || msg.role == "system" {
-                if let content = msg.content { texts.append(content) }
-            }
+            // 写给模型的护栏消息不参与搜索（与气泡映射同一判据，见 ModelFacingMessage）
+            let texts = ModelFacingMessage.searchableTexts(of: turn)
             for text in texts {
                 let lower = text.lowercased()
                 guard let range = lower.range(of: query) else { continue }

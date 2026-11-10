@@ -103,11 +103,15 @@ def test_schedule_preemption_preserves_iteration_fuse(make_session, budget, pree
     engine, record = run(asyncio.wait_for(scenario(), timeout=5))
     assert len(engine.calls) == budget
     assert record["status"] == "warning"
+    # build 85 A2：整轮第 budget 次（最后一次）迭代是强制作答——不给工具，脚本里的工具调用
+    # 被丢弃、不执行，所以子用量只有前 budget-1 次。强制作答按**整轮**（含被抢占前的段）
+    # 计数判「最后一次」，正是本条要钉的跨段口径
+    assert engine.calls[-1]["n_tools"] == 0
     landed = history_lines(session)[0]
     assert landed["generations"] == budget
     assert landed["generation_tokens_turn"] == 20 * budget
-    assert landed["sub_generations"] == 2 * budget
-    assert landed["sub_generation_tokens"] == 17 * budget
+    assert landed["sub_generations"] == 2 * (budget - 1)
+    assert landed["sub_generation_tokens"] == 17 * (budget - 1)
     assert [e["type"] for e in session.journal.replay(0)].count("suspended") == preemptions
 
 
@@ -151,7 +155,9 @@ def test_sub_generation_fuse_survives_suspension(make_session):
     engine = PausingEngine([{"tool_calls": [call("dig", i=1)]},
                             {"tool_calls": [call("dig", i=2)]},
                             {"text": "不应生成"}])
-    orch = make_orch(engine, UsageRegistry([FakeTool("dig")]), max_sub_generations=4)
+    # build 85：上限 4 小于强制作答余量缺省 7——本条钉熔断本体跨挂起续算，关掉 A2 那条触发
+    orch = make_orch(engine, UsageRegistry([FakeTool("dig")]), max_sub_generations=4,
+                     forced_answer_sub_reserve=0)
     session = make_session()
     session.add_user_message("查询")
     begin_turn(session)

@@ -1,0 +1,173 @@
+[
+ {
+  "name": "B1 非2xx判定收窄为只认5xx（429/403 漏判）",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "    if not isinstance(status, int) or not 200 <= status < 300:\n        return None, f\"searxng (HTTP",
+  "new": "    if not isinstance(status, int) or status >= 500:\n        return None, f\"searxng (HTTP",
+  "tests": [
+   "tests/test_search_unavailable.py"
+  ]
+ },
+ {
+  "name": "B2 0条+失联不再判待确认",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "    elif data.get(\"unresponsive_engines\") and not _recently_confirmed_healthy():",
+  "new": "    elif False:",
+  "tests": [
+   "tests/test_search_unavailable.py"
+  ]
+ },
+ {
+  "name": "B3 确认查询有结果也判不可用",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "        if not cdata[\"results\"]:",
+  "new": "        if True:",
+  "tests": [
+   "tests/test_search_unavailable.py"
+  ]
+ },
+ {
+  "name": "B4 确认查询0条不判不可用",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "        if not cdata[\"results\"]:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_search_unavailable.py"
+  ]
+ },
+ {
+  "name": "B5 确认健康后不记健康时间戳",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "        _note_search_ok(confirm_started)   # 引擎活着：清闩、记健康，原查询照旧「没搜到」\n        _mark_healthy(cfg)",
+  "new": "        _note_search_ok(confirm_started)   # 引擎活着：清闩、记健康，原查询照旧「没搜到」\n        pass",
+  "tests": [
+   "tests/test_search_unavailable.py"
+  ]
+ },
+ {
+  "name": "B6 闩锁TTL边界 < 改 <=",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "        if _clock() < float(_search_latch[\"until\"]):",
+  "new": "        if _clock() <= float(_search_latch[\"until\"]):",
+  "tests": [
+   "tests/test_search_unavailable.py"
+  ]
+ },
+ {
+  "name": "B7 闩锁TTL忽略配置恒60",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "        return float(cfg.get(\"search_unavailable_ttl\", _SEARCH_UNAVAILABLE_TTL))",
+  "new": "        return _SEARCH_UNAVAILABLE_TTL",
+  "tests": [
+   "tests/test_search_unavailable.py"
+  ]
+ },
+ {
+  "name": "B8 有结果不清闩",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "    if results:\n        _note_search_ok(started)   # 任一次有结果即清闩",
+  "new": "    if results:\n        pass",
+  "tests": [
+   "tests/test_search_unavailable.py"
+  ]
+ },
+ {
+  "name": "B9 晚到失败照样上闩",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "        if last_ok is not None and started < float(last_ok):\n            return",
+  "new": "        if False:\n            return",
+  "tests": [
+   "tests/test_search_unavailable.py"
+  ]
+ },
+ {
+  "name": "B10 沙箱提前结束不看是否打开过有效页",
+  "file": "backend/framework/agents/research_sandbox.py",
+  "old": "        if search_down is not None and not pool and not opened[\"any\"]:",
+  "new": "        if search_down is not None and not pool:",
+  "tests": [
+   "tests/test_search_unavailable.py"
+  ]
+ },
+ {
+  "name": "B11 沙箱提前结束不看候选池",
+  "file": "backend/framework/agents/research_sandbox.py",
+  "old": "        if search_down is not None and not pool and not opened[\"any\"]:",
+  "new": "        if search_down is not None and not opened[\"any\"]:",
+  "tests": [
+   "tests/test_search_unavailable.py"
+  ]
+ },
+ {
+  "name": "B12 打开过页面的口径从 _is_valid 放宽为无错",
+  "file": "backend/framework/agents/research_sandbox.py",
+  "old": "                if any(isinstance(r, dict) and web_tools._is_valid(r) for r in (res or [])):",
+  "new": "                if any(isinstance(r, dict) and not r.get(\"error\") for r in (res or [])):",
+  "tests": [
+   "tests/test_search_unavailable.py"
+  ]
+ },
+ {
+  "name": "B13 入口短路不豁免带地址的 query",
+  "file": "backend/framework/mcp/tools/web_research.py",
+  "old": "        if down is not None and not _URL_IN_QUERY.search(query or \"\"):",
+  "new": "        if down is not None:",
+  "tests": [
+   "tests/test_search_unavailable.py"
+  ]
+ },
+ {
+  "name": "B14 入口短路整条删除",
+  "file": "backend/framework/mcp/tools/web_research.py",
+  "old": "            return str(search_unavailable_error(down))",
+  "new": "            pass",
+  "tests": [
+   "tests/test_search_unavailable.py"
+  ]
+ },
+ {
+  "name": "B15 CGNAT 上沿收窄到 /11",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "_CGNAT_NET = ipaddress.ip_network(\"100.64.0.0/10\")",
+  "new": "_CGNAT_NET = ipaddress.ip_network(\"100.64.0.0/11\")",
+  "tests": [
+   "tests/test_web_ssrf.py"
+  ]
+ },
+ {
+  "name": "B16 CGNAT 下沿外扩到 100.0.0.0/9",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "_CGNAT_NET = ipaddress.ip_network(\"100.64.0.0/10\")",
+  "new": "_CGNAT_NET = ipaddress.ip_network(\"100.0.0.0/9\")",
+  "tests": [
+   "tests/test_web_ssrf.py"
+  ]
+ },
+ {
+  "name": "B17 IPv4 映射形态不按 CGNAT 判",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_web_ssrf.py"
+  ]
+ },
+ {
+  "name": "B18 解析不了的地址放行（fail-open）",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "            return False, f\"Unparseable resolved address {ip!r} (SSRF blocked)\"",
+  "new": "            continue",
+  "tests": [
+   "tests/test_web_ssrf.py"
+  ]
+ },
+ {
+  "name": "B19 _ssrf_ok 不查 CGNAT",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "                or addr.is_reserved or addr.is_multicast or addr.is_unspecified\n                or _is_cgnat(addr)):",
+  "new": "                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):",
+  "tests": [
+   "tests/test_web_ssrf.py"
+  ]
+ }
+]

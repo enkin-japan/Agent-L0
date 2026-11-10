@@ -241,10 +241,12 @@ _DIG_SCENE = [{"tool_calls": [call("dig", q=1)]},
 
 def test_sub_generation_fuse_aborts_runaway_research(make_session):
     """子生成走**独立**保险丝（复审修正）：每次调研烧 3 次子生成、上限 6 →
-    两次工具调用后熔断,主循环预算(40)分毫未动。原病根「子生成完全无界」由此闭合。"""
+    两次工具调用后熔断,主循环预算(40)分毫未动。原病根「子生成完全无界」由此闭合。
+    build 85：上限 6 小于强制作答余量缺省 7，第一次调研后就会先走强制作答（A2，见
+    test_forced_answer.py）；本条钉的是熔断本体，故 forced_answer_sub_reserve=0 关掉那条触发。"""
     engine = FakeEngine(list(_DIG_SCENE))
     registry = _SinkWritingRegistry([FakeTool("dig")], per_call=3, tokens=100)
-    orch = make_orch(engine, registry, max_sub_generations=6)
+    orch = make_orch(engine, registry, max_sub_generations=6, forced_answer_sub_reserve=0)
     session = make_session()
     session.add_user_message("查三件事")
     begin_turn(session)

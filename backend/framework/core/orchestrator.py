@@ -285,6 +285,18 @@ MAX_TOKENS_RECOVERIES = 3
 # 多件套任务）里模型 3-4 次无计划工具迭代后就以「承诺继续」文本收尾；而不建计划意味着
 # 记事板/提前收尾推回/goal_verify 全体休眠，这条提醒是把它们唤醒的唯一入口。
 NO_PLAN_NUDGE_ITERATIONS = 3
+# 预算将尽强制作答（build 85 A2）：子调研生成余量不足以再做一次调研、或主循环只剩最后一次
+# 迭代时，不再直接熔断，而是做**一次**不给工具的生成，让模型用已收集的材料作答。尾注走
+# pending_tail_notes（一次性、不进历史、不落盘），不往 history 里塞 system 气泡。
+FORCED_ANSWER_NOTE = (
+    "[System guardrail] The tool budget for this turn is used up. Do NOT call any tool. "
+    "Using only the material already gathered above, answer the user now, in the language "
+    "of the user's most recent message. Clearly mark anything you could not confirm. If "
+    "nothing useful was gathered, say so plainly and suggest what the user can try next.")
+# F1：触发强制作答时最近一次工具调用失败且其后无成功（D2 unresolved_failure）→ 第二条尾注，同样不落盘
+FORCED_ANSWER_FAILURE_NOTE = (
+    "[System guardrail] The most recent tool call FAILED. Do not claim that it succeeded; "
+    "say what could not be done.")
 # 全思考空产出推回：整段生成都进了思考频道（典型：无收尾频道块被解析器 §2.7 路由后
 # 正文为空），用户什么都看不到；静默空转只会烧到总熔断。推回一次，用尽即放行给熔断。
 THINKING_ONLY_NUDGE_MAX = 1
@@ -452,6 +464,14 @@ class Orchestrator:
         # [F6] 子沙箱生成的独立保险丝:主熔断守编排失控,这条守调研失控（一次
         # excel_research ≈16 次生成,计进主分母会把研究型轮次预算压掉一个量级）
         self.max_sub_generations = int(cfg.get("max_sub_generations", 80))
+        # [A2 强制作答] 子调研生成余量 < 本值即在熔断前做一次无工具的强制作答。缺省 7 =
+        # 一次 web_research 子沙箱的上限（max_steps 6 步 + 步数用尽后 1 次强制摘要，见
+        # research_sandbox）：余量不够再调研一次就别再放工具了。只有代码缺省、config.yaml
+        # 不设此键；≤ 0 关闭这条触发（总迭代那条不受影响）。
+        self.forced_answer_sub_reserve = int(cfg.get("forced_answer_sub_reserve", 7))
+        # 总开关（同样只有代码缺省）：关掉 = 两条触发都不判，回到 build 84 的直接熔断。只给评估 harness 用——
+        # benchmarks/summary_trace 拿 max_total_iterations 当「带工具跑到第 N 次即截断」的截断点
+        self.forced_answer_enabled = bool(cfg.get("forced_answer", True))
         self.replan_max = int(cfg.get("replan_max", 3))
         self.observation_max_chars = int(cfg.get("observation_max_chars", 4000))
         # ⚠️ 回落值必须与 `mcp/tools/shell_exec.py` 的 `_OUTER_BUDGET_FALLBACK_S` 逐字
@@ -1425,24 +1445,87 @@ class Orchestrator:
             session._tool_hint_replayed = True
         upgrade_failures = 0          # 本轮连续失败的**批次**数（一次迭代的物理调用批算一次）
 
+        def _finalize_answer(text_: str, thoughts_: Any, task_: Optional[TaskState]) -> str:
+            """正常收尾与强制作答共用的落答复：资产链接补全 → 云端降级/换档提示 → 落会话 → 弃已完成任务。
+            返回最终答复文本（已追加确定性提示）。"""
+            session.set_activity("已完成", phase="done")
+            # 落盘视图（W1）：应急压缩桩会截掉观察头部之后的资产链接
+            text_ = _append_missing_asset_links(
+                text_, session.persistable_messages(turn_start_idx))
+            # ⑤′-1 降级路：云端导师本轮不可用过 → 答复末尾明示「本地作答」，不静默装满血
+            text_ = _finalize_cloud_degraded(session, metrics, text_, append_notice=True)
+            # ⑤′-3：换档建议 / 显式要求但云端不可用 → 收尾确定性提示（用户要自己动手的事）
+            text_ = _append_upgrade_notices(text_, metrics, upgrade_decisions)
+            session.add_assistant_message(content=text_, thoughts=thoughts_)
+            if task_ is not None and (task_.all_done() or not task_.plan):
+                # W4：弃之前留一份摘要器视图，随本轮记录落盘（摘要器的关键值逐字来源）
+                # D47-next (b)：纯 [Goal]（无 plan 无便签）不留，记录不盖 task_state
+                session.last_task_state_render = ("" if task_.is_bare_goal()
+                                                  else task_.render_for_summary())
+                # 任务完成即弃：工作过程已沉淀在本轮消息流（blackboard=消息流本身）
+                session.task_state = None
+            return text_
 
+        def _abort_sub_budget() -> Dict[str, Any]:
+            """[F6] 子调研生成熔断出口。说明文字落进会话（A1）：turn_runner 落盘/下发只取
+            persistable_messages，只放在返回值 response 里用户就什么都看不到。"""
+            _n = turn_usage.get("sub_generations", 0)
+            # 余量不足而强制作答又失败（A2）时尚未真到上限：如实说「接近」，不谎称已达
+            _head = (f"子调研生成已达预算上限（{self.max_sub_generations} 次）"
+                     if _n >= self.max_sub_generations else
+                     f"子调研生成接近预算上限（{self.max_sub_generations} 次），且未能据已收集的材料作答")
+            _stamp_turn_stats()
+            events.emit("turn_abort", session=session.session_id,
+                        reason="max_sub_generations",
+                        sub_generations=_n)
+            _exit_audit()
+            msg = _with_retrieval_note(
+                f"{_head}，任务终止。"
+                f"本轮主循环 {session.carried_iterations + iterations} 次、"
+                f"子调研生成 {_n} 次。"
+                "可以试试：①减少调研类工具的连续调用；②把任务拆小分别发起。")
+            session.add_assistant_message(content=msg)
+            session.set_activity("已终止（子调研生成达预算上限）", phase="done")
+            return {
+                "status": "warning",
+                "response": msg,
+                "thoughts": "System Warning: sandbox generation budget exceeded.",
+                "metrics": metrics,
+            }
+
+        def _answer_status(text_: str, *, failure_checked: bool, claim_checked: bool) -> str:
+            """[D2 谎报围堵] 收尾答复的状态降级（正常收尾与强制作答共用）：最近的物理调用失败且其后
+            无成功、或本轮零成功变更却声称做了动作 → warning（汇报可疑要在轮次状态上留痕）。
+            正常收尾只在推回过一次之后才降级（*_checked = 已推回）；强制作答没有推回机会，两项恒判。"""
+            if unresolved_failure and failure_checked:
+                return "warning"
+            if not mutated_ok_this_turn and claim_checked and _ACTION_CLAIM_RE.search(text_):
+                return "warning"
+            return "success"
+
+        def _forced_answer_trigger() -> Optional[str]:
+            """[A2] 循环顶部判是否该做强制作答，返回原因（sub_generations / iterations）或 None。
+            检索证据未决时不判：此时的纯文本答复反正过不了证据门（REPAIR_NOTE / _retrieval_incomplete），
+            照旧带工具走修复路。两条触发都要求本轮已经干过活：子生成一次没花（sub == 0）时余量不足
+            只可能来自 max_sub_generations 配得比一次调研还小；整轮一次迭代都没有时「只剩最后一次」
+            只可能来自 max_total_iterations ≤ 1——两种情况都没有任何材料可据以作答，照旧走原路。"""
+            if not self.forced_answer_enabled or retrieval.unresolved:
+                return None
+            _n = turn_usage.get("sub_generations", 0)
+            if (self.forced_answer_sub_reserve > 0 and _n > 0
+                    and self.max_sub_generations - _n < self.forced_answer_sub_reserve):
+                return "sub_generations"
+            _done = session.carried_iterations + iterations
+            if _done > 0 and _done + 1 >= self.max_total_iterations:
+                return "iterations"
+            return None
+
+        # [A2] 一轮最多一次强制作答：强制那次生成之后的每条路（成功 / 失败 / 取消 / ceiling）都 return 或
+        # break，不会回到循环顶，所以不需要另设「已强制过」旗标
         while session.carried_iterations + iterations < self.max_total_iterations:
-            if turn_usage.get("sub_generations", 0) >= self.max_sub_generations:
-                _stamp_turn_stats()
-                events.emit("turn_abort", session=session.session_id,
-                            reason="max_sub_generations",
-                            sub_generations=turn_usage.get("sub_generations", 0))
-                _exit_audit()
-                return {
-                    "status": "warning",
-                    "response": _with_retrieval_note(
-                        f"子调研生成已达预算上限（{self.max_sub_generations} 次），任务终止。"
-                        f"本轮主循环 {session.carried_iterations + iterations} 次、"
-                        f"子调研生成 {turn_usage.get('sub_generations', 0)} 次。"
-                        "可以试试：①减少调研类工具的连续调用；②把任务拆小分别发起。"),
-                    "thoughts": "System Warning: sandbox generation budget exceeded.",
-                    "metrics": metrics,
-                }
+            forced_reason = _forced_answer_trigger()
+            if forced_reason is None and turn_usage.get("sub_generations", 0) >= self.max_sub_generations:
+                return _abort_sub_budget()
             # --- 取消检查点（迭代边界；token 级检查在 engine 内） ---
             if session.cancel_requested:
                 _exit_audit()
@@ -1485,9 +1568,22 @@ class Orchestrator:
                                 requested=_req_max, clamped_to=guard_cfg.reserve)
             elif "max_tokens" not in call_kwargs:
                 call_kwargs["max_tokens"] = _req_max
+            if forced_reason is not None:
+                # [A2] 强制作答：这次生成不声明任何工具（约束语法同样置空），尾注只留强制作答这一条——
+                # 积压的其它一次性提醒（「继续执行剩余步骤」「重发工具调用」等）与它相互矛盾，且本轮到此为止
+                pending_tail_notes = [FORCED_ANSWER_NOTE]
+                if unresolved_failure:
+                    pending_tail_notes.append(FORCED_ANSWER_FAILURE_NOTE)
+                # 只此一次作答机会：上限直接升到截断恢复那一档（T1-3 的 ESCALATED），仍钳在 generation_reserve
+                # 之内（ceiling = 上限 − reserve 的前提）；已经更高（用户请求 / 已升档）则不降
+                call_kwargs["max_tokens"] = max(int(call_kwargs["max_tokens"]),
+                                                min(ESCALATED_MAX_TOKENS, guard_cfg.reserve))
+                session.set_activity("工具预算已用尽，正在据已有材料作答…")
+                print(f"[Orchestrator] 预算将尽（{forced_reason}）：强制作答生成，不提供工具")
             # prompt 入参只组这一份：护栏量它、生成发它（防分叉，W1）
             prompt_args: Dict[str, Any] = {
-                "session": session, "tools": self._tools_decl_for(session),
+                "session": session,
+                "tools": [] if forced_reason is not None else self._tools_decl_for(session),
                 "task_block": task_block, "tail_notes": pending_tail_notes or None,
                 "enable_thinking": call_kwargs.pop("enable_thinking"),
             }
@@ -1500,7 +1596,9 @@ class Orchestrator:
             })
             provisional_generation = retrieval.unresolved
             result = await self.engine.generate_once(
-                **prompt_args, grammar_tools=self._grammar_tools, **call_kwargs
+                **prompt_args,
+                grammar_tools=[] if forced_reason is not None else self._grammar_tools,
+                **call_kwargs
             )
             pending_tail_notes = []  # 一次性提醒已被本次生成消费，清空（T3-c）
             fresh_metrics = result.get("metrics")
@@ -1525,6 +1623,26 @@ class Orchestrator:
             _stamp_turn_stats()
             if task is not None and task.plan and task.current_step() is not None:
                 task.step_iterations += 1
+
+            # --- [A2] 强制作答的结果：成功即终点，失败即落熔断出口（不重试、不推回） ---
+            if forced_reason is not None:
+                _f_text = result.get("text") or ""
+                if (_f_text.strip() and not result.get("tool_calls")
+                        and not result.get("repetition_guard")):
+                    _f_text = _finalize_answer(_f_text, result.get("thoughts"), session.task_state)
+                    metrics["forced_answer"] = forced_reason
+                    events.emit("turn_forced_answer", session=session.session_id,
+                                reason=forced_reason,
+                                sub_generations=turn_usage.get("sub_generations", 0),
+                                iterations=session.carried_iterations + iterations)
+                    return {"status": _answer_status(_f_text, failure_checked=True, claim_checked=True),
+                            "response": _f_text,
+                            "thoughts": result.get("thoughts"), "metrics": metrics}
+                # 空输出 / 只有思考 / 仍吐工具调用（含解析错误项）/ 复读：产出整体丢弃（不落 history）
+                print(f"[Orchestrator] 强制作答失败（{forced_reason}）：落熔断出口")
+                if forced_reason == "sub_generations":
+                    return _abort_sub_budget()
+                break     # iterations：本次已是最后一次迭代 → 落到下方总迭代熔断出口
 
             # --- 护栏：流式复读（engine 已当场停生成、记日志与 repetition 事件） ---
             # 产出整体丢弃（不落 history，与 runaway 同：KV 前缀下次生成自动裁剪对齐）。
@@ -1594,12 +1712,15 @@ class Orchestrator:
                         session.set_activity("已终止（工具调用参数反复失控）", phase="done")
                         events.emit("turn_abort", session=session.session_id, reason="runaway_call")
                         _exit_audit()
+                        # 说明落进会话（与 A1 同理）：失控产出本就整体丢弃、未进 history，这里不会重复
+                        _msg = _with_retrieval_note(
+                            "多次生成工具调用参数失控（超长复读），已终止本次任务。"
+                            "可以试试：①把需求拆成几件更小的事分别发起；"
+                            "②如果涉及长文本，让我分段处理。")
+                        session.add_assistant_message(content=_msg)
                         return {
                             "status": "warning",
-                            "response": _with_retrieval_note(
-                                "多次生成工具调用参数失控（超长复读），已终止本次任务。"
-                                "可以试试：①把需求拆成几件更小的事分别发起；"
-                                "②如果涉及长文本，让我分段处理。"),
+                            "response": _msg,
                             "thoughts": "System: repeated runaway constrained tool calls; aborted.",
                             "metrics": metrics,
                         }
@@ -1872,12 +1993,15 @@ class Orchestrator:
                     session.set_activity("已终止（工具格式反复解析失败）", phase="done")
                     events.emit("turn_abort", session=session.session_id, reason="parse_loop")
                     _exit_audit()
+                    # 说明落进会话（与 A1 同理）：此前 history 里只有坏调用与解析错误回执，没有说明文字
+                    _msg = _with_retrieval_note(
+                        "多次未能解析要调用的工具格式，已终止本次任务。"
+                        "可以试试：①原样重发一次；②把需求说得更简单具体些；"
+                        "③把任务拆成几个更小的步骤分别提出。")
+                    session.add_assistant_message(content=_msg)
                     return {
                         "status": "warning",
-                        "response": _with_retrieval_note(
-                            "多次未能解析要调用的工具格式，已终止本次任务。"
-                            "可以试试：①原样重发一次；②把需求说得更简单具体些；"
-                            "③把任务拆成几个更小的步骤分别提出。"),
+                        "response": _msg,
                         "thoughts": "System: repeated tool-call parse failures; aborted to avoid a loop.",
                         "metrics": metrics,
                     }
@@ -2054,30 +2178,11 @@ class Orchestrator:
                             "is missing and why.")
                         continue
 
-                session.set_activity("已完成", phase="done")
-                # 落盘视图（W1）：应急压缩桩会截掉观察头部之后的资产链接
-                text = _append_missing_asset_links(
-                    text, session.persistable_messages(turn_start_idx))
-                # ⑤′-1 降级路：云端导师本轮不可用过 → 答复末尾明示「本地作答」，不静默装满血
-                text = _finalize_cloud_degraded(session, metrics, text, append_notice=True)
-                # ⑤′-3：换档建议 / 显式要求但云端不可用 → 收尾确定性提示（用户要自己动手的事）
-                text = _append_upgrade_notices(text, metrics, upgrade_decisions)
-                session.add_assistant_message(content=text, thoughts=thoughts)
-                if task is not None and (task.all_done() or not task.plan):
-                    # W4：弃之前留一份摘要器视图，随本轮记录落盘（摘要器的关键值逐字来源）
-                    # D47-next (b)：纯 [Goal]（无 plan 无便签）不留，记录不盖 task_state
-                    session.last_task_state_render = ("" if task.is_bare_goal()
-                                                      else task.render_for_summary())
-                    # 任务完成即弃：工作过程已沉淀在本轮消息流（blackboard=消息流本身）
-                    session.task_state = None
+                text = _finalize_answer(text, thoughts, task)
                 # [D2 谎报围堵] 推回后仍坚持吞错/零证据声明 → 放行但状态降级 warning
                 # （汇报可疑要在轮次状态上留痕，前端和评测脚本都看得见）
-                status = "success"
-                if unresolved_failure and failure_nudges >= 1:
-                    status = "warning"
-                elif (not mutated_ok_this_turn and fabrication_nudges >= 1
-                      and _ACTION_CLAIM_RE.search(text)):
-                    status = "warning"
+                status = _answer_status(text, failure_checked=failure_nudges >= 1,
+                                        claim_checked=fabrication_nudges >= 1)
                 # 未完成而输出文本 = 向用户提问/汇报障碍，任务跨轮保留，等用户答复继续
                 return {"status": status, "response": text, "thoughts": thoughts, "metrics": metrics}
 
@@ -2110,12 +2215,16 @@ class Orchestrator:
         # 该拆任务还是该少调研（子生成有自己的保险丝,这里只如实附注）。
         _budget_detail = (f"（期间另有子调研生成 {_sub_gens} 次）" if _sub_gens else "")
         _exit_audit()
+        # A1：说明落进会话（turn_runner 落盘/下发只取 persistable_messages）
+        _msg = _with_retrieval_note(
+            f"任务在 {self.max_total_iterations} 次主循环迭代内未能收敛{_budget_detail}，已终止。"
+            "可以试试：①把任务拆成几个更小的目标分别发起；②缩小范围（只处理一部分）；"
+            "③告诉我可以跳过哪些环节。")
+        session.add_assistant_message(content=_msg)
+        session.set_activity("已终止（主循环迭代达上限）", phase="done")
         return {
             "status": "warning",
-            "response": _with_retrieval_note(
-                f"任务在 {self.max_total_iterations} 次主循环迭代内未能收敛{_budget_detail}，已终止。"
-                "可以试试：①把任务拆成几个更小的目标分别发起；②缩小范围（只处理一部分）；"
-                "③告诉我可以跳过哪些环节。"),
+            "response": _msg,
             "thoughts": "System Warning: orchestration loop threshold exceeded.",
             "metrics": metrics,
         }

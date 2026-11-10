@@ -29,8 +29,8 @@ struct SettingsView: View {
     // 每次 body 重算时无绑定的 TabView 会重置回第一页——实机症状即"点击不切页/
     // 切过去又弹回第一页"。@State 存活于重渲染，选中页才稳得住。
     private enum SettingsTab: Hashable, CaseIterable, Identifiable {
-        case connection, notification, permissions, knowledge, apiTools, skills, registrations,
-             sidecar, appearance
+        case connection, notification, permissions, knowledge, apiTools, search, skills,
+             registrations, sidecar, appearance
         var id: Self { self }
         var title: String {
             switch self {
@@ -39,6 +39,7 @@ struct SettingsView: View {
             case .permissions:   return L("权限")
             case .knowledge:     return L("知识库")
             case .apiTools:      return L("API 工具")
+            case .search:        return L("搜索")
             case .skills:        return L("剧本")
             case .registrations: return L("待确认")
             case .sidecar:       return L("执行层")
@@ -52,6 +53,7 @@ struct SettingsView: View {
             case .permissions:   return "hand.raised"
             case .knowledge:     return "books.vertical"
             case .apiTools:      return "wrench.and.screwdriver"
+            case .search:        return "magnifyingglass"
             case .skills:        return "book.closed"
             case .registrations: return "tray.full"
             case .sidecar:       return "gearshape.2"
@@ -104,6 +106,11 @@ struct SettingsView: View {
                         ApiToolsPanelView(embedded: true)
                     } label: {
                         Label(L("API 工具"), systemImage: "wrench.and.screwdriver")
+                    }
+                    NavigationLink {
+                        Form { SearchProvidersSection() }.navigationTitle(L("搜索"))
+                    } label: {
+                        Label(L("搜索"), systemImage: "magnifyingglass")
                     }
                     NavigationLink {
                         SkillsPanelView(embedded: true)
@@ -179,6 +186,9 @@ struct SettingsView: View {
         // 私人 API 工具（声明式工具工厂表单面）：同为全局数据实体，归设置
         case .apiTools:
             ApiToolsPanelView(embedded: true)
+        // 搜索 API 提供方（批 C）：优先于内置搜索，全不可用时后端自动兜底
+        case .search:
+            Form { SearchProvidersSection() }.formStyle(.grouped)
         // 剧本（用户以 /名字 点名的流程提示词）：同为全局数据实体，归设置
         case .skills:
             SkillsPanelView(embedded: true)

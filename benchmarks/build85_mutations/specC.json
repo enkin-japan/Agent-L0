@@ -1,0 +1,237 @@
+[
+ {
+  "name": "C1 API成功后仍落到下一个/SearXNG",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "            return _rank(items, set(cfg.get(\"content_farms\") or []), limit)",
+  "new": "            continue",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C2 不随机打乱候选",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "    _rng.shuffle(out)\n",
+  "new": "    pass\n",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C3 冷却边界 < 改 <=",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "        return bool(rec) and now < float(rec[\"until\"])",
+  "new": "        return bool(rec) and now <= float(rec[\"until\"])",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C4 冷却中的提供方不跳过",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "        if not p.get(\"enabled\") or cls is None or _cooling(p[\"id\"], now):",
+  "new": "        if not p.get(\"enabled\") or cls is None:",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C5 auth 冷却按普通冷却算",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "        key, default = \"search_api_auth_cooldown\", 600",
+  "new": "        key, default = \"search_api_cooldown\", 60",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C6 合法0条当失败降级",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "        if kind is None:\n            search_providers.note_ok(entry[\"id\"])",
+  "new": "        if kind is None and items:\n            search_providers.note_ok(entry[\"id\"])",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C7 Brave 省略 web 块不算合法0条",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "        elif web is None and not news and data.get(\"type\") == \"search\":",
+  "new": "        elif False:",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C8 入口查询不看可用API（只看SearXNG闩锁）",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "    if search_providers.api_available():\n        return None",
+  "new": "    if False:\n        return None",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C9 注册判断回到只看SearXNG",
+  "file": "backend/framework/mcp/tools/web_research.py",
+  "old": "                if not search_providers.has_configured_api():",
+  "new": "                if True:",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C10 注册判断不看密钥",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "    return any(p.get(\"enabled\") and p[\"type\"] in PROVIDER_TYPES and has_secret(p[\"id\"])",
+  "new": "    return any(p.get(\"enabled\") and p[\"type\"] in PROVIDER_TYPES",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C11 非原子写（替换前先写目标文件）",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "        os.chmod(tmp, 0o600)\n        os.replace(tmp, path)",
+  "new": "        os.chmod(tmp, 0o600)\n        path.write_bytes(payload)\n        os.replace(tmp, path)",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C12 存储文件 0644",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "        os.chmod(tmp, 0o600)\n        os.replace(tmp, path)",
+  "new": "        os.chmod(tmp, 0o644)\n        os.replace(tmp, path)",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C13 DELETE 端点去掉 require_owner_or_paired",
+  "file": "backend/framework/api/routes.py",
+  "old": "@router.delete(\"/api/v1/search-providers/{provider_id}\", status_code=204,\n               dependencies=[Depends(require_owner_or_paired)])",
+  "new": "@router.delete(\"/api/v1/search-providers/{provider_id}\", status_code=204)",
+  "tests": [
+   "tests/test_search_providers_routes.py"
+  ]
+ },
+ {
+  "name": "C14 适配器把原异常挂在链上（脱敏失效）",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "        except Exception:      # 超时 / 连接错 / 其它请求失败：原文可能含 URL 与头，一概不留\n            kind = \"network\"",
+  "new": "        except Exception as e:\n            raise ProviderUnavailable(\"network\") from e",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C15 422 回显请求体（FastAPI 缺省口径）",
+  "file": "backend/framework/api/routes.py",
+  "old": "        raise HTTPException(status_code=422, detail=errors)",
+  "new": "        raise HTTPException(status_code=422, detail=json.loads(e.json()))",
+  "tests": [
+   "tests/test_search_providers_routes.py"
+  ]
+ },
+ {
+  "name": "C16 Tavily 433 不算 quota",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "        if status in (432, 433):",
+  "new": "        if status in (432,):",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C17 Retry-After 不与缺省取 max",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "        base = max(base, min(float(retry_after), RETRY_AFTER_CAP))",
+  "new": "        base = min(float(retry_after), RETRY_AFTER_CAP)",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C18 Retry-After 不设上限",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "        base = max(base, min(float(retry_after), RETRY_AFTER_CAP))",
+  "new": "        base = max(base, float(retry_after))",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C19 Tavily 密钥进 body",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "            \"include_answer\": False, \"include_raw_content\": False,\n        }",
+  "new": "            \"include_answer\": False, \"include_raw_content\": False, \"api_key\": key,\n        }",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C20 全链不可用摘要丢掉 API 部分",
+  "file": "backend/framework/agents/web_tools.py",
+  "old": "            return _unavailable_result(\", \".join(notes + [down]))",
+  "new": "            return res",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C21 F1 删除顺序换回先落盘后清钥",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "        _factory().write_secret(env_name_for(provider_id), \"\")\n        _save(rest)",
+  "new": "        _save(rest)\n        _factory().write_secret(env_name_for(provider_id), \"\")",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C22 F2 行界字符正则去掉 C1 与 U+2028/2029",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "_CTRL_RE = re.compile(\"[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]\")",
+  "new": "_CTRL_RE = re.compile(\"[\\x00-\\x1f\\x7f]\")",
+  "tests": [
+   "tests/test_search_providers.py",
+   "tests/test_search_providers_routes.py"
+  ]
+ },
+ {
+  "name": "C23 F3 允许跟随重定向",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "            resp = fn(url, timeout=timeout, allow_redirects=False, **kwargs)",
+  "new": "            resp = fn(url, timeout=timeout, **kwargs)",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C24 F4 损坏文件不备份直接覆盖",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "    _backup_corrupt(path)\n",
+  "new": "    pass\n",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C25 F5 API 超时回到 SearXNG 的 timeout",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "                          _api_timeout(cfg), params=params,",
+  "new": "                          float(cfg.get(\"timeout\", 15)), params=params,",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ },
+ {
+  "name": "C26 F6 patch 先写钥后落盘",
+  "file": "backend/framework/agents/search_providers.py",
+  "old": "                _save(providers)\n            if secret is not None:\n                _factory().write_secret(env_name_for(provider_id), secret)",
+  "new": "                pass\n            if secret is not None:\n                _factory().write_secret(env_name_for(provider_id), secret)\n            if enabled is not None or label is not None:\n                _save(providers)",
+  "tests": [
+   "tests/test_search_providers.py"
+  ]
+ }
+]

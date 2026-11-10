@@ -5,7 +5,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, UploadFile, File, Form
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from .schemas import (
     ChatResponse,
@@ -14,6 +14,11 @@ from .schemas import (
     ApiToolTestRequest,
     ApprovalPolicyResponse,
     ApprovalRequest,
+    SearchProviderCreateRequest,
+    SearchProviderItem,
+    SearchProviderPatchRequest,
+    SearchProvidersResponse,
+    SearchProviderTestResponse,
     RetryRequest,
     CancelResponse,
     DeleteSessionResponse,
@@ -82,6 +87,12 @@ _LOCAL_READ_ROUTES = {
     # 本集合的含义是「首次装配前即可用」，不是「只读」：审批策略是本地状态，设置页在
     # 算力就绪前也要能读写（PATCH 另挂 require_owner_or_paired）
     ("GET", "/api/v1/approval-policy"), ("PATCH", "/api/v1/approval-policy"),
+    # 搜索 API 提供方（批 C）：同为本地状态（数据根文件 + 0600 密钥），设置页在算力就绪前
+    # 也要能管；写端点另挂 require_owner_or_paired。test 只打第三方搜索 API，不碰算力端。
+    ("GET", "/api/v1/search-providers"), ("POST", "/api/v1/search-providers"),
+    ("PATCH", "/api/v1/search-providers/{provider_id}"),
+    ("DELETE", "/api/v1/search-providers/{provider_id}"),
+    ("POST", "/api/v1/search-providers/{provider_id}/test"),
 }
 _EXECUTION_ROUTES = {
     ("POST", "/api/v1/chat/{session_id}"), ("POST", "/api/v1/chat/{session_id}/turns"),
@@ -183,6 +194,119 @@ async def patch_approval_policy(request: Request, body: Any = Body(...)):
           f"{getattr(request.state, 'device_id', None) or 'local'} "
           f"read={policy.read} write={policy.write}")
     return _approval_policy_payload(request, policy)
+
+
+# ---------------- 搜索 API 提供方（build 85 批 C，设置页「搜索」） ----------------
+# 密钥红线：请求体里的 secret 只交给 search_providers → api_tool_factory.write_secret；
+# 响应模型没有 secret 字段；日志只记 id / type / 操作者；校验失败的 422 不回显输入
+# （FastAPI 缺省的 422 会把整个请求体当 input 回传，密钥会顺着错误响应漏出去）。
+
+def _sp():
+    from ..agents import search_providers
+    return search_providers
+
+
+def _validated(model, body: Any):
+    from pydantic import ValidationError
+    try:
+        return model.model_validate(body)
+    except ValidationError as e:
+        errors = [{"loc": list(err.get("loc", ())), "msg": err.get("msg", ""),
+                   "type": err.get("type", "")}
+                  for err in e.errors(include_url=False, include_context=False,
+                                      include_input=False)]
+        raise HTTPException(status_code=422, detail=errors)
+
+
+def _sp_actor(request: Request) -> str:
+    return f"device={getattr(request.state, 'device_id', None) or 'local'}"
+
+
+def _sp_known(provider_id: str):
+    """路径 id 不合规则或不存在 → 404（id 只含 [a-z0-9-]，不会走到文件系统之外）。"""
+    sp = _sp()
+    try:
+        sp.env_name_for(provider_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="search provider not found")
+    entry = sp.get_provider(provider_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="search provider not found")
+    return entry
+
+
+def _sp_save_failed(e: BaseException):
+    print(f"[SearchProviders] ⚠️ 落盘失败: {type(e).__name__}")
+    return HTTPException(status_code=503, detail={"reason": "search_providers_save_failed"})
+
+
+@router.get("/api/v1/search-providers", response_model=SearchProvidersResponse)
+async def list_search_providers():
+    """已添加的搜索 API（密钥只回 has_secret）+ 可选类型 + 兜底（内置 SearXNG）。"""
+    return await asyncio.to_thread(_sp().listing)
+
+
+@router.post("/api/v1/search-providers", status_code=201, response_model=SearchProviderItem,
+             dependencies=[Depends(require_owner_or_paired)])
+async def add_search_provider(request: Request, body: Any = Body(...)):
+    """新增 {type, label?, secret}：id 服务端生成；类型未知 / 密钥为空或过长 / 标签过长 → 422。"""
+    req = _validated(SearchProviderCreateRequest, body)
+    try:
+        item = await asyncio.to_thread(_sp().add_provider, req.type, req.label, req.secret)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except OSError as e:
+        raise _sp_save_failed(e)
+    print(f"[SearchProviders] added id={item['id']} type={item['type']} by {_sp_actor(request)}")
+    return item
+
+
+@router.patch("/api/v1/search-providers/{provider_id}", response_model=SearchProviderItem,
+              dependencies=[Depends(require_owner_or_paired)])
+async def patch_search_provider(provider_id: str, request: Request, body: Any = Body(...)):
+    """部分更新 {enabled?, label?, secret?}：下一次搜索即生效（不重启）。"""
+    _sp_known(provider_id)
+    req = _validated(SearchProviderPatchRequest, body)
+    try:
+        item = await asyncio.to_thread(_sp().patch_provider, provider_id,
+                                       req.model_dump(exclude_unset=True))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="search provider not found")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except OSError as e:
+        raise _sp_save_failed(e)
+    print(f"[SearchProviders] patched id={item['id']} type={item['type']} by {_sp_actor(request)}")
+    return item
+
+
+@router.delete("/api/v1/search-providers/{provider_id}", status_code=204,
+               dependencies=[Depends(require_owner_or_paired)])
+async def delete_search_provider(provider_id: str, request: Request):
+    """删除：列表去掉、密钥清空、冷却 / 状态清掉。"""
+    entry = _sp_known(provider_id)
+    try:
+        removed = await asyncio.to_thread(_sp().delete_provider, provider_id)
+    except OSError as e:
+        raise _sp_save_failed(e)
+    if not removed:
+        raise HTTPException(status_code=404, detail="search provider not found")
+    print(f"[SearchProviders] deleted id={provider_id} type={entry['type']} by {_sp_actor(request)}")
+    return Response(status_code=204)
+
+
+@router.post("/api/v1/search-providers/{provider_id}/test",
+             response_model=SearchProviderTestResponse,
+             dependencies=[Depends(require_owner_or_paired)])
+async def test_search_provider(provider_id: str, request: Request):
+    """用该条目发一次常青查询（消耗一次额度）；只更新它的冷却 / 最近状态，不回显密钥。"""
+    _sp_known(provider_id)
+    from ..utils.config_loader import load_section
+    cfg = load_section("web_search")
+    try:
+        return await asyncio.to_thread(_sp().run_test, provider_id, cfg)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="search provider not found")
 
 
 @router.get("/api/v1/skills", response_model=SkillsResponse)

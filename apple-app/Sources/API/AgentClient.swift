@@ -840,6 +840,51 @@ final class AgentClient {
         try await send(try request("PATCH", "/api/v1/approval-policy", json: patch, timeout: 10))
     }
 
+    // MARK: - 搜索 API 提供方（build 85 批 C；设置页「搜索」。旧后端没有该路由 → 404 抛出）
+    // 新增回 201、删除回 204——通用 send 只认 200，这组走 sendAccepting。
+    // 密钥只在 create / update 的请求体里出现一次；错误详情取自服务端，服务端不回显密钥。
+
+    func searchProviders() async throws -> SearchProvidersResponse {
+        try await send(try request("GET", "/api/v1/search-providers", timeout: 10))
+    }
+
+    func addSearchProvider(_ body: SearchProviderCreateBody) async throws -> SearchProvider {
+        let data = try await sendAccepting([201], try request("POST", "/api/v1/search-providers",
+                                                               json: body, timeout: 15))
+        return try JSONDecoder().decode(SearchProvider.self, from: data)
+    }
+
+    func updateSearchProvider(id: String, _ patch: SearchProviderPatch) async throws -> SearchProvider {
+        try await send(try request("PATCH", "/api/v1/search-providers/\(Self.pathSegment(id))",
+                                   json: patch, timeout: 15))
+    }
+
+    func deleteSearchProvider(id: String) async throws {
+        _ = try await sendAccepting([204, 200], try request(
+            "DELETE", "/api/v1/search-providers/\(Self.pathSegment(id))", timeout: 15))
+    }
+
+    /// 用该条目真实发一次常青查询（消耗一次额度）；搜索 API 超时 15 s 量级，留足余量。
+    func testSearchProvider(id: String) async throws -> SearchProviderTestResult {
+        try await send(try request("POST", "/api/v1/search-providers/\(Self.pathSegment(id))/test",
+                                   timeout: 45))
+    }
+
+    /// 提供方 id 由后端生成（[a-z0-9-]）；其它字符一律百分号编码，拼不出别的路径。
+    private static let idCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789-")
+    private static func pathSegment(_ raw: String) -> String {
+        raw.addingPercentEncoding(withAllowedCharacters: idCharacters) ?? ""
+    }
+
+    private func sendAccepting(_ codes: Set<Int>, _ req: URLRequest) async throws -> Data {
+        let (data, response) = try await session.data(for: req)
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard codes.contains(code) else {
+            throw AgentError.http(code, String(data: data.prefix(300), encoding: .utf8) ?? "")
+        }
+        return data
+    }
+
     func skills() async throws -> [SkillItem] {
         let res: SkillsResponse = try await send(try request("GET", "/api/v1/skills"))
         return res.skills

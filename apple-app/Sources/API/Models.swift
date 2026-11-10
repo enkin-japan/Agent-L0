@@ -753,3 +753,63 @@ struct ApprovalPolicyPatch: Encodable {
     var read: String?
     var write: String?
 }
+
+// ---------- 搜索 API 提供方（build 85 批 C；backend /api/v1/search-providers） ----------
+
+/// 可添加的提供方类型（后端类型表权威：brave / tavily）。
+struct SearchProviderType: Decodable, Equatable, Identifiable {
+    let type: String
+    let label: String
+    var id: String { type }
+}
+
+/// 一条已添加的搜索 API。密钥永不回传，只有 hasSecret（已保存 / 未保存）。
+/// 界面文案（L10n）在 Views/SearchProviderText.swift——本文件被不带 L10n 的单编测试编译。
+struct SearchProvider: Decodable, Equatable, Identifiable {
+    let id: String
+    let type: String
+    let label: String
+    let enabled: Bool
+    let hasSecret: Bool
+    let status: String
+    let statusAt: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id, type, label, enabled, status
+        case hasSecret = "has_secret"
+        case statusAt = "status_at"
+    }
+
+    /// 列表标题：类型名 + 用户标签（标签可空）。
+    func title(types: [SearchProviderType]) -> String {
+        let name = types.first { $0.type == type }?.label ?? type
+        return label.isEmpty ? name : "\(name) · \(label)"
+    }
+}
+
+struct SearchProvidersResponse: Decodable, Equatable {
+    let types: [SearchProviderType]
+    let providers: [SearchProvider]
+    let fallback: String?
+}
+
+/// 新增体：密钥实值只随这一次请求发往后端（后端写 0600 文件），客户端不落盘。
+struct SearchProviderCreateBody: Encodable {
+    var type: String
+    var label: String?
+    var secret: String
+}
+
+/// PATCH 体：只带改动的键（nil 不编码）。
+struct SearchProviderPatch: Encodable {
+    var enabled: Bool?
+    var label: String?
+    var secret: String?
+}
+
+/// 「测试」结果：kind ∈ ok | auth | rate_limit | quota | http | network | bad_response。
+struct SearchProviderTestResult: Decodable, Equatable {
+    let ok: Bool
+    let kind: String
+    let results: Int
+}

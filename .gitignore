@@ -48,6 +48,8 @@ backend/registrations/
 backend/ui_state.json
 # 审批策略旋钮（build 78，data_dir()/approval_policy.json，0600）
 backend/approval_policy.json
+# 搜索 API 提供方的非密配置（build 85，data_dir()/search_providers.json，0600；密钥在 api_tools/.secrets.env）
+backend/search_providers.json
 backend/guardrail_events.jsonl
 # UI 添加的私人 API 声明 + 密钥文件（dev 模式 data_dir=backend/；仓库根 api_tools/ 是手写声明，照常入库）
 backend/api_tools/

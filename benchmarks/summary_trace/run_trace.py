@@ -203,6 +203,9 @@ def _cfg(ctx: "K.OrchContext", iterations: int) -> Dict[str, Any]:
     """config.yaml agent 段 + W1/W2/goal-verify 关（本评估只测摘要）+ 迭代熔断覆盖。"""
     cfg, _over = OT.agent_cfg(ctx.agent_base, guard=False, step=False, goal_verify=False)
     cfg["max_total_iterations"] = int(iterations)    # agent 段缺该键时 agent_cfg 不覆盖，这里显式钉
+    # build 85 起编排层在最后一次迭代 / 子生成余量不足时做无工具的强制作答；本评估拿 max_total_iterations
+    # 当「带工具跑满 N 次即截断」的截断点（turn 1 末次 remember 必须真执行），故关掉，协议与 D45 批同口径
+    cfg["forced_answer"] = False
     return cfg
 
 

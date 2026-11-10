@@ -254,6 +254,54 @@ class ApiToolPatchRequest(BaseModel):
     secret: Optional[str] = None
 
 
+class SearchProviderCreateRequest(BaseModel):
+    """搜索 API 提供方新增（设置页「搜索」）。secret 是密钥**实值**——只经
+    api_tool_factory.write_secret 写数据根 0600 secrets 文件，绝不入 search_providers.json、
+    不回传、不进日志。路由按原始 Body 手动校验（422 不回显输入，见 routes._validated）。"""
+    model_config = {"extra": "forbid"}
+    type: str
+    label: Optional[str] = Field(default=None, max_length=64)
+    secret: str = Field(min_length=1, max_length=512)
+
+
+class SearchProviderPatchRequest(BaseModel):
+    """部分更新：只改给出的字段（null = 不变）；未知键 → 422。secret 同上，只写不读。"""
+    model_config = {"extra": "forbid"}
+    enabled: Optional[bool] = None
+    label: Optional[str] = Field(default=None, max_length=64)
+    secret: Optional[str] = Field(default=None, min_length=1, max_length=512)
+
+
+class SearchProviderItem(BaseModel):
+    """对外条目：密钥只以 has_secret 布尔出现（无值、无变量名、无长度）。
+    status ∈ ok | rate_limit | auth_error | quota | error | unused；status_at = 墙钟秒。"""
+    id: str
+    type: str
+    label: str
+    enabled: bool
+    has_secret: bool
+    status: str
+    status_at: Optional[float] = None
+
+
+class SearchProviderType(BaseModel):
+    type: str
+    label: str
+
+
+class SearchProvidersResponse(BaseModel):
+    types: List[SearchProviderType]
+    providers: List[SearchProviderItem]
+    fallback: str
+
+
+class SearchProviderTestResponse(BaseModel):
+    """kind ∈ ok | auth | rate_limit | quota | http | network | bad_response；results = 条数。"""
+    ok: bool
+    kind: str
+    results: int
+
+
 class PushRegisterRequest(BaseModel):
     """
     推送设备注册/更新（upsert）：device_id 是 app 生成并持久化的稳定标识；

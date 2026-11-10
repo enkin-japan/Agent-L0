@@ -46,6 +46,24 @@ def _isolate_approval_policy():
     approval_policy.replace(approval_policy.DEFAULT)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_search_latch(tmp_path):
+    """搜索不可用闩锁（含确认查询的健康时间戳）是进程级状态：按测试复位，
+    防一个测试上的闩漏进另一个文件，让 web_research 入口无端短路。"""
+    from framework.agents import search_providers, web_tools
+    web_tools.reset_search_latch()
+    # 搜索 API 提供方（批 C）：数据根钉到每个测试自己的空临时目录 + 冷却 / 状态清零——
+    # dev 数据根（backend/）里用户添加过的提供方不许漏进金测试（否则「没配 API」的
+    # 批 B 回归会被真实配置改道，甚至真发出付费请求）。
+    search_providers.reset_state()
+    old_root = search_providers._root_override
+    search_providers._root_override = tmp_path / "search-providers-isolated"
+    yield
+    search_providers._root_override = old_root
+    search_providers.reset_state()
+    web_tools.reset_search_latch()
+
+
 @pytest.fixture()
 def chart_caveat_live(monkeypatch):
     """B1 `vision_chart_numeric` 在 D27（2026-10-31）后降为 pending（26b-4bit 口径，待对新生产档

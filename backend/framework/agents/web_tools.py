@@ -1,5 +1,5 @@
 """
-沙箱内部工具：L1 搜索（SearXNG）+ L2 抓取 + L3 清洗/反投毒 + L4 信任边界。
+沙箱内部工具：L1 搜索（搜索 API 优先、SearXNG 兜底）+ L2 抓取 + L3 清洗/反投毒 + L4 信任边界。
 
 这些函数只被 research_sandbox 的受限循环调用，不是 BaseTool、不进插件目录、主 Agent 看不到。
 反投毒是这里的核心价值：网页正文永远是「不可信资料」，抓取前先净化（删隐藏元素/脚本/零宽字符）、
@@ -138,44 +138,236 @@ def _domain_score(url: str, content_farms: set) -> float:
 
 
 # ==========================================================================
-# L1 搜索：SearXNG（JSON 输出）
+# L1 搜索：搜索 API（用户在设置页添加，优先、随机）→ SearXNG（JSON 输出，兜底）
 # ==========================================================================
 _TIME_RANGES = ("day", "week", "month", "year")
 _CATEGORIES = ("general", "news")
 
+# ---------- 搜索不可用：判定 + 进程内短时闩锁（build 85 B3） ----------
+# 现场：上游引擎被限流时 SearXNG 照样 200 + 0 条结果（失联名单在 unresponsive_engines），
+# 旧实现把它当「没搜到」，子沙箱照常跑满 6 步 + 1 次强制摘要 = 7 次子生成白烧几十秒；
+# 且主代理每次重调 web_research 都再烧一遍。判为「不可用」后返回可机器识别的标记，
+# 并在 TTL 内对后续搜索直接短路（不再请求 SearXNG），任一次有结果的搜索即清闩。
+#
+# 判据（第一道审查后改写）：
+#  · 请求失败（超时 / 连接错 / 其它异常 / 非 2xx / 不是 JSON 对象）→ 直接不可用、上闩。
+#  · 0 条且 unresponsive_engines 非空 → **待确认**：SearXNG 会把被挂起的引擎（CAPTCHA 挂起
+#    一小时起）在之后每次查询里都列进失联名单，单凭它判不可用会把合法的冷门 0 条查询误判、
+#    并把全进程闩锁。故用同一出口再发一次常青查询：有结果 → 引擎活着、原查询确实没结果
+#    （照旧「没搜到」、不上闩，记健康时间戳，TTL 内同类情形不再重复确认）；仍 0 条 / 失败
+#    → 不可用、上闩。
+#  · 0 条且无失联（空 / 缺失 / null）→ 关键词问题，行为不变。
+#  · 晚到失败不翻案：一条在最近一次成功搜索**之前**发出、之后才失败返回的请求不重新上闩。
+SEARCH_UNAVAILABLE = "SEARCH_UNAVAILABLE:"
+# 确认查询：与 web_research 的 drift canary 同一条常青查询（任一引擎活着都必有结果）
+SEARCH_CONFIRM_QUERY = "python programming language"
+_SEARCH_UNAVAILABLE_TTL = 60.0          # 秒；config web_search.search_unavailable_ttl 可覆写
+_clock = time.monotonic                 # 闩锁时钟（测试 monkeypatch 本属性，不碰全局 time）
+_SEARCH_LATCH_LOCK = threading.Lock()
+_search_latch: Dict[str, object] = {
+    "until": 0.0,           # 闩锁到期时刻（_clock 读数）
+    "engines": "",          # 闩锁期内回放的失联摘要
+    "healthy_until": 0.0,   # 确认查询证实引擎健康的有效期（期内 0 条+失联不再确认）
+    "last_ok_start": None,  # 最近一次成功搜索的**发出**时刻（晚到失败据此不翻案）
+}
 
-def web_search(query: str, cfg: dict, n: Optional[int] = None,
-               time_range: Optional[str] = None, category: Optional[str] = None) -> List[Dict]:
-    """返回候选网页列表（去重 + 信誉降序）。仅元数据与摘要，不抓正文。
-    time_range/category 由沙箱模型按问题时效性选择（SearXNG 原生支持）；非法值静默回落默认。
-    """
-    base = cfg.get("searxng_url", "http://127.0.0.1:8080").rstrip("/")
-    timeout = int(cfg.get("timeout", 15))
-    limit = int(n or cfg.get("max_results", 8))
-    farms = set(cfg.get("content_farms") or [])
-    engines = cfg.get("engines") or []
 
-    params = {"q": query, "format": "json",
-              "categories": category if category in _CATEGORIES else "general"}
-    if time_range in _TIME_RANGES:
-        params["time_range"] = time_range
-    if engines:
-        params["engines"] = ",".join(engines)
+def reset_search_latch() -> None:
+    """清空搜索不可用闩锁与健康时间戳（测试复位用；生产路径由「搜索成功」自然清闩）。"""
+    with _SEARCH_LATCH_LOCK:
+        _search_latch["until"] = 0.0
+        _search_latch["engines"] = ""
+        _search_latch["healthy_until"] = 0.0
+        _search_latch["last_ok_start"] = None
+
+
+def _searxng_latched() -> Optional[str]:
+    """SearXNG 这一层的闩锁生效中 → 返回失联引擎摘要（名字 + 简短原因）；否则 None。"""
+    with _SEARCH_LATCH_LOCK:
+        if _clock() < float(_search_latch["until"]):
+            return str(_search_latch["engines"]) or "unknown"
+        return None
+
+
+def search_unavailable_engines() -> Optional[str]:
+    """**整条搜索链**此刻是否不可用（web_research 入口短路用）：SearXNG 闩锁生效 ∧ 没有一个
+    「已启用 ∧ 有密钥 ∧ 不在冷却」的搜索 API（批 C）。不可用 → 摘要（冷却中的 API 类型与
+    kind + SearXNG 失联名单）；否则 None。SearXNG 未上闩时不读提供方文件。"""
+    latched = _searxng_latched()
+    if latched is None:
+        return None
+    from . import search_providers
+    if search_providers.api_available():
+        return None
+    notes = search_providers.unavailable_notes()
+    return ", ".join(notes + [latched]) if notes else latched
+
+
+def _latch_ttl(cfg: dict) -> float:
+    try:
+        return float(cfg.get("search_unavailable_ttl", _SEARCH_UNAVAILABLE_TTL))
+    except (TypeError, ValueError):
+        return _SEARCH_UNAVAILABLE_TTL
+
+
+def _latch_search_unavailable(engines: str, cfg: dict, started: float) -> None:
+    """上闩——除非这条失败的请求发出得比最近一次成功搜索还早（晚到失败不翻案）。"""
+    ttl = _latch_ttl(cfg)
+    with _SEARCH_LATCH_LOCK:
+        last_ok = _search_latch["last_ok_start"]
+        if last_ok is not None and started < float(last_ok):
+            return
+        _search_latch["until"] = _clock() + ttl
+        _search_latch["engines"] = engines
+        _search_latch["healthy_until"] = 0.0
+
+
+def _note_search_ok(started: float) -> None:
+    """一次有结果的搜索（含确认查询）：清闩，并记下它的发出时刻。"""
+    with _SEARCH_LATCH_LOCK:
+        _search_latch["until"] = 0.0
+        _search_latch["engines"] = ""
+        last_ok = _search_latch["last_ok_start"]
+        if last_ok is None or started > float(last_ok):
+            _search_latch["last_ok_start"] = started
+
+
+def _mark_healthy(cfg: dict) -> None:
+    with _SEARCH_LATCH_LOCK:
+        _search_latch["healthy_until"] = _clock() + _latch_ttl(cfg)
+
+
+def _recently_confirmed_healthy() -> bool:
+    with _SEARCH_LATCH_LOCK:
+        return _clock() < float(_search_latch["healthy_until"])
+
+
+def _unavailable_result(engines: str) -> List[Dict]:
+    """不可用标记（web_search 的返回形态与原错误路同构：单元素 error 列表）。
+    search_unavailable 键供沙箱机器识别；error 文本以 SEARCH_UNAVAILABLE 常量开头。"""
+    return [{"error": (f"{SEARCH_UNAVAILABLE} web search is temporarily unavailable (search "
+                       f"engines not responding: {engines}). Answer from the material you "
+                       "already have."),
+             "search_unavailable": engines}]
+
+
+def search_unavailable_names(results) -> Optional[str]:
+    """web_search 的返回是否为不可用标记；是则返回失联引擎摘要，否则 None。"""
+    if (isinstance(results, list) and len(results) == 1 and isinstance(results[0], dict)
+            and results[0].get("search_unavailable")
+            and str(results[0].get("error", "")).startswith(SEARCH_UNAVAILABLE)):
+        return str(results[0]["search_unavailable"])
+    return None
+
+
+_MAX_ENGINE_NOTES = 6
+
+
+def _summarize_unresponsive(items) -> str:
+    """SearXNG 的 unresponsive_engines（[[name, reason], ...]）→ 「google (timeout), ...」。
+    只留引擎名与简短原因词：名字限字母数字/空格/_-，原因只取前 4 个纯字母词——
+    地址、端口、路径、堆栈里的数字与符号一律滤掉，不会顺着标记流进模型上下文。"""
+    notes: List[str] = []
+    for it in items if isinstance(items, (list, tuple)) else []:
+        if isinstance(it, (list, tuple)):
+            name, reason = (it[0] if it else ""), (it[1] if len(it) > 1 else "")
+        elif isinstance(it, dict):
+            name, reason = it.get("engine") or it.get("name") or "", it.get("reason") or ""
+        else:
+            name, reason = it, ""
+        name = re.sub(r"[^A-Za-z0-9 _-]", "", str(name)).strip()[:32] or "unknown"
+        reason = " ".join(re.findall(r"[A-Za-z]+", str(reason))[:4])[:40]
+        note = f"{name} ({reason})" if reason else name
+        if note not in notes:
+            notes.append(note)
+        if len(notes) >= _MAX_ENGINE_NOTES:
+            break
+    return ", ".join(notes) or "unknown"
+
+
+def _searx_query(base: str, params: dict, timeout: int) -> tuple:
+    """发一次 SearXNG 请求（唯一网络出口）。返回 (data|None, 失败原因|None)。
+    原因只给类别词：异常文本里带 SearXNG 地址与端口，不得进标记。
+    results 为 null / 缺失按空列表处理（G7）；不是列表才算非法响应。"""
     try:
         r = _session().get(f"{base}/search", params=params,
                            headers={"User-Agent": UA}, timeout=timeout)
-        r.raise_for_status()
-        results = r.json().get("results", [])
-    except Exception as e:
-        return [{"error": f"SearXNG search failed: {e}"}]
+    except requests.exceptions.Timeout:
+        return None, "searxng (timeout)"
+    except requests.exceptions.ConnectionError:
+        return None, "searxng (connection error)"
+    except Exception:
+        return None, "searxng (request failed)"
+    status = getattr(r, "status_code", 0)
+    if not isinstance(status, int) or not 200 <= status < 300:
+        return None, f"searxng (HTTP {status if isinstance(status, int) else '?'})"
+    try:
+        data = r.json()
+    except Exception:
+        return None, "searxng (invalid response)"
+    if not isinstance(data, dict):
+        return None, "searxng (invalid response)"
+    if data.get("results") is None:
+        data = {**data, "results": []}
+    if not isinstance(data["results"], list):
+        return None, "searxng (invalid response)"
+    return data, None
 
+
+def web_search(query: str, cfg: dict, n: Optional[int] = None,
+               time_range: Optional[str] = None, category: Optional[str] = None) -> List[Dict]:
+    """搜索链（批 C）：返回候选网页列表（去重 + 信誉降序）。仅元数据与摘要，不抓正文。
+
+    1. 候选 API = 已启用 ∧ 有密钥 ∧ 不在冷却，每次随机打乱；依次尝试，成功（含合法 0 条）
+       立即返回、**不请求 SearXNG**；失败 → 该提供方进冷却，试下一个。
+    2. 没有可用 API（未配置 / 停用 / 冷却 / 全败）→ 内置 SearXNG（批 B 的不可用判定、确认查询、
+       闩锁原样，属 SearXNG 这一层自己的状态）。
+    3. 本次没有 API 成功 ∧ SearXNG 不可用 → SEARCH_UNAVAILABLE 标记（摘要带 API 类型与 kind）。
+    密钥只交给适配器放进请求头；这里经手的只有 kind。"""
+    from . import search_providers
+    limit = int(n or cfg.get("max_results", 8))
+    api_notes: List[str] = []
+    for entry, adapter, key in search_providers.candidates():
+        kind, retry_after, items = None, None, None
+        try:
+            items = adapter().search(key, query, cfg, n=n, time_range=time_range,
+                                     category=category)
+        except search_providers.ProviderUnavailable as e:
+            kind, retry_after = e.kind, e.retry_after
+        except Exception:          # 适配器自身的意外错误：同样只记类别，不留原文
+            kind = "bad_response"
+        if kind is None:
+            search_providers.note_ok(entry["id"])
+            return _rank(items, set(cfg.get("content_farms") or []), limit)
+        search_providers.note_failure(entry["id"], kind, cfg, retry_after)
+        note = f"{entry['type']}-api ({kind})"
+        if note not in api_notes:
+            api_notes.append(note)
+
+    res = _searxng_search(query, cfg, n, time_range, category)
+    down = search_unavailable_names(res)
+    if down is not None:
+        notes = list(api_notes)
+        for note in search_providers.unavailable_notes():
+            if note not in notes:
+                notes.append(note)
+        if notes:
+            return _unavailable_result(", ".join(notes + [down]))
+    return res
+
+
+def _rank(results: list, farms: set, limit: int) -> List[Dict]:
+    """原始条目（title / url / content / engine）→ 去重 + 信誉混合打分 + 截 limit。
+    SearXNG 与搜索 API 两条路径共用这一套（排序位次 + 域名信誉，内容农场恒沉底）。"""
     seen, out = set(), []
     for idx, x in enumerate(results):
+        if not isinstance(x, dict):
+            continue
         url = x.get("url")
         if not url or url in seen:
             continue
         seen.add(url)
-        # 排序分 = 域名信誉与引擎相关性（SearXNG 返回序）的混合：纯信誉排序会让
+        # 排序分 = 域名信誉与引擎相关性（返回序）的混合：纯信誉排序会让
         # 高信誉但离题的页（如无关的大学页面）压过真正相关的结果。
         # 内容农场不参与混合，恒沉底。
         tier = _domain_score(url, farms)
@@ -190,6 +382,59 @@ def web_search(query: str, cfg: dict, n: Optional[int] = None,
         })
     out.sort(key=lambda d: d["score"], reverse=True)
     return out[:limit]
+
+
+def _searxng_search(query: str, cfg: dict, n: Optional[int] = None,
+                    time_range: Optional[str] = None, category: Optional[str] = None) -> List[Dict]:
+    """内置 SearXNG 一层（批 B 判定原样）。
+    time_range/category 由沙箱模型按问题时效性选择（SearXNG 原生支持）；非法值静默回落默认。
+    """
+    base = cfg.get("searxng_url", "http://127.0.0.1:8080").rstrip("/")
+    timeout = int(cfg.get("timeout", 15))
+    limit = int(n or cfg.get("max_results", 8))
+    farms = set(cfg.get("content_farms") or [])
+    engines = cfg.get("engines") or []
+
+    params = {"q": query, "format": "json",
+              "categories": category if category in _CATEGORIES else "general"}
+    if time_range in _TIME_RANGES:
+        params["time_range"] = time_range
+    if engines:
+        params["engines"] = ",".join(engines)
+    # 闩锁生效：TTL 内不再请求 SearXNG，直接回同一标记（省掉注定失败的往返与子生成）
+    down = _searxng_latched()
+    if down is not None:
+        return _unavailable_result(down)
+
+    started = _clock()
+    data, failure = _searx_query(base, params, timeout)
+    if failure is not None:   # 请求本身失败 = 直接不可用
+        return _mark_unavailable(failure, cfg, started)
+    results = data["results"]
+    if results:
+        _note_search_ok(started)   # 任一次有结果即清闩
+    elif data.get("unresponsive_engines") and not _recently_confirmed_healthy():
+        # 0 条 + 有引擎失联 → 待确认：同一出口再发一次常青查询（不带时间范围等收窄参数）。
+        # 确认查询不经 web_search，故不会递归触发确认。
+        confirm_params = {"q": SEARCH_CONFIRM_QUERY, "format": "json", "categories": "general"}
+        if engines:
+            confirm_params["engines"] = ",".join(engines)
+        confirm_started = _clock()
+        cdata, cfail = _searx_query(base, confirm_params, timeout)
+        if cfail is not None:
+            return _mark_unavailable(cfail, cfg, started)
+        if not cdata["results"]:
+            return _mark_unavailable(
+                _summarize_unresponsive(data.get("unresponsive_engines")), cfg, started)
+        _note_search_ok(confirm_started)   # 引擎活着：清闩、记健康，原查询照旧「没搜到」
+        _mark_healthy(cfg)
+
+    return _rank(results, farms, limit)
+
+
+def _mark_unavailable(engines: str, cfg: dict, started: float) -> List[Dict]:
+    _latch_search_unavailable(engines, cfg, started)
+    return _unavailable_result(engines)
 
 
 def format_search_results(results: List[Dict]) -> str:
@@ -221,8 +466,22 @@ _INJECTION = [
 ]
 
 
+# CGNAT 共享地址段（RFC 6598）——Tailscale 的 tailnet 地址就在这里。Python 的
+# ipaddress 不把它算 is_private / is_reserved（3.13 实测），不单列就会放行；而本机后端与
+# 算力端正走 tailnet，免审批抓取因此够得到内网机器。IPv6 的 Tailscale 段
+# fd7a:115c:a1e0::/48 属 ULA fc00::/7，is_private 已覆盖。IPv4 映射形态一并按此段判。
+_CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
+
+
+def _is_cgnat(addr) -> bool:
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return isinstance(addr, ipaddress.IPv4Address) and addr in _CGNAT_NET
+
+
 def _ssrf_ok(url: str) -> tuple:
-    """硬拒绝非公网目标：环回/私有网段/链路本地（含 169.254.169.254 云元数据）/保留地址。"""
+    """硬拒绝非公网目标：环回/私有网段/链路本地（含 169.254.169.254 云元数据）/保留地址/
+    CGNAT 100.64.0.0/10（tailnet）。"""
     try:
         u = urlparse(url)
     except Exception:
@@ -241,9 +500,12 @@ def _ssrf_ok(url: str) -> tuple:
         try:
             addr = ipaddress.ip_address(ip)
         except ValueError:
-            continue
+            # fail-closed：判不了的地址一律不放行（3.13 下带 zone 的 fe80::1%en0 可正常解析、
+            # 按链路本地拦截，不走这里）
+            return False, f"Unparseable resolved address {ip!r} (SSRF blocked)"
         if (addr.is_private or addr.is_loopback or addr.is_link_local
-                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
+                or addr.is_reserved or addr.is_multicast or addr.is_unspecified
+                or _is_cgnat(addr)):
             return False, f"Resolved to non-public address {ip} (SSRF blocked)"
     return True, ""
 

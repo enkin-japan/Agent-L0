@@ -326,3 +326,27 @@ external 态用户真的需要「接管重启」时上 3；再出现「崩溃自
   - **挪提醒位置**：把 `no_plan_nudge` 挪到第 1–2 次物理调用后再验一步。reviewer 指出现行提醒在 d47b 里 15/30 对在任务已完成时才触发，对 (a) 文案几乎无检出力。
 - **重启触发条件**：摘要续跑丢进度仍是主要失败且工具段 digest（D45）不够；或便签有了模型之外的生产消费者（如 D43 (a) 线索想跨轮带走）；或种任务被证明有成本（prompt 增长 / 路由误判）——那时先做 D47c。
 
+
+## 10. build 85 展示前加固的残留（2026-11-10；方案 docs/plans/2026-11-10-build85-demo-hardening.md）
+
+- **熔断 / 强制作答的状态文字是写死的中文**（`orchestrator.py` 四个熔断出口的说明与
+  「工具预算已用尽，正在据已有材料作答…」活动文案）。界面语言为日 / 英时仍显示中文。要修得走
+  build 84 的 `tool_progress` code 化同一条路（后端发 code，app 侧三语模板）。
+- **搜索 API 不做额度计量**：Tavily 免费档 1,000 credits / 月、Brave 按订阅计；额度用尽靠 432 / 433 /
+  429 进冷却后回落 SearXNG，没有事前提醒。计划任务等无人值守轮次同样消耗额度。
+- **密钥删除留空行**：`api_tool_factory` 没有删除函数，删提供方是把 `SEARCH_API_KEY_<ID>` 写成空串。
+  要干净删除需加 `delete_secret`（主会话专管的密钥处理段，宜在 Opus 会话里做）。
+  `write_secret` 非原子写（`write_text` 后才 `chmod 0600`，文件首次创建时有一瞬按 umask 的权限）、
+  与 api-tools 路由并发写同一文件无共享锁，是既有问题，同此项。
+- **后加 API 不立即上架**：`web_research` 的上架条件只在装配时判一次；SearXNG 不可达、之后才在设置里
+  加 API 的机器，要等工具重扫或重启才有 `web_research`。
+- **`web_research` 可被模型构造的网址带出数据**：子沙箱会打开模型给的任意公网 URL（SSRF 护栏只拦内网
+  与 CGNAT），查询串可携带会话内容。现状接受；要收紧得先定「哪些 URL 算用户给的」。
+- **审批卡对 curl 时弹时不弹**：同一类非只读 shell 命令在 build 84 彩排里卡数为 2 / 1 / 0 / 0，
+  未解释；用户 11-10 令停止追查（展示用自然语言提示语不触发 curl）。
+- **`searxng/settings.yml` 的 `secret_key`**：批 B 一审指出仓库里是明文占位值；它在内置 SearXNG 首次
+  起动时重新生成，仅本机回环访问，未动。
+- **Google 搜索未接**：Search grounding 是 Gemini 模型调用且条款与本管线冲突（见方案 §2-4）；若要接
+  Google，用 Custom Search JSON API 做成第三种提供方类型。
+- **`benchmarks/context_knee/run_knee.py` 未加强制作答开关**：留给 D48c / D49 那一片（`--forced-answer`）；
+  `summary_trace/run_trace.py` 已显式关。

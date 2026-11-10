@@ -1,0 +1,273 @@
+[
+ {
+  "name": "A1 子调研熔断说明不落会话",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "session.add_assistant_message(content=msg)\n            session.set_activity(\"已终止（子调研生成达预算上限）\"",
+  "new": "pass\n            session.set_activity(\"已终止（子调研生成达预算上限）\"",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "A2 总迭代熔断说明不落会话",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "session.add_assistant_message(content=_msg)\n        session.set_activity(\"已终止（主循环迭代达上限）\"",
+  "new": "pass\n        session.set_activity(\"已终止（主循环迭代达上限）\"",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "A3 runaway 出口说明不落会话",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "\"②如果涉及长文本，让我分段处理。\")\n                        session.add_assistant_message(content=_msg)",
+  "new": "\"②如果涉及长文本，让我分段处理。\")\n                        pass",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "A4 parse_loop 出口说明不落会话",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "\"③把任务拆成几个更小的步骤分别提出。\")\n                    session.add_assistant_message(content=_msg)",
+  "new": "\"③把任务拆成几个更小的步骤分别提出。\")\n                    pass",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "A5 检索证据未决时也强制作答",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "if not self.forced_answer_enabled or retrieval.unresolved:",
+  "new": "if not self.forced_answer_enabled:",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "A6 T1 子生成余量触发失效",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "and self.max_sub_generations - _n < self.forced_answer_sub_reserve):",
+  "new": "and self.max_sub_generations - _n < 0):",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "A7 T2 最后一次迭代触发失效",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "if _done > 0 and _done + 1 >= self.max_total_iterations:",
+  "new": "if _done > 0 and _done + 1 > self.max_total_iterations:",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "A8 T1 不要求已花过子生成",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "if (self.forced_answer_sub_reserve > 0 and _n > 0",
+  "new": "if (self.forced_answer_sub_reserve > 0",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "A9 强制作答仍声明工具",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "\"tools\": [] if forced_reason is not None else self._tools_decl_for(session),",
+  "new": "\"tools\": self._tools_decl_for(session),",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "A10 强制作答仍给约束语法",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "grammar_tools=[] if forced_reason is not None else self._grammar_tools,",
+  "new": "grammar_tools=self._grammar_tools,",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "A11 强制作答接受带工具调用的产出",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "if (_f_text.strip() and not result.get(\"tool_calls\")",
+  "new": "if (_f_text.strip()",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "A12 强制作答绕过谎报降级",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "_answer_status(_f_text, failure_checked=True, claim_checked=True)",
+  "new": "\"success\"",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "A13 未解失败时不加失败尾注",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "                if unresolved_failure:\n                    pending_tail_notes.append(FORCED_ANSWER_FAILURE_NOTE)",
+  "new": "                if False:\n                    pending_tail_notes.append(FORCED_ANSWER_FAILURE_NOTE)",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "A14 forced_answer 开关被忽略",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "self.forced_answer_enabled = bool(cfg.get(\"forced_answer\", True))",
+  "new": "self.forced_answer_enabled = True",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "A15 强制作答接受复读产出",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "                        and not result.get(\"repetition_guard\")):\n                    _f_text = _finalize_answer(",
+  "new": "                        ):\n                    _f_text = _finalize_answer(",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "A16 强制作答接受空产出",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "if (_f_text.strip() and not result.get(\"tool_calls\")",
+  "new": "if (not result.get(\"tool_calls\")",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "A17 _answer_status 未解失败不降级",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "if unresolved_failure and failure_checked:",
+  "new": "if False:",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py",
+   "tests/test_fabrication_guardrails.py",
+   "tests/test_d2_batch2.py"
+  ]
+ },
+ {
+  "name": "A18 _answer_status 零变更动作声明不降级",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "if not mutated_ok_this_turn and claim_checked and _ACTION_CLAIM_RE.search(text_):",
+  "new": "if False:",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py",
+   "tests/test_fabrication_guardrails.py",
+   "tests/test_d2_batch2.py"
+  ]
+ },
+ {
+  "name": "A19 强制作答 max_tokens 不钳 reserve",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "min(ESCALATED_MAX_TOKENS, guard_cfg.reserve))",
+  "new": "ESCALATED_MAX_TOKENS)",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "A20 子调研熔断出口失效",
+  "file": "backend/framework/core/orchestrator.py",
+  "old": "if forced_reason is None and turn_usage.get(\"sub_generations\", 0) >= self.max_sub_generations:",
+  "new": "if False:",
+  "tests": [
+   "tests/test_forced_answer.py",
+   "tests/test_usage_attribution.py",
+   "tests/test_resume_budget.py",
+   "tests/test_summary_trace.py"
+  ]
+ },
+ {
+  "name": "S1 isHidden 恒假",
+  "file": "apple-app/Sources/Store/ChatMessage.swift",
+  "old": "msg.role == \"system\" && (msg.content?.hasPrefix(guardrailPrefix) ?? false)",
+  "new": "false",
+  "tests": [
+   "tests/test_native_guardrail_message.py"
+  ]
+ },
+ {
+  "name": "S2 气泡映射不过滤护栏消息",
+  "file": "apple-app/Sources/Store/ChatMessage.swift",
+  "old": "                if ModelFacingMessage.isHidden(msg) { continue }\n",
+  "new": "",
+  "tests": [
+   "tests/test_native_guardrail_message.py"
+  ]
+ },
+ {
+  "name": "S3 搜索候选不排除护栏消息",
+  "file": "apple-app/Sources/Store/ChatMessage.swift",
+  "old": "            if isHidden(msg) { continue }\n",
+  "new": "",
+  "tests": [
+   "tests/test_native_guardrail_message.py"
+  ]
+ }
+]

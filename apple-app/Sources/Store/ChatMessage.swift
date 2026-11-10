@@ -9,6 +9,30 @@ struct SearchHit: Identifiable {
     let lastUpdated: Double?
 }
 
+/// build 85：后端编排层以 role=system 追加进 history、写给**模型**看的护栏消息（英文指令，
+/// 以 `[System guardrail]` 开头，如无计划收敛提醒、步骤失败路由）。它们随轮次落盘下发，但不是给
+/// 用户的：不生成聊天气泡、不进会话内搜索。其余 system 消息（取消 / 引擎故障说明等）照常显示。
+/// 放在本文件：气泡映射（`from(turn:)`）与搜索（AgentStore.match）共用同一判据。
+enum ModelFacingMessage {
+    /// 与 backend/framework/core/orchestrator.py 里各条护栏消息的开头逐字相同。
+    static let guardrailPrefix = "[System guardrail]"
+
+    static func isHidden(_ msg: ResponseMessage) -> Bool {
+        msg.role == "system" && (msg.content?.hasPrefix(guardrailPrefix) ?? false)
+    }
+
+    /// 会话内搜索的候选文本：用户输入 + 助手 / system 正文，排除写给模型的护栏消息。
+    static func searchableTexts(of turn: Turn) -> [String] {
+        var texts: [String] = []
+        if let prompt = turn.prompt { texts.append(prompt) }
+        for msg in turn.response ?? [] where msg.role == "assistant" || msg.role == "system" {
+            if isHidden(msg) { continue }
+            if let content = msg.content { texts.append(content) }
+        }
+        return texts
+    }
+}
+
 /// 执行过程组里的一步（来自一条 `.tool` 消息；status/timestamp 仅在执行回执给得出时有值）。
 struct ToolStep: Identifiable {
     let id: UUID
@@ -196,6 +220,8 @@ extension ChatMessage {
                 }
             case "system":
                 if stopped { continue }
+                // 写给模型看的护栏消息（`[System guardrail] …`）不出气泡；其余 system 消息照常
+                if ModelFacingMessage.isHidden(msg) { continue }
                 if let content = msg.content, !content.isEmpty {
                     out.append(.system(content))
                 }

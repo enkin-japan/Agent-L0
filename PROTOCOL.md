@@ -240,6 +240,20 @@ suspended 轮时，TurnRunner 发 `turn_ended`，status 为 cancelled，response
 两字段都不出现;所有收尾出口(含迭代/子生成保险丝)都记,但「本地作答」标注只追加在正常
 完成出口且 `cloud_consult_ok=false` 时。客户端按 §0.5 忽略即可,不要求渲染。
 
+**`forced_answer`(additive,2026-11-10,build 85)**:本轮答复出自「预算将尽强制作答」时出现的顶层
+字段,值为触发原因 `"sub_generations"`(子调研生成余量不够再做一次调研)或 `"iterations"`(主循环
+只剩最后一次迭代)。此时最后一次生成不声明任何工具,答复只依据已收集的材料;`status` 仍按
+谎报围堵规则取 `success` / `warning`。正常收尾的轮次不出现该字段。客户端按 §0.5 忽略即可。
+
+**熔断出口的说明文字(2026-11-10,build 85)**:子调研生成熔断、主循环迭代熔断、工具参数失控
+(runaway_call)、工具格式反复解析失败(parse_loop)四个出口,说明文字作为一条
+`{"role": "assistant", "content": …}` 落进本轮 `response`(此前只在内部返回值里,落盘与下发
+都看不到)。`status` 仍为 `warning`,不新增事件。
+
+**写给模型的 system 消息(2026-11-10,build 85)**:编排层追加进 history 的护栏消息
+(`role: "system"`,`content` 以 `[System guardrail]` 开头)照旧随 `response` 下发与落盘,
+但它们不是给用户的——客户端不为其生成气泡、不纳入会话内搜索;其余 system 消息照常显示。
+
 
 ### 2.4 传输:SSE 附着流
 
@@ -655,6 +669,48 @@ PATCH 对配对设备开放(用户决定 2026-10-30):配对可由 Mac 一键解�
 
 `awaiting_approval` 事件、`POST /turns/approval`(含锁屏 Live Activity 的拒绝路径)、计划任务的
 自动拒绝、§2.9 配对面均不受此节影响;C4 检索证据护栏继续读工具自身的 `requires_approval`。
+
+### 2.12 搜索 API 提供方:API 优先,内置 SearXNG 兜底(additive,2026-11-10;不改既有事件语义,不升版本)
+
+`web_research` 的搜索一步走一条链:**启用 ∧ 有密钥 ∧ 未在冷却**的搜索 API 随机排序、依次尝试,
+第一个成功即用(合法的 0 条结果也算成功,不再下落);API 全不可用才走内置 SearXNG;整条链都不可用
+才向模型报「搜索暂不可用」。首批提供方类型 `brave`、`tavily`。失败的提供方进冷却:一般失败 60 s、
+鉴权失败 600 s、额度用尽 3600 s,服务端给 `Retry-After` 时取 `max(缺省, min(Retry-After, 600))`;
+冷却与最近状态只在进程内存里,重启即清。对搜索 API 的请求单次超时 8 s(`web_search.search_api_timeout`),
+不跟随重定向(3xx 按一般失败计),密钥只放请求头。
+
+非密配置落盘 `<data_root>/search_providers.json`(0600,先 chmod 临时文件再原子替换):
+`{"version": 1, "providers": [{"id", "type", "label", "enabled"}]}`;`id` = `<type>-<6 位小写 hex>`。
+文件缺失 = 没有 API;存在但损坏或不可读 = 按没有 API 处理并告警一次(搜索照走 SearXNG,不报错),
+之后第一次写入前把损坏文件改名为同目录 `search_providers.json.corrupt` 留底,不静默覆盖。
+密钥不进这个文件:走 API 工具同一份密钥文件(`<data_root>/api_tools/.secrets.env`,0600),变量名
+`SEARCH_API_KEY_<ID 大写、- 换 _>`;删除提供方 = 把该变量写成空串(读出视为无)。**任何响应、
+日志、事件都不含密钥值**:列表只报 `has_secret`;请求体校验失败的 422 只给 `loc / msg / type`,
+不回显输入。
+
+```
+GET    /api/v1/search-providers            → 200 {"types": [{"type", "label"}],
+                                                  "providers": [{"id", "type", "label", "enabled", "has_secret",
+                                                                 "status", "status_at"}],
+                                                  "fallback": "searxng"}
+                                             status ∈ ok | rate_limit | auth_error | quota | error | unused;
+                                             status_at = 墙钟 epoch 秒或 null
+POST   /api/v1/search-providers            {"type", "label"?, "secret"} → 201 条目;
+                                             未知 type / 空或超长(>512)或含控制字符的 secret /
+                                             超长(>64)label / 未知键 → 422
+PATCH  /api/v1/search-providers/{id}       {"enabled"?, "label"?, "secret"?}(缺省或 null = 不变)→ 200 条目;
+                                             未知 id → 404;换密钥会清掉该条的冷却与状态
+DELETE /api/v1/search-providers/{id}       → 204;未知 id → 404
+POST   /api/v1/search-providers/{id}/test  → 200 {"ok": bool, "kind": "ok|auth|rate_limit|quota|http|network|bad_response",
+                                                  "results": N};发一条固定的探测查询;没有密钥时不发请求,
+                                             直接回 {"ok": false, "kind": "auth", "results": 0}
+```
+
+GET 走全局鉴权;POST / PATCH / DELETE / test 四个写操作要求 Mac 本体(共享密钥)或已配对设备票据
+(`require_owner_or_paired`,与 §2.11 的 PATCH 同口径),每次改动记一行
+`[SearchProviders] added|patched|deleted id=… type=… by device=…`。五个操作都不依赖算力端就绪
+(§2.10:未就绪时照常可用)。`web_research` 的上架条件相应放宽为「SearXNG 可达,或配置了至少一个
+搜索 API」,装配时判一次。计划任务等无人值守轮次同样走这条链(会消耗 API 额度;不做额度计量)。
 
 ---
 

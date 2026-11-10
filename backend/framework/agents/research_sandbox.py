@@ -107,6 +107,21 @@ _OPEN_PAGES_SCHEMA = {
 _TOOLS = [_WEB_SEARCH_SCHEMA, _OPEN_PAGES_SCHEMA]
 
 
+class SandboxSystemError(str):
+    """沙箱自己判定的系统级失败（不是模型写出的文本）。包壳据**类型**而非前缀识别它、
+    原样交回主代理（不套不可信摘要边界），让编排层 _FAILED_RESP_RE 判为失败——
+    按前缀识别会被「子代理被网页注入后吐出 System Error: 开头的文本」冒充绕过边界。"""
+
+
+def search_unavailable_error(engines: str) -> SandboxSystemError:
+    """搜索不可用时给主代理的快速失败返回（英文，给模型看；以 System Error: 开头）。"""
+    return SandboxSystemError(
+        "System Error: web search is temporarily unavailable (search engines not responding: "
+        f"{engines}). Do NOT call web_research again in this turn. If the user gave a specific "
+        "URL, read it with web_read; otherwise answer from what you already have and tell the "
+        "user that web search is temporarily unavailable.")
+
+
 def _extract_urls(args: dict) -> List[str]:
     urls = args.get("urls")
     if isinstance(urls, str):
@@ -163,6 +178,9 @@ async def run_research(engine, query: str, cfg: dict,
     fetch_cache: Dict[str, Dict] = {}  # 整轮调查的抓取缓存：同一 URL 跨 step 不重抓（尤其省 T2 渲染）
     source_registry: Dict[str, Dict] = {}  # 调查级来源注册表：[source N] 全局编号 + 账本数据源
     title_by_key: Dict[str, str] = {}  # 搜索结果标题（按归一化 key），充实最终来源清单
+    # 本次调研是否打开过有效页面（_is_valid：无错且 >80 字正文，与 min_valid_pages 同口径；
+    # 空壳页不算材料）：与候选池一起决定搜索不可用时提前结束还是让子代理收尾
+    opened = {"any": False}
 
     def _finish(digest: str) -> str:
         """摘要收尾：附上代码拼装的来源账本（编号→URL 映射确定性兜底，不经模型转写）。"""
@@ -181,6 +199,7 @@ async def run_research(engine, query: str, cfg: dict,
 
     async def _dispatch(calls):
         responses = []
+        search_down: Optional[str] = None
         for c in calls:
             name = c.get("name")
             args = c.get("arguments", {}) or {}
@@ -189,6 +208,9 @@ async def run_research(engine, query: str, cfg: dict,
                 _report("research.searching", query=f"{q[:40]}")  # 与 build 83 同一截断表达式
                 res = await asyncio.to_thread(web_tools.web_search, q, cfg, args.get("n"),
                                               args.get("time_range"), args.get("category"))
+                down = web_tools.search_unavailable_names(res)
+                if down is not None:
+                    search_down = down
                 for item in res:  # 累积候选池（按归一化 key 去重，保信誉序），供后续 open_pages 补位
                     u = item.get("url")
                     if not u:
@@ -206,6 +228,8 @@ async def run_research(engine, query: str, cfg: dict,
                         count=len(urls))
                 res = await asyncio.to_thread(web_tools.open_pages, urls, cfg, pool, fetch_cache,
                                               bool(args.get("render")))
+                if any(isinstance(r, dict) and web_tools._is_valid(r) for r in (res or [])):
+                    opened["any"] = True
                 responses.append({"name": name,
                                   "response": web_tools.wrap_untrusted(res, source_registry)})
                 # 补齐注册表条目的标题（来自搜索结果；直给 URL 无标题则留空）
@@ -215,6 +239,14 @@ async def run_research(engine, query: str, cfg: dict,
             else:
                 responses.append({"name": name,
                                   "response": f"Unknown tool {name!r} (this sandbox only has web_search / open_pages)"})
+        # 搜索不可用（build 85 B3）：手上什么材料都没有——本次调研至今没有任何一次搜索出过
+        # 候选（候选池空）、也没打开过有效页面 → 立即结束（不再走步、不做收尾强制摘要），把
+        # 快速失败交回主代理；任一条不满足 → 标记作普通工具结果交还子代理，让它用已有材料收尾。
+        # 判定在整步分发之后：同一步里的另一条搜索结果 / 读到的页面也算材料。
+        # 注：query 带地址只豁免 web_research 入口短路；进沙箱后子代理若先搜索仍会在此快速
+        # 失败，返回文案会引导主代理改用 web_read。
+        if search_down is not None and not pool and not opened["any"]:
+            return responses, search_unavailable_error(search_down)
         return responses, None
 
     async def _exhausted() -> str:
