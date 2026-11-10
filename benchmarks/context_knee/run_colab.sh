@@ -291,7 +291,7 @@ start_and_wait(){
   started=1
   lease_start=$(date +%s); lease_steps=0
   log "START deploy $MODEL --retain"
-  "$DEPLOY" start --retain --model "$MODEL" >> "$LOG" 2>&1; start_rc=$?
+  "$DEPLOY" start --no-retry --retain --model "$MODEL" >> "$LOG" 2>&1; start_rc=$?
   if [ $start_rc -ne 0 ]; then log "deploy start FAILED rc=$start_rc"; return 3; fi
   deadline=$(( $(date +%s) + READY_DEADLINE_SEC ))
   while [ $(date +%s) -lt $deadline ]; do

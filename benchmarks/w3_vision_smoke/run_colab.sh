@@ -68,7 +68,7 @@ esac
 # zsh 的 trap 在前台子进程退出后才执行：信号期间仍会停机，只是延后到 start 返回。
 started=1
 log "START deploy $MODEL lease ${MINUTES}min"
-./colab/deploy.sh start --model "$MODEL" --minutes "$MINUTES" >> "$LOG" 2>&1; start_rc=$?
+./colab/deploy.sh start --no-retry --model "$MODEL" --minutes "$MINUTES" >> "$LOG" 2>&1; start_rc=$?
 if [ $start_rc -ne 0 ]; then
   log "deploy start FAILED rc=$start_rc; defensive stop"
   if ! stop_colab; then

@@ -82,3 +82,65 @@
 熔断 / 强制作答的状态文字是写死的中文；密钥删除留空行；后加 API 不立即上架；API 不做额度计量；定时任务也会消耗付费 API；
 `web_research` 仍可被模型构造的网址带出数据；curl 审批卡不一致未解释；Google 若要接，
 可选 Custom Search JSON API 而非 grounding。
+
+## 6. 发布后彩排与阶段复审（2026-11-10 傍晚，Mac mini，MacAgent build 85 公证版）
+
+### 6.1 现场
+- Colab：16:45 首次申请 A100 120 s 超时未分到（服务端无 VM、无扣费，`stop --confirm-unallocated` 清本地租约）；16:48 重起，17:02 READY；17:57 停机并经服务端确认释放（余额 463.47 → 456.21 单位）。
+- 搜索 API：用户在设置「検索」页自己填了 Brave Search 与 Tavily，17:02 点「テスト」各返回 8 件、状态「正常」（首次用真钥验证）。
+
+### 6.2 彩排记录（日语自然语言提示语，不点名网站 / 接口）
+| 题 | 次 | 执行过程 | 搜索 | curl | 审批卡 | 结果 |
+|---|---|---|---|---|---|---|
+| 天气（東京・大阪・福岡） | 1 | 13 步 106 s | 1 次正常（走 API） | 3（Open-Meteo） | 0 | 折线图 + 推荐大阪周六 |
+| 旅行综合（ソウル・台北・バンコク：天气 + 汇率 + 图 + 换算表 + 推荐） | 1 | 18 步 99 s | 2 次正常 | 0 | 0 | 推荐台北，Sources 16 条 |
+| 同上 | 2 | 19 步 224 s | 3 次正常 | 0 | 0 | 推荐台北 |
+| 同上 | 3 | 墙钟 7 分 45 秒（大半是等人点卡） | **首调即 SEARCH_UNAVAILABLE** | 3 | 3 | 推荐台北 |
+| 同上 | 4 | 18 步 194 s | 4 次正常 | 0 | 0 | 推荐台北 |
+
+- 「自然语言提示语就不会触发 curl」不成立：天气题搜索成功后模型仍自己 curl 取精确数值；系统提示与工具说明里没有任何一句限制用命令行取网页 / 接口。
+- 第 3 次：`brave-api (network), tavily-api (network)` 同时出现，内置 SearXNG 照旧被限流 / 验证码挡住；快速失败按设计生效（17:15:46 `tool_error`）。**根因未定位**：事后 curl 直连 0.3–0.6 s 正常；`requests` 同会话空闲 200 s 复用正常；后端 fd 128 / 256；无钥探针 90 轮 × 4 = 360 次 0 异常；`log show` 该 40 s 无网络 / DNS 变更记录。
+- **可观测性缺口**：`search_providers._send` 的 `except Exception` 只留 `kind="network"`，不记异常类名，无法区分超时 / 连接错 / 解析失败。候选加固（未做、未获授权）：网络类失败立即重试一次；记 `type(e).__name__`（不含 URL 与头）。
+- 审批卡：非只读判定的 shell 命令（`&& echo` 串联、`| head`、`| python3 -c`）仍会弹卡，「写入自动许可」不覆盖。
+
+### 6.3 用户决定（2026-11-10 傍晚，逐条）
+- 「继续用app测试，审批你来点」「保持build85不动」。
+- 提议「先用终端方式测试…再用app过一遍」——核实后未采纳：仓库无终端客户端；app 后端访问密钥在钥匙串；审批推送由后端 dispatcher 发（PROTOCOL §2.8），与客户端无关。
+- 「换个题测试，纯调查有点简单了，而且压力全丢给web search了，可以设计一个任务，让工具调用尽量全面点，但不过于依赖局部架构。」→ 拟定「本地销售数据（合成 CSV）分析 → 汇总 → 画图 → 一次联网调查 → 写报告并保存 / 打开 →（可选）加日程」的综合题，工具可行性在摸底中，**尚未测**；是否往真实日历写测试日程待用户定。
+- 17:55「让我先思考一下，关colab，进度落盘，我压缩一下上下文。」
+
+### 6.4 阶段复审（53e3098a..9860f4e2，stage-reviewer；M1 另经 reviewer 怀疑者复核）
+- Critical 0。
+- **Major M1（成立）**：`forced_answer` 代码缺省为开，`orch_tools.agent_cfg()` 不写该键 → 下一批膝点测量与 d48b 基线不同口径，混批守卫看不到。已在 `docs/plans/2026-10-31-context-management-plan.md` D49 行与 `benchmarks/data/context-knee-20261109-d48b/ANALYSIS.md` 后续事项补 (c)；代码修补（`agent_cfg()` 显式写键 + `run_knee --forced-answer`，缺省 off，须变异证明）并入 D48c / D49。
+- Minor（均未修）：m1 `search_providers.json.corrupt` 与 `.search_providers.json.<hex>.tmp` 未被 `bundle-macos.sh` 排除、未被 `.gitignore` 忽略；m2 `backend/tests/test_web_ssrf.py:40,57-58` 写进了真实算力端 tailnet 地址而仓库为 PUBLIC（换示例地址；历史不改写）；m3 `search_providers` 读文件遇瞬时 OSError 也按损坏缓存，随后一次添加会把好文件改名 `.corrupt`；m4 `run_mutants.py` 判定前不跑基线、不核对红的是否目标用例、逐项日志未入库；m5 三处文档不一致（`backend/README.md:94` 与 `config.yaml:440-441` 仍写 SearXNG 离线则不注册；`AgentClient.swift:867` 注释写 15 s 实为 8 s；`test_forced_answer.py:3` 引用的 `diag/findings.md` 不在库里）。
+
+### 6.5 起机失败与 status 里的「幽灵」记录（11-10 晚查明并修）
+
+用户在 `./colab/deploy.sh status` 里看到一条无主的部署记录，怀疑它是起机失败的原因。只读摸底的结论相反：记录是失败的结果，失败的原因在服务端。
+
+- **现场**：19:05 的 status 显示本机记录 state=`release-unconfirmed`、started 18:59:18、租约 120 分钟、`worker_pid` 指向已退出的进程；服务端 Active assignments 0、sessions 为空、费率 0、余额 456.21。18:59 这次 start 不是本会话发起的（本会话 17:57 停机后没有再起机），18:59:41 还有一次 stop。
+- **成因**：CLI 日志里 16:45 与 18:59 两次失败的请求序列相同——分配请求 POST 约 31 s 后回 503，CLI 退避 10 s 重试，再 503，退避 20 s 发第三次；第三次还没返回，`compute_ctl._allocate` 给 `colab new` 的 120 s 超时到点（31+10+31+20+31 ≈ 123 s）。`_allocate` 只捕获 `CalledProcessError`（`colab/compute_ctl.py:867-874`），超时不会标 `allocation_failed`，回收阶段于是判「分配身份未知」并写入 `release-unconfirmed`（`:639-651`）。16:48 的重起第二次 POST 就回了 200，所以成功。
+- **为什么卡住下一次起机**：`start` 见到上一条记录不是 stopped 就直接拒绝（`:1525-1526`）；普通 `stop` 清不掉，只有 `stop --confirm-unallocated` 在三次服务端核对都干净后才记为 stopped。这是有意的保守设计：被杀的 CLI 的第三次请求有可能事后分配成功。
+- **不是原因的**：没有孤儿进程。`colab` 是单进程脚本，超时后被杀干净；worker 用独立会话脱管是设计如此；旧 worker 改不了新租约（按 session 做 CAS）。`status` 不改状态文件。
+- **从什么时候开始的**（CLI 日志全量统计，脚本 `benchmarks/colab_ops/assign_hist.py`，只取时间与状态码）：10-23 到 11-07 共 60 余次分配，全部首发 200、耗时 2–4 s；11-08 12:30 首次变慢（52 s 才回 200），11-08 21:10 起出现 503。11-08 之后共 9 次起机：上午 / 中午 3 次都成（11-08 12:30、11-09 08:31、11-10 09:52），下午 / 晚上 6 次首发全是 503（11-08 21:10、11-09 19:01、11-10 16:45 / 18:59 / 19:20，以及各自的重起），其中 3 次重起在第 2–4 个请求拿到 200。本机没有变化：CLI 0.7.5 装于 10-23，`compute_ctl.py` 最后改动 11-01，此后 11-02 到 11-07 照常首发成功。所以变化在 Colab 服务端；503 的具体原因（多半是 A100 高峰期容量）从客户端无法证实。摸底报告里「11-02 / 11-03 / 11-07 各批首次起机也失败」的推断与日志不符，已作废。
+- **已修（11-10 晚，用户指示「失败后自动清理自动重新启动，不断反复重试」「申请到 VM 之前阻塞当前终端，Ctrl+C 终止」）**，改在 `colab/compute_ctl.py`：
+  1. `colab new` 带 `COLAB_CLI_ASSIGN_RETRIES=0` 运行，每次只发一次分配请求，本机超时放到 300 s（盖过 CLI 的 GET + POST 各 120 s）。CLI 自己报错退出，走既有的 cli-error → 三次核对 → stopped，不再因为请求途中被杀而落到 `release-unconfirmed`。
+  2. `start` 缺省占住终端直到申请到 VM（`start_until_allocated`）：每次尝试是一条新租约加一个照旧脱管的 worker，前台转发 `deploy.log`；申请到即返回 0，后台继续部署。
+  3. 只有「服务端明确回 502 / 503 / 504（按 CLI 报错原文末行判定）且三次核对服务端为空」才自动重试，间隔 30 s、不限次数；请求超时、配额 / 权益被拒、`release-unconfirmed`、预检查失败一律停下交给人；worker 失联而租约未停时前台按记录走一次回收。
+  4. Ctrl+C / SIGTERM / 关终端：第一发信号即屏蔽后续信号，先打 stop 标记再走既有回收路径，退出码 130。
+  5. 别处 `stop` 能终止重试：`request_stop()` 在租约记录上留 `stop_requested`，此后属主不能把租约写回活动态（但它刚从服务端得知的 endpoint / allocation_failed 仍会保留给回收路径），重试循环也不会接续带标记的租约；`stop` 按「打完标记后的记录」决定是否回收。
+  6. `--no-retry` 保留旧的「派出即返回」；两个链脚本（`benchmarks/context_knee/run_colab.sh`、`benchmarks/w3_vision_smoke/run_colab.sh`）显式用它，行为除第 1 条外不变。
+  - 评审一道门：1 Critical（stop 与重试循环的下一条租约竞态，stop 以为没有活动租约而 VM 照常分配）、2 Major（状态读不出时信任过时的内存租约；CLI 报的请求超时被当成可重试）、6 Minor，均已修或采纳；二道门逐行读，另发现一处（stop 标记挡住了属主把 allocation_failed 写进记录，Ctrl+C 落在被拒的请求途中会先报「回收尚未确认」），已修。
+  - 变异证明：23 条 + 2 条全部变红（清单、结果与轮次说明在 `benchmarks/colab_ops/start_retry_mutation/`；M14 以 240 s 硬超时判红）。
+  - **实机第一次（20:20，用户自己起的）**：申请一发成功（3 s），但新 VM 的 Jupyter 很慢——`colab exec` 建内核 12 s、连通 30 s（16:49 成功那次各不到 1 s），GPU 检查在原先 60 s 的时限内没回音，worker 按启动失败回收了 VM（存活约 1 分 40 秒）；而前台在「申请到」那一刻已返回 0。请求顺序与成功那次一致，属于 Colab 当晚状态不好的另一面，不是本次改动引入的。
+  - **据此再改（用户确认「按这个改」）**：(1) 首次联络新 VM 给 3 分钟（`FIRST_CONTACT`：代码 120 s + 连接余量 60 s），只延长不重发——`gpu_check` 会建私有目录、不可重复执行；(2) 前台等到租约进入 `booting`（GPU 检查通过、部署任务已启动）才返回（`await_boot`）；(3) 申请到之后的失败已在计费，不自动重试，终端报「申请到 VM 后启动失败」；(4) 收到 stop / Ctrl+C 后 worker 不再往 VM 上传凭据或启动部署（`stand_down_if_stopped`，旧缺陷，这一段现在占着终端更容易碰到）；(5) Ctrl+C 回收确认后通知 worker 退出，不再占着租约锁几分钟。增量评审无 Critical / Major，6 条 Minor 采纳 5 条；未采纳的一条写进了 README：CLI 连接内核时自己的单次 10 s 时限与 3 次重试没有动。变异证明另加 7 + 4 条全部变红。
+  - **未在真实 Colab 上验证**：CLI 对 503 的报错原文是按 0.7.5 源码与日志里的 `503 Service Unavailable` 推出来的；若实际末行不同，表现是「不属于可自动重试的情形」并停下（失败关闭），需据 `worker.log` 调整判定。
+  - 仍未做：status 在 worker 已退出时明说；`deploy.log` 按租约留档；回收阶段 `colab` 调用失败时保留 stderr。
+- **未查明**：18:59 的 start / stop 由谁发起；19:00:07–29 每秒一次的用量查询来自哪里。
+
+### 6.6 用户决定（2026-11-10 21:0x，逐条）
+
+- 「现在就可以提交」——§6 的文档与 §6.5 的脚本改动合成一次提交（未说推送，不推）。
+- 「新展示题驳回，我再考虑一下新题」——销售 CSV 综合题不采用；展示题待用户另定。
+- 「明天我自己起机，你不管」——11-11 的 Colab 起停由用户自己操作，主会话不起机、不停机、不接管。
+- 实机补记：用户 20:51 用新脚本自己起机，一发申请到（5 s）、GPU 检查 3 s 通过、20:52:03 终端在租约进入 booting 后返回，随后正常加载模型——新脚本的正常路径第一次在真实 Colab 上走通；503 自动重试路径仍未被真实触发。

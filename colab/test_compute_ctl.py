@@ -15,6 +15,7 @@ import tarfile
 import tempfile
 import time
 import unittest
+import unittest.mock
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('compute_ctl', Path(__file__).with_name('compute_ctl.py'))
@@ -677,6 +678,424 @@ m.stop_owned(m.current())
             with self.assertRaises(RuntimeError): ctl.poll_progress({'session':'synthetic'},time.time()-1)
             remote.assert_not_called()
 
+
+
+class StartRetryTests(unittest.TestCase):
+    """`start` 缺省：占住终端直到申请到 VM；只有「已证明服务端为空」的失败才自动重试。"""
+    S1, S2 = 'agent-compute-0123456789ab', 'agent-compute-ba9876543210'
+
+    def setUp(self):
+        state = tempfile.TemporaryDirectory()
+        self.addCleanup(state.cleanup)
+        for target, value in (('STATE', Path(state.name)/'state'), ('ECHO', True)):
+            patcher = patch.object(ctl, target, value); patcher.start(); self.addCleanup(patcher.stop)
+        registry = patch.object(ctl, 'registered_models', return_value={ctl.MODEL: {'revision': 'a'*40}})
+        registry.start(); self.addCleanup(registry.stop)
+        for signum in (ctl.signal.SIGINT, ctl.signal.SIGTERM, ctl.signal.SIGHUP):
+            self.addCleanup(ctl.signal.signal, signum, ctl.signal.getsignal(signum))
+        ctl.private_dir(ctl.STATE)
+
+    class Child:
+        """The detached worker as the loop sees it. An exception as `code` is raised by the
+        first poll (a signal arriving while the loop waits); the worker is alive afterwards."""
+        def __init__(self, code): self.code, self.terminated = code, False
+        def poll(self):
+            if isinstance(self.code, BaseException):
+                signal, self.code = self.code, None
+                raise signal
+            return self.code
+        def terminate(self): self.terminated = True
+        def wait(self, timeout=None): return 0
+
+    def worker_runs(self, *outcomes):
+        """launch_worker 的替身：第 i 次调用把第 i 个 (终态, 退出码) 写成 worker 留下的现场。"""
+        calls, self.children = [], []
+        def launch(args, lease_fd, retry_of=None):
+            state, code = outcomes[len(calls)]
+            calls.append(retry_of)
+            ctl._write_state(dict(state))
+            self.children.append(self.Child(code))
+            return dict(state), self.children[-1]
+        return calls, patch.object(ctl, 'launch_worker', side_effect=launch)
+
+    def failed(self, session, **extra):
+        return {'session': session, 'state': 'stopped', 'allocation_attempted': True,
+                'allocation_failed': 'cli-error', 'allocation_transient': True, **extra}
+
+    def run_loop(self, *outcomes):
+        calls, launch = self.worker_runs(*outcomes)
+        with launch, patch.object(ctl.time, 'sleep') as sleep, patch.object(ctl, 'stop_owned') as stop, \
+             contextlib.redirect_stdout(io.StringIO()) as out:
+            try:
+                result = ctl.start_until_allocated(argparse.Namespace(), 99)
+            except KeyboardInterrupt:
+                result = KeyboardInterrupt
+        return result, calls, sleep, stop, out.getvalue()
+
+    def test_proven_empty_failure_is_retried_until_a_vm_is_allocated(self):
+        result, calls, sleep, stop, out = self.run_loop(
+            (self.failed(self.S1), 1),
+            ({'session': self.S2, 'state': 'booting', 'endpoint': 'owned-endpoint'}, None))
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, [None, self.S1])  # the retry names the lease it continues
+        self.assertEqual(sum(call.args[0] for call in sleep.call_args_list), ctl.RETRY_INTERVAL)
+        stop.assert_not_called()
+        self.assertIn('第 1 次申请被服务端暂时拒绝', out)
+        self.assertIn('部署任务已在 VM 上启动', out)
+        self.assertTrue(ctl.ECHO)
+
+    def test_only_a_proven_empty_cli_failure_is_retryable(self):
+        lease = {'session': self.S1}
+        self.assertTrue(ctl.retryable_failure(self.failed(self.S1), lease))
+        for name, view in {
+                'release-unconfirmed': self.failed(self.S1, state='release-unconfirmed'),
+                'killed CLI (no proof)': {**self.failed(self.S1), 'allocation_failed': None},
+                'refusal or timeout reported by the CLI': self.failed(self.S1, allocation_transient=False),
+                'unclassified CLI failure': {k: v for k, v in self.failed(self.S1).items() if k != 'allocation_transient'},
+                'truthy but not True': self.failed(self.S1, allocation_transient='yes'),
+                'operator-confirmed timeout': {'session': self.S1, 'state': 'stopped', 'allocation_attempted': True},
+                'local preflight failure': {'session': self.S1, 'state': 'stopped', 'allocation_attempted': False},
+                'allocated then released': self.failed(self.S1, endpoint='owned-endpoint'),
+                'explicit stop': self.failed(self.S1, stop_requested=1.0),
+                'another lease': self.failed(self.S2),
+                'still allocating': self.failed(self.S1, state='allocating'),
+                'unreadable state': None}.items():
+            with self.subTest(name):
+                self.assertFalse(ctl.retryable_failure(view, lease))
+
+    def test_unproven_failures_end_the_loop_after_one_attempt(self):
+        for name, (state, said) in {
+                'release-unconfirmed': (self.failed(self.S1, state='release-unconfirmed'), '回收未确认'),
+                'preflight': ({'session': self.S1, 'state': 'stopped', 'allocation_attempted': False}, '不属于可自动重试的情形'),
+                'refusal': (self.failed(self.S1, allocation_transient=False), '不属于可自动重试的情形'),
+                'allocated, failed the first contact, released (billed)': (
+                    {'session': self.S1, 'state': 'stopped', 'allocation_attempted': True, 'endpoint': 'owned-endpoint'},
+                    '申请到 VM 后启动失败'),
+                'stop': (self.failed(self.S1, stop_requested=1.0), '收到 stop：停止重试')}.items():
+            with self.subTest(name):
+                result, calls, sleep, stop, out = self.run_loop((state, 1), (self.failed(self.S2), 1))
+                self.assertEqual(result, 1)
+                self.assertEqual(calls, [None])
+                sleep.assert_not_called()
+                stop.assert_not_called()
+                self.assertIn(said, out)  # says which kind of failure ended it
+
+    def test_stop_during_the_retry_wait_ends_the_loop_within_a_step(self):
+        calls, launch = self.worker_runs((self.failed(self.S1), 1), (self.failed(self.S2), 1))
+        def sleep(seconds):
+            ctl.request_stop()  # another terminal's `stop`, with nothing left to release
+        with launch, patch.object(ctl.time, 'sleep', side_effect=sleep) as slept, \
+             patch.object(ctl, 'stop_owned') as stop, contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(ctl.start_until_allocated(argparse.Namespace(), 99), 1)
+        self.assertEqual((calls, slept.call_count), ([None], 1))
+        stop.assert_not_called()
+        self.assertIn('收到 stop：停止重试', out.getvalue())
+
+    def test_worker_that_died_without_a_final_state_is_released_fail_closed(self):
+        for name, state, code in (
+                ('killed while allocating', {'session': self.S1, 'state': 'allocating', 'allocation_attempted': True}, -9),
+                ('exited with a recorded endpoint', {'session': self.S1, 'state': 'booting', 'endpoint': 'owned-endpoint'}, 0),
+                ('died mid-release', {'session': self.S1, 'state': 'stopping', 'endpoint': 'owned-endpoint'}, 1)):
+            with self.subTest(name):
+                result, calls, sleep, stop, out = self.run_loop((state, code), (self.failed(self.S2), 1))
+                self.assertEqual(result, 1)  # never 0: nobody supervises that endpoint
+                self.assertEqual(calls, [None])
+                stop.assert_called_once()  # through the release path, which asks the server
+                self.assertEqual(stop.call_args.args[0]['session'], self.S1)
+                self.assertNotIn('部署任务已在 VM 上启动', out)
+
+    def test_interrupt_during_an_attempt_releases_it_and_stops_retrying(self):
+        result, calls, _, stop, out = self.run_loop(
+            ({'session': self.S1, 'state': 'allocating', 'allocation_attempted': True}, KeyboardInterrupt()),
+            (self.failed(self.S2), 1))
+        self.assertIs(result, KeyboardInterrupt)
+        self.assertEqual(calls, [None])
+        stop.assert_called_once()
+        self.assertEqual(stop.call_args.args[0]['session'], self.S1)
+        self.assertTrue(ctl.current()['stop_requested'])  # marked before the release even starts
+        self.assertIn('收到中断', out)
+        self.assertTrue(ctl.ECHO)
+        # Released first; only then is the worker told to leave its remote call (and the lease lock).
+        self.assertTrue(self.children[0].terminated)
+
+    def test_second_signal_cannot_skip_the_release(self):
+        real_sleep, real_request_stop = time.sleep, ctl.request_stop
+        class Interrupted(self.Child):
+            def poll(self):
+                os.kill(os.getpid(), ctl.signal.SIGINT); real_sleep(.3)
+        def impatient_operator():
+            os.kill(os.getpid(), ctl.signal.SIGINT); real_sleep(.3)  # lands inside the handler
+            return real_request_stop()
+        state = {'session': self.S1, 'state': 'allocating', 'allocation_attempted': True}
+        def launch(args, lease_fd, retry_of=None):
+            ctl._write_state(dict(state)); return dict(state), Interrupted(None)
+        with patch.object(ctl, 'launch_worker', side_effect=launch), patch.object(ctl, 'stop_owned') as stop, \
+             patch.object(ctl, 'request_stop', side_effect=impatient_operator), \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(KeyboardInterrupt):
+                ctl.start_until_allocated(argparse.Namespace(), 99)
+        stop.assert_called_once()
+
+    def test_interrupt_with_unreadable_state_asks_the_server_instead_of_trusting_a_stale_lease(self):
+        state = {'session': self.S1, 'state': 'preparing', 'allocation_attempted': False}
+        class Interrupted(self.Child):
+            def poll(self):
+                (ctl.STATE/'current.json').write_text('{corrupt'); raise KeyboardInterrupt
+        def launch(args, lease_fd, retry_of=None):
+            ctl._write_state(dict(state)); return dict(state), Interrupted(None)
+        with patch.object(ctl, 'launch_worker', side_effect=launch), patch.object(ctl, 'stop_owned') as stop, \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(KeyboardInterrupt):
+                ctl.start_until_allocated(argparse.Namespace(), 99)
+        stop.assert_called_once()
+        target = stop.call_args.args[0]
+        self.assertEqual(target['session'], self.S1)
+        # allocation_attempted False would let the release path record STOPPED unchecked.
+        self.assertIs(target['allocation_attempted'], True)
+
+    def test_interrupt_between_attempts_has_nothing_to_release(self):
+        calls, launch = self.worker_runs((self.failed(self.S1), 1), (self.failed(self.S2), 1))
+        with launch, patch.object(ctl.time, 'sleep', side_effect=KeyboardInterrupt), patch.object(ctl, 'stop_owned') as stop, \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(KeyboardInterrupt):
+                ctl.start_until_allocated(argparse.Namespace(), 99)
+        self.assertEqual(calls, [None])
+        stop.assert_not_called()
+
+    def test_first_interrupt_disarms_later_ones_until_cleanup_ran(self):
+        with ctl.interrupt_once():
+            with self.assertRaises(KeyboardInterrupt):
+                os.kill(os.getpid(), ctl.signal.SIGINT); time.sleep(.2)
+            for signum in ctl.INTERRUPT_SIGNALS:
+                self.assertEqual(ctl.signal.getsignal(signum), ctl.signal.SIG_IGN)
+            os.kill(os.getpid(), ctl.signal.SIGINT); time.sleep(.05)  # must not raise
+
+    def test_await_boot_returns_at_booting_or_at_worker_exit(self):
+        lease = {'session': self.S1}
+        record = lambda **fields: ctl._write_state({'session': self.S1, 'endpoint': 'owned-endpoint', **fields})
+        class Worker(self.Child):
+            """Alive for `alive` polls; `at` maps a poll number to a state the worker writes then."""
+            def __init__(self, alive, code=None, at=None): self.polls, self.alive, self.code, self.at = 0, alive, code, at or {}
+            def poll(self):
+                self.polls += 1
+                if self.polls in self.at: record(state=self.at[self.polls])
+                return None if self.polls <= self.alive else self.code
+        with patch.object(ctl.time, 'sleep'), contextlib.redirect_stdout(io.StringIO()):
+            # An endpoint is not enough: the first contact with the VM is still ahead.
+            record(state='allocating')
+            worker = Worker(alive=9, at={3: 'booting'})
+            self.assertEqual(ctl.await_boot(lease, worker, 0)[0], None)
+            self.assertEqual(worker.polls, 3)
+            # The GPU check failed and the VM was released: the worker's exit is the answer.
+            record(state='allocating')
+            worker = Worker(alive=2, code=1, at={3: 'stopped'})
+            self.assertEqual(ctl.await_boot(lease, worker, 0)[0], 1)
+            record(state='booting')
+            self.assertEqual(ctl.await_boot(lease, self.Child(0), 0)[0], 0)  # exited: the exit code wins
+            ctl._write_state({'session': self.S2, 'state': 'booting', 'endpoint': 'owned-endpoint'})
+            worker = Worker(alive=2, code=3)
+            self.assertEqual(ctl.await_boot(lease, worker, 0)[0], 3)  # another lease's record is not ours
+            self.assertEqual(worker.polls, 3)
+            record(state='ready')
+            self.assertEqual(ctl.await_boot(lease, Worker(alive=9), 0)[0], None)  # a very fast deployment
+            record(state='booting', stop_requested=1.0)
+            worker = Worker(alive=2, code=1)
+            self.assertEqual(ctl.await_boot(lease, worker, 0)[0], 1)  # stop seen: never a success
+            self.assertEqual(worker.polls, 3)
+
+    def test_first_contact_with_a_fresh_vm_gets_three_minutes_and_one_try(self):
+        lease = {'session': self.S1}
+        done = unittest.mock.Mock(stdout='COMPUTE_GPU_VERIFIED A100 40960\n')
+        with patch.object(ctl, 'cli', return_value=done) as cli, contextlib.redirect_stdout(io.StringIO()):
+            ctl._verify_gpu(lease)
+            cli.assert_called_once()  # the check creates the private directory: not repeatable
+            args, kwargs = cli.call_args
+            self.assertEqual(args[0], 'exec')
+            code_timeout = float(args[args.index('--timeout') + 1])
+            self.assertGreaterEqual(code_timeout, 120)
+            self.assertGreaterEqual(kwargs['timeout'] - code_timeout, 60)  # room to reach a slow kernel
+            self.assertGreaterEqual(kwargs['timeout'], 180)
+            ctl.remote(self.S1, 'print(1)')  # every other task keeps the short default
+            self.assertEqual(cli.call_args.kwargs['timeout'], 60)
+            ctl.remote_task(self.S1, 'gpu_check', {'private': '/p', 'gpu_name': 'A100', 'memory_mib': [1, 2]})
+            self.assertEqual(cli.call_args.kwargs['timeout'], 60)
+        with patch.object(ctl, 'cli', side_effect=subprocess.TimeoutExpired('colab', 180)) as cli, \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                ctl._verify_gpu(lease)
+            cli.assert_called_once()
+
+    def test_relay_log_prints_each_complete_line_once(self):
+        log = ctl.STATE/'deploy.log'
+        log.write_bytes('第一行\n半'.encode())
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            offset = ctl.relay_log(0)
+            self.assertEqual(out.getvalue(), '第一行\n')
+            with log.open('ab') as handle: handle.write('行\n'.encode())
+            offset = ctl.relay_log(offset)
+            self.assertEqual(ctl.relay_log(offset), offset)
+        self.assertEqual(out.getvalue(), '第一行\n半行\n')
+        log.unlink()
+        self.assertEqual(ctl.relay_log(7), 7)  # no log yet: offset unchanged, nothing raised
+
+    def test_allocation_issues_one_request_and_lets_the_cli_give_up_first(self):
+        lease = {'session': self.S1, 'state': 'preparing'}
+        ctl._write_state(dict(lease))
+        with patch.object(ctl, 'cli') as cli, patch.object(ctl, 'server_sessions', return_value={'owned-endpoint': self.S1}), \
+             contextlib.redirect_stdout(io.StringIO()):
+            ctl._allocate(lease, {'allocated': False})
+        self.assertEqual(cli.call_args.args[0], 'new')
+        self.assertEqual(cli.call_args.kwargs['env']['COLAB_CLI_ASSIGN_RETRIES'], '0')
+        self.assertIs(cli.call_args.kwargs['capture'], True)
+        # The CLI must be the one to give up: its GET and its POST both fit inside the kill timeout.
+        self.assertLess(2 * float(cli.call_args.kwargs['env']['COLAB_CLI_REQUEST_TIMEOUT']), cli.call_args.kwargs['timeout'])
+        with patch.object(ctl.subprocess, 'run') as run:
+            ctl.cli('new', env={'COLAB_CLI_ASSIGN_RETRIES': '0'})
+            self.assertEqual(run.call_args.kwargs['env']['COLAB_CLI_ASSIGN_RETRIES'], '0')
+            self.assertEqual(run.call_args.kwargs['env'].get('PATH'), os.environ.get('PATH'))
+            ctl.cli('sessions')
+            self.assertIsNone(run.call_args.kwargs['env'])
+
+    def test_only_a_transient_server_refusal_is_marked_retryable(self):
+        url = 'https://colab.example/tun/m/assign?nbh=synthetic'
+        trace = 'Traceback (most recent call last):\n  File "client.py", line 238, in _issue_request\n'
+        cases = {
+            '503': (trace + f'colab_cli.client.ColabRequestError: Failed to issue request POST {url}: Service Unavailable\n', True),
+            '502 on the GET': (trace + f'colab_cli.client.ColabRequestError: Failed to issue request GET {url}: Bad Gateway\n', True),
+            'read timeout': (trace + "requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='colab.example', port=443): Read timed out. (read timeout=120.0)\n", False),
+            'refused (412)': ('[colab] Allocation refused (precondition failed). This can mean too many active sessions\n', False),
+            'no entitlement (400)': ("[colab] Backend rejected accelerator 'A100'. You may not have quota\n", False),
+            'other 4xx/5xx': (trace + f'colab_cli.client.ColabRequestError: Failed to issue request POST {url}: Internal Server Error\n', False),
+            '503 mentioned earlier, different final error': (
+                f'ColabRequestError: Failed to issue request POST {url}: Service Unavailable\nRuntimeError: later failure\n', False),
+            'no output': (None, False)}
+        for name, (stderr, expected) in cases.items():
+            with self.subTest(name):
+                lease = {'session': self.S1, 'state': 'preparing'}
+                ctl._write_state(dict(lease))
+                failure = subprocess.CalledProcessError(1, 'colab', stderr=stderr)
+                with patch.object(ctl, 'cli', side_effect=failure), contextlib.redirect_stdout(io.StringIO()), \
+                     contextlib.redirect_stderr(io.StringIO()) as relayed:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        ctl._allocate(lease, {'allocated': False})
+                saved = ctl.current()
+                self.assertEqual(saved['allocation_failed'], 'cli-error')
+                self.assertIs(saved['allocation_transient'], expected)
+                self.assertEqual(relayed.getvalue(), stderr or '')  # worker.log keeps the CLI's words
+        # A killed CLI stays unclassified and unproven: the release path must not treat it as cli-error.
+        lease = {'session': self.S1, 'state': 'preparing'}
+        ctl._write_state(dict(lease))
+        with patch.object(ctl, 'cli', side_effect=subprocess.TimeoutExpired('colab', 300)), \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                ctl._allocate(lease, {'allocated': False})
+        self.assertNotIn('allocation_failed', ctl.current())
+        self.assertNotIn('allocation_transient', ctl.current())
+
+    def test_worker_stands_down_before_handing_a_stopped_vm_anything(self):
+        lease = {'session': self.S1}
+        live = {'session': self.S1, 'state': 'allocating', 'endpoint': 'owned-endpoint'}
+        ctl._write_state(dict(live)); ctl.stand_down_if_stopped(lease)  # nothing happened: carry on
+        (ctl.STATE/'current.json').unlink(); ctl.stand_down_if_stopped(lease)  # no record proves no stop
+        for name, record in {'stop marked, release not started': {**live, 'stop_requested': 1.0},
+                             'being released': {**live, 'state': 'stopping'},
+                             'released': {**live, 'state': 'stopped'},
+                             'another lease': {**live, 'session': self.S2}}.items():
+            with self.subTest(name):
+                ctl._write_state(dict(record))
+                with self.assertRaises(ctl.LeaseStopped):
+                    ctl.stand_down_if_stopped(lease)
+        # Wired in before every upload (credentials.json is one of them) and before the kick.
+        ctl._write_state({**live, 'stop_requested': 1.0})
+        with tempfile.TemporaryDirectory() as directory, patch.object(ctl, 'cli') as cli, \
+             contextlib.redirect_stdout(io.StringIO()):
+            temp = Path(directory); archive = temp/'source.tar.gz'; archive.write_bytes(b'x')
+            with self.assertRaises(ctl.LeaseStopped):
+                ctl._upload_bundle({**live, 'hostname': 'h', 'expected_dns': 'h.example', 'vm_layout': dict(ctl.common.LAYOUT),
+                                    'options': {}}, temp, archive, {'TS_AUTHKEY': 'tskey-auth-synthetic'})
+            cli.assert_not_called()
+
+    def test_stop_during_the_upload_is_not_followed_by_the_bootstrap(self):
+        lease = {'session': self.S1, 'state': 'preparing', 'hostname': ctl.HOSTNAME}
+        ctl._write_state(dict(lease))
+        def allocated(lease, phase): lease['endpoint'] = 'owned-endpoint'; ctl.save_state(lease)
+        with patch.object(ctl, '_preflight', return_value=({}, 'example.ts.net')), patch.object(ctl, 'make_archive', return_value=5), \
+             patch.object(ctl, '_allocate', side_effect=allocated), patch.object(ctl, '_verify_gpu'), \
+             patch.object(ctl, '_upload_bundle', side_effect=lambda *a: ctl.request_stop()) as upload, \
+             patch.object(ctl, '_kick_bootstrap') as kick, contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(ctl.LeaseStopped):
+                ctl._start_owned(lease, {'allocated': False, 'bootstrapped': False})
+        upload.assert_called_once()
+        kick.assert_not_called()
+        self.assertNotEqual(ctl.current()['state'], 'booting')
+
+    def test_stop_mark_survives_the_owner_and_blocks_the_next_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            key = Path(directory)/'key'; key.write_text('tskey-auth-synthetic'); key.chmod(0o600)
+            args = argparse.Namespace(auth_key=key, minutes=1, hostname=ctl.HOSTNAME)
+            first = ctl.reserve_lease(args)
+            self.assertEqual(ctl.request_stop()['session'], first['session'])
+            with self.assertRaisesRegex(ctl.LeaseStopped, 'stop'):
+                # The owner's pre-allocation CAS: refused, so the paid call is never made...
+                ctl.save_state({**first, 'state': 'allocating', 'allocation_attempted': True})
+            self.assertEqual(ctl.current()['state'], 'preparing')
+            self.assertIs(ctl.current()['allocation_attempted'], False)  # ...and never claimed
+            with self.assertRaisesRegex(ctl.LeaseStopped, 'stop'):
+                # A request already in flight when the stop landed: the owner still stands
+                # down, but what the server told it reaches the release path.
+                ctl.save_state({**first, 'state': 'allocating', 'allocation_attempted': True,
+                                'allocation_failed': 'cli-error', 'allocation_transient': True})
+            saved = ctl.current()
+            self.assertEqual((saved['state'], saved['allocation_failed'], saved['allocation_transient']),
+                             ('preparing', 'cli-error', True))
+            with self.assertRaisesRegex(ctl.LeaseStopped, 'stop'):
+                ctl.save_state({**first, 'state': 'allocating', 'endpoint': 'owned-endpoint'})
+            self.assertEqual(ctl.current()['endpoint'], 'owned-endpoint')
+            self.assertEqual(ctl.current()['state'], 'preparing')
+            # The owner's release writes from its stale in-memory lease and keeps the mark.
+            ctl.save_state({**first, 'state': 'stopped', 'allocation_failed': 'cli-error',
+                            'allocation_transient': True})
+            self.assertTrue(ctl.current()['stop_requested'])
+            self.assertFalse(ctl.retryable_failure(ctl.current(), first))
+            with self.assertRaisesRegex(ctl.LeaseStopped, 'stop'):
+                ctl.reserve_lease(args, retry_of=first['session'])
+            self.assertEqual(ctl.current()['session'], first['session'])
+            fresh = ctl.reserve_lease(args)  # a new `start` typed by the operator is not a retry
+            self.assertNotIn('stop_requested', ctl.current())
+            self.assertNotEqual(fresh['session'], first['session'])
+
+    def test_stop_with_nothing_to_release_still_marks_the_record(self):
+        ctl._write_state(self.failed(self.S1))
+        with patch.object(ctl, 'stop_owned') as stop, contextlib.redirect_stdout(io.StringIO()) as out:
+            ctl.dispatch(argparse.Namespace(command='stop', confirm_unallocated=False))
+        stop.assert_not_called()
+        self.assertIn('没有本工具持有的活动租约（已记下 stop', out.getvalue())
+        self.assertTrue(ctl.current()['stop_requested'])
+        (ctl.STATE/'current.json').unlink()
+        self.assertIsNone(ctl.request_stop())  # no record: nothing to mark, nothing created
+        self.assertFalse((ctl.STATE/'current.json').exists())
+
+    def test_stop_acts_on_the_record_it_marked_not_on_an_older_snapshot(self):
+        # A retrying start reserved its next lease between stop's snapshot and stop's mark.
+        ctl._write_state({'session': self.S2, 'state': 'preparing', 'allocation_attempted': False})
+        with patch.object(ctl, 'snapshot', return_value=self.failed(self.S1)), \
+             patch.object(ctl, 'stop_owned') as stop, contextlib.redirect_stdout(io.StringIO()) as out:
+            ctl.dispatch(argparse.Namespace(command='stop', confirm_unallocated=False))
+        stop.assert_called_once()
+        self.assertEqual(stop.call_args.args[0]['session'], self.S2)
+        self.assertTrue(stop.call_args.args[0]['stop_requested'])
+        self.assertNotIn('没有本工具持有的活动租约', out.getvalue())
+
+    def test_start_dispatch_blocks_by_default_and_keeps_the_single_shot_paths(self):
+        parser = ctl.build_parser()
+        with patch.object(ctl, 'start_until_allocated', return_value=0) as blocking, \
+             patch.object(ctl, 'start_background', return_value=0) as single, patch.object(ctl, 'start') as foreground:
+            ctl.dispatch(parser.parse_args(['start']))
+            self.assertEqual((blocking.call_count, single.call_count, foreground.call_count), (1, 0, 0))
+            ctl.dispatch(parser.parse_args(['start', '--no-retry']))
+            self.assertEqual((blocking.call_count, single.call_count, foreground.call_count), (1, 1, 0))
+            ctl.dispatch(parser.parse_args(['start', '--foreground']))
+            self.assertEqual((blocking.call_count, single.call_count, foreground.call_count), (1, 1, 1))
 
 
 class GuardTests(unittest.TestCase):

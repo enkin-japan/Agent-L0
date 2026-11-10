@@ -1,0 +1,67 @@
+[
+ {
+  "id": "A1",
+  "name": "await_boot: 有 endpoint 就算就位",
+  "old": "                and view.get('state') in (BOOTING, READY) and not view.get('stop_requested')):",
+  "new": "                and view.get('state') not in STOP_STATES and not view.get('stop_requested')):",
+  "expect_red": [
+   "test_await_boot_returns_at_booting_or_at_worker_exit",
+   "test_start_holds_the_terminal_through_the_first_contact_with_the_vm"
+  ]
+ },
+ {
+  "id": "A2",
+  "name": "await_boot: 已见 stop 仍算就位",
+  "old": "                and view.get('state') in (BOOTING, READY) and not view.get('stop_requested')):",
+  "new": "                and view.get('state') in (BOOTING, READY)):",
+  "expect_red": [
+   "test_await_boot_returns_at_booting_or_at_worker_exit"
+  ]
+ },
+ {
+  "id": "A3",
+  "name": "await_boot: endpoint 优先于进程已退出",
+  "old": "        if code is not None:\n            return code, offset\n        if (view.get('session') == lease['session'] and view.get('endpoint')",
+  "new": "        if code is not None and not view.get('endpoint'):\n            return code, offset\n        if (view.get('session') == lease['session'] and view.get('endpoint')",
+  "expect_red": [
+   "test_await_boot_returns_at_booting_or_at_worker_exit",
+   "test_worker_that_died_without_a_final_state_is_released_fail_closed"
+  ]
+ },
+ {
+  "id": "A4",
+  "name": "首次联络: 代码时限回到 40 s",
+  "old": "FIRST_CONTACT = {'timeout': 120, 'grace': 60}",
+  "new": "FIRST_CONTACT = {'timeout': 40, 'grace': 60}",
+  "expect_red": [
+   "test_first_contact_with_a_fresh_vm_gets_three_minutes_and_one_try"
+  ]
+ },
+ {
+  "id": "A5",
+  "name": "首次联络: 连接余量回到 20 s",
+  "old": "FIRST_CONTACT = {'timeout': 120, 'grace': 60}",
+  "new": "FIRST_CONTACT = {'timeout': 120, 'grace': 20}",
+  "expect_red": [
+   "test_first_contact_with_a_fresh_vm_gets_three_minutes_and_one_try"
+  ]
+ },
+ {
+  "id": "A6",
+  "name": "首次联络: GPU 检查不用放宽的时限",
+  "old": "                       'gpu_name': common.GPU_NAME, 'memory_mib': common.GPU_MEMORY_MIB},\n                      **FIRST_CONTACT)",
+  "new": "                       'gpu_name': common.GPU_NAME, 'memory_mib': common.GPU_MEMORY_MIB})",
+  "expect_red": [
+   "test_first_contact_with_a_fresh_vm_gets_three_minutes_and_one_try"
+  ]
+ },
+ {
+  "id": "A7",
+  "name": "retryable: 申请到后失败也重试",
+  "old": "                and not view.get('endpoint') and not view.get('stop_requested'))",
+  "new": "                and not view.get('stop_requested'))",
+  "expect_red": [
+   "test_only_a_proven_empty_cli_failure_is_retryable"
+  ]
+ }
+]

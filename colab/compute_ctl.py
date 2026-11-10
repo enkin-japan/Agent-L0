@@ -54,6 +54,35 @@ STOPPING, STOPPED, RELEASE_UNCONFIRMED = 'stopping', 'stopped', 'release-unconfi
 STOP_STATES = {STOPPING, STOPPED, RELEASE_UNCONFIRMED}
 RETAINABLE_STATES = {READY, SWITCHING, SWITCH_FAILED}
 SWITCH_FIELDS = ('switch', 'model', 'options', 'progress')
+RELEASE_FACTS = ('endpoint', 'allocation_failed', 'allocation_transient')
+
+# ---- Allocation request budget ---------------------------------------------
+# One assignment request per `colab new`. The CLI's own retry loop (3 retries, 10/20/40 s
+# backoff) outlasts any sane local timeout once the server takes 30–60 s to answer 503
+# (seen from 2026-11-08), and killing the CLI mid-request leaves the allocation identity
+# unknown: release-unconfirmed, which only an operator can clear. With a single request the
+# CLI reports the failure itself, the release path then proves the server holds nothing,
+# and `start` does the retrying. The CLI has to be the one that gives up, so the local kill
+# timeout covers its two requests before the assignment exists (a GET, then the POST) at
+# the pinned per-request timeout. Both variables were read in CLI 0.7.5 (client.py); a CLI
+# that ignores them falls back to its own retries and, at worst, to release-unconfirmed.
+ALLOCATE_ENV = {'COLAB_CLI_ASSIGN_RETRIES': '0', 'COLAB_CLI_REQUEST_TIMEOUT': '120'}
+ALLOCATE_TIMEOUT = 300
+RETRY_INTERVAL = 30  # seconds between two allocation attempts of one `start`
+# The one failure `start` retries unattended: the server itself answered a request of
+# `colab new` with a transient 5xx, so nothing was accepted. A read timeout (the request
+# may still be honoured later), a refusal (quota, entitlement, too many sessions) and any
+# output this does not recognise all need a person.
+TRANSIENT_REFUSAL = re.compile(
+    r'ColabRequestError: Failed to issue request (?:GET|POST) \S+: '
+    r'(?:Bad Gateway|Service Unavailable|Gateway Timeout)\s*\Z')
+CONFIRM_INTERVAL = 5  # seconds between the server reads that prove nothing was allocated
+# First contact with a VM allocated seconds ago. Its Jupyter server may still be coming up:
+# on 2026-11-10 the kernel took 12 s to create and 30 s to connect (usually under 1 s
+# each), the default 60 s ran out before the check answered, and a healthy VM was released.
+# The check is not repeatable (it creates the private directory), so it gets time instead of
+# a second try: `timeout` for the code itself, `grace` for the CLI to reach the kernel.
+FIRST_CONTACT = {'timeout': 120, 'grace': 60}
 
 PHASE_LABELS = {
     'extracting': '解压代码', 'installing-python': '安装 Python 环境',
@@ -141,6 +170,20 @@ def interrupts_raise():
     return signal_handlers(_raise_interrupt)
 
 
+def _raise_interrupt_once(*_):
+    for s in INTERRUPT_SIGNALS:
+        signal.signal(s, signal.SIG_IGN)
+    raise KeyboardInterrupt
+
+
+def interrupt_once():
+    """Like interrupts_raise, but the first signal also disarms the rest.
+
+    For a handler whose cleanup must not be skipped: a second Ctrl+C landing between the
+    KeyboardInterrupt and the cleanup's own cleanup_signals() would otherwise abandon it."""
+    return signal_handlers(_raise_interrupt_once)
+
+
 def cleanup_signals():
     # Ctrl+C must request cleanup once, not interrupt the cleanup subprocesses.
     return signal_handlers(signal.SIG_IGN)
@@ -155,7 +198,8 @@ def allocation_signals():
     def requested(*_):
         nonlocal pending
         if not pending:
-            event('收到停止请求：等待当前 VM 分配请求返回，再立即回收（请求上限 120 秒）')
+            event('收到停止请求：等待当前 VM 分配请求返回，再立即回收'
+                  f'（请求上限 {ALLOCATE_TIMEOUT} 秒）')
         pending = True
 
     with signal_handlers(requested):
@@ -220,11 +264,28 @@ def save_state(data, *, new_lease=False):
         if previous and previous.get('session') != data.get('session'):
             if not new_lease or previous.get('state') != STOPPED:
                 raise LeaseStopped('状态文件属于另一个租约')
+            if previous.get('stop_requested') and data.get('retry_of') == previous.get('session'):
+                # An explicit stop outranks start's retry loop, wherever it landed.
+                raise LeaseStopped('上一次申请期间收到了 stop；不再自动重试')
         elif previous:
             if previous.get('state') in STOP_STATES and data.get('state') not in STOP_STATES:
                 raise LeaseStopped('租约已被并发停止')
+            if previous.get('stop_requested') and data.get('state') not in STOP_STATES:
+                # The stop may not have reached its release yet (it waits for the allocation
+                # lock, or its process is gone): the owner stands down itself. What the owner
+                # just learned from the server is kept, because the release path decides from
+                # it (endpoint → release by identity; allocation_failed → prove empty). Not
+                # allocation_attempted: the write that sets it precedes the paid call, and a
+                # refusal here means that call is never made.
+                learned = {k: data[k] for k in RELEASE_FACTS if data.get(k) is not None}
+                if any(previous.get(k) != v for k, v in learned.items()):
+                    _write_state({**previous, **learned})
+                raise LeaseStopped('租约已收到 stop')
             if previous.get('tailnet') and not data.get('tailnet'):
                 data['tailnet'] = previous['tailnet']
+            # The lease owner writes from an older in-memory lease; it must not erase a stop.
+            if previous.get('stop_requested') and not data.get('stop_requested'):
+                data['stop_requested'] = previous['stop_requested']
             # The long-lived start/watch owner holds an older lease object.
             # A switch owns its options/progress; supervision must not roll it back.
             if previous.get('switch') != data.get('switch') and data.get('state') not in STOP_STATES:
@@ -241,6 +302,28 @@ def _write_state(data):
     temporary.write_text(json.dumps(data, indent=2))
     temporary.chmod(0o600)
     temporary.replace(STATE / 'current.json')
+
+
+def request_stop():
+    """Record an explicit `stop` on the current record, whatever its state.
+
+    start's retry loop reads it (save_state, retryable_failure): a stop has to end the
+    loop even when it lands while a failed attempt is being cleaned up or between two
+    attempts, when there is nothing left for the stop itself to release. From then on the
+    lease owner can no longer write a non-stop state (save_state). Returns the record as
+    marked: the caller must act on this one, not on a snapshot taken before the lock."""
+    if not (STATE / 'current.json').exists():
+        return None
+    with (STATE / 'state.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            data = current()
+        except ValueError:
+            return None  # Corrupt record: the stop path reports it.
+        if data:
+            data['stop_requested'] = time.time()
+            _write_state(data)
+        return data
 
 
 def switch_update(session, job, **updates):
@@ -316,7 +399,7 @@ def deployment_options(args):
             'bootstrap_timeout': opt(args, 'bootstrap_timeout')}
 
 
-def reserve_lease(args):
+def reserve_lease(args, retry_of=None):
     previous = current()
     if previous and previous.get('state') != STOPPED:
         raise ValueError('上一个租约尚未确认停止；先运行 status / stop')
@@ -331,6 +414,8 @@ def reserve_lease(args):
              'supervision_options': {'poll_interval': opt(args, 'poll_interval'),
                                      'health_interval': opt(args, 'health_interval')},
              'predecessor': prior_resources(previous)}
+    if retry_of:
+        lease['retry_of'] = retry_of  # save_state refuses it once that lease saw a stop
     save_state(lease, new_lease=True)
     return lease
 
@@ -375,26 +460,27 @@ def make_archive(root, destination):
 
 # ---- Colab CLI and VM tasks ------------------------------------------------
 
-def cli(*args, timeout=90, capture=False):
+def cli(*args, timeout=90, capture=False, env=None):
     # Colab itself owns its auth/session store. Never read, copy, or restore it.
     return subprocess.run(['colab', *args], check=True, timeout=timeout,
-                          text=True, capture_output=capture, start_new_session=True)
+                          text=True, capture_output=capture, start_new_session=True,
+                          env={**os.environ, **env} if env else None)
 
 
-def remote(session, code, timeout=40):
+def remote(session, code, timeout=40, grace=20):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py') as f:
         f.write(code)
         f.flush()
         return cli('exec', '-s', session, '-f', f.name, '--timeout', str(timeout),
-                   timeout=timeout + 20, capture=True).stdout
+                   timeout=timeout + grace, capture=True).stdout
 
 
 def task_code(name, params):
     return (TASKS / f'{name}.py').read_text() + f'\nmain(json.loads({json.dumps(params)!r}))\n'
 
 
-def remote_task(session, name, params, timeout=40):
-    return remote(session, task_code(name, params), timeout=timeout)
+def remote_task(session, name, params, timeout=40, **budget):
+    return remote(session, task_code(name, params), timeout=timeout, **budget)
 
 
 def marker_line(output, marker):
@@ -621,7 +707,7 @@ def _confirm_no_allocation(name, first):
     # unattributed `?` VMs across three reads, 5 s apart.
     views = [first]
     for _ in range(2):
-        time.sleep(5)
+        time.sleep(CONFIRM_INTERVAL)
         views.append(server_sessions())
     return all(name not in v.values() and '?' not in v.values() for v in views)
 
@@ -760,6 +846,17 @@ def lease_alive(lease):
         raise LeaseStopped('租约已不再处于活动状态')
 
 
+def stand_down_if_stopped(lease):
+    """Before each step that hands the VM something (credentials, the bootstrap).
+
+    A stop that landed during the previous remote call releases the VM without waiting for
+    this process; what follows here must not deploy onto a VM that is being released."""
+    saved = snapshot()
+    if saved and (saved.get('session') != lease['session'] or saved.get('state') in STOP_STATES
+                  or saved.get('stop_requested')):
+        raise LeaseStopped('租约已收到 stop 或已在回收；不再继续部署')
+
+
 def start(args):
     job = getattr(args, 'job', None)
     lease = current() if job else reserve_lease(args)
@@ -837,6 +934,7 @@ def _start_owned(lease, phase):
         _allocate(lease, phase)
         _verify_gpu(lease)
         _upload_bundle(lease, temp, archive, credentials)
+        stand_down_if_stopped(lease)
         _kick_bootstrap(lease)
         phase['bootstrapped'] = True
     credentials.clear()
@@ -856,6 +954,26 @@ def _preflight(lease):
     return credentials, suffix
 
 
+def relay_cli_output(result):
+    """`colab new` runs captured (its stderr classifies a failure); worker.log still gets it."""
+    for stream, text in ((sys.stdout, getattr(result, 'stdout', None)),
+                         (sys.stderr, getattr(result, 'stderr', None))):
+        if isinstance(text, bytes):
+            text = text.decode('utf-8', 'replace')
+        if isinstance(text, str) and text:
+            try:
+                stream.write(text)
+                stream.flush()
+            except OSError:
+                pass
+
+
+def transient_refusal(stderr):
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode('utf-8', 'replace')
+    return isinstance(stderr, str) and bool(TRANSIENT_REFUSAL.search(stderr.rstrip()))
+
+
 def _allocate(lease, phase):
     with allocation_signals(), (STATE / 'allocation.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -864,12 +982,18 @@ def _allocate(lease, phase):
         phase['allocated'] = True
         event('开始申请 A100 40GB VM', session=lease['session'])
         try:
-            cli('new', '-s', lease['session'], '--gpu', common.GPU_NAME, timeout=120)
+            relay_cli_output(cli('new', '-s', lease['session'], '--gpu', common.GPU_NAME,
+                                 timeout=ALLOCATE_TIMEOUT, env=ALLOCATE_ENV, capture=True))
+        except subprocess.TimeoutExpired as exc:
+            relay_cli_output(exc)
+            raise
         except subprocess.CalledProcessError as exc:
+            relay_cli_output(exc)
             # The CLI itself reported the request failed (no A100, quota, network).
             # allocation_attempted stays True: stop still has to see the server list
             # free of this session and of unattributed VMs before recording STOPPED.
             lease['allocation_failed'] = 'cli-error'
+            lease['allocation_transient'] = transient_refusal(exc.stderr)
             save_state(lease)
             event('Colab CLI 申请 VM 失败', returncode=exc.returncode)
             raise
@@ -884,7 +1008,8 @@ def _verify_gpu(lease):
     event('VM 已分配，检查 GPU 型号及占用')
     out = remote_task(lease['session'], 'gpu_check',
                       {'private': common.layout_of(lease)['private'],
-                       'gpu_name': common.GPU_NAME, 'memory_mib': common.GPU_MEMORY_MIB})
+                       'gpu_name': common.GPU_NAME, 'memory_mib': common.GPU_MEMORY_MIB},
+                      **FIRST_CONTACT)
     if 'COMPUTE_GPU_VERIFIED' not in out:
         raise RuntimeError('GPU 校验未通过')
     event('GPU 型号和空闲检查通过')
@@ -904,6 +1029,7 @@ def _upload_bundle(lease, temp, archive, credentials):
              *[(ROOT / 'colab' / name, name) for name in VM_FILES],
              (ROOT / 'colab/requirements-compute.lock', 'requirements.txt')]
     for local, name in files:
+        stand_down_if_stopped(lease)  # the first contact may have taken minutes
         event('开始上传', file=name)
         cli('upload', '-s', lease['session'], str(local), f'{private}/{name}',
             timeout=120, capture=True)
@@ -1121,22 +1247,191 @@ def run_watch_worker(args, lease_fd):
         mark_supervision_interrupted(args.job)
 
 
-def start_background(args, lease_fd):
+def launch_worker(args, lease_fd, retry_of=None):
     # FD inheritance transfers the already-acquired lease lock without a race.
-    lease = reserve_lease(args)
-    for name in ('deploy.log', 'worker.log'):  # rotate only once a new lease exists
-        path = STATE / name
-        if path.exists():
-            path.replace(STATE / (name + '.previous'))
+    lease = reserve_lease(args, retry_of)
+    if not retry_of:  # a retry keeps appending: one `start` reads as one log
+        for name in ('deploy.log', 'worker.log'):  # rotate only once a new lease exists
+            path = STATE / name
+            if path.exists():
+                path.replace(STATE / (name + '.previous'))
     try:
         child = spawn_worker(worker_command('_worker', '--lease-fd', lease_fd, lease['session']),
-                             lease_fd, 'w')
+                             lease_fd, 'a' if retry_of else 'w')
     except BaseException:
         stop_owned(lease)
         raise
     event('后台部署进程已启动（尚未 READY）', pid=child.pid,
           logs='./colab/deploy.sh logs -f', stop='./colab/deploy.sh stop')
-    return early_exit_code(child)
+    return lease, child
+
+
+def start_background(args, lease_fd):
+    """`start --no-retry`: one attempt, return as soon as the worker is detached."""
+    return early_exit_code(launch_worker(args, lease_fd)[1])
+
+
+def relay_log(offset):
+    """Print the complete deploy.log lines written since offset; return the new offset."""
+    try:
+        with (STATE / 'deploy.log').open('rb') as log:
+            log.seek(offset)
+            data = log.read()
+    except OSError:
+        return offset
+    end = data.rfind(b'\n') + 1
+    if end:
+        try:
+            print(data[:end].decode('utf-8', 'replace'), end='', flush=True)
+        except OSError:
+            pass  # A closed terminal must not abort the wait or the cleanup behind it.
+    return offset + end
+
+
+def await_boot(lease, child, offset):
+    """Relay the worker's progress until its VM is booting or the worker exits.
+
+    Returns (None, offset) once a live worker has allocated the VM, passed the GPU check and
+    started the bootstrap on it (BOOTING); otherwise the worker's exit code and the offset.
+    An endpoint alone is not enough: the first contact with a fresh VM is where a slow or
+    dead runtime shows, and the operator should still be watching then. The exit is sampled
+    before the state, and wins: an exited worker's record is final, and a VM nobody
+    supervises is not a success. A lease that has seen a stop never counts."""
+    while True:
+        code = child.poll()
+        view = snapshot() or {}
+        offset = relay_log(offset)
+        if code is not None:
+            return code, offset
+        if (view.get('session') == lease['session'] and view.get('endpoint')
+                and view.get('state') in (BOOTING, READY) and not view.get('stop_requested')):
+            return None, offset
+        time.sleep(1)
+
+
+def retryable_failure(view, lease):
+    """Only a failure the release path has already proven empty is retried unattended.
+
+    The server answered `colab new` with a transient 5xx (allocation_transient), and the
+    release path then read the server three times without finding this session or an
+    unattributed VM (the only way to STOPPED with allocation_failed == 'cli-error'). A
+    killed or timed-out CLI, a refusal, release-unconfirmed, a local preflight failure, a
+    VM that was allocated and then released, and an explicit stop all end the loop."""
+    return bool(view and view.get('session') == lease['session']
+                and view.get('state') == STOPPED
+                and view.get('allocation_failed') == 'cli-error'
+                and view.get('allocation_transient') is True
+                and not view.get('endpoint') and not view.get('stop_requested'))
+
+
+def wait_for_retry():
+    """Sleep RETRY_INTERVAL in short steps; False as soon as a stop has been recorded."""
+    remaining = RETRY_INTERVAL
+    while remaining > 0:
+        if (snapshot() or {}).get('stop_requested'):
+            return False
+        step = min(1, remaining)
+        time.sleep(step)
+        remaining -= step
+    return True
+
+
+def start_until_allocated(args, lease_fd):
+    """Default `start`: hold the terminal until a VM is booting, retrying allocation.
+
+    Each attempt is an ordinary detached worker on a fresh lease; this process keeps the
+    lease lock across attempts, relays the worker's log, and returns 0 once the bootstrap
+    runs on the VM (the worker then deploys and supervises on its own). Ctrl+C, SIGTERM and a closed terminal
+    all stop the retrying and release whatever the current attempt holds; so does a
+    `stop` from anywhere else (request_stop)."""
+    global ECHO
+    lease = child = None
+    attempt = offset = 0
+    echo, ECHO = ECHO, False  # every line reaches the terminal once, through relay_log
+    try:
+        with interrupt_once():
+            try:
+                while True:
+                    attempt += 1
+                    try:
+                        lease, child = launch_worker(args, lease_fd,
+                                                     lease['session'] if lease else None)
+                    except LeaseStopped as exc:
+                        if attempt == 1:
+                            raise
+                        event('停止重试', reason=str(exc))
+                        return 1
+                    code, offset = await_boot(lease, child, offset)
+                    if code is None:
+                        event('VM 已就位，部署任务已在 VM 上启动；后台继续（尚未 READY）',
+                              attempts=attempt, logs='./colab/deploy.sh logs -f',
+                              stop='./colab/deploy.sh stop')
+                        return 0
+                    view = snapshot()
+                    if retryable_failure(view, lease):
+                        event(f'第 {attempt} 次申请被服务端暂时拒绝；已核对无残留，'
+                              f'{RETRY_INTERVAL} 秒后重试（Ctrl+C 或 stop 终止）')
+                        offset = relay_log(offset)
+                        if wait_for_retry():
+                            continue
+                        view = snapshot()
+                    if (view or {}).get('stop_requested'):
+                        event('收到 stop：停止重试', attempts=attempt)
+                    elif (view or {}).get('state') == RELEASE_UNCONFIRMED:
+                        event('回收未确认（release-unconfirmed）：不再重试；按上面的提示人工核对后 stop',
+                              attempts=attempt)
+                    elif (view is None or view.get('session') != lease['session']
+                          or view.get('state') != STOPPED):
+                        # The worker is gone and left no final state: nobody else will
+                        # release what it may hold. Fail closed through the release path,
+                        # which checks the server by identity and never guesses.
+                        event('后台进程已退出但租约未停止：按记录核对并回收', attempts=attempt)
+                        offset = relay_log(offset)
+                        ECHO = echo
+                        stop_owned(view if view is not None
+                                   else dict(lease, allocation_attempted=True))
+                    elif view.get('endpoint'):
+                        event('申请到 VM 后启动失败，VM 已回收；这类失败已产生计费，不自动重试'
+                              '（原因见上方日志）', attempts=attempt)
+                    else:
+                        event('申请未成功，且不属于可自动重试的情形；不再重试'
+                              '（CLI 报错原文见 .colab-compute/worker.log）', attempts=attempt)
+                    return code if code > 0 else 1
+            except KeyboardInterrupt:
+                # Mark first: if this process is killed while it waits for the request in
+                # flight, the mark alone makes the worker stand down and release.
+                try:
+                    marked = request_stop()
+                except OSError:
+                    marked = None
+                offset = relay_log(offset)
+                ECHO = echo
+                # This process holds the lease lock, so a record not yet STOPPED is this
+                # start's own. With no readable record, release from the last lease this
+                # loop reserved, but as one that may have allocated: the release path then
+                # asks the server instead of trusting a stale local copy.
+                target = marked if marked is not None else (
+                    dict(lease, allocation_attempted=True) if lease else None)
+                if target and target.get('state') != STOPPED:
+                    event('收到中断：停止重试并回收当前申请；如请求正在途中，须等它返回'
+                          f'（最长约 {ALLOCATE_TIMEOUT} 秒），勿强制杀进程')
+                    stop_owned(target)
+                else:
+                    event('收到中断：停止重试；没有需要回收的申请')
+                if child is not None and child.poll() is None:
+                    # The release is confirmed. The worker may still sit in a remote call to
+                    # the VM that is gone (up to minutes), holding the lease lock; its own
+                    # signal handling turns this into an orderly exit.
+                    child.terminate()
+                    try:
+                        child.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        pass
+                raise
+    finally:
+        if not ECHO and lease is not None:  # no lease: deploy.log is still the previous run's
+            relay_log(offset)  # whatever the last step logged while output was relayed
+        ECHO = echo
 
 
 # ---- Switch ----------------------------------------------------------------
@@ -1449,7 +1744,7 @@ def build_parser():
 
     commands.add_parser('prepare', help='打包检查；不读密钥、不创建 VM')
     commands.add_parser('models', help='列出 config.yaml 中钉了 revision 的 CUDA 模型')
-    p = commands.add_parser('start', help='创建 VM 并部署计算端（默认后台）')
+    p = commands.add_parser('start', help='创建 VM 并部署计算端（占住终端直到部署任务在 VM 上启动，之后后台部署）')
     deployment(p)
     p.add_argument('--minutes', type=bounded(int, 'minutes'), default=DEFAULTS['minutes'],
                    help='限时租约时长（1–240 分钟）')
@@ -1457,6 +1752,10 @@ def build_parser():
     p.add_argument('--hostname', default=HOSTNAME, help='固定的 MagicDNS 机器名')
     p.add_argument('--retain', action='store_true', help='READY 后一直保留，直到手动 stop')
     p.add_argument('--foreground', action='store_true', help='前台运行；Ctrl+C 请求回收')
+    p.add_argument('--no-retry', action='store_true',
+                   help='只申请一次并立即返回。缺省：占住终端直到 VM 通过 GPU 检查、部署任务已启动；'
+                        '申请被服务端暂时拒绝且核对无残留时自动重试，Ctrl+C 或 stop 终止'
+                        '（--foreground 始终只申请一次）')
     p.add_argument('--health-interval', type=bounded(int, 'health_interval'),
                    default=DEFAULTS['health_interval'], help='READY 后健康检查间隔秒数')
     p = commands.add_parser('switch', help='在现有 VM 上切换模型或推理选项')
@@ -1524,9 +1823,12 @@ def dispatch(args):
             previous = current()
             if previous and previous.get('state') != STOPPED:
                 raise ValueError('上一个租约尚未确认停止；先运行 status / stop')
-            if not args.foreground:
+            if args.foreground:
+                start(args)
+            elif args.no_retry:
                 return start_background(args, lock.fileno())
-            start(args)
+            else:
+                return start_until_allocated(args, lock.fileno())
     elif args.command == 'watch':
         private_dir(STATE)
         with (STATE / 'lease.lock').open('a') as lock:
@@ -1543,12 +1845,16 @@ def dispatch(args):
         if data is None and (STATE / 'current.json').exists():
             raise RuntimeError('状态文件已损坏，无法确定要释放哪台 VM；用 status / colab sessions '
                                '核对本工具的会话后在 Colab 控制台释放，再删除该文件')
+        # Mark, then decide from the record as marked: a retrying `start` may have reserved
+        # its next lease between the snapshot above and the mark.
+        data = request_stop() or data
         if data and (data.get('endpoint') or data.get('state') != STOPPED):
             # The operator's confirmation applies to this invocation only; it is not
             # persisted, so a later plain `stop` does not inherit it.
             stop_owned(data, operator_confirmed=getattr(args, 'confirm_unallocated', False))
         else:
-            print('没有本工具持有的活动租约')
+            print('没有本工具持有的活动租约'
+                  + ('（已记下 stop：正在重试的 start 会就此停止）' if data else ''))
     elif args.command == 'status':
         print(json.dumps(supervisor_status(snapshot()), indent=2, ensure_ascii=False))
         print(json.dumps(inspect_resources(args.hostname), indent=2, ensure_ascii=False))

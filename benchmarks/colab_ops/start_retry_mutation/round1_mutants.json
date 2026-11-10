@@ -1,0 +1,217 @@
+[
+ {
+  "id": "M01",
+  "name": "retryable: 任何停止态都算可重试",
+  "old": "                and view.get('state') == STOPPED\n                and view.get('allocation_failed') == 'cli-error'",
+  "new": "                and view.get('state') in STOP_STATES\n                and view.get('allocation_failed') == 'cli-error'",
+  "expect_red": [
+   "test_only_a_proven_empty_cli_failure_is_retryable",
+   "test_unattended_retry_stops_at_release_unconfirmed"
+  ]
+ },
+ {
+  "id": "M02",
+  "name": "retryable: 不看 allocation_transient",
+  "old": "                and view.get('allocation_transient') is True\n",
+  "new": "",
+  "expect_red": [
+   "test_only_a_proven_empty_cli_failure_is_retryable",
+   "test_timeout_and_refusal_reported_by_the_cli_are_not_retried"
+  ]
+ },
+ {
+  "id": "M03",
+  "name": "retryable: 不看 stop 标记",
+  "old": "                and not view.get('endpoint') and not view.get('stop_requested'))",
+  "new": "                and not view.get('endpoint'))",
+  "expect_red": [
+   "test_only_a_proven_empty_cli_failure_is_retryable"
+  ]
+ },
+ {
+  "id": "M04",
+  "name": "save_state: 不拒绝接续带 stop 标记租约的重试",
+  "old": "            if previous.get('stop_requested') and data.get('retry_of') == previous.get('session'):",
+  "new": "            if False and data.get('retry_of') == previous.get('session'):",
+  "expect_red": [
+   "test_stop_mark_survives_the_owner_and_blocks_the_next_retry"
+  ]
+ },
+ {
+  "id": "M05",
+  "name": "save_state: 带 stop 标记的租约仍可写回活动态",
+  "old": "            if previous.get('stop_requested') and data.get('state') not in STOP_STATES:\n                # The stop may not",
+  "new": "            if False and data.get('state') not in STOP_STATES:\n                # The stop may not",
+  "expect_red": [
+   "test_stop_mark_survives_the_owner_and_blocks_the_next_retry"
+  ]
+ },
+ {
+  "id": "M06",
+  "name": "save_state: 属主写入抹掉 stop 标记",
+  "old": "            if previous.get('stop_requested') and not data.get('stop_requested'):\n                data['stop_requested'] = previous['stop_requested']",
+  "new": "            if False and not data.get('stop_requested'):\n                data['stop_requested'] = previous['stop_requested']",
+  "expect_red": [
+   "test_stop_mark_survives_the_owner_and_blocks_the_next_retry"
+  ]
+ },
+ {
+  "id": "M07",
+  "name": "stop: 仍按打标记之前的快照决定",
+  "old": "        data = request_stop() or data\n",
+  "new": "        request_stop()\n",
+  "expect_red": [
+   "test_stop_acts_on_the_record_it_marked_not_on_an_older_snapshot"
+  ]
+ },
+ {
+  "id": "M08",
+  "name": "stop: 不打标记",
+  "old": "        data = request_stop() or data\n",
+  "new": "        data = data\n",
+  "expect_red": [
+   "test_stop_with_nothing_to_release_still_marks_the_record",
+   "test_stop_from_another_terminal_ends_the_retry_loop"
+  ]
+ },
+ {
+  "id": "M09",
+  "name": "循环: 信号处理不是一次性的",
+  "old": "        with interrupt_once():\n            try:\n                while True:",
+  "new": "        with interrupts_raise():\n            try:\n                while True:",
+  "expect_red": [
+   "test_second_signal_cannot_skip_the_release"
+  ]
+ },
+ {
+  "id": "M10",
+  "name": "中断: 不回收当前申请",
+  "old": "                          f'（最长约 {ALLOCATE_TIMEOUT} 秒），勿强制杀进程')\n                    stop_owned(target)\n",
+  "new": "                          f'（最长约 {ALLOCATE_TIMEOUT} 秒），勿强制杀进程')\n",
+  "expect_red": [
+   "test_interrupt_during_an_attempt_releases_it_and_stops_retrying",
+   "test_repeated_ctrl_c_ends_the_retry_loop_and_releases_the_attempt"
+  ]
+ },
+ {
+  "id": "M11",
+  "name": "中断: 状态读不出时信任过时的内存租约",
+  "old": "                target = marked if marked is not None else (\n                    dict(lease, allocation_attempted=True) if lease else None)",
+  "new": "                target = marked if marked is not None else (\n                    dict(lease) if lease else None)",
+  "expect_red": [
+   "test_interrupt_with_unreadable_state_asks_the_server_instead_of_trusting_a_stale_lease"
+  ]
+ },
+ {
+  "id": "M12",
+  "name": "中断: 不先打 stop 标记",
+  "old": "                try:\n                    marked = request_stop()\n                except OSError:\n                    marked = None",
+  "new": "                marked = snapshot()",
+  "expect_red": [
+   "test_interrupt_during_an_attempt_releases_it_and_stops_retrying"
+  ]
+ },
+ {
+  "id": "M13",
+  "name": "await: 已见 stop 仍算申请到",
+  "old": "                and view.get('state') not in STOP_STATES and not view.get('stop_requested')):\n            return None, offset",
+  "new": "                and view.get('state') not in STOP_STATES):\n            return None, offset",
+  "expect_red": [
+   "test_await_allocation_reports_endpoint_or_worker_exit"
+  ]
+ },
+ {
+  "id": "M14",
+  "name": "await: endpoint 优先于进程已退出",
+  "old": "        if code is not None:\n            return code, offset\n        if (view.get('session') == lease['session'] and view.get('endpoint')",
+  "new": "        if code is not None and not view.get('endpoint'):\n            return code, offset\n        if (view.get('session') == lease['session'] and view.get('endpoint')",
+  "expect_red": [
+   "test_await_allocation_reports_endpoint_or_worker_exit",
+   "test_worker_that_died_without_a_final_state_is_released_fail_closed"
+  ]
+ },
+ {
+  "id": "M15",
+  "name": "allocate: CLI 仍自带重试",
+  "old": "ALLOCATE_ENV = {'COLAB_CLI_ASSIGN_RETRIES': '0',",
+  "new": "ALLOCATE_ENV = {'COLAB_CLI_ASSIGN_RETRIES': '3',",
+  "expect_red": [
+   "test_allocation_issues_one_request_and_lets_the_cli_give_up_first",
+   "test_default_start_retries_failed_allocation_until_a_vm_is_allocated"
+  ]
+ },
+ {
+  "id": "M16",
+  "name": "allocate: 本机超时短于 CLI 两个请求",
+  "old": "ALLOCATE_TIMEOUT = 300\n",
+  "new": "ALLOCATE_TIMEOUT = 200\n",
+  "expect_red": [
+   "test_allocation_issues_one_request_and_lets_the_cli_give_up_first"
+  ]
+ },
+ {
+  "id": "M17",
+  "name": "allocate: 任何 CLI 失败都标为瞬时",
+  "old": "            lease['allocation_transient'] = transient_refusal(exc.stderr)\n",
+  "new": "            lease['allocation_transient'] = True\n",
+  "expect_red": [
+   "test_only_a_transient_server_refusal_is_marked_retryable",
+   "test_timeout_and_refusal_reported_by_the_cli_are_not_retried"
+  ]
+ },
+ {
+  "id": "M18",
+  "name": "瞬时判定: 不要求是最后一条错误",
+  "old": "    r'(?:Bad Gateway|Service Unavailable|Gateway Timeout)\\s*\\Z')",
+  "new": "    r'(?:Bad Gateway|Service Unavailable|Gateway Timeout)')",
+  "expect_red": [
+   "test_only_a_transient_server_refusal_is_marked_retryable"
+  ]
+ },
+ {
+  "id": "M19",
+  "name": "瞬时判定: 把 500 也算进去",
+  "old": "    r'(?:Bad Gateway|Service Unavailable|Gateway Timeout)\\s*\\Z')",
+  "new": "    r'(?:Bad Gateway|Service Unavailable|Gateway Timeout|Internal Server Error)\\s*\\Z')",
+  "expect_red": [
+   "test_only_a_transient_server_refusal_is_marked_retryable"
+  ]
+ },
+ {
+  "id": "M20",
+  "name": "失联 worker: 不走回收",
+  "old": "                        stop_owned(view if view is not None\n                                   else dict(lease, allocation_attempted=True))\n",
+  "new": "",
+  "expect_red": [
+   "test_worker_that_died_without_a_final_state_is_released_fail_closed"
+  ]
+ },
+ {
+  "id": "M21",
+  "name": "重试等待: 不看 stop 标记",
+  "old": "        if (snapshot() or {}).get('stop_requested'):\n            return False\n        step = min(1, remaining)",
+  "new": "        step = min(1, remaining)",
+  "expect_red": [
+   "test_stop_during_the_retry_wait_ends_the_loop_within_a_step",
+   "test_stop_from_another_terminal_ends_the_retry_loop"
+  ]
+ },
+ {
+  "id": "M22",
+  "name": "dispatch: 缺省仍是派出即返回",
+  "old": "            elif args.no_retry:\n                return start_background(args, lock.fileno())\n            else:\n                return start_until_allocated(args, lock.fileno())",
+  "new": "            else:\n                return start_background(args, lock.fileno())",
+  "expect_red": [
+   "test_start_dispatch_blocks_by_default_and_keeps_the_single_shot_paths"
+  ]
+ },
+ {
+  "id": "M23",
+  "name": "重试时轮换日志",
+  "old": "    if not retry_of:  # a retry keeps appending",
+  "new": "    if True:  # a retry keeps appending",
+  "expect_red": [
+   "test_default_start_retries_failed_allocation_until_a_vm_is_allocated"
+  ]
+ }
+]

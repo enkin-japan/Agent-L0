@@ -1,0 +1,279 @@
+[
+  {
+    "id": "M01",
+    "name": "retryable: 任何停止态都算可重试",
+    "verdict": "KILLED",
+    "red": [
+      "test_only_a_proven_empty_cli_failure_is_retryable",
+      "test_unattended_retry_stops_at_release_unconfirmed",
+      "test_unproven_failures_end_the_loop_after_one_attempt"
+    ],
+    "expect_red": [
+      "test_only_a_proven_empty_cli_failure_is_retryable",
+      "test_unattended_retry_stops_at_release_unconfirmed"
+    ]
+  },
+  {
+    "id": "M02",
+    "name": "retryable: 不看 allocation_transient",
+    "verdict": "KILLED",
+    "red": [
+      "test_only_a_proven_empty_cli_failure_is_retryable",
+      "test_timeout_and_refusal_reported_by_the_cli_are_not_retried",
+      "test_unproven_failures_end_the_loop_after_one_attempt"
+    ],
+    "expect_red": [
+      "test_only_a_proven_empty_cli_failure_is_retryable",
+      "test_timeout_and_refusal_reported_by_the_cli_are_not_retried"
+    ]
+  },
+  {
+    "id": "M03",
+    "name": "retryable: 不看 stop 标记",
+    "verdict": "KILLED",
+    "red": [
+      "test_only_a_proven_empty_cli_failure_is_retryable",
+      "test_stop_mark_survives_the_owner_and_blocks_the_next_retry"
+    ],
+    "expect_red": [
+      "test_only_a_proven_empty_cli_failure_is_retryable"
+    ]
+  },
+  {
+    "id": "M04",
+    "name": "save_state: 不拒绝接续带 stop 标记租约的重试",
+    "verdict": "KILLED",
+    "red": [
+      "test_stop_mark_survives_the_owner_and_blocks_the_next_retry"
+    ],
+    "expect_red": [
+      "test_stop_mark_survives_the_owner_and_blocks_the_next_retry"
+    ]
+  },
+  {
+    "id": "M05",
+    "name": "save_state: 带 stop 标记的租约仍可写回活动态",
+    "verdict": "KILLED",
+    "red": [
+      "test_stop_mark_survives_the_owner_and_blocks_the_next_retry"
+    ],
+    "expect_red": [
+      "test_stop_mark_survives_the_owner_and_blocks_the_next_retry"
+    ]
+  },
+  {
+    "id": "M06",
+    "name": "save_state: 属主写入抹掉 stop 标记",
+    "verdict": "KILLED",
+    "red": [
+      "test_stop_mark_survives_the_owner_and_blocks_the_next_retry"
+    ],
+    "expect_red": [
+      "test_stop_mark_survives_the_owner_and_blocks_the_next_retry"
+    ]
+  },
+  {
+    "id": "M07",
+    "name": "stop: 仍按打标记之前的快照决定",
+    "verdict": "KILLED",
+    "red": [
+      "test_stop_acts_on_the_record_it_marked_not_on_an_older_snapshot"
+    ],
+    "expect_red": [
+      "test_stop_acts_on_the_record_it_marked_not_on_an_older_snapshot"
+    ]
+  },
+  {
+    "id": "M08",
+    "name": "stop: 不打标记",
+    "verdict": "KILLED",
+    "red": [
+      "test_stop_acts_on_the_record_it_marked_not_on_an_older_snapshot",
+      "test_stop_from_another_terminal_ends_the_retry_loop",
+      "test_stop_with_nothing_to_release_still_marks_the_record"
+    ],
+    "expect_red": [
+      "test_stop_from_another_terminal_ends_the_retry_loop",
+      "test_stop_with_nothing_to_release_still_marks_the_record"
+    ]
+  },
+  {
+    "id": "M09",
+    "name": "循环: 信号处理不是一次性的",
+    "verdict": "KILLED",
+    "red": [
+      "test_second_signal_cannot_skip_the_release"
+    ],
+    "expect_red": [
+      "test_second_signal_cannot_skip_the_release"
+    ]
+  },
+  {
+    "id": "M10",
+    "name": "中断: 不回收当前申请",
+    "verdict": "KILLED",
+    "red": [
+      "test_interrupt_during_an_attempt_releases_it_and_stops_retrying",
+      "test_interrupt_with_unreadable_state_asks_the_server_instead_of_trusting_a_stale_lease",
+      "test_repeated_ctrl_c_ends_the_retry_loop_and_releases_the_attempt",
+      "test_second_signal_cannot_skip_the_release"
+    ],
+    "expect_red": [
+      "test_interrupt_during_an_attempt_releases_it_and_stops_retrying",
+      "test_repeated_ctrl_c_ends_the_retry_loop_and_releases_the_attempt"
+    ]
+  },
+  {
+    "id": "M11",
+    "name": "中断: 状态读不出时信任过时的内存租约",
+    "verdict": "KILLED",
+    "red": [
+      "test_interrupt_with_unreadable_state_asks_the_server_instead_of_trusting_a_stale_lease"
+    ],
+    "expect_red": [
+      "test_interrupt_with_unreadable_state_asks_the_server_instead_of_trusting_a_stale_lease"
+    ]
+  },
+  {
+    "id": "M12",
+    "name": "中断: 不先打 stop 标记",
+    "verdict": "KILLED",
+    "red": [
+      "test_interrupt_during_an_attempt_releases_it_and_stops_retrying"
+    ],
+    "expect_red": [
+      "test_interrupt_during_an_attempt_releases_it_and_stops_retrying"
+    ]
+  },
+  {
+    "id": "M13",
+    "name": "await: 已见 stop 仍算申请到",
+    "verdict": "KILLED",
+    "red": [
+      "test_await_allocation_reports_endpoint_or_worker_exit"
+    ],
+    "expect_red": [
+      "test_await_allocation_reports_endpoint_or_worker_exit"
+    ]
+  },
+  {
+    "id": "M14",
+    "name": "await: endpoint 优先于进程已退出",
+    "verdict": "KILLED(TIMEOUT推断)",
+    "red": [],
+    "expect_red": [
+      "test_await_allocation_reports_endpoint_or_worker_exit",
+      "test_worker_that_died_without_a_final_state_is_released_fail_closed"
+    ]
+  },
+  {
+    "id": "M15",
+    "name": "allocate: CLI 仍自带重试",
+    "verdict": "KILLED",
+    "red": [
+      "test_allocation_issues_one_request_and_lets_the_cli_give_up_first",
+      "test_default_start_retries_failed_allocation_until_a_vm_is_allocated"
+    ],
+    "expect_red": [
+      "test_allocation_issues_one_request_and_lets_the_cli_give_up_first",
+      "test_default_start_retries_failed_allocation_until_a_vm_is_allocated"
+    ]
+  },
+  {
+    "id": "M16",
+    "name": "allocate: 本机超时短于 CLI 两个请求",
+    "verdict": "KILLED",
+    "red": [
+      "test_allocation_issues_one_request_and_lets_the_cli_give_up_first"
+    ],
+    "expect_red": [
+      "test_allocation_issues_one_request_and_lets_the_cli_give_up_first"
+    ]
+  },
+  {
+    "id": "M17",
+    "name": "allocate: 任何 CLI 失败都标为瞬时",
+    "verdict": "KILLED",
+    "red": [
+      "test_only_a_transient_server_refusal_is_marked_retryable",
+      "test_timeout_and_refusal_reported_by_the_cli_are_not_retried"
+    ],
+    "expect_red": [
+      "test_only_a_transient_server_refusal_is_marked_retryable",
+      "test_timeout_and_refusal_reported_by_the_cli_are_not_retried"
+    ]
+  },
+  {
+    "id": "M18",
+    "name": "瞬时判定: 不要求是最后一条错误",
+    "verdict": "KILLED",
+    "red": [
+      "test_only_a_transient_server_refusal_is_marked_retryable"
+    ],
+    "expect_red": [
+      "test_only_a_transient_server_refusal_is_marked_retryable"
+    ]
+  },
+  {
+    "id": "M19",
+    "name": "瞬时判定: 把 500 也算进去",
+    "verdict": "KILLED",
+    "red": [
+      "test_only_a_transient_server_refusal_is_marked_retryable"
+    ],
+    "expect_red": [
+      "test_only_a_transient_server_refusal_is_marked_retryable"
+    ]
+  },
+  {
+    "id": "M20",
+    "name": "失联 worker: 不走回收",
+    "verdict": "KILLED",
+    "red": [
+      "test_worker_that_died_without_a_final_state_is_released_fail_closed"
+    ],
+    "expect_red": [
+      "test_worker_that_died_without_a_final_state_is_released_fail_closed"
+    ]
+  },
+  {
+    "id": "M21",
+    "name": "重试等待: 不看 stop 标记",
+    "verdict": "KILLED",
+    "red": [
+      "test_stop_during_the_retry_wait_ends_the_loop_within_a_step",
+      "test_stop_from_another_terminal_ends_the_retry_loop"
+    ],
+    "expect_red": [
+      "test_stop_during_the_retry_wait_ends_the_loop_within_a_step",
+      "test_stop_from_another_terminal_ends_the_retry_loop"
+    ]
+  },
+  {
+    "id": "M22",
+    "name": "dispatch: 缺省仍是派出即返回",
+    "verdict": "KILLED",
+    "red": [
+      "test_default_start_retries_failed_allocation_until_a_vm_is_allocated",
+      "test_repeated_ctrl_c_ends_the_retry_loop_and_releases_the_attempt",
+      "test_start_dispatch_blocks_by_default_and_keeps_the_single_shot_paths",
+      "test_stop_from_another_terminal_ends_the_retry_loop",
+      "test_timeout_and_refusal_reported_by_the_cli_are_not_retried",
+      "test_unattended_retry_stops_at_release_unconfirmed"
+    ],
+    "expect_red": [
+      "test_start_dispatch_blocks_by_default_and_keeps_the_single_shot_paths"
+    ]
+  },
+  {
+    "id": "M23",
+    "name": "重试时轮换日志",
+    "verdict": "KILLED",
+    "red": [
+      "test_default_start_retries_failed_allocation_until_a_vm_is_allocated"
+    ],
+    "expect_red": [
+      "test_default_start_retries_failed_allocation_until_a_vm_is_allocated"
+    ]
+  }
+]

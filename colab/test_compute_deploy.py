@@ -48,6 +48,8 @@ m.verify_dns=lambda *args: None
 import os,contextlib
 if os.environ.get('SYNTHETIC_DISABLE_CLEANUP_SIGNALS'): m.cleanup_signals=contextlib.nullcontext
 if os.environ.get('SYNTHETIC_DISABLE_ALLOCATION_SIGNALS'): m.allocation_signals=contextlib.nullcontext
+for knob in ('RETRY_INTERVAL','CONFIRM_INTERVAL'):
+    if os.environ.get('SYNTHETIC_'+knob): setattr(m,knob,float(os.environ['SYNTHETIC_'+knob]))
 raise SystemExit(m.main())
 ''' % str(SOURCE/'compute_ctl.py'))
         binpath=self.root/'bin'; binpath.mkdir()
@@ -60,15 +62,27 @@ with (root/'commands.jsonl').open('a') as trace: trace.write(json.dumps(args)+'\
 if cmd=='new':
  (root/'allocation-started').touch()
  time.sleep(float(os.environ.get('SYNTHETIC_ALLOCATION_DELAY','0')))
+ with (root/'new-env.jsonl').open('a') as seen: seen.write(json.dumps({k:os.environ.get(k) for k in ('COLAB_CLI_ASSIGN_RETRIES','COLAB_CLI_REQUEST_TIMEOUT')})+'\\n')
+ failures=root/'new-failures'; failed=int(failures.read_text()) if failures.exists() else 0
+ if failed<int(os.environ.get('SYNTHETIC_NEW_FAILURES','0')):
+  failures.write_text(str(failed+1))
+  sys.stderr.write({'503':'colab_cli.client.ColabRequestError: Failed to issue request POST https://colab.example/tun/m/assign?nbh=synthetic: Service Unavailable\\n',
+                    'timeout':"requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='colab.example', port=443): Read timed out. (read timeout=120.0)\\n",
+                    'refused':'[colab] Allocation refused (precondition failed).\\n'}[os.environ.get('SYNTHETIC_NEW_FAILURE_KIND','503')])
+  raise SystemExit(1)
  db.write_text(json.dumps({'session':args[args.index('-s')+1]}))
 elif cmd=='sessions':
- if db.exists(): print('['+json.loads(db.read_text())['session']+'] owned-endpoint | Hardware: A100')
+ if os.environ.get('SYNTHETIC_UNATTRIBUTED_VM') and (root/'new-failures').exists(): print('[?] stray-endpoint | Hardware: A100')
+ elif db.exists(): print('['+json.loads(db.read_text())['session']+'] owned-endpoint | Hardware: A100')
  else: print('No active sessions found on server.')
 elif cmd=='stop':
  time.sleep(.4); db.unlink(missing_ok=True)
 elif cmd=='exec':
  code=Path(args[args.index('-f')+1]).read_text()
- if 'COMPUTE_GPU_VERIFIED' in code: print('COMPUTE_GPU_VERIFIED A100 40960')
+ if 'COMPUTE_GPU_VERIFIED' in code:
+  (root/'gpu-check-started').touch(); time.sleep(float(os.environ.get('SYNTHETIC_GPU_CHECK_DELAY','0')))
+  if os.environ.get('SYNTHETIC_GPU_CHECK_FAILS'): raise SystemExit(1)
+  print('COMPUTE_GPU_VERIFIED A100 40960')
  elif 'COMPUTE_BOOTSTRAP_STARTED' in code: print('COMPUTE_BOOTSTRAP_STARTED')
  elif 'COMPUTE_SWITCH_STAGE_READY' in code: print('COMPUTE_SWITCH_STAGE_READY')
  elif 'COMPUTE_SWITCH_STARTED' in code:
@@ -120,6 +134,158 @@ elif cmd!='usage': raise SystemExit(2)
         p=self.state/'deploy.log'
         return p.exists() and text in p.read_text()
 
+    def new_calls(self):
+        trace=self.root/'commands.jsonl'
+        rows=[json.loads(line) for line in trace.read_text().splitlines()] if trace.exists() else []
+        return [row[row.index('-s')+1] for row in rows if row[0]=='new']
+
+    def test_default_start_retries_failed_allocation_until_a_vm_is_allocated(self):
+        self.env.update(SYNTHETIC_NEW_FAILURES='2',SYNTHETIC_RETRY_INTERVAL='0.2',SYNTHETIC_CONFIRM_INTERVAL='0.05')
+        launcher=self.launch('start','--auth-key',str(self.key))
+        out,_=launcher.communicate(timeout=30)
+        self.workers.append(self.data()['worker_pid'])
+        self.assertEqual(launcher.returncode,0,out)
+        sessions=self.new_calls()
+        self.assertEqual(len(sessions),3)
+        self.assertEqual(len(set(sessions)),3)  # every attempt is a fresh lease
+        self.assertEqual(self.data()['session'],sessions[-1])
+        self.assertEqual(self.data()['retry_of'],sessions[-2])
+        seen=[json.loads(line) for line in (self.root/'new-env.jsonl').read_text().splitlines()]
+        self.assertEqual({row['COLAB_CLI_ASSIGN_RETRIES'] for row in seen},{'0'})
+        for text in ('第 1 次申请被服务端暂时拒绝','第 2 次申请被服务端暂时拒绝','部署任务已在 VM 上启动'):
+            self.assertEqual(out.count(text),1,out)
+        log=(self.state/'deploy.log').read_text()
+        self.assertEqual(out.count('开始申请 A100'),log.count('开始申请 A100'))  # relayed once each
+        self.assertEqual(log.count('开始申请 A100'),3)  # one log across the retries
+        self.until(lambda:self.data().get('state')=='ready')
+        stopper=self.launch('stop'); stopper.communicate(timeout=8)
+        self.assertEqual(stopper.returncode,0)
+        self.assertEqual(self.data()['state'],'stopped')
+        self.assertFalse((self.root/'assignment.json').exists())
+
+    def test_repeated_ctrl_c_ends_the_retry_loop_and_releases_the_attempt(self):
+        self.env.update(SYNTHETIC_ALLOCATION_DELAY='1.5',SYNTHETIC_RETRY_INTERVAL='0.2',SYNTHETIC_CONFIRM_INTERVAL='0.05')
+        launcher=self.launch('start','--auth-key',str(self.key))
+        self.until(lambda:(self.root/'allocation-started').exists())
+        self.workers.append(self.data()['worker_pid'])
+        for _ in range(3):
+            os.killpg(launcher.pid,signal.SIGINT); time.sleep(.1)
+        launcher.communicate(timeout=15)
+        self.assertEqual(launcher.returncode,130)
+        self.assertEqual(self.data()['state'],'stopped')
+        self.assertIn('endpoint',self.data())  # the request in flight was allowed to return
+        self.assertFalse((self.root/'assignment.json').exists())
+        time.sleep(1)
+        self.assertEqual(len(self.new_calls()),1)
+
+    def test_ctrl_c_while_a_request_is_being_refused_ends_cleanly(self):
+        # The stop mark lands while `colab new` is in flight; the 503 that follows must still
+        # reach the release path, or the lease is left release-unconfirmed for a person.
+        self.env.update(SYNTHETIC_ALLOCATION_DELAY='1.5',SYNTHETIC_NEW_FAILURES='9',
+                        SYNTHETIC_RETRY_INTERVAL='0.2',SYNTHETIC_CONFIRM_INTERVAL='0.05')
+        launcher=self.launch('start','--auth-key',str(self.key))
+        self.until(lambda:(self.root/'allocation-started').exists())
+        self.workers.append(self.data()['worker_pid'])
+        os.killpg(launcher.pid,signal.SIGINT)
+        launcher.communicate(timeout=15)
+        self.assertEqual(launcher.returncode,130)
+        self.assertEqual(self.data()['state'],'stopped')
+        self.assertEqual(self.data()['allocation_failed'],'cli-error')
+        self.assertFalse(self.log_contains('回收尚未确认'))
+        time.sleep(1)
+        self.assertEqual(len(self.new_calls()),1)
+
+    def test_stop_from_another_terminal_ends_the_retry_loop(self):
+        self.env.update(SYNTHETIC_NEW_FAILURES='9',SYNTHETIC_RETRY_INTERVAL='60',SYNTHETIC_CONFIRM_INTERVAL='0.05')
+        launcher=self.launch('start','--auth-key',str(self.key))
+        self.until(lambda:self.log_contains('第 1 次申请被服务端暂时拒绝'),seconds=20)
+        stopper=self.launch('stop'); stopper.communicate(timeout=8)  # lands between two attempts
+        self.assertEqual(stopper.returncode,0)
+        out,_=launcher.communicate(timeout=15)
+        self.assertEqual(launcher.returncode,1,out)
+        self.assertIn('停止重试',out)
+        self.assertEqual(len(self.new_calls()),1)
+        self.assertEqual(self.data()['state'],'stopped')
+
+    def test_start_holds_the_terminal_through_the_first_contact_with_the_vm(self):
+        # Allocated at once, but the GPU check then fails and the VM is released: the terminal
+        # must still be attached to say so, and must not start another (billed) attempt.
+        self.env.update(SYNTHETIC_GPU_CHECK_FAILS='1',SYNTHETIC_RETRY_INTERVAL='0.2',SYNTHETIC_CONFIRM_INTERVAL='0.05')
+        launcher=self.launch('start','--auth-key',str(self.key))
+        out,_=launcher.communicate(timeout=30)
+        self.assertEqual(launcher.returncode,1,out)
+        self.assertNotIn('部署任务已在 VM 上启动',out)
+        self.assertIn('申请到 VM 后启动失败',out)
+        self.assertEqual(len(self.new_calls()),1)
+        self.assertEqual(self.data()['state'],'stopped')
+        self.assertFalse((self.root/'assignment.json').exists())
+
+    def commands(self):
+        trace=self.root/'commands.jsonl'
+        return [json.loads(line)[0] for line in trace.read_text().splitlines()] if trace.exists() else []
+
+    def lease_unlocked(self):
+        import fcntl
+        with (self.state/'lease.lock').open('a') as lock:
+            try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB); return True
+            except BlockingIOError: return False
+
+    def test_stop_during_a_slow_first_contact_is_not_followed_by_deployment(self):
+        # The VM is released while the worker still waits for the GPU check to answer; when
+        # it does answer, nothing more may be handed to that VM (credentials, the bootstrap).
+        self.env.update(SYNTHETIC_GPU_CHECK_DELAY='3',SYNTHETIC_RETRY_INTERVAL='0.2',SYNTHETIC_CONFIRM_INTERVAL='0.05')
+        launcher=self.launch('start','--auth-key',str(self.key))
+        self.until(lambda:(self.root/'gpu-check-started').exists())
+        self.workers.append(self.data()['worker_pid'])
+        stopper=self.launch('stop'); stopper.communicate(timeout=10)
+        self.assertEqual(stopper.returncode,0)
+        out,_=launcher.communicate(timeout=20)
+        self.assertEqual(launcher.returncode,1,out)
+        self.assertIn('收到 stop：停止重试',out)
+        self.assertEqual(self.data()['state'],'stopped')
+        self.assertFalse((self.root/'assignment.json').exists())
+        self.until(self.lease_unlocked)
+        self.assertNotIn('upload',self.commands())
+        self.assertEqual(len(self.new_calls()),1)
+
+    def test_ctrl_c_during_a_slow_first_contact_releases_and_frees_the_lease_at_once(self):
+        self.env.update(SYNTHETIC_GPU_CHECK_DELAY='30',SYNTHETIC_RETRY_INTERVAL='0.2',SYNTHETIC_CONFIRM_INTERVAL='0.05')
+        launcher=self.launch('start','--auth-key',str(self.key))
+        self.until(lambda:(self.root/'gpu-check-started').exists())
+        self.workers.append(self.data()['worker_pid'])
+        os.killpg(launcher.pid,signal.SIGINT)
+        launcher.communicate(timeout=15)  # far less than the 30 s the worker's remote call would take
+        self.assertEqual(launcher.returncode,130)
+        self.assertEqual(self.data()['state'],'stopped')
+        self.assertFalse((self.root/'assignment.json').exists())
+        self.until(self.lease_unlocked,seconds=5)  # the next start is not locked out for minutes
+        self.assertNotIn('upload',self.commands())
+
+    def test_timeout_and_refusal_reported_by_the_cli_are_not_retried(self):
+        for kind in ('timeout','refused'):
+            with self.subTest(kind):
+                for name in ('commands.jsonl','new-failures'): (self.root/name).unlink(missing_ok=True)
+                self.env.update(SYNTHETIC_NEW_FAILURES='9',SYNTHETIC_NEW_FAILURE_KIND=kind,
+                                SYNTHETIC_RETRY_INTERVAL='0.2',SYNTHETIC_CONFIRM_INTERVAL='0.05')
+                launcher=self.launch('start','--auth-key',str(self.key))
+                out,_=launcher.communicate(timeout=30)
+                self.assertEqual(launcher.returncode,1,out)
+                self.assertEqual(len(self.new_calls()),1)
+                self.assertEqual(self.data()['state'],'stopped')  # proven empty, yet left to a person
+                self.assertIs(self.data()['allocation_transient'],False)
+                self.assertIn('不属于可自动重试的情形',out)
+
+    def test_unattended_retry_stops_at_release_unconfirmed(self):
+        # An unattributed VM on the server after a failed request: nobody may guess; no retry.
+        self.env.update(SYNTHETIC_NEW_FAILURES='9',SYNTHETIC_RETRY_INTERVAL='0.2',SYNTHETIC_CONFIRM_INTERVAL='0.05',
+                        SYNTHETIC_UNATTRIBUTED_VM='1')
+        launcher=self.launch('start','--auth-key',str(self.key))
+        out,_=launcher.communicate(timeout=40)
+        self.assertEqual(launcher.returncode,1,out)
+        self.assertEqual(self.data()['state'],'release-unconfirmed')
+        self.assertEqual(len(self.new_calls()),1)
+        self.assertIn('不再重试',out)
+
     def test_repeated_terminal_ctrl_c_cannot_interrupt_vm_release(self):
         proc=self.launch('start','--foreground','--auth-key',str(self.key))
         self.until(lambda: self.data().get('state')=='ready')
@@ -139,7 +305,7 @@ elif cmd!='usage': raise SystemExit(2)
 
     def test_background_stop_during_preflight_prevents_allocation(self):
         self.env['SYNTHETIC_PREFLIGHT_DELAY']='2.5'
-        launcher=self.launch('start','--auth-key',str(self.key))
+        launcher=self.launch('start','--no-retry','--auth-key',str(self.key))
         launcher.communicate(timeout=4)
         self.assertEqual(launcher.returncode,0)
         self.workers.append(self.data()['worker_pid'])
@@ -168,7 +334,7 @@ elif cmd!='usage': raise SystemExit(2)
 
     def test_stop_during_background_allocation_waits_then_releases(self):
         self.env['SYNTHETIC_ALLOCATION_DELAY']='2'
-        launcher=self.launch('start','--auth-key',str(self.key))
+        launcher=self.launch('start','--no-retry','--auth-key',str(self.key))
         self.until(lambda:(self.root/'allocation-started').exists())
         self.workers.append(self.data()['worker_pid'])
         stopper=self.launch('stop'); stopper.communicate(timeout=10)
@@ -178,7 +344,7 @@ elif cmd!='usage': raise SystemExit(2)
         self.assertFalse((self.root/'assignment.json').exists())
 
     def test_background_survives_terminal_close_and_log_viewer_ctrl_c(self):
-        launcher=self.launch('start','--auth-key',str(self.key))
+        launcher=self.launch('start','--no-retry','--auth-key',str(self.key))
         self.until(lambda: self.data().get('state')=='ready')
         worker=self.data()['worker_pid']; self.workers.append(worker)
         self.assertNotEqual(os.getpgid(worker),launcher.pid)
@@ -204,7 +370,7 @@ elif cmd!='usage': raise SystemExit(2)
 
     def test_background_switch_reuses_retained_vm_while_watch_owns_lease(self):
         # Start on another model: waiting for the model field is how this test sees the switch land.
-        starter=self.launch('start','--retain','--model','google/gemma-4-31B-it-qat-w4a16-ct',
+        starter=self.launch('start','--no-retry','--retain','--model','google/gemma-4-31B-it-qat-w4a16-ct',
                             '--auth-key',str(self.key))
         self.until(lambda:self.data().get('state')=='ready')
         starter.communicate(timeout=3)
@@ -230,7 +396,7 @@ elif cmd!='usage': raise SystemExit(2)
 
     def test_stop_during_background_switch_cannot_be_revived(self):
         self.env['SYNTHETIC_SWITCH_WAIT']='1'
-        starter=self.launch('start','--retain','--model','google/gemma-4-31B-it-qat-w4a16-ct','--auth-key',str(self.key))
+        starter=self.launch('start','--no-retry','--retain','--model','google/gemma-4-31B-it-qat-w4a16-ct','--auth-key',str(self.key))
         self.until(lambda:self.data().get('state')=='ready')
         starter.communicate(timeout=3)
         self.workers.append(self.data()['worker_pid'])

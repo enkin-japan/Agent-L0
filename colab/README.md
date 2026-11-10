@@ -26,7 +26,8 @@ Colab 上只使用合成提示与测试资料。
 ```bash
 ./colab/deploy.sh prepare                  # 打包检查；不读密钥、不创建 VM
 ./colab/deploy.sh models                   # config.yaml 中钉了 revision 的 CUDA 模型
-./colab/deploy.sh start --minutes 120      # 默认后台部署；命令立即返回，不代表已 READY
+./colab/deploy.sh start --minutes 120      # 占住终端直到部署任务在 VM 上启动（申请被拒自动重试，Ctrl+C 终止）；返回后在后台部署，不代表已 READY
+./colab/deploy.sh start --no-retry        # 只申请一次并立即返回（链脚本用）
 ./colab/deploy.sh start --retain           # READY 后一直保留，直到手动 stop
 ./colab/deploy.sh start --foreground       # 前台模式；Ctrl+C 请求回收，请等待最终确认
 ./colab/deploy.sh switch --model <repo>    # 在现有 VM 上切换模型或推理选项（见下）
@@ -44,12 +45,41 @@ Colab 上只使用合成提示与测试资料。
 `--attention-backend auto|triton|flashinfer`、`--kv-cache-dtype auto|bfloat16|fp8`、
 `--max-model-len`（默认 65536）、`--gpu-memory`（默认 0.72）、`--stall-timeout`（默认 600 秒）、
 `--bootstrap-timeout`（默认 3600 秒）、`--poll-interval`（默认 10 秒）。`start` 另有 `--minutes`（1–240）、
-`--hostname`（默认 `agent-compute`）、`--auth-key`、`--retain`、`--foreground`、`--health-interval`（默认 60 秒）。
+`--hostname`（默认 `agent-compute`）、`--auth-key`、`--retain`、`--foreground`、`--no-retry`、`--health-interval`（默认 60 秒）。
 默认值和取值范围各只在 `compute_ctl.py` 的 `DEFAULTS` / `LIMITS` 里定义一次。
 
-后台进程独立于启动终端，关闭终端不影响部署；停止必须用 `stop`。后台 worker 的全部参数都从租约
+`start` 返回之后，后台进程独立于启动终端，关闭终端不影响部署，停止必须用 `stop`；返回之前关闭终端等同于 Ctrl+C（`--no-retry` 除外：它派出后台进程就返回）。后台 worker 的全部参数都从租约
 记录读取（命令行只传租约身份），不会出现前台校验与后台执行用了两套参数的情况。后台启动成功只说明
 已交给工作进程，是否部署完成以日志的 `READY` 与 `status` 为准。
+
+### 申请 VM 的等待与重试
+
+`start` 缺省占住当前终端，直到 VM 申请到、通过 GPU 检查、部署任务已在 VM 上启动（租约进入 `booting`）
+才返回 0；之后的装环境、下模型、监督照旧由后台进程完成，用 `logs -f` / `status` 看进度。等待期间终端里
+显示的就是 `deploy.log` 的内容。
+
+- **每次申请只发一次分配请求。** `colab new` 带 `COLAB_CLI_ASSIGN_RETRIES=0` 运行，CLI 不再自己重试。
+  起因（2026-11-08 起）：服务端对分配请求约 30–60 s 后回 503，CLI 自带的三次退避重试合计超过
+  本机给它的超时，CLI 在请求途中被杀，分配身份就成了未知，租约落到 `release-unconfirmed`，只能人工
+  `stop --confirm-unallocated`。现在是 CLI 自己报错退出，回收路径连续三次核对服务端后记为 `stopped`。
+- **只有「服务端明确暂时拒绝、且已证明服务端为空」的失败才自动重试**：CLI 报的是 502 / 503 / 504
+  （按它的报错原文判定，认不出的一律不算），且三次核对既没有本会话、也没有身份不明（`?`）的 VM。
+  每次重试是一条新租约，间隔 30 s，不限次数。
+- **其余情形一律停下来交给人**：请求超时（服务端可能事后仍然分配）、配额 / 权益 / 会话数被拒、
+  `release-unconfirmed`、本机预检查失败、申请到后又被回收。后台进程异常退出而租约未停止时，前台会
+  按记录走一次回收（按身份核对服务端，查不清就落到 `release-unconfirmed`），同样不再重试。
+- **终止重试**：在这个终端按 Ctrl+C（或关掉终端），或在任何地方运行 `./colab/deploy.sh stop`。
+  `stop` 会在租约记录上留下标记：之后后台进程不能再把租约写回活动状态，重试循环也不会再开新租约。
+  正在途中的请求要等它返回（通常一分钟内，上限 5 分钟）才能确认并回收，期间不要强杀进程。
+- **申请到之后的失败不重试。** 这一段已经在计费：GPU 检查不过、上传或启动部署任务失败时，VM 被回收，
+  终端报「申请到 VM 后启动失败」并以非零退出，由人决定是否再起。
+- **首次联络新 VM 给 3 分钟。** 刚分配的 VM 上 Jupyter 可能还没起来（2026-11-10 实测：建内核 12 s、
+  连通 30 s，平时各不到 1 s），原先 60 s 的时限会把一台正常的 VM 判死。GPU 检查会建私有目录、不可重复
+  执行，所以是延长等待（代码 120 s + 连接余量 60 s），不是失败重发。
+  这只放宽了本机的总时限；CLI 连接内核时自己的单次 10 s 时限与 3 次退避重试没有动，Jupyter 再慢就仍会失败。
+  这段时间里收到 stop / Ctrl+C，VM 立即回收，后台进程不会再往上传凭据或启动部署。
+- `--no-retry` 保留旧行为：只申请一次、派出后台进程后立即返回；链脚本用它，自己负责重试。
+  `--foreground` 也只申请一次。
 
 ## 模型与 MTP
 
