@@ -71,6 +71,27 @@ struct ApprovalArguments {
         return String(out)
     }
 
+    /// The multi-line preview value (backend approval_preview `body`, an email body)
+    /// keeps its real line breaks so it reads as the message will. It is the last row
+    /// of its card, drawn in its own scroll area, so it cannot push other rows around;
+    /// all other preview rows go through singleLine. Everything else that could hide
+    /// or reorder text (bare CR, other controls, bidi overrides, zero-width characters)
+    /// is escaped exactly like singleLine.
+    static func multiLine(_ text: String) -> String {
+        var out = String.UnicodeScalarView()
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        for scalar in normalized.unicodeScalars {
+            switch scalar {
+            case "\n", "\t": out.append(scalar)
+            case "\r": out.append(contentsOf: "\\r".unicodeScalars)
+            default:
+                if isConfusable(scalar) { out.append(contentsOf: escape(scalar)) }
+                else { out.append(scalar) }
+            }
+        }
+        return String(out)
+    }
+
     /// For the already serialized texts (summary / 完整参数): JSON escapes the line
     /// breaks itself, so only the invisible reordering characters have to be made
     /// visible. Backslashes and quotes of the serialization are left untouched, so
@@ -93,6 +114,9 @@ struct ApprovalCard: View {
     let onDecision: (Bool) -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var toolListHeight: CGFloat?
+    /// 预览正文的实测高度（按条目序号）：超过约 12 行时在卡内滚动，按钮不被挤出屏幕。
+    @State private var previewBodyHeights: [Int: CGFloat] = [:]
+    @ScaledMetric(relativeTo: .callout) private var previewLineHeight: CGFloat = 20
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.s3) {
@@ -138,11 +162,29 @@ struct ApprovalCard: View {
                         Text("\(index + 1)")
                             .font(.caption.monospacedDigit().weight(.semibold))
                             .foregroundStyle(.secondary)
-                        Text(tool.name)
-                            .font(.system(.callout, design: .monospaced).weight(.semibold))
-                            .fixedSize(horizontal: false, vertical: true)
+                        if let rows = tool.preview, !rows.isEmpty {
+                            Text(StepText.toolName(tool.name))
+                                .font(.callout.weight(.semibold))
+                                .fixedSize(horizontal: false, vertical: true)
+                        } else {
+                            Text(tool.name)
+                                .font(.system(.callout, design: .monospaced).weight(.semibold))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
-                    if let args = tool.arguments, !args.isEmpty {
+                    if let rows = tool.preview, !rows.isEmpty {
+                        // 后端给了预览（如 send_email：解析后的收件人 / 主题 / 附件 / 正文）：
+                        // 按给定顺序逐行显示，代替原始参数行；完整参数仍可展开核对。
+                        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                            VStack(alignment: .leading, spacing: Theme.s1) {
+                                Text(Self.previewLabel(row.key)).font(.caption).foregroundStyle(.secondary)
+                                previewValue(row, index: index)
+                            }
+                        }
+                        if let args = tool.arguments, !args.isEmpty {
+                            fullArguments(ApprovalArguments(args))
+                        }
+                    } else if let args = tool.arguments, !args.isEmpty {
                         let presentation = ApprovalArguments(args)
                         if presentation.fullText.count <= 500 {
                             ForEach(args.keys.sorted(), id: \.self) { key in
@@ -161,14 +203,7 @@ struct ApprovalCard: View {
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        DisclosureGroup(L("完整参数")) {
-                            Text(ApprovalArguments.visibleFormatting(presentation.fullText))
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
+                        fullArguments(presentation)
                     }
                 }
                 .padding(Theme.s3)
@@ -176,6 +211,53 @@ struct ApprovalCard: View {
                 .background(Theme.wash)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.radiusCard))
             }
+        }
+    }
+
+    /// 折叠的「完整参数」：即将执行的原样 JSON（有无预览都在）。
+    private func fullArguments(_ presentation: ApprovalArguments) -> some View {
+        DisclosureGroup(L("完整参数")) {
+            Text(ApprovalArguments.visibleFormatting(presentation.fullText))
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// 预览行标签：已知代号本地化，未知代号原样（同参数名一样过可见化过滤）。
+    static func previewLabel(_ key: String) -> String {
+        switch key {
+        case "to": return L("收件人")
+        case "subject": return L("主题")
+        case "body": return L("正文")
+        case "file": return L("页面文件")
+        case "site": return L("发布到")
+        default: return ApprovalArguments.displayKey(key)
+        }
+    }
+
+    /// 预览值：可选中；正文保留真实换行，超过约 12 行时在固定高度里滚动；其余行单行可见化。
+    @ViewBuilder
+    private func previewValue(_ row: ApprovalPreviewRow, index: Int) -> some View {
+        let isBody = row.key == "body"
+        let text = Text(isBody ? ApprovalArguments.multiLine(row.value)
+                               : ApprovalArguments.singleLine(row.value))
+            .font(.callout)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        if isBody {
+            let cap = previewLineHeight * 12
+            ScrollView {
+                text.onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                    previewBodyHeights[index] = $0
+                }
+            }
+            .frame(height: min(previewBodyHeights[index] ?? cap, cap))
+        } else {
+            text
         }
     }
 

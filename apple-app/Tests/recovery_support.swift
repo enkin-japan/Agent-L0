@@ -25,7 +25,7 @@ let nativeOfflineCacheRoot = FileManager.default.temporaryDirectory.appendingPat
 }
 @MainActor final class PushManager {
     enum Kind { case scheduleStart, approvalAutodenied, approval(tools: [String]), result(status: String) }
-    func postLocal(kind: Kind, sessionId: String, turnId: String, sessionTitle: String, fullBody: String? = nil) { fatalError("notifications forbidden") }
+    func postLocal(kind: Kind, sessionId: String, turnId: String, sessionTitle: String, fullBody: String? = nil, cardOnly: Bool = false) { fatalError("notifications forbidden") }
 }
 final class LocationProvider {
     static let shared = LocationProvider()

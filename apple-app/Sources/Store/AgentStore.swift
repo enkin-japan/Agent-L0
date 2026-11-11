@@ -1321,9 +1321,11 @@ final class AgentStore: ObservableObject {
                     if self.pendingApprovalTarget == target { self.pendingTools = tools; self.isGenerating = false }
                     return
                 }
+                // 卡片路径 = 用户看着审批卡（含预览行）做的决定：card_ack
                 _ = try await client.submitApproval(sessionId: sid, approve: approve,
                                                     expectedTurnId: target.turnId,
-                                                    expectedApprovalSeq: target.seq)
+                                                    expectedApprovalSeq: target.seq,
+                                                    cardAck: true)
             } catch is TurnConflictError {
                 // 决议目标已不存在（另一端已处理/已过期）：以服务端为准重载
                 guard let self, self.isCurrent(sid, epoch, client),
@@ -2316,7 +2318,8 @@ final class AgentStore: ObservableObject {
                                        turnId: turnId, sessionTitle: title)
             } else {
                 pushManager?.postLocal(kind: .approval(tools: item.toolNames()),
-                                       sessionId: sid, turnId: turnId, sessionTitle: title)
+                                       sessionId: sid, turnId: turnId, sessionTitle: title,
+                                       cardOnly: item.hasCardOnlyTool())
             }
             #endif
         case "turn_ended":

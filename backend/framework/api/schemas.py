@@ -187,6 +187,9 @@ class ApprovalRequest(BaseModel):
     approve: bool
     expected_turn_id: Optional[str] = None
     expected_approval_seq: Optional[int] = Field(default=None, strict=True, gt=0)
+    # card_ack（可选，缺省 false）：批准来自 app 内看着审批卡的操作。批次含只认卡的调用
+    # （send_email）时，批准必须带 card_ack=true，否则 409 card_confirmation_required、状态不动。
+    card_ack: bool = Field(default=False, strict=True)
 
 
 class LocationReport(BaseModel):
@@ -300,6 +303,51 @@ class SearchProviderTestResponse(BaseModel):
     ok: bool
     kind: str
     results: int
+
+
+class MailContact(BaseModel):
+    name: str
+    address: str
+
+
+class MailSettingsRequest(BaseModel):
+    """邮件发送设置整体保存（设置页「邮件发送」）。非密钥字段的类型 / 取值由
+    framework.mail.settings.validate 校验（给设置页可读的 422 文案）；password 是 SMTP
+    app 密码**实值**——只经 api_tool_factory.write_secret 写数据根 0600 secrets 文件，
+    缺省 / 空串 = 保留已存的；clear_password=true 清掉。路由按原始 Body 手动校验（422 不回显输入）。"""
+    model_config = {"extra": "forbid"}
+    host: Any = None
+    port: Any = None
+    username: Any = None
+    from_addr: Any = None
+    contacts: Any = None
+    password: Optional[str] = Field(default=None, max_length=512)
+    clear_password: bool = False
+
+
+class MailSettingsResponse(BaseModel):
+    """对外视图：密码只以 has_password 布尔出现（无值、无变量名、无长度）。"""
+    host: str
+    port: int
+    username: str
+    from_addr: str
+    contacts: List[MailContact]
+    has_password: bool
+    configured: bool
+
+
+class PublishSettingsRequest(BaseModel):
+    """页面发布设置整体保存（设置页「页面发布」）。取值由 framework.publish.settings.validate
+    校验（给设置页可读的 422 文案）；两个都空 = 未配置。"""
+    model_config = {"extra": "forbid"}
+    root_dir: Any = None
+    base_url: Any = None
+
+
+class PublishSettingsResponse(BaseModel):
+    root_dir: str
+    base_url: str
+    configured: bool
 
 
 class PushRegisterRequest(BaseModel):

@@ -113,6 +113,16 @@ extension FeedItem {
         return ""
     }
 
+    /// awaiting_approval 的批次里是否有只认审批卡的调用（条目 card_only == true）：
+    /// 有则本地通知不挂可操作类别（「允许」只会换来 409），点开即进 app 看卡。
+    func hasCardOnlyTool() -> Bool {
+        guard case .array(let arr)? = data?["pending_tools"] else { return false }
+        return arr.contains {
+            if case .object(let o) = $0, case .bool(true)? = o["card_only"] { return true }
+            return false
+        }
+    }
+
     /// awaiting_approval 的 pending_tools 工具名列表(通知正文 full 档用)。
     func toolNames() -> [String] {
         guard case .array(let arr)? = data?["pending_tools"] else { return [] }

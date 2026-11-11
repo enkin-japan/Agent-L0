@@ -108,7 +108,7 @@ struct SettingsView: View {
                         Label(L("API 工具"), systemImage: "wrench.and.screwdriver")
                     }
                     NavigationLink {
-                        Form { SearchProvidersSection() }.navigationTitle(L("搜索"))
+                        Form { SearchProvidersSection(); MailSettingsSection(); PublishSettingsSection() }.navigationTitle(L("搜索"))
                     } label: {
                         Label(L("搜索"), systemImage: "magnifyingglass")
                     }
@@ -188,7 +188,7 @@ struct SettingsView: View {
             ApiToolsPanelView(embedded: true)
         // 搜索 API 提供方（批 C）：优先于内置搜索，全不可用时后端自动兜底
         case .search:
-            Form { SearchProvidersSection() }.formStyle(.grouped)
+            Form { SearchProvidersSection(); MailSettingsSection(); PublishSettingsSection() }.formStyle(.grouped)
         // 剧本（用户以 /名字 点名的流程提示词）：同为全局数据实体，归设置
         case .skills:
             SkillsPanelView(embedded: true)

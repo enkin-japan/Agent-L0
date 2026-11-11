@@ -13,7 +13,7 @@ cloud_consult provider 幻觉):
 2. **快照**:声明文本 + DEFAULT_SYSTEM_PROMPT 逐字节钉死,「顺手改措辞」必须显式过审。
 
 口径(与 `scripts/tool_token_audit.py` 的 full 口径同一实现,经 tests/_tool_fleet 取数):
-  含 56 件确定性工具(update_plan/complete_step/remember 三件常驻元工具在内)、
+  含 58 件确定性工具(update_plan/complete_step/remember 三件常驻元工具在内)、
   skill_invoke 为**生产形**(repo 剧本索引已追加,复审 C3——裸类形少算 ~130 token,
   恰好吞掉全部余量);不含 get_tool_schema(仅 catalog 进声明)、DEFAULT_SYSTEM_PROMPT
   (预算另计,快照钉字)、每工具 <|tool>/<tool|> 包裹(~2/件,与 est 尺同样排除)、
@@ -42,8 +42,13 @@ from ._tool_fleet import (GEMMA4_TOKENIZER_REPO, GET_TOOL_SCHEMA_NAME, META_NAME
 # qwen35 两家族同口径共用这一条,不另立 qwen35 线。再动须用户拍板。
 # 2026-10-31 实测(W-1/A):gemma4 12036 / qwen35 12144(qwen35 整块含 "# Tools" 头与
 # 调用格式教学为 12325,不计入本闸,供 W-2 前缀瘦身参考)
-BUDGET = 12300
-EXPECTED_DECLS = 56       # 确定性工具面件数(复审 S6:枚举静默吞 import 错,缩水要报真锅)
+# 2026-11-11 send_email(第 57 件)落地:加前 gemma4 12085 / qwen35 12193,加后 12227 / 12338
+# (+142 / +145;描述已压到仍可读的最短),线按最小需要上取到下一个 50 → 12350。
+# 同日 publish_page(第 58 件)+ send_email 去掉 attachment 参数、描述加「页面先 publish_page 再发
+# 链接」一句:12227 / 12338 → 12316 / 12429(+89 / +91),线上取到下一个 50 → 12450。
+# 两次上调均经用户 2026-11-11 批准,仅限 feat/send-email 分支。
+BUDGET = 12450
+EXPECTED_DECLS = 58       # 确定性工具面件数(复审 S6:枚举静默吞 import 错,缩水要报真锅)
 SNAP = Path(__file__).parent / "data" / "model_visible_text.snap"
 
 
@@ -128,7 +133,7 @@ def _catalog_schemas():
 def test_catalog_declarations_under_token_budget(family, fmt, repo):
     """catalog 口径门：元 + core 完整 + 其余目录行，两家族各自方言、自家分词器 ≤ BUDGET_CATALOG。"""
     decl = _catalog_schemas()
-    assert len(decl) == EXPECTED_DECLS + 1          # 56 件 + get_tool_schema，件数不缩水
+    assert len(decl) == EXPECTED_DECLS + 1          # 58 件 + get_tool_schema，件数不缩水
     tok = real_lltokenizer(repo)
     total = sum(len(tok.tokenize_str(fmt(s))) for s in decl)
     print(f"[budget] {family} catalog 工具声明 {total}/{BUDGET_CATALOG},余量 {BUDGET_CATALOG - total}")

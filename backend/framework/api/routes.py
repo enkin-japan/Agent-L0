@@ -14,6 +14,10 @@ from .schemas import (
     ApiToolTestRequest,
     ApprovalPolicyResponse,
     ApprovalRequest,
+    MailSettingsRequest,
+    MailSettingsResponse,
+    PublishSettingsRequest,
+    PublishSettingsResponse,
     SearchProviderCreateRequest,
     SearchProviderItem,
     SearchProviderPatchRequest,
@@ -49,7 +53,8 @@ from .schemas import (
 from .auth import require_owner_or_paired
 from ..core import approval_policy
 from ..core.journal import BOOT_ID, TurnJournal
-from ..core.turn_runner import TurnConflict, public_turn, turn_reference, retry_history_projection
+from ..core.turn_runner import (CARD_CONFIRMATION_MESSAGE, CARD_CONFIRMATION_REQUIRED,
+                                TurnConflict, public_turn, turn_reference, retry_history_projection)
 from ..memory.compactor import maybe_summarize_context
 from .devices import store_for
 
@@ -93,6 +98,11 @@ _LOCAL_READ_ROUTES = {
     ("PATCH", "/api/v1/search-providers/{provider_id}"),
     ("DELETE", "/api/v1/search-providers/{provider_id}"),
     ("POST", "/api/v1/search-providers/{provider_id}/test"),
+    # 邮件发送设置（send_email）：同为本地状态（数据根文件 + 0600 密码），PUT 另挂
+    # require_owner_or_paired；两端点都不碰算力端，也不连邮件服务器。
+    ("GET", "/api/v1/mail/settings"), ("PUT", "/api/v1/mail/settings"),
+    # 页面发布设置（publish_page）：同为本地状态（数据根文件），PUT 另挂 require_owner_or_paired。
+    ("GET", "/api/v1/publish/settings"), ("PUT", "/api/v1/publish/settings"),
 }
 _EXECUTION_ROUTES = {
     ("POST", "/api/v1/chat/{session_id}"), ("POST", "/api/v1/chat/{session_id}/turns"),
@@ -309,6 +319,74 @@ async def test_search_provider(provider_id: str, request: Request):
         raise HTTPException(status_code=404, detail="search provider not found")
 
 
+# ---------- 邮件发送设置（send_email 工具；设置页「邮件发送」） ----------
+# 密码红线同上：请求体里的 password 只交给 mail.settings → api_tool_factory.write_secret；
+# 响应只有 has_password 布尔；日志只记操作者与布尔；422 不回显输入。
+# 工具可见性：保存不触发注册表重扫（搜索 API 保存同样不触发）——send_email 在下一次
+# 周期重扫（app.py，30 s）被加入；清掉配置后已注册的工具留在表里，但 execute / 预检
+# 每次现读设置，未配置即拒发。
+
+def _mail():
+    from ..mail import settings as mail_settings
+    return mail_settings
+
+
+@router.get("/api/v1/mail/settings", response_model=MailSettingsResponse)
+async def get_mail_settings():
+    """服务器 / 用户名 / 发件地址 / 联系人；密码只回 has_password。"""
+    return await asyncio.to_thread(_mail().public_view)
+
+
+@router.put("/api/v1/mail/settings", response_model=MailSettingsResponse,
+            dependencies=[Depends(require_owner_or_paired)])
+async def put_mail_settings(request: Request, body: Any = Body(...)):
+    """整体保存非密钥设置；password 缺省 / 空串 = 保留，clear_password=true = 清掉。
+    任何一项非法 → 422（什么都不写）。"""
+    req = _validated(MailSettingsRequest, body)
+    fields = req.model_dump(exclude={"password", "clear_password"}, exclude_none=True)
+    try:
+        view = await asyncio.to_thread(_mail().update, fields, new_password=req.password,
+                                       clear_password=req.clear_password)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except OSError as e:
+        print(f"[MailSettings] ⚠️ 落盘失败: {type(e).__name__}")
+        raise HTTPException(status_code=503, detail={"reason": "mail_settings_save_failed"})
+    print(f"[MailSettings] saved contacts={len(view['contacts'])} "
+          f"has_password={view['has_password']} by {_sp_actor(request)}")
+    return view
+
+
+# ---------- 页面发布设置（publish_page 工具；设置页「页面发布」） ----------
+# 没有密钥；保存同样不触发注册表重扫（周期重扫加入工具，见上方邮件设置注释）。
+
+def _publish():
+    from ..publish import settings as publish_settings
+    return publish_settings
+
+
+@router.get("/api/v1/publish/settings", response_model=PublishSettingsResponse)
+async def get_publish_settings():
+    """发布文件夹与公开 URL 前缀。"""
+    return await asyncio.to_thread(_publish().public_view)
+
+
+@router.put("/api/v1/publish/settings", response_model=PublishSettingsResponse,
+            dependencies=[Depends(require_owner_or_paired)])
+async def put_publish_settings(request: Request, body: Any = Body(...)):
+    """整体保存 {root_dir, base_url}；两个都空 = 未配置；任何一项非法 → 422（什么都不写）。"""
+    req = _validated(PublishSettingsRequest, body)
+    try:
+        view = await asyncio.to_thread(_publish().update, req.model_dump(exclude_none=True))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except OSError as e:
+        print(f"[PagePublish] ⚠️ 落盘失败: {type(e).__name__}")
+        raise HTTPException(status_code=503, detail={"reason": "publish_settings_save_failed"})
+    print(f"[PagePublish] saved configured={view['configured']} by {_sp_actor(request)}")
+    return view
+
+
 @router.get("/api/v1/skills", response_model=SkillsResponse)
 async def list_skills(request: Request):
     """
@@ -483,7 +561,9 @@ async def _save_api_tool_impl(request: Request, decl: dict,
             raise HTTPException(status_code=409,
                                 detail="仓库 api_tools/ 已有同名手写声明，UI 不覆盖")
     if secret and decl.get("auth"):
-        factory.write_secret(str(decl["auth"]["env"]), secret)
+        from ..utils.secrets_lock import SECRETS_FILE_LOCK
+        with SECRETS_FILE_LOCK:   # 与搜索 API / 邮件设置共用：write_secret 是读改写
+            factory.write_secret(str(decl["auth"]["env"]), secret)
     user_dir = factory.user_decl_dir()
     user_dir.mkdir(parents=True, exist_ok=True)
     (user_dir / f"{decl['name']}.yaml").write_text(
@@ -1318,9 +1398,13 @@ async def submit_approval(session_id: str, request: Request, body: ApprovalReque
     try:
         turn_id = await runner.accept_approval(session, session_id, body.approve,
                                                expected_turn_id=body.expected_turn_id,
-                                               expected_approval_seq=body.expected_approval_seq)
+                                               expected_approval_seq=body.expected_approval_seq,
+                                               card_ack=body.card_ack)
     except TurnConflict as e:
-        return JSONResponse(status_code=409, content={"status": False, "reason": e.reason})
+        content = {"status": False, "reason": e.reason}
+        if e.reason == CARD_CONFIRMATION_REQUIRED:
+            content["message"] = CARD_CONFIRMATION_MESSAGE
+        return JSONResponse(status_code=409, content=content)
     runner.spawn(session_id, runner.run_approval(session, session_id, body.approve))
     return JSONResponse(status_code=202, content={"status": True, "turn_id": turn_id})
 

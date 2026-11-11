@@ -91,7 +91,7 @@
 |---|---|---|
 | ★ `turn_queued` | `{prompt, attachments: [{name,kind}], gen: {enable_thinking, thinking_budget, max_tokens, temperature, min_p}, origin}` | 轮次受理。`origin`: `chat`(用户消息) / `schedule`(定时任务) / `intent`(快捷指令等)。用户气泡据此渲染 |
 | ★ `turn_started` | `{}` | 调度准入,开始占用 worker(含审批/恢复后的再次准入) |
-| ★ `awaiting_approval` | `{pending_tools: [{name, arguments}]}` | 转入等待审批(worker 已让出) |
+| ★ `awaiting_approval` | `{pending_tools: [{name, arguments, preview?, card_only?}]}` | 转入等待审批(worker 已让出)。`preview`（build 86，可选、增量字段）：工具自报的审批卡展示行 `[{key, value}]`，按显示顺序；有则客户端按行展示（已知 key 本地化标签，未知 key 显示原文），无则照旧展示 arguments。执行仍以 arguments 为准，`preview` 只供人看；旧客户端忽略该字段。批准时服务端对带 `preview` 的调用重算一次，与展示时不一致（设置或文件在弹卡后变了）则该调用不执行、回模型一条错误。`card_only: true`（build 86，可选）：该调用只能在 app 内审批卡上批准，见「仅卡片批准」 |
 | ★ `suspended` | `{}` | 转入挂起(worker 已让出,KV 留内存) |
 | ★ `resumed` | `{trigger: "approve" \| "deny" \| "resume"}` | 暂停态被决议/恢复,重新排队(随后有新的 `turn_started`) |
 | ★ `turn_ended` | 完整轮次记录(见 §2.3);journal 持久化时瘦身为 `{status, turn_index}` | **唯一权威终态**。status ∈ success/warning/fail/cancelled |
@@ -406,6 +406,17 @@ additive，不升版本）：取卡片所展示的 `awaiting_approval` **信封 
 字段为正整数或 null；省略/null 保留旧客户端行为，未知请求字段沿用忽略策略。
 现有 `expected_turn_id` 的字段语义、事件负载和 v1 信封均保持不变。
 
+**仅卡片批准**（build 86，2026-11-11，additive，不升版本）：`POST /turns/approval` 追加可选布尔
+`card_ack`（缺省 false，只接受布尔）。工具可声明 `approval_card_only`（现有：`send_email`——卡上的
+收件人与正文就是确认对象）；待批批次里只要有一条 `card_only` 调用，`approve: true` 而 `card_ack`
+不为 true 即返回 409 `{status: false, reason: "card_confirmation_required", message}`，**不改变任何
+状态**（该轮仍在等待审批，可回到卡片上批准）；拒绝（`approve: false`）不受影响。只有 app 内审批卡的
+批准动作发送 `card_ack: true`，通知动作、Live Activity 等卡片之外的入口一律不发；含 `card_only`
+调用的审批推送不带可操作类别（点开进 app）。build 85 及更早的客户端不发该字段，因此批不了这类批次。
+`card_only` 工具的 `preview` 取不到（钩子抛错或返回空）时该调用不进审批、直接回模型错误——没有
+如实的卡就不问。另：批准时对**未上卡**的调用重新过一次闸门，此刻需要审批的不执行、回模型一条
+错误（挂起后才注册的工具不得搭便车）。
+
 #### 显式任务重试（additive，2026-10-11，不升版本）
 
 ```
@@ -650,7 +661,7 @@ effect 按命令逐次判定(只读命令 → read),API 工具 GET/HEAD → read
 调用的 effect 取档。三条硬规则压过档位:(1)**钉死**——用户在 API 工具声明里显式写的
 `requires_approval`、`cloud.require_approval` 开着的云咨询、以及 `run_shell_command` 的变更命令
 (它的只读判定本身就是密钥隔离护栏的前提:免审批执行 ⇔ 只读,见 2026-10-26 阶段复审)、以及
-审批卡本身就是安全门的工具(定时任务的建立/修改/删除——卡即任务详情确认;API 工具与技能注册——第一道门),
+审批卡本身就是安全门的工具(定时任务的建立/修改/删除——卡即任务详情确认;API 工具与技能注册——第一道门;`send_email`——卡即收件人与正文确认,且仅卡片批准),
 都是工具级的人为决定,`auto` 不得越过(`ask` 仍可更严);(2)**无人值守**——`turn_origin != chat` 的轮次(计划任务等)一律按
 default 判,auto 不安全、ask 无人可答;(3)**损坏即收紧**——策略文件缺失按缺省,存在但损坏或
 不可读按 ask/ask 并告警一次。策略落盘 `<data_root>/approval_policy.json`(0600,先 chmod 临时

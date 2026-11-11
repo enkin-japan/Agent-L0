@@ -199,8 +199,9 @@ final class PushManager: NSObject, ObservableObject {
 
     /// 按偏好开关 + 内容分级组装并投递本地通知。iOS 不走本函数（横幅由 APNs 远程投递，
     /// 本地再发一份会双横幅）。
+    /// cardOnly：审批批次含只认审批卡的调用（send_email）——不挂可操作类别，点开通知即进 app 看卡。
     func postLocal(kind: LocalKind, sessionId: String, turnId: String?,
-                   sessionTitle: String, fullBody: String? = nil) {
+                   sessionTitle: String, fullBody: String? = nil, cardOnly: Bool = false) {
         guard settings.notifEnabled else { return }
         let level = settings.notifContentLevel
         var categoryId: String?
@@ -222,7 +223,7 @@ final class PushManager: NSObject, ObservableObject {
         case .approval(let tools):
             guard settings.notifApproval else { return }
             kindTag = "approval"
-            categoryId = Self.approvalCategoryId
+            categoryId = cardOnly ? nil : Self.approvalCategoryId
             body = (level == "full" && !tools.isEmpty)
                 ? L("等待授权：") + tools.prefix(4).joined(separator: "、")
                 : L("有敏感操作等待你的授权")
@@ -270,9 +271,12 @@ final class PushManager: NSObject, ObservableObject {
             do {
                 _ = try await client.submitApproval(sessionId: sessionId, approve: approve,
                                                     expectedTurnId: turnId)
-            } catch is TurnConflictError {
+            } catch let conflict as TurnConflictError {
+                // 通知按钮的批准从不带 card_ack：含只认卡操作（发邮件）的批次后端拒收，引导去 app
                 self.postPlain(title: "MacAgent",
-                               body: L("这条审批已过期或已被处理，未生效。"))
+                               body: conflict.reason == "card_confirmation_required"
+                                   ? L("这项操作只能在 app 的审批卡上确认，请打开 app 查看后再决定。")
+                                   : L("这条审批已过期或已被处理，未生效。"))
             } catch {
                 // 回程网络断（隧道没开等）：任务仍在等待，明确告知而不是静默吞掉
                 self.postPlain(title: "MacAgent",

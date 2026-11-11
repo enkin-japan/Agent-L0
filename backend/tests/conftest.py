@@ -64,6 +64,46 @@ def _isolate_search_latch(tmp_path):
     web_tools.reset_search_latch()
 
 
+class _MemorySecrets:
+    """api_tool_factory 读写面的内存替身（只给 mail.settings 用）：自动隔离下的邮件设置
+    密码读写全在内存里，不碰任何 .secrets.env 文件。"""
+
+    def __init__(self):
+        self.values = {}
+
+    def read_secret(self, env_name):
+        return self.values.get(env_name, "")
+
+    def write_secret(self, env_name, value):
+        self.values[env_name] = value
+
+
+@pytest.fixture(autouse=True)
+def _isolate_mail_settings(tmp_path):
+    """邮件发送设置（send_email）：数据根钉到每个测试自己的空临时目录——dev 数据根（backend/）
+    里用户保存过的联系人 / 用户名不许漏进金测试（未配置 = 工具不注册、预检拒发）；密码读写换成
+    内存替身——任何测试（现在的、以后的）不经显式装置就碰不到真实密钥文件。要测真实文件读写
+    的测试显式换回 mail_settings._default_factory 并把 AGENT_DATA_DIR 指向临时目录。"""
+    from framework.mail import settings as mail_settings
+    old_root, old_factory = mail_settings._root_override, mail_settings._factory
+    mail_settings._root_override = tmp_path / "mail-settings-isolated"
+    shim = _MemorySecrets()
+    mail_settings._factory = lambda: shim
+    yield
+    mail_settings._root_override = old_root
+    mail_settings._factory = old_factory
+
+
+@pytest.fixture(autouse=True)
+def _isolate_publish_settings(tmp_path):
+    """页面发布设置（publish_page）：同上，数据根钉到每个测试自己的空临时目录。"""
+    from framework.publish import settings as publish_settings
+    old_root = publish_settings._root_override
+    publish_settings._root_override = tmp_path / "publish-settings-isolated"
+    yield
+    publish_settings._root_override = old_root
+
+
 @pytest.fixture()
 def chart_caveat_live(monkeypatch):
     """B1 `vision_chart_numeric` 在 D27（2026-10-31）后降为 pending（26b-4bit 口径，待对新生产档

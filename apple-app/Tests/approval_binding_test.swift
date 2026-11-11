@@ -123,12 +123,13 @@ import Foundation
         check(json["approve"] as? Bool==true,"approve decision differs from displayed action")
         check(json["expected_turn_id"] as? String=="t_card_a","displayed A identity missing from request")
         check(json["expected_approval_seq"] as? Int==3,"displayed A approval batch missing from request")
+        check(json["card_ack"] as? Bool==true,"card decision must carry card_ack")
         if mode=="body" {
             pending.respond(["status":true,"turn_id":"t_card_a","seq":4],status:202)
             let legacy=Task {try await store.client!.submitApproval(sessionId:"legacy",approve:false)}
             await wait({RecoveryTransport.matching("/approval").count==2},"legacy compatible POST")
             let old=body(RecoveryTransport.matching("/approval").last!)
-            check(old["approve"] as? Bool==false && old["expected_turn_id"]==nil && old["expected_approval_seq"]==nil,"legacy approval caller remains compatible")
+            check(old["approve"] as? Bool==false && old["expected_turn_id"]==nil && old["expected_approval_seq"]==nil && old["card_ack"]==nil,"legacy approval caller remains compatible")
             RecoveryTransport.takeHeld().respond(["status":true],status:202)
             _=try await legacy.value
             print("PASS "+mode);exit(0)

@@ -45,7 +45,10 @@ rsync -a --delete --delete-excluded \
   --exclude='*.jsonl' --exclude='*.log' --exclude='.DS_Store' \
   --exclude='logs' --exclude='api_tools' --exclude='skills' --exclude='/maintenance/' \
   --exclude='/auth/' --exclude='/push/' --exclude='/registrations/' \
-  --exclude='/approval_policy.json' --exclude='/search_providers.json' \
+  --exclude='/approval_policy.json*' --exclude='/.approval_policy.json*' \
+  --exclude='/search_providers.json*' --exclude='/.search_providers.json*' \
+  --exclude='/mail_settings.json*' --exclude='/.mail_settings.json*' \
+  --exclude='/page_publish.json*' --exclude='/.page_publish.json*' \
   "$ROOT/backend/" "$RES/backend/"
 # /auth/ /push/ /registrations/ 同样只匹配数据根（设备票据哈希、APNs token、待确认注册队列），
 # framework/push/ 是运行代码，必须保留；下方泄漏断言一并核对这三个目录。

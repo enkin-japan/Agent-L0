@@ -81,6 +81,23 @@ struct ResponseMessage: Codable {
 struct PendingTool: Codable {
     let name: String
     let arguments: [String: JSONValue]?
+    /// 审批卡预览行（后端工具可选钩子 approval_preview，如 send_email 的收件人 / 主题 / 正文）。
+    /// 旧后端与没有钩子的工具不发此键 = nil，审批卡照旧显示原始参数。
+    var preview: [ApprovalPreviewRow]? = nil
+    /// 只认审批卡的调用（send_email）：后端只接受卡片路径带 card_ack 的批准；通知不挂「允许」按钮。
+    var cardOnly: Bool? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case name, arguments, preview
+        case cardOnly = "card_only"
+    }
+}
+
+/// 审批卡的一行预览：key 是稳定代号（to / subject / attachment / body；未知键原样显示），
+/// value 是后端已解析好的展示文本（例如收件人的「名字 <地址>」）。
+struct ApprovalPreviewRow: Codable, Equatable {
+    let key: String
+    let value: String
 }
 
 struct AttachmentInfo: Codable {
@@ -812,4 +829,72 @@ struct SearchProviderTestResult: Decodable, Equatable {
     let ok: Bool
     let kind: String
     let results: Int
+}
+
+// ---------- 邮件发送设置（send_email；backend /api/v1/mail/settings） ----------
+
+/// 一个可收信的联系人（只有登记过的联系人能收到 send_email 的邮件）。
+struct MailContact: Codable, Equatable {
+    var name: String
+    var address: String
+}
+
+/// GET / PUT 的回包。密码永不回传，只有 hasPassword（已保存 / 未保存）。
+struct MailSettings: Decodable, Equatable {
+    let host: String
+    let port: Int
+    let username: String
+    let fromAddr: String
+    let contacts: [MailContact]
+    let hasPassword: Bool
+    let configured: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case host, port, username, contacts, configured
+        case fromAddr = "from_addr"
+        case hasPassword = "has_password"
+    }
+}
+
+// ---------- 页面发布设置（publish_page；backend /api/v1/publish/settings） ----------
+
+/// 发布文件夹（web 服务器对外提供的目录）与公开 URL 前缀；两者都空 = 未配置。
+struct PublishSettings: Decodable, Equatable {
+    let rootDir: String
+    let baseUrl: String
+    let configured: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case configured
+        case rootDir = "root_dir"
+        case baseUrl = "base_url"
+    }
+}
+
+struct PublishSettingsBody: Encodable {
+    var rootDir: String
+    var baseUrl: String
+
+    enum CodingKeys: String, CodingKey {
+        case rootDir = "root_dir"
+        case baseUrl = "base_url"
+    }
+}
+
+/// PUT 体：非密钥字段整体保存；password 为 nil = 不发送（后端保留已存的），
+/// clearPassword = true 清掉。密码实值只随这一次请求发往后端，客户端不落盘。
+struct MailSettingsBody: Encodable {
+    var host: String
+    var port: Int
+    var username: String
+    var fromAddr: String
+    var contacts: [MailContact]
+    var password: String?
+    var clearPassword: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case host, port, username, contacts, password
+        case fromAddr = "from_addr"
+        case clearPassword = "clear_password"
+    }
 }

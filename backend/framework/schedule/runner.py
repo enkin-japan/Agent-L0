@@ -154,6 +154,7 @@ class ScheduleRunner:
                 ] or [{"name": "system", "response": "Pending tool call cancelled."}]
                 session.add_tool_message(cancelled)
                 session.pending_tool_calls = None
+                session.pending_card_meta = None      # 与 pending_tool_calls 同生同灭
                 if session.pending_turn is not None:
                     session.pending_turn.pop("_rollback_idx", None)
                     session.pending_turn.pop("_task_snapshot", None)

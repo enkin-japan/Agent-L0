@@ -329,6 +329,34 @@ class MCPRegistry:
         except Exception:
             return False
 
+    def approval_preview(self, name: str, arguments: Dict[str, Any] = None) -> "List[Dict[str, str]] | None":
+        """审批卡预览行（工具可选钩子 BaseTool.approval_preview）。返回非空的
+        [{"key": str, "value": str}, ...] 或 None。fail-open：钩子缺席 / 异常 / 形态不对一律 None
+        （异常记一条护栏事件），绝不让审批请求本身失败——预览只是展示，审批闸照常出卡。"""
+        tool = self._tools.get(name)
+        hook = getattr(tool, "approval_preview", None) if tool is not None else None
+        if not callable(hook):
+            return None
+        try:
+            rows = hook(dict(arguments or {}))
+            if not rows:
+                return None
+            out = [{"key": str(r["key"]), "value": str(r["value"])} for r in rows]
+            return out or None
+        except Exception as e:
+            from ..core import events
+            events.emit("approval_preview_failed", tool=name, error=type(e).__name__)
+            print(f"[MCP] ⚠️ 工具 {name} 审批预览异常，本条不带预览: {type(e).__name__}")
+            return None
+
+    def is_card_only(self, name: str) -> bool:
+        """该工具的调用是否只能凭审批卡批准（BaseTool.approval_card_only）。`is True` 收紧。"""
+        tool = self._tools.get(name)
+        try:
+            return tool is not None and getattr(tool, "approval_card_only", False) is True
+        except Exception:
+            return True       # 判不了 = 按更严的一侧
+
     def tool_timeout(self, name: str) -> "int | None":
         """查询工具级超时覆盖（秒）。未声明/非法值返回 None（编排层回落全局值）。"""
         tool = self._tools.get(name)

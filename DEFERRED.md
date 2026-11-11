@@ -350,3 +350,22 @@ external 态用户真的需要「接管重启」时上 3；再出现「崩溃自
   Google，用 Custom Search JSON API 做成第三种提供方类型。
 - **`benchmarks/context_knee/run_knee.py` 未加强制作答开关**：留给 D48c / D49 那一片（`--forced-answer`）；
   `summary_trace/run_trace.py` 已显式关。
+
+## 11. build 86 发信 / 页面发布的残留（2026-11-11；记录 docs/plans/2026-11-10-build85-demo-hardening.md §6.8）
+
+- **`write_secret` 非原子**（既有，红线文件 `api_tool_factory.py`，主会话、优先 Opus 5 会话）：`write_text`
+  先截断后写，中途失败（如磁盘满）可把 `.secrets.env` 留空、全部密钥丢失；新建文件先写后 chmod 0600。
+  邮件设置的回滚只救得回 `mail_settings.json`。修法：同目录 0600 临时文件 + fsync + `os.replace`。
+- **API 工具注册可点名任意密钥变量**（既有同类：`SEARCH_API_KEY_*`；红线）：`register_api_tool` 的 `auth_env`
+  不设保留名，写 `MAIL_SMTP_PASSWORD` + 外部 endpoint 即可在两道人工确认（钉死的注册卡、设置页确认）之后把
+  SMTP 密码当鉴权头发出去。修法：`_validate` 拒保留名（`MAIL_SMTP_PASSWORD`、`SEARCH_API_KEY_*`）。
+- **批准复核是整批一次**：同批里排在前面的已批准调用（如改 `mail_settings.json` 的 shell 命令，本身在卡上）
+  可以改变排在后面的 `send_email` 解析到的地址。修法：改为每条调用执行前即刻复核。
+- **页面发布无下架 / 无过期**：`publish_page` 只新建；`write=auto` 时免卡，页面先于（或无需）发信卡公开，
+  拒绝发信不会撤回页面。「链接即凭据」假定 web 服务器不列发布根目录（设置页文案未写）。
+- **web 前端审批卡不发 `card_ack`**（`frontend/src/store/useChatStore.ts`）：含发信的批次在网页端批不了，
+  且 409 后静默重载、没有说明。build 85 及更早的 iOS 客户端同样批不了（按设计）。
+- **审批卡预览无 Swift 自动测试、协议夹具未加 `preview` / `card_only` 样例**（加夹具须按
+  `protocol/fixtures/README.md` 做变异证明）。
+- **发信正文里的链接不设白名单**：正文由模型写，可含任意 URL；靠审批卡显示全文由人把关。
+- **SMTP 发出的信是否进「已发送」未核实**；发信结果（含收件地址）与正文会进 `tool_started` 事件与日志。

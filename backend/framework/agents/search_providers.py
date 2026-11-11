@@ -227,7 +227,8 @@ def type_listing() -> List[Dict[str, str]]:
 # 测试隔离用：非 None 时取代数据根（conftest 按测试钉到空临时目录，dev 数据根里
 # 用户添加过的提供方不许漏进金测试）。生产恒为 None。
 _root_override: Optional[Path] = None
-_STORE_LOCK = threading.RLock()
+# 与邮件发送设置共用一把锁（utils.secrets_lock）：两边都在锁内读改写同一个 .secrets.env
+from ..utils.secrets_lock import SECRETS_FILE_LOCK as _STORE_LOCK  # noqa: E402
 # corrupt：当前磁盘上的文件存在但损坏 / 结构不对——_save 覆盖它前先备份成 .corrupt
 _cache: Dict[str, Any] = {"key": None, "providers": [], "corrupt": False}
 _warned: set = set()

@@ -33,6 +33,7 @@ _TOOL_LABELS = {
     "render_chart": "绘图", "web_search": "搜索", "file_extract": "读文件",
     "write_file": "写文件", "run_bash": "执行命令", "rag_search": "查记忆",
     "deck_export_pdf": "导出 PDF", "update_plan": "订计划", "complete_step": "步骤完成",
+    "send_email": "发邮件", "publish_page": "发布页面",
 }
 
 _SKIP_LOG_SECONDS = 300   # 到期设备的「跳过」日志：同一设备最多每 5 分钟一行
@@ -42,6 +43,23 @@ _STEP_STATE = {"pending": "pending", "doing": "doing", "done": "done", "failed":
 
 def _tool_label(name: str) -> str:
     return _TOOL_LABELS.get(name, name)
+
+
+def _approval_line(tool: Dict[str, Any]) -> str:
+    """审批推送里的一条：工具短标签（未收录的用原名）；有预览（send_email）再加预览里的
+    收件人 / 主题，截到约 80 字——锁屏上就能看出要发给谁、发什么。"""
+    name = _tool_label(str(tool.get("name", "?")))
+    rows = tool.get("preview")
+    if not isinstance(rows, list):
+        return name
+    vals = {r.get("key"): str(r.get("value", "")) for r in rows if isinstance(r, dict)}
+    detail = " / ".join(v for v in (vals.get("to"), vals.get("subject")) if v)
+    if not detail:
+        return name
+    detail = " ".join(detail.split())
+    if len(detail) > 80:
+        detail = detail[:79] + "…"
+    return f"{name}（{detail}）"
 
 
 class _ActivityState:
@@ -191,12 +209,16 @@ class NotificationDispatcher:
             return
 
         if etype == "awaiting_approval":
-            tools = [t.get("name", "?") for t in (data.get("pending_tools") or [])]
+            pending = [t for t in (data.get("pending_tools") or []) if isinstance(t, dict)]
+            tools = [t.get("name", "?") for t in pending]
             if origin == "schedule":
                 # runner 即将自动拒绝（无人值守语义）——推通报，不推互动审批卡
                 await self._alert("approval_autodenied", sid, turn_id, {**meta, "tools": tools})
             else:
-                await self._alert("approval", sid, turn_id, {**meta, "tools": tools})
+                await self._alert("approval", sid, turn_id,
+                                  {**meta, "tools": tools,
+                                   "tool_lines": [_approval_line(t) for t in pending],
+                                   "card_only": any(t.get("card_only") is True for t in pending)})
             return
 
         if etype == "turn_ended":
@@ -230,7 +252,11 @@ class NotificationDispatcher:
             }
             expiration = now + 1800
             if kind == "approval":
-                aps["category"] = "APPROVAL"
+                # 批次含只认审批卡的调用（send_email）：不挂可操作类别——通知上没有「允许 /
+                # 拒绝」按钮，点开只是打开 app，在审批卡上看着内容决定（后端也拒收不带
+                # card_ack 的批准）
+                if not ctx.get("card_only"):
+                    aps["category"] = "APPROVAL"
                 aps["interruption-level"] = "time-sensitive"
                 expiration = now + self.approval_ttl
             ma = {"v": 1, "kind": kind, "session_id": sid, "turn_id": turn_id}
@@ -262,9 +288,11 @@ class NotificationDispatcher:
             return "Agent", "有新事件，点开查看。"
         title = f"「{title_hint}」" if title_hint else "Agent"
         if kind == "approval":
+            tail = "（请在 app 的审批卡上确认）" if ctx.get("card_only") else ""
             if level == "full" and ctx.get("tools"):
-                return title, "等待授权：" + "、".join(ctx["tools"][:4])
-            return title, "有敏感操作等待你的授权"
+                return title, ("等待授权：" + "、".join((ctx.get("tool_lines") or ctx["tools"])[:4])
+                               + tail)
+            return title, "有敏感操作等待你的授权" + tail
         if kind == "approval_autodenied":
             if level == "full" and ctx.get("tools"):
                 return title, ("定时任务遇到需授权操作，已按无人值守策略自动拒绝："

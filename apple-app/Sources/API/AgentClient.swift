@@ -194,13 +194,17 @@ final class AgentClient {
     /// 审批决议(202 受理即返):结果经事件流回来(resumed → … → turn_ended)。
     /// expectedTurnId:实时卡片与远程决议均携带展示轮次，目标已换时 409 防错批；
     /// 保持可选以兼容旧调用方。
+    /// cardAck：决议来自 app 内看着审批卡的操作（只有 AgentStore 的卡片路径传 true）。批次含只认卡的
+    /// 调用（send_email）时后端只接受带 card_ack 的批准；推送通知按钮路径绝不传。
     func submitApproval(sessionId: String, approve: Bool,
                         expectedTurnId: String? = nil,
-                        expectedApprovalSeq: Int? = nil) async throws -> TurnAccepted {
+                        expectedApprovalSeq: Int? = nil,
+                        cardAck: Bool = false) async throws -> TurnAccepted {
         let req = try request("POST", "/api/v1/chat/\(sessionId)/turns/approval",
                               json: ApprovalBody(approve: approve,
                                                  expected_turn_id: expectedTurnId,
-                                                 expected_approval_seq: expectedApprovalSeq))
+                                                 expected_approval_seq: expectedApprovalSeq,
+                                                 card_ack: cardAck ? true : nil))
         return try await acceptedOrConflict(req)
     }
 
@@ -315,6 +319,7 @@ final class AgentClient {
         let approve: Bool
         let expected_turn_id: String?
         let expected_approval_seq: Int?
+        let card_ack: Bool?
     }
 
     // MARK: - 推送注册面（iOS APNs；macOS 本地通知不经后端）
@@ -868,6 +873,27 @@ final class AgentClient {
     func testSearchProvider(id: String) async throws -> SearchProviderTestResult {
         try await send(try request("POST", "/api/v1/search-providers/\(Self.pathSegment(id))/test",
                                    timeout: 45))
+    }
+
+    // MARK: - 邮件发送设置（send_email；设置页「邮件发送」。旧后端没有该路由 → 404 抛出）
+    // 密码只在 PUT 的请求体里出现（用户输入了新密码时）；回包只有 has_password。
+
+    func mailSettings() async throws -> MailSettings {
+        try await send(try request("GET", "/api/v1/mail/settings", timeout: 10))
+    }
+
+    func updateMailSettings(_ body: MailSettingsBody) async throws -> MailSettings {
+        try await send(try request("PUT", "/api/v1/mail/settings", json: body, timeout: 15))
+    }
+
+    // MARK: - 页面发布设置（publish_page；设置页「页面发布」。旧后端没有该路由 → 404 抛出）
+
+    func publishSettings() async throws -> PublishSettings {
+        try await send(try request("GET", "/api/v1/publish/settings", timeout: 10))
+    }
+
+    func updatePublishSettings(_ body: PublishSettingsBody) async throws -> PublishSettings {
+        try await send(try request("PUT", "/api/v1/publish/settings", json: body, timeout: 15))
     }
 
     /// 提供方 id 由后端生成（[a-z0-9-]）；其它字符一律百分号编码，拼不出别的路径。

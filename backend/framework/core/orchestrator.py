@@ -1057,11 +1057,26 @@ class Orchestrator:
         turn_usage: Dict[str, int] = dict(_carried.get("usage") or {})
 
         def _suspend_for_approval(phys_calls_: List[Dict[str, Any]], responses_: List[Dict[str, Any]],
-                                  approval_needed_: List[Dict[str, Any]]) -> Dict[str, Any]:
-            """[审批闸门] 整批挂起待审批（模型发起与编排层代发起共用同一条路）。"""
+                                  approval_needed_: List[Dict[str, Any]],
+                                  previews_: Optional[Dict[int, Any]] = None) -> Dict[str, Any]:
+            """[审批闸门] 整批挂起待审批（模型发起与编排层代发起共用同一条路）。
+            previews_：调用方已算好的预览行（id(调用) → 行或 None）；缺的在这里算。
+            同时按调用逐条记下「是否列在卡上 / 卡上显示的预览 / 是否只认卡」（session.pending_card_meta），
+            批准续跑据此复核：卡外调用重过闸门（B2），带预览的调用重算预览比对（B3）。"""
             if responses_:
                 session.add_tool_message(responses_)
+            previews_ = dict(previews_ or {})
+            for c in approval_needed_:
+                if id(c) not in previews_:
+                    previews_[id(c)] = self._preview_rows(c)
+            on_card = {id(c) for c in approval_needed_}
             session.pending_tool_calls = phys_calls_
+            session.pending_card_meta = [
+                {"on_card": id(c) in on_card,
+                 "preview": previews_.get(id(c)) if id(c) in on_card else None,
+                 "card_only": self._card_only(c.get("name"))}
+                for c in phys_calls_
+            ]
             _carry_turn_state()
             names = "、".join(c.get("name") for c in approval_needed_)
             session.set_activity(f"等待授权：{names}", phase="awaiting_approval")
@@ -1069,12 +1084,20 @@ class Orchestrator:
             print(f"[Orchestrator] 敏感工具调用挂起待审批: {[c.get('name') for c in approval_needed_]}")
             return {
                 "status": "pending_approval",
-                "pending_tools": [
-                    {"name": c.get("name"), "arguments": c.get("arguments", {})}
-                    for c in approval_needed_
-                ],
+                "pending_tools": [_pending_entry(c, previews_.get(id(c))) for c in approval_needed_],
                 "metrics": metrics,
             }
+
+        def _pending_entry(c: Dict[str, Any], rows: Optional[List[Dict[str, str]]]) -> Dict[str, Any]:
+            """审批卡条目：name + arguments（即将执行的原样实参），工具给了预览行再加 "preview"
+            （registry.approval_preview fail-open：钩子异常 = 本条无预览，审批照常；只认卡的
+            工具在进到这里之前已 fail-closed 打回，见闸门处）。"""
+            entry = {"name": c.get("name"), "arguments": c.get("arguments", {})}
+            if rows:
+                entry["preview"] = rows
+            if self._card_only(c.get("name")):
+                entry["card_only"] = True      # 推送据此不挂可操作按钮（客户端可忽略）
+            return entry
 
         # 沙箱包壳（无状态 MCP 工具）拿不到本方法的局部量，经 ContextVar 交接：在此处
         # （run_turn 的任务上下文里）set，asyncio.to_thread 把上下文拷进工具线程，包壳在
@@ -1897,7 +1920,26 @@ class Orchestrator:
                     and self._gate_requires_approval(c.get("name"), c.get("arguments", {}), _policy)
                 ]
                 if approval_needed:
-                    return _suspend_for_approval(phys_calls, responses, approval_needed)
+                    # [只认卡 fail-closed]（send_email）：预览出不来就不出卡、不执行，打回模型
+                    _previews: Dict[int, Any] = {}
+                    for c in list(approval_needed):
+                        rows = self._preview_rows(c)
+                        _previews[id(c)] = rows
+                        if rows or not self._card_only(c.get("name")):
+                            continue
+                        _cname = c.get("name")
+                        events.emit("approval_preview_unavailable", session=session.session_id,
+                                    tool=_cname)
+                        _r = {"name": _cname, "_failed": True, "_safe": True, "response": (
+                            f"System Error: '{_cname}' was not executed and not sent for approval: "
+                            "its approval card could not be prepared. Check the arguments and the "
+                            "related settings, then call it again.")}
+                        approval_needed.remove(c)
+                        phys_calls.remove(c)
+                        _rejected[id(c)] = _r
+                        responses.append(_r)
+                if approval_needed:
+                    return _suspend_for_approval(phys_calls, responses, approval_needed, _previews)
 
                 phys_responses = await self._execute_physical(session, phys_calls, tracker,
                                                               parse_errors, journal=journal,
@@ -2270,6 +2312,26 @@ class Orchestrator:
         if getattr(journal, "turn_origin", "chat") != "chat":
             return approval_policy.DEFAULT
         return approval_policy.current()
+
+    def _preview_rows(self, call: Dict[str, Any]) -> Optional[List[Dict[str, str]]]:
+        """审批卡预览行（registry.approval_preview，自身 fail-open）；没有 / 异常 / 形态不对 = None。"""
+        fn = getattr(self.registry, "approval_preview", None)
+        if not callable(fn):
+            return None
+        try:
+            rows = fn(call.get("name"), call.get("arguments") or {})
+        except Exception:
+            return None
+        return rows if isinstance(rows, list) and rows else None
+
+    def _card_only(self, name: Any) -> bool:
+        fn = getattr(self.registry, "is_card_only", None)
+        if not callable(fn):
+            return False
+        try:
+            return fn(name) is True
+        except Exception:
+            return True
 
     def _gate_requires_approval(self, name: str, arguments: Dict[str, Any], policy) -> bool:
         """闸门判定：只有已注册工具进入审批判定；未注册名（模型幻觉）不弹审批卡，
@@ -2782,6 +2844,47 @@ class Orchestrator:
         })
 
     # ---------- 审批决议恢复 ----------
+    def _recheck_approved_batch(self, session: ChatSession, pending_calls: List[Dict[str, Any]],
+                                card_meta: Optional[List[Dict[str, Any]]],
+                                journal: TurnJournal) -> Dict[int, Dict[str, Any]]:
+        """批准后、执行前的复核。返回 {序号: 代替执行的观察}（这些调用不执行）。
+
+        B2：卡上没列的调用（挂起时不需审批）若此刻需要审批（例如期间工具被重扫注册），
+            不执行——用户没看过它。
+        B3：卡上带预览的调用重算预览；异常或与显示的不同（例如联系人地址改了）就不执行——
+            批准的是卡上显示的内容，不是此刻的内容。
+        记录缺失或与批次对不上 → 全部按「卡外」处理（fail-closed：需审批的一律不执行）。"""
+        if not isinstance(card_meta, list) or len(card_meta) != len(pending_calls):
+            card_meta = [{"on_card": False, "preview": None}] * len(pending_calls)
+        policy = self._approval_policy_for(journal)
+        held: Dict[int, Dict[str, Any]] = {}
+        for i, (c, meta) in enumerate(zip(pending_calls, card_meta)):
+            if c.get("type") == "error":
+                continue
+            name, args = c.get("name"), c.get("arguments") or {}
+            if not meta.get("on_card"):
+                if self._gate_requires_approval(name, args, policy):
+                    events.emit("approval_offcard_held", session=session.session_id, tool=name)
+                    held[i] = {"name": name, "_failed": True, "_safe": True, "response": (
+                        f"System Error: '{name}' was NOT executed: it needs the user's approval "
+                        "but was not shown on the approval card the user confirmed. Call it "
+                        "again so it gets its own approval card.")}
+                continue
+            shown = meta.get("preview")
+            if shown:
+                fn = getattr(self.registry, "approval_preview", None)
+                try:
+                    now = fn(name, args) if callable(fn) else None
+                except Exception:
+                    now = None
+                if now != shown:
+                    events.emit("approval_preview_changed", session=session.session_id, tool=name)
+                    held[i] = {"name": name, "_failed": True, "_safe": True, "response": (
+                        f"System Error: '{name}' was NOT executed: the details shown to the user "
+                        "for approval have changed since (for example a setting it depends on was "
+                        "edited), so nothing was done. Call it again to get a fresh approval card.")}
+        return held
+
     async def resume_after_approval(self, session: ChatSession, approved: bool, *,
                                     journal: TurnJournal,
                                     **gen_kwargs) -> Dict[str, Any]:
@@ -2791,6 +2894,8 @@ class Orchestrator:
         """
         pending_calls = session.pending_tool_calls or []
         session.pending_tool_calls = None
+        card_meta = getattr(session, "pending_card_meta", None)
+        session.pending_card_meta = None
 
         # [F6] 先清过期用量槽（复审）:本方法在 run_turn **之前**执行已批准的工具,而
         # ContextVar 里可能还躺着同一 Task 上一段 run_turn 的 sink（定时轮 runner 在
@@ -2809,8 +2914,13 @@ class Orchestrator:
                 session.carried_turn_stats.get("no_task_calls") or [])
             # 批准的敏感调用同样经账本发事件（修复旧实现漏发 tool_started/result 的洞）
             retrieval = RetrievalEvidence(session.carried_turn_stats.get("retrieval_evidence"))
-            responses = await self._execute_physical(session, pending_calls, tracker, {},
-                                                     journal=journal, retrieval=retrieval)
+            held = self._recheck_approved_batch(session, pending_calls, card_meta, journal)
+            runnable = [c for i, c in enumerate(pending_calls) if i not in held]
+            ran = await self._execute_physical(session, runnable, tracker, {},
+                                               journal=journal, retrieval=retrieval)
+            ran_iter = iter(ran)
+            responses = [held[i] if i in held else next(ran_iter)
+                         for i in range(len(pending_calls))]
             session.carried_turn_stats["retrieval_evidence"] = retrieval.checkpoint()
             if task is None:
                 session.carried_turn_stats["no_task_calls"] = tracker

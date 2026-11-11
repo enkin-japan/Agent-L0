@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 
 class ToolOutput:
@@ -54,6 +54,10 @@ class BaseTool(ABC):
     # cloud.require_approval=true）；② 审批卡本身是文档化安全闸的工具按类钉死——shell（按
     # 命令：只有非只读命令要审批，钉的就是这些）、schedule_create/update、register_api_tool。
     approval_pinned: bool = False
+    # 只认审批卡（send_email）：这类调用只能在 app 内看着审批卡（approval_preview 行）批准——
+    # 推送通知不带可操作的「允许」按钮，批准请求须带 card_ack=true（否则 409），
+    # 且预览生成失败时整条调用 fail-closed 打回模型（不出卡、不执行）。
+    approval_card_only: bool = False
     # 并发安全：可与同批其他安全调用并发执行（无副作用且可重入）设 True。
     # 默认 False（保守串行）；有状态或有副作用的工具（GUI 变更、写库、shell）保持 False。
     is_concurrency_safe: bool = False
@@ -91,6 +95,14 @@ class BaseTool(ABC):
         """按调用的效果分类（"read" | "write"）。默认返回类属性 effect；
         效果随参数变化的工具（shell：只读命令 = read）覆写本方法。"""
         return self.effect
+
+    def approval_preview(self, arguments: Dict[str, Any]) -> Optional[List[Dict[str, str]]]:
+        """
+        审批卡预览钩子（可选）：返回 [{"key": str, "value": str}, ...]（展示序），编排层把它作为
+        pending_tools 条目的 "preview" 一并下发，客户端按行渲染以代替原始参数行（完整参数仍可展开）。
+        默认 None = 不给预览，客户端照旧显示原始参数。钩子异常不影响审批（registry 吞掉并记事件）。
+        """
+        return None
 
     def is_available(self) -> bool:
         """

@@ -47,7 +47,7 @@ WRITE_TOOLS = {
     "run_applescript", "cloud_consult", "code_explore",
     "deck_critique", "deck_export_pdf", "deck_export_pptx", "deck_init",
     "deck_remove_slide", "deck_set_slide",
-    "clipboard_write", "notify_user", "open_path", "write_document", "excel_research",
+    "clipboard_write", "notify_user", "send_email", "publish_page", "open_path", "write_document", "excel_research",
     "edit_file", "write_file", "copy_file", "move_file", "trash_file", "media_download",
     "memory_write", "calendar_add", "reminder_add",
     "rag_delete_category", "rag_delete_document", "rag_insert_document", "rag_mark_stale",
@@ -64,7 +64,7 @@ DYNAMIC_TOOLS = {"run_shell_command"}
 # never clears it (shell: per command, only non-read-only commands ask). Instance-level pins
 # (API declarations, cloud.require_approval) are covered by their own tests below.
 PINNED_TOOLS = {"run_shell_command", "schedule_create", "schedule_update", "schedule_delete",
-                "register_api_tool", "register_skill"}
+                "register_api_tool", "register_skill", "send_email"}
 
 
 class _Fixture(BaseTool):

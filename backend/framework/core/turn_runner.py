@@ -27,6 +27,12 @@ from .journal import new_turn_id
 from .task_state import TaskState
 
 
+# 409 原因码：批次含只认审批卡的调用（send_email），批准请求却没带 card_ack=true
+CARD_CONFIRMATION_REQUIRED = "card_confirmation_required"
+CARD_CONFIRMATION_MESSAGE = ("This approval includes an action that can only be approved from the "
+                             "approval card in the app. Open the app and approve it there.")
+
+
 class TurnConflict(Exception):
     """受理冲突:会话已有排队/运行中的轮次,或决议/恢复的目标态不存在。"""
     def __init__(self, reason: str):
@@ -196,6 +202,7 @@ class TurnRunner:
                 _restore_routing(session, turn.get("_task_snapshot"))
                 await asyncio.to_thread(session.save_routing)
                 session.pending_tool_calls = None
+                session.pending_card_meta = None      # 与 pending_tool_calls 同生同灭
                 session.pending_turn = None
                 session.suspended_turn = None
                 session.suspend_requested = False
@@ -495,6 +502,7 @@ class TurnRunner:
             ] or [{"name": "system", "response": "Pending tool call cancelled."}]
             session.add_tool_message(cancelled)
             session.pending_tool_calls = None
+            session.pending_card_meta = None      # 与 pending_tool_calls 同生同灭
             if session.pending_turn is not None:
                 session.pending_turn.pop("_rollback_idx", None)
                 session.pending_turn.pop("_task_snapshot", None)
@@ -627,7 +635,8 @@ class TurnRunner:
     # ---------- 审批决议 ----------
     async def accept_approval(self, session, sid: str, approve: bool, *,
                               expected_turn_id: str = None,
-                              expected_approval_seq: Optional[int] = None) -> str:
+                              expected_approval_seq: Optional[int] = None,
+                              card_ack: bool = False) -> str:
         """受理审批决议(短临界区):校验目标态 → 账本 resumed。返回 turn_id。
         expected_turn_id:远程决议(推送通知按钮)的防错批锚——迟到点击时当前等待
         审批的可能已是另一个轮次,不匹配即拒。
@@ -646,8 +655,30 @@ class TurnRunner:
             # 使用 emit 记录的 awaiting_approval seq，后续进度事件不改批次身份。
             if expected_approval_seq is not None and journal.approval_seq != expected_approval_seq:
                 raise TurnConflict("approval_target_mismatch")
+            # 只认审批卡的调用（send_email）：批准必须来自看着卡的 app 内操作（card_ack=true）；
+            # 推送通知按钮 / 旧客户端的批准一律 409，状态不动，仍可在卡上批准。拒绝不受限。
+            if approve and not card_ack and self._batch_card_only(session):
+                raise TurnConflict(CARD_CONFIRMATION_REQUIRED)
             journal.emit("resumed", {"trigger": "approve" if approve else "deny"})
             return journal.current_turn_id
+
+    def _batch_card_only(self, session) -> bool:
+        """挂起批次里是否有只认卡的调用：挂起时记下的 card_only，或此刻注册表的判定（任一为真即真）。"""
+        meta = getattr(session, "pending_card_meta", None) or []
+        if any(isinstance(m, dict) and m.get("card_only") for m in meta):
+            return True
+        fn = getattr(getattr(self.orchestrator, "registry", None), "is_card_only", None)
+        if not callable(fn):
+            return False
+        for c in session.pending_tool_calls or []:
+            if c.get("type") == "error":
+                continue
+            try:
+                if fn(c.get("name")) is True:
+                    return True
+            except Exception:
+                return True
+        return False
 
     async def run_approval(self, session, sid: str, approve: bool) -> Dict[str, Any]:
         """执行审批决议后的续跑闭环。返回轮次数据(response 仅含本次决议后新增的消息)。"""

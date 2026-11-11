@@ -203,6 +203,9 @@ class FakeRegistry:
     # FakeTool.validate）：编排层金测试跑的是生产预检，不是替身副本
     argument_problems = MCPRegistry.argument_problems
     validate_call = MCPRegistry.validate_call
+    # 审批卡预览同样借生产实现（工具可选 approval_preview 钩子，FakeTool 无此属性 = 不带预览）
+    approval_preview = MCPRegistry.approval_preview
+    is_card_only = MCPRegistry.is_card_only
 
     def list_tools(self):
         return [{"name": t.name, "description": f"fake tool {t.name}",

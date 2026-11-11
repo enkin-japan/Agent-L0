@@ -23,7 +23,7 @@ DELIVERY_TOOLS = frozenset({
     # persistence of claimed facts
     "memory_write", "rag_insert_document",
     # outward sends of model-authored content
-    "notify_user", "clipboard_write", "calendar_add", "reminder_add",
+    "notify_user", "send_email", "publish_page", "clipboard_write", "calendar_add", "reminder_add",
     "schedule_create", "schedule_update", "type_text", "set_ui_element_value",
     "run_applescript",
     # spreadsheets built from model-written text

@@ -183,6 +183,9 @@ class ChatSession:
         # pending_tool_calls 为等待用户决议的工具调用；pending_turn 为该轮暂存的
         # 完整响应数据（决议后合并落盘）。冻结/关闭时整轮以 fail 落盘作废。
         self.pending_tool_calls: Optional[List[Dict[str, Any]]] = None
+        # 与 pending_tool_calls 逐条对齐的审批卡记录（orchestrator 挂起时写）：
+        # {"on_card": 该调用是否列在卡上, "preview": 卡上显示的预览行或 None, "card_only": bool}
+        self.pending_card_meta: Optional[List[Dict[str, Any]]] = None
         self.pending_turn: Optional[Dict[str, Any]] = None
 
         # 逻辑轮次累计迭代数（跨审批挂起/续跑存续）：总迭代熔断（max_total_iterations）
@@ -341,6 +344,7 @@ class ChatSession:
                 self.pending_turn = None
                 self.task_state = None
             self.pending_tool_calls = None
+            self.pending_card_meta = None
 
             # 挂起中的未完结轮次随冻结作废（正常情况下挂起会话被调度器钉住不冻，
             # 此处兜底 shutdown/delete 等强制路径）：以 warning 落盘，其 KV 已随冻结释放，
